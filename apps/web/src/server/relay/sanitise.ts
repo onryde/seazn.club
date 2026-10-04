@@ -26,6 +26,8 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "delta", "balanceAfter", "pack", "credits", "amountMinor", "currency", "checkoutSessionId", "paymentIntentId", "ledgerId",
   // client / admin actions
   "action", "actorUserId", "orgId", "sessionId", "fixtureId", "targetId", "destinationKind", "url", "watchUrl",
+  // capture QR v2 (T6): who started it and the pairing it rode on (ids, never the phone's own id or the tok)
+  "startCause", "pairingId",
   // nesting containers
   "outputs", "inputs", "samples", "summary",
 ]);

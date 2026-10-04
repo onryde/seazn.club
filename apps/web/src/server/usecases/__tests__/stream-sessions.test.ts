@@ -33,8 +33,8 @@ import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
 import { FAKE_CONNECTING_KEY_PREFIX, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
 import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { routes } from "@/lib/routes";
-import { holdStateOf, type SessionState } from "@/server/relay/domain/session";
-import { inputEnvelopesHex, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { admit, holdStateOf, type AdmitInput, type SessionState } from "@/server/relay/domain/session";
+import { inputEnvelopesHex, pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
@@ -58,8 +58,8 @@ import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
-  type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, expireTargetHolders, heartbeat,
-  holdStatesOf, openStreamStates, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
+  type SessionDeps, apply, applyExpiry, createSession as organiserStart, currentSession, estimateCostMinor, expireTargetHolders, heartbeat,
+  holdStatesOf, openStreamStates, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, startBroadcast, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
@@ -90,6 +90,13 @@ vi.mock("../stream-credits", async (importOriginal) => {
       return real.streamMonthlyRate(orgId);
     },
   };
+});
+
+// T6 (A23): `admit`, spied — a PASS-THROUGH (every call answers exactly as the domain does), so the diff test can read the
+// AdmitInput each start path built. Every other test is unaffected.
+vi.mock("@/server/relay/domain/session", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/relay/domain/session")>();
+  return { ...real, admit: vi.fn(real.admit) };
 });
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -214,7 +221,7 @@ async function override(orgId: string, key: string, value: boolean) {
 
 /** `monthly: true` leaves this period's free match credits for createSession to grant (V426); by default the rig grants
  *  and spends them (`spendMonthlyStreamGrant`), so `credits` is the whole balance, as every pre-V426 test assumes. */
-async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; streamKey?: string; watchUrl?: string; kind?: "youtube" | "twitch"; recorder?: ProviderCallRecorder } = {}) {
+async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; streamKey?: string; watchUrl?: string; kind?: "youtube" | "twitch"; recorder?: ProviderCallRecorder; phone?: boolean } = {}) {
   const seeded = await seedOrg();
   // A8: seedOrg's auth.userId is null (_rig.ts:37), and fixture_stream_sessions.created_by is `uuid not null` — the
   // organiser who starts a stream is a REAL users row, so every `created_by` / `actor_user_id` below is a real id and
@@ -223,6 +230,10 @@ async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: b
   const d = await startedDivisionWithFixture(auth, opts.fixtures === 2 ? { fixtures: 2 } : {});
   await override(auth.orgId, "streaming.overlay", opts.overlay ?? true);
   await override(auth.orgId, "streaming.relay", opts.relay ?? true);
+  // A7 (capture QR v2 T6): W5 refuses an organiser start with no present phone, so every fixture is paired here — where
+  // the org can hold a stream code at all (the relay plan; production refuses an org without it the code too). `phone:
+  // false` is the W5 tests' fixture with no phone.
+  if ((opts.relay ?? true) && opts.phone !== false) for (const f of d.fixtureIds) await pairPresentPhone(f);
   // The grant's in-transaction audit row needs a real users row (staff_audit_log.actor_id NOT NULL, V103:16) and every
   // staff write needs a key (Task 7).
   if (opts.credits) await grantCredits({ orgId: auth.orgId, delta: opts.credits, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
@@ -257,6 +268,18 @@ async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: b
 }
 
 const body = (targetId: string, mode: "passthrough" | "composed" = "passthrough") => ({ mode, targetId });
+
+/** A7 (capture QR v2 T6) — this file's start helper. W5 refuses every organiser start with no present phone, and no start
+ *  below except the W5 cases is ABOUT the phone: each re-beats its fixture's pairing on the start's OWN clock first (a
+ *  test that ticks its clock hours ahead would otherwise find its phone silent). A refresh only: a fixture with no active
+ *  stream code (an org without the relay, a fixture made after rig()) is left unpaired, as production would leave it.
+ *  The W5 cases call `organiserStart` directly. */
+async function createSession(...args: Parameters<typeof organiserStart>): ReturnType<typeof organiserStart> {
+  const [, fixtureId, , deps] = args;
+  const [code] = await sql`select 1 from fixture_stream_codes where fixture_id = ${fixtureId} and ended_at is null`;
+  if (code) await pairPresentPhone(fixtureId, { at: deps.now() });
+  return organiserStart(...args);
+}
 
 describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
   it("EMPTY: no session → current is null, never a default object", async () => {
@@ -377,7 +400,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       expect(refused.snapshot.headroom).toBe(0);
       expect(refused.refusal).toMatchObject({ code: "storage_exhausted" });
       // Push the stale one past the warming timeout — nobody reads it, no sweep runs — and the reserve is released by the POLICY alone.
-      await sql`update fixture_stream_sessions set created_at = ${ago(WARMING_TIMEOUT_MINUTES + 1)} where id = ${a!.id}`;
+      await sql`update fixture_stream_sessions set created_at = ${ago(WARMING_TIMEOUT_MINUTES + 1)}, warming_at = ${ago(WARMING_TIMEOUT_MINUTES + 1)} where id = ${a!.id}`;
       const admitted = await admitAgainstPool(r, { ...pool, ownReserved: await reservedBy([b!.id]) });
       expect(admitted.snapshot.headroom, "only the fresh row still reserves").toBe(both - (await reservedBy([b!.id])));
       expect(admitted.refusal).toBeNull();
@@ -681,8 +704,8 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     // The free restart's phone never connects: warming past its timeout, read by the organiser's poll.
     // Both rows are re-dated, the paid one further back: the projection reads the fixture's LATEST session by created_at.
     const second = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 2}) where id = ${first.sessionId}`;
-    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${second.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 2}), warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 2}) where id = ${first.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}), warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${second.sessionId}`;
     const redate = (minutesAgo: number) => sql`
       update org_stream_credits set created_at = ${r.deps.now()}::timestamptz - make_interval(mins => ${minutesAgo})
        where org_id = ${r.auth.orgId} and reason = 'consume'`;
@@ -1614,7 +1637,7 @@ describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sw
   it("warming 11 min, unread → the organiser's next current() fails it with no_inbound_timeout (mutant: delete applyExpiry in currentSession → red)", async () => {
     const r = await rig({ credits: 1 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    await sql`update fixture_stream_sessions set created_at = now() - interval '11 minutes' where id = ${sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - interval '11 minutes', warming_at = now() - interval '11 minutes' where id = ${sessionId}`;
     const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(cur.state).toBe("failed");
     expect(cur.failReason).toBe("no_inbound_timeout");
@@ -1623,7 +1646,7 @@ describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sw
   it("warming 9 min → still warming (the boundary is the domain's; this proves the wiring does not fire early)", async () => {
     const r = await rig({ credits: 1 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    await sql`update fixture_stream_sessions set created_at = now() - interval '9 minutes' where id = ${sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - interval '9 minutes', warming_at = now() - interval '9 minutes' where id = ${sessionId}`;
     expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("warming");
   });
 
@@ -1866,7 +1889,7 @@ describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sw
   it("the fixture's OWN stale warming session is expired at admission, so the organiser can start again (mutant: delete applyExpiry in createSession → 409 active_session → red)", async () => {
     const r = await rig({ credits: 2 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    await sql`update fixture_stream_sessions set created_at = now() - interval '11 minutes' where id = ${sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - interval '11 minutes', warming_at = now() - interval '11 minutes' where id = ${sessionId}`;
     const again = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect(again.sessionId).not.toBe(sessionId);
     expect(await r.row(sessionId)).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
@@ -3382,7 +3405,7 @@ describe.skipIf(!HAS_DB)("the lifecycle as a SEQUENCE — drawn orderings, invar
               const s = await latest(a.fixture);
               if (!s) return;
               if (a.what === "wall_clock") await sql`update fixture_stream_sessions set created_at = created_at - make_interval(mins => ${MAX_DURATION_MINUTES + 1}), started_at = started_at - make_interval(mins => ${MAX_DURATION_MINUTES + 1}) where id = ${s.id}`;
-              if (a.what === "warming") await sql`update fixture_stream_sessions set created_at = created_at - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${s.id}`;
+              if (a.what === "warming") await sql`update fixture_stream_sessions set created_at = created_at - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}), warming_at = warming_at - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${s.id}`;
               if (a.what === "beat") await sql`update fixture_stream_sessions set heartbeat_at = now() - make_interval(secs => ${STALE_HEARTBEAT_SECONDS + 30}), beat_window_at = now() - make_interval(secs => ${STALE_HEARTBEAT_SECONDS + 30}) where id = ${s.id}`;
               if (a.what === "ending") await sql`update fixture_stream_sessions set ending_at = ending_at - make_interval(secs => ${ENDING_TIMEOUT_SECONDS + 1}), runner_stop_requested_at = runner_stop_requested_at - make_interval(secs => ${RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1}) where id = ${s.id}`;
               return;
@@ -4096,7 +4119,7 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
     const rec2 = new FakeRecorder();
     const x = await rig({ credits: 1, recorder: rec2, connectAfterMs: 24 * 3600_000 });
     const made = await createSession(x.auth, x.fixtureId, body(x.target.id), x.deps);
-    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${made.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}), warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${made.sessionId}`;
     expect((await currentSession(x.auth, x.fixtureId, x.deps))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
     await flush();
     const pre = rec2.calls.filter((c) => c.operation === "inputStatus");
@@ -4523,7 +4546,7 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
             case "age": {
               const sess = fx!.session;
               if (sess?.status !== "waiting") { tally.skipped++; return; }
-              run = () => sql`update fixture_stream_sessions set created_at = created_at - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 5}) where id = ${sess.id}`;
+              run = () => sql`update fixture_stream_sessions set created_at = created_at - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 5}), warming_at = warming_at - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 5}) where id = ${sess.id}`;
               onOk = () => { sess.status = "stale"; };
               break;
             }
@@ -5261,7 +5284,7 @@ describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory'
     const foreign = await createSession(other.auth, other.fixtureId, body(other.target.id), other.deps);
     // An abandoned Go live: warming past the timeout, read by nobody. Both orgs have one.
     const due = new Date(r.deps.now().getTime() - (WARMING_TIMEOUT_MINUTES + 1) * 60_000);
-    await sql`update fixture_stream_sessions set created_at = ${due} where id in ${sql([stuck.sessionId, foreign.sessionId])}`;
+    await sql`update fixture_stream_sessions set created_at = ${due}, warming_at = ${due} where id in ${sql([stuck.sessionId, foreign.sessionId])}`;
     const held = async () => new Map((await listStreamTargets(r.auth, r.auth.orgId)).map((t) => [t.id, t.inUse !== null]));
     expect(await held(), "PREMISE: both destinations show In use").toEqual(new Map([[r.target.id, true], [second.id, true]]));
 
@@ -5285,6 +5308,7 @@ describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory'
   it("three due holders, the MIDDLE one's tick throws: the first and the third are still expired, the middle is reported once and left holding, and the answer names both sets; a second call, the fault gone, expires the middle", async () => {
     const r = await rig({ credits: 3, fixtures: 2, connectAfterMs: 24 * 60 * 60_000 });
     const extra = await startedDivisionWithFixture(r.auth);
+    await pairPresentPhone(extra.fixtureId);   // A7
     const targets = [
       r.target,
       await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Second", streamKey: `yt-${randomUUID()}` }),
@@ -5296,7 +5320,7 @@ describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory'
     const [first, middle, third] = ids as [string, string, string];
     // All three abandoned past the warming timeout, in this order (holderRows ticks oldest first).
     const due = r.deps.now().getTime() - (WARMING_TIMEOUT_MINUTES + 1) * 60_000;
-    for (let i = 0; i < 3; i++) await sql`update fixture_stream_sessions set created_at = ${new Date(due - (3 - i) * 1000)} where id = ${ids[i]!}`;
+    for (let i = 0; i < 3; i++) await sql`update fixture_stream_sessions set created_at = ${new Date(due - (3 - i) * 1000)}, warming_at = ${new Date(due - (3 - i) * 1000)} where id = ${ids[i]!}`;
     const held = async () => new Map((await listStreamTargets(r.auth, r.auth.orgId)).map((t) => [t.id, t.inUse !== null]));
     expect(await held(), "PREMISE: all three destinations show In use").toEqual(new Map(targets.map((t) => [t.id, true])));
     const tickReports = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string } | undefined)?.route === "relay.expire_target_holders");
@@ -5388,5 +5412,187 @@ describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory'
     // The second call, the faults gone: A is no holder any more (terminal), B expires.
     expect(await expireTargetHolders(r.auth.orgId, null, r.deps)).toEqual({ expired: [b], failed: [] });
     expect(tickReports(), "a clean tick reports nothing more").toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capture QR v2 T6 — ONE start path (§5.3, §6.7.1). W5's present phone gates the organiser's Go live; every start
+// records who made it (startCause) and the pairing it rides on; the phone operator's start runs through the same
+// `startBroadcast`, diffed against the organiser's (A23); the warming timeout runs from warming ENTRY (A8). The W5 cases
+// call `organiserStart` (the real createSession) directly, bypassing this file's re-beating helper. ONE SPORT (rule 6):
+// no step of the start path reads the sport.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, the operator through the same code", () => {
+  const sessionsOf = async (orgId: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${orgId}`)[0]!.n;
+  /** A provider call that MADE something (an input, an output, a Machine) — a refused start may read, never write. */
+  const writes = (rec: FakeRecorder) => rec.calls.filter((c) => c.method !== "GET").map((c) => `${c.provider}:${c.operation}`);
+
+  it("W5: an organiser Go live with NO phone paired → 409 phone_not_paired — no row, no credit moved, nothing made at a provider; the same Go live once a present phone pairs is admitted (the positive pair)", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 1, phone: false, recorder: rec });
+    const before = await creditBalance(sql, r.auth.orgId);
+    const err = await organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ status: 409, code: "phone_not_paired" });
+    expect(await sessionsOf(r.auth.orgId)).toBe(0);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(before);
+    await new Promise((res) => setImmediate(res));
+    expect(writes(rec)).toEqual([]);
+    expect(r.runner.created).toEqual([]);
+    await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+    const { sessionId } = await organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect((await r.row(sessionId)).state).toBe("warming");
+  });
+
+  it("W5: a SILENT phone (current, but no beat for longer than §6.9's threshold on the start's clock) is not present → phone_not_paired; its next beat makes the same Go live admitted", async () => {
+    const r = await rig({ credits: 1, phone: false });
+    // The threshold from the domain's own rule (§6.9, domain/pairing.ts): max(floor, answered cadence + slack).
+    const { codeId } = await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+    expect(codeId).toBeTruthy();
+    r.tick(10 * 60_000);   // ten minutes: past max(60 s, 60 s + 30 s) whatever the tunables
+    await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_paired" });
+    expect(await sessionsOf(r.auth.orgId)).toBe(0);
+    await pairPresentPhone(r.fixtureId, { at: r.deps.now() });   // the next beat, on the same clock
+    await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) });
+  });
+
+  it("§6.7.1 ORDER through the usecase: no phone AND no credits → phone_not_paired (never no_credits); the phone back → no_credits; a fixture ALREADY streaming whose phone has gone → active_session (F-A5 kept), never phone_not_paired", async () => {
+    const broke = await rig({ credits: 0, phone: false });
+    await expect(organiserStart(broke.auth, broke.fixtureId, body(broke.target.id), broke.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_paired" });
+    await pairPresentPhone(broke.fixtureId, { at: broke.deps.now() });
+    await expect(organiserStart(broke.auth, broke.fixtureId, body(broke.target.id), broke.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+
+    const r = await rig({ credits: 1 });
+    const running = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const { pairingId } = await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+    await sql`update fixture_stream_pairings set ended_at = now(), end_cause = 'replaced' where id = ${pairingId}`;   // the phone is gone
+    await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps))
+      .rejects.toMatchObject({ status: 409, code: "active_session", extra: { sessionId: running.sessionId } });
+  });
+
+  it("with a present phone: the row records start_cause 'organiser', the pairing it rode on and that pairing's code; the create action row is the organiser's (source client) and names both; the destination is saved as the fixture's pre-pick", async () => {
+    const r = await rig({ credits: 1 });
+    const { pairingId, codeId } = await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+    const { sessionId } = await organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const [row] = await sql<{ start_cause: string; pairing_id: string | null; code_id: string | null; created_by: string }[]>`
+      select start_cause, pairing_id, code_id, created_by from fixture_stream_sessions where id = ${sessionId}`;
+    expect(row).toEqual({ start_cause: "organiser", pairing_id: pairingId, code_id: codeId, created_by: r.auth.userId });
+    const [create] = await sql<{ source: string; actor_user_id: string; payload: Record<string, unknown> }[]>`
+      select source, actor_user_id, payload from fixture_stream_events where session_id = ${sessionId} and kind = 'action' and type = 'create'`;
+    expect(create).toMatchObject({ source: "client", actor_user_id: r.auth.userId, payload: { startCause: "organiser", pairingId } });
+    const [settings] = await sql<{ target_id: string | null; updated_by: string | null }[]>`
+      select target_id, updated_by from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+    expect(settings).toEqual({ target_id: r.target.id, updated_by: r.auth.userId });
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.startCause).toBe("organiser");
+  });
+
+  it("A23 (a new write path, diffed against the old): the organiser's Go live and the phone operator's start build the SAME AdmitInput but for the documented phonePresent, and make the SAME provider calls in the SAME order — at the start and at go-live", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 2, fixtures: 2, recorder: rec });
+    const deps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
+    const [a, b] = r.fixtureIds as [string, string];
+    const second = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Court two", streamKey: `k-${randomUUID()}` });
+    await pairPresentPhone(a, { at: deps.now() });
+    const phoneB = await pairPresentPhone(b, { at: deps.now() });
+    const [{ issued_by: issuedBy }] = await sql<{ issued_by: string }[]>`select issued_by from fixture_stream_codes where id = ${phoneB.codeId}`;
+    const spy = vi.mocked(admit);
+    const observe = async <T>(step: () => Promise<T>) => {
+      await new Promise((res) => setImmediate(res));
+      spy.mockClear();
+      rec.calls.length = 0;
+      const out = await step();
+      await new Promise((res) => setImmediate(res));
+      return { out, inputs: spy.mock.calls.map(([i]) => i), calls: rec.calls.map((c) => `${c.provider}:${c.operation}:${c.method}`) };
+    };
+    const organiser = await observe(() => organiserStart(r.auth, a, body(r.target.id), deps));
+    const operator = await observe(() => startBroadcast(
+      { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phoneB.pairingId }, b,
+      { targetId: second.id, startCause: "operator", phonePresent: true }, deps));
+    // The M1 probe and the admission: two asks each, or one path skipped a gate the other kept.
+    expect(organiser.inputs).toHaveLength(2);
+    expect(operator.inputs).toHaveLength(2);
+    // headroomMinutes is the ACCOUNT-WIDE pool (the C3 tests' reason): A's own reservation, and any other suite's
+    // session, moves it between the two starts. Every other field is compared.
+    const strip = (i: AdmitInput): Partial<AdmitInput> => {
+      const rest: Partial<AdmitInput> = { ...i };
+      delete rest.phonePresent;
+      delete rest.headroomMinutes;
+      return rest;
+    };
+    expect(operator.inputs.map(strip)).toEqual(organiser.inputs.map(strip));
+    // The documented difference is WHERE phonePresent comes from: read from the pairing for the organiser, the caller's
+    // own word for the operator. Both true here — a present phone is paired on each fixture.
+    expect(organiser.inputs.map((i) => i.phonePresent)).toEqual([true, true]);
+    expect(operator.inputs.map((i) => i.phonePresent)).toEqual([true, true]);
+    expect(organiser.calls.length, "the organiser's start made provider calls").toBeGreaterThan(0);
+    expect(operator.calls).toEqual(organiser.calls);
+    r.tick(3000);
+    const liveA = await observe(() => currentSession(r.auth, a, deps));
+    const liveB = await observe(() => currentSession(r.auth, b, deps));
+    expect([liveA.out!.state, liveB.out!.state]).toEqual(["live", "live"]);
+    expect(liveA.calls.length).toBeGreaterThan(0);
+    expect(liveB.calls).toEqual(liveA.calls);
+    expect(liveB.out!.startCause).toBe("operator");
+  });
+
+  it("the operator's start: created_by is the stream code's issued_by (never the organiser), start_cause 'operator', and the create action row is the phone's (source phone) naming its pairing", async () => {
+    const r = await rig({ credits: 1 });
+    const phone = await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+    const [{ issued_by: issuedBy }] = await sql<{ issued_by: string }[]>`select issued_by from fixture_stream_codes where id = ${phone.codeId}`;
+    expect(issuedBy, "the differential: the code's issuer is not the organiser this rig signs in as").not.toBe(r.auth.userId);
+    const { sessionId } = await startBroadcast(
+      { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phone.pairingId }, r.fixtureId,
+      { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps);
+    const [row] = await sql<{ created_by: string; start_cause: string; pairing_id: string; code_id: string }[]>`
+      select created_by, start_cause, pairing_id, code_id from fixture_stream_sessions where id = ${sessionId}`;
+    expect(row).toEqual({ created_by: issuedBy, start_cause: "operator", pairing_id: phone.pairingId, code_id: phone.codeId });
+    const actions = await sql<{ type: string; source: string; actor_user_id: string; payload: Record<string, unknown> }[]>`
+      select type, source, actor_user_id, payload from fixture_stream_events where session_id = ${sessionId} and kind = 'action' order by seq`;
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ type: "create", source: "phone", actor_user_id: issuedBy, payload: { startCause: "operator", pairingId: phone.pairingId } });
+    // The pre-pick is the ORGANISER's Go live's to save; the phone's start writes none.
+    expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${r.fixtureId}`).toHaveLength(0);
+  });
+
+  it("an assumption made a guard: startBroadcast refuses a pairing on ANOTHER fixture's code before anything is weighed or written; the fixture's own pairing is admitted (the positive pair)", async () => {
+    const r = await rig({ credits: 1, fixtures: 2 });
+    const [a, b] = r.fixtureIds as [string, string];
+    const onA = await pairPresentPhone(a, { at: r.deps.now() });
+    const onB = await pairPresentPhone(b, { at: r.deps.now() });
+    const err = await startBroadcast(
+      { userId: r.auth.userId!, orgId: r.auth.orgId, source: "phone", pairingId: onA.pairingId }, b,
+      { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(HttpError);
+    expect((err as Error).message).toMatch(/is not on fixture/);
+    expect(await sessionsOf(r.auth.orgId)).toBe(0);
+    await expect(startBroadcast(
+      { userId: r.auth.userId!, orgId: r.auth.orgId, source: "phone", pairingId: onB.pairingId }, b,
+      { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) });
+  });
+
+  it("A8: warming_at is written when the session ENTERS warming, on the start's clock, round-trips into the Session, and anchors the warming timeout — created_at alone past the limit does not expire it; warming_at past it does", async () => {
+    const r = await rig({ credits: 1, connectAfterMs: 24 * 60 * 60_000 });
+    const startedAt = r.deps.now();
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const [row] = await sql<{ warming_at: Date | null; created_at: Date }[]>`select warming_at, created_at from fixture_stream_sessions where id = ${sessionId}`;
+    expect(row!.warming_at).toEqual(startedAt);
+    const s = await reconcileSession(sessionId, r.deps);
+    expect(s!.warmingAt).toEqual(startedAt);
+    const limitAgo = r.deps.now().getTime() - (WARMING_TIMEOUT_MINUTES + 1) * 60_000;
+    await sql`update fixture_stream_sessions set created_at = ${new Date(limitAgo)} where id = ${sessionId}`;
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "provisioning ran long: the phone still has its window").toBe("warming");
+    await sql`update fixture_stream_sessions set warming_at = ${new Date(limitAgo)} where id = ${sessionId}`;
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+  });
+
+  it("§5.3: Stop records the organiser's reason — end_reason 'stopped' — and the projection carries it", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    const done = await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    expect(done).toMatchObject({ state: "completed", endReason: "stopped" });
   });
 });

@@ -37886,7 +37886,7 @@
     },
     "/api/v1/fixtures/{id}/stream-sessions": {
       "post": {
-        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 503 storage_exhausted (no row is written)",
+        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 phone_not_paired (no phone is paired and answering on the fixture's stream code — scan it first; asked after active_session and before credits, so no row is written and no credit spent), 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 503 storage_exhausted (no row is written)",
         "tags": [
           "fixtures"
         ],
@@ -38849,6 +38849,9 @@
                                   "type": "string",
                                   "enum": [
                                     "stopped",
+                                    "operator_stopped",
+                                    "auto_stopped",
+                                    "phone_lost",
                                     "max_duration"
                                   ]
                                 },
@@ -38862,6 +38865,14 @@
                             },
                             "restartFree": {
                               "type": "boolean"
+                            },
+                            "startCause": {
+                              "type": "string",
+                              "enum": [
+                                "organiser",
+                                "operator",
+                                "automatic"
+                              ]
                             }
                           },
                           "required": [
@@ -38883,7 +38894,8 @@
                             "fixtureDecided",
                             "endReason",
                             "creditUsed",
-                            "restartFree"
+                            "restartFree",
+                            "startCause"
                           ],
                           "additionalProperties": false
                         },
@@ -38952,7 +38964,8 @@
                     "fixtureDecided": true,
                     "endReason": "stopped",
                     "creditUsed": true,
-                    "restartFree": true
+                    "restartFree": true,
+                    "startCause": "organiser"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -39544,6 +39557,9 @@
                               "type": "string",
                               "enum": [
                                 "stopped",
+                                "operator_stopped",
+                                "auto_stopped",
+                                "phone_lost",
                                 "max_duration"
                               ]
                             },
@@ -39557,6 +39573,14 @@
                         },
                         "restartFree": {
                           "type": "boolean"
+                        },
+                        "startCause": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "operator",
+                            "automatic"
+                          ]
                         }
                       },
                       "required": [
@@ -39578,7 +39602,8 @@
                         "fixtureDecided",
                         "endReason",
                         "creditUsed",
-                        "restartFree"
+                        "restartFree",
+                        "startCause"
                       ],
                       "additionalProperties": false
                     },
@@ -39642,7 +39667,8 @@
                     "fixtureDecided": true,
                     "endReason": "stopped",
                     "creditUsed": true,
-                    "restartFree": true
+                    "restartFree": true,
+                    "startCause": "organiser"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

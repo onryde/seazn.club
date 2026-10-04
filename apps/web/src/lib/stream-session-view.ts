@@ -121,6 +121,10 @@ export const FAIL_REASON_KEYS: Record<StreamFailReason, MessageKey> = {
 /** How a COMPLETED session ended — shown as a chip in the ended state. */
 export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
   stopped: "stream.phone.ended.reason.stopped",
+  // Capture QR v2 (T6, spec §6.8.4 copy table): the three stops the phone and the automatic mode make.
+  operator_stopped: "stream.phone.ended.reason.operator_stopped",
+  auto_stopped: "stream.phone.ended.reason.auto_stopped",
+  phone_lost: "stream.phone.ended.reason.phone_lost",
   max_duration: "stream.phone.ended.reason.max_duration",
 };
 

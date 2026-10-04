@@ -13,6 +13,8 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { seal } from "../crypto";
 import { creditBreakdown, ensureMonthlyStreamGrant } from "@/server/usecases/stream-credits";
+import { ensureStreamCode } from "@/server/usecases/stream-codes";
+import { POLL_FAR_SECONDS } from "../config";
 
 /** A real users row. staff_audit_log.actor_id is `not null references users(id)` (V103) and
  *  seedOrg's AuthCtx carries userId: null (_rig.ts) — so every staff credit write needs one. */
@@ -133,4 +135,41 @@ export async function streamRig(opts: { fixtures?: 1 | 2; createdBy?: string } =
     return s!.id;
   };
   return { orgId: auth.orgId, createdBy, fixtureIds, session };
+}
+
+/** A7 (capture QR v2 T6, FP25): W5 refuses every organiser start with no PRESENT phone (§6.7.1), so every DB test that
+ *  starts a session pairs one first. Two steps:
+ *   1. the fixture's stream code, minted through the REAL `ensureStreamCode` (T5) when it has no active one — so the
+ *      code row, its sealed tok and its `issued_by` are exactly what production writes. Its issuer is a fresh users row
+ *      (`rigUser`). Minting needs `streaming.relay` and RELAY_KEK, as in production; an active code is reused as is,
+ *      so a refresh needs neither;
+ *   2. slot 0's current pairing, written by ONE raw insert: `claim_kind 'new'`, `last_beat_at = opts.at ?? now`,
+ *      `answered_poll_seconds = POLL_FAR_SECONDS`. **This insert is the one NON-REAL step**: the real claim is T8b's
+ *      `postBeat`, which does not exist yet. T8b re-points this step to a real claim in its own commit.
+ *  A second call for the same fixture REFRESHES `last_beat_at` (the current pairing is kept, never a second one) — so a
+ *  test that advances its clock re-calls it, on that clock, before its next start. */
+export async function pairPresentPhone(
+  fixtureId: string, opts: { phone?: string; at?: Date } = {},
+): Promise<{ codeId: string; pairingId: string; phone: string }> {
+  const activeCode = async () => (await sql<{ id: string; org_id: string }[]>`
+    select id, org_id from fixture_stream_codes where fixture_id = ${fixtureId} and ended_at is null`)[0] ?? null;
+  let code = await activeCode();
+  if (!code) {
+    const [fx] = await sql<{ org_id: string }[]>`
+      select c.org_id from fixtures f join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
+       where f.id = ${fixtureId}`;
+    if (!fx) throw new Error(`pairPresentPhone: no fixture ${fixtureId}`);
+    const issuer: AuthCtx = { orgId: fx.org_id, via: "session", userId: await rigUser(), role: "owner", keyId: null };
+    await ensureStreamCode(issuer, fixtureId);
+    code = await activeCode();
+    if (!code) throw new Error(`pairPresentPhone: ensureStreamCode left fixture ${fixtureId} with no active code`);
+  }
+  const at = opts.at ?? new Date();
+  const phone = opts.phone ?? `rig-phone-${fixtureId}`;
+  const [p] = await sql<{ id: string; phone: string }[]>`
+    insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, claimed_at, last_beat_at, answered_poll_seconds)
+    values (${code.org_id}, ${code.id}, 0, ${phone}, 'new', ${at}, ${at}, ${POLL_FAR_SECONDS})
+    on conflict (code_id, slot) where ended_at is null do update set last_beat_at = excluded.last_beat_at
+    returning id, phone`;
+  return { codeId: code.id, pairingId: p!.id, phone: p!.phone };
 }

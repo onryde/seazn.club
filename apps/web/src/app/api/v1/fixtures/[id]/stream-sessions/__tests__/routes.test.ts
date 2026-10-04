@@ -48,7 +48,7 @@ import { MAX_DURATION_MINUTES, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_S
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { StorageUsage } from "@/server/relay/ports";
-import { resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { grantCredits } from "@/server/usecases/stream-credits";
 import { defaultDeps, heartbeat } from "@/server/usecases/stream-sessions";
@@ -90,12 +90,15 @@ async function override(orgId: string, key: string, value: boolean) {
 }
 
 /** A signed-in owner of a fresh org with one saved YouTube destination, the relay entitlements, and `credits` credits. */
-async function organiser(opts: { credits?: number; overlay?: boolean; relay?: boolean; fixtures?: 1 | 2; storage?: StorageUsage } = {}) {
+async function organiser(opts: { credits?: number; overlay?: boolean; relay?: boolean; fixtures?: 1 | 2; storage?: StorageUsage; phone?: boolean } = {}) {
   const { auth } = await seedOrg("pro");
   authState.userId = auth.userId!;
   const d = await startedDivisionWithFixture(auth, opts.fixtures === 2 ? { fixtures: 2 } : {});
   await override(auth.orgId, "streaming.overlay", opts.overlay ?? true);
   await override(auth.orgId, "streaming.relay", opts.relay ?? true);
+  // A7 (capture QR v2 T6): W5 refuses a Go live with no present phone — every fixture is paired where the org can hold a
+  // stream code (the relay plan). The routes run on the wall clock, so a pairing made here stays present for the test.
+  if ((opts.relay ?? true) && opts.phone !== false) for (const f of d.fixtureIds) await pairPresentPhone(f);
   const credits = opts.credits ?? 1;
   if (credits > 0) await grantCredits({ orgId: auth.orgId, delta: credits, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
   // V426: createSession grants the plan's free monthly credits first; grant AND spend them here so `credits` stays the
@@ -523,6 +526,35 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     expect(lost.body.error, "holder is on the wire, and null").toHaveProperty("holder", null);
     expect(await sessionsOn(b)).toBe(0);
     expect(await sessionsOn(a)).toBe(1);
+  });
+
+  it("T6 (§6.6): a Go live saves its destination as the fixture's pre-pick — and a later Go live on ANOTHER destination moves it; a refused Go live saves nothing", async () => {
+    const o = await organiser({ credits: 2 });
+    const settings = async () => (await sql<{ target_id: string | null }[]>`
+      select target_id from fixture_stream_settings where fixture_id = ${o.fixtureId}`)[0]?.target_id;
+    expect(await settings(), "the empty case: no Go live, no pre-pick").toBeUndefined();
+    const first = await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id });
+    expect(first.status).toBe(201);
+    expect(await settings()).toBe(o.target.id);
+    const refused = await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id });
+    expect(refused.status, "already running").toBe(409);
+    const other = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court two", streamKey: `k-${randomUUID().slice(0, 8)}` });
+    expect((await create(o.fixtureId, { mode: "passthrough", targetId: other.id })).status, "already running, on another destination").toBe(409);
+    expect(await settings(), "a refused Go live never moves the pre-pick").toBe(o.target.id);
+    expect((await stop(o.fixtureId, first.body.data!.sessionId)).status).toBe(200);
+    expect((await create(o.fixtureId, { mode: "passthrough", targetId: other.id })).status).toBe(201);
+    expect(await settings()).toBe(other.id);
+  });
+
+  it("W5 over HTTP: a Go live with no phone paired is 409 phone_not_paired on the wire, documented on the route, and writes nothing", async () => {
+    const o = await organiser({ phone: false });
+    const r = await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatchObject({ code: "phone_not_paired" });
+    expect(await sessionsOn(o.fixtureId)).toBe(0);
+    expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${o.fixtureId}`).toHaveLength(0);
+    const doc = buildOpenApiDocument() as { paths: Record<string, { post?: { summary?: string } }> };
+    expect(doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.summary).toContain("409 phone_not_paired");
   });
 
   it("create: an empty body, a non-JSON body and an unknown field are 400 VALIDATION, and no row is written", async () => {

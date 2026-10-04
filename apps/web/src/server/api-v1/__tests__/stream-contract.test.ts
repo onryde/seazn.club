@@ -13,6 +13,8 @@ import { CaptureQrV1 } from "@/lib/capture-qr";
 import { buildOpenApiDocument, ROUTES } from "../openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "../key-scopes";
 import { ACTIVE_STATES, TERMINAL_STATES, type FailReason } from "@/server/relay/domain/session";
+import { DB_END_REASONS } from "@/server/relay/domain/end-reason";
+import { EVENT_SOURCES } from "@/server/relay/telemetry";
 import { deltaText, lastCheckList, MIGRATION, STREAM_DELTA_COUNT, STREAM_DELTA_FILES } from "@/server/relay/__tests__/_stream-migration";
 import {
   DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_KEY_EMPTY, STREAM_PLATFORMS,
@@ -36,7 +38,10 @@ describe("relay wire enums equal their declarations", () => {
     ["StreamSessionState ↔ fixture_stream_sessions.state", S.StreamSessionState.options, checkList("fixture_stream_sessions", "state")],
     ["StreamSessionCurrent.desiredState ↔ fixture_stream_sessions.desired_state", S.StreamSessionCurrent.shape.desiredState.options, checkList("fixture_stream_sessions", "desired_state")],
     ["RelayHeartbeatReply.desiredState ↔ fixture_stream_sessions.desired_state", S.RelayHeartbeatReply.shape.desiredState.options, checkList("fixture_stream_sessions", "desired_state")],
-    ["StreamEndReason ↔ fixture_stream_sessions.end_reason", S.StreamEndReason.options, checkList("fixture_stream_sessions", "end_reason")],
+    // T6 (capture QR v2 §6.8.4): V430 drops V410's inline end_reason check and re-adds it with five members, so the list
+    // is the FOLD's last definition (T3's lastCheckList), never V410's alone — which would still answer two.
+    ["StreamEndReason ↔ fixture_stream_sessions.end_reason (folded)", S.StreamEndReason.options, lastCheckList("fixture_stream_sessions", "end_reason")],
+    ["StreamSessionCurrent.startCause ↔ fixture_stream_sessions.start_cause (V430)", S.StreamSessionCurrent.shape.startCause.options, lastCheckList("fixture_stream_sessions", "start_cause")],
     ["StreamIngest.protocol ↔ fixture_stream_sessions.ingest_protocol", S.StreamIngest.shape.protocol.unwrap().options, checkList("fixture_stream_sessions", "ingest_protocol")],
     ["StreamTargetKind ↔ org_stream_targets.kind", S.StreamTargetKind.options, checkList("org_stream_targets", "kind")],
   ];
@@ -50,6 +55,23 @@ describe("relay wire enums equal their declarations", () => {
     }
     expect(checked, "pairs checked").toBe(pairs.length);
     expect(checked).toBeGreaterThan(0);
+  });
+
+  it("T6: StreamEndReason is exactly T4b's DB_END_REASONS — five — and the folded CHECK list agrees in both directions", () => {
+    const declared = lastCheckList("fixture_stream_sessions", "end_reason");
+    expect(declared).toHaveLength(5);
+    expect(sorted(S.StreamEndReason.options)).toEqual(sorted(DB_END_REASONS));
+    expect(sorted(declared)).toEqual(sorted(DB_END_REASONS));
+  });
+
+  it("A6: EventSource ↔ fixture_stream_events.source — telemetry's runtime list equals the folded CHECK list in both directions, and 'phone' is in both", () => {
+    const declared = lastCheckList("fixture_stream_events", "source");
+    let checked = 0;
+    for (const source of EVENT_SOURCES) { expect(declared, `telemetry writes ${source}; the CHECK must admit it`).toContain(source); checked++; }
+    for (const source of declared) { expect(EVENT_SOURCES as readonly string[], `the CHECK admits ${source}; EventSource must name it`).toContain(source); checked++; }
+    expect(checked, "sources compared").toBeGreaterThan(0);
+    expect(checked).toBe(EVENT_SOURCES.length + declared.length);
+    expect(declared).toContain("phone");
   });
 
   it("StreamSessionState is exactly the domain's active + terminal states", () => {
@@ -225,9 +247,27 @@ describe("relay request schemas refuse what they must", () => {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
       health: null, ingest: null, output: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
-      restartFree: false,
+      restartFree: false, startCause: "organiser",
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
+    // T6: startCause is REQUIRED and closed — the panel names who started the broadcast from it.
+    const withoutStartCause: Record<string, unknown> = { ...current };
+    delete withoutStartCause.startCause;
+    expect(S.StreamSessionCurrent.safeParse(withoutStartCause).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, startCause: "phone" }).success).toBe(false);
+    let causes = 0;
+    for (const startCause of ["organiser", "operator", "automatic"] as const) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, startCause }).success, startCause).toBe(true);
+      causes++;
+    }
+    expect(causes).toBe(3);
+    // T6: every DB end reason is a legal wire value on a completed session's projection.
+    let reasons = 0;
+    for (const endReason of DB_END_REASONS) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, state: "completed", endReason }).success, endReason).toBe(true);
+      reasons++;
+    }
+    expect(reasons).toBe(5);
     // T4 D3: output is REQUIRED (null, or {state, since, elapsedMs}) — an absent field would read as "nothing to warn about".
     const withoutOutput: Record<string, unknown> = { ...current };
     delete withoutOutput.output;
@@ -269,19 +309,24 @@ describe("relay request schemas refuse what they must", () => {
 
 /** OpenAPI `{id}` template → the key table's `:id` form. */
 const keyForm = (method: string, path: string) => `${method.toUpperCase()} ${path.replace(/\{([^}]+)\}/g, ":$1")}`;
-const STREAM_ROUTE = /\/(stream-sessions|stream-targets)(\/|$)/;
+// T6 (plan premise 10): widened so the capture QR v2 organiser routes enter the pin — without it they were invisible here
+// and the count stayed at seven, a vacuous pass. T9's GET …/stream-phone makes eleven (spec §9 "7 to 11").
+const STREAM_ROUTE = /\/(stream-sessions|stream-targets|stream-code|stream-phone|stream-settings)(\/|$)/;
 const streamRoutes = ROUTES.filter((r) => STREAM_ROUTE.test(r.path));
 
 describe("the relay's routes are never key-reachable", () => {
-  it("ROUTES declares exactly the SEVEN relay operations (design §6.3 / §6.1; spec §5.2 adds rename/replace + remove)", () => {
+  it("ROUTES declares exactly the TEN relay operations (design §6.3 / §6.1; spec §5.2 adds rename/replace + remove; capture QR v2 T5 adds the stream code, its reissue and the stream settings)", () => {
     expect(streamRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
       "DELETE /orgs/:id/stream-targets/:targetId",
       "GET /fixtures/:id/stream-sessions/current",
       "GET /orgs/:id/stream-targets",
       "PATCH /orgs/:id/stream-targets/:targetId",
+      "POST /fixtures/:id/stream-code",
+      "POST /fixtures/:id/stream-code/reissue",
       "POST /fixtures/:id/stream-sessions",
       "POST /fixtures/:id/stream-sessions/:sid/stop",
       "POST /orgs/:id/stream-targets",
+      "PUT /fixtures/:id/stream-settings",
     ]);
   });
 

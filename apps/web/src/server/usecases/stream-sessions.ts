@@ -25,20 +25,21 @@ import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
-  MAX_DURATION_MINUTES, QR_PREFERRED_DEFAULT, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, SRT_LATENCY_MS,
-  relayEnvironment,
+  MAX_DURATION_MINUTES, PHONE_SILENT_FLOOR_SECONDS, QR_PREFERRED_DEFAULT, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP,
+  SRT_LATENCY_MS, relayEnvironment, tunable,
 } from "@/server/relay/config";
 import {
   ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, holdStateOf, isTerminal,
-  type Command, type Decision, type Effect, type HoldState, type Session, type SessionState,
+  type Command, type Decision, type Effect, type HoldState, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
+import { isPresent } from "@/server/relay/domain/pairing";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/expiry";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
-import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
+import { recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
@@ -49,6 +50,7 @@ import {
 import { DestinationNotAllowedError, TargetUnreadableError } from "./stream-targets";
 import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
 import { setFixtureStreamUrl } from "./fixtures";
+import { writeStreamSettings } from "./stream-codes";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
 
@@ -74,6 +76,8 @@ interface Row {
   runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
   created_by: string; created_at: string;
   output_uid: string | null;   // C1: the domain's proof an output exists to release (Session.outputUid)
+  start_cause: Session["startCause"];   // capture QR v2 §5.3 (V430)
+  warming_at: string | null;            // A8 (V430): the warming timeout's anchor
 }
 /** A FUNCTION, not a module-scope fragment: building a `sql` fragment opens the pooled client, and `next build`
  *  evaluates this module (through the daily sweep's cron route) to collect route config in a process with no
@@ -82,7 +86,7 @@ interface Row {
 const cols = () => sql`id, fixture_id, org_id, mode, state, desired_state, fail_reason, end_reason, theme_id, overlay_delay_ms,
   target_id, machine_id, last_heartbeat, heartbeat_at, beat_window_at, started_at, ended_at, ending_at, max_duration_minutes,
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at,
-  runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid`;
+  runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid, start_cause, warming_at`;
 
 const d = (s: string | null): Date | null => (s ? new Date(s) : null);
 
@@ -109,6 +113,9 @@ function toSession(r: Row): Session {
     // which is the exact stranding F22 exists to end. The round-trip test is the only witness.
     endingAt: d(r.ending_at),
     outputUid: r.output_uid,
+    // Capture QR v2 §5.3. A8: dropping warming_at here (or from cols()) is silent to tsc — it reads undefined → null and
+    // the warming timeout quietly falls back to createdAt; "A8: warming_at round-trips" is the witness.
+    startCause: r.start_cause, warmingAt: d(r.warming_at),
     runner: {
       // C3: ONE authority for the attempt — the persisted `runner_attempts` (create calls MADE).
       // Deriving it as `runner_retries + (state === "none" ? 0 : 1)` disagrees with the row after an
@@ -223,6 +230,11 @@ function logDecision(before: Session, dec: Decision, now: Date): void {
 async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command, now: Date): Promise<void> {
   if (before.state !== "live" && next.state === "live") {
     await tx`update fixture_stream_sessions set live_at = coalesce(live_at, ${now}) where id = ${next.id}`;
+  }
+  // A8 (capture QR v2 §5.3): the instant the session ENTERED warming — the warming timeout's anchor (domain/expiry.ts),
+  // so provisioning time never eats the phone's pre-flight window. Coalesced like live_at: a repeat never moves it.
+  if (before.state !== "warming" && next.state === "warming") {
+    await tx`update fixture_stream_sessions set warming_at = coalesce(warming_at, ${now}) where id = ${next.id}`;
   }
   if (cmd.type === "stop") {
     await tx`update fixture_stream_sessions set stop_requested_at = coalesce(stop_requested_at, ${now}) where id = ${next.id}`;
@@ -1107,6 +1119,8 @@ function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headro
     case "target_not_found": throw new HttpError(404, "stream target not found");
     case "storage_exhausted": throw new HttpError(503, "recording storage is exhausted; no new stream can start", "storage_exhausted", { headroomMinutes: headroom });
     case "active_session": throw new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: refusal.activeSessionId ?? null });
+    // W5 / T10 (capture QR v2 §6.7.1): nothing to stream from — the organiser pairs a phone before anything is weighed.
+    case "phone_not_paired": throw new HttpError(409, "no phone is paired and answering on this match's stream code", "phone_not_paired");
   }
 }
 
@@ -1137,10 +1151,45 @@ async function refuseUnreadableTarget(
   });
 }
 
+export type { StartCause };
+
+/** Capture QR v2 §5.3 (T6): who is starting. `userId` is the person the start is attributed to — the organiser, or for
+ *  the phone's and the automatic start the stream code's `issued_by` (the issuer vouches for the phone, the device-link
+ *  precedent). `pairingId` is the slot-0 pairing the start rides on, or null when the fixture has none. */
+export interface StartActor {
+  userId: string;
+  orgId: string;
+  source: "organiser" | "phone" | "auto";
+  pairingId: string | null;
+}
+
+/** The create action row's source per actor: the organiser's tab is the `client`, the phone is `phone` (A6, V430), and
+ *  the automatic start is the domain's own decision. */
+const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain" } as const satisfies Record<StartActor["source"], EventSource>;
+
+/** W5 / T10 (§6.7.1, §6.9): slot 0's CURRENT pairing on the fixture's ACTIVE stream code, and whether it is present —
+ *  current and not silent on `now` (admission's clock). Through the non-tenant `sql` (R1): V430's tables are FORCE RLS
+ *  with no policy. At most one row: one active code per fixture, one current pairing per (code, slot) — V430's indexes. */
+async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId: string; present: boolean } | null> {
+  const [p] = await sql<{ id: string; last_beat_at: Date; answered_poll_seconds: number }[]>`
+    select p.id, p.last_beat_at, p.answered_poll_seconds
+      from fixture_stream_codes c
+      join fixture_stream_pairings p on p.code_id = c.id and p.slot = 0 and p.ended_at is null
+     where c.fixture_id = ${fixtureId} and c.ended_at is null`;
+  if (!p) return null;
+  const present = isPresent(
+    { current: true, lastBeatAt: new Date(p.last_beat_at), answeredPoll: p.answered_poll_seconds },
+    now, tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS),
+  );
+  return { pairingId: p.id, present };
+}
+
+/** The organiser's Go live (the route's caller; unchanged signature). It resolves the actor, asks whether the fixture's
+ *  phone is present (W5), starts through the ONE start path, and saves the destination as the fixture's pre-pick. */
 export async function createSession(
   auth: AuthCtx, fixtureId: string, body: CreateStreamSession, deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
-  const { orgId, competitionId } = await fixtureContext(fixtureId);
+  const { orgId } = await fixtureContext(fixtureId);
   if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");
   // The ACTOR is a guard, not a fallback. `created_by` is `uuid not null` with no FK, and `fillReplayUrl` later acts AS
   // that user when it writes the replay link. The plan wrote `auth.userId ?? orgId`, which for a caller with no user (an
@@ -1149,6 +1198,49 @@ export async function createSession(
   // (device-links.ts, checkin-token.ts) answers 403. A device link carries its issuing organiser, so it passes.
   const actorUserId = auth.userId;
   if (actorUserId === null) throw new HttpError(403, "A stream can only be started by a signed-in organiser");
+  const phone = await currentPhoneOf(fixtureId, deps.now());
+  const started = await startBroadcast(
+    { userId: actorUserId, orgId, source: "organiser", pairingId: phone?.pairingId ?? null },
+    fixtureId,
+    { targetId: body.targetId, startCause: "organiser", phonePresent: phone?.present ?? false, mode: body.mode, themeId: body.themeId ?? null },
+    deps,
+  );
+  // T6 (§6.6): the destination this Go live used becomes the fixture's pre-pick, which the phone's own start reads.
+  // AFTER the start, and never failing it: a broadcast that IS running must not answer an error the organiser would
+  // retry straight into active_session. A failed save is logged and reported; the next Go live saves it again.
+  try {
+    await sql.begin((tx) => writeStreamSettings(tx, { orgId, fixtureId, targetId: body.targetId, updatedBy: actorUserId }));
+  } catch (err) {
+    log.warn({ err, fixtureId, targetId: body.targetId }, "stream session: the destination pre-pick was not saved — the session is running");
+    captureError(err, { orgId, route: "relay.session.pre_pick" });
+  }
+  return started;
+}
+
+/** Capture QR v2 §5.3 / §6.7 (T6): the ONE start path. The organiser's Go live (`createSession`), the phone operator's
+ *  start and the automatic start all come through here, so admission, the destination doors, the storage read, the
+ *  insert and provisioning are the same code for all three (A23); only the actor, `startCause` and `phonePresent`
+ *  differ. `phonePresent` is the caller's answer: the organiser's is read from the pairing, the phone's is true (the
+ *  caller IS the current phone). */
+export async function startBroadcast(
+  actor: StartActor,
+  fixtureId: string,
+  opts: { targetId: string; startCause: StartCause; phonePresent: boolean; mode?: CreateStreamSession["mode"]; themeId?: string | null },
+  deps: SessionDeps,
+): Promise<{ sessionId: string }> {
+  const { orgId, competitionId } = await fixtureContext(fixtureId);
+  if (orgId !== actor.orgId) throw new HttpError(404, "fixture not found");
+  const actorUserId = actor.userId;
+  const body = { mode: opts.mode ?? "passthrough", targetId: opts.targetId, themeId: opts.themeId ?? null };
+  // An assumption made a guard: every caller reads its pairing FROM this fixture's code, so a pairing on another
+  // fixture's code is a caller bug — refused before anything is weighed or written, never a session tied to the wrong
+  // phone. Witness: "startBroadcast refuses a pairing from another fixture's code".
+  const pairing = actor.pairingId === null ? null : (await sql<{ code_id: string }[]>`
+    select p.code_id from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id
+     where p.id = ${actor.pairingId} and c.fixture_id = ${fixtureId}`)[0] ?? null;
+  if (actor.pairingId !== null && pairing === null) {
+    throw new Error(`startBroadcast: pairing ${actor.pairingId} is not on fixture ${fixtureId}'s stream code`);
+  }
   // R5 (Task 14b): a production deployment with no RELAY_DRIVERS has no relay (drivers.ts `disabledRelayDrivers`).
   // Refused with the ingest's own 503 BEFORE anything else — no expiry, no provider call, no monthly grant, no row —
   // so nothing is faked and no credit moves. The Phone tab already reads this code.
@@ -1226,7 +1318,7 @@ export async function createSession(
   // would otherwise pass (F-A5, see `refuseUnreadableTarget`), and the read inside the admission transaction stays the
   // authority for everything that row lock protects.
   await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
-    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true,
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phonePresent: opts.phonePresent,
     headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here
     activeSessionId: activeSessionId ?? priorMachineSessionId,
   }).ok);
@@ -1242,7 +1334,7 @@ export async function createSession(
     const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
-      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom,
+      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom, phonePresent: opts.phonePresent,
       maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: (await activeSessionIdFor(fixtureId, tx)) ?? priorMachineSessionId,   // m2: on the tx, never a 2nd pooled connection
     });
     if (!verdict.ok) {
@@ -1276,11 +1368,13 @@ export async function createSession(
       insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, theme_id, max_duration_minutes, created_by,
                                            storage_minutes_at_admission, reserved_minutes, destination_kind,
                                            sport_key, competition_id, division_id, fixture_scheduled_at,
-                                           venue_id, venue_address, org_timezone, entitlement_via_override)
+                                           venue_id, venue_address, org_timezone, entitlement_via_override,
+                                           start_cause, code_id, pairing_id)
       select ${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId}, ${body.themeId ?? null}, ${MAX_DURATION_MINUTES}, ${actorUserId},
              ${usage.totalStorageMinutes}, ${MAX_DURATION_MINUTES}, (select kind from org_stream_targets where id = ${body.targetId}),
              d.sport_key, d.competition_id, f.division_id, f.scheduled_at,
-             c.venue_id, v.address, o.timezone, ${viaOverride}
+             c.venue_id, v.address, o.timezone, ${viaOverride},
+             ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId}
         from fixtures f
         join divisions d on d.id = f.division_id
         join organizations o on o.id = ${orgId}
@@ -1291,8 +1385,8 @@ export async function createSession(
     const sid = s!.id;
     await tx`insert into fixture_stream_inputs (session_id, slot) values (${sid}, 0)`;   // M3: same transaction
     await recordStorageSnapshot(tx, { ...snapshot, sessionId: sid });
-    await recordEvent(tx, { sessionId: sid, orgId, source: "client", kind: "action", type: "create", actorUserId, occurredAt: deps.now(),
-      payload: { mode: body.mode, targetId: body.targetId, headroomMinutes: headroom, credits: balance } });
+    await recordEvent(tx, { sessionId: sid, orgId, source: START_EVENT_SOURCE[actor.source], kind: "action", type: "create", actorUserId, occurredAt: deps.now(),
+      payload: { mode: body.mode, targetId: body.targetId, headroomMinutes: headroom, credits: balance, startCause: opts.startCause, pairingId: actor.pairingId } });
     return sid;
   }) as Promise<string>).catch(async (err: unknown) => {
     // The race backstops, mapped OUTSIDE `sql.begin` — Task 7's `staffRow` idiom and its measured reason: postgres.js
@@ -1609,6 +1703,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     // I-1: admission's own question, on admission's own clock (createSession asks `reuseWindowOpen` with deps.now()), so
     // the tab's "free restart" and the gate that waives the balance cannot disagree.
     restartFree: await reuseWindowOpen(sql, { orgId: row.org_id, fixtureId }, deps.now()),
+    startCause: row.start_cause,
   };
 }
 
@@ -1645,7 +1740,7 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
   // m1: re-decided on the LOCKED row (T5-a). A session another writer FINISHED after the read above (an expiry, a failure)
   // writes nothing — no decision, no tap, the same as the finished-session branch above — and the projection answers.
   // `ending` is still decided: `ending × stop` is identity, and it records the tap (n5).
-  await apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "stop" }), deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
+  await apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "stop", reason: "stopped" }), deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
   return (await currentSession(auth, fixtureId, deps))!;
 }
 

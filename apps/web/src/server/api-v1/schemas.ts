@@ -1349,8 +1349,11 @@ export const StreamFailReason = z.enum([
   // M10 (Task 14b review): a deployment with no relay ended a session left up from before.
   "relay_disabled",
 ]);
-/** How a COMPLETED session ended — the deadline is not a failure. */
-export const StreamEndReason = z.enum(["stopped", "max_duration"]);
+/** How a COMPLETED session ended — the deadline is not a failure. Capture QR v2 (T6, §5.3): the five DB reasons
+ *  (domain/end-reason.ts `DB_END_REASONS`, V430's end_reason check) — the organiser's Stop, the phone operator's
+ *  Stop (W12), the automatic stop after the result (W7), the phone and its video gone (W19), and the wall clock.
+ *  stream-contract.test.ts pins this list against both. */
+export const StreamEndReason = z.enum(["stopped", "operator_stopped", "auto_stopped", "phone_lost", "max_duration"]);
 export type StreamEndReason = z.infer<typeof StreamEndReason>;
 export type StreamFailReason = z.infer<typeof StreamFailReason>;
 export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp"]);
@@ -1418,6 +1421,9 @@ export const StreamSessionCurrent = z
      *  the one authority admission asks (`reuseWindowOpen`), so the Phone tab never sells a pack for a restart the server
      *  would admit at balance 0. A fixture fact, not this session's: a restart that consumed nothing still reads true. */
     restartFree: z.boolean(),
+    /** Capture QR v2 §5.3 (T6): who started this session — the organiser's Go live, the phone operator's start, or
+     *  the automatic start. V430's start_cause; set at creation and never changed. */
+    startCause: z.enum(["organiser", "operator", "automatic"]),
   })
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;

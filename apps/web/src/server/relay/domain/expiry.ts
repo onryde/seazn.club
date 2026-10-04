@@ -92,7 +92,9 @@ export function evaluate(s: Session, now: Date, limits: ExpiryLimits = DEFAULT_L
     return { kind: "none" };
   }
   if (s.state === "warming") {
-    if (now.getTime() - s.createdAt.getTime() >= limits.warmingTimeoutMinutes * 60_000) return { kind: "warming_timeout" };
+    // A8 (capture QR v2 §5.3): from warming ENTRY, so provisioning time never eats the phone's pre-flight window. The
+    // createdAt fallback is load-bearing: a session opened before V430 has no warming_at.
+    if (now.getTime() - (s.warmingAt ?? s.createdAt).getTime() >= limits.warmingTimeoutMinutes * 60_000) return { kind: "warming_timeout" };
     return { kind: "none" };
   }
   // A playing runner owes a beat; so does a REPLACEMENT that is still booting

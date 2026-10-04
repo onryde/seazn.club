@@ -29,7 +29,7 @@ import { StreamFailReason } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { IngestProvider, RunnerProvider } from "@/server/relay/ports";
-import { rigUser } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS,
   REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
@@ -90,6 +90,7 @@ async function rig(mode: "passthrough" | "composed" = "passthrough") {
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
   const runner = new FakeRunner();
   const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test" };
+  await pairPresentPhone(fixtureId, { at: deps.now() });   // A7 (capture QR v2 T6): W5 refuses a Go live with no present phone
   const { sessionId } = await createSession(auth, fixtureId, { mode, targetId: target.id }, deps);
   const state = async (sid = sessionId) => (await sql<{
     state: string; fail_reason: string | null; machine_id: string | null; runner_retries: number; runner_state: string; runner_gone_confirmed_at: Date | null;
@@ -163,7 +164,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
 
   it("BACKSTOP: a warming session nobody reads past the warming timeout is failed by the sweep, and counted in ITS bucket (mutant: delete the sweep's reconcileSession call → red)", async () => {
     const r = await rig();
-    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${r.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}), warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${r.sessionId}`;
     const res = await sweep(r);
     expect(res.backstop).toMatchObject({ candidates: 1, visited: 1, skippedLocked: 0, errored: 0, warmingTimedOut: 1, crashed: 0 });
     expect(await r.state()).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
@@ -602,7 +603,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
 
   it("the sweep lock: a session held by another sweep's transaction is skipped; released → visited", async () => {
     const r = await rig();
-    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${r.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}), warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${r.sessionId}`;
     let release!: () => void;
     const held = new Promise<void>((res) => (release = res));
     let locked!: () => void;
@@ -627,7 +628,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     const bad = await rig("composed");
     const mb = await goLive(bad);
     const good = await rig();
-    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${good.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}), warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${good.sessionId}`;
     const boom = new Error("observe exploded");
     const runner = Object.assign(Object.create(bad.runner) as FakeRunner, {
       async observe(id: string) { if (id === mb) throw boom; return bad.runner.observe(id); },
