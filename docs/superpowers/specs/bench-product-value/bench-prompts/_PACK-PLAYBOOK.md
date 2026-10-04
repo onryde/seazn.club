@@ -18,8 +18,8 @@ oracles). Read `_RULES.md` §4 first. Spec: bench design §4 (packs), §5
    real score) and flag `provenance:"reconstructed"` — never guess an
    ATTRIBUTED fact (scorer, card, wicket); an unattributable fact is a
    §7A adaptation, not an invention.
-2. **Build.** `scripts/bench/build-packs/<suite>.ts` emits
-   `scripts/bench/packs/<suite>.json` conforming to the FROZEN
+2. **Build.** `tools/bench/packs/build-packs/<suite>.ts` emits
+   `tools/bench/packs/<suite>.json` conforming to the FROZEN
    PackSchema (B02; additive change = escalate, never silent). Builder
    is deterministic (no Date.now/random) and committed alongside its
    inputs (checked-in raw data files where licensing permits, else the

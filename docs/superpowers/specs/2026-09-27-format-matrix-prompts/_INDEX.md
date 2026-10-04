@@ -544,7 +544,7 @@ a peer session as the other.
     as written; execution is subagent-driven (fresh implementer + reviewer per
     task, whole-branch review at the end).
 23. **Read-only transitive `PackSchema` load accepted** (W1a open question 1):
-    importing `scripts/bench/lib/plan.ts` transitively loads the pack schema
+    importing `tools/bench/lib/plan.ts` transitively loads the pack schema
     for reading; R3 still forbids importing or editing `run-suite.ts` /
     `pack-schema.ts` directly.
 24. **W1a/W1b defaults** (W1a open questions 2–3): the W1b double_elim denied
@@ -662,7 +662,7 @@ a peer session as the other.
     owner answered "1" to the controller's two options.
     - **What it means.** `BrowserDriver` lives in `tools/matrix/lib/driver/`,
       uses the Playwright *library* (the root `playwright` dependency, as
-      `scripts/bench/lib/tap-play.ts` already does), and is selected by the
+      `tools/bench/lib/tap-play.ts` already does), and is selected by the
       matrix runner. L1 and L2 share L3's planner, invariants, `decideState`,
       `results.json` and `MATRIX.md`.
     - **Rejected alternative:** Playwright Test specs under
@@ -677,11 +677,11 @@ a peer session as the other.
 38. **W1c borrows the bench's tap helpers by import** (2026-09-29). Asked
     "import, or copy?", the owner answered "1" (import).
     - **What it means.** `tools/matrix` may import four more bench modules:
-      `scripts/bench/lib/ledger.ts`; the sport-blind exports of
-      `scripts/bench/lib/drivers/scorer.ts` (`TapStep`, `selectorForTapStep`,
+      `tools/bench/lib/ledger.ts`; the sport-blind exports of
+      `tools/bench/lib/drivers/scorer.ts` (`TapStep`, `selectorForTapStep`,
       the chassis testids, `TAP_PACING_MS`, `PadPage`, `organiserStepsFor`);
-      `scripts/bench/lib/drivers/adapters/generic.ts` (`genericAdapter`); and
-      the pure helpers of `scripts/bench/lib/tap-play.ts` (consent seed,
+      `tools/bench/lib/drivers/adapters/generic.ts` (`genericAdapter`); and
+      the pure helpers of `tools/bench/lib/tap-play.ts` (consent seed,
       device-link mint and pad URL, `waitForStartRow`,
       `reloadConsoleBeforeAction`). The private `executeStep` is copied.
       `playMatchByTaps` and `createTapPlayer` are not used: they fix the
@@ -854,7 +854,8 @@ Elsewhere the text is the controller's record.
       owner's "ok": the truth runs are 12 MB, read by 12 CI test files, W1d's baseline, and history already holds
       them, so moving them out buys nothing. They are left out of the image instead.
     - **The package.** The harness lives at `tools/matrix` as `@seazn/matrix`; `tools/` is the home for dev-only
-      harnesses (bench to follow). Choosing `tools/` over `packages/` was the controller's ruling (CL-R3, revised),
+      harnesses (bench to follow; it did on 2026-10-04 as `tools/bench`, `@seazn/bench`, recorded in the bench
+      programme's `_INDEX.md`). Choosing `tools/` over `packages/` was the controller's ruling (CL-R3, revised),
       not the owner's: the owner asked "tools or package?" and said the bench would follow later, and the
       controller ruled on that. `tools/*` is a pnpm workspace glob; the harness's manifest declares what it
       really imports. Nothing in `apps/`, `packages/` or `scripts/` may import `tools/**` or `@seazn/matrix`:
@@ -1170,7 +1171,7 @@ a check means or where a finding goes are listed here. SHAs are post-rebase (the
     stages, because I4 and I5 fail on zero stages.
   - **Bench owner:** the bench preflight runs its catalog queries and
     `GET /api/health` concurrently with `show data_directory`
-    (`scripts/bench/lib/env.ts:244-252`). The matrix runs its own guard first,
+    (`tools/bench/lib/env.ts:244-252`). The matrix runs its own guard first,
     so the matrix makes no foreign write, but the bench on its own is exposed.
   - **The wave that adds the weekly schedule** must delete or invert
     `ci-wiring.test.ts`'s "no scheduled matrix workflow" test.

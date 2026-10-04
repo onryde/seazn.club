@@ -93,7 +93,7 @@ re-derived:
 
 **What happened.** `V393__entitlements_v18.sql` deleted the `pro_plus` plan outright
 and inserted `officials.auto` for both Event Pass rungs.
-`chooseGrantingPlanForCapabilities` (`scripts/bench/lib/plan.ts`) iterates
+`chooseGrantingPlanForCapabilities` (`tools/bench/lib/plan.ts`) iterates
 `[...primaryGrantors].sort()` and breaks on the first plan satisfying every desired
 capability. With `cricket.dls` granted by `{community, enterprise, pro}` in the live
 matrix, **`enterprise` sorts before `pro`** and satisfies the rest — so `provisionPlan`
@@ -104,7 +104,7 @@ the Contact-us plan — and its column is unlimited across the board. A benchmar
 provisioned onto unlimited caps is not measuring anything a customer can buy. There is
 no crash and no FK failure; the baseline just moved.
 
-**And the fixtures hide it.** `scripts/bench/lib/__tests__/plan.test.ts:27-30` and
+**And the fixtures hide it.** `tools/bench/lib/__tests__/plan.test.ts:27-30` and
 `dls-gate.test.ts:129-156,295-315` inject a fake catalog containing `pro_plus` and no
 `enterprise`, so they stay green while asserting a catalog shape that no longer exists
 — `dls-gate.test.ts:304` still expects `provisionedPlan === "pro_plus"`, a plan V393
@@ -119,7 +119,7 @@ rather than relying on `.sort()`, where the current behaviour is alphabetical by
 accident. And point the fixtures at the live catalog, or they will keep passing
 through the next plan change too.
 
-**One caution from the wave that found it:** `scripts/bench/lib/plan.ts` deliberately
+**One caution from the wave that found it:** `tools/bench/lib/plan.ts` deliberately
 reads `plan_entitlements` at call time so constants cannot go stale — and its own
 header comment still went stale anyway, asserting as *checked* that no pass tier had
 an `officials.auto` row. That comment is corrected in place with the correction left

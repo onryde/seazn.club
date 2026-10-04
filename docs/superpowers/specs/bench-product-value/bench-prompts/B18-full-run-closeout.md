@@ -28,7 +28,7 @@ any code fixes; docs may land on main per repo convention.
    app (players, stats, career pages, standings, news) — screenshot
    set at 1280/320/768 for THREE representative surfaces attached to
    the PR (the demo-data-factory promise, verified once).
-4. **Docs**: bench README (`scripts/bench/README.md`) — how to run,
+4. **Docs**: bench README (`tools/bench/README.md`) — how to run,
    flags, report anatomy, how to add a suite (pointer to playbook);
    `seazn-local-env` final touch-ups.
 5. **Close-out**: `_INDEX.md` all rows DONE + programme summary
@@ -54,7 +54,7 @@ any code fixes; docs may land on main per repo convention.
 ```bash
 npm run bench:scheduler -- --engine both            # full roster (suite 13 UI-first)
 npm run bench:scheduler -- --entry registration --keep   # volume pass, report-only
-npx vitest run --reporter=json --outputFile=/tmp/b18.json scripts/bench
+npx vitest run --reporter=json --outputFile=/tmp/b18.json tools/bench
 jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/b18.json
 rtk proxy npm run lint
 ```

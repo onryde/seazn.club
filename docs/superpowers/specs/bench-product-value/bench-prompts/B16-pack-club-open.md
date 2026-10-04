@@ -19,8 +19,8 @@ signup route. Paste re-pins into the PR body.
 
 ## Scope
 
-1. **Pack** `scripts/bench/packs/club-open.json` built by
-   `scripts/bench/build-packs/club-open.ts` — fully synthetic
+1. **Pack** `tools/bench/packs/club-open.json` built by
+   `tools/bench/packs/build-packs/club-open.ts` — fully synthetic
    (`provenance:"synthetic"` on every stream and on the entry layer),
    deterministic (seeded PRNG, seed in `meta`), spec §5 table verbatim:
    - U16 Singles · badminton · `age_max:15` · individual · free · auto · 16 entries · 1 over-age offender · KO
@@ -103,7 +103,7 @@ shape is missing, escalate in the PR).
 ## Verify (verbatim)
 
 ```bash
-npx vitest run --reporter=json --outputFile=/tmp/b16.json scripts/bench
+npx vitest run --reporter=json --outputFile=/tmp/b16.json tools/bench
 jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/b16.json
 rtk proxy npm run lint
 npm run bench:scheduler -- --suite club-open --wipe
