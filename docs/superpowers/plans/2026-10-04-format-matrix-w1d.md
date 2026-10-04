@@ -4312,6 +4312,22 @@ Re-review 7 (0 Critical, 1 Important, 7 Minor) was taken against `26c0b5226`. It
 
 ---
 
+
+## Plan review 8: Approved (0C/0I/3m), executor carries
+
+Re-review 8 (plan `2d3a7801f`) approved the plan. Its three minors are not fixed in the plan. The executor of the
+named task carries them:
+
+1. **Task 15 Step 4** also runs `tools/matrix/__tests__/ci-wiring.test.ts`, where the new floor-step pin lives.
+   Check it in `.testResults[].name`.
+2. **Task 15, `--check-file-against` contract:**
+   - The file path is relative to cwd.
+   - Resolve the ref with `git rev-parse --verify <ref>^{commit}`, and test presence with `git ls-tree <ref> -- <path>`.
+     Never parse the localised stderr of `git show`.
+   - The interface states the compared-entry count the CLI prints, and zero compared with a floor present is a failure.
+3. **Task 15's temp-git-repo CLI tests** copy Task 1's git-identity helper (`user.name` / `user.email`) and set
+   `commit.gpgsign=false`, so a developer machine with signing on does not red them.
+
 ## Self-Review
 
 **1. Spec coverage** (the brief, rulings 60–68, item list):
