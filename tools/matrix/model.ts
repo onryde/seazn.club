@@ -41,7 +41,9 @@
 //      its sport's (carry G-2); a live builder default that is not the offline
 //      one (BuilderDefaultDrift, Review Focus 5); a case-org plan that allows
 //      no division per competition (PlanAllowsNoDivision, final batch F-6 —
-//      read before any case org).
+//      read before any case org); a run id whose case orgs this DATABASE
+//      already holds (RunIdUsedInDb, W1d items 12, 25 — asked once, after the
+//      DB opens and before the sign-in; run.ts seeds the same slugs).
 //   3  aborted after the start gates: git, the DB, sign-in, a case org, or a
 //      report that cannot be written or still holds a secret after redaction;
 //      or, report written, some cell's request did not answer (RequestTimedOut:
@@ -66,12 +68,13 @@ import { runCell, type CellReport } from "./lib/model/run-cell.ts";
 import { modelRowRefusal } from "./lib/model/state.ts";
 import { BaseNotUrl, baseScrubber, findSecrets, mapStrings, redact } from "./lib/redact.ts";
 import { SecretInResults, stringsIn } from "./lib/results.ts";
+import { RUN_ID_MAX, slugRunId } from "./lib/run-id.ts";
 import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, loadRegressions, replayFences, type RegressionCase } from "./lib/scenario-catalogue.ts";
-import { DataDirMismatch, DataDirUnset, caseOrgSlug, ownerEmail, requireOwnDataDir } from "./lib/seed-org.ts";
+import { DataDirMismatch, DataDirUnset, RunIdUsedInDb, caseOrgSlug, ownerEmail, requireOwnDataDir } from "./lib/seed-org.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "./lib/slice.ts";
 import { variantKeys } from "./lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
-import { BuilderDefaultDrift, EXIT, RUN_ID_MAX, realDeps, type RunDeps } from "./run.ts";
+import { BuilderDefaultDrift, EXIT, realDeps, type RunDeps } from "./run.ts";
 
 export type ModelDeps = Pick<RunDeps, "env" | "harnessCommit" | "preflight" | "openDb" | "signIn" | "prepareCaseOrg" | "driverFor"> & {
   /** The committed regressions (default: regressions.json under --root, or this checkout). A seam for the unit suite. */
@@ -198,9 +201,9 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   // so a constant default made a second run abort on a duplicate slug, or
   // re-walk the same seeds on a fresh DB.
   if (v["run-id"] === undefined) return { usage: "--run-id is required: the case orgs' slugs and every cell's seed derive from it, so each run needs its own" };
-  const slugged = v["run-id"].toLowerCase().replace(/[^a-z0-9-]+/g, "-");
-  const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
-  if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
+  // lib/run-id.ts owns the slug (W1d Task 4); this was a verbatim copy of it until Task 5.
+  const runId = slugRunId(v["run-id"]);
+  if (runId === null) return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
   return {
     runId, reportDir: v["report-dir"] ?? "matrix-report", cells, cellsGiven: v.cell !== undefined, runs, maxCommands, timeLimitMs,
     seed, path: v.path, replayPath: v["replay-path"], fences: v["no-fences"] !== true, regressions: v.regressions === true, base: v.base, root: v.root,
@@ -393,6 +396,11 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
     harnessCommit = await deps.harnessCommit();
     const db = await deps.openDb();
     try {
+      // W1d items 12, 25: the case orgs' slugs (`m-<run id>-<n>`) are unique, so a run id this DATABASE already
+      // holds (from run.ts as much as from an earlier model run) would abort the first cell on a raw duplicate
+      // slug. Asked once, after the DB (and its own-DB proof) is open and BEFORE the sign-in and any case org.
+      const taken = await db.runIdTaken(cli.runId);
+      if (taken > 0) throw new RunIdUsedInDb(cli.runId, taken);
       const owner = ownerEmail(cli.runId);
       const session = await deps.signIn(base, owner);
       const userId = await db.userIdForEmail(owner);
@@ -441,7 +449,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
       try { await db.dispose(); } catch (e) { warn(`model: db dispose failed — ${errText(e)}`); }
     }
   } catch (e) {
-    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanAllowsNoDivision;
+    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanAllowsNoDivision || e instanceof RunIdUsedInDb;
     warn(`model: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }

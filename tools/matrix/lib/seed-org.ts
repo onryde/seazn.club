@@ -48,6 +48,11 @@ export interface MatrixSql {
    *  null is UNLIMITED (null here) and no row at all is 0. A case org on the
    *  plan with no pass, no override and no add-on holds exactly this. */
   planLimit(planKey: string, featureKey: string): Promise<number | null>;
+  /** W1d items 12, 25: how many case orgs `runId` has ALREADY seeded in this database — the `organizations`
+   *  rows whose slug is `m-<runId>-<n>` (caseOrgSlug), which is the only slug a run under that id can collide
+   *  with (organizations.slug is unique). Zero is a fresh id. Behind the same data-dir gate as every query:
+   *  a free function over a raw client would read a database nobody proved was ours. */
+  runIdTaken(runId: string): Promise<number>;
 }
 
 export class DataDirUnset extends Error {
@@ -88,6 +93,7 @@ export function gateOnOwnDataDir(inner: MatrixSql, readDataDir: () => Promise<st
     async denyFeature(input) { await proven(); return inner.denyFeature(input); },
     async planGrants(planKey) { await proven(); return inner.planGrants(planKey); },
     async planLimit(planKey, featureKey) { await proven(); return inner.planLimit(planKey, featureKey); },
+    async runIdTaken(runId) { await proven(); return inner.runIdTaken(runId); },
   };
 }
 
@@ -188,6 +194,28 @@ export function caseOrgSlug(runId: string, n: number): string {
   return `${CASE_ORG_SLUG_PREFIX}${runId}-${n}`;
 }
 
+/** The prefix every case org of run `runId` carries (`m-<id>-`, caseOrgSlug's), escaped for a LIKE: `%` and
+ *  `_` are its wildcards and `\` its escape (Postgres's default, so the query needs no ESCAPE clause). A run id
+ *  is slug-safe ([a-z0-9-] — ownerEmail refuses anything else before any query runs), so none of the three can
+ *  occur in one; the escape keeps the pattern exact for ANY string instead of resting on that. */
+export function likePrefixOf(runId: string): string {
+  return `${CASE_ORG_SLUG_PREFIX}${runId.replace(/[\\%_]/g, "\\$&")}-`;
+}
+
+/** W1d items 12, 25: the database already holds case orgs under this run id, so a run under it would collide
+ *  on the slug of its first org (organizations_slug_key) and red every case — the same wall for run.ts and
+ *  model.ts, which share the `m-<id>-<n>` slug space. Refused before any sign-in or seeding. */
+export class RunIdUsedInDb extends Error {
+  readonly runId: string;
+  readonly count: number;
+  constructor(runId: string, count: number) {
+    super(`run id ${runId} already seeded ${count} org(s) in this database — pick a fresh --run-id (item 12)`);
+    this.name = "RunIdUsedInDb";
+    this.runId = runId;
+    this.count = count;
+  }
+}
+
 /** R14a: the run's owner is a synthetic resend.dev sink. The run id must be
  *  slug-safe, so nothing but `[a-z0-9-]` can reach the local part. */
 export function ownerEmail(runId: string): string {
@@ -252,6 +280,15 @@ export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: 
       const v = row.int_value;
       if (v !== null && !Number.isInteger(v)) throw new Error(redact(`seed-org: plan ${planKey}'s ${featureKey} int_value is ${JSON.stringify(v)}, not an integer or null`));
       return v;
+    },
+    async runIdTaken(runId) {
+      // The LIKE narrows to the id's prefix; which of those rows are THIS id's case orgs is decided here, because
+      // a prefix is not an identity: run id `a` must not be refused for the orgs of run id `a-b` (`m-a-b-1`), which
+      // can never collide with `m-a-<n>`. A case org's slug is the prefix and then its case number, digits only.
+      const prefix = `${CASE_ORG_SLUG_PREFIX}${runId}-`;
+      const pattern = `${likePrefixOf(runId)}%`;
+      const rows = await db<{ slug: string }[]>`select slug from organizations where slug like ${pattern}`;
+      return rows.filter((r) => r.slug.startsWith(prefix) && /^[0-9]+$/.test(r.slug.slice(prefix.length))).length;
     },
     async variantKeysInBuilderOrder(sportKey) {
       // The division builder (app/o/[orgSlug]/c/[compSlug]/d/new/page.tsx)

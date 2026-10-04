@@ -52,6 +52,9 @@ export function deps(over: Partial<RunDeps> = {}, o: { failOrgAt?: number } = {}
       chooseTopPublicPlan: async () => "pro",
       planGrants: async (k: string) => { planReads.push(k); return [...ALL_GATES]; },
       planLimit: async () => null,
+      // W1d Task 5: a fresh database holds no org of any run id. It does NOT push to `order` — a dozen tests
+      // pin that list exactly; withRunIdTaken below is the recording one.
+      runIdTaken: async () => 0,
       dispose: async () => { order.push("dispose"); },
     }; },
     signIn: async (_b, e) => { order.push("signIn"); emails.push(`signIn ${e}`); return session; },
@@ -66,6 +69,19 @@ export function deps(over: Partial<RunDeps> = {}, o: { failOrgAt?: number } = {}
     ...over,
   };
   return d;
+}
+
+/** W1d Task 5 (items 12, 25): the fake DB answers `answer(runId)` for the run-id probe, and the call is
+ *  recorded — into `order` as `runIdTaken <id>`, so a test can pin where it sits against `signIn`, and into
+ *  `d.taken` as the id the runner asked about (slugged, as it reaches the DB). */
+export function withRunIdTaken(d: Deps, answer: (runId: string) => number | Promise<number>): Deps & { taken: string[] } {
+  const taken: string[] = [];
+  const prior = d.openDb.bind(d);
+  d.openDb = async () => ({
+    ...(await prior()),
+    runIdTaken: async (runId: string) => { d.order.push(`runIdTaken ${runId}`); taken.push(runId); return answer(runId); },
+  });
+  return Object.assign(d, { taken });
 }
 
 export interface FakeBrowserRun { run: BrowserRun; log: string[]; opts: CaseDriverOptions[]; opened: () => number }

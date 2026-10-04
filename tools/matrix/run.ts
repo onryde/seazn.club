@@ -74,7 +74,12 @@
 //      layered plan with no case (NothingPlanned) or with one result id twice
 //      (DuplicateCaseId) — both after sign-in, before any case; a run id whose
 //      <report-dir>/<run-id>/results.json already exists (RunIdReused, W1c
-//      Task 8 E-2 — its evidence is kept, never overwritten); an unknown
+//      Task 8 E-2 — its evidence is kept, never overwritten); a run id whose
+//      case orgs (`m-<run-id>-<n>`) this DATABASE already holds (RunIdUsedInDb,
+//      W1d items 12, 25 — the report dir cannot see another dir's run, or
+//      model.ts's: asked after the DB opens, BEFORE the sign-in, so every shard
+//      refuses a reused id too); a width no layer runs at (NoLayerForWidth,
+//      W1d item 5 — defensive: every --width the CLI accepts has a layer); an unknown
 //      filter value (UnknownFilter — checked before anything else, PF13); an
 //      unknown --set (UnknownSet) or a planner that refuses to be built (a
 //      bound variant case the engine cannot score, BoundVariantUnscorable; a
@@ -130,7 +135,7 @@ import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
 import { routeTo } from "./lib/routing.ts";
 import {
-  API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, LAYER_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
+  API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, LAYER_PLANNERS, NoLayerForWidth, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
   type LayerCase, type LayerScope, type PlannedLayerCase,
 } from "./lib/layers.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
@@ -144,7 +149,7 @@ import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
 import { SCENARIOS } from "./lib/scenarios/index.ts";
 import { ScenarioUnsupported, type CaseSpec } from "./lib/scenarios/types.ts";
 import {
-  DataDirMismatch, DataDirUnset, caseOrgSlug, chooseTopPublicPlan, createRealMatrixSql, ownerEmail, prepareCaseOrg, requireOwnDataDir,
+  DataDirMismatch, DataDirUnset, RunIdUsedInDb, caseOrgSlug, chooseTopPublicPlan, createRealMatrixSql, ownerEmail, prepareCaseOrg, requireOwnDataDir,
 } from "./lib/seed-org.ts";
 import { BadShard, parseShard, stripe, type Shard } from "./lib/shard.ts";
 import { resolveSportCfg } from "./lib/sport-cfg.ts";
@@ -159,7 +164,8 @@ export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 
 /** A run id names the report directory, the owner's email and every case's
  *  org slug (`m-<id>-<n>`), so it must be slug-safe and short enough that no
  *  slug is ever cut — a cut slug would drop the case number and collide. The
- *  slug moved to lib/run-id.ts (W1d Task 4); model.ts still imports the bound from here. */
+ *  slug moved to lib/run-id.ts (W1d Task 4), and so did model.ts's import of
+ *  the bound (W1d Task 5); this re-export is for the callers that still name it here. */
 export { RUN_ID_MAX };
 
 export interface RunDb {
@@ -170,6 +176,9 @@ export interface RunDb {
   planGrants(planKey: string): Promise<readonly string[]>;
   /** `planKey`'s numeric limit for `featureKey`, null = unlimited (seed-org.ts MatrixSql.planLimit). */
   planLimit(planKey: string, featureKey: string): Promise<number | null>;
+  /** How many case orgs `runId` has already seeded in this database (seed-org.ts MatrixSql.runIdTaken,
+   *  W1d items 12, 25). Required, never optional: a db without it would skip the refusal rather than fail. */
+  runIdTaken(runId: string): Promise<number>;
   dispose(): Promise<void>;
 }
 
@@ -909,6 +918,13 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   let shardHeader: ShardHeader | undefined;
   const db = await deps.openDb();
   try {
+    // W1d items 12, 25: the case orgs' slugs are `m-<run id>-<n>` and unique, so a run id this DATABASE already
+    // holds would red its first org (organizations_slug_key) and then every case. The E-2 guard above reads only
+    // <report-dir>/<id>/results.json, which another --report-dir (or model.ts, which seeds the same slugs) never
+    // leaves. Asked here — after the DB (and its own-DB proof) is open, BEFORE the sign-in, the shard stripe, the
+    // plan reads and any case — so a sharded run refuses a reused id by name too, in every shard.
+    const taken = await db.runIdTaken(cli.runId);
+    if (taken > 0) throw new RunIdUsedInDb(cli.runId, taken);
     // LOAD-BEARING (final review gap hunt): the data-dir guard proves the
     // harness's OWN SQL connection, never the server's. That the server at
     // SMOKE_BASE writes the same DB is proven only by these two, each of which
@@ -1168,7 +1184,9 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
     return await execute(deps, cli, base, planner, width);
   } catch (e) {
     const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanLacksGate
-      || e instanceof PlanStageCapTooLow || e instanceof NothingPlanned || e instanceof DuplicateCaseId || e instanceof ShardEmptyPlan;
+      || e instanceof PlanStageCapTooLow || e instanceof NothingPlanned || e instanceof DuplicateCaseId || e instanceof ShardEmptyPlan
+      // W1d item 5: a width no layer runs at is a precondition, not a crash mid-run. W1d items 12, 25: so is a run id the DB holds.
+      || e instanceof NoLayerForWidth || e instanceof RunIdUsedInDb;
     warn(`matrix: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }
@@ -1260,6 +1278,7 @@ export function realDeps(dbf: DbFactories = REAL_DB, turnDeadlineMs: number = TU
         chooseTopPublicPlan: async () => chooseTopPublicPlan(await p.sql.planCandidateInfo(await m.sql.listPlanKeys())),
         planGrants: (k) => m.sql.planGrants(k),
         planLimit: (k, f) => m.sql.planLimit(k, f),
+        runIdTaken: (id) => m.sql.runIdTaken(id),
         dispose: () => closeHandles(m, p),
       };
       resolve(db);

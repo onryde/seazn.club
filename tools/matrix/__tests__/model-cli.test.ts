@@ -30,6 +30,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { DIVISION_CAP_KEY, MODEL_DEFAULTS, MODEL_USAGE, fnv1a32, runModel, seedFor, type ModelDeps } from "../model.ts";
 import { REQUEST_TIMEOUT_MS } from "../lib/driver/http-driver.ts";
 import { LOCAL_BASE } from "../lib/redact.ts";
+import { RUN_ID_MAX, slugRunId } from "../lib/run-id.ts";
 import { RefusedCall, RequestTimedOut, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
 import { MODEL_ERROR } from "../lib/model/run-cell.ts";
 import { REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
@@ -116,6 +117,7 @@ const deps = (over: Over = {}): ModelDeps => {
       chooseTopPublicPlan: async () => "pro",
       planGrants: async () => [],
       planLimit: async () => null,
+      runIdTaken: async () => 0,
       dispose: async () => {},
     }),
     signIn: async () => ({ cookies: {} }),
@@ -786,7 +788,7 @@ describe("model.ts", () => {
     const io = capture();
     let orgs = 0;
     const d = deps({
-      openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async () => ["win_loss"], chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, dispose: async () => {} }),
+      openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async () => ["win_loss"], chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, runIdTaken: async () => 0, dispose: async () => {} }),
       prepareCaseOrg: async (_c, i) => { orgs++; return { orgId: "o", orgSlug: i.slug, denied: [] }; },
     });
     expect(await runModel(d, ["--run-id", "bd", "--report-dir", reportDir(), ...ONE])).toBe(2);
@@ -952,7 +954,7 @@ describe("model.ts --cell (W1-driving Task 14)", () => {
   /** The live builder's variant order for any sport — the offline catalogue's, so no drift. */
   const gridDeps = (driver: () => ModelFakeDriver): ModelDeps => deps({
     driverFor: driver,
-    openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async (s: string) => offlineVariantOrder(s), chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, dispose: async () => {} }),
+    openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async (s: string) => offlineVariantOrder(s), chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, runIdTaken: async () => 0, dispose: async () => {} }),
   });
   it("empty case first: a cell off the grid is a usage refusal naming it, exit 2, before any DB work", async () => {
     const io = capture();
@@ -1057,5 +1059,79 @@ describe("model.ts --regressions: which cells it replays (W1-driving Task 14 fix
     expect(touched).toEqual([]);
     expect(io.err()).toContain("model: refused ladder|generic — ModelUnsupported:");
     expect(io.err()).toContain("→ W7");
+  });
+});
+
+// W1d Task 5 (items 12, 25): the model CLI seeds case orgs under the SAME slug space as run.ts (`m-<id>-<n>`,
+// organizations.slug is unique), so a run id this database already holds aborted its first cell on a raw duplicate-slug
+// error. It is refused up front instead — after the DB opens, before the sign-in and the first case org.
+describe("model.ts: a run id the database already holds (W1d items 12, 25)", () => {
+  const probing = (answer: (id: string) => number | Promise<number>) => {
+    const order: string[] = [];
+    const taken: string[] = [];
+    const base = deps();
+    const d = deps({
+      openDb: async () => ({ ...(await base.openDb()), runIdTaken: async (id: string) => { order.push(`runIdTaken ${id}`); taken.push(id); return answer(id); } }),
+      signIn: async () => { order.push("signIn"); return { cookies: {} }; },
+      prepareCaseOrg: async (_c, i) => { order.push(`org ${i.slug}`); return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] }; },
+    });
+    return { d, order, taken };
+  };
+
+  it("a taken run id: exit 2, named with the count — no sign-in, no case org, no report", async () => {
+    const io = capture();
+    const dir = reportDir();
+    const { d, order } = probing(async () => 3);
+    expect(await runModel(d, ["--run-id", "model-dup", "--report-dir", dir, ...ONE])).toBe(2);
+    expect(io.err()).toContain("RunIdUsedInDb: run id model-dup already seeded 3 org(s) in this database — pick a fresh --run-id (item 12)");
+    expect(io.err()).toMatch(/model: refused — RunIdUsedInDb/);
+    expect(io.err()).not.toContain("aborted");
+    expect(order).toEqual(["runIdTaken model-dup"]);
+    expect(existsSync(join(dir, "model-dup", "model-report.json"))).toBe(false);
+  });
+
+  it("the empty case: a fresh run id (zero orgs) proceeds — probed once, BEFORE the sign-in, then the first case org", async () => {
+    capture();
+    const { d, order, taken } = probing(async () => 0);
+    expect(await runModel(d, ["--run-id", "model-fresh", "--report-dir", reportDir(), ...ONE])).toBe(0);
+    expect(taken).toEqual(["model-fresh"]);
+    expect(order).toEqual(["runIdTaken model-fresh", "signIn", "org m-model-fresh-1"]);
+  });
+
+  it("asked ONCE per run, not once per cell: two cells, one probe, two case orgs", async () => {
+    capture();
+    const { d, order, taken } = probing(async () => 0);
+    expect(await runModel(d, ["--run-id", "two", "--report-dir", reportDir(), "--cell", CELL, "--cell", "league|badminton", "--runs", "40"])).toBe(0);
+    expect(taken).toEqual(["two"]);
+    expect(order.filter((o) => o.startsWith("org "))).toEqual(["org m-two-1", "org m-two-2"]);
+  });
+
+  it("the probe is asked about the SLUGGED run id (lib/run-id.ts slugRunId — the one the case org slugs carry), not the raw argument", async () => {
+    capture();
+    const { d, taken } = probing(async () => 0);
+    expect(await runModel(d, ["--run-id", "Model Raw_Id", "--report-dir", reportDir(), ...ONE])).toBe(0);
+    expect(taken).toEqual([slugRunId("Model Raw_Id")]);
+    expect(taken).toEqual(["model-raw-id"]);
+  });
+
+  it("the run id's slug rule is the leaf's: every id slugRunId refuses is refused here too, and the bound is its RUN_ID_MAX (the verbatim copy is gone)", async () => {
+    const io = capture();
+    const refusedByLeaf = ["!!!", "   ", "a".repeat(RUN_ID_MAX + 1), `${"a".repeat(RUN_ID_MAX)}-`, "---"];
+    const accepted = ["a", "a".repeat(RUN_ID_MAX), "Mixed Case"];
+    let checked = 0;
+    for (const id of refusedByLeaf) { expect(slugRunId(id), id).toBeNull(); expect(await runModel(deps({ openDb: noDb() }), ["--run-id", id, ...ONE]), id).toBe(2); checked++; }
+    expect(io.err()).toContain(`--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]`);
+    for (const id of accepted) { expect(slugRunId(id), id).not.toBeNull(); checked++; }
+    expect(checked).toBe(refusedByLeaf.length + accepted.length);
+    // The source no longer carries its own copy of the slug.
+    expect(readFileSync(MODEL, "utf8")).not.toMatch(/\.replace\(\/\[\^a-z0-9-\]\+\/g/);
+  });
+
+  it("a probe that cannot read the DB: a data-dir mismatch is a refusal (exit 2), anything else an abort (exit 3)", async () => {
+    const io = capture();
+    expect(await runModel(probing(() => { throw new DataDirMismatch("/tmp/pg", "/elsewhere"); }).d, ["--run-id", "mm1", "--report-dir", reportDir(), ...ONE])).toBe(2);
+    expect(io.err()).toMatch(/refused — DataDirMismatch/);
+    expect(await runModel(probing(() => { throw new Error("connection refused"); }).d, ["--run-id", "mm2", "--report-dir", reportDir(), ...ONE])).toBe(3);
+    expect(io.err()).toMatch(/aborted — Error: connection refused/);
   });
 });

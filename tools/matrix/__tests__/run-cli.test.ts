@@ -898,6 +898,7 @@ describe("runSlice — aborts after the start gates", () => {
     chooseTopPublicPlan: async () => "pro",
     planGrants: async () => [...ALL_GATES],
     planLimit: async () => null,
+    runIdTaken: async () => 0,
     dispose: async () => {},
   }) });
   it("Review Focus 5: a live builder default that differs from the offline one refuses (exit 2) naming both keys, before any case", async () => {
@@ -1166,6 +1167,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
       denyFeature: async () => { log.push("m.denyFeature"); },
       planGrants: async () => { log.push("m.planGrants"); return ["formats.double_elim"]; },
       planLimit: async () => null,
+      runIdTaken: async () => 0,
     };
     const f: DbFactories = {
       matrixSql: () => { log.push("m.open"); return { sql, dispose: async () => { log.push("m.dispose"); if (opts.mThrows) throw new Error("m end timed out"); } }; },
@@ -1226,6 +1228,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
         denyFeature: async (i) => { log.push(`m.deny ${i.orgId} ${i.featureKey}`); },
         planGrants: async () => [],
         planLimit: async () => null,
+        runIdTaken: async () => 0,
       };
       const p = {
         getOrgSubscriptionId: async (o: string) => { log.push(`p.subscription? ${o}`); return "sub1"; },
@@ -1345,6 +1348,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
         denyFeature: async () => {},
         planGrants: async () => [],
         planLimit: async () => null,
+        runIdTaken: async () => 0,
       };
       // ONE owner behind both orgs: setOwnerStaff flips the same user, as the real SQL does.
       const p = {
@@ -2918,6 +2922,7 @@ async function provisionLoopback(
     denyFeature: async () => {},
     planGrants: async () => [],
     planLimit: async () => null,
+    runIdTaken: async () => 0,
   };
   const p = {
     getOrgSubscriptionId: async () => "sub",
