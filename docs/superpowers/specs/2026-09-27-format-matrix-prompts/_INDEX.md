@@ -916,6 +916,13 @@ Elsewhere the text is the controller's record.
     `l2-pairs.json`, and L3 is the W1-driving set of 937 cases. Each GitHub job is one shard on a fresh Postgres with
     `sync:sports`, about 12 shards. That is $0 while the repo is public.
 
+65. **Ruling 61's "no ░" applies to driven cases only** (2026-10-04, plan D7, owner "ok" to recommendation (a)).
+    Ruling 64's full L2 scope plans 62 driven runs, 164 🚫 and 1,505 ░ of 1,731. The ░ runs have no scenario script
+    yet, by construction. Those 1,505 are recorded as planned ░ (`planned: true`) and counted per atom in the summary,
+    and they do not make a run harness-red. A ░ on a case the plan drives is still harness-red. The ░ count shrinks as
+    W2–W7 add scenario scripts. Rejected: (b) shrinking L2 to the drivable runs, which hides the backlog, and (c) the
+    literal reading, under which the weekly schedule could never be enabled.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
