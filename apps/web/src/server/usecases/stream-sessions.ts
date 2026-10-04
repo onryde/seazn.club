@@ -35,7 +35,7 @@ import {
 import { isPresent } from "@/server/relay/domain/pairing";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
-import { livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
+import { type Ask10Phone, livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
@@ -1737,11 +1737,9 @@ function phoneLostEnd(s: Session, f: PhoneFacts, fresh: IngestState | undefined,
     return { command: { type: "expire", expiry: { kind: "warming_timeout" } }, rule: "m-5" };
   }
   const silentFloor = tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS);
-  // With no current pairing the cadence is never read (warmingPhoneLost answers before it); the pairing's own values otherwise.
-  if (warmingPhoneLost({
-    state: s.state, firstIngestAt: f.first_ingest_at, hasCurrentPairing: f.has_current,
-    lastBeatAt: f.has_current ? f.last_beat_at : null, answeredPollSeconds: f.answered_poll_seconds ?? 0, heardGoLive: f.heard_go_live,
-  }, now, silentFloor)) return { command: { type: "stop", reason: "phone_lost" }, rule: "ask-10" };
+  if (warmingPhoneLost({ state: s.state, firstIngestAt: f.first_ingest_at, ...ask10PhoneOf(f) }, now, silentFloor)) {
+    return { command: { type: "stop", reason: "phone_lost" }, rule: "ask-10" };
+  }
   // m-3 (controller ruling): an `unknown` read — claimed or coalesced — never advances a phone-lost end. A Cloudflare
   // read blip must not end a paid broadcast as phone_lost; the next fresh word decides, and max_duration still bounds it.
   if (fresh !== undefined && fresh !== "unknown" && livePhoneLost({
@@ -1749,6 +1747,15 @@ function phoneLostEnd(s: Session, f: PhoneFacts, fresh: IngestState | undefined,
     freshReadConnected: fresh === "connected", lastConnectedSampleAt: f.last_connected_at,
   }, now, tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES))) return { command: { type: "stop", reason: "phone_lost" }, rule: "w19" };
   return null;
+}
+
+/** Ask 10's phone, from the facts: ONE mapping for the tick's end and the W24 countdown, so the countdown names the
+ *  deadline the tick judges. With no current pairing the cadence is never read (both answer before it). */
+function ask10PhoneOf(f: PhoneFacts): Ask10Phone {
+  return {
+    hasCurrentPairing: f.has_current, lastBeatAt: f.has_current ? f.last_beat_at : null,
+    answeredPollSeconds: f.answered_poll_seconds ?? 0, heardGoLive: f.heard_go_live,
+  };
 }
 
 /** Steps 5–6 of the tick. Judged first on an UNLOCKED read (the common answer is "nothing", and `apply` takes the org's
@@ -1912,14 +1919,16 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   const allowance = await restartAllowance(sql, { orgId: row.org_id, fixtureId, excludeSessionId: null }, deps.now());
   // W24 (§6.12, T9): the countdown to the end the tick will make, from the clocks the tick judges (phoneFactsOf: the
   // phone's beat, the last connected sample, first ingest) and the row's warming entry, on this response's clock, and
-  // from the reading THIS tick judged on (controller ruling 2026-10-04: shown iff that end fires; lostCountdown gates
-  // each kind on what its end reads). A session with no phone (C-1: pairing_id null) has no phone rules, so it has no
+  // from the reading THIS tick judged on (controller rulings 2026-10-04: shown iff that end fires, naming the EARLIEST
+  // end and its reason; lostCountdown gates each end on what it reads). Ask 10's clock is the tick's own mapping. A session with no phone (C-1: pairing_id null) has no phone rules, so it has no
   // countdown either.
   const facts = await phoneFactsOf(sql, row.id);
   const countdown = facts?.has_phone ? lostCountdown({
     state: row.state, firstIngestAt: facts.first_ingest_at, warmingAt: d(row.warming_at), phoneBeatAt: facts.phone_beat_at,
     read: { fresh: freshIngest, served: ingestState?.state ?? null, failed: phoneReadFailed }, lastConnectedSampleAt: facts.last_connected_at,
+    phone: ask10PhoneOf(facts),
   }, deps.now(), {
+    silentFloorSeconds: tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS),
     lostMinutes: tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES), warmingMinutes: WARMING_TIMEOUT_MINUTES,
     quietSeconds: RECONNECT_QUIET_SECONDS,
   }) : null;

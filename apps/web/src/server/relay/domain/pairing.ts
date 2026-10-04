@@ -35,10 +35,15 @@ function cadenceMs(answeredPoll: number): number {
   return answeredPoll * 1000;
 }
 
+/** §6.9: how long after its last beat a phone is silent — max(floor, answered_poll_seconds + slack). isSilent's one
+ *  threshold; the W24 countdown reads it to name ask 10's deadline (phone-lost.ts). */
+export function silentAfterMs(answeredPoll: number, floorSeconds: number): number {
+  return Math.max(floorSeconds * 1000, cadenceMs(answeredPoll) + PHONE_SILENT_SLACK_SECONDS * 1000);
+}
+
 /** §6.9: `now − last_beat_at ≥ max(floor, answered_poll_seconds + slack)`. */
 export function isSilent(lastBeatAt: Date, answeredPoll: number, now: Date, floorSeconds: number): boolean {
-  const threshold = Math.max(floorSeconds * 1000, cadenceMs(answeredPoll) + PHONE_SILENT_SLACK_SECONDS * 1000);
-  return since(lastBeatAt, now) >= threshold;
+  return since(lastBeatAt, now) >= silentAfterMs(answeredPoll, floorSeconds);
 }
 
 /** §6.9: current, and not silent. What gates Go live (T10). */

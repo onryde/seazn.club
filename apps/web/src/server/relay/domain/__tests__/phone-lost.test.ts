@@ -159,11 +159,15 @@ describe("livePhoneLost — W19 (§6.8.5), both clocks and a fresh read", () => 
 });
 
 describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
-  const cfg = { lostMinutes: PHONE_LOST_LIVE_MINUTES, warmingMinutes: WARMING_TIMEOUT_MINUTES, quietSeconds: RECONNECT_QUIET_SECONDS };
+  const cfg = {
+    lostMinutes: PHONE_LOST_LIVE_MINUTES, warmingMinutes: WARMING_TIMEOUT_MINUTES, quietSeconds: RECONNECT_QUIET_SECONDS, silentFloorSeconds: FLOOR,
+  };
   const DOWN: CountdownRead = { fresh: "disconnected", served: "disconnected", failed: false };
+  /** The warming session's phone, beating on the starting cadence a second ago: ask 10 is not armed. */
+  const BEATING = { hasCurrentPairing: true, lastBeatAt: ago(S), answeredPollSeconds: POLL_STARTING_SECONDS, heardGoLive: true };
   const live = (beatMs: number, videoMs: number) => ({
     state: "live" as const, firstIngestAt: ago(LOST_MS * 2), warmingAt: ago(LOST_MS * 3), phoneBeatAt: ago(beatMs),
-    read: DOWN, lastConnectedSampleAt: ago(videoMs),
+    read: DOWN, lastConnectedSampleAt: ago(videoMs), phone: BEATING,
   });
   const WORDS = ["connected", "disconnected", "unknown"] as const;
 
@@ -191,7 +195,7 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
 
   it("live, no video and no beat for RECONNECT_QUIET_SECONDS − 1 s → null; at the quiet hold → the countdown", () => {
     expect(lostCountdown(live(QUIET_MS - S, QUIET_MS - S), NOW, cfg)).toBeNull();
-    expect(lostCountdown(live(QUIET_MS, QUIET_MS), NOW, cfg)).toEqual({ kind: "live", elapsedMs: QUIET_MS, remainingMs: LOST_MS - QUIET_MS });
+    expect(lostCountdown(live(QUIET_MS, QUIET_MS), NOW, cfg)).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: QUIET_MS, remainingMs: LOST_MS - QUIET_MS });
   });
 
   it("O5: video gone 10 min while the phone still beats (inside the quiet hold) → null — W19 cannot fire", () => {
@@ -200,36 +204,36 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
   });
 
   it("§6.12's rule, not the brief's example: a beat 2 min ago is past the quiet hold, so it counts down from the 2-min silence", () => {
-    expect(lostCountdown(live(2 * MIN, 10 * MIN), NOW, cfg)).toEqual({ kind: "live", elapsedMs: 2 * MIN, remainingMs: LOST_MS - 2 * MIN });
+    expect(lostCountdown(live(2 * MIN, 10 * MIN), NOW, cfg)).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: 2 * MIN, remainingMs: LOST_MS - 2 * MIN });
   });
 
   it("ordering differential: beat 12 min, video 9 min → elapsed is the SHORTER silence (9 min); the longer would say 12", () => {
     const c = lostCountdown(live(12 * MIN, 9 * MIN), NOW, cfg);
-    expect(c).toEqual({ kind: "live", elapsedMs: 9 * MIN, remainingMs: LOST_MS - 9 * MIN });
+    expect(c).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: 9 * MIN, remainingMs: LOST_MS - 9 * MIN });
     expect(c!.elapsedMs).not.toBe(12 * MIN);
   });
 
   it("no beat ever and no connected sample: both clocks run from first ingest", () => {
     const i = { ...live(0, 0), phoneBeatAt: null, lastConnectedSampleAt: null, firstIngestAt: ago(3 * MIN) };
-    expect(lostCountdown(i, NOW, cfg)).toEqual({ kind: "live", elapsedMs: 3 * MIN, remainingMs: LOST_MS - 3 * MIN });
+    expect(lostCountdown(i, NOW, cfg)).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: 3 * MIN, remainingMs: LOST_MS - 3 * MIN });
   });
 
   it("a warming reconnect (first ingest set) counts down like live", () => {
-    expect(lostCountdown({ ...live(MIN, MIN), state: "warming" }, NOW, cfg)).toEqual({ kind: "live", elapsedMs: MIN, remainingMs: LOST_MS - MIN });
+    expect(lostCountdown({ ...live(MIN, MIN), state: "warming" }, NOW, cfg)).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: MIN, remainingMs: LOST_MS - MIN });
   });
 
   it("past W19's end but not yet ticked: remaining is 0, never negative", () => {
-    expect(lostCountdown(live(LOST_MS + MIN, LOST_MS + MIN), NOW, cfg)).toEqual({ kind: "live", elapsedMs: LOST_MS + MIN, remainingMs: 0 });
+    expect(lostCountdown(live(LOST_MS + MIN, LOST_MS + MIN), NOW, cfg)).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: LOST_MS + MIN, remainingMs: 0 });
   });
 
   it("lostMinutes is read from cfg: at 1 minute, a 30 s silence leaves 30 s", () => {
-    expect(lostCountdown(live(QUIET_MS, QUIET_MS), NOW, { ...cfg, lostMinutes: 1 })).toEqual({ kind: "live", elapsedMs: QUIET_MS, remainingMs: MIN - QUIET_MS });
+    expect(lostCountdown(live(QUIET_MS, QUIET_MS), NOW, { ...cfg, lostMinutes: 1 })).toEqual({ kind: "live", reason: "phone_lost", elapsedMs: QUIET_MS, remainingMs: MIN - QUIET_MS });
   });
 
   describe("warming (no video yet)", () => {
     const warming = (sinceMs: number | null) => ({
       state: "warming" as const, firstIngestAt: null, warmingAt: sinceMs === null ? null : ago(sinceMs), phoneBeatAt: ago(S),
-      read: DOWN, lastConnectedSampleAt: null,
+      read: DOWN, lastConnectedSampleAt: null, phone: BEATING,
     });
     const WARMING_MS = WARMING_TIMEOUT_MINUTES * MIN;
 
@@ -239,7 +243,7 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
         for (const served of ["disconnected", "unknown", null] as const) {
           if (fresh !== undefined && fresh !== served) continue;   // a fresh word IS the served one; only a carry differs
           expect(lostCountdown({ ...warming(5 * MIN), read: { fresh, served, failed: false } }, NOW, cfg), `fresh ${fresh}, served ${served}`)
-            .toEqual({ kind: "warming", elapsedMs: 5 * MIN, remainingMs: WARMING_MS - 5 * MIN });
+            .toEqual({ kind: "warming", reason: "no_inbound_timeout", elapsedMs: 5 * MIN, remainingMs: WARMING_MS - 5 * MIN });
           shown++;
         }
       }
@@ -261,11 +265,11 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
 
     it("30 s after warmingAt → warming, remaining = warmingAt + WARMING_TIMEOUT_MINUTES − now; 1 s short → null", () => {
       expect(lostCountdown(warming(QUIET_MS - S), NOW, cfg)).toBeNull();
-      expect(lostCountdown(warming(QUIET_MS), NOW, cfg)).toEqual({ kind: "warming", elapsedMs: QUIET_MS, remainingMs: WARMING_MS - QUIET_MS });
+      expect(lostCountdown(warming(QUIET_MS), NOW, cfg)).toEqual({ kind: "warming", reason: "no_inbound_timeout", elapsedMs: QUIET_MS, remainingMs: WARMING_MS - QUIET_MS });
     });
 
     it("past the warming deadline but not yet failed: remaining is 0", () => {
-      expect(lostCountdown(warming(WARMING_MS + S), NOW, cfg)).toEqual({ kind: "warming", elapsedMs: WARMING_MS + S, remainingMs: 0 });
+      expect(lostCountdown(warming(WARMING_MS + S), NOW, cfg)).toEqual({ kind: "warming", reason: "no_inbound_timeout", elapsedMs: WARMING_MS + S, remainingMs: 0 });
     });
 
     it("a session from before V430 (warming_at null) shows nothing rather than a guessed clock", () => {
@@ -277,6 +281,82 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
         expect(lostCountdown({ ...warming(5 * MIN), state }, NOW, cfg), state).toBeNull();
         expect(lostCountdown({ ...live(5 * MIN, 5 * MIN), state }, NOW, cfg), `${state} with ingest`).toBeNull();
       }
+    });
+
+    // Controller ruling 2026-10-04: the countdown targets the EARLIEST end that will fire and carries that end's reason.
+    // Ask 10 is armed once beats have stopped: no beat for the longer of the phone's own cadence (a beat it owed is
+    // missing) and the quiet hold (O5's measure of a phone gone quiet). It then fires at its silence threshold. Every
+    // figure below is §6.9's arithmetic over the declared constants, never lostCountdown's.
+    describe("the earliest end: ask 10 once beats have stopped (controller ruling 2026-10-04)", () => {
+      const phone = (beatAgoMs: number, answeredPollSeconds: number, heardGoLive: boolean) =>
+        ({ hasCurrentPairing: true, lastBeatAt: ago(beatAgoMs), answeredPollSeconds, heardGoLive });
+      /** §6.8.3: the cadence ask 10 judges on, and §6.9's threshold over it. */
+      const judged = (answered: number, heard: boolean) => (heard ? Math.min(answered, OPEN_SESSION_MAX_POLL_SECONDS) : answered);
+      const thresholdMs = (answered: number, heard: boolean) => Math.max(FLOOR, judged(answered, heard) + PHONE_SILENT_SLACK_SECONDS) * S;
+      const armMs = (answered: number, heard: boolean) => Math.max(QUIET_MS, judged(answered, heard) * S);
+
+      it("armed exactly when beats have stopped: 1 s short → the warming timeout; at it → phone_lost, remaining = the silence threshold − the beat's age (each cadence the phone can be on)", () => {
+        let checked = 0;
+        for (const [answered, heard] of [[POLL_STARTING_SECONDS, true], [POLL_NEAR_SECONDS, true], [POLL_FAR_SECONDS, true], [POLL_NEAR_SECONDS, false], [POLL_FAR_SECONDS, false]] as const) {
+          const label = `answered ${answered} s, ${heard ? "heard" : "not heard"} go-live`;
+          const arm = armMs(answered, heard);
+          expect(arm, `PREMISE ${label}: armed before ask 10 fires`).toBeLessThan(thresholdMs(answered, heard));
+          const short = lostCountdown({ ...warming(5 * MIN), phone: phone(arm - S, answered, heard) }, NOW, cfg);
+          expect(short?.reason, `${label}: 1 s short of armed`).toBe("no_inbound_timeout");
+          expect(lostCountdown({ ...warming(5 * MIN), phone: phone(arm, answered, heard) }, NOW, cfg), label)
+            .toEqual({ kind: "warming", reason: "phone_lost", elapsedMs: arm, remainingMs: thresholdMs(answered, heard) - arm });
+          checked++;
+        }
+        expect(checked).toBe(5);
+      });
+
+      it("ordering differential: an armed ask 10 that lands AFTER the warming deadline does not displace it; the same phone 1 min earlier in warming lands before it and does", () => {
+        const p = phone(armMs(POLL_STARTING_SECONDS, true), POLL_STARTING_SECONDS, true);
+        const toAsk10 = thresholdMs(POLL_STARTING_SECONDS, true) - armMs(POLL_STARTING_SECONDS, true);
+        const lateInWarming = WARMING_MS - toAsk10 + 5 * S;   // the warming deadline is 5 s BEFORE ask 10's
+        expect(lostCountdown({ ...warming(lateInWarming), phone: p }, NOW, cfg)).toEqual({ kind: "warming", reason: "no_inbound_timeout", elapsedMs: lateInWarming, remainingMs: WARMING_MS - lateInWarming });
+        const earlier = lateInWarming - MIN;
+        expect(lostCountdown({ ...warming(earlier), phone: p }, NOW, cfg)?.reason).toBe("phone_lost");
+      });
+
+      it("a tie goes to the warming timeout: the tick expires before it judges ask 10", () => {
+        const p = phone(armMs(POLL_STARTING_SECONDS, true), POLL_STARTING_SECONDS, true);
+        const toAsk10 = thresholdMs(POLL_STARTING_SECONDS, true) - armMs(POLL_STARTING_SECONDS, true);
+        expect(lostCountdown({ ...warming(WARMING_MS - toAsk10), phone: p }, NOW, cfg)?.reason).toBe("no_inbound_timeout");
+      });
+
+      it("armed ask 10 shows even inside the warming quiet hold: the real end is coming (a phone silent since before Go live)", () => {
+        const beat = armMs(POLL_FAR_SECONDS, false) + 10 * S;
+        expect(lostCountdown({ ...warming(10 * S), phone: phone(beat, POLL_FAR_SECONDS, false) }, NOW, cfg))
+          .toEqual({ kind: "warming", reason: "phone_lost", elapsedMs: beat, remainingMs: thresholdMs(POLL_FAR_SECONDS, false) - beat });
+        expect(lostCountdown({ ...warming(10 * S) }, NOW, cfg), "the pair: a beating phone inside the hold shows nothing").toBeNull();
+      });
+
+      it("a status read that threw holds the timeout, NOT ask 10: armed → the ask-10 target even when it lands after the held deadline; not armed → nothing fires, so null", () => {
+        const failed: CountdownRead = { fresh: undefined, served: null, failed: true };
+        const p = phone(armMs(POLL_STARTING_SECONDS, true), POLL_STARTING_SECONDS, true);
+        const toAsk10 = thresholdMs(POLL_STARTING_SECONDS, true) - armMs(POLL_STARTING_SECONDS, true);
+        const lateInWarming = WARMING_MS - toAsk10 + 5 * S;
+        expect(lostCountdown({ ...warming(lateInWarming), phone: p, read: failed }, NOW, cfg)).toEqual({ kind: "warming", reason: "phone_lost", elapsedMs: armMs(POLL_STARTING_SECONDS, true), remainingMs: toAsk10 });
+        expect(lostCountdown({ ...warming(lateInWarming), read: failed }, NOW, cfg)).toBeNull();
+      });
+
+      it("a `connected` word → null even with ask 10 armed: the observation takes the session live, out of ask 10's reach", () => {
+        const p = phone(armMs(POLL_FAR_SECONDS, false), POLL_FAR_SECONDS, false);
+        expect(lostCountdown({ ...warming(5 * MIN), phone: p, read: { fresh: "connected", served: "connected", failed: false } }, NOW, cfg)).toBeNull();
+        expect(lostCountdown({ ...warming(5 * MIN), phone: p }, NOW, cfg)?.reason, "the pair").toBe("phone_lost");
+      });
+
+      it("no current pairing: ask 10 is owed NOW (the next tick ends it), so phone_lost at 0 — there is no beat to time it from", () => {
+        expect(lostCountdown({ ...warming(5 * MIN), phone: { hasCurrentPairing: false, lastBeatAt: null, answeredPollSeconds: 0, heardGoLive: false } }, NOW, cfg))
+          .toEqual({ kind: "warming", reason: "phone_lost", elapsedMs: 0, remainingMs: 0 });
+      });
+
+      it("the floor is read from cfg (§6.15, tunable): a 10 s floor cannot pull ask 10 inside cadence + slack", () => {
+        const p = phone(QUIET_MS, POLL_STARTING_SECONDS, true);
+        const c = lostCountdown({ ...warming(5 * MIN), phone: p }, NOW, { ...cfg, silentFloorSeconds: 10 });
+        expect(c).toEqual({ kind: "warming", reason: "phone_lost", elapsedMs: QUIET_MS, remainingMs: Math.max(10, POLL_STARTING_SECONDS + PHONE_SILENT_SLACK_SECONDS) * S - QUIET_MS });
+      });
     });
   });
 });

@@ -895,7 +895,7 @@ unchanged.
 | **Ready, no phone** | The picker (it now saves the pre-pick). The **QR** with "Scan with the Seazn Capture app" and the paste code. A "Revoke & reissue" text button, with a confirm. **Go live disabled**, with "Pair a phone first: scan the code with Seazn Capture". Phone node: slate, "Not connected". |
 | **Ready, phone paired** | The picker. Phone node: lime ring, "Paired". The QR folds into a "Show the code again" disclosure, with Revoke & reissue inside it. **Go live enabled.** |
 | **Ready, phone paired but silent** (§6.9) | Phone node amber, "Not answering". **Go live disabled**, with "The phone stopped checking in. Open Seazn Capture on it". The QR stays folded. |
-| **Waiting** (requested, provisioning or warming) | Phone node amber, "Starting". The line "Waiting for the phone's video". The pollSeconds line from §6.6 when relevant. Cancel. **No QR**: the phone is already paired. **Warming countdown (W24):** after 30 s in warming with no video, "No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.", counting down to the warming deadline (`warming_at` + `WARMING_TIMEOUT_MINUTES`). |
+| **Waiting** (requested, provisioning or warming) | Phone node amber, "Starting". The line "Waiting for the phone's video". The pollSeconds line from §6.6 when relevant. Cancel. **No QR**: the phone is already paired. **Warming countdown (W24):** after 30 s in warming with no video, "No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.", counting down to the warming deadline (`warming_at` + `WARMING_TIMEOUT_MINUTES`), or to ask 10's end once the phone's beats have stopped, whichever is first (amended, §17.12). |
 | **Live, reconnecting** (W24) | The Phone node says "Reconnecting…" instead of "No signal" while the input is not connected. After `RECONNECT_QUIET_SECONDS` (30) with no video **and** no beat, the sentence "No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back." counts down to W19's end. `remaining` = 15 min − the **shorter** of the two silences, because W19 needs both. While the phone still beats, W19 cannot fire, so there is **no countdown** (O5, ruled 2026-10-01). Instead the panel shows "Reconnecting…" and, when the latest beat carries one, the phone's reason, through `reconnectReasonOf(phone)`: `notReady` `camera` → "Phone is on a call — video paused" (the owner's example); `sound` → "Phone's microphone is in use — video paused"; `network` → "Phone has no network — video paused"; `held` → "Phone is upright — turn it sideways"; otherwise state `degraded` or `reconnecting` → "Phone's connection is weak — video paused". Only the first string is the owner's; the rest are this spec's, shown in the mockups for sign-off. The session does not end while the phone is alive, except at the `maxDurationMinutes` cap (300). |
 | **Ready or Ended, inside the reuse window** (W23) | Above Go live: "Free restarts used ({used} of 3)", or at the limit "Free restarts used (3 of 3) — this one uses 1 credit". |
 | **Live, Ended, Failed** | As today. The new end reasons use the copy in §6.8.4. |
@@ -1896,6 +1896,19 @@ C-2), not the seazn.club owner's.
 - **An `unknown` read never ends a broadcast as phone lost (m-3).** Clause 2 of §6.8.5 needs a fresh read that is
   `disconnected`. An `unknown` read, claimed or coalesced, does not satisfy it. A Cloudflare read blip never ends a paid
   broadcast as `phone_lost`. The phone's beat and the `max_duration` deadline still end it.
+
+### 17.12 The countdown names the earliest end (B7 fix rounds)
+
+Amends §6.12's Waiting row and W24. Recorded 2026-10-04. These are controller rulings, not the seazn.club owner's.
+
+- **A countdown shows if and only if the end it counts down to fires at that deadline.** Each end is gated on what it
+  reads. The live countdown (W19) shows only on a FRESH `disconnected` read (m-3). The warming timeout fires whatever
+  the read's word is, so it is withheld only by a status read that threw (N1).
+- **It names the EARLIEST end that will fire, with that end's `reason`.** In warming, once the phone's beats have
+  stopped (no beat for the longer of its own cadence and `RECONNECT_QUIET_SECONDS`), ask 10's end is a candidate:
+  the last beat + §6.9's silence threshold, `phone_lost`. The earlier of that and the warming timeout is shown. A tie
+  goes to the timeout, because the tick expires a session before it judges ask 10. The panel's copy for a warming
+  `phone_lost` countdown is owed by T11 and is not chosen here.
 
 **No spec text changes for these:**
 

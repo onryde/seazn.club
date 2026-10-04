@@ -1399,9 +1399,13 @@ export const StreamRestartAllowance = z
   .strict();
 
 /** W24 (§6.12): `lostCountdown`'s answer — both durations on the server's clock, never below 0. */
-export const StreamLostCountdown = z
-  .object({ kind: z.enum(["warming", "live"]), elapsedMs: z.number().int().nonnegative(), remainingMs: z.number().int().nonnegative() })
-  .strict();
+const countdownClock = { elapsedMs: z.number().int().nonnegative(), remainingMs: z.number().int().nonnegative() };
+/** W24 (controller ruling 2026-10-04): the countdown names the end it counts to — `live` only W19's `phone_lost`;
+ *  `warming` the warming timeout (`no_inbound_timeout`) or ask 10's `phone_lost`, whichever lands first. */
+export const StreamLostCountdown = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("live"), reason: z.literal("phone_lost"), ...countdownClock }).strict(),
+  z.object({ kind: z.literal("warming"), reason: z.enum(["no_inbound_timeout", "phone_lost"]), ...countdownClock }).strict(),
+]);
 export type StreamLostCountdown = z.infer<typeof StreamLostCountdown>;
 
 export const StreamSessionCurrent = z
@@ -1443,9 +1447,10 @@ export const StreamSessionCurrent = z
     /** Capture QR v2 §5.3 (T6): who started this session — the organiser's Go live, the phone operator's start, or
      *  the automatic start. V430's start_cause; set at creation and never changed. */
     startCause: z.enum(["organiser", "operator", "automatic"]),
-    /** W24 (§6.12, T9): the server-computed countdown to the end the tick will make — `live`: W19's phone-lost end, from
-     *  the SHORTER of the two silences (no beat, no video), shown after RECONNECT_QUIET_SECONDS; `warming`: the warming
-     *  deadline. `lostCountdown` (domain/phone-lost.ts) on the server's clock, from the same clocks the tick judges.
+    /** W24 (§6.12, T9): the server-computed countdown to the EARLIEST end the tick will make, carrying that end's
+     *  `reason` — `live`: W19's phone-lost end, from the SHORTER of the two silences (no beat, no video), shown after
+     *  RECONNECT_QUIET_SECONDS; `warming`: the warming deadline, or ask 10's once the phone's beats have stopped, whichever
+     *  is first. `lostCountdown` (domain/phone-lost.ts) on the server's clock, from the same clocks the tick judges.
      *  null when there is nothing to count down — and always for a session with no phone (pairing_id null: today's
      *  rules, controller ruling C-1). */
     countdown: StreamLostCountdown.nullable(),

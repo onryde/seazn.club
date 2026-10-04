@@ -598,7 +598,7 @@ describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the 
     r.tick(STREAM_POLL_MS);   // a fresh claim window: this poll reads the input again
     const elapsedMs = r.deps.now().getTime() - lastBeat.getTime();
     const c = await countdownOf(r);
-    expect(c).toEqual({ kind: "live", elapsedMs, remainingMs: LOST_MS - elapsedMs });
+    expect(c).toEqual({ kind: "live", reason: "phone_lost", elapsedMs, remainingMs: LOST_MS - elapsedMs });
     r.tick(c!.remainingMs - 1000);
     expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "1 s before the countdown's end").toBe("live");
     r.tick(1000);
@@ -654,7 +654,7 @@ describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the 
     r.tick(1);
     await keepBeating();
     const c = await countdownOf(r);
-    expect(c).toEqual({ kind: "warming", elapsedMs: QUIET_MS, remainingMs: deadline - r.deps.now().getTime() });
+    expect(c).toEqual({ kind: "warming", reason: "no_inbound_timeout", elapsedMs: QUIET_MS, remainingMs: deadline - r.deps.now().getTime() });
     r.tick(c!.remainingMs - 1);
     await keepBeating();
     expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "1 ms before the countdown's end").toBe("warming");
@@ -819,7 +819,7 @@ describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the 
         expect(cur.ingest?.state ?? null, `PREMISE ${h.label}: the word served`).toBe(h.served);
         const c = cur.countdown;
         if (c) {
-          expect(c.kind, h.label).toBe("live");
+          expect([c.kind, c.reason], h.label).toEqual(["live", "phone_lost"]);
           expect(r.deps.now().getTime() + c.remainingMs, `${h.label}: the countdown names W19's deadline`).toBe(deadline);
         }
         const phoneLost = (s: Awaited<ReturnType<typeof tickSession>>["session"]) => s?.state === "completed" && s.endReason === "phone_lost";
@@ -838,49 +838,76 @@ describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the 
     expect(seen.shown + seen.none).toBe(cases.length);
   });
 
-  it("W24 ⇔ the warming timeout: under every read condition, the WARMING countdown shows exactly when the tick at its end fails the session no_inbound_timeout — it fires whatever the word (M-4), and is held only by a status read that throws (N1)", async () => {
-    const cases: Hold[] = [
-      { label: "claimed disconnected", served: "disconnected" },
-      { label: "claimed unknown", word: "unknown", served: "unknown" },
-      { label: "carried unknown", word: "unknown", carried: true, served: "unknown" },
-      { label: "no-evidence read with nothing to carry", status: "no-evidence", served: null },
-      { label: "the status read throws", status: "throws", served: null },
-      { label: "the outputs read throws (the status read answers)", outputsThrow: true, served: null },
+  it("W24 ⇔ the EARLIEST warming end (controller ruling 2026-10-04): under every read condition and every beat pattern, the warming countdown names an end and its reason exactly when the tick at that instant makes it — the timeout whatever the word (M-4, held only by a status read that throws, N1), or ask 10 once beats have stopped, whichever lands first", async () => {
+    // `phone`: "beats" at every instant (ask 10 out of reach); "silent" since the rig paired it, before the session was
+    // created (it has not heard go-live); or one beat `stopAt` after warming entry (it has heard go-live), then silent.
+    // `pollAfter` is when the countdown is read: after warming entry for a beating phone, after the last beat otherwise.
+    type Row = Hold & { phone: "beats" | "silent" | { stopAt: number }; pollAfter: number };
+    const cases: Row[] = [
+      { label: "claimed disconnected", served: "disconnected", phone: "beats", pollAfter: 5 * MIN },
+      { label: "claimed unknown", word: "unknown", served: "unknown", phone: "beats", pollAfter: 5 * MIN },
+      { label: "carried unknown", word: "unknown", carried: true, served: "unknown", phone: "beats", pollAfter: 5 * MIN },
+      { label: "no-evidence read with nothing to carry", status: "no-evidence", served: null, phone: "beats", pollAfter: 5 * MIN },
+      { label: "the status read throws", status: "throws", served: null, phone: "beats", pollAfter: 5 * MIN },
+      { label: "the outputs read throws (the status read answers)", outputsThrow: true, served: null, phone: "beats", pollAfter: 5 * MIN },
+      { label: "silent since pairing, disconnected", served: "disconnected", phone: "silent", pollAfter: 75_000 },
+      { label: "silent since pairing, the status read throws", status: "throws", served: null, phone: "silent", pollAfter: 75_000 },
+      { label: "silent since pairing, no-evidence read", status: "no-evidence", served: null, phone: "silent", pollAfter: 75_000 },
+      { label: "heard go-live, silent from +20 s, unknown", word: "unknown", served: "unknown", phone: { stopAt: 20_000 }, pollAfter: 45_000 },
+      { label: "heard go-live, silent from +9:20, disconnected", served: "disconnected", phone: { stopAt: 9 * MIN + 20_000 }, pollAfter: 35_000 },
+      { label: "heard go-live, silent from +9:20, the status read throws", status: "throws", served: null, phone: { stopAt: 9 * MIN + 20_000 }, pollAfter: 35_000 },
     ];
-    const seen = { shown: 0, none: 0 };
+    type S = Awaited<ReturnType<typeof tickSession>>["session"];
+    /** The end the tick made, as the countdown names it: a failure's reason or a completion's; null = still open. */
+    const endOf = (x: S) => (x === null ? "no session" : x.state === "failed" ? x.failReason : x.state === "completed" ? x.endReason : null);
+    const seen = { no_inbound_timeout: 0, phone_lost: 0, none: 0 };
     for (const h of cases) {
       const r = await rig({ connectAfterMs: 60 * MIN });   // the phone never connects: FakeIngest reads it disconnected
-      const [{ warming_at }] = await sql<{ warming_at: Date }[]>`select warming_at from fixture_stream_sessions where id = ${r.sessionId}`;
+      const [{ warming_at, created_at }] = await sql<{ warming_at: Date; created_at: Date }[]>`
+        select warming_at, created_at from fixture_stream_sessions where id = ${r.sessionId}`;
       const deadline = warming_at.getTime() + WARMING_TIMEOUT_MINUTES * MIN;
-      // The phone beats throughout, so ask 10 cannot end it first: the warming timeout is the only end in reach.
-      const beat = () => sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}`;
+      if (typeof h.phone === "object") {
+        r.tick(warming_at.getTime() + h.phone.stopAt - r.deps.now().getTime());
+        await sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}`;
+        expect(r.deps.now().getTime(), `PREMISE ${h.label}: the beat is after creation, so the phone has heard go-live`).toBeGreaterThan(created_at.getTime());
+      }
+      const [{ last_beat_at }] = await sql<{ last_beat_at: Date }[]>`select last_beat_at from fixture_stream_pairings where id = ${r.paired.pairingId}`;
+      if (h.phone === "silent") expect(last_beat_at.getTime(), `PREMISE ${h.label}: the last beat predates creation`).toBeLessThan(created_at.getTime());
+      const beat = () => (h.phone === "beats" ? sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}` : Promise.resolve());
       const hold = holding(r, h, beat);
       if (h.word) r.ingest.setState(r.inputId, h.word);
       hold.install();
       try {
-        await hold.at(warming_at.getTime() + 5 * MIN);
+        await hold.at((h.phone === "beats" ? warming_at.getTime() : last_beat_at.getTime()) + h.pollAfter);
         const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
         expect(cur.state, `PREMISE ${h.label}`).toBe("warming");
         expect(cur.ingest?.state ?? null, `PREMISE ${h.label}: the word served`).toBe(h.served);
         const c = cur.countdown;
         if (c) {
           expect(c.kind, h.label).toBe("warming");
-          expect(r.deps.now().getTime() + c.remainingMs, `${h.label}: the countdown names the warming deadline`).toBe(deadline);
+          const at = r.deps.now().getTime() + c.remainingMs;
+          await hold.at(at - 1000);
+          const early = (await tickSession(r.sessionId, r.deps, "sweep")).session;
+          expect(endOf(early), `${h.label}: 1 s before the countdown's end (${c.reason}) it is still open`).toBeNull();
+          await hold.at(at);
+          const end = (await tickSession(r.sessionId, r.deps, "sweep")).session;
+          expect(endOf(end), `${h.label}: the tick at the countdown's end makes the end it named`).toBe(c.reason);
+          seen[c.reason]++;
+        } else {
+          // Nothing named: nothing may fire, out to past every end these clocks can make.
+          await hold.at(deadline + ASK10_SILENT_MS + MIN);
+          const later = (await tickSession(r.sessionId, r.deps, "sweep")).session;
+          expect(endOf(later), `${h.label}: no countdown, so no end`).toBeNull();
+          seen.none++;
         }
-        const timedOut = (s: Awaited<ReturnType<typeof tickSession>>["session"]) => s?.state === "failed" && s.failReason === "no_inbound_timeout";
-        await hold.at(deadline - 1000);
-        expect(timedOut((await tickSession(r.sessionId, r.deps, "sweep")).session), `${h.label}: 1 s before the deadline`).toBe(false);
-        await hold.at(deadline);
-        const end = (await tickSession(r.sessionId, r.deps, "sweep")).session;
-        expect(timedOut(end), `${h.label}: countdown ${c ? "shown" : "none"}, the tick at the warming deadline left ${end?.state}/${end?.failReason}`).toBe(c !== null);
-        if (c) seen.shown++; else seen.none++;
       } finally {
         hold.restore();
       }
     }
-    expect(seen.shown, "anti-vacuity: some case showed one").toBeGreaterThan(0);
-    expect(seen.none, "anti-vacuity: some case showed none").toBeGreaterThan(0);
-    expect(seen.shown + seen.none).toBe(cases.length);
+    expect(seen.no_inbound_timeout, "anti-vacuity: the timeout was named").toBeGreaterThan(0);
+    expect(seen.phone_lost, "anti-vacuity: ask 10 was named").toBeGreaterThan(0);
+    expect(seen.none, "anti-vacuity: some case named none").toBeGreaterThan(0);
+    expect(seen.no_inbound_timeout + seen.phone_lost + seen.none).toBe(cases.length);
   });
 
   it("ask 10 reads no ingest word: under every read condition a warming session whose phone stops beating ends phone_lost at its silence deadline, and the same session whose phone beats does not (the pair) — so no read gate touches it", async () => {

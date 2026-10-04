@@ -255,16 +255,29 @@ describe("relay request schemas refuse what they must", () => {
     const withoutCountdown: Record<string, unknown> = { ...current };
     delete withoutCountdown.countdown;
     expect(S.StreamSessionCurrent.safeParse(withoutCountdown).success).toBe(false);
-    expect(S.StreamSessionCurrent.safeParse({ ...current, countdown: { kind: "live", elapsedMs: 31_000, remainingMs: 869_000 } }).success).toBe(true);
+    // Controller ruling 2026-10-04: the countdown carries the reason of the end it names — `live` only W19's phone_lost,
+    // `warming` the timeout or ask 10's phone_lost — so the panel never has to guess which end is coming.
+    let acceptedCountdowns = 0;
+    for (const ok of [
+      { kind: "live", reason: "phone_lost", elapsedMs: 31_000, remainingMs: 869_000 },
+      { kind: "warming", reason: "no_inbound_timeout", elapsedMs: 31_000, remainingMs: 569_000 },
+      { kind: "warming", reason: "phone_lost", elapsedMs: 60_000, remainingMs: 30_000 },
+    ]) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, countdown: ok }).success, JSON.stringify(ok)).toBe(true);
+      acceptedCountdowns++;
+    }
+    expect(acceptedCountdowns).toBe(3);
     let refusedCountdowns = 0;
     for (const bad of [
-      { kind: "lost", elapsedMs: 0, remainingMs: 0 }, { kind: "live", elapsedMs: -1, remainingMs: 0 },
-      { kind: "warming", elapsedMs: 0, remainingMs: 1.5 }, { kind: "live", elapsedMs: 0, remainingMs: 0, at: "x" },
+      { kind: "lost", reason: "phone_lost", elapsedMs: 0, remainingMs: 0 }, { kind: "live", reason: "phone_lost", elapsedMs: -1, remainingMs: 0 },
+      { kind: "warming", reason: "no_inbound_timeout", elapsedMs: 0, remainingMs: 1.5 }, { kind: "live", reason: "phone_lost", elapsedMs: 0, remainingMs: 0, at: "x" },
+      { kind: "live", elapsedMs: 0, remainingMs: 0 }, { kind: "warming", elapsedMs: 0, remainingMs: 0 },
+      { kind: "live", reason: "no_inbound_timeout", elapsedMs: 0, remainingMs: 0 }, { kind: "warming", reason: "stopped", elapsedMs: 0, remainingMs: 0 },
     ]) {
       expect(S.StreamSessionCurrent.safeParse({ ...current, countdown: bad }).success, JSON.stringify(bad)).toBe(false);
       refusedCountdowns++;
     }
-    expect(refusedCountdowns).toBe(4);
+    expect(refusedCountdowns).toBe(8);
     // T6: startCause is REQUIRED and closed — the panel names who started the broadcast from it.
     const withoutStartCause: Record<string, unknown> = { ...current };
     delete withoutStartCause.startCause;
