@@ -8,7 +8,7 @@
 
 What an organiser gets: the ~150 audit hypotheses become a list of reproduced problems, each owned by one wave, plus a weekly signal when a change breaks a case that used to work.
 
-**Architecture** (owner rulings 60–67, 2026-10-04):
+**Architecture** (owner rulings 60–68, 2026-10-04):
 - **One plan, two PRs** (ruling 62). `workflow_dispatch` fires only a workflow file already on `main`.
   - **PR-A (infra), Tasks 1–16:** the 28 "W1d first tasks" items, sharding, the workflow and its visibility guard, the per-PR sample, the Stryker workflow, and the weekly schedule shipped DISABLED.
   - **PR-B (evidence), Tasks 17–22:** three harness-green dispatches, the triage tooling and the triaged baseline, the Stryker floor, the schedule enabled, the per-wave ❌ tables, and W2 → "backlog ready".
@@ -472,7 +472,7 @@ Three CLIs change:
 - **Outside W1d, not planned here:** the ephemeral self-hosted runner on Fly Machines is a follow-up between PR-B and the private switch. Then `vars.MATRIX_RUNNER` changes, to a runner that meets the contract in the execution handoff (it is NOT only the variable: see there). This supersedes design §6.5's "a VPS or the owner's machine". W1d builds no runner.
 - **`MATRIX_RUNNER` stays UNSET while the repo is public (review 5, R5-m8).** A self-hosted runner on a public repository runs fork `pull_request` jobs. The variable is set in the same step as the private flip, never before, unless the owner accepts in writing the mitigation of an ephemeral, secretless runner.
 - **The order:** PR-B's dispatches run on GitHub-hosted runners while the repo is public; then the Fly runner follow-up; then the switch to private. `ci.yml` PR jobs go back on the meter at the switch, which is outside the matrix. The per-PR sample calls `matrix-truth.yml`, so it inherits the switchable runner.
-- Owner value: going private cannot silently bill hosted minutes, and the move to a free runner is one variable.
+- Owner value: going private cannot silently bill hosted minutes, and the move to a free runner is one variable on W1d's side (the runner itself has a contract, see the handoff).
 - Rejected: building the Fly runner in W1d (ruling 68 puts it outside).
 
 ---
@@ -2182,7 +2182,7 @@ describe("the visibility guard (Review Focus 2)", () => {
       expect(stepHeads(t)[0]).toBe(`      - name: ${GUARD}`);
       return stepOf(t, GUARD).script;
     });
-    expect(scripts).toHaveLength(4);   // matrix-truth.yml's four jobs; mutation.yml's are held equal to them below
+    expect(scripts).toHaveLength(4);   // matrix-truth.yml's four jobs; Task 15 adds mutation.yml's, held equal to them
     expect(scripts.every((x) => x !== null)).toBe(true);
     expect(new Set(scripts).size).toBe(1);
   });
@@ -2208,14 +2208,12 @@ describe("the visibility guard (Review Focus 2)", () => {
     const at = (r: string, g: string) => cases.find((c) => c.env.RUNNER_ENV === r && c.gh === g && c.env.INJECT === "none")!;
     expect([at("github-hosted", "public").want, at("self-hosted", "public").want, at("github-hosted", "private").want, at("self-hosted", "private").want]).toEqual([0, 0, 1, 0]);
   });
-  it("every job of matrix-truth.yml and mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes", () => {
-    for (const [file, text] of [["matrix-truth.yml", WF], ["mutation.yml", readFileSync(".github/workflows/mutation.yml", "utf8")]] as const) {
-      const jobs = Object.entries(jobsOf(text));
-      expect(jobs.length, file).toBeGreaterThan(1);   // anti-vacuity
-      for (const [name, t] of jobs) {
-        expect(t, `${file}:${name} runs-on`).toContain("runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}");
-        expect(t, `${file}:${name} timeout-minutes`).toMatch(/timeout-minutes:/);
-      }
+  it("every job of matrix-truth.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes (mutation.yml's jobs join this check in Task 15)", () => {
+    const jobs = Object.entries(JOBS);
+    expect(jobs.length).toBeGreaterThan(1);   // anti-vacuity
+    for (const [name, t] of jobs) {
+      expect(t, `${name} runs-on`).toContain("runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}");
+      expect(t, `${name} timeout-minutes`).toMatch(/timeout-minutes:/);
     }
   });
   it("the guard fails closed: unreadable, 403, private, internal, injected public, unset runner — counted", () => {
@@ -2224,27 +2222,6 @@ describe("the visibility guard (Review Focus 2)", () => {
   it("never prints the token", () => {
     const r = run({ RUNNER_ENV: "github-hosted", INJECT: "none", GH_TOKEN: "ghs_SECRETSECRETSECRET" }, "private");
     expect(r.stdout + r.stderr).not.toContain("ghs_");
-  });
-});
-
-describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3)", () => {
-  const MUT = readFileSync(".github/workflows/mutation.yml", "utf8");
-  const MJOBS = jobsOf(MUT);
-  it("every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed)", () => {
-    const all = [...Object.values(JOBS), ...Object.values(MJOBS)];
-    expect(all.length).toBeGreaterThan(4);   // anti-vacuity: matrix-truth's four plus mutation's
-    for (const t of all) expect(stepOf(t, GUARD).body).toContain("RUNNER_ENV: ${{ runner.environment }}");
-  });
-  it("the mutate job does not cancel its siblings, takes its timeout from the matrix, and saves its evidence even when Stryker exits non-zero (R5-I1)", () => {
-    expect(MJOBS.mutate).toContain("matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}");
-    expect(MJOBS.mutate).toContain("fail-fast: false");
-    expect(MJOBS.mutate).toContain("timeout-minutes: ${{ matrix.timeout }}");
-    for (const n of ["Survivors", "Upload mutation results"]) expect(stepOf(MJOBS.mutate, n).body).toContain("if: always()");
-  });
-  it("the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys (m2; mutation.yml was not read by any test before)", () => {
-    const opts = /group:[\s\S]*?options:\n((?:\s+- .+\n)+)/.exec(MUT)![1].split("\n").map((l) => l.replace(/^\s+- /, "").trim()).filter(Boolean);
-    expect(opts).toEqual(["all", ...Object.keys(STRYKER_GROUPS)]);
-    expect(opts.length).toBeGreaterThan(2);
   });
 });
 
@@ -2828,11 +2805,7 @@ All green, with `.testResults[].name` listing exactly these 6 files (review I15:
 | In the guard, `[ "$vis" != "public" ]` → `[ "$vis" = "private" ]` | "unreadable (403)" (and "internal") |
 | Make the guard fail on a `self-hosted` runner (delete the early `exit 0`) | "public, self-hosted" and "private, self-hosted" (ruling 68) |
 | Make the guard pass on a `github-hosted` private repo (accept hosted like self-hosted) | "private, hosted" and the four-combination test |
-| One job back to `runs-on: ubuntu-latest` | "every job … runs on the switchable runner" |
-| `RUNNER_ENV: self-hosted` literal in one job's guard env | "every guard step of BOTH workflows takes RUNNER_ENV from runner.environment" |
-| Delete `fail-fast: false` from mutation.yml's `mutate` | "the mutate job does not cancel its siblings" (R5-I1) |
-| Delete `if: always()` from the `Survivors` or upload step | the same test |
-| Add a group to `stryker.groups.mjs` only | "the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys" |
+| One matrix-truth job back to `runs-on: ubuntu-latest` | "every job of matrix-truth.yml runs on the switchable runner" |
 | Delete the `case "$INJECT"` block | "public but injected private" |
 | Change `private\|internal)` to accept `public` | "private but injected public" |
 | Remove `if:` from `plan` | the D2 test |
@@ -3541,7 +3514,8 @@ on:
         default: all
         options:
           - all
-          - competition          # … one line per STRYKER_GROUPS key, probe included
+          - competition
+          # … one line per STRYKER_GROUPS key, in the order stryker.groups.mjs declares them, probe included (the choices test is order-sensitive)
       inject_visibility:
         type: choice
         default: none
@@ -3600,10 +3574,10 @@ jobs:
       - name: Floor check
         # … skipped for probe, and while stryker-floor.json's groups is empty …
       - name: Survivors
-        if: always()
-        # … --survivors → SURVIVORS.md …
+        if: always()   # deliberate: save evidence after a non-zero Stryker exit (a manual cancel also runs it; accepted)
+        # … node --experimental-strip-types scripts/stryker-floor.ts --survivors "$GROUP" reports/mutation/$GROUP.json --out SURVIVORS.md (run in packages/engine) …
       - name: Upload mutation results
-        if: always()
+        if: always()   # deliberate, as above
         uses: actions/upload-artifact@v4
         with:
           name: mutation-${{ matrix.group }}
@@ -3612,7 +3586,53 @@ jobs:
             packages/engine/SURVIVORS.md
 ```
 
-The guard step is the SAME script as `matrix-truth.yml`. `matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's. A new `packages/engine/test/stryker-matrix.test.ts` SPAWNS `stryker-matrix.mjs` per event and compares with `STRYKER_GROUPS` and `stryker-timeouts.json`: `pull_request` gives exactly `["probe"]`; `schedule` and dispatch `all` give every non-probe key (more than one); dispatch `probe` gives `["probe"]`; an unknown key such as `nosuch` is exit 2; every entry has a timeout in (0, 300]. Mutation rows: change the `pull_request` branch to `all`; ignore `--group`; drop the timeout lookup. Add `stryker-matrix.mjs` and `stryker-timeouts.json` to Task 15's Create list. The new `describe("mutation.yml and the runner wiring")` in `matrix-workflow.test.ts` imports `STRYKER_GROUPS` from `packages/engine/stryker.groups.mjs` (through its `.d.mts`) and pins the `RUNNER_ENV` line, `fail-fast: false`, `if: always()` and the dispatch choices.
+The guard step is the SAME script as `matrix-truth.yml`.
+
+Append these to `tools/matrix/__tests__/matrix-workflow.test.ts` (they read `mutation.yml` and `stryker.groups.mjs`, which this task creates, so they cannot live in Task 9: a read in a `describe` body fails the whole file at collection). The file imports `STRYKER_GROUPS` from `../../../packages/engine/stryker.groups.mjs` (typed by its `.d.mts`):
+
+```ts
+describe("both workflows run on the switchable runner (ruling 68, D24)", () => {
+  const WF = readFileSync(".github/workflows/matrix-truth.yml", "utf8");
+  it("every job of matrix-truth.yml AND mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes", () => {
+    for (const [file, text] of [["matrix-truth.yml", WF], ["mutation.yml", readFileSync(".github/workflows/mutation.yml", "utf8")]] as const) {
+      const jobs = Object.entries(jobsOf(text));
+      expect(jobs.length, file).toBeGreaterThan(1);   // anti-vacuity
+      for (const [name, t] of jobs) {
+        expect(t, `${file}:${name} runs-on`).toContain("runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}");
+        expect(t, `${file}:${name} timeout-minutes`).toMatch(/timeout-minutes:/);
+      }
+    }
+  });
+});
+
+describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1)", () => {
+  const JOBS = jobsOf(readFileSync(".github/workflows/matrix-truth.yml", "utf8"));
+  const GUARD = "Visibility guard (design §6.4; R14a)";
+  const MUT = readFileSync(".github/workflows/mutation.yml", "utf8");
+  const MJOBS = jobsOf(MUT);
+  it("every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed)", () => {
+    const all = [...Object.values(JOBS), ...Object.values(MJOBS)];
+    expect(all.length).toBeGreaterThan(4);   // anti-vacuity: matrix-truth's four plus mutation's
+    for (const t of all) expect(stepOf(t, GUARD).body).toContain("RUNNER_ENV: ${{ runner.environment }}");
+  });
+  it("the mutate job does not cancel its siblings, takes its timeout from the matrix, and saves its evidence even when Stryker exits non-zero (R5-I1)", () => {
+    expect(MJOBS.mutate).toContain("matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}");
+    expect(MJOBS.mutate).toContain("fail-fast: false");
+    expect(MJOBS.mutate).toContain("timeout-minutes: ${{ matrix.timeout }}");
+    for (const n of ["Survivors", "Upload mutation results"]) expect(stepOf(MJOBS.mutate, n).body).toContain("if: always()");
+  });
+  it("the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys, in declaration order (m2)", () => {
+    // a trailing `# comment` on an option line is stripped (review 6, m4)
+    const opts = /group:[\s\S]*?options:\n((?:\s+- .+\n)+)/.exec(MUT)![1].split("\n").map((l) => l.replace(/\s+#.*$/, "").replace(/^\s+- /, "").trim()).filter(Boolean);
+    expect(opts).toEqual(["all", ...Object.keys(STRYKER_GROUPS)]);
+    expect(opts.length).toBeGreaterThan(2);
+  });
+});
+```
+
+Mutation rows for these (Step 5): `RUNNER_ENV: self-hosted` literal in one job's guard env; delete `fail-fast: false` from `mutate`; delete `if: always()` from `Survivors` or the upload step; one `mutation.yml` job back to `runs-on: ubuntu-latest`; add a group to `stryker.groups.mjs` only.
+
+`matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's. A new `packages/engine/test/stryker-matrix.test.ts` SPAWNS `stryker-matrix.mjs` per event and compares with `STRYKER_GROUPS` and `stryker-timeouts.json`: `pull_request` gives exactly `["probe"]`; `schedule` and dispatch `all` give every non-probe key (more than one); dispatch `probe` gives `["probe"]`; an unknown key such as `nosuch` is exit 2; every entry has a timeout in (0, 300]. Mutation rows: change the `pull_request` branch to `all`; ignore `--group`; drop the timeout lookup. Add `stryker-matrix.mjs` and `stryker-timeouts.json` to Task 15's Create list. The new `describe("mutation.yml and the runner wiring")` in `matrix-workflow.test.ts` imports `STRYKER_GROUPS` from `packages/engine/stryker.groups.mjs` (through its `.d.mts`) and pins the `RUNNER_ENV` line, `fail-fast: false`, `if: always()` and the dispatch choices.
 
 - [ ] **Step 4: Dry-run every group, run the probe, and the tests**
 
@@ -3636,7 +3656,7 @@ cd <exec>/packages/engine && node --experimental-strip-types scripts/stryker-flo
 
 Expected: Stryker completes, with a non-zero mutant count and a score. Record the mutants, the score and the wall time: the probe's mutants-per-second is the first measured rate, and Task 20's per-group estimate is checked against it.
 
-Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1d-t15.json" test/stryker-groups.test.ts test/stryker-floor.test.ts test/runtime-deps.test.ts; echo EXIT=$?` (judged by the template). `runtime-deps` must stay green: devDependencies only.
+Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1d-t15.json" test/stryker-groups.test.ts test/stryker-floor.test.ts test/stryker-matrix.test.ts test/runtime-deps.test.ts; echo EXIT=$?` (judged by the template; `.testResults[].name` lists exactly these 4 files). Then, from the root, the vitest template on `tools/matrix/__tests__/matrix-workflow.test.ts` (Task 9's file, now holding the mutation.yml block), judged the same way. `runtime-deps` must stay green: devDependencies only.
 
 - [ ] **Step 5: Mutate**
 
@@ -3647,6 +3667,9 @@ Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest r
 | Put `roundrobin.ts` in two real groups (not the probe) | the sweep's `doubled` list |
 | Delete the `src/testkit/**` exclusion | the sweep: `unclassified` lists the testkit files, with the count |
 | Delete one `STRYKER_PLACEMENT_OUT_OF_SCOPE` key | the sweep: that file is unclassified; `placement` no longer equals the key count |
+| `stryker-matrix.mjs`: the `pull_request` branch returns `all` | `stryker-matrix.test.ts` (a PR must give exactly `["probe"]`) |
+| `stryker-matrix.mjs` ignores `--group` | the same test (dispatch of one key) |
+| `stryker-matrix.mjs` drops the timeout lookup | the same test (every entry has a timeout in (0, 300]) |
 | Add a stale exclusion key (a renamed file) | "every exclusion … globs at least one file" |
 | Point the probe at `rest-floor.ts` | "the probe is one exact file with a co-located test" |
 | Drop `!src/competition/**/*.test.ts` | "no group's mutate list reaches a test file" (it goes red only because `expand` filters the result; the `exclude` form could never have gone green) |
@@ -3744,7 +3767,7 @@ Record the SHA. A tag push runs no workflow (D21), and the executor confirms tha
 cd <evidence> && gh variable list --json name,value --jq '.[] | select(.name == "MATRIX_RUNNER")'
 ```
 
-It must print nothing. If it prints a value, STOP with the reason "`MATRIX_RUNNER` is set, so this dispatch would run self-hosted and the injection proof is void" (not a red): unset it, or record that the proof was run with it unset. After the dispatch, the plan job's log must also not contain `self-hosted runner:`.
+This lists REPO-level variables only; `vars.MATRIX_RUNNER` also resolves organisation and environment variables, so this check is the quick one and the LOG check after the dispatch is the authority. List the other two scopes as well (`gh variable list --org <org>`, `gh variable list --env <env>`), or rely on the log check. The repo-level list must print nothing. If it prints a value, STOP with the reason "`MATRIX_RUNNER` is set, so this dispatch would run self-hosted and the injection proof is void" (not a red): unset it, or record that the proof was run with it unset. After the dispatch, the plan job's log must also not contain `self-hosted runner:`.
 
 ```bash
 cd <evidence> && gh workflow run matrix-truth.yml --ref matrix-truth/w1d-baseline -f scope=smoke -f inject_visibility=private; echo EXIT=$?
@@ -3758,7 +3781,7 @@ Expected:
 - the log shows `pretending the repository is private` and the `::error title=Matrix truth run refused::` line;
 - `headSha` equals the tag's SHA.
 
-Record the run id. If `plan` SUCCEEDED, the guard is open: STOP, with a PR-A defect.
+Record the run id. If `plan` SUCCEEDED and the log does NOT show `self-hosted runner:`, the guard is open: STOP, with a PR-A defect. If it SUCCEEDED and the log DOES show `self-hosted runner:`, the precondition failed (an org- or environment-level `MATRIX_RUNNER`), which is not a defect: unset it and re-dispatch.
 
 - [ ] **Step 2: Dispatch 1 of 3 (full)**
 
@@ -4214,6 +4237,17 @@ Re-review 5 (0 Critical, 1 Important, 10 Minor) was taken against `d8b2b7b35`.
 
 - **R5-I1 fixed.** `mutate` has `strategy: fail-fast: false` and `if: always()` on its survivors and upload steps. A test in `matrix-workflow.test.ts`, beside matrix-truth's, pins both and the matrix-derived timeout, with mutation rows.
 - **m1** 9 cases. **m2** the dispatch choices test now exists. **m3** every guard step of both workflows must carry `RUNNER_ENV: ${{ runner.environment }}`, with a mutation row. **m4** Task 17 Step 1 checks `vars.MATRIX_RUNNER` is unset and STOPs with that reason; D24 says the injection proves the hosted path only. **m5** wording and the guard's hint. **m6** the estimate floors the dry run at 344 s and uses concurrency 3; timeouts are re-derived when the runner changes. **m7** the handoff states the runner contract (Docker for `services: postgres`, tools, one label). No Fly runner is planned. **m8** `MATRIX_RUNNER` stays unset while the repo is public, in D24 and the handoff. **m9** the garbled example and the D23/D24 order. **m10** a `mutation.yml` skeleton in Task 15 Step 3.
+- **Disagreements:** none. **New false premises:** none.
+
+---
+
+## Review response (fix round 6)
+
+Re-review 6 (0 Critical, 1 Important, 7 Minor) was taken against `b53c5cd53`.
+
+- **R6-I1 fixed.** The `mutation.yml` / `stryker.groups.mjs` blocks (the two-file `runs-on` test, the `RUNNER_ENV`, `fail-fast`, `if: always()` and choices tests) and their mutation rows moved from Task 9 to Task 15 Step 3 and Step 5. Task 9 keeps a `runs-on` / `timeout-minutes` check on `matrix-truth.yml` alone. Task 15 Step 4 runs `matrix-workflow.test.ts` too, and `stryker-matrix.test.ts` (m1) with its three mutation rows.
+- **Scan of every task for the same shape** (a test or command in Task N that reads a file first created in a later task). Method: every file named in a `Create` list of every task (by basename) was searched for in all EARLIER tasks, once on read/import/spawn/`pnpm`/`node` lines and once on every line inside a code fence. Result: only the three Task 9 mentions above (`mutation.yml`, at the `runs-on` test, the describe body and the choices test). One prose hit in Task 7 names `shards.json` (Task 8) as a figure to check later, and reads nothing. Not covered by the scan: files named only in prose, and files a task reads that are Modify targets of a later task, which already exist.
+- **m1** done. **m2** the precondition states that `gh variable list` shows repo-level variables only, adds the org and environment lists, and makes the post-dispatch log check the authority; the "guard is open" STOP now excludes the self-hosted log line. **m3** D24 wording. **m4** the skeleton comment moved off the option line, and the test strips trailing comments and says it is order-sensitive. **m5** the status row now says rulings 60–68. **m6** the `if: always()` choice is marked deliberate. **m7** the `--out` path is written once.
 - **Disagreements:** none. **New false premises:** none.
 
 ---
