@@ -1568,6 +1568,10 @@ export type TickObservation = {
   /** T8b (§6.5, A14 conjunct 2): THIS tick's fresh read of the phone — the word W19 judges on (a claimed read's own
    *  word, or a coalesced sample younger than COALESCED_SAMPLE_MAX_AGE_MS); undefined = no fresh read. */
   freshIngest: IngestState | undefined;
+  /** W24 (controller ruling 2026-10-04): THIS tick's STATUS read threw (N1). The warming timeout's own observation is
+   *  held by exactly that (`heldByUnknownIngest`), so the warming countdown reads it. An outputs read that threw is not
+   *  it: the timeout's observation never reads the outputs. False when this tick made no read (coalesced, no input). */
+  phoneReadFailed: boolean;
 };
 
 /** T7 (§6.11): who advances a session. The organiser poll's reconcile-and-ingest block, extracted so a phone beat and the
@@ -1576,7 +1580,7 @@ export type TickObservation = {
  *  5. m-5, then ask 10 (§6.8.3); 6. W19 (§6.8.5). `cause` names the caller in the log line of an end it makes. */
 export async function tickSession(sessionId: string, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<TickObservation> {
   let row = await readRow(sessionId);
-  if (!row) return { session: null, ingestState: null, outputObserved: null, coalescedSince: undefined, freshIngest: undefined };
+  if (!row) return { session: null, ingestState: null, outputObserved: null, coalescedSince: undefined, freshIngest: undefined, phoneReadFailed: false };
 
   if (!isTerminal(row.state)) await reconcileSession(row.id, deps);      // expiry + one Machine observation
   row = (await readRow(sessionId))!;
@@ -1590,6 +1594,7 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
   // younger than COALESCED_SAMPLE_MAX_AGE_MS. Undefined = no fresh read to judge on (no input, a failed or no-evidence
   // read, an older sample): W19 skips this tick and never guesses.
   let freshIngest: IngestState | undefined;
+  let phoneReadFailed = false;
   if (row.mode === "passthrough" && (row.state === "warming" || row.state === "live")) {
     const input = (await sql.begin((tx) => readFirstInput(tx, row!.id))) as Awaited<ReturnType<typeof readFirstInput>>;
     const inputId = input?.ingestInputId ?? null;
@@ -1600,8 +1605,11 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
     if (inputId) {
       if (!(await claimIngestPoll(row.id, deps.now()))) coalesced = true;
       else {
+        phoneReadFailed = true;   // until the status read answers
         try {
-          read = { status: await deps.drivers.ingest.inputStatus(inputId, { sessionId: row.id }), output: await deps.drivers.ingest.outputState(inputId, { sessionId: row.id }) };
+          const status = await deps.drivers.ingest.inputStatus(inputId, { sessionId: row.id });
+          phoneReadFailed = false;
+          read = { status, output: await deps.drivers.ingest.outputState(inputId, { sessionId: row.id }) };
         } catch (err) {
           reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
         }
@@ -1674,7 +1682,7 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
 
   // 5–6: the phone-lost ends, judged on what this tick read and re-taken on the LOCKED row.
   if (!isTerminal(row.state)) row = await endIfPhoneLost(row, freshIngest, deps, cause);
-  return { session: toSession(row), ingestState, outputObserved, coalescedSince, freshIngest };
+  return { session: toSession(row), ingestState, outputObserved, coalescedSince, freshIngest, phoneReadFailed };
 }
 
 /** The facts ask 10, W19 and m-5 judge, in ONE statement (one snapshot). The session's phone is its `pairing_id`
@@ -1830,7 +1838,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   // B: the organiser's poll IS a tick (§6.11) — expiry + one Machine observation, the coalesced ingest read, warming →
   // live, target_rejected and the phone-lost ends. T7 (A10): the projection below is built from what THAT tick observed,
   // exactly as it was from the block's own locals before the extraction.
-  const { ingestState, outputObserved, coalescedSince } = await tickSession(row.id, deps, "poll");
+  const { ingestState, outputObserved, coalescedSince, freshIngest, phoneReadFailed } = await tickSession(row.id, deps, "poll");
   row = (await latestRow(fixtureId))!;
 
   const qr = (await sql.begin(async (tx): Promise<CaptureQrV1 | null> => {
@@ -1903,13 +1911,14 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   }
   const allowance = await restartAllowance(sql, { orgId: row.org_id, fixtureId, excludeSessionId: null }, deps.now());
   // W24 (§6.12, T9): the countdown to the end the tick will make, from the clocks the tick judges (phoneFactsOf: the
-  // phone's beat, the last connected sample, first ingest) and the row's warming entry, on this response's clock. A
-  // session with no phone (C-1: pairing_id null) has no phone rules, so it has no countdown either; nor does a read that
-  // is not `disconnected` (I-1: an unknown word or a failed read never ends anything, m-3).
+  // phone's beat, the last connected sample, first ingest) and the row's warming entry, on this response's clock, and
+  // from the reading THIS tick judged on (controller ruling 2026-10-04: shown iff that end fires; lostCountdown gates
+  // each kind on what its end reads). A session with no phone (C-1: pairing_id null) has no phone rules, so it has no
+  // countdown either.
   const facts = await phoneFactsOf(sql, row.id);
   const countdown = facts?.has_phone ? lostCountdown({
     state: row.state, firstIngestAt: facts.first_ingest_at, warmingAt: d(row.warming_at), phoneBeatAt: facts.phone_beat_at,
-    ingestDisconnected: ingestState?.state === "disconnected", lastConnectedSampleAt: facts.last_connected_at,
+    read: { fresh: freshIngest, served: ingestState?.state ?? null, failed: phoneReadFailed }, lastConnectedSampleAt: facts.last_connected_at,
   }, deps.now(), {
     lostMinutes: tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES), warmingMinutes: WARMING_TIMEOUT_MINUTES,
     quietSeconds: RECONNECT_QUIET_SECONDS,

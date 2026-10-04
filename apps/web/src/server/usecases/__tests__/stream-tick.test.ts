@@ -23,7 +23,7 @@ import {
 } from "@/server/relay/config";
 import { OPEN_SESSION_MAX_POLL_SECONDS } from "@/server/relay/domain/poll-seconds";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
-import type { IngestProvider, ProviderCallRecord } from "@/server/relay/ports";
+import type { IngestProvider, IngestState, IngestStatus, ProviderCallRecord } from "@/server/relay/ports";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits } from "../stream-credits";
@@ -172,7 +172,7 @@ describe.skipIf(!HAS_DB)("tickSession — the tick (§6.11)", () => {
 
   it("an UNKNOWN session id is not a throw: the empty observation, every field at its 'read nothing' value", async () => {
     const r = await rig();
-    expect(await tickSession(randomUUID(), r.deps, "sweep")).toEqual({ session: null, ingestState: null, outputObserved: null, coalescedSince: undefined });
+    expect(await tickSession(randomUUID(), r.deps, "sweep")).toEqual({ session: null, ingestState: null, outputObserved: null, coalescedSince: undefined, phoneReadFailed: false });
   });
 
   it("coalescing: two organiser polls and one beat inside one STREAM_POLL_MS make exactly ONE inputStatus call — concurrently and in sequence", async () => {
@@ -748,6 +748,175 @@ describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the 
       }
     }
     expect(checked).toBe(4);
+  });
+
+  // Controller ruling 2026-10-04: `current` shows a countdown IF AND ONLY IF the end it counts down to fires at that
+  // deadline. Each case is ONE session under ONE read condition, held from the poll through the tick at the rule's
+  // deadline. The countdown is read off the poll and the end off that tick, and the assertion is their AGREEMENT, never a
+  // table of which cases should show. Both sides must occur, or the iff was checked on one side only.
+  type Hold = {
+    label: string; word?: IngestState; carried?: boolean; status?: "no-evidence" | "throws"; outputsThrow?: boolean; beats?: boolean;
+    /** PREMISE: what `current.ingest` serves under this condition (null = no word). */
+    served: IngestState | null;
+  };
+  const NO_EVIDENCE: IngestStatus = { state: null, protocol: null, enteredAt: null, lastSeenAt: null, reason: null };
+
+  /** Holds `h` on `r` for every read from `install()` on. `at(t)` moves the clock to `t` and readies the next read there:
+   *  a CLAIMED read (the claim reset, so the read is this one's own), or, carried, a coalesced one served from the sample
+   *  a claimed read wrote 1 s before. The phone beats at each instant `keepBeating` is given (a no-op when it does not). */
+  function holding(r: Rig, h: Hold, keepBeating: () => Promise<unknown>) {
+    const spies: { mockRestore(): void }[] = [];
+    return {
+      install: () => {
+        if (h.status === "no-evidence") spies.push(vi.spyOn(r.ingest as IngestProvider, "inputStatus").mockResolvedValue(NO_EVIDENCE));
+        if (h.status === "throws") spies.push(vi.spyOn(r.ingest as IngestProvider, "inputStatus").mockRejectedValue(new Error("cloudflare: 503")));
+        if (h.outputsThrow) spies.push(vi.spyOn(r.ingest as IngestProvider, "outputState").mockRejectedValue(new Error("cloudflare: 503")));
+      },
+      at: async (t: number) => {
+        r.tick(t - (h.carried ? 1000 : 0) - r.deps.now().getTime());
+        await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${r.sessionId}`;
+        await keepBeating();
+        if (!h.carried) return;
+        await tickSession(r.sessionId, r.deps, "sweep");   // the claimed read whose sample the next read is served
+        r.tick(1000);
+        await sql`update fixture_stream_sessions set ingest_polled_at = ${r.deps.now()} where id = ${r.sessionId}`;   // another caller holds the claim
+        await keepBeating();
+      },
+      restore: () => { for (const s of spies) s.mockRestore(); },
+    };
+  }
+
+  it("W24 ⇔ W19: under every read condition the tick meets, the LIVE countdown shows exactly when the tick at its end ends the session phone_lost — a fresh `disconnected` only (m-3), never a carried word, a failed read or a beating phone", async () => {
+    const cases: Hold[] = [
+      { label: "claimed disconnected", word: "disconnected", served: "disconnected" },
+      { label: "claimed unknown", word: "unknown", served: "unknown" },
+      { label: "carried disconnected", word: "disconnected", carried: true, served: "disconnected" },
+      { label: "carried unknown", word: "unknown", carried: true, served: "unknown" },
+      { label: "no-evidence read carrying disconnected (G-a)", word: "disconnected", status: "no-evidence", served: "disconnected" },
+      { label: "the status read throws", word: "disconnected", status: "throws", served: null },
+      { label: "the outputs read throws", word: "disconnected", outputsThrow: true, served: null },
+      { label: "disconnected, the phone still beats (O5)", word: "disconnected", beats: true, served: "disconnected" },
+    ];
+    const seen = { shown: 0, none: 0 };
+    for (const h of cases) {
+      const r = await rig();
+      const live = await goLive(r);
+      // Both of W19's clocks start at go-live: the last beat and the last connected sample.
+      await sql`update fixture_stream_sessions set phone_beat_at = ${live} where id = ${r.sessionId}`;
+      await connectedSampleAt(r.sessionId, live);
+      const deadline = live.getTime() + LOST_MS;
+      const beat = () => (h.beats ? sql`update fixture_stream_sessions set phone_beat_at = ${r.deps.now()} where id = ${r.sessionId}` : Promise.resolve());
+      const hold = holding(r, h, beat);
+      if (h.word) r.ingest.setState(r.inputId, h.word);
+      if (h.status === "no-evidence") {
+        r.tick(5 * MIN);
+        await tickSession(r.sessionId, r.deps, "sweep");   // a real read records `disconnected`: the word the no-evidence reads carry
+      }
+      hold.install();
+      try {
+        await hold.at(live.getTime() + 10 * MIN);
+        const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+        expect(cur.ingest?.state ?? null, `PREMISE ${h.label}: the word served`).toBe(h.served);
+        const c = cur.countdown;
+        if (c) {
+          expect(c.kind, h.label).toBe("live");
+          expect(r.deps.now().getTime() + c.remainingMs, `${h.label}: the countdown names W19's deadline`).toBe(deadline);
+        }
+        const phoneLost = (s: Awaited<ReturnType<typeof tickSession>>["session"]) => s?.state === "completed" && s.endReason === "phone_lost";
+        await hold.at(deadline - 1000);
+        expect(phoneLost((await tickSession(r.sessionId, r.deps, "sweep")).session), `${h.label}: 1 s before the deadline`).toBe(false);
+        await hold.at(deadline);
+        const end = (await tickSession(r.sessionId, r.deps, "sweep")).session;
+        expect(phoneLost(end), `${h.label}: countdown ${c ? "shown" : "none"}, the tick at W19's deadline left ${end?.state}/${end?.endReason}`).toBe(c !== null);
+        if (c) seen.shown++; else seen.none++;
+      } finally {
+        hold.restore();
+      }
+    }
+    expect(seen.shown, "anti-vacuity: some case showed one").toBeGreaterThan(0);
+    expect(seen.none, "anti-vacuity: some case showed none").toBeGreaterThan(0);
+    expect(seen.shown + seen.none).toBe(cases.length);
+  });
+
+  it("W24 ⇔ the warming timeout: under every read condition, the WARMING countdown shows exactly when the tick at its end fails the session no_inbound_timeout — it fires whatever the word (M-4), and is held only by a status read that throws (N1)", async () => {
+    const cases: Hold[] = [
+      { label: "claimed disconnected", served: "disconnected" },
+      { label: "claimed unknown", word: "unknown", served: "unknown" },
+      { label: "carried unknown", word: "unknown", carried: true, served: "unknown" },
+      { label: "no-evidence read with nothing to carry", status: "no-evidence", served: null },
+      { label: "the status read throws", status: "throws", served: null },
+      { label: "the outputs read throws (the status read answers)", outputsThrow: true, served: null },
+    ];
+    const seen = { shown: 0, none: 0 };
+    for (const h of cases) {
+      const r = await rig({ connectAfterMs: 60 * MIN });   // the phone never connects: FakeIngest reads it disconnected
+      const [{ warming_at }] = await sql<{ warming_at: Date }[]>`select warming_at from fixture_stream_sessions where id = ${r.sessionId}`;
+      const deadline = warming_at.getTime() + WARMING_TIMEOUT_MINUTES * MIN;
+      // The phone beats throughout, so ask 10 cannot end it first: the warming timeout is the only end in reach.
+      const beat = () => sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}`;
+      const hold = holding(r, h, beat);
+      if (h.word) r.ingest.setState(r.inputId, h.word);
+      hold.install();
+      try {
+        await hold.at(warming_at.getTime() + 5 * MIN);
+        const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+        expect(cur.state, `PREMISE ${h.label}`).toBe("warming");
+        expect(cur.ingest?.state ?? null, `PREMISE ${h.label}: the word served`).toBe(h.served);
+        const c = cur.countdown;
+        if (c) {
+          expect(c.kind, h.label).toBe("warming");
+          expect(r.deps.now().getTime() + c.remainingMs, `${h.label}: the countdown names the warming deadline`).toBe(deadline);
+        }
+        const timedOut = (s: Awaited<ReturnType<typeof tickSession>>["session"]) => s?.state === "failed" && s.failReason === "no_inbound_timeout";
+        await hold.at(deadline - 1000);
+        expect(timedOut((await tickSession(r.sessionId, r.deps, "sweep")).session), `${h.label}: 1 s before the deadline`).toBe(false);
+        await hold.at(deadline);
+        const end = (await tickSession(r.sessionId, r.deps, "sweep")).session;
+        expect(timedOut(end), `${h.label}: countdown ${c ? "shown" : "none"}, the tick at the warming deadline left ${end?.state}/${end?.failReason}`).toBe(c !== null);
+        if (c) seen.shown++; else seen.none++;
+      } finally {
+        hold.restore();
+      }
+    }
+    expect(seen.shown, "anti-vacuity: some case showed one").toBeGreaterThan(0);
+    expect(seen.none, "anti-vacuity: some case showed none").toBeGreaterThan(0);
+    expect(seen.shown + seen.none).toBe(cases.length);
+  });
+
+  it("ask 10 reads no ingest word: under every read condition a warming session whose phone stops beating ends phone_lost at its silence deadline, and the same session whose phone beats does not (the pair) — so no read gate touches it", async () => {
+    const cases: Hold[] = [
+      { label: "disconnected", served: "disconnected" },
+      { label: "unknown", word: "unknown", served: "unknown" },
+      { label: "no-evidence read with nothing to carry", status: "no-evidence", served: null },
+      { label: "the status read throws", status: "throws", served: null },
+    ];
+    const seen = { ended: 0, kept: 0 };
+    for (const h of cases) {
+      for (const beats of [false, true]) {
+        const label = `${h.label}, the phone ${beats ? "beats" : "is silent"}`;
+        const r = await rig({ connectAfterMs: 60 * MIN });
+        const [{ last_beat_at }] = await sql<{ last_beat_at: Date }[]>`select last_beat_at from fixture_stream_pairings where id = ${r.paired.pairingId}`;
+        const deadline = last_beat_at.getTime() + ASK10_SILENT_MS;
+        const beat = () => (beats ? sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}` : Promise.resolve());
+        const hold = holding(r, { ...h, beats }, beat);
+        if (h.word) r.ingest.setState(r.inputId, h.word);
+        hold.install();
+        try {
+          const phoneLost = (s: Awaited<ReturnType<typeof tickSession>>["session"]) => s?.state === "completed" && s.endReason === "phone_lost";
+          await hold.at(deadline - 1000);
+          const early = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+          expect(early.ingest?.state ?? null, `PREMISE ${label}: the word served`).toBe(h.served);
+          expect(early.state, `${label}: 1 s before the deadline`).toBe("warming");
+          await hold.at(deadline);
+          const end = (await tickSession(r.sessionId, r.deps, "sweep")).session;
+          expect(phoneLost(end), `${label}: left ${end?.state}/${end?.endReason}`).toBe(!beats);
+          if (beats) seen.kept++; else seen.ended++;
+        } finally {
+          hold.restore();
+        }
+      }
+    }
+    expect(seen).toEqual({ ended: cases.length, kept: cases.length });
   });
 });
 

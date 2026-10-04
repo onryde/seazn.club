@@ -5,7 +5,7 @@ import {
   PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, POLL_NEAR_SECONDS,
   POLL_STARTING_SECONDS, RECONNECT_QUIET_SECONDS, WARMING_TIMEOUT_MINUTES,
 } from "../../config";
-import { livePhoneLost, lostCountdown, warmingPhoneLost } from "../phone-lost";
+import { type CountdownRead, livePhoneLost, lostCountdown, warmingPhoneLost } from "../phone-lost";
 import { OPEN_SESSION_MAX_POLL_SECONDS, pollSecondsFor } from "../poll-seconds";
 import { ACTIVE_STATES } from "../session";
 
@@ -160,14 +160,33 @@ describe("livePhoneLost — W19 (§6.8.5), both clocks and a fresh read", () => 
 
 describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
   const cfg = { lostMinutes: PHONE_LOST_LIVE_MINUTES, warmingMinutes: WARMING_TIMEOUT_MINUTES, quietSeconds: RECONNECT_QUIET_SECONDS };
+  const DOWN: CountdownRead = { fresh: "disconnected", served: "disconnected", failed: false };
   const live = (beatMs: number, videoMs: number) => ({
     state: "live" as const, firstIngestAt: ago(LOST_MS * 2), warmingAt: ago(LOST_MS * 3), phoneBeatAt: ago(beatMs),
-    ingestDisconnected: true, lastConnectedSampleAt: ago(videoMs),
+    read: DOWN, lastConnectedSampleAt: ago(videoMs),
   });
+  const WORDS = ["connected", "disconnected", "unknown"] as const;
 
-  it("the empty case first: a read that is not `disconnected` (connected, unknown, or no read at all) → null (live and warming alike)", () => {
-    expect(lostCountdown({ ...live(LOST_MS, LOST_MS), ingestDisconnected: false }, NOW, cfg)).toBeNull();
-    expect(lostCountdown({ state: "warming", firstIngestAt: null, warmingAt: ago(5 * MIN), phoneBeatAt: null, ingestDisconnected: false, lastConnectedSampleAt: null }, NOW, cfg)).toBeNull();
+  it("the empty case first (live): unless THIS tick's fresh word is `disconnected` → null. W19 judges the fresh word only (m-3), so a served `disconnected` that is only CARRIED (a no-evidence read, fresh undefined) shows nothing either", () => {
+    const seen = { shown: 0, none: 0, refused: 0 };
+    for (const fresh of [...WORDS, undefined]) {
+      for (const served of [...WORDS, null]) {
+        for (const failed of [false, true]) {
+          const read = { fresh, served, failed };
+          if (failed && fresh !== undefined) {
+            // A read that threw has no word: a fresh word beside `failed` is a caller that broke the TickObservation contract.
+            expect(() => lostCountdown({ ...live(LOST_MS, LOST_MS), read }, NOW, cfg), `fresh ${fresh} on a failed read`).toThrow(RangeError);
+            seen.refused++;
+            continue;
+          }
+          const c = lostCountdown({ ...live(LOST_MS, LOST_MS), read }, NOW, cfg);
+          if (fresh === "disconnected") { expect(c?.kind, `fresh ${fresh}, served ${served}`).toBe("live"); seen.shown++; }
+          else { expect(c, `fresh ${fresh}, served ${served}, failed ${failed}`).toBeNull(); seen.none++; }
+        }
+      }
+    }
+    // 4 fresh × 4 served × 2: the 12 failed reads that still carry a fresh word are refused; of the 20 others, 4 are fresh disconnected.
+    expect(seen).toEqual({ shown: 4, none: 16, refused: 12 });
   });
 
   it("live, no video and no beat for RECONNECT_QUIET_SECONDS − 1 s → null; at the quiet hold → the countdown", () => {
@@ -210,9 +229,35 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
   describe("warming (no video yet)", () => {
     const warming = (sinceMs: number | null) => ({
       state: "warming" as const, firstIngestAt: null, warmingAt: sinceMs === null ? null : ago(sinceMs), phoneBeatAt: ago(S),
-      ingestDisconnected: true, lastConnectedSampleAt: null,
+      read: DOWN, lastConnectedSampleAt: null,
     });
     const WARMING_MS = WARMING_TIMEOUT_MINUTES * MIN;
+
+    it("controller ruling 2026-10-04: the warming timeout fires whatever the WORD (M-4: unknown and a no-evidence read run it on schedule), so every read that answered shows the countdown — fresh or carried, any word but connected", () => {
+      let shown = 0;
+      for (const fresh of [...WORDS, undefined]) {
+        for (const served of ["disconnected", "unknown", null] as const) {
+          if (fresh !== undefined && fresh !== served) continue;   // a fresh word IS the served one; only a carry differs
+          expect(lostCountdown({ ...warming(5 * MIN), read: { fresh, served, failed: false } }, NOW, cfg), `fresh ${fresh}, served ${served}`)
+            .toEqual({ kind: "warming", elapsedMs: 5 * MIN, remainingMs: WARMING_MS - 5 * MIN });
+          shown++;
+        }
+      }
+      // fresh disconnected/unknown (2) + undefined with served disconnected, unknown or null (3).
+      expect(shown).toBe(5);
+    });
+
+    it("N1: a phone read that THREW → null, because heldByUnknownIngest holds warming_timeout while the ingest cannot be seen; the same session whose read answered shows it (the pair)", () => {
+      expect(lostCountdown({ ...warming(5 * MIN), read: { fresh: undefined, served: null, failed: true } }, NOW, cfg)).toBeNull();
+      expect(lostCountdown({ ...warming(5 * MIN), read: { fresh: undefined, served: null, failed: false } }, NOW, cfg)?.kind).toBe("warming");
+    });
+
+    it("a served `connected` word → null: the observation takes the session live, so the timeout never fires (fresh, or carried by a no-evidence read); `disconnected` is the pair", () => {
+      for (const fresh of ["connected", undefined] as const) {
+        expect(lostCountdown({ ...warming(5 * MIN), read: { fresh, served: "connected", failed: false } }, NOW, cfg), `fresh ${fresh}`).toBeNull();
+      }
+      expect(lostCountdown({ ...warming(5 * MIN), read: { fresh: undefined, served: "disconnected", failed: false } }, NOW, cfg)?.kind).toBe("warming");
+    });
 
     it("30 s after warmingAt → warming, remaining = warmingAt + WARMING_TIMEOUT_MINUTES − now; 1 s short → null", () => {
       expect(lostCountdown(warming(QUIET_MS - S), NOW, cfg)).toBeNull();
