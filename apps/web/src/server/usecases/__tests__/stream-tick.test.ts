@@ -471,6 +471,44 @@ describe.skipIf(!HAS_DB)("W19 (§6.8.5): a live phone stream whose phone AND vid
     expect(1.5 * STREAM_POLL_MS > STREAM_POLL_MS, "the case differs from a 1× bound's answer").toBe(true);
   });
 
+  it("m-3 (controller ruling): an UNKNOWN read never advances a phone-lost end — a W19-due session read `unknown` stays live, CLAIMED or COALESCED; the same read `disconnected` ends it phone_lost", async () => {
+    let checked = 0;
+    for (const path of ["claimed", "coalesced"] as const) {
+      for (const word of ["unknown", "disconnected"] as const) {
+        const label = `${path} ${word}`;
+        const r = await rig();
+        await goLive(r);
+        r.ingest.setState(r.inputId, word);
+        let t;
+        if (path === "claimed") {
+          r.tick(LOST_MS);
+          const before = await inputStatusCalls(r);
+          t = await tickSession(r.sessionId, r.deps, "sweep");
+          expect(await inputStatusCalls(r) - before, `PREMISE ${label}: this tick read`).toBe(1);
+        } else {
+          r.tick(LOST_MS - 1000);
+          expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, `PREMISE ${label}: short of the limit`).toBe("live");
+          const [last] = await sql<{ ingest_state: string }[]>`
+            select ingest_state from fixture_stream_samples where session_id = ${r.sessionId} and source = 'poll' order by sampled_at desc limit 1`;
+          expect(last!.ingest_state, `PREMISE ${label}: the sample carries the word`).toBe(word);
+          r.tick(1000);
+          await sql`update fixture_stream_sessions set ingest_polled_at = ${r.deps.now()} where id = ${r.sessionId}`;   // another caller holds the claim
+          const before = await inputStatusCalls(r);
+          t = await tickSession(r.sessionId, r.deps, "sweep");
+          expect(await inputStatusCalls(r) - before, `PREMISE ${label}: served, not read`).toBe(0);
+        }
+        if (word === "unknown") {
+          expect(t.session?.state, label).toBe("live");
+          expect(await ends(r.sessionId), `${label}: no end`).toEqual({ transitions: 0, ended: 0 });
+        } else {
+          expect(t.session, label).toMatchObject({ state: "completed", endReason: "phone_lost" });
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
   it("two ticks AT ONCE on one W19-due session end it exactly once, with one end event — both judge it due (a fresh coalesced sample), one decision lands", async () => {
     const r = await rig();
     await goLive(r);

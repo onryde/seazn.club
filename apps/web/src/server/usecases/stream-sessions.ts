@@ -1720,7 +1720,9 @@ function phoneLostEnd(s: Session, f: PhoneFacts, fresh: IngestState | undefined,
     state: s.state, firstIngestAt: f.first_ingest_at, hasCurrentPairing: f.has_current,
     lastBeatAt: f.has_current ? f.last_beat_at : null, answeredPollSeconds: f.answered_poll_seconds ?? 0, heardGoLive: f.heard_go_live,
   }, now, silentFloor)) return { command: { type: "stop", reason: "phone_lost" }, rule: "ask-10" };
-  if (fresh !== undefined && livePhoneLost({
+  // m-3 (controller ruling): an `unknown` read — claimed or coalesced — never advances a phone-lost end. A Cloudflare
+  // read blip must not end a paid broadcast as phone_lost; the next fresh word decides, and max_duration still bounds it.
+  if (fresh !== undefined && fresh !== "unknown" && livePhoneLost({
     state: s.state, firstIngestAt: f.first_ingest_at, phoneBeatAt: f.phone_beat_at,
     freshReadConnected: fresh === "connected", lastConnectedSampleAt: f.last_connected_at,
   }, now, tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES))) return { command: { type: "stop", reason: "phone_lost" }, rule: "w19" };

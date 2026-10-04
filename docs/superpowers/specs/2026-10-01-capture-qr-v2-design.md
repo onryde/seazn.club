@@ -1893,6 +1893,9 @@ C-2), not the seazn.club owner's.
   the open session's phone until the session ends. That phone is judged by the same silence clock as before the
   reissue. The code-active filter applies only to NEW claims and to the Go-live lookup, so a new Go live after a
   reissue still answers `phone_not_paired` until a phone claims the new code.
+- **An `unknown` read never ends a broadcast as phone lost (m-3).** Clause 2 of §6.8.5 needs a fresh read that is
+  `disconnected`. An `unknown` read, claimed or coalesced, does not satisfy it. A Cloudflare read blip never ends a paid
+  broadcast as `phone_lost`. The phone's beat and the `max_duration` deadline still end it.
 
 **No spec text changes for these:**
 
