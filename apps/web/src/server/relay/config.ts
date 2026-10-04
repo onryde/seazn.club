@@ -163,6 +163,40 @@ export const OUTPUT_READ_FAILURES_BEFORE_REPORT = 6;
 /** Ruling R-A / C14: a discriminator the phone obeys; asserts NOTHING about
  *  which leg is production primary — R3 rules that, and this is the config line. */
 export const QR_PREFERRED_DEFAULT: "srt" | "rtmps" = "srt";
+
+/** Capture QR v2 §6.4 / §6.15 (W15, W21): the three ingest settings the phone's descriptor reads. Each is read at the
+ *  request, never cached, so a test (and an operator) can flip it. Typed `Record<…>` for the reason `tunable` gives. */
+const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
+function hostSetting(name: "STREAM_INGEST_HOST" | "STREAM_PLAYBACK_HOST", env: Record<string, string | undefined>): string | null {
+  const v = env[name]?.trim();
+  if (!v) return null;
+  // A bare hostname only: a scheme, port or path here would be served inside a URL the phone dials.
+  if (!HOST_RE.test(v)) throw new Error(`${name} must be a bare hostname (no scheme, port or path), got ${JSON.stringify(v)}`);
+  return v;
+}
+/** W15: the environment's RTMPS ingest host (`live.seazn.club`, `live.stg.seazn.club`). Unset or blank (local, CI) =
+ *  null, and Cloudflare's own host is served. */
+export function streamIngestHost(env: Record<string, string | undefined> = process.env): string | null {
+  return hostSetting("STREAM_INGEST_HOST", env);
+}
+/** The fake driver's playback host (§6.15: local and CI serve "the fake driver's value"). `.invalid` never resolves. */
+export const FAKE_PLAYBACK_HOST = "playback.fake.invalid";
+/** W14: the Stream customer host `playbackUrl` is built on. Unset under the FAKE driver = FAKE_PLAYBACK_HOST. Unset
+ *  under any other mode = null: a real-driver deployment without it answers 503 (`playback_unconfigured`), because a
+ *  guessed host would be a lie (§6.15). */
+export function streamPlaybackHost(env: Record<string, string | undefined> = process.env): string | null {
+  const v = hostSetting("STREAM_PLAYBACK_HOST", env);
+  if (v !== null) return v;
+  return relayDriverMode(env) === "fake" ? FAKE_PLAYBACK_HOST : null;
+}
+/** W21: SRT is offered by DEFAULT — unset or blank means on. `false` is A18's safety net (the descriptor then carries
+ *  `cred.srt: null` and `preferred: "rtmps"`). Anything but true/false throws, naming the variable. */
+export function srtEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  const v = env.STREAM_SRT_ENABLED?.trim().toLowerCase();
+  if (!v || v === "true") return true;
+  if (v === "false") return false;
+  throw new Error(`STREAM_SRT_ENABLED must be "true" or "false" (unset = true), got ${JSON.stringify(env.STREAM_SRT_ENABLED)}`);
+}
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 

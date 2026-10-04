@@ -73,6 +73,9 @@
     },
     {
       "name": "public"
+    },
+    {
+      "name": "capture"
     }
   ],
   "components": {
@@ -86,6 +89,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "Pro API key: `Authorization: Bearer sc_…` (entitlement api.access). Scopes: read < score < manage; see x-required-scope per operation."
+      },
+      "captureTok": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Capture QR v2 (§6.3): the phone's Bearer is the stream code's `tok` from the QR — accepted ONLY by the `capture` routes of ITS code. Unknown, wrong, ended or missing → 401 code_ended (one body)."
       },
       "deviceLink": {
         "type": "http",
@@ -40830,6 +40838,1440 @@
           },
           {
             "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/capture/codes/{code}": {
+      "get": {
+        "summary": "The phone's descriptor (Bearer: the stream code's tok). With `phone`, it follows the fixture's latest session: open (warming, live, ending) → the session shape, with `cred` only for that session's own phone; ended after warming → completed or failed with its endReason; otherwise, and always without `phone`, the waiting shape. Served private, no-store. 401 code_ended (unknown, wrong tok, ended, or no Bearer — one body), 404 not_a_stream_code, 422 invalid (a slot other than 0), 429 rate_limited, 503 unavailable. Never 410",
+        "tags": [
+          "capture"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+            }
+          },
+          {
+            "name": "slot",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "enum": [
+                0
+              ]
+            },
+            "description": "The camera slot; omitted = 0, any other is 422 invalid"
+          },
+          {
+            "name": "phone",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 64
+            },
+            "description": "The phone's id: picks the session shape, and `cred` for the session's own phone"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "const": "waiting"
+                        },
+                        "code": {
+                          "type": "string",
+                          "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "venueTimezone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "scheduledStart": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "pollSeconds": {
+                          "type": "integer",
+                          "minimum": 5,
+                          "maximum": 300
+                        },
+                        "autoAllowed": {
+                          "type": "boolean"
+                        },
+                        "destinationName": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "overlayUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "heartbeatUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "startUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "code",
+                        "label",
+                        "venueTimezone",
+                        "pollSeconds",
+                        "autoAllowed",
+                        "destinationName",
+                        "overlayUrl",
+                        "heartbeatUrl",
+                        "startUrl"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "const": "warming"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "preferred": {
+                          "type": "string",
+                          "enum": [
+                            "srt",
+                            "rtmps"
+                          ]
+                        },
+                        "playbackUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "holdWindowSeconds": {
+                          "type": "object",
+                          "properties": {
+                            "srt": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            },
+                            "rtmps": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            }
+                          },
+                          "required": [
+                            "srt",
+                            "rtmps"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "maxDurationMinutes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "warmingDeadline": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "scoreUpdates": {
+                          "type": "string",
+                          "enum": [
+                            "realtime",
+                            "polled"
+                          ]
+                        },
+                        "code": {
+                          "type": "string",
+                          "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "venueTimezone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "scheduledStart": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "pollSeconds": {
+                          "type": "integer",
+                          "minimum": 5,
+                          "maximum": 300
+                        },
+                        "autoAllowed": {
+                          "type": "boolean"
+                        },
+                        "destinationName": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "overlayUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "heartbeatUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "startUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "cred": {
+                          "type": "object",
+                          "properties": {
+                            "srt": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "streamId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "passphrase": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "latencyMs": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "url",
+                                    "streamId",
+                                    "passphrase",
+                                    "latencyMs"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "rtmps": {
+                              "type": "object",
+                              "properties": {
+                                "url": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "streamKey": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "url",
+                                "streamKey"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "srt",
+                            "rtmps"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "sid",
+                        "preferred",
+                        "playbackUrl",
+                        "holdWindowSeconds",
+                        "maxDurationMinutes",
+                        "warmingDeadline",
+                        "scoreUpdates",
+                        "code",
+                        "label",
+                        "venueTimezone",
+                        "pollSeconds",
+                        "autoAllowed",
+                        "destinationName",
+                        "overlayUrl",
+                        "heartbeatUrl",
+                        "startUrl"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "const": "live"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "preferred": {
+                          "type": "string",
+                          "enum": [
+                            "srt",
+                            "rtmps"
+                          ]
+                        },
+                        "playbackUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "holdWindowSeconds": {
+                          "type": "object",
+                          "properties": {
+                            "srt": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            },
+                            "rtmps": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            }
+                          },
+                          "required": [
+                            "srt",
+                            "rtmps"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "maxDurationMinutes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "warmingDeadline": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "scoreUpdates": {
+                          "type": "string",
+                          "enum": [
+                            "realtime",
+                            "polled"
+                          ]
+                        },
+                        "code": {
+                          "type": "string",
+                          "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "venueTimezone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "scheduledStart": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "pollSeconds": {
+                          "type": "integer",
+                          "minimum": 5,
+                          "maximum": 300
+                        },
+                        "autoAllowed": {
+                          "type": "boolean"
+                        },
+                        "destinationName": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "overlayUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "heartbeatUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "startUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "cred": {
+                          "type": "object",
+                          "properties": {
+                            "srt": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "streamId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "passphrase": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "latencyMs": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "url",
+                                    "streamId",
+                                    "passphrase",
+                                    "latencyMs"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "rtmps": {
+                              "type": "object",
+                              "properties": {
+                                "url": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "streamKey": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "url",
+                                "streamKey"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "srt",
+                            "rtmps"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "sid",
+                        "preferred",
+                        "playbackUrl",
+                        "holdWindowSeconds",
+                        "maxDurationMinutes",
+                        "warmingDeadline",
+                        "scoreUpdates",
+                        "code",
+                        "label",
+                        "venueTimezone",
+                        "pollSeconds",
+                        "autoAllowed",
+                        "destinationName",
+                        "overlayUrl",
+                        "heartbeatUrl",
+                        "startUrl"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "const": "ending"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "preferred": {
+                          "type": "string",
+                          "enum": [
+                            "srt",
+                            "rtmps"
+                          ]
+                        },
+                        "playbackUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "holdWindowSeconds": {
+                          "type": "object",
+                          "properties": {
+                            "srt": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            },
+                            "rtmps": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            }
+                          },
+                          "required": [
+                            "srt",
+                            "rtmps"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "maxDurationMinutes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "warmingDeadline": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "scoreUpdates": {
+                          "type": "string",
+                          "enum": [
+                            "realtime",
+                            "polled"
+                          ]
+                        },
+                        "code": {
+                          "type": "string",
+                          "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "venueTimezone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "scheduledStart": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "pollSeconds": {
+                          "type": "integer",
+                          "minimum": 5,
+                          "maximum": 300
+                        },
+                        "autoAllowed": {
+                          "type": "boolean"
+                        },
+                        "destinationName": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "overlayUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "heartbeatUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "startUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "cred": {
+                          "type": "object",
+                          "properties": {
+                            "srt": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "streamId": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "passphrase": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "latencyMs": {
+                                      "type": "integer",
+                                      "minimum": 1,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "url",
+                                    "streamId",
+                                    "passphrase",
+                                    "latencyMs"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "rtmps": {
+                              "type": "object",
+                              "properties": {
+                                "url": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "streamKey": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "url",
+                                "streamKey"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "srt",
+                            "rtmps"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "endReason": {
+                          "type": "string",
+                          "enum": [
+                            "stopped",
+                            "auto_stopped",
+                            "no_inbound_timeout",
+                            "target_rejected",
+                            "max_duration",
+                            "phone_lost",
+                            "failed"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "sid",
+                        "preferred",
+                        "playbackUrl",
+                        "holdWindowSeconds",
+                        "maxDurationMinutes",
+                        "warmingDeadline",
+                        "scoreUpdates",
+                        "code",
+                        "label",
+                        "venueTimezone",
+                        "pollSeconds",
+                        "autoAllowed",
+                        "destinationName",
+                        "overlayUrl",
+                        "heartbeatUrl",
+                        "startUrl",
+                        "endReason"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "const": "completed"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "preferred": {
+                          "type": "string",
+                          "enum": [
+                            "srt",
+                            "rtmps"
+                          ]
+                        },
+                        "playbackUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "holdWindowSeconds": {
+                          "type": "object",
+                          "properties": {
+                            "srt": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            },
+                            "rtmps": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            }
+                          },
+                          "required": [
+                            "srt",
+                            "rtmps"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "maxDurationMinutes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "warmingDeadline": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "scoreUpdates": {
+                          "type": "string",
+                          "enum": [
+                            "realtime",
+                            "polled"
+                          ]
+                        },
+                        "code": {
+                          "type": "string",
+                          "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "venueTimezone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "scheduledStart": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "pollSeconds": {
+                          "type": "integer",
+                          "minimum": 5,
+                          "maximum": 300
+                        },
+                        "autoAllowed": {
+                          "type": "boolean"
+                        },
+                        "destinationName": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "overlayUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "heartbeatUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "startUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "endReason": {
+                          "type": "string",
+                          "enum": [
+                            "stopped",
+                            "auto_stopped",
+                            "no_inbound_timeout",
+                            "target_rejected",
+                            "max_duration",
+                            "phone_lost",
+                            "failed"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "sid",
+                        "preferred",
+                        "playbackUrl",
+                        "holdWindowSeconds",
+                        "maxDurationMinutes",
+                        "warmingDeadline",
+                        "scoreUpdates",
+                        "code",
+                        "label",
+                        "venueTimezone",
+                        "pollSeconds",
+                        "autoAllowed",
+                        "destinationName",
+                        "overlayUrl",
+                        "heartbeatUrl",
+                        "startUrl",
+                        "endReason"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "const": "failed"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "preferred": {
+                          "type": "string",
+                          "enum": [
+                            "srt",
+                            "rtmps"
+                          ]
+                        },
+                        "playbackUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "holdWindowSeconds": {
+                          "type": "object",
+                          "properties": {
+                            "srt": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            },
+                            "rtmps": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 999
+                            }
+                          },
+                          "required": [
+                            "srt",
+                            "rtmps"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "maxDurationMinutes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "warmingDeadline": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "scoreUpdates": {
+                          "type": "string",
+                          "enum": [
+                            "realtime",
+                            "polled"
+                          ]
+                        },
+                        "code": {
+                          "type": "string",
+                          "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "venueTimezone": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "scheduledStart": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "pollSeconds": {
+                          "type": "integer",
+                          "minimum": 5,
+                          "maximum": 300
+                        },
+                        "autoAllowed": {
+                          "type": "boolean"
+                        },
+                        "destinationName": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "overlayUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "heartbeatUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "startUrl": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "endReason": {
+                          "type": "string",
+                          "enum": [
+                            "stopped",
+                            "auto_stopped",
+                            "no_inbound_timeout",
+                            "target_rejected",
+                            "max_duration",
+                            "phone_lost",
+                            "failed"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "sid",
+                        "preferred",
+                        "playbackUrl",
+                        "holdWindowSeconds",
+                        "maxDurationMinutes",
+                        "warmingDeadline",
+                        "scoreUpdates",
+                        "code",
+                        "label",
+                        "venueTimezone",
+                        "pollSeconds",
+                        "autoAllowed",
+                        "destinationName",
+                        "overlayUrl",
+                        "heartbeatUrl",
+                        "startUrl",
+                        "endReason"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "example": {
+                  "state": "waiting",
+                  "code": "example",
+                  "label": "example",
+                  "venueTimezone": "example",
+                  "pollSeconds": 5,
+                  "autoAllowed": true,
+                  "destinationName": "example",
+                  "overlayUrl": "example",
+                  "heartbeatUrl": "example",
+                  "startUrl": "example"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "captureTok": []
           }
         ]
       }

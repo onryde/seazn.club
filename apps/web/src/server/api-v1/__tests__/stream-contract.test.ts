@@ -421,9 +421,14 @@ describe("the relay's routes are never key-reachable", () => {
     for (const [path, ops] of Object.entries(doc.paths)) {
       for (const [method, o] of Object.entries(ops)) {
         if (refusesDestinations.has(`${method} ${path}`)) continue;
-        const e = o.responses["422"]?.content["application/json"].schema.properties.error;
-        if (!e) continue;
-        expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("rule");
+        const schema = o.responses["422"]?.content["application/json"].schema as
+          | { properties?: { error?: ErrorProps }; anyOf?: ErrorProps[] } | undefined;
+        if (!schema) continue;
+        // Capture QR v2 (T8a): a BARE phone route refuses with the capture-refusal body itself — its branches are the
+        // error objects, there is no envelope `error`. Either way every error object is checked.
+        const errors = schema.properties?.error ? [schema.properties.error] : (schema.anyOf ?? []);
+        expect(errors.length, `${method} ${path}: a 422 with no error object to check`).toBeGreaterThan(0);
+        for (const e of errors) expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("rule");
         others++;
       }
     }

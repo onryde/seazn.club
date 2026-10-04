@@ -10,7 +10,7 @@ import { sql, type Tx } from "@/lib/db";
 import { requireFeature } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { CaptureRefusalError } from "@/server/api-v1/capture-http";
+import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import type { StreamCodeShown } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { CODE_GRACE_AFTER_FINISH_MINUTES, tunable } from "@/server/relay/config";
@@ -235,8 +235,8 @@ export async function resolveStreamCode(
   return { codeId: row.id, orgId: row.org_id, fixtureId: row.fixture_id, status: status as ResolvedCode["status"], issuedBy: row.issued_by };
 }
 
-/** One sentence for every refusal of a code (C1): the wire never tells expired, revoked, unknown and wrong-tok apart. */
-const codeEnded = () => new CaptureRefusalError(401, "code_ended", "this stream code is no longer valid");
+// One sentence for every refusal of a code (C1): `codeEnded` lives in capture-http.ts, shared with the route's Bearer
+// read (A17), so the wire never tells expired, revoked, unknown, wrong-tok and no-Bearer apart.
 
 /**
  * The fixture's destination pre-pick (§6.7.3): `null` clears it. Another org's target, an archived one and an unknown

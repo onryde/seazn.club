@@ -48,6 +48,10 @@ interface RouteSpec {
   query?: Record<string, { schema: object; description?: string }>;
   public?: boolean; // no auth, cacheable
   errors?: number[]; // extra documented error statuses
+  /** Capture QR v2 §6.3 (the phone's routes): the 2xx is the BARE `response` shape and every refusal the bare
+   *  `{code, message}` of the capture-refusal contract — no `{ok, data | error, requestId}` envelope, no 400 (a bad
+   *  request is 422 `invalid`) — and the Bearer is the stream code's tok, never a session or an API key. */
+  bare?: boolean;
 }
 
 const PAGE_QUERY = {
@@ -171,6 +175,9 @@ export const ROUTES: RouteSpec[] = [
   // Capture QR v2 (T5) — the stable stream code and the destination pre-pick. Never key-reachable (key-scopes.ts).
   { path: "/fixtures/{id}/stream-code", method: "post", summary: "The fixture's stable stream code (editor session only): re-shows the ACTIVE code (the same QR) or mints one; never ends a code. Served private, no-store (the tok is live). 402 without streaming.relay, 422 fixture_finished (the match is over: nothing left to start), 503 RELAY_KEK_MISSING (the server has no key; nothing is written)", tag: "fixtures", response: S.StreamCodeShown, errors: [402, 403, 404, 422, 503] },
   { path: "/fixtures/{id}/stream-code/reissue", method: "post", summary: "Revoke & reissue the fixture's stream code: the ACTIVE code ends at once (a phone already streaming keeps its session until it ends) and a fresh one is minted and shown. 402 without streaming.relay, 422 fixture_finished, 503 RELAY_KEK_MISSING (the old code is untouched)", tag: "fixtures", response: S.StreamCodeShown, errors: [402, 403, 404, 422, 503] },
+  // Capture QR v2 §6.3 — the phone's routes, under the internal `capture` tag: never key-reachable (key-scopes.ts), so
+  // never in the published spec. The JSON contracts (docs/contracts/capture-*.json) stay the cross-repo authority.
+  { path: "/capture/codes/{code}", method: "get", summary: "The phone's descriptor (Bearer: the stream code's tok). With `phone`, it follows the fixture's latest session: open (warming, live, ending) → the session shape, with `cred` only for that session's own phone; ended after warming → completed or failed with its endReason; otherwise, and always without `phone`, the waiting shape. Served private, no-store. 401 code_ended (unknown, wrong tok, ended, or no Bearer — one body), 404 not_a_stream_code, 422 invalid (a slot other than 0), 429 rate_limited, 503 unavailable. Never 410", tag: "capture", bare: true, response: S.CaptureDescriptor, query: { slot: { schema: { type: "integer", enum: [0] }, description: "The camera slot; omitted = 0, any other is 422 invalid" }, phone: { schema: { type: "string", minLength: 16, maxLength: 64 }, description: "The phone's id: picks the session shape, and `cred` for the session's own phone" } }, errors: [422, 429, 503] },
   { path: "/fixtures/{id}/stream-settings", method: "put", summary: "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it). 404 when the target is not this org's, is archived, or does not exist", tag: "fixtures", request: S.PutStreamSettings, response: S.StreamSettings, errors: [403, 404] },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "get", summary: "Get a side's lineup", tag: "fixtures" },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "put", summary: "Replace a side's lineup", tag: "fixtures", request: S.PutLineup, errors: [422] },
@@ -700,9 +707,11 @@ function pathParams(path: string): object[] {
     name,
     in: "path",
     required: true,
-    schema: name.endsWith("Slug") || name === "slug" || name === "sport"
-      ? { type: "string" }
-      : { type: "string", format: "uuid" },
+    schema: name === "code"
+      ? { type: "string", pattern: S.CAPTURE_CODE_RE.source }   // capture QR v2: the stream code, not a uuid
+      : name.endsWith("Slug") || name === "slug" || name === "sport"
+        ? { type: "string" }
+        : { type: "string", format: "uuid" },
   }));
 }
 
@@ -765,22 +774,24 @@ function requiredScope(route: RouteSpec): string | null {
 
 function operation(route: RouteSpec): Record<string, unknown> {
   const scope = requiredScope(route);
+  // A bare route (capture QR v2) answers the shape itself and refuses with the capture-refusal body.
+  const errorBody = route.bare ? toSchema(S.CaptureRefusal) : ERROR_ENVELOPE;
   const responses: Record<string, unknown> = {
     [String(route.status ?? 200)]: {
       description: "Success",
-      content: { "application/json": { schema: envelope(route.response) } },
+      content: { "application/json": { schema: route.bare && route.response ? toSchema(route.response) : envelope(route.response) } },
     },
-    "400": { description: "Validation error", content: { "application/json": { schema: ERROR_ENVELOPE } } },
   };
+  if (!route.bare) responses["400"] = { description: "Validation error", content: { "application/json": { schema: ERROR_ENVELOPE } } };
   if (!route.public) {
-    responses["401"] = { description: "Not authenticated", content: { "application/json": { schema: ERROR_ENVELOPE } } };
+    responses["401"] = { description: "Not authenticated", content: { "application/json": { schema: errorBody } } };
   }
-  responses["404"] = { description: "Not found", content: { "application/json": { schema: ERROR_ENVELOPE } } };
+  responses["404"] = { description: "Not found", content: { "application/json": { schema: errorBody } } };
   const overrides = ERROR_SCHEMA_OVERRIDES[`${route.method.toUpperCase()} ${route.path}`];
   for (const status of route.errors ?? []) {
     responses[String(status)] = {
       description: { 402: "Plan upgrade required", 409: "Conflict", 422: "Rejected by the engine", 429: "Rate limited" }[status] ?? "Error",
-      content: { "application/json": { schema: overrides?.[status] ?? ERROR_ENVELOPE } },
+      content: { "application/json": { schema: overrides?.[status] ?? errorBody } },
     };
   }
   // Response example: success envelope around a data sample.
@@ -788,11 +799,10 @@ function operation(route: RouteSpec): Record<string, unknown> {
     content?: { "application/json": { schema: unknown; example?: unknown } };
   };
   if (success?.content) {
-    success.content["application/json"].example = {
-      ok: true,
-      data: route.response ? exampleOf(toSchema(route.response)) : {},
-      requestId: "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-    };
+    const data = route.response ? exampleOf(toSchema(route.response)) : {};
+    success.content["application/json"].example = route.bare
+      ? data
+      : { ok: true, data, requestId: "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b" };
   }
   return {
     summary: route.summary,
@@ -824,7 +834,7 @@ function operation(route: RouteSpec): Record<string, unknown> {
         }
       : {}),
     responses,
-    security: route.public ? [] : [{ sessionCookie: [] }, { apiKey: [] }],
+    security: route.public ? [] : route.bare ? [{ captureTok: [] }] : [{ sessionCookie: [] }, { apiKey: [] }],
   };
 }
 
@@ -850,7 +860,7 @@ export function buildOpenApiDocument(
     { name: "device-links" }, { name: "api-keys" }, { name: "registration" },
     { name: "clubs" }, { name: "officials" }, { name: "sponsors" }, { name: "venues" }, { name: "history" },
     { name: "exports" }, { name: "stats" }, { name: "discipline" }, { name: "news" },
-    { name: "public" },
+    { name: "public" }, { name: "capture" },
   ].filter((t) => usedTags.has(t.name));
   return {
     openapi: "3.1.0",
@@ -882,6 +892,16 @@ export function buildOpenApiDocument(
             "Pro API key: `Authorization: Bearer sc_…` (entitlement api.access). " +
             "Scopes: read < score < manage; see x-required-scope per operation.",
         },
+        // The capture routes are internal (never key-reachable), so the PUBLISHED spec neither lists them nor this.
+        ...(opts.published ? {} : {
+          captureTok: {
+            type: "http",
+            scheme: "bearer",
+            description:
+              "Capture QR v2 (§6.3): the phone's Bearer is the stream code's `tok` from the QR — accepted ONLY by " +
+              "the `capture` routes of ITS code. Unknown, wrong, ended or missing → 401 code_ended (one body).",
+          },
+        }),
         deviceLink: {
           type: "http",
           scheme: "bearer",

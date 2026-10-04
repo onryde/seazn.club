@@ -48,6 +48,11 @@ describe("matchKeyRoute", () => {
     expect(NEVER_KEY_ROUTES).toContain("DELETE /competitions/:id");
   });
 
+  it("capture QR v2 (T8a, A16): the phone's descriptor is never key-reachable — an explicit ban, matched on a concrete path", () => {
+    expect(NEVER_KEY_ROUTES).toContain("GET /capture/codes/:code");
+    expect(matchKeyRoute("GET", "/api/v1/capture/codes/0123456789ab")).toBeNull();
+  });
+
   it("maps the scoring doors to the score scope with a pin", () => {
     const events = matchKeyRoute("POST", "/api/v1/fixtures/11111111-1111-1111-1111-111111111111/events");
     expect(events).toMatchObject({ scope: "score", pin: "fixture" });
