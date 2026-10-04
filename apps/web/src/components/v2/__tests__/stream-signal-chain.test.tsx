@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DictProvider } from "@/components/i18n/dict-provider";
-import { D3Warning, SignalChain } from "@/components/v2/stream-signal-chain";
+import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import { platformName } from "@/components/v2/stream-platform-mark";
 import { chainFor, type Chain } from "@/lib/stream-chain";
 import { messages } from "@/lib/messages";
@@ -131,17 +131,46 @@ describe("SignalChain (spec §3.2)", () => {
   // cannot shrink (the mockup's `w-16 shrink-0`) put the destination node 10 px past that viewport. 64 px stays the
   // node's width wherever it fits; below that the node gives way (`min-w-0`, no `shrink-0`), and its 40-px ring with it
   // never — the ring is `shrink-0`. The walkthrough measures the real box; this pins the classes it depends on.
-  it("each node may shrink below its 64 px on a zoomed phone (min-w-0, never shrink-0); its 40 px ring may not", () => {
+  // Capture QR v2 §6.12 (Option B rev 2): the PHONE node is 80 px below 768 (was 64) so "Reconnecting…" (76 px at
+  // 11 px) fits one line; 96 at ≥768 as before. Seazn stays 64/96 and the destination 64/208.
+  it("each node may shrink below its width on a zoomed phone (min-w-0, never shrink-0); its 40 px ring may not — the phone node 80 px below 768", () => {
     const html = chainHtml(chainFor(liveOk)!);
-    const nodes = [...html.matchAll(/<div data-node="[a-z]+" class="(flex w-16[^"]*)">/g)].map((m) => m[1]!);
-    expect(nodes, "three nodes").toHaveLength(3);
-    for (const cls of nodes) {
-      expect(cls.split(" "), cls).toContain("min-w-0");
-      expect(cls.split(" "), cls).not.toContain("shrink-0");
+    const nodes = Object.fromEntries([...html.matchAll(/<div data-node="([a-z]+)" class="(flex [^"]*)">/g)].map((m) => [m[1]!, m[2]!.split(" ")]));
+    expect(Object.keys(nodes), "three nodes").toEqual(["phone", "seazn", "dest"]);
+    expect(nodes.phone, "phone: 80 px below 768, 96 from it").toEqual(expect.arrayContaining(["w-20", "md:w-24"]));
+    expect(nodes.seazn).toEqual(expect.arrayContaining(["w-16", "md:w-24"]));
+    expect(nodes.dest).toEqual(expect.arrayContaining(["w-16", "md:w-52"]));
+    expect(nodes.phone).not.toContain("w-16");
+    for (const cls of Object.values(nodes)) {
+      expect(cls).toContain("min-w-0");
+      expect(cls).not.toContain("shrink-0");
     }
     const rings = [...html.matchAll(/<span data-tone="[a-z]+" class="([^"]*)">/g)].map((m) => m[1]!);
     expect(rings, "three rings").toHaveLength(3);
     for (const cls of rings) expect(cls.split(" "), cls).toContain("shrink-0");
+  });
+
+  it("§6.12: a node's state word may break only as a fallback for a longer translation — `max-w-full [overflow-wrap:anywhere]` on every word", () => {
+    const html = chainHtml(chainFor(view("live", "disconnected", "unknown", W), { capture: { phone: null, countdown: { kind: "live", reason: "phone_lost", elapsedMs: 1, remainingMs: 1 } } })!);
+    const words = [...html.matchAll(/<span class="(mt-0\.5 [^"]*)">/g)].map((m) => m[1]!.split(" "));
+    expect(words, "three state words").toHaveLength(3);
+    for (const w of words) expect(w).toEqual(expect.arrayContaining(["max-w-full", "[overflow-wrap:anywhere]"]));
+    expect(html).toContain(`>${messages["stream.chain.word.reconnecting"]}<`);
+    expect(messages["stream.chain.word.reconnecting"]).toBe("Reconnecting…");
+  });
+
+  it("the strip renders INSIDE the chain card, after the group (Option B: the caret points up at the phone node)", () => {
+    const html = renderToStaticMarkup(
+      <SignalChain chain={chainFor(null)!} destination={DEST}>
+        <p data-testid="strip-child">x</p>
+      </SignalChain>,
+    );
+    const card = html.indexOf('data-testid="stream-chain"');
+    const group = html.indexOf('role="group"');
+    const child = html.indexOf('data-testid="strip-child"');
+    expect([card >= 0, group > card, child > group]).toEqual([true, true, true]);
+    expect(html.endsWith("</div>"), "the child is inside the card").toBe(true);
+    expect(html.slice(child)).not.toMatch(/role="group"/);
   });
 
   it("D9: phoneStatus is accepted and renders NOTHING in this branch", () => {
@@ -243,3 +272,46 @@ describe("D3Warning (D3; I-1 — the cause decides the sentence)", () => {
   });
 });
 
+
+describe("PhoneStripView — the phone's message under the chain (capture QR v2 §6.12, Option B rev 2)", () => {
+  const strip = (props: Parameters<typeof PhoneStripView>[0], locale: Locale = "en") =>
+    renderToStaticMarkup(
+      <DictProvider dict={dict(locale)} locale={locale}>
+        <PhoneStripView {...props} />
+      </DictProvider>,
+    );
+
+  it("a status box with the tone's classes, the caret on the phone node, the icon and the sentence — slate for pair-first", () => {
+    const html = strip({ id: "why-1", strip: { tone: "slate", icon: "phone", lead: null, body: { key: "stream.phone.pairFirst" } }, caret: true });
+    expect(html).toMatch(/^<div id="why-1" data-testid="stream-phone-strip" data-tone="slate" data-icon="phone" role="status" class="relative mt-3 rounded-md border px-3 py-2 text-sm border-slate-200 bg-slate-50 text-slate-700">/);
+    expect(html).toContain('class="absolute -top-[7px] left-[34px] h-3 w-3 rotate-45 border-l border-t border-slate-200 bg-slate-50 md:left-[42px]"');
+    expect(html).toContain(">Pair a phone first: scan the code with Seazn Capture<");
+  });
+
+  it("amber with the lead in medium weight, and the countdown's durations in the locale, unbroken (whitespace-nowrap tabular-nums) — en and fr", () => {
+    const props = {
+      id: "s", caret: true,
+      strip: { tone: "amber" as const, icon: "clock" as const, lead: "stream.phone.waitingVideo" as const, body: { key: "stream.phone.countdown.warming.no_inbound_timeout" as const, elapsedMs: 45_000, remainingMs: 555_000 } },
+    };
+    const en = strip(props);
+    expect(en).toContain("border-amber-300 bg-amber-50 text-amber-900");
+    expect(en).toContain(`<p class="font-medium">Waiting for the phone&#x27;s video</p>`);
+    // The mockup's own sentence, verbatim — the duration is the server's 555 000 ms, never a clock read here.
+    expect(en).toContain(`No video from the phone yet — the stream is cancelled in <span class="whitespace-nowrap tabular-nums">9 min, 15 sec</span> if it doesn&#x27;t arrive.`);
+    // French spaces with a narrow no-break space: the oracle is the platform's own Intl.DurationFormat, not a typed string.
+    const DF = (Intl as unknown as { DurationFormat: new (l: string, o: object) => { format(d: object): string } }).DurationFormat;
+    const fr = new DF("fr", { style: "short" }).format({ minutes: 9, seconds: 15 });
+    expect(fr.replace(/\s/g, " ")).toBe("9 min et 15 s");
+    expect(strip(props, "fr")).toContain(`<span class="whitespace-nowrap tabular-nums">${fr}</span>`);
+    const live = strip({ id: "l", caret: true, strip: { tone: "amber", icon: "clock", lead: null, body: { key: "stream.phone.countdown.live.phone_lost", elapsedMs: 160_000, remainingMs: 740_000 } } });
+    expect(live).toContain(`No video from the phone for <span class="whitespace-nowrap tabular-nums">2 min, 40 sec</span> — the stream ends in <span class="whitespace-nowrap tabular-nums">12 min, 20 sec</span> if it doesn&#x27;t come back.`);
+  });
+
+  it("each icon is its own drawing (phone, alert, clock, pause), and no caret without a chain to point at", () => {
+    const d = (icon: "phone" | "alert" | "clock" | "pause") => strip({ id: "i", caret: false, strip: { tone: "amber", icon, lead: null, body: { key: "stream.phone.paused.camera" } } });
+    const svgs = (["phone", "alert", "clock", "pause"] as const).map((i) => /<svg[\s\S]*?<\/svg>/.exec(d(i))![0]);
+    expect(new Set(svgs).size, "four distinct icons").toBe(4);
+    expect(d("pause")).toContain('d="M10 9v6M14 9v6"');
+    expect(d("pause")).not.toContain("rotate-45");
+  });
+});

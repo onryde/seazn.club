@@ -217,3 +217,91 @@ describe("chainFor — the whole input space against the table", () => {
     expect(destBangRows, "…and the '!' on the destination too").toBeGreaterThan(0);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Capture QR v2 §6.12 (T11, Option B rev 2): with the phone's read model (`capture`), the PHONE node says Paired / Not
+// answering at Ready, Starting while the session waits, and "Reconnecting…" instead of "No signal" while live with the
+// input not connected. The "!" stays on the phone during the countdown and is dropped while the phone still beats (its
+// reason shows instead). Every other node and link is the §3.2 table's, and a session with no `capture` (C-1: a legacy
+// session, pairing_id null) is exactly today's chain. Expected values are §6.12's rulings, written out here.
+// ---------------------------------------------------------------------------------------------------------------------
+type CapturePhone = NonNullable<Parameters<typeof chainFor>[1]>["capture"];
+const beating = (over: Record<string, unknown> = {}) => ({
+  present: true, silent: false, notResponding: false, model: null, appVersion: null, mode: null, state: "publishing",
+  notReady: null, startFailed: null, lastBeatAt: "2026-09-30T12:00:00.000Z", elapsedMs: 5_000,
+  beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
+}) as NonNullable<NonNullable<CapturePhone>["phone"]>;
+const LIVE_CD = { kind: "live" as const, reason: "phone_lost" as const, elapsedMs: 160_000, remainingMs: 740_000 };
+
+describe("chainFor — capture v2's phone node (T11)", () => {
+  it("Ready: no phone → slate Not connected; present → lime Paired; not answering → amber Not answering — the rest is idle's", () => {
+    const rows: [string, CapturePhone, ChainNode][] = [
+      ["no phone (the empty case)", { phone: null, countdown: null }, n("slate", "notConnected")],
+      ["paired and present", { phone: beating({ state: "paired" }), countdown: null }, n("lime", "paired")],
+      ["paired but silent (§6.9)", { phone: beating({ present: false, silent: true }), countdown: null }, n("amber", "notAnswering")],
+    ];
+    let checked = 0;
+    for (const [name, capture, phone] of rows) {
+      expect(chainFor(null, { capture }), name).toEqual({ ...chainFor(null)!, phone });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("waiting (requested / provisioning / warming): the phone node is amber Starting; everything else is §3.2's waiting row", () => {
+    let checked = 0;
+    for (const s of ["requested", "provisioning", "warming"] as const) {
+      expect(chainFor(v(s, "disconnected", null), { capture: { phone: beating(), countdown: null } }), s).toEqual({
+        ...chainFor(v(s, "disconnected", null))!, phone: n("amber", "starting"),
+      });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("live, input not connected: Reconnecting… — with the '!' while the server counts down, and without it while the phone beats with a reason", () => {
+    const counting = chainFor(v("live", "disconnected", "unknown", W), { capture: { phone: beating({ present: false, silent: true }), countdown: LIVE_CD } })!;
+    expect(counting.phone).toEqual(n("amber", "reconnecting", "bang"));
+    expect(counting.dest, "the cause is the phone: no mark on the destination").toEqual(n("amber", "notReceiving"));
+    // The paused mockup: the phone still beats with a reason → no "!" (no countdown), the destination unmarked.
+    const paused = chainFor(v("live", "disconnected", "unknown", W), { capture: { phone: beating({ notReady: "camera" }), countdown: null } })!;
+    expect(paused.phone).toEqual(n("amber", "reconnecting"));
+    expect(paused.dest).toEqual(n("amber", "notReceiving"));
+    // No reason and no countdown past the hold: D3's phone box shows, so the "!" follows it as today.
+    expect(chainFor(v("live", "disconnected", "unknown", W), { capture: { phone: beating(), countdown: null } })!.phone).toEqual(n("amber", "reconnecting", "bang"));
+    // Under the hold with no countdown: no "!".
+    expect(chainFor(v("live", "disconnected", "connecting", W - 1), { capture: { phone: beating(), countdown: null } })!.phone).toEqual(n("amber", "reconnecting"));
+    // The countdown alone earns the "!", even under the D3 hold.
+    expect(chainFor(v("live", "disconnected", "connecting", W - 1), { capture: { phone: null, countdown: LIVE_CD } })!.phone).toEqual(n("amber", "reconnecting", "bang"));
+  });
+
+  it("W24: Reconnecting… ONLY while the input is not connected — a connected (or unread) input is §3.2's lime Connected", () => {
+    const capture = { phone: beating({ notReady: "camera" }), countdown: null };
+    expect(chainFor(v("live", "connected", "ok"), { capture })).toEqual(chainFor(v("live", "connected", "ok")));
+    expect(chainFor(v("live", null, "ok"), { capture })).toEqual(chainFor(v("live", null, "ok")));
+  });
+
+  it("the whole input space: with capture, ONLY the phone node may differ from §3.2's row — every link, Seazn and the destination are the table's; without it (legacy) the chain is today's", () => {
+    const ingests: (IngestWord | null)[] = [null, ...StreamIngest.shape.state.options];
+    const outputs: (OutputWord | null)[] = [null, ...StreamOutput.shape.state.options];
+    const captures: CapturePhone[] = [
+      { phone: null, countdown: null }, { phone: beating(), countdown: null }, { phone: beating({ notReady: "held" }), countdown: null },
+      { phone: beating({ present: false, silent: true }), countdown: LIVE_CD },
+    ];
+    let checked = 0;
+    let phoneMoved = 0;
+    for (const state of StreamSessionState.options) for (const ingest of ingests) for (const output of outputs) for (const ms of [0, W]) {
+      const legacy = chainFor(v(state, ingest, output, ms));
+      expect(chainFor(v(state, ingest, output, ms), {}), "no capture = today").toEqual(legacy);
+      for (const capture of captures) {
+        const c = chainFor(v(state, ingest, output, ms), { capture });
+        if (legacy === null) { expect(c).toBeNull(); checked++; continue; }
+        expect({ ...c!, phone: null }, `${state} ${ingest} ${output} ${ms}`).toEqual({ ...legacy, phone: null });
+        if (JSON.stringify(c!.phone) !== JSON.stringify(legacy.phone)) phoneMoved++;
+        checked++;
+      }
+    }
+    expect(checked).toBe(StreamSessionState.options.length * ingests.length * outputs.length * 2 * captures.length);
+    expect(phoneMoved, "anti-vacuity: the v2 words were reached").toBeGreaterThan(0);
+  });
+});

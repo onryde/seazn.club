@@ -1,19 +1,54 @@
 // lib/stream-chain.ts — spec 2026-09-30 §3.2, the Signal-path table as ONE pure mapping. `SignalChain`
 // (components/v2/stream-signal-chain.tsx) draws it; the Stream button's dot reads the same session through
 // `streamButtonState` (T9b). No React, no clock: D3's 30 s are the SERVER's measure on the projection (M6).
-import { d3Warning, destinationWarning, phoneNoSignal, type StreamSessionView } from "@/lib/stream-session-view";
+import {
+  d3Warning, destinationWarning, phoneNoSignal, reconnectReasonOf, type StreamSessionView,
+} from "@/lib/stream-session-view";
+import type { StreamLostCountdown, StreamPhone } from "@/server/api-v1/schemas";
 
 export type NodeTone = "slate" | "amber" | "lime" | "red";
 export type LinkStyle = "idle" | "connecting" | "flowing" | "problem";
 export type ChainWord =
   | "notConnected" | "ready" | "notLive" | "inUse" | "waiting" | "connected" | "receiving" | "live" | "connecting"
-  | "notReceiving" | "noSignal" | "ending";
+  | "notReceiving" | "noSignal" | "ending"
+  // Capture QR v2 §6.12 (T11): the phone node's own words once the phone has a read model.
+  | "paired" | "notAnswering" | "starting" | "reconnecting";
 export interface ChainNode { tone: NodeTone; word: ChainWord; mark: "dot" | "bang" | null }
 export interface Chain { phone: ChainNode; link1: LinkStyle; seazn: ChainNode; link2: LinkStyle; dest: ChainNode }
 
 const node = (tone: NodeTone, word: ChainWord, mark: ChainNode["mark"] = null): ChainNode => ({ tone, word, mark });
 
 type ChainView = Pick<StreamSessionView, "state" | "ingest" | "output">;
+
+/** Capture QR v2 (T11): the phone's facts from the `stream-phone` read model, and the server's countdown (`current`).
+ *  Passed only for a v2 session — a LEGACY one (C-1, pairing_id null) passes none and draws today's chain exactly. */
+export interface CaptureFacts { phone: StreamPhone["phone"]; countdown: StreamLostCountdown | null }
+
+/**
+ * §6.12's phone node over §3.2's row. Only the PHONE node moves; every link, Seazn and the destination stay the table's.
+ *  - Ready: Paired (lime) while present, Not answering (amber) while silent, Not connected with no phone;
+ *  - waiting: Starting (amber);
+ *  - live with the input not connected: "Reconnecting…" instead of "No signal". The "!" stays on the phone while the
+ *    server counts down, is dropped while the phone still beats with a reason (the strip says it), and otherwise follows
+ *    the D3 box as today.
+ */
+function capturePhone(view: ChainView | null, row: Chain, capture: CaptureFacts): ChainNode {
+  if (!view) {
+    if (!capture.phone) return row.phone;
+    return capture.phone.present ? node("lime", "paired") : node("amber", "notAnswering");
+  }
+  switch (view.state) {
+    case "requested":
+    case "provisioning":
+    case "warming": return node("amber", "starting");
+    case "live": {
+      if (!phoneNoSignal(view)) return row.phone;
+      const bang = capture.countdown !== null || (d3Warning(view) === "phone" && reconnectReasonOf(capture.phone) === null);
+      return node("amber", "reconnecting", bang ? "bang" : null);
+    }
+    default: return row.phone;
+  }
+}
 
 /** The destination half while live: ok → flowing + red Live; not ok under 30 s (or not yet read) → animated + amber
  *  Connecting; not ok for 30 s or more (D3) → amber dashes + amber "!" Not receiving. */
@@ -34,7 +69,12 @@ function destinationHalf(view: ChainView): Pick<Chain, "link2" | "dest"> {
  * stale: nothing is decided on an unknown, which is the poll's own rule. For `ending` the phone and Seazn words stay as
  * they were, in slate — a slate "Connected" reads as "was connected", which is honest.
  */
-export function chainFor(view: ChainView | null, opts: { destInUse?: boolean } = {}): Chain | null {
+export function chainFor(view: ChainView | null, opts: { destInUse?: boolean; capture?: CaptureFacts } = {}): Chain | null {
+  const row = tableRow(view, opts);
+  return row && opts.capture ? { ...row, phone: capturePhone(view, row, opts.capture) } : row;
+}
+
+function tableRow(view: ChainView | null, opts: { destInUse?: boolean }): Chain | null {
   if (!view) {
     return {
       phone: node("slate", "notConnected"), link1: "idle",

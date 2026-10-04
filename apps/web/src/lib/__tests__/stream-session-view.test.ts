@@ -25,12 +25,18 @@ import { STREAM_PLATFORMS } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { messages } from "@/lib/messages";
 import { v1 } from "@/server/api-v1/http";
-import { StreamEndReason, StreamFailReason, StreamIngest, StreamOutput, StreamSessionState } from "@/server/api-v1/schemas";
+import { CaptureNotReady, CapturePhoneState } from "@/server/api-v1/capture-schemas";
+import {
+  StreamEndReason, StreamFailReason, StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone,
+} from "@/server/api-v1/schemas";
 import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usecases/stream-targets";
 import {
-  BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
-  INGEST_STATE_KEYS, STATE_PILL_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
-  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneNoSignal, phoneTabState,
+  BEAT_STALE_SECONDS, COUNTDOWN_KEYS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
+  INGEST_STATE_KEYS, READY_STATES, RECONNECT_REASON_KEYS, STATE_PILL_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState,
+  type ReadyState, type StreamSessionView,
+  TARGET_REMOVED, canGoLive, countdownKey, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning,
+  destinationWarning, durationLabel, elapsedLabel, healthChips, outputElapsedMs, phoneNoSignal, phoneStrip, phoneTabState,
+  readyStateOf, reconnectReasonOf, restartLine,
 } from "../stream-session-view";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
@@ -59,9 +65,9 @@ function inEveryLocale(keys: readonly string[]): number {
 const NOW = new Date("2026-09-14T12:10:00Z");
 const view = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s", fixtureId: "f", mode: "passthrough", state: "live", desiredState: "live", failReason: null,
-  health: null, ingest: { state: "connected", protocol: "srt" }, output: null, qr: null, balance: 2,
+  health: null, ingest: { state: "connected", protocol: "srt" }, output: null, balance: 2,
   startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null,
-  target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: true, restartFree: false, startCause: "organiser", restart: null, countdown: null, ...over,
+  target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: true, startCause: "organiser", restart: null, countdown: null, ...over,
 });
 
 /** A server error through the REAL v1 envelope and the REAL client transport — the ApiV1Error the Phone tab catches. */
@@ -186,6 +192,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["no_credits 402", new HttpError(402, "This organisation has no match credits", "no_credits", { featureKey: "streaming.relay" }), "no_credits"],
     ["overlay_required 409", new HttpError(409, "phone streaming needs the overlay tier", "overlay_required"), "overlay_required"],
     ["active_session 409", new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: "s-1" }), "active_session"],
+    // Capture QR v2 W5 (carry): no phone paired and answering on the code — the refusal createSession throws (`refuse`).
+    ["phone_not_paired 409", new HttpError(409, "no phone is paired and answering on this match's stream code", "phone_not_paired"), "phone_not_paired"],
     ["storage_exhausted 503", new HttpError(503, "recording storage is exhausted", "storage_exhausted", { headroomMinutes: 12 }), "storage_exhausted"],
     ["ingest_unavailable 503", new HttpError(503, "the ingest service is unavailable", "ingest_unavailable"), "ingest_unavailable"],
     ["target_in_use 409, a holder with a court", new HttpError(409, "in use", "target_in_use", { holder: { fixtureId: "f-2", courtName: "Court 3", label: "Club channel" } }), "target_in_use"],
@@ -612,3 +620,250 @@ describe("I-1 — which D3 box: phone first (owner 2026-10-01, option a)", () =>
   });
 });
 
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Capture QR v2 §6.12 (T11): the Ready states, the phone strip, the paused reasons, the countdown copy, the restart line.
+// Expected values come from §6.12's table and rulings (written out here) and from the schemas' own enums — never from
+// stream-session-view.ts. ONE SPORT, on purpose: none of this reads a sport.
+// ---------------------------------------------------------------------------------------------------------------------
+
+type Phone = NonNullable<StreamPhone["phone"]>;
+const phoneFacts = (over: Partial<Phone> = {}): Phone => ({
+  present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
+  state: "paired", notReady: null, startFailed: null, lastBeatAt: "2026-09-14T12:09:50Z", elapsedMs: 10_000,
+  beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
+});
+const readModel = (over: Partial<StreamPhone> = {}): StreamPhone => ({
+  code: { issuedAt: "2026-09-14T11:00:00Z", state: "active", endCause: null }, phone: phoneFacts(), destination: null,
+  lastTakeover: null, auto: null, legacy: false, finished: false, ...over,
+});
+const SILENT = phoneFacts({ present: false, silent: true, elapsedMs: 90_000 });
+const ENDED_CODE = { issuedAt: "2026-09-14T09:00:00Z", state: "ended" as const, endCause: "expired" as const };
+
+describe("readyStateOf — §6.12's rows (T11)", () => {
+  it("the EMPTY case first: no read model and no session → no_phone; a read with no phone → no_phone", () => {
+    expect(readyStateOf(null, null)).toBe("no_phone");
+    expect(readyStateOf(readModel({ phone: null }), null)).toBe("no_phone");
+    expect(readyStateOf(readModel({ phone: null, code: null }), null), "no code yet either").toBe("no_phone");
+  });
+
+  it("every row of the table, each from its own inputs", () => {
+    const rows: [string, StreamPhone | null, StreamSessionView | null, ReadyState][] = [
+      ["paired: present", readModel(), null, "paired"],
+      ["silent: paired but not answering (§6.9)", readModel({ phone: SILENT }), null, "silent"],
+      ["code ended: finished + the code ended", readModel({ finished: true, code: ENDED_CODE }), null, "code_ended"],
+      ["code ended: finished, no code ever", readModel({ finished: true, code: null, phone: null }), null, "code_ended"],
+      ["finished but the code still FINISHING (inside the grace): not over", readModel({ finished: true, code: { ...ENDED_CODE, state: "finishing", endCause: null } }), null, "paired"],
+      ["C5: a reverted result — not finished, the expired code still ended: Ready, not over", readModel({ code: ENDED_CODE, phone: null }), null, "no_phone"],
+      ["a terminal session reads ended, whatever the phone", readModel({ phone: SILENT }), view({ state: "completed" }), "ended"],
+      ["…and ended over a finished match too (the summary card first)", readModel({ finished: true, code: ENDED_CODE }), view({ state: "failed" }), "ended"],
+      ["an open session reads its own state, whatever the phone", readModel({ phone: null }), view({ state: "live" }), "live"],
+    ];
+    let checked = 0;
+    for (const [name, rm, session, want] of rows) {
+      expect(readyStateOf(rm, session), name).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("every session state the enum declares maps to waiting, live or ended — requested / provisioning / warming wait; live / ending are live", () => {
+    const want: Record<string, ReadyState> = {
+      requested: "waiting", provisioning: "waiting", warming: "waiting", live: "live", ending: "live", completed: "ended", failed: "ended",
+    };
+    let checked = 0;
+    for (const state of StreamSessionState.options) {
+      for (const rm of [null, readModel(), readModel({ phone: SILENT }), readModel({ phone: null })]) {
+        expect(readyStateOf(rm, view({ state })), `${state}`).toBe(want[state]);
+        checked++;
+      }
+    }
+    expect(Object.keys(want).sort()).toEqual([...StreamSessionState.options].sort());
+    expect(checked).toBe(StreamSessionState.options.length * 4);
+  });
+
+  it("Go live is enabled ONLY for paired — every state swept, exactly one admits it (mutant: enable it for silent → red)", () => {
+    const admitted = READY_STATES.filter((s) => canGoLive(s));
+    expect(admitted).toEqual(["paired"]);
+    expect(READY_STATES).toHaveLength(7);
+    expect(canGoLive("silent")).toBe(false);
+    expect(canGoLive(readyStateOf(readModel({ phone: SILENT }), null))).toBe(false);
+    expect(canGoLive(readyStateOf(readModel(), null)), "the positive pair").toBe(true);
+  });
+});
+
+describe("reconnectReasonOf — §6.12's O5 mapping (T11)", () => {
+  it("the EMPTY case first: no phone → null", () => {
+    expect(reconnectReasonOf(null)).toBeNull();
+  });
+
+  it("every notReady value, then degraded and reconnecting (weak), then publishing (none) — 7 cases", () => {
+    const cases: [string, Phone, string | null][] = [
+      ...CaptureNotReady.options.map((n): [string, Phone, string] => [`notReady ${n}`, phoneFacts({ notReady: n, state: "publishing" }), n]),
+      ["degraded", phoneFacts({ state: "degraded" }), "weak"],
+      ["reconnecting", phoneFacts({ state: "reconnecting" }), "weak"],
+      ["publishing", phoneFacts({ state: "publishing" }), null],
+    ];
+    let checked = 0;
+    for (const [name, p, want] of cases) {
+      expect(reconnectReasonOf(p), name).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(7);
+    // notReady outranks the state: a weak connection with the camera taken is "on a call".
+    expect(reconnectReasonOf(phoneFacts({ notReady: "camera", state: "degraded" }))).toBe("camera");
+  });
+
+  it("the other phone states carry no reason — swept over CapturePhoneState", () => {
+    let checked = 0;
+    for (const state of CapturePhoneState.options) {
+      const want = state === "degraded" || state === "reconnecting" ? "weak" : null;
+      expect(reconnectReasonOf(phoneFacts({ state })), state).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(CapturePhoneState.options.length);
+  });
+
+  it("each reason's copy is the spec's — the owner's camera sentence verbatim — in all four locales", () => {
+    expect(Object.keys(RECONNECT_REASON_KEYS).sort()).toEqual(["camera", "held", "network", "sound", "weak"]);
+    expect(msg(RECONNECT_REASON_KEYS.camera)).toBe("Phone is on a call — video paused");
+    expect(msg(RECONNECT_REASON_KEYS.sound)).toBe("Phone's microphone is in use — video paused");
+    expect(msg(RECONNECT_REASON_KEYS.network)).toBe("Phone has no network — video paused");
+    expect(msg(RECONNECT_REASON_KEYS.held)).toBe("Phone is upright — turn it sideways");
+    expect(msg(RECONNECT_REASON_KEYS.weak)).toBe("Phone's connection is weak — video paused");
+    expect(inEveryLocale(Object.values(RECONNECT_REASON_KEYS))).toBe(5 * LOCALES.length);
+  });
+});
+
+describe("the countdown copy and its durations (W24, T11)", () => {
+  /** Every (kind, reason) the wire's union declares — read off the schema, so a new end cannot ship without copy. */
+  const combos = StreamLostCountdown.options.flatMap((o) => {
+    const reason = o.shape.reason as unknown as { options?: string[]; value?: string };
+    return (reason.options ?? [reason.value!]).map((r) => [o.shape.kind.value, r] as const);
+  });
+
+  it("one key per (kind, reason) the union declares — 3 — each in all four locales, with the placeholders its kind needs", () => {
+    expect(combos).toHaveLength(3);
+    let checked = 0;
+    for (const [kind, reason] of combos) {
+      const key = countdownKey({ kind, reason, elapsedMs: 0, remainingMs: 0 } as never);
+      expect(Object.values(COUNTDOWN_KEYS)).toContain(key);
+      for (const l of LOCALES) {
+        const text = dict(l)[key]!;
+        expect(text, `${l} ${key}`).toBeTruthy();
+        expect(text, `${l} ${key}: remaining`).toContain("{remaining}");
+        if (kind === "live") expect(text, `${l} ${key}: elapsed`).toContain("{elapsed}");
+        checked++;
+      }
+    }
+    expect(checked).toBe(3 * LOCALES.length);
+    expect(msg("stream.phone.countdown.live.phone_lost")).toBe("No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back.");
+    expect(msg("stream.phone.countdown.warming.no_inbound_timeout")).toBe("No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.");
+  });
+
+  it("durationLabel is the locale's own short duration (the oracle: Intl.DurationFormat) — every locale, the boundaries, zero", () => {
+    const DF = (Intl as unknown as { DurationFormat: new (l: string, o: object) => { format(d: object): string } }).DurationFormat;
+    expect(typeof DF, "PREMISE: this Node has Intl.DurationFormat to judge by").toBe("function");
+    const values = [0, 999, 1_000, 59_999, 60_000, 555_000, 740_000, 899_999, 3_600_000, 3_723_000];
+    let checked = 0;
+    for (const l of LOCALES) {
+      for (const ms of values) {
+        const total = Math.floor(ms / 1000);
+        const parts = { hours: Math.floor(total / 3600), minutes: Math.floor((total % 3600) / 60), seconds: total % 60 };
+        const want = total === 0
+          ? new DF(l, { style: "short", secondsDisplay: "always" }).format({ seconds: 0 })
+          : new DF(l, { style: "short" }).format(parts);
+        expect(durationLabel(ms, l), `${l} ${ms}`).toBe(want);
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * values.length);
+    // The mockup's own figures, in English.
+    expect(durationLabel(555_000, "en")).toBe("9 min, 15 sec");
+    expect(durationLabel(160_000, "en")).toBe("2 min, 40 sec");
+  });
+});
+
+describe("phoneStrip — the message under the chain (Option B rev 2, T11)", () => {
+  const live = (over: Partial<StreamSessionView> = {}) => view({ state: "live", ingest: { state: "disconnected", protocol: "srt" }, ...over });
+
+  it("the EMPTY case: no read model and no session → the pair-first line (slate, the phone icon)", () => {
+    expect(phoneStrip(null, null)).toEqual({ tone: "slate", icon: "phone", lead: null, body: { key: "stream.phone.pairFirst" } });
+  });
+
+  it("each Ready row: no phone → pair first; silent → amber, open Capture; paired, ended and code-ended → no strip", () => {
+    expect(phoneStrip(readModel({ phone: null }), null)).toMatchObject({ tone: "slate", icon: "phone", body: { key: "stream.phone.pairFirst" } });
+    expect(phoneStrip(readModel({ phone: SILENT }), null)).toMatchObject({ tone: "amber", icon: "alert", body: { key: "stream.phone.silent" } });
+    expect(phoneStrip(readModel(), null)).toBeNull();
+    expect(phoneStrip(readModel(), view({ state: "completed" }))).toBeNull();
+    expect(phoneStrip(readModel({ finished: true, code: ENDED_CODE }), null)).toBeNull();
+    expect(msg("stream.phone.pairFirst")).toBe("Pair a phone first: scan the code with Seazn Capture");
+    expect(msg("stream.phone.silent")).toBe("The phone stopped checking in. Open Seazn Capture on it");
+  });
+
+  it("waiting: the lead alone, slate, before a countdown; with the warming countdown, amber and its reason's sentence over `remaining` — exactly as given", () => {
+    const warming = view({ state: "warming", ingest: { state: "disconnected", protocol: "srt" } });
+    expect(phoneStrip(readModel(), warming)).toEqual({ tone: "slate", icon: "clock", lead: "stream.phone.waitingVideo", body: null });
+    const cd = { kind: "warming" as const, reason: "no_inbound_timeout" as const, elapsedMs: 45_000, remainingMs: 555_000 };
+    expect(phoneStrip(readModel(), { ...warming, countdown: cd })).toEqual({
+      tone: "amber", icon: "clock", lead: "stream.phone.waitingVideo",
+      body: { key: "stream.phone.countdown.warming.no_inbound_timeout", elapsedMs: 45_000, remainingMs: 555_000 },
+    });
+    const lost = { ...cd, reason: "phone_lost" as const, remainingMs: 30_000 };
+    expect(phoneStrip(readModel(), { ...warming, countdown: lost })?.body).toEqual({ key: "stream.phone.countdown.warming.phone_lost", elapsedMs: 45_000, remainingMs: 30_000 });
+    expect(msg("stream.phone.waitingVideo")).toBe("Waiting for the phone's video");
+  });
+
+  it("live: the countdown when the server sends one (it outranks a stale reason); otherwise the O5 reason while the input is down; nothing while it is connected", () => {
+    const cd = { kind: "live" as const, reason: "phone_lost" as const, elapsedMs: 160_000, remainingMs: 740_000 };
+    const counting = phoneStrip(readModel({ phone: phoneFacts({ notReady: "camera" }) }), live({ countdown: cd }));
+    expect(counting).toEqual({ tone: "amber", icon: "clock", lead: null, body: { key: "stream.phone.countdown.live.phone_lost", elapsedMs: 160_000, remainingMs: 740_000 } });
+    // O5 (the brief's case): live, input not connected, the phone beating with notReady camera → the reason, NO countdown.
+    const paused = phoneStrip(readModel({ phone: phoneFacts({ notReady: "camera" }) }), live());
+    expect(paused).toEqual({ tone: "amber", icon: "pause", lead: null, body: { key: "stream.phone.paused.camera" } });
+    expect(JSON.stringify(paused)).not.toMatch(/countdown/);
+    expect(phoneStrip(readModel({ phone: phoneFacts({ state: "reconnecting" }) }), live())?.body).toEqual({ key: "stream.phone.paused.weak" });
+    expect(phoneStrip(readModel({ phone: phoneFacts({ state: "publishing" }) }), live()), "down, but no reason and no countdown").toBeNull();
+    expect(phoneStrip(readModel({ phone: phoneFacts({ notReady: "camera" }) }), live({ ingest: { state: "connected", protocol: "srt" } })), "the input is connected").toBeNull();
+    expect(phoneStrip(readModel({ phone: null }), live()), "no phone facts, no countdown").toBeNull();
+  });
+
+  it("C-1: a LEGACY session (no pairing) shows no strip at all, whatever it carries", () => {
+    let checked = 0;
+    for (const state of StreamSessionState.options) {
+      expect(phoneStrip(readModel({ legacy: true, phone: null }), view({ state, ingest: { state: "disconnected", protocol: "srt" } })), state).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(StreamSessionState.options.length);
+  });
+
+  it("the strip's own copy is in all four locales", () => {
+    expect(inEveryLocale(["stream.phone.pairFirst", "stream.phone.silent", "stream.phone.waitingVideo", "stream.phone.pollFar", "stream.phone.matchOver"])).toBe(5 * LOCALES.length);
+    expect(msg("stream.phone.pollFar")).toBe("The phone checks in every minute until 30 minutes before the match");
+    expect(msg("stream.phone.matchOver")).toBe("This match is over. Its stream code has ended.");
+  });
+});
+
+describe("restartLine — W23 (T11)", () => {
+  it("the EMPTY case: no window → no line", () => {
+    expect(restartLine(null)).toBeNull();
+  });
+
+  it("below the limit: emerald, the count only; at the limit: amber, with the credit suffix — the numbers are the server's", () => {
+    expect(restartLine({ windowOpen: true, used: 1, limit: 3, free: true })).toEqual({ tone: "emerald", key: "stream.restart.used", vars: { used: 1, limit: 3 } });
+    expect(restartLine({ windowOpen: true, used: 0, limit: 3, free: true })).toEqual({ tone: "emerald", key: "stream.restart.used", vars: { used: 0, limit: 3 } });
+    expect(restartLine({ windowOpen: true, used: 3, limit: 3, free: false })).toEqual({ tone: "amber", key: "stream.restart.usedCredit", vars: { used: 3, limit: 3 } });
+    expect(msg("stream.restart.used", { used: 1, limit: 3 })).toBe("Free restarts used (1 of 3)");
+    expect(msg("stream.restart.usedCredit", { used: 3, limit: 3 })).toBe("Free restarts used (3 of 3) — this one uses 1 credit");
+    expect(inEveryLocale(["stream.restart.used", "stream.restart.usedCredit"])).toBe(2 * LOCALES.length);
+  });
+
+  it("the retired 24-hour line is gone from every locale (carry: it was inaccurate under W23)", () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      expect(Object.keys(dict(l)).filter((k) => /^stream\.phone\.restart/.test(k)), l).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});
