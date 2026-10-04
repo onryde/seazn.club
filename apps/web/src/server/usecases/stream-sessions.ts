@@ -25,7 +25,7 @@ import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
-  MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, QR_PREFERRED_DEFAULT, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
+  CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, QR_PREFERRED_DEFAULT, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
   RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES, relayEnvironment, tunable,
 } from "@/server/relay/config";
 import {
@@ -33,13 +33,14 @@ import {
   type Command, type Decision, type Effect, type HoldState, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
 import { isPresent } from "@/server/relay/domain/pairing";
+import { codeStatus } from "@/server/relay/domain/stream-code";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
 import { type Ask10Phone, livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
-import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
+import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
@@ -1177,14 +1178,30 @@ const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain"
  *  with no policy. At most one row: one active code per fixture, one current pairing per (code, slot) — V430's indexes.
  *  Both filters are load-bearing, and `c.ended_at is null` is the ONLY authority for a revoked code: T30 leaves a reissued
  *  code's pairings current "until they call", so without it the revoked phone would read present (witnesses: "W5 after
- *  Revoke & reissue" and "a SUPERSEDED pairing is not current"). */
+ *  Revoke & reissue" and "a SUPERSEDED pairing is not current").
+ *  C2 (B7 re-review m-b, §6.12 "Code ended: no Go live"): the lookup EVALUATES the active code, on the same clock. Found
+ *  expired, the first evaluation writes it (ended `expired`, tok wiped), as resolve, ensure and the panel's read do, and
+ *  the code has no current phone: W5 answers `phone_not_paired`. An open session defers it (C2), so a Go live over one
+ *  meets `active_session` as before. */
 async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId: string; present: boolean } | null> {
-  const [p] = await sql<{ id: string; last_beat_at: Date; answered_poll_seconds: number }[]>`
-    select p.id, p.last_beat_at, p.answered_poll_seconds
+  const [c] = await sql<{
+    id: string; finished_at: Date | null; open: boolean; pairing_id: string | null; last_beat_at: Date | null; answered_poll_seconds: number | null;
+  }[]>`
+    select c.id, f.finished_at,
+           exists (select 1 from fixture_stream_sessions s where s.fixture_id = c.fixture_id and s.state in ${sql([...ACTIVE_STATES])}) as open,
+           p.id as pairing_id, p.last_beat_at, p.answered_poll_seconds
       from fixture_stream_codes c
-      join fixture_stream_pairings p on p.code_id = c.id and p.slot = 0 and p.ended_at is null
+      join fixtures f on f.id = c.fixture_id
+      left join fixture_stream_pairings p on p.code_id = c.id and p.slot = 0 and p.ended_at is null
      where c.fixture_id = ${fixtureId} and c.ended_at is null`;
-  if (!p) return null;
+  if (!c) return null;
+  const grace = tunable("CODE_GRACE_AFTER_FINISH_MINUTES", CODE_GRACE_AFTER_FINISH_MINUTES);
+  if (codeStatus({ endedAt: null, finishedAt: c.finished_at }, now, c.open, grace) === "expiry_due") {
+    await sql.begin((tx) => wipeStreamCodeTok(tx, c.id, "expired", null));
+    return null;
+  }
+  if (c.pairing_id === null) return null;
+  const p = { id: c.pairing_id, last_beat_at: c.last_beat_at!, answered_poll_seconds: c.answered_poll_seconds! };
   const present = isPresent(
     { current: true, lastBeatAt: new Date(p.last_beat_at), answeredPoll: p.answered_poll_seconds },
     now, tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS),

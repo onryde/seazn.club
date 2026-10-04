@@ -1918,3 +1918,6 @@ Amends §6.12's Waiting row and W24. Recorded 2026-10-04. These are controller r
   stg machine awake. §6.11 already says what the trigger costs. The merge itself still needs its own owner OK.
 - **R10:** where CI sets the walkthrough tunables. That is plan-only.
 - **§5.4's `warming` (a reconnect) row has no producer (B7 review M-7; a controller ruling, 2026-10-04, not the owner's).** `warming` is entered only from `provisioning`, so a `warming` session with `first_ingest_at` set exists only in the gap between the `first_ingest_at` write and `connectIfWarming`, which are two separate statements. The row stays as written. The named killer tests build it by hand.
+- **Go live evaluates C2 at W5's lookup (B7 re-review m-b).** §6.12's "Code ended: no Go live" now holds before any other
+  evaluator has written the expiry: the lookup writes it (C2's first evaluation) and W5 answers `phone_not_paired`. An
+  open session defers it, so a Go live over one still meets `active_session`.

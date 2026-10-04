@@ -38,7 +38,7 @@ import { inputEnvelopesHex, pairPresentPhone, resealTargetDestination, rigTarget
 import { KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
-  CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
+  CLOUDFLARE_STORED_MICROS_PER_MINUTE, CODE_GRACE_AFTER_FINISH_MINUTES, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES,
   PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, PROVISION_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
   RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SRT_LATENCY_MS, STALE_HEARTBEAT_SECONDS,
@@ -5481,6 +5481,43 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect(await sessionsOf(r.auth.orgId)).toBe(0);
     await withEnv({ PHONE_SILENT_FLOOR_SECONDS: undefined }, () =>
       expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) }));
+  });
+
+  it("C2 at W5's lookup (B7 re-review m-b; §6.12 Code ended: no Go live): a PRESENT phone on a code AT its grace, before anything wrote the expiry → 409 phone_not_paired, and the Go live's evaluation WRITES the expiry (ended expired) — no row, no credit; the pair: 1 ms inside the grace the same Go live is admitted and the code stays active", async () => {
+    const GRACE_MS = CODE_GRACE_AFTER_FINISH_MINUTES * 60_000;
+    // The tok's wipe is wipeStreamCodeTok's (server/relay/__tests__/stream-code-tok.test.ts): enc-boundary keeps the sealed
+    // column out of this file, so the C2 write is read off ended_at and end_cause.
+    const codeOf = async (codeId: string) => (await sql<{ ended_at: Date | null; end_cause: string | null }[]>`
+      select ended_at, end_cause from fixture_stream_codes where id = ${codeId}`)[0]!;
+    let checked = 0;
+    for (const [label, sinceFinish, admitted] of [["at the grace (C2's ≥)", GRACE_MS, false], ["1 ms inside the grace", GRACE_MS - 1, true]] as const) {
+      const r = await rig({ credits: 1, phone: false });
+      const { codeId } = await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+      await sql`update fixtures set finished_at = ${new Date(r.deps.now().getTime() - sinceFinish)} where id = ${r.fixtureId}`;
+      expect((await codeOf(codeId)).ended_at, `PREMISE ${label}: nothing has written the expiry yet`).toBeNull();
+      const before = await creditBalance(sql, r.auth.orgId);
+      const got = await organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps).then((ok) => ok, (e: unknown) => e);
+      if (admitted) {
+        expect(got, label).toMatchObject({ sessionId: expect.any(String) });
+        expect(await codeOf(codeId), `${label}: the code is still active`).toEqual({ ended_at: null, end_cause: null });
+      } else {
+        expect(got, label).toBeInstanceOf(HttpError);
+        expect(got, label).toMatchObject({ status: 409, code: "phone_not_paired" });
+        expect(await codeOf(codeId), `${label}: the Go live's evaluation wrote C2`).toMatchObject({ ended_at: expect.any(Date), end_cause: "expired" });
+        expect(await sessionsOf(r.auth.orgId), `${label}: no row`).toBe(0);
+        expect(await creditBalance(sql, r.auth.orgId), `${label}: no credit moved`).toBe(before);
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // C2's deferral at the same lookup: a session already open defers the expiry, so a second Go live meets
+    // active_session (§6.7.1's order) and the code its phone streams through is NOT ended under it.
+    const r = await rig({ credits: 2, phone: false });
+    const { codeId } = await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+    await organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await sql`update fixtures set finished_at = ${new Date(r.deps.now().getTime() - GRACE_MS)} where id = ${r.fixtureId}`;
+    await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "active_session" });
+    expect(await codeOf(codeId), "an open session defers C2").toEqual({ ended_at: null, end_cause: null });
   });
 
   it("W5: a SILENT phone (current, but no beat for longer than §6.9's threshold on the start's clock) is not present → phone_not_paired; its next beat makes the same Go live admitted", async () => {

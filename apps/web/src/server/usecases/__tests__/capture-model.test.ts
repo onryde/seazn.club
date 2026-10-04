@@ -148,6 +148,8 @@ const COUNT_KEYS = [
   "consumes", "refusedClaims", "oneCurrent", "oneOpen", "paidRestarts",
   // I-3: #8 on the answers it names. I-2: T14's gate and W23's balance waiver. M-4: an owed W19 end made at the tick.
   "goLiveAnswers", "liveAnswers", "noCreditRefusals", "freeAtZero", "owedLostMade",
+  // m-b: a Go live on a code past its grace whose phone is PRESENT — the case the lookup admitted before it evaluated C2.
+  "codeEndedPresent",
 ] as const;
 type CountKey = (typeof COUNT_KEYS)[number];
 const ACTIONS = [
@@ -156,6 +158,8 @@ const ACTIONS = [
   "lateStopOwn", "deadTakeover", "oldCodeCall",
   // I-2: §11.1.4's four, the repick that keeps a run going after an archive, and T28's window edge. M-3: the unknown word.
   "finish", "revertResult", "archiveDestination", "buyCredit", "repick", "windowEdge", "ingestUnknown",
+  // m-c (B7 re-review): the rare outcomes' own intents.
+  "warmingLost", "staleStop", "archivedRestart", "noCreditStart",
 ] as const;
 type Action = (typeof ACTIONS)[number];
 /** Every outcome the model can name. Each must be reached by the drawn runs. */
@@ -173,6 +177,8 @@ const OUTCOMES = [
   "beat:T34-deferred", "beat:T33-401", "reissue:200", "reissue:422", "revert:active", "revert:expired-stays",
   "archive:archived", "archive:held-refused", "start:no_destination", "goLive:target_not_found",
   "goLive:no_credits", "start:no_credit", "buy:applied", "video:window-closed-paid", "video:T28-no_credits",
+  // m-b: C2 evaluated at W5's lookup.
+  "goLive:code-ended",
 ] as const;
 type Outcome = (typeof OUTCOMES)[number] | "end:max_duration";
 
@@ -668,6 +674,9 @@ async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
     const t = x.tally;
     let refusal: string | null = null;
     let sid: string | null = null;
+    // C2 at W5's lookup (B7 re-review m-b): Go live evaluates the active code BEFORE any open session's lazy expiry, so an
+    // open session (even one about to end) defers it — activeStatus reads m.open. Found due, it is refused below.
+    const due = activeStatus(m, x.r.now().getTime()) === "due";
     try {
       sid = (await createSession(x.r.auth, x.r.fixtureId, { mode: "passthrough", targetId: x.targets[m.pick]! }, x.r.deps)).sessionId;
     } catch (e) {
@@ -688,6 +697,14 @@ async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
     }
     const cur = pre.current;
     const present = cur !== null && x.r.now().getTime() - cur.last_beat_at.getTime() < silentMs(cur.answered_poll_seconds);
+    if (due) {
+      // §6.12 "Code ended: no Go live": the lookup writes the expiry (C2's first evaluation), so the code has no phone.
+      expireIfDue(m, m.codes - 1, x.r.now().getTime());
+      expect(refusal, "C2 at W5's lookup: a code past its grace answers no Go live").toBe("phone_not_paired");
+      if (present) t.count("codeEndedPresent");
+      t.outcome("goLive:code-ended");
+      return;
+    }
     if (!present) {
       expect(refusal, "W5: no present phone on the active code").toBe("phone_not_paired");
       t.outcome("goLive:phone_not_paired");
@@ -953,6 +970,23 @@ class Cmd implements fc.AsyncCommand<Model, Real> {
 }
 
 const holderOpen = (m: Readonly<Model>) => (m.open !== null && m.open.holder !== null ? m.open.holder : null);
+/** A live broadcast with a phone holding it (A14's state). */
+const liveHeld = (m: Readonly<Model>) => holderOpen(m) !== null && m.open!.live;
+/** A restart can be made: the fixture is not finished and its code not expired. */
+const canRestart = (m: Readonly<Model>) => m.finishedAt === null && !m.expired;
+/** localStop's state: an open session before its first frame whose phone holds no Stop yet. */
+const stoppable = (m: Readonly<Model>) => { const h = holderOpen(m); return h !== null && !m.open!.live && !m.stopRecords.has(h); };
+/** The late-stop intents' state: an open session before its first frame, its phone scanned, holding no Stop for another. */
+const preFrame = (m: Readonly<Model>) => {
+  const h = holderOpen(m);
+  return h !== null && !m.open!.live && m.scanned.has(h) && (!m.stopRecords.has(h) || m.stopRecords.get(h) === m.open!.sid);
+};
+/** m-c (B7 re-review): the late-stop family reached by its OWN draws, not only when a run happens to be in that state —
+ *  with no such session, `who`'s restart with no video makes one (each part a checked step). False when none results. */
+async function openPreFrame(m: Model, x: Real, who: P): Promise<boolean> {
+  if (!preFrame(m) && canRestart(m)) await cmd.restart(who, false).run(m, x);
+  return preFrame(m);
+}
 const cmd = {
   claimNew: (sel: Sel, resend = false) => new Cmd(`claimNew(${sel}${resend ? ",resend" : ""})`, "claimNew",
     (m) => pick(m, sel) !== null, (m, x) => phoneCall(m, x, pick(m, sel)!, "new", { resend })),
@@ -966,9 +1000,12 @@ const cmd = {
   phoneStop: () => new Cmd("phoneStop", "phoneStop",
     (m) => { const h = holderOpen(m); return h !== null && m.open!.live && !m.stopRecords.has(h) && m.scanned.get(h) === m.open!.pairIdx; },
     (m, x) => phoneCall(m, x, m.open!.holder!, null, { ended: true })),
-  /** A8: before the first frame, a Stop sends nothing and is kept. */
-  localStop: () => new Cmd("localStop", "localStop",
-    (m) => { const h = holderOpen(m); return h !== null && !m.open!.live && !m.stopRecords.has(h); }, localStop),
+  /** A8: before the first frame, a Stop sends nothing and is kept. m-c: with no such session, `who`'s restart makes one. */
+  localStop: (who: P = "A") => new Cmd(`localStop(${who})`, "localStop",
+    (m) => stoppable(m) || canRestart(m), async (m, x) => {
+      if (!stoppable(m)) await cmd.restart(who, false).run(m, x);
+      if (stoppable(m)) await localStop(m, x);
+    }),
   goLive: () => new Cmd("goLive", "goLive", () => true, async (m, x) => { await goLive(m, x); }),
   /** The organiser's Go live after an end (W23's restart), as an INTENT: stop what is open, make sure the active code has a
    *  present phone, Go live — and, `video`, let the phone's video arrive. Each part is its own checked step. */
@@ -1027,14 +1064,25 @@ const cmd = {
     await advance(m, x, ms);
     await cronTick(m, x);
   }),
-  /** I-2: the result is recorded — and, `wait`, the clock runs past C2's grace (an INTENT of two checked steps). */
-  finish: (wait: boolean) => new Cmd(`finish(${wait ? "wait" : ""})`, "finish", (m) => m.finishedAt === null, async (m, x) => {
+  /** I-2: the result is recorded — and, `beat`, the clock runs past C2's grace and the slot's phone beats; or, `goLive`
+   *  (m-b), the stream is stopped, the phone beats just INSIDE the grace (still served) and the organiser presses Go live
+   *  just past it, before anything wrote the expiry. An INTENT of checked steps; each answer is its step's prediction. */
+  finish: (then: "none" | "beat" | "goLive") => new Cmd(`finish(${then})`, "finish", (m) => m.finishedAt === null, async (m, x) => {
     await finish(m, x);
-    if (!wait) return;
-    await advance(m, x, GRACE_MS + MIN);
-    // The slot's phone then beats: T34 when a session is still open (expiry deferred), T33 when none is (401).
-    const p = m.open?.holder ?? m.current;
+    if (then === "none") return;
+    if (then === "beat") {
+      await advance(m, x, GRACE_MS + MIN);
+      // The slot's phone then beats: T34 when a session is still open (expiry deferred), T33 when none is (401).
+      const p = m.open?.holder ?? m.current;
+      if (p !== null && m.scanned.has(p)) await phoneCall(m, x, p, null);
+      return;
+    }
+    if (m.open !== null) await orgStop(m, x);
+    await advance(m, x, GRACE_MS - 15 * SEC);
+    const p = m.current;
     if (p !== null && m.scanned.has(p)) await phoneCall(m, x, p, null);
+    await advance(m, x, 30 * SEC);
+    await goLive(m, x);
   }),
   revertResult: () => new Cmd("revertResult", "revertResult", (m) => m.finishedAt !== null, revertResult),
   archiveDestination: () => new Cmd("archiveDestination", "archiveDestination", (m) => !m.archived.has(m.pick), archiveDestination),
@@ -1043,8 +1091,10 @@ const cmd = {
   /** T28 as an INTENT (§6.7.4 × §5.2): a free restart admitted just inside the reuse window, its video arriving just after
    *  the window closed. At the live it is no longer free: it pays — or, with nothing held, fails no_credits. Each part is
    *  its own checked step; ingestConnect predicts which. */
-  windowEdge: () => new Cmd("windowEdge", "windowEdge",
-    (m) => m.finishedAt === null && !m.expired && restartFree(m, m.now()).free && m.now() < m.w23.anchorAt! + REUSE_MS - EDGE_MS,
+  /** m-c (B7 re-review): `broke` is drawn only at an empty balance, where the live MUST fail no_credits — that leg was the
+   *  rarer one, reached only when a free-form draw happened to find the balance spent. */
+  windowEdge: (broke: boolean) => new Cmd(`windowEdge${broke ? "(broke)" : ""}`, "windowEdge",
+    (m) => (!broke || m.balance < 1) && m.finishedAt === null && !m.expired && restartFree(m, m.now()).free && m.now() < m.w23.anchorAt! + REUSE_MS - EDGE_MS,
     async (m, x) => {
       if (m.open !== null) await orgStop(m, x);
       if (m.archived.has(m.pick)) await repick(m, x);
@@ -1071,12 +1121,10 @@ const cmd = {
   /** §11.1.4's race as an INTENT (T24a): the phone that stopped before its first frame still holds the slot; the OTHER
    *  phone claims it first (T2 — not live), and only then does the stopped phone's next beat carry its record. Two
    *  checked steps; what each answers is phoneCall's prediction, never this command's. */
-  lateStopRace: () => new Cmd("lateStopRace", "lateStopRace",
-    (m) => {
-      const h = holderOpen(m);
-      return h !== null && !m.open!.live && m.scanned.has(h) && (!m.stopRecords.has(h) || m.stopRecords.get(h) === m.open!.sid);
-    },
+  lateStopRace: (who: P = "A") => new Cmd(`lateStopRace(${who})`, "lateStopRace",
+    (m) => preFrame(m) || canRestart(m),
     async (m, x) => {
+      if (!(await openPreFrame(m, x, who))) return;
       const h = m.open!.holder!;
       if (!m.stopRecords.has(h)) await localStop(m, x);
       await phoneCall(m, x, other(h), "new");
@@ -1084,12 +1132,10 @@ const cmd = {
     }),
   /** T23 as an INTENT, the race's positive pair: the phone that stopped before its first frame is still the slot's
    *  phone when its record arrives — so its Stop applies. */
-  lateStopOwn: () => new Cmd("lateStopOwn", "lateStopOwn",
-    (m) => {
-      const h = holderOpen(m);
-      return h !== null && !m.open!.live && m.scanned.has(h) && (!m.stopRecords.has(h) || m.stopRecords.get(h) === m.open!.sid);
-    },
+  lateStopOwn: (who: P = "A") => new Cmd(`lateStopOwn(${who})`, "lateStopOwn",
+    (m) => preFrame(m) || canRestart(m),
     async (m, x) => {
+      if (!(await openPreFrame(m, x, who))) return;
       const h = m.open!.holder!;
       if (!m.stopRecords.has(h)) await localStop(m, x);
       await phoneCall(m, x, h, null);
@@ -1111,14 +1157,48 @@ const cmd = {
     }),
   /** A14 / T4 as an INTENT: a LIVE broadcast's phone and video go quiet for 2 min (past DEAD_PHONE_TAKEOVER_SECONDS,
    *  inside W19's 15), and the other phone claims. Three checked steps; T4's answer is phoneCall's prediction. */
-  deadTakeover: () => new Cmd("deadTakeover", "deadTakeover",
-    (m) => holderOpen(m) !== null && m.open!.live,
+  deadTakeover: (who: P) => new Cmd(`deadTakeover(${who})`, "deadTakeover",
+    (m) => liveHeld(m) || canRestart(m),
     async (m, x) => {
+      // m-c (B7 re-review): with no live broadcast, `who`'s restart with video makes one first (each part checked).
+      if (!liveHeld(m) && canRestart(m)) await cmd.restart(who, true).run(m, x);
+      if (!liveHeld(m)) return;
       const h = m.open!.holder!;
       await ingestDrop(m, x);
       await advance(m, x, 2 * MIN);
       await phoneCall(m, x, other(h), "new");
     }),
+  /** m-c (B7 re-review): a warming silence as an INTENT — the organiser's restart with no video, then the phone and its
+   *  video go away before any video arrived: `gone(2 min)` (past ask 10's silence for every cadence, inside the warming
+   *  timeout) or `gone(16 min)` (past both; the tick expires first). Which end is owed is #10's to prove. */
+  warmingLost: (who: P, ms: number) => new Cmd(`warmingLost(${who},${ms / SEC}s)`, "warmingLost", canRestart, async (m, x) => {
+    await cmd.restart(who, false).run(m, x);
+    if (m.open !== null && !m.open.live) await cmd.gone(ms).run(m, x);
+  }),
+  /** m-c: the stale late stop as an INTENT — the phone that stopped before its first frame keeps its record, the organiser
+   *  stops the session first, and only then does the phone's next beat carry the record, naming a session no longer open. */
+  staleStop: (who: P = "A") => new Cmd(`staleStop(${who})`, "staleStop",
+    (m) => preFrame(m) || canRestart(m),
+    async (m, x) => {
+      if (!(await openPreFrame(m, x, who))) return;
+      const h = m.open!.holder!;
+      if (!m.stopRecords.has(h)) await localStop(m, x);
+      await orgStop(m, x);
+      if (m.scanned.has(h)) await phoneCall(m, x, h, null);
+    }),
+  /** m-c: T36 as an INTENT — the organiser archives the picked destination once nothing holds it, and a restart meets
+   *  T36's gate without clearing it: the phone's own start answers no_destination, the Go live 404. */
+  archivedRestart: (who: P, by: "organiser" | "operator") => new Cmd(`archivedRestart(${who},${by})`, "archivedRestart",
+    (m) => m.finishedAt === null && !m.expired, async (m, x) => {
+      if (m.open !== null) await orgStop(m, x);
+      if (!m.archived.has(m.pick)) await archiveDestination(m, x);
+      await cmd.restart(who, false, by, false).run(m, x);
+    }),
+  /** m-c: T14 as an INTENT — with nothing held and no free restart, the phone's own start meets the balance gate without
+   *  a credit bought first: 402 no_credit. Drawn only in that state; the restart's own prediction checks the answer. */
+  noCreditStart: (who: P) => new Cmd(`noCreditStart(${who})`, "noCreditStart",
+    (m) => canRestart(m) && m.balance < 1 && !restartFree(m, m.now()).free && !m.archived.has(m.pick),
+    (m, x) => cmd.restart(who, false, "operator", false).run(m, x)),
 };
 
 const sel = fc.constantFrom<Sel>("A", "B", "holder", "other");
@@ -1143,7 +1223,7 @@ const ALL: fc.Arbitrary<Cmd>[] = [
   ...Array.from({ length: 3 }, () => sel.map(cmd.beat)),
   ...Array.from({ length: 2 }, () => sel.map(cmd.get)),
   fc.constant(null).map(cmd.phoneStop),
-  ...Array.from({ length: 3 }, () => fc.constant(null).map(cmd.localStop)),
+  ...Array.from({ length: 3 }, () => phone.map(cmd.localStop)),
   ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.goLive)),
   ...Array.from({ length: 3 }, () => fc.tuple(
     phone, fc.oneof({ arbitrary: fc.constant(true), weight: 2 }, { arbitrary: fc.constant(false), weight: 1 }),
@@ -1160,18 +1240,24 @@ const ALL: fc.Arbitrary<Cmd>[] = [
   fc.constant(null).map(cmd.orgStop),
   fc.constant(null).map(cmd.reissue),
   fc.constant(null).map(cmd.rescan),
-  ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.lateStopRace)),
-  fc.constant(null).map(cmd.lateStopOwn),
+  ...Array.from({ length: 2 }, () => phone.map(cmd.lateStopRace)),
+  phone.map(cmd.lateStopOwn),
   ...Array.from({ length: 3 }, () => fc.constantFrom<"beat" | "get" | "start" | "resume">("beat", "get", "start", "resume").map(cmd.oldCodeCall)),
-  fc.constant(null).map(cmd.deadTakeover),
+  phone.map(cmd.deadTakeover),
   // I-2 and M-3.
-  fc.boolean().map(cmd.finish),
+  fc.constantFrom<"none" | "beat" | "goLive">("none", "beat", "beat", "goLive").map(cmd.finish),
   ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.revertResult)),
   fc.constant(null).map(cmd.archiveDestination),
-  fc.constant(null).map(cmd.repick),
+  ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.repick)),   // m-c: diluted by the intents below
   fc.constantFrom(1, 2).map(cmd.buyCredit),
-  ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.windowEdge)),
+  ...Array.from({ length: 2 }, () => fc.constant(false).map(cmd.windowEdge)),
+  ...Array.from({ length: 2 }, () => fc.constant(true).map(cmd.windowEdge)),
   ...Array.from({ length: 2 }, () => fc.constantFrom(0, 16 * MIN).map(cmd.ingestUnknown)),
+  // m-c (B7 re-review): the rare outcomes' own intents, so a fresh seed reaches each well clear of zero.
+  ...Array.from({ length: 2 }, () => fc.tuple(phone, fc.constantFrom(2 * MIN, 16 * MIN)).map(([p, ms]) => cmd.warmingLost(p, ms))),
+  phone.map(cmd.staleStop),
+  fc.tuple(phone, starter).map(([p, by]) => cmd.archivedRestart(p, by)),
+  ...Array.from({ length: 2 }, () => phone.map(cmd.noCreditStart)),
 ];
 /** W23 needs FIVE sessions with video in one run for a paid restart, which a free-form run reaches only sometimes (the
  *  T6b review's m-1): one run in three draws from this mix, the same commands with restarts-with-video weighted up. */
