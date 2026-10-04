@@ -3,7 +3,7 @@
 // tests for `publicCompetitionHub` (Task 4 fix round 2).
 //
 // Not a test file — the leading underscore keeps it out of vitest's `*.test.ts`
-// glob, matching `scripts/bench/lib/__tests__/_*.ts`.
+// glob, matching `tools/bench/lib/__tests__/_*.ts`.
 //
 // It lives here rather than being copied into the second suite because a
 // second hand-maintained copy drifts: the copy that is not next to the schema

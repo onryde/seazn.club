@@ -36,7 +36,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { EventImportRequest } from "@/server/api-v1/schemas";
 
 // The caps live in `import-caps.ts` — a module free of `server-only` — so that
-// consumers outside Next's build (scripts, workers, scripts/bench) can import
+// consumers outside Next's build (scripts, workers, tools/bench) can import
 // the real constant instead of mirroring it. Re-exported here so every
 // existing importer of `IMPORT_CAPS` from this module keeps working.
 export { IMPORT_CAPS } from "./import-caps";
