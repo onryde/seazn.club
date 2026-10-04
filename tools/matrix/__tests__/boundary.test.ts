@@ -3,7 +3,8 @@
 // from W1b Task 5, the match-rules table the variant set is built from), and
 // the invariant layer is type-only so W1b's fast-check model and W10's shadow
 // checks can reuse it.
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -23,6 +24,13 @@ const ALLOWED_BENCH = new Set([
 const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts"]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
+// The bench is also the @seazn/bench workspace (2026-10-04). A bare
+// `@seazn/bench/<sub>` specifier would reach it with no relative path, so it
+// would get past both the ALLOWED_BENCH check and closure(), which read
+// relative specifiers only. Matrix -> bench imports stay relative. That keeps
+// one spelling, and the allowlist sees every import. This is refused, not
+// mapped, because mapping would leave two spellings (controller ruling BT-R3).
+const BENCH_PACKAGE = /^@seazn\/bench(?:\/|$)/;
 
 function shipped(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -67,6 +75,8 @@ function closure(roots: readonly string[]): Set<string> {
     if (seen.has(file)) continue;
     seen.add(file);
     for (const { spec, typeOnly, dynamic } of importsOf(file)) {
+      // Refused before the skip below, which would otherwise wave it through as a package.
+      if (BENCH_PACKAGE.test(spec)) throw new Error(`${relative(REPO, file)} imports ${spec}: reach the bench by relative path, never by package name`);
       if (typeOnly || dynamic || !spec.startsWith(".")) continue;
       const target = resolve(dirname(file), spec);
       if (target.endsWith(".ts") && existsSync(target)) stack.push(target);
@@ -86,10 +96,31 @@ describe("tools/matrix import boundary", () => {
   it.each(MODULES.map((f) => [relative(MATRIX, f), f]))("%s imports only allowed modules", (_rel, file) => {
     for (const { spec } of importsOf(file)) {
       expect(FORBIDDEN.some((bad) => spec.includes(bad)), `${spec}`).toBe(false);
+      expect(BENCH_PACKAGE.test(spec), `${spec}: reach the bench by relative path, never by package name`).toBe(false);
       if (!spec.startsWith(".")) continue;
       const target = relative(REPO, resolve(dirname(file), spec));
       if (target.startsWith("tools/bench/")) expect(ALLOWED_BENCH.has(target), target).toBe(true);
       if (target.startsWith("apps/web/")) expect(ALLOWED_WEB.has(target), target).toBe(true);
+    }
+  });
+
+  it("the bench is reached by relative path only: a bare @seazn/bench specifier is refused, by the per-module check and by closure()", () => {
+    const refused = ["@seazn/bench", "@seazn/bench/lib/board.ts", "@seazn/bench/lib/env.ts"];
+    const passed = ["@seazn/benchx", "@seazn/engine", "../../bench/lib/env.ts", "../bench/lib/http.ts"];
+    expect(refused.filter((s) => !BENCH_PACKAGE.test(s))).toEqual([]);
+    expect(passed.filter((s) => BENCH_PACKAGE.test(s))).toEqual([]);
+    // closure() throws rather than skipping the specifier as a bare package. A
+    // decoy file in the same directory is walked without a throw.
+    const dir = mkdtempSync(join(tmpdir(), "matrix-boundary-"));
+    try {
+      const probe = join(dir, "probe.ts");
+      const decoy = join(dir, "decoy.ts");
+      writeFileSync(probe, 'import "@seazn/bench/lib/board.ts";\n');
+      writeFileSync(decoy, 'import "@seazn/benchx";\n');
+      expect(() => closure([probe])).toThrow(/imports @seazn\/bench\/lib\/board\.ts/);
+      expect([...closure([decoy])]).toEqual([decoy]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
