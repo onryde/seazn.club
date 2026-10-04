@@ -1748,8 +1748,8 @@ async function endIfPhoneLost(row: Row, fresh: IngestState | undefined, deps: Se
 
 /** T7b (§6.11, W22): one stream-tick pass's answer. Written out LITERALLY, never inferred: the cron Worker reads
  *  `data.failed` as its failure counter (R3), and apps/cron-worker/test/drift.test.ts finds that field by reading this
- *  module's source for a `failed: number` declaration. `deferred` (the budget ran out) is NOT a failure: the next
- *  firing, five minutes on, reaches those sessions. */
+ *  module's CODE (comments stripped) for its numeric declaration. `deferred` (the budget ran out) is NOT a failure: the
+ *  next firing, five minutes on, reaches those sessions. */
 export type StreamTickResult = { ticked: number; ended: number; failed: number; deferred: number };
 
 /** T7b: the pass stops STARTING ticks once this much wall-clock time has gone. The cron Worker abandons a job at 60 s

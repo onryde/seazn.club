@@ -5,7 +5,8 @@ import { baseUrl } from "@/lib/oauth";
 import { type StreamTickResult, defaultDeps, tickOpenSessions } from "@/server/usecases/stream-sessions";
 
 /** The route's 200 body (inside handler's `{ ok, data }`). EXPLICIT on purpose: the cron Worker reads `data.failed` as
- *  its failure counter (R3), so both answers carry it, and drift.test.ts finds its `failed: number` declaration. */
+ *  its failure counter (R3), so both answers carry it, and drift.test.ts finds the field's numeric declaration in the
+ *  imported StreamTickResult. */
 type StreamTickAnswer = StreamTickResult | (StreamTickResult & { disabled: true });
 
 /** POST /api/cron/stream-tick — EVERY 5 MINUTES (capture QR v2 §6.11, W22): ticks every open stream session
