@@ -8,7 +8,9 @@
 //   - every refusal (402 without streaming.relay, 422 fixture_finished, 404 another org's target) reaches the wire, and
 //     each status is a documented response of that route in the OpenAPI spec;
 //   - API keys are refused at the door on all three (NEVER_KEY_ROUTES), and it is THAT refusal, not the usecase's own
-//     session-only 403 that shares its status.
+//     session-only 403 that shares its status;
+//   - §6.1 "Who: … editors only": a VIEWER is refused at the door on all three. The usecase checks only that the caller
+//     is a session (`requireSessionEditor`, the device-links idiom), so the door's `write` scope is the ONE role gate.
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): nothing on these routes reads the sport.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -37,7 +39,7 @@ import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { StreamCodeShown, StreamSettings } from "@/server/api-v1/schemas";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { createStreamTarget } from "@/server/usecases/stream-targets";
-import { seedOrg } from "@/server/usecases/__tests__/_seed";
+import { makeUser, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { POST as ensureRoute } from "../route";
 import { POST as reissueRoute } from "../reissue/route";
@@ -236,19 +238,74 @@ describe.skipIf(!HAS_DB)("the three routes are never key-reachable (NEVER_KEY_RO
     expect((await settingsRaw(o.fixtureId, { targetId: null })).status).toBe(200);
   });
 
-  it("a signed-in user who is not a member of the fixture's org is refused, and no code is minted", async () => {
+  it("a signed-in user who is not a member of the fixture's org is refused on ensure, reissue and settings — no code minted, no pick saved", async () => {
     const o = await organiser();
     const stranger = await organiser();
     authState.userId = stranger.auth.userId!;
+    const calls: [string, (id: string) => Promise<Response>][] = [
+      ["ensure", (id) => ensureRaw(id)], ["reissue", (id) => reissueRaw(id)], ["settings", (id) => settingsRaw(id, { targetId: null })],
+    ];
     let checked = 0;
-    for (const call of [ensureRaw, reissueRaw]) {
-      // The door's own answer for a non-member (requireResourceAuth: 401) — any refusal will do; what matters is no mint.
+    for (const [label, call] of calls) {
+      // The door's own answer for a non-member (requireResourceAuth: 401) — any refusal will do; what matters is no write.
       const status = (await call(o.fixtureId)).status;
-      expect([401, 403, 404]).toContain(status);
+      expect([401, 403, 404], label).toContain(status);
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(3);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_codes where fixture_id = ${o.fixtureId}`;
     expect(n).toBe(0);
+    const [{ picks }] = await sql<{ picks: number }[]>`select count(*)::int as picks from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
+    expect(picks).toBe(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("editors only (§6.1) — the door's write scope is the one role gate on all three routes", () => {
+  /** A signed-in member of `orgId` with `role` (a real users row and org_members row; the cookie door is faked one layer
+   *  down, so `requireResourceAuth` reads the real membership). */
+  async function member(orgId: string, role: "admin" | "viewer"): Promise<string> {
+    const u = await makeUser(role);
+    await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${u.id}, ${role})`;
+    return u.id;
+  }
+
+  it("a VIEWER of the fixture's own org is refused 403 by the DOOR on ensure, reissue and settings and nothing is written; an ADMIN of the same org is admitted on all three (the positive pair)", async () => {
+    const o = await organiser();
+    const target = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court", streamKey: `k-${randomUUID().slice(0, 8)}` });
+    const viewer = await member(o.auth.orgId, "viewer");
+    const admin = await member(o.auth.orgId, "admin");
+    const calls: [string, () => Promise<Response>][] = [
+      ["ensure", () => ensureRaw(o.fixtureId)],
+      ["reissue", () => reissueRaw(o.fixtureId)],
+      ["settings", () => settingsRaw(o.fixtureId, { targetId: target.id })],
+    ];
+    authState.userId = viewer;
+    let refused = 0;
+    for (const [label, call] of calls) {
+      const r = await read(await call());
+      expect(r.status, label).toBe(403);
+      // The door's sentence (requireOrgAuth), never a usecase refusal that shares the status.
+      expect(r.body.error?.message, label).toBe("Insufficient permissions");
+      refused++;
+    }
+    expect(refused).toBe(3);
+    const codeRows = async () => sql<{ issued_by: string; ended_at: Date | null }[]>`
+      select issued_by, ended_at from fixture_stream_codes where fixture_id = ${o.fixtureId} order by created_at`;
+    const pick = async () => sql<{ target_id: string | null; updated_by: string | null }[]>`
+      select target_id, updated_by from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
+    expect(await codeRows(), "a viewer minted nothing").toEqual([]);
+    expect(await pick(), "a viewer saved no pick").toEqual([]);
+
+    authState.userId = admin;
+    let admitted = 0;
+    for (const [label, call] of calls) {
+      expect((await call()).status, label).toBe(200);
+      admitted++;
+    }
+    expect(admitted).toBe(3);
+    // ensure minted one, reissue ended it and minted the next — both issued by the admin; the pick is the admin's.
+    const rows = await codeRows();
+    expect(rows.map((c) => [c.issued_by, c.ended_at === null ? "active" : "ended"])).toEqual([[admin, "ended"], [admin, "active"]]);
+    expect(await pick()).toEqual([{ target_id: target.id, updated_by: admin }]);
   });
 });
