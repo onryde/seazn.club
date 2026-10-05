@@ -6,7 +6,7 @@ import { EngineError, type MatchOutcome, type StageCtx, type StageKind } from "@
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import { templateBodies, templateField, templateRow } from "../templates.ts";
 import {
-  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type StageRef,
+  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, SetupRefused, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type StageRef,
 } from "../driver/types.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
 import { redact } from "../redact.ts";
@@ -175,6 +175,23 @@ export const MAX_ITERATIONS = 64;
 /** engine-db/competition.ts:79 — the seat a bye's award is scored against. */
 const BYE_PHANTOM = "__bye__";
 
+/** W1d Task 6 (D6): runs one SETUP-PHASE driver call and tags a refusal from it. A
+ *  RefusedCall out of `f` is rethrown as a SetupRefused (a subclass, so every existing
+ *  `instanceof RefusedCall` catch still catches it): the harness asked the product to
+ *  build something it will not build. Anything else — a result, any other error, an
+ *  already-tagged refusal — passes through as it was. The tag is by PHASE, never by
+ *  route (review 2, R2-I2): `setUpDivision` wraps every driver call it makes before
+ *  `start`, and DENIED wraps its own four; `start` and the action under test stay
+ *  outside, because their refusals are the product answering. */
+export async function inSetup<T>(f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (e instanceof RefusedCall && !(e instanceof SetupRefused)) throw SetupRefused.from(e);
+    throw e;
+  }
+}
+
 /** `rosterlessTeams`: a team-kind sport plays on team entrants with no members
  *  and no lineups. Only PADPROOF asks for it (W1c Tasks 9–11): Step 0 saw the
  *  pad score a rosterless team fixture (volleyball beach), and the plan's D3
@@ -216,12 +233,12 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   if (template !== undefined) {
     // ONE organiser act: the card. It creates no entrant (templates.ts:351-366),
     // and its stages are never posted.
-    ({ competition, division } = await ctx.driver.createFromTemplate(template, { name: `Matrix ${ctx.spec.caseId}`, endsOn: TEMPLATE_ENDS_ON }));
+    ({ competition, division } = await inSetup(() => ctx.driver.createFromTemplate(template, { name: `Matrix ${ctx.spec.caseId}`, endsOn: TEMPLATE_ENDS_ON })));
   } else {
     const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
-    competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
-    division = await ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant, config });
-    await ctx.driver.postStages(division.id, bodies);
+    competition = await inSetup(() => ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug }));
+    division = await inSetup(() => ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant, config }));
+    await inSetup(() => ctx.driver.postStages(division.id, bodies));
   }
   const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1 }));
   // Task 4 (fold-in beneath ruling 49): a team entrant carries the catalog's
@@ -235,10 +252,10 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
     if (linked) return [{ fullName: e.displayName, squadNumber: 1, isCaptain: true }];
     return undefined;
   };
-  const entrants = await ctx.driver.addEntrants(division.id, inputs.map((e) => {
+  const entrants = await inSetup(() => ctx.driver.addEntrants(division.id, inputs.map((e) => {
     const members = membersOf(e);
     return { ...e, kind, ...(members !== undefined ? { members } : {}) };
-  }));
+  })));
   // The members are the PRODUCT's person ids, read back for every entrant it
   // answered — never the inputs. A roster that is not the full declared size
   // would play short, and an americano individual with no person is no
@@ -249,7 +266,7 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   const size = seated ? rosterSize(ctx.spec.sport, ctx.cfg) : linked ? 1 : 0;
   if (size > 0) {
     for (const e of entrants) {
-      const stored = await ctx.driver.entrantMembers(e.id);
+      const stored = await inSetup(() => ctx.driver.entrantMembers(e.id));
       if (stored.length !== size) {
         throw new Error(seated
           ? `scenario: entrant ${e.id} (seed ${e.seed ?? "none"}) reads back ${stored.length} roster member(s), ${size} posted — a short roster would play short`

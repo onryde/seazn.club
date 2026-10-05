@@ -648,17 +648,31 @@ describe("runSlice — a run", () => {
     expect(io.out()).not.toContain("abcdefghijklmnop");
   });
 
-  it("PF4: a product refusal is listed as an error red with its code, method and path — and is not vacuous", async () => {
+  it("PF4: a refusal is listed as an error red with its code, method and path — and is not vacuous. W1d D6: one raised in SETUP (the stages POST before start) reads `SetupRefused`", async () => {
     const io = capture();
     const driverFor = () => new (class extends FakeLeagueDriver {
       override async postStages(): Promise<never> { throw new RefusedCall("POST", "/api/v1/divisions/d1/stages", 400, "VALIDATION", "bad stage body"); }
     })("org-fake");
     const dir = dirFor();
     expect(await runSlice(deps({ driverFor }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t7", "--report-dir", dir])).toBe(0);
-    expect(resultsIn(dir, "t7").cases[0]!.reason).toMatch(/^error: RefusedCall: POST \/api\/v1\/divisions\/d1\/stages → HTTP 400 VALIDATION/);
+    // D6: the stages POST is a setUpDivision call, so the harness's own setup was refused — tagged by phase.
+    expect(resultsIn(dir, "t7").cases[0]!.reason).toMatch(/^error: SetupRefused: POST \/api\/v1\/divisions\/d1\/stages → HTTP 400 VALIDATION/);
     expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: 1");
     expect(io.out()).toContain("error-red league|generic|score|LIFECYCLE: POST /api/v1/divisions/d1/stages → 400 VALIDATION");
+  });
+
+  it("D6: the SAME refusal raised by `start` — the action under test — stays a plain `RefusedCall`: the product answering is data, not a harness fault", async () => {
+    const io = capture();
+    const driverFor = () => new (class extends FakeLeagueDriver {
+      override async start(): Promise<never> { throw new RefusedCall("POST", "/api/v1/divisions/d1/start", 400, "VALIDATION", "bad start"); }
+    })("org-fake");
+    const dir = dirFor();
+    expect(await runSlice(deps({ driverFor }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t7s", "--report-dir", dir])).toBe(0);
+    const reason = resultsIn(dir, "t7s").cases[0]!.reason;
+    expect(reason).toMatch(/^error: RefusedCall: POST \/api\/v1\/divisions\/d1\/start → HTTP 400 VALIDATION/);
+    expect(reason).not.toMatch(/SetupRefused/);
+    expect(io.out()).toContain("error reds: 1");
   });
 
   it("zero cases: results.json and the 'No cases run' banner are written, exit 1 (planner seam, no shared-state edit)", async () => {

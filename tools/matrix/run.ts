@@ -497,7 +497,7 @@ export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal 
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
 const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--scope slice|grid] [--shard k/N] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] (--set ${W1_DRIVING_SET} also takes --only/--scenario)
-  --shard k/N  run only plan items i with i mod N = k-1 (W1d D4)`;
+  --shard k/N  run only plan items i with i mod N = k-1`;
 
 /** D10 (ruling 52): browser workers are not this wave's — one chromium per
  *  run, one context per case, one case at a time. */

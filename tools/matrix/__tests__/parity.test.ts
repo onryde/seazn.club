@@ -587,7 +587,9 @@ describe("parity CLI, run as its package script", () => {
     expect(existsSync(out)).toBe(false);
   });
 
-  it("exit 3: unreadable input — a missing file, bad JSON, results the schema refuses, a repeated case id; nothing written, nothing secret printed", { timeout: meter.budget }, () => {
+  // D8 (W1d item 6): unreadable input is a REFUSAL, exit 2 — the same code merge-shards, render and lock-check use. It was 3
+  // here, the code for an abort or a crash while loading, so a wrapper switching on the code read a bad file as a crash.
+  it("exit 2: unreadable input — a missing file, bad JSON, results the schema refuses, a repeated case id; nothing written, nothing secret printed", { timeout: meter.budget }, () => {
     const out = join(dir, "never-input.md");
     for (const [what, file, why] of [
       ["a missing file", join(dir, "nope.json"), /ENOENT/],
@@ -598,7 +600,7 @@ describe("parity CLI, run as its package script", () => {
       ["a secret in bad JSON", put("secret.json", "token=abc123secret"), /\[redacted\]/],
     ] as const) {
       const r = cli(HTTP, file, "--out", out);
-      expect({ what, status: r.status }, r.stderr).toEqual({ what, status: 3 });
+      expect({ what, status: r.status }, r.stderr).toEqual({ what, status: 2 });
       expect(r.stderr, what).toMatch(why);
       expect(r.stderr, what).not.toContain("abc123secret");
       expect(r.stderr, what).not.toContain("crashed");

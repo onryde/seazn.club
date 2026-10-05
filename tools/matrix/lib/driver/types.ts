@@ -252,6 +252,33 @@ export class RefusedCall extends Error {
   }
 }
 
+/** W1d Task 6 (D6): a RefusedCall raised in a scenario's SETUP PHASE — the driver calls
+ *  `setUpDivision` makes before `start` (scenarios/common.ts `inSetup`), and DENIED's own
+ *  four. The harness asked the product to build something it will not build, so it is
+ *  the harness's fault, never a finding: the judge reads it as `setup-refused`. A refusal
+ *  anywhere else (`start`, the action under test) is the product answering, and stays a
+ *  plain RefusedCall — so the tag is by PHASE, never by route.
+ *
+ *  A subclass, so every `instanceof RefusedCall` catch behaves as before; run.ts `errText`
+ *  writes `name` into the reason (`error: SetupRefused: …`). `name` is assigned in the
+ *  constructor body, as every Error subclass here does (strip-types, house rule). */
+export class SetupRefused extends RefusedCall {
+  constructor(method: string, path: string, status: number, code: string | null, message: string | null, featureKey: string | null = null, extra: Readonly<Record<string, unknown>> | null = null) {
+    super(method, path, status, code, message, featureKey, extra);
+    this.name = "SetupRefused";
+  }
+
+  /** The tagged copy of `e`, keeping its message WHOLE. RefusedCall's constructor composes
+   *  `<method> <path> → HTTP <status> <code>: <message>` and keeps no raw message, so
+   *  rebuilding from `e.message` would double the request line (review 3, R3-m2): the
+   *  fields go in with a null message and the finished, already-redacted text is put back. */
+  static from(e: RefusedCall): SetupRefused {
+    const tagged = new SetupRefused(e.method, e.path, e.status, e.code, null, e.featureKey, e.extra);
+    tagged.message = e.message;
+    return tagged;
+  }
+}
+
 /** The fixture a refusal says the result fed, or null (W1b carry c): the
  *  product's NEXT_MATCH_STARTED names it as `next_match.fixture_id`
  *  (fed-seats.ts boardRef; pinned by product-text.ts). */

@@ -270,6 +270,14 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 6: the judge, its CLI, and the one exit-code table every CLI header is held to.
+  const W1D_T6 = ["lib/judge.ts", "judge.ts", "lib/exit-codes.ts"];
+  it("W1d Task 6's modules are all in the walk", () => {
+    const missing = W1D_T6.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T6.length).toBe(3);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

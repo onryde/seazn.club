@@ -1,17 +1,18 @@
 // CLI: pnpm matrix:parity <http results.json> <browser results.json> [--out parity.md]
 // (W1c Task 13). Compares an HTTP run with a browser run, case by case
 // (lib/parity.ts). The report goes to --out, or to stdout without it.
-// Exit codes, the house codes (W1b final batch F-6, W1c carry e):
+// Exit codes, the house codes (W1b final batch F-6, W1c carry e; one meaning per
+// code across every CLI, W1d item 6 / D8, lib/exit-codes.ts):
 //   0  parity: at least one case compared, at least one common check, and no
 //      difference;
 //   1  a difference (the report is still written), or nothing to compare:
 //      compared 0 cases, or 0 common checks, is never parity;
-//   2  usage: not exactly two files, an unknown flag, or the runs in the
-//      wrong slots (WrongDriver). Nothing is written;
-//   3  unreadable input: a missing or unreadable file, bad JSON, results the
-//      schema refuses, a case or check id that repeats, or a case id that
-//      does not end in its own width. Nothing is written. A crash while the CLI
-//      loads is 3 too, through the package script's preload
+//   2  refused, nothing written: usage (not exactly two files, an unknown flag,
+//      or the runs in the wrong slots, WrongDriver), or unreadable input (a
+//      missing or unreadable file, bad JSON, results the schema refuses, a case
+//      or check id that repeats, or a case id that does not end in its own
+//      width). Before W1d the unreadable input was 3;
+//   3  a crash while the CLI loads, through the package script's preload
 //      (scripts/lib/crash-exit.ts). Run it only through that script: without the
 //      preload, a load crash exits 1, which reads as a verdict (W1b carry e).
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -55,7 +56,7 @@ export function main(argv: readonly string[]): number {
     browser = read(cli.browser);
   } catch (e) {
     process.stderr.write(`parity: ${why(e)}\n`);
-    return 3;
+    return 2;
   }
   let report: ParityReport;
   try {
@@ -67,7 +68,7 @@ export function main(argv: readonly string[]): number {
     }
     if (e instanceof DuplicateId || e instanceof WidthSuffixMismatch) {
       process.stderr.write(`parity: ${why(e)}\n`);
-      return 3;
+      return 2;
     }
     throw e;
   }

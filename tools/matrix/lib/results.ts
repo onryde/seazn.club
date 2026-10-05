@@ -310,6 +310,16 @@ export function parseResults(json: unknown): AnyRunResults {
   return AnyRunResultsSchema.parse(json);
 }
 
+/** The three reasons decideState gives a vacuous red (R13, R25), written ONCE: the judge (W1d Task 6, D6)
+ *  reads a red as a harness fault by these words, so it imports them rather than retype them. Two are
+ *  whole reasons; `zeroItemsPrefix` is followed by the ids of the checks that counted nothing, so a reader
+ *  matches it by PREFIX (review I3). None starts with `error:` (PF4). */
+export const VACUOUS_REASONS = Object.freeze({
+  none: "no checks ran (vacuous)",
+  abstained: "every check abstained (vacuous)",
+  zeroItemsPrefix: "checked zero items (vacuous):",
+} as const);
+
 export interface DecideInput {
   checks: readonly CheckResult[];
   deferred: { wave: string; reason: string } | null;
@@ -334,13 +344,13 @@ export function decideState(input: DecideInput): { state: CaseState; reason: str
   if (input.deferred !== null) return { state: "later", reason: `${input.deferred.wave}: ${input.deferred.reason}` };
   if (input.noPath != null) return { state: "no_path", reason: `${input.noPath.wave}: ${input.noPath.reason}` };
   if (input.notRun != null) return { state: "not_run", reason: input.notRun };
-  if (input.checks.length === 0) return { state: "red", reason: "no checks ran (vacuous)" };
+  if (input.checks.length === 0) return { state: "red", reason: VACUOUS_REASONS.none };
   const failed = input.checks.filter((c) => c.verdict === "fail");
   if (failed.length > 0) return { state: "red", reason: failed.map((c) => `${c.id}: ${c.reason}`).join("; ") };
   const applied = input.checks.filter((c) => c.verdict !== "abstain");
-  if (applied.length === 0) return { state: "red", reason: "every check abstained (vacuous)" };
+  if (applied.length === 0) return { state: "red", reason: VACUOUS_REASONS.abstained };
   const empty = applied.filter((c) => c.checked === 0);
-  if (empty.length > 0) return { state: "red", reason: `checked zero items (vacuous): ${empty.map((c) => c.id).join(", ")}` };
+  if (empty.length > 0) return { state: "red", reason: `${VACUOUS_REASONS.zeroItemsPrefix} ${empty.map((c) => c.id).join(", ")}` };
   if (input.mandated != null) return { state: "refused", reason: input.mandated };
   return { state: "works", reason: `${applied.length} checks, ${applied.reduce((n, c) => n + c.checked, 0)} items` };
 }

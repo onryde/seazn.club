@@ -1,24 +1,26 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules.ts";
 import { RULES, decide } from "../lib/applicability.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
-import { RefusedCall, type EntrantInput, type EntrantRow, type LineupSlotWire, type StageRef } from "../lib/driver/types.ts";
+import { RefusedCall, SetupRefused, type EntrantInput, type EntrantRow, type LineupSlotWire, type StageRef } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
+import { harnessFaults } from "../lib/judge.ts";
 import { isTerminal, PENDING_STATUSES, winnerOf, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
-import { decideState } from "../lib/results.ts";
+import { decideState, parseResults, type RunResults } from "../lib/results.ts";
 import { entrantKindFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
   CANARY_MARK, FORMAT_LOCK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
-  LINEUP_ISSUE_TEXT, LineupWarned, MAX_ITERATIONS, Recorder, TEMPLATE_ENDS_ON, byeDeclared, decideFixture, defaultPolicy, ensureLineups, finishStage, lineupWarningKind, personsNeeded, playStage, setUpDivision, snapshot,
+  LINEUP_ISSUE_TEXT, LineupWarned, MAX_ITERATIONS, Recorder, TEMPLATE_ENDS_ON, byeDeclared, decideFixture, defaultPolicy, ensureLineups, finishStage, inSetup, lineupWarningKind, personsNeeded, playStage, setUpDivision, snapshot,
   type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -29,8 +31,12 @@ import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } 
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
-import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture, type FakeKnockoutOptions } from "./fake-driver.ts";
+import { runSlice } from "../run.ts";
+import { FakeDeniedDriver, FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture, type FakeKnockoutOptions } from "./fake-driver.ts";
 import { wireCodeFor } from "./product-text.ts";
+import { deps } from "./run-deps.ts";
+import { denied } from "../lib/scenarios/denied.ts";
+import { expectedGate } from "../lib/format-gates-copy.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** Task 8 m-7: the status api-v1 answers STAGE_NOT_READY with, read from the
@@ -2244,5 +2250,175 @@ describe("setUpDivision — the template branch (W1-driving Task 13)", () => {
       refused++;
     }
     expect(refused).toBe(shapes.length);
+  });
+});
+
+// W1d Task 6 (D6, review 2 R2-I2, review 3 R3-m2/m3): a refusal raised in setUpDivision's SETUP PHASE — every driver call it
+// makes before `start` — is a SetupRefused: the harness asked the product for something it will not build, which is the
+// harness's fault, not a finding. The tag is by PHASE, never by route: DENIED's action is the same POST /stages as a setup
+// call elsewhere. SetupRefused extends RefusedCall, so every `instanceof RefusedCall` catch still catches it; run.ts's
+// errText writes the subclass's name into the reason, and the judge reads it.
+describe("D6: a refusal in setUpDivision's setup phase is SetupRefused, by phase and not by route", () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+  const original = (path = "/api/v1/divisions/d1/entrants") => new RefusedCall("POST", path, 422, "VALIDATION", "members: roster is too short");
+  /** `driver`'s `method` answers with `err` — and is counted as answered, in `calls`, like any call the fake served. */
+  function refuses<T extends FakeLeagueDriver>(driver: T, method: string, err: Error): T {
+    Object.defineProperty(driver, method, { value: () => { driver.log(method); return Promise.reject(err); } });
+    return driver;
+  }
+  const football = offlineBuilderDefault("football");
+  const boxCtx = (driver: FakeLeagueDriver): ScenarioContext => ({
+    driver, orgSlug: "o", cfg: resolveSportCfg("badminton", "short"), tag: "t", denied: [],
+    spec: { caseId: "group_only|badminton|short|LIFECYCLE", row: "group_only", sport: "badminton", variant: "short", scenario: "LIFECYCLE", canary: false, template: "box-league" },
+  });
+  const boxEntrants = (JSON.parse(readFileSync(resolve(REPO, "apps/web/src/server/templates/catalog/box-league.json"), "utf8")) as { divisions: { entrantCount: number }[] }).divisions[0]!.entrantCount;
+  /** The three ways a division is set up: the builder path on a solo sport, the builder path on a team sport (it reads every roster back), and the gallery card. */
+  const SETUPS: readonly { what: string; ctx: (d: FakeLeagueDriver) => ScenarioContext; entrants: number }[] = [
+    { what: "builder, solo", ctx: (d) => ctxFor(d, "LIFECYCLE"), entrants: 4 },
+    { what: "builder, team", ctx: (d) => ctxFor(d, "LIFECYCLE", { sport: "football", variant: football }), entrants: 4 },
+    { what: "template", ctx: boxCtx, entrants: boxEntrants },
+  ];
+  /** Every driver call a setup makes before its first `start`, by name. */
+  const preStart = (calls: readonly string[]): string[] => calls.slice(0, calls.indexOf("start"));
+
+  /** D6's own list of what setup is — the six calls, by name. A call added to setUpDivision before `start` and not named here reds the test below. */
+  const SETUP_CALLS = ["createFromTemplate", "createCompetition", "createDivision", "postStages", "addEntrants", "entrantMembers"] as const;
+
+  it("the premise, from the fake's own call log: the pre-start calls over the three kinds of setup are exactly the six D6 names — none more, none fewer", async () => {
+    const seen = new Set<string>();
+    for (const s of SETUPS) {
+      const driver = new FakeLeagueDriver();
+      await setUpDivision(s.ctx(driver), new Recorder(), s.entrants);
+      const before = preStart(driver.calls);
+      expect(before.length, s.what).toBeGreaterThan(0);
+      for (const c of before) seen.add(c);
+    }
+    expect([...seen].sort()).toEqual([...SETUP_CALLS].sort());
+  });
+
+  it("each of the six refuses as SetupRefused — still a RefusedCall, its message the original's whole, its fields kept (6 checked)", async () => {
+    let checked = 0;
+    for (const call of SETUP_CALLS) {
+      // Find, by running, the setup that makes this call (the premise test above proved each call is made by one of them).
+      let chosen: (typeof SETUPS)[number] | undefined;
+      for (const s of SETUPS) {
+        const probe = new FakeLeagueDriver();
+        await setUpDivision(s.ctx(probe), new Recorder(), s.entrants);
+        if (preStart(probe.calls).includes(call)) { chosen = s; break; }
+      }
+      expect(chosen, `${call} is made by one of the setups`).toBeDefined();
+      const err = original(`/api/v1/${call}`);
+      const driver = refuses(new FakeLeagueDriver(), call, err);
+      const caught = await setUpDivision(chosen!.ctx(driver), new Recorder(), chosen!.entrants).then(() => null, (e: unknown) => e);
+      expect(caught, `${call}: setup threw`).toBeInstanceOf(SetupRefused);
+      expect(caught, `${call}: still a RefusedCall`).toBeInstanceOf(RefusedCall);
+      const e = caught as SetupRefused;
+      expect(e.name).toBe("SetupRefused");
+      expect(e.message, `${call}: the original's message, whole — never composed twice`).toBe(err.message);
+      expect({ method: e.method, path: e.path, status: e.status, code: e.code }).toEqual({ method: err.method, path: err.path, status: err.status, code: err.code });
+      // The fake answered the refusing call: a setup that never reached it would have passed empty.
+      expect(driver.calls, `${call} was reached`).toContain(call);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("the negative pair: `start` is the product's own act, so its refusal is a plain RefusedCall — and so is any call after it", async () => {
+    const err = new RefusedCall("POST", "/api/v1/divisions/d1/start", 422, "STAGE_NOT_READY", "page playoffs need exactly 4 entrants, got 8");
+    const driver = refuses(new FakeLeagueDriver(), "start", err);
+    const caught = await setUpDivision(ctxFor(driver, "LIFECYCLE"), new Recorder(), 4).then(() => null, (e: unknown) => e);
+    expect(caught).toBeInstanceOf(RefusedCall);
+    expect(caught).not.toBeInstanceOf(SetupRefused);
+    expect((caught as RefusedCall).name).toBe("RefusedCall");
+    expect(driver.calls).toContain("start");
+    // After start: the read-backs are not setup either.
+    const after = refuses(new FakeLeagueDriver(), "listStages", original("/api/v1/divisions/d1/stages"));
+    const late = await setUpDivision(ctxFor(after, "LIFECYCLE"), new Recorder(), 4).then(() => null, (e: unknown) => e);
+    expect(late).toBeInstanceOf(RefusedCall);
+    expect(late).not.toBeInstanceOf(SetupRefused);
+    expect(after.calls.indexOf("listStages")).toBeGreaterThan(after.calls.indexOf("start"));
+  });
+
+  it("an error that is not a refusal passes through setup untouched — the same object, still the harness's own crash", async () => {
+    const boom = new Error("fake: league only");
+    const caught = await setUpDivision(ctxFor(refuses(new FakeLeagueDriver(), "addEntrants", boom), "LIFECYCLE"), new Recorder(), 4).then(() => null, (e: unknown) => e);
+    expect(caught).toBe(boom);
+  });
+
+  it("inSetup: a result passes through; a RefusedCall becomes SetupRefused once (never twice); anything else is rethrown as it was", async () => {
+    expect(await inSetup(() => Promise.resolve(42))).toBe(42);
+    const first = await inSetup(() => Promise.reject(original())).then(() => null, (e: unknown) => e);
+    expect(first).toBeInstanceOf(SetupRefused);
+    // Nested: an already-tagged refusal is not wrapped again (a wrapper inside a wrapper is the same tag).
+    const nested = await inSetup(() => inSetup(() => Promise.reject(original()))).then(() => null, (e: unknown) => e);
+    expect(nested).toBeInstanceOf(SetupRefused);
+    expect((nested as SetupRefused).message).toBe(original().message);
+    const plain = new TypeError("x is undefined");
+    expect(await inSetup(() => Promise.reject(plain)).then(() => null, (e: unknown) => e)).toBe(plain);
+  });
+
+  it("SetupRefused.from keeps the original's featureKey and extra fields", () => {
+    const e = new RefusedCall("POST", "/api/v1/divisions/d1/stages", 402, "PAYMENT_REQUIRED", "upgrade", "formats.advanced", { next_match: { fixture_id: "f1" } });
+    const s = SetupRefused.from(e);
+    expect({ featureKey: s.featureKey, extra: s.extra, message: s.message }).toEqual({ featureKey: "formats.advanced", extra: { next_match: { fixture_id: "f1" } }, message: e.message });
+  });
+
+  it("end to end, through runSlice: a division whose entrants the product refuses is a red whose reason is exactly 'error: SetupRefused: <the refusal>' — and the judge names it setup-refused", async () => {
+    const err = original();
+    const reportDir = mkdtempSync(join(tmpdir(), "w1d-setup-"));
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let answered = 0;
+    const d = deps({ driverFor: (_b, _s, orgId) => { const dr = refuses(new FakeLeagueDriver(orgId), "addEntrants", err); answered++; return dr; } });
+    expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "setup1", "--report-dir", reportDir])).toBe(0);
+    const r = parseResults(JSON.parse(readFileSync(join(reportDir, "setup1", "results.json"), "utf8"))) as RunResults;
+    expect(answered).toBe(1);
+    expect(r.cases).toHaveLength(1);
+    // The WHOLE reason: a doubled request line (SetupRefused rebuilt from the message) would not equal it.
+    expect(r.cases[0]!.state).toBe("red");
+    expect(r.cases[0]!.reason).toBe(`error: SetupRefused: ${err.message}`);
+    expect(harnessFaults(r, { plannedNotRun: "allow" }).map((f) => [f.caseId, f.kind])).toEqual([[r.cases[0]!.caseId, "setup-refused"]]);
+  });
+
+  describe("DENIED's own setup (review 3, R3-m3): its four setup calls are tagged, its gated POST is still data", () => {
+    const row = ROW_KEYS.find((r) => expectedGate(stagesForRow(r)) !== null)!;
+    const gate = expectedGate(stagesForRow(row))!;
+    const gatedKind = stagesForRow(row).find((s) => (s.kind as string) !== "league")!.kind;
+    const spec: CaseSpec = { caseId: `${row}|generic|score|DENIED`, row, sport: "generic", variant: "score", scenario: "DENIED", canary: false, deny: [gate] };
+    const ctxOf = (driver: FakeDeniedDriver): ScenarioContext => ({ driver, spec, orgSlug: "o", cfg: null, tag: "t", denied: [gate] });
+    const fake = (extraDeny: readonly [string, string][] = []) => new FakeDeniedDriver(new Map([[gatedKind as string, gate], ...extraDeny]), { deleteFirst: false });
+
+    it("empty case first: with only the gated kind denied, the scenario runs to its end — the :67 refusal is caught as data, and both postStages calls were answered", async () => {
+      expect(gate).toBeTruthy();
+      const driver = fake();
+      const out = await denied.run(ctxOf(driver));
+      expect(driver.calls.filter((c) => c === "postStages")).toHaveLength(2);
+      expect(out.assertions.find((a) => a.id === "denied-refused-named")).toMatchObject({ verdict: "pass" });
+    });
+
+    it("a refused working postStages (the :77 shape — the SAME route as the action under test) is a SetupRefused, while the gated one before it was still data", async () => {
+      // The working body is the league row's: refusing `league` refuses it and only it.
+      const driver = fake([["league", "formats.fake"]]);
+      const caught = await denied.run(ctxOf(driver)).then(() => null, (e: unknown) => e);
+      expect(caught).toBeInstanceOf(SetupRefused);
+      expect(caught).toBeInstanceOf(RefusedCall);
+      // Both posts were answered: the gated one (caught as data), then the working one (setup).
+      expect(driver.calls.filter((c) => c === "postStages")).toHaveLength(2);
+    });
+
+    it("createCompetition, createDivision and the second createDivision are setup too (3 checked)", async () => {
+      let checked = 0;
+      for (const [call, nth] of [["createCompetition", 1], ["createDivision", 1], ["createDivision", 2]] as const) {
+        const driver = fake();
+        const inner = driver[call].bind(driver) as (...a: never[]) => Promise<unknown>;
+        let seen = 0;
+        Object.defineProperty(driver, call, { value: (...a: never[]) => (++seen === nth ? (driver.log(call), Promise.reject(original(`/api/v1/${call}`))) : inner(...a)) });
+        const caught = await denied.run(ctxOf(driver)).then(() => null, (e: unknown) => e);
+        expect(caught, `${call} #${nth}`).toBeInstanceOf(SetupRefused);
+        expect(seen, `${call} #${nth} was reached`).toBe(nth);
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
   });
 });
