@@ -16,6 +16,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as TS from "typescript";
 import { z } from "zod";
+import { LAYERS } from "./results.ts";
 import { isClean, routeOf, type GapRouting, type TriageJson } from "./triage.ts";
 
 // `typescript` through require, not import: vite's transform chokes on the ~9 MB CJS bundle and a test importing this
@@ -229,32 +230,44 @@ export const parseVerdicts = (json: unknown): { verdicts: Verdict[] } => Verdict
 
 // --- the witness a verified-by-failing-test verdict names -------------------------------------------------------------------
 
-export interface TestCall { title: string; fails: boolean }
+export interface TestCall {
+  title: string;
+  /** The call carries the `fails` modifier. */
+  fails: boolean;
+  /** The call runs whenever the file does: no modifier but `fails` (no skip, todo, only, skipIf…), and every ancestor up to
+   *  the file is a statement, a block or the callback of a bare `describe(...)` — never an `if`, an `&&`, a function nothing
+   *  calls, or a `describe.skip`. A witness that does not run flips nothing when the gap is fixed. */
+  runs: boolean;
+}
 
-/** Every `it(...)` / `test(...)` call with a literal title, with whatever modifiers it carries (`.fails`, `.skip`, …), read
- *  from the TypeScript AST: a comment or a string that spells a test is no test. */
+/** Every `it(...)` / `test(...)` call with a literal title, with whatever modifiers it carries (`.fails`, `.skip`, …) and
+ *  whether it runs, read from the TypeScript AST: a comment or a string that spells a test is no test. */
 export function testCalls(src: string): TestCall[] {
   const sf = ts.createSourceFile("witness.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const out: TestCall[] = [];
-  const visit = (n: TS.Node): void => {
+  /** `live`: everything above `n` up to the file is certain to be reached. */
+  const visit = (n: TS.Node, live: boolean): void => {
+    let carries = ts.isSourceFile(n) || ts.isExpressionStatement(n) || ts.isBlock(n) || ts.isArrowFunction(n) || ts.isFunctionExpression(n);
     if (ts.isCallExpression(n)) {
       const mods: string[] = [];
       let cur: TS.Expression = n.expression;
       while (ts.isPropertyAccessExpression(cur)) { mods.unshift(cur.name.text); cur = cur.expression; }
       const arg = n.arguments[0];
       if (ts.isIdentifier(cur) && (cur.text === "it" || cur.text === "test") && arg !== undefined && (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg))) {
-        out.push({ title: arg.text, fails: mods.includes("fails") });
+        out.push({ title: arg.text, fails: mods.includes("fails"), runs: live && mods.every((m) => m === "fails") });
       }
+      // The callback of a bare describe is reached; any other call's arguments may never be.
+      carries = ts.isIdentifier(cur) && cur.text === "describe" && mods.length === 0;
     }
-    ts.forEachChild(n, visit);
+    ts.forEachChild(n, (c) => visit(c, live && carries));
   };
-  visit(sf);
+  visit(sf, true);
   return out;
 }
 
-/** The titles of the file's `it.fails` / `test.fails` calls, in source order. */
+/** The titles of the file's `it.fails` / `test.fails` calls that run, in source order. */
 export function failsTitles(src: string): string[] {
-  return testCalls(src).filter((c) => c.fails).map((c) => c.title);
+  return testCalls(src).filter((c) => c.fails && c.runs).map((c) => c.title);
 }
 
 /** The title carries the audit id as a whole token: SW-H1 is not in "SW-H10: …". */
@@ -271,13 +284,13 @@ function carriesId(title: string, id: string): boolean {
 
 /** Every way the ledger refuses to build (exit 2). Each is the Error's own `name`. */
 export class LedgerRefused extends Error {
-  constructor(name: "NoIds" | "TriageNotClean", message: string) {
+  constructor(name: "NoIds" | "TriageNoRuns" | "TriageLayerMissing" | "TriageNoCases" | "TriageNotClean", message: string) {
     super(message);
     this.name = name;
   }
 }
 
-export const TEST_REASONS = ["file-missing", "title-missing", "not-a-fails-test", "id-not-in-title", "engine-src"] as const;
+export const TEST_REASONS = ["file-missing", "title-missing", "not-a-fails-test", "witness-not-run", "id-not-in-title", "engine-src"] as const;
 export type TestReason = (typeof TEST_REASONS)[number];
 
 export type Finding =
@@ -311,6 +324,8 @@ export interface Ledger {
   counts: Record<Outcome, number>;
   /** Triage rows keyed to an umbrella: the umbrella is no id, so these are shown, and its members still owe an outcome. */
   umbrellaCases: { id: string; members: string[]; cases: string[] }[];
+  /** The runs the triage read, so every claim of the ledger traces to a run id (D19). */
+  runs: TriageJson["runs"];
 }
 
 export interface LedgerInput {
@@ -334,9 +349,9 @@ function testFindings(v: Verdict, readFile: (p: string) => string | null): Findi
   const src = readFile(file);
   if (src === null) return [...out, at("file-missing")];
   if (!carriesId(title, v.id)) out.push(at("id-not-in-title"));
-  const calls = testCalls(src);
-  if (calls.some((c) => c.fails && c.title === title)) return out;
-  return [...out, at(calls.some((c) => c.title === title) ? "not-a-fails-test" : "title-missing")];
+  const same = testCalls(src).filter((c) => c.title === title);
+  if (same.some((c) => c.fails && c.runs)) return out;
+  return [...out, at(same.length === 0 ? "title-missing" : same.some((c) => c.fails) ? "witness-not-run" : "not-a-fails-test")];
 }
 
 /** Every audit id with exactly one outcome, or a finding saying why not. Refuses a ledger with no id at all, and a triage
@@ -344,6 +359,14 @@ function testFindings(v: Verdict, readFile: (p: string) => string | null): Findi
 export function buildLedger(input: LedgerInput): Ledger {
   const { gaps, umbrellas, routing, triage, verdicts, readFile } = input;
   if (gaps.length === 0) throw new LedgerRefused("NoIds", "the audit holds zero ids — nothing to account for (vacuous)");
+  // The ledger reads a triage.json on faith, so it holds the file to the bar the triage CLI keeps: a triage that read nothing,
+  // or only some of the baseline's layers, would call every id its missing runs could have shown `not-exercised`.
+  if (triage.runs.length === 0) throw new LedgerRefused("TriageNoRuns", "the triage names no run — it read nothing (vacuous)");
+  const missing = LAYERS.filter((l) => !triage.runs.some((r) => r.layer === l));
+  if (missing.length > 0) {
+    throw new LedgerRefused("TriageLayerMissing", `the triage has no run of ${missing.length === 1 ? "layer" : "layers"} ${missing.join(", ")} (it holds ${triage.runs.map((r) => r.layer).join(", ")}): the baseline reads all of ${LAYERS.join(", ")}, and an id only a missing layer could reproduce would read not-exercised`);
+  }
+  if (triage.scanned === 0) throw new LedgerRefused("TriageNoCases", "the triage read no case at all — nothing was checked (vacuous)");
   if (!isClean(triage)) {
     throw new LedgerRefused("TriageNotClean", `the triage is not clean (${triage.untriaged.length} untriaged, ${triage.ambiguous.length} ambiguous, ${triage.misrouted.length} misrouted rules, ${triage.unknownGap.length} unknown gaps): an untriaged red could be the very gap a verdict calls not-exercised — fix the triage first`);
   }
@@ -399,7 +422,7 @@ export function buildLedger(input: LedgerInput): Ledger {
     if (u !== undefined) umbrellaCases.push({ id: gap, members: u.members, cases: at.cases });
     else if (!ids.has(gap) && !NEW_GAP.test(gap)) findings.push({ kind: "unknown-triage-gap", id: gap });
   }
-  return { entries, findings, counts, umbrellaCases };
+  return { entries, findings, counts, umbrellaCases, runs: triage.runs };
 }
 
 // --- AUDIT-LEDGER.md ------------------------------------------------------------------------------------------------------------
@@ -418,6 +441,7 @@ export function findingLine(f: Finding): string {
       switch (f.reason) {
         case "file-missing": return `${where} is not in the repo`;
         case "title-missing": return `${where} holds no test titled "${f.title}"`;
+        case "witness-not-run": return `${where}: "${f.title}" is an it.fails that never runs (skipped, todo, or under a skip or a condition) — it cannot flip when the gap is fixed`;
         case "not-a-fails-test": return `${where}: "${f.title}" is a plain test, not an it.fails — a passing test is no witness that flips when the gap is fixed`;
         case "id-not-in-title": return `${where}: the title "${f.title}" does not carry ${f.id}`;
         case "engine-src": return `${where} is under ${ENGINE_SRC}, which this wave does not touch`;
@@ -449,6 +473,11 @@ export function renderLedger(ledger: Ledger, meta: LedgerMeta): string {
   lines.push(
     `Each of the ${plural(meta.audit, "audit id")} has exactly one of five outcomes. ${plural(meta.umbrellas, "umbrella row")} (SC's, which explain rows counted elsewhere) ${meta.umbrellas === 1 ? "is" : "are"} no id. The triage read ${plural(meta.checked, "red")}.`, "",
     "| outcome | ids |", "|---|---|", ...OUTCOMES.map((o) => `| ${o} | ${counts[o]} |`), "",
+  );
+  lines.push(
+    "## Runs", "", "The triage this ledger was built from, one run per layer:", "",
+    "| layer | run | plan | cases | reds |", "|---|---|---|---|---|",
+    ...ledger.runs.map((r) => `| ${r.layer} | ${cell(r.runId)} | ${cell(r.plan ?? "—")} | ${r.cases} | ${r.reds} |`), "",
   );
   const inOutcome = (o: Outcome): LedgerEntry[] => entries.filter((e) => e.outcome === o);
   const row = (e: LedgerEntry): string => `| ${e.id} | ${e.wave ?? "—"} | ${cell(e.severity)} | ${cell(e.title)} | ${cell(e.evidence ?? "")} |`;

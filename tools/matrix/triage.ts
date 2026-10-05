@@ -3,21 +3,23 @@
 // W1d Task 18 (ruling 63, D18): keys every red of the given runs to ONE audit gap id (or a NEW- id) and its design §8
 // wave, by the committed rules in catalogue/triage-rules.json read against catalogue/gap-routing.json. Writes
 // <dir>/triage.json (the ledger reads it), <dir>/TRIAGE.md (per wave, per gap, the case list) and, with --rekey,
-// <dir>/REKEY.md (each case a P-rule keyed, with the gap it now has). One run per layer: L1, L2 and L3 triage together.
+// <dir>/REKEY.md (each case a P-rule keyed, with the gap it now has; a run without --rekey removes the REKEY.md an earlier
+// run left in <dir>). One run per layer: L1, L2 and L3 triage together.
 // Exit codes, each with one meaning:
 //   0  every red is triaged: the files are written (zero reds is a verdict too, and is said);
 //   1  a negative signal, the files still written so a reviewer reads them: a red no rule matches, a red two rules
-//      match, a rule that routes a gap away from design §8, or a rule naming a gap the audit and new-gaps.json do not
-//      hold — each listed on stdout;
+//      match, a rule that routes a gap away from design §8, a rule naming a gap the audit and new-gaps.json do not
+//      hold, or (with --rekey) a rule whose `was` names a different P-rule than the map gives the case it keyed —
+//      each listed on stdout;
 //   2  usage or input error, with a message on stderr and nothing written: a missing --runs or --out, an unknown
 //      flag, a run file that is unreadable, not JSON, not a results.json or not a v3 run, two runs of one layer, runs
-//      with no case at all, a catalogue file or audit directory that is unreadable, or a P-rule map that is
-//      unreadable or names a case the --rekey results do not hold;
+//      with no case at all, a catalogue file (a rule with an empty match among them) or audit directory that is
+//      unreadable, or a P-rule map that is unreadable or names a case the --rekey results do not hold;
 //   3  a crash while it loads, through `pnpm run matrix:triage` (its preload, scripts/lib/crash-exit.ts). Run it only
 //      through that script: without the preload a load crash exits 1.
 // An uncaught throw would exit 1 without the preload, so every input failure is caught here. Every line printed and
 // every file written passes through redact().
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -27,7 +29,7 @@ import { EXIT_CODES } from "./lib/exit-codes.ts";
 import { mapStrings, redact } from "./lib/redact.ts";
 import { parseResults, type AnyRunResults, type CaseResult } from "./lib/results.ts";
 import {
-  CATALOGUE_DIR, TriageRefused, isClean, loadCatalogue, parseTriage, rekey, renderRekey, renderTriage, triage, triageJson, unkeyedReds,
+  CATALOGUE_DIR, TriageRefused, isClean, loadCatalogue, parseTriage, rekey, renderRekey, renderTriage, triage, triageJson, unkeyedReds, wasChecked, wasConflicts,
   type TriageRun, type TriageRefusalName,
 } from "./lib/triage.ts";
 
@@ -135,7 +137,9 @@ export function main(argv: string[]): number {
     mkdirSync(cli.out, { recursive: true });
     writeFileSync(join(cli.out, "triage.json"), `${JSON.stringify(mapStrings(json, redact), null, 2)}\n`);
     writeFileSync(join(cli.out, "TRIAGE.md"), redact(renderTriage(result, titles)));
-    if (rekeyed !== null) writeFileSync(join(cli.out, "REKEY.md"), redact(renderRekey(rekeyed.rows, result, rekeyed.unkeyed)));
+    // REKEY.md belongs to the run that wrote it: a run that does not re-key leaves none from an earlier run beside its files.
+    if (rekeyed === null) rmSync(join(cli.out, "REKEY.md"), { force: true });
+    else writeFileSync(join(cli.out, "REKEY.md"), redact(renderRekey(rekeyed.rows, result, rekeyed.unkeyed)));
 
     const at = new Map<string, CaseResult>(runs.flatMap((r) => r.cases.map((c) => [c.caseId, c] as const)));
     say(`${plural(result.scanned, "case")} in ${plural(runs.length, "run")}; ${result.checked} reds checked: ${result.rows.length} triaged, ${result.untriaged.length} untriaged, ${result.ambiguous.length} ambiguous, ${result.misrouted.length} misrouted, ${result.unknownGap.length} unknown`);
@@ -143,11 +147,13 @@ export function main(argv: string[]): number {
     for (const l of capped(result.ambiguous.map((a) => `ambiguous ${a.caseId} — ${a.rules.join(", ")}`))) say(l);
     for (const l of capped(result.misrouted.map((m) => `misrouted ${m.rule}: ${m.gap} ${m.routed === null ? "has no route in design §8" : `is ${m.routed} in design §8`}, the rule says ${m.wave}`))) say(l);
     for (const l of capped(result.unknownGap.map((u) => `unknown gap ${u.rule}: ${u.gap} is in neither the audit ledger nor new-gaps.json`))) say(l);
+    const conflicts = rekeyed === null ? [] : wasConflicts(rekeyed.rows);
     if (rekeyed !== null) {
       const re = rekeyed.rows.filter((r) => r.now !== null).length;
-      say(`rekey: ${plural(rekeyed.rows.length, "mapped case")}, ${re} re-keyed, ${rekeyed.rows.length - re} with no gap in the triage; ${rekeyed.unkeyed.length} reds the map does not key`);
+      say(`rekey: ${plural(rekeyed.rows.length, "mapped case")}, ${re} re-keyed, ${rekeyed.rows.length - re} with no gap in the triage; ${rekeyed.unkeyed.length} reds the map does not key; was checked on ${plural(wasChecked(rekeyed.rows), "mapped case")}, ${conflicts.length} disagree`);
     }
-    const code = isClean(result) ? 0 : 1;
+    for (const l of capped(conflicts.map((x) => `was conflict ${x.caseId}: the map says ${x.was}, rule ${x.rule} says ${x.ruleWas}`))) say(l);
+    const code = isClean(result) && conflicts.length === 0 ? 0 : 1;
     say(`exit ${code}: ${EXIT_CODES[code]}`);
     return code;
   } catch (e) {

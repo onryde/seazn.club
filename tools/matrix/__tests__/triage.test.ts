@@ -10,21 +10,24 @@
 //   - the CLI: exit codes, the three files, redaction, and the refusals that write nothing;
 //   - the REAL committed results (TR/w1drv-l3, w1drv-l1, w1c-l2) through the CLI (class 1: a fixture proves the fixture),
 //     with every expected count read from the raw JSON by a second implementation, never from triage().
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseVerdicts, readAudit } from "../lib/audit-ledger.ts";
 import { CASE_STATES, type CaseResult, type CaseState, type Layer, type RunResults } from "../lib/results.ts";
 import {
-  CATALOGUE_DIR, TriageRefused, isClean, loadCatalogue, parseNewGaps, parseRouting, parseRules, parseTriage, rekey, renderRekey, renderTriage, routeOf, triage, triageJson, unkeyedReds,
+  CATALOGUE_DIR, TriageRefused, isClean, loadCatalogue, parseNewGaps, parseRouting, parseRules, parseTriage, rekey, renderRekey, renderTriage, routeOf, triage, triageJson, unkeyedReds, wasChecked, wasConflicts,
   type GapRouting, type NewGaps, type TriageRules,
 } from "../lib/triage.ts";
 import { main } from "../triage.ts";
 import { REPO, TRUTH_RUNS } from "./committed-plans.ts";
+import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 import { kase, mergedRun } from "./summary-fixtures.ts";
 
 const AUDIT_DIR = resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/audit-2026-09-27");
+const PACKAGE_SCRIPTS = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 
 // --- builders --------------------------------------------------------------------------------------------------------
 
@@ -74,12 +77,22 @@ describe("catalogue schemas", () => {
   const rule = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ id: "T-1", match: { cell: "league|*" }, gap: "ST-G3", wave: "W5", note: "n", ...over });
 
   it("accepts the brief's shapes, every optional key set and absent", () => {
-    const parsed = parseRules({ rules: [rule({ match: { cell: "league|*", scenario: "M1", layer: "L3", check: "standings", reason: "x" }, was: "P1" }), rule({ id: "T-2", gap: "NEW-W1d-2", match: {} })] });
+    const parsed = parseRules({ rules: [rule({ match: { cell: "league|*", scenario: "M1", layer: "L3", check: "standings", reason: "x" }, was: "P1" }), rule({ id: "T-2", gap: "NEW-W1d-2", match: { reason: "x" } })] });
     expect(parsed.rules).toHaveLength(2);
     expect(parsed.rules[0]!.was).toBe("P1");
     expect(parsed.rules[1]!.was).toBeUndefined();
     expect(parseRules({ rules: [] }).rules).toEqual([]);
     expect(parseNewGaps({ gaps: [{ id: "NEW-W1d-1", wave: "W4", title: "t", evidence: "a|b|c|M1" }] }).gaps).toHaveLength(1);
+  });
+
+  it("an empty match is refused by name of its cause; any one key makes a rule", () => {
+    expect(() => parseRules({ rules: [rule({ match: {} })] })).toThrow(/at least one of cell, scenario, layer, check, reason/);
+    let accepted = 0;
+    for (const m of [{ cell: "a|b" }, { scenario: "M1" }, { layer: "L1" }, { check: "k" }, { reason: "r" }]) {
+      expect(parseRules({ rules: [rule({ match: m })] }).rules, JSON.stringify(m)).toHaveLength(1);
+      accepted++;
+    }
+    expect(accepted).toBe(5);
   });
 
   it("refuses each malformed rule on its own field", () => {
@@ -89,6 +102,7 @@ describe("catalogue schemas", () => {
       ["an unknown match key", rule({ match: { sport: "x" } })],
       ["a layer that is not a layer", rule({ match: { layer: "L4" } })],
       ["an empty reason substring (it would match every red)", rule({ match: { reason: "" } })],
+      ["an empty match (no key: it would match every red and hide each untriaged one)", rule({ match: {} })],
       ["a gap that is no id", rule({ gap: "ledger-3" })],
       ["a NEW id of the wrong shape", rule({ gap: "NEW-1" })],
       ["a wave that is not a wave", rule({ wave: "five" })],
@@ -141,17 +155,17 @@ describe("triage (ruling 63)", () => {
   });
 
   it("a rule that routes a gap away from §8 is misrouted (never re-route a gap §8 assigns)", () => {
-    const r = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: {}, gap: "SC-O1", wave: "W4" }]), ROUTING, LEDGER, NONE);
+    const r = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: { cell: "*|*" }, gap: "SC-O1", wave: "W4" }]), ROUTING, LEDGER, NONE);
     expect(r.misrouted).toEqual([{ rule: "T-1", gap: "SC-O1", wave: "W4", routed: "W2" }]);
     expect(r.unknownGap).toEqual([]);
     expect(isClean(r)).toBe(false);
   });
 
   it("the same rule at §8's wave is clean; a known gap with NO route is misrouted too (routed null), never waved through", () => {
-    const fine = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: {}, gap: "SC-O1", wave: "W2" }]), ROUTING, LEDGER, NONE);
+    const fine = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: { cell: "*|*" }, gap: "SC-O1", wave: "W2" }]), ROUTING, LEDGER, NONE);
     expect(fine.misrouted).toEqual([]);
     expect(isClean(fine)).toBe(true);
-    const unrouted = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: {}, gap: "ST-G3", wave: "W5" }]), parseRouting({ note: "t", routes: { "SW-*": "W3" } }), LEDGER, NONE);
+    const unrouted = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: { cell: "*|*" }, gap: "ST-G3", wave: "W5" }]), parseRouting({ note: "t", routes: { "SW-*": "W3" } }), LEDGER, NONE);
     expect(unrouted.misrouted).toEqual([{ rule: "T-1", gap: "ST-G3", wave: "W5", routed: null }]);
   });
 
@@ -163,7 +177,7 @@ describe("triage (ruling 63)", () => {
   });
 
   it("a gap id that is neither in the audit ledger nor in new-gaps.json is unknown", () => {
-    const r = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: {}, gap: "SC-Z9", wave: "W2" }]), ROUTING, LEDGER, NONE);
+    const r = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: { cell: "*|*" }, gap: "SC-Z9", wave: "W2" }]), ROUTING, LEDGER, NONE);
     expect(r.unknownGap).toEqual([{ rule: "T-1", gap: "SC-Z9" }]);
     // Unknown is not also misrouted: there is no route to compare to.
     expect(r.misrouted).toEqual([]);
@@ -172,7 +186,7 @@ describe("triage (ruling 63)", () => {
 
   it("a NEW-W1d-<n> gap is known only if new-gaps.json holds it, and its wave is the one new-gaps.json gives (misrouted otherwise)", () => {
     const newGaps = parseNewGaps({ gaps: [{ id: "NEW-W1d-1", wave: "W4", title: "t", evidence: "e" }] });
-    const at = (gap: string, wave: string) => triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: {}, gap, wave }]), ROUTING, LEDGER, newGaps);
+    const at = (gap: string, wave: string) => triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: { cell: "*|*" }, gap, wave }]), ROUTING, LEDGER, newGaps);
     expect(isClean(at("NEW-W1d-1", "W4"))).toBe(true);
     expect(at("NEW-W1d-1", "W5").misrouted).toEqual([{ rule: "T-1", gap: "NEW-W1d-1", wave: "W5", routed: "W4" }]);
     expect(at("NEW-W1d-2", "W4").unknownGap).toEqual([{ rule: "T-1", gap: "NEW-W1d-2" }]);
@@ -222,7 +236,7 @@ describe("triage (ruling 63)", () => {
     const b = red("league|generic|default|R4", "standings: x");
     const both = triage([run([a, b])], rules([{ id: "T-1", match: { cell: "league|*", scenario: "R4" }, gap: "ST-G3", wave: "W5" }]), ROUTING, LEDGER, NONE);
     expect(both.rows.map((x) => x.caseId)).toEqual([b.caseId]);
-    const all = triage([run([a, b])], rules([{ id: "T-1", match: {}, gap: "ST-G3", wave: "W5" }]), ROUTING, LEDGER, NONE);
+    const all = triage([run([a, b])], rules([{ id: "T-1", match: { cell: "*|*" }, gap: "ST-G3", wave: "W5" }]), ROUTING, LEDGER, NONE);
     expect(all.rows).toHaveLength(2);
   });
 
@@ -261,7 +275,7 @@ describe("triage (ruling 63)", () => {
   });
 
   it("a red matched by one INVALID rule is still a row (the rule is listed misrouted); it is neither untriaged nor lost", () => {
-    const r = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: {}, gap: "SC-O1", wave: "W4" }]), ROUTING, LEDGER, NONE);
+    const r = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: { cell: "*|*" }, gap: "SC-O1", wave: "W4" }]), ROUTING, LEDGER, NONE);
     expect(r.rows.map((x) => [x.caseId, x.gap, x.wave])).toEqual([["a|b|c|M1", "SC-O1", "W4"]]);
     expect(r.untriaged).toEqual([]);
     expect(r.checked).toBe(r.rows.length + r.untriaged.length + r.ambiguous.length);
@@ -327,6 +341,26 @@ describe("rekey: W1-driving's red cases, each with its P-rule and its new gap", 
     const result = baseline([red("league|boardgame|default|F1", "x")]);
     expect(() => rekey(W1DRV, { "league|boardgame|default|F9": "P1" }, result)).toThrow(/league\|boardgame\|default\|F9 is not a case of the keyed results/);
     expect(() => rekey(W1DRV, {}, result)).toThrow(/maps no case/);
+  });
+
+  it("a rule's `was` is checked against the map: agreement passes, another P-rule is a conflict naming both and the rule, a rule with no `was` is not checked (m5)", () => {
+    const rl = [
+      { id: "T-1", match: { cell: "league|*" }, gap: "SC-O1", wave: "W2", was: "P1" },
+      { id: "T-2", match: { cell: "knockout|*" }, gap: "SC-O1", wave: "W2", was: "P2" },
+      { id: "T-3", match: { cell: "league_ko|*" }, gap: "SC-O1", wave: "W2" },
+    ];
+    const result = baseline([red("league|boardgame|default|F1", "x"), red("knockout|generic|default|F1", "x"), red("league_ko|generic|default|F1", "x")], rl);
+    const w1 = { cases: ["league|boardgame|default|F1", "knockout|generic|default|F1", "league_ko|generic|default|F1"].map((caseId) => ({ caseId, state: "red" as const })) };
+    // T-1's red is P1 in the map (agree), T-2's is P3 (T-2 says it re-keys P2), T-3 carries no `was`.
+    const rows = rekey(w1, { "league|boardgame|default|F1": "P1", "knockout|generic|default|F1": "P3", "league_ko|generic|default|F1": "P9" }, result);
+    expect(wasChecked(rows)).toBe(2);
+    expect(wasConflicts(rows)).toEqual([{ caseId: "knockout|generic|default|F1", was: "P3", now: "SC-O1", rule: "T-2", ruleWas: "P2" }]);
+    // The same rules over a map that agrees: nothing conflicts, and both rules' `was` were still checked.
+    const agree = rekey(w1, { "league|boardgame|default|F1": "P1", "knockout|generic|default|F1": "P2", "league_ko|generic|default|F1": "P9" }, result);
+    expect(wasChecked(agree)).toBe(2);
+    expect(wasConflicts(agree)).toEqual([]);
+    // A mapped case with no gap has no rule to check: it is not counted.
+    expect(wasChecked(rekey({ cases: [{ caseId: "x|y|z|M1", state: "red" as const }] }, { "x|y|z|M1": "P1" }, result))).toBe(0);
   });
 
   it("the reds of the W1-driving results that the map does not key are listed, so a gap in the map is seen", () => {
@@ -411,6 +445,19 @@ describe("triage.json, TRIAGE.md and REKEY.md", () => {
     expect(md).toContain("unknown gap: T-3 names SC-Z9");
   });
 
+  it("REKEY.md says how many rules' `was` it checked and lists each that disagrees with the map, in the map's words and the rule's (m5)", () => {
+    // The third mapped case works in the baseline: it has no rule, so its `was` is not checked and is not counted.
+    const w1 = { cases: [{ caseId: "a|b|c|M1", state: "red" as const }, { caseId: "d|e|f|M1", state: "red" as const }, { caseId: "g|h|i|M1", state: "works" as const }] };
+    const agree = renderRekey(rekey(w1, { "a|b|c|M1": "P1", "d|e|f|M1": "P2", "g|h|i|M1": "P9" }, result), result, []);
+    expect(agree).toContain("was checked against the map on 2 cases: 0 disagree");
+    expect(agree).not.toContain("## Rules whose");
+    const rows = rekey(w1, { "a|b|c|M1": "P1", "d|e|f|M1": "P3", "g|h|i|M1": "P9" }, result);
+    const md = renderRekey(rows, result, []);
+    expect(md).toContain("was checked against the map on 2 cases: 1 disagree");
+    expect(md).toMatch(/## Rules whose `was` disagrees with the map\n\n- `d\|e\|f\|M1`: the map says P3, rule T-2 says P2\n/);
+    expect(md).not.toContain("the map says P1");
+  });
+
   it("REKEY.md: a count per P-rule and gap, then every case; 'not red in the baseline' is said in those words", () => {
     const rows = rekey({ cases: [{ caseId: "a|b|c|M1", state: "red" }, { caseId: "a|b|c|M2", state: "red" }, { caseId: "g|h|i|M1", state: "red" }] }, { "a|b|c|M1": "P1", "a|b|c|M2": "P1", "g|h|i|M1": "P3" }, result);
     const md = renderRekey(rows, result, ["x|y|z|M1"]);
@@ -426,6 +473,8 @@ describe("triage.json, TRIAGE.md and REKEY.md", () => {
 // --- the CLI -------------------------------------------------------------------------------------------------------
 
 const scratch = mkdtempSync(join(tmpdir(), "w1d-t18-triage-"));
+// Every test dir lives under this one, so one removal leaves nothing in the temp dir.
+afterAll(() => { rmSync(scratch, { recursive: true, force: true }); });
 let n = 0;
 const fresh = (): string => { const d = join(scratch, `d${++n}`); mkdirSync(d, { recursive: true }); return d; };
 const put = (name: string, body: unknown): string => { const p = join(fresh(), name); writeFileSync(p, typeof body === "string" ? body : JSON.stringify(body)); return p; };
@@ -491,9 +540,9 @@ describe("triage CLI", () => {
   it("exit 1 for an ambiguous red, a misrouted rule and a rule naming an unknown gap — each listed", () => {
     const rl = (list: Record<string, unknown>[]): unknown => ({ rules: list.map((r) => ({ note: "n", ...r })) });
     const cases: [string, unknown, RegExp][] = [
-      ["ambiguous", rl([{ id: "T-1", match: {}, gap: "SW-H1", wave: "W3" }, { id: "T-2", match: { check: "standings" }, gap: "ST-G3", wave: "W5" }]), /ambiguous a\|b\|c\|M1 — T-1, T-2/],
-      ["misrouted", rl([{ id: "T-1", match: {}, gap: "SC-O1", wave: "W4" }]), /misrouted T-1: SC-O1 is W2 in design §8, the rule says W4/],
-      ["unknown", rl([{ id: "T-1", match: {}, gap: "SC-Z9", wave: "W2" }]), /unknown gap T-1: SC-Z9 is in neither the audit ledger nor new-gaps\.json/],
+      ["ambiguous", rl([{ id: "T-1", match: { cell: "*|*" }, gap: "SW-H1", wave: "W3" }, { id: "T-2", match: { check: "standings" }, gap: "ST-G3", wave: "W5" }]), /ambiguous a\|b\|c\|M1 — T-1, T-2/],
+      ["misrouted", rl([{ id: "T-1", match: { cell: "*|*" }, gap: "SC-O1", wave: "W4" }]), /misrouted T-1: SC-O1 is W2 in design §8, the rule says W4/],
+      ["unknown", rl([{ id: "T-1", match: { cell: "*|*" }, gap: "SC-Z9", wave: "W2" }]), /unknown gap T-1: SC-Z9 is in neither the audit ledger nor new-gaps\.json/],
     ];
     for (const [what, rules_, re] of cases) {
       out = []; err = [];
@@ -542,6 +591,7 @@ describe("triage CLI", () => {
       ["unreadable rules", argsFor({ runs: [good], cat: brokenCat }).argv, /CatalogueUnreadable.*triage-rules\.json/],
       ["a catalogue dir with no files", argsFor({ runs: [good], cat: missingCat }).argv, /CatalogueUnreadable/],
       ["rules the schema refuses", argsFor({ runs: [good], cat: catalogue({ rules: { rules: [{ id: "T-1" }] } }) }).argv, /CatalogueUnreadable/],
+      ["a rule with an empty match", argsFor({ runs: [good], cat: catalogue({ rules: { rules: [{ id: "T-1", match: {}, gap: "SC-O1", wave: "W2", note: "n" }] } }) }).argv, /CatalogueUnreadable.*at least one of cell/],
       ["--rekey without --rekey-map", argsFor({ runs: [good], extra: ["--rekey", good] }).argv, /usage/],
       ["--rekey-map without --rekey", argsFor({ runs: [good], extra: ["--rekey-map", put("m.json", { "a|b|c|M1": "P1" })] }).argv, /usage/],
       ["an audit dir with no gaps", argsFor({ runs: [good], audit: fresh() }).argv, /AuditParse.*zero gaps/],
@@ -585,6 +635,60 @@ describe("triage CLI", () => {
       expect(existsSync(e.outDir)).toBe(false);
     }
   });
+
+  it("a second run into the same --out without --rekey leaves no REKEY.md from the first: the directory describes one run (m3)", () => {
+    const w1drv = runFile(run([red("a|b|c|M1", "standings: x"), ok("a|b|c|M3")]));
+    const map = put("p-map.json", { "a|b|c|M1": "P2", "a|b|c|M3": "P9" });
+    const cat = catalogue({ rules: RULES_OK });
+    const baseline = runFile(run(CASES));
+    const first = argsFor({ runs: [baseline], cat, extra: ["--rekey", w1drv, "--rekey-map", map] });
+    expect(main(first.argv), said()).toBe(0);
+    expect(readdirSync(first.outDir).sort()).toEqual(["REKEY.md", "TRIAGE.md", "triage.json"]);
+    out = []; err = [];
+    // The same directory, no --rekey: REKEY.md is the first run's and must go.
+    const second = argsFor({ runs: [baseline], cat, outDir: first.outDir });
+    expect(main(second.argv), said()).toBe(0);
+    expect(readdirSync(first.outDir).sort()).toEqual(["TRIAGE.md", "triage.json"]);
+    // …and a third run that does re-key writes it again (the removal is not a one-way door).
+    out = []; err = [];
+    expect(main(argsFor({ runs: [baseline], cat, outDir: first.outDir, extra: ["--rekey", w1drv, "--rekey-map", map] }).argv), said()).toBe(0);
+    expect(readdirSync(first.outDir).sort()).toEqual(["REKEY.md", "TRIAGE.md", "triage.json"]);
+  });
+
+  it("a rule whose `was` disagrees with the P-rule map is exit 1: each named with the map's value and the rule's, the files still written; agreement is exit 0 and says it checked (m5)", () => {
+    const w1drv = runFile(run([red("a|b|c|M1", "standings: x"), red("a|b|c|M2", "round 5 paired nobody (SW-H1)"), ok("a|b|c|M3")]));
+    const baseline = runFile(run(CASES));
+    // RULES_OK: T-1 (was P2) keys a|b|c|M1, T-2 (was P6) keys a|b|c|M2; a|b|c|M3 works, so it has no rule to check.
+    const cat = catalogue({ rules: RULES_OK });
+    const ok_ = argsFor({ runs: [baseline], cat, extra: ["--rekey", w1drv, "--rekey-map", put("agree.json", { "a|b|c|M1": "P2", "a|b|c|M2": "P6", "a|b|c|M3": "P9" })] });
+    expect(main(ok_.argv), said()).toBe(0);
+    expect(said()).toContain("rekey: 3 mapped cases");
+    expect(said()).toContain("was checked on 2 mapped cases, 0 disagree");
+    out = []; err = [];
+    const bad = argsFor({ runs: [baseline], cat, extra: ["--rekey", w1drv, "--rekey-map", put("differ.json", { "a|b|c|M1": "P2", "a|b|c|M2": "P4", "a|b|c|M3": "P9" })] });
+    expect(main(bad.argv), said()).toBe(1);
+    expect(said()).toContain("was conflict a|b|c|M2: the map says P4, rule T-2 says P6");
+    expect(said()).not.toContain("was conflict a|b|c|M1");
+    expect(said()).toContain("was checked on 2 mapped cases, 1 disagree");
+    expect(said()).toContain("exit 1:");
+    expect(readFileSync(join(bad.outDir, "REKEY.md"), "utf8")).toContain("the map says P4, rule T-2 says P6");
+  });
+
+  it("the documented form `pnpm run matrix:triage -- <flags>` works: pnpm hands the script a literal `--` first (m1)", () => {
+    const cat = catalogue({ rules: RULES_OK });
+    const a = argsFor({ runs: [runFile(run(CASES))], cat });
+    expect(main(["--", ...a.argv]), said()).toBe(0);
+    expect(existsSync(join(a.outDir, "triage.json"))).toBe(true);
+    // …and through a real process, its argv built as pnpm builds it: the package script's words, then `--`, then the flags.
+    const words = PACKAGE_SCRIPTS["matrix:triage"]!.split(" ");
+    expect(words[0]).toBe("node");
+    expect(words.at(-1)).toBe("tools/matrix/triage.ts");
+    const b = argsFor({ runs: [runFile(run(CASES))], cat });
+    const r = spawnSync(process.execPath, [...words.slice(1), "--", ...b.argv], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS, env: { PATH: process.env.PATH ?? "" } });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain("exit 0:");
+    expect(existsSync(join(b.outDir, "triage.json"))).toBe(true);
+  }, spawnBudget(1));
 
   it("what is written and printed is redacted: a synthetic bearer token in a red's reason reaches neither a file nor stdout", () => {
     const secret = `Bearer ${"a".repeat(8)}.${"b".repeat(30)}`;
@@ -759,7 +863,7 @@ describe("the real committed results (TR/w1drv-l3, w1drv-l1, w1c-l2) through the
     const all = reds(R3);
     const sample = all.slice(0, 5).map((c) => c.caseId);
     const map = put("p-map.json", Object.fromEntries([...sample.map((id) => [id, "P1"]), [R3.cases.find((c) => c.state === "works")!.caseId, "P9"]]));
-    const catAll = catalogue_({ rules: [{ id: "T-ALL", match: {}, gap: "SW-H1", wave: "W3", note: "seam test only: every red" }] });
+    const catAll = catalogue_({ rules: [{ id: "T-ALL", match: { cell: "*|*" }, gap: "SW-H1", wave: "W3", note: "seam test only: every red" }] });
     const a = argsFor({ runs: [L1, L2, L3], cat: catAll, audit: AUDIT_DIR, extra: ["--rekey", L3, "--rekey-map", map] });
     expect(main(a.argv), said()).toBe(0);
     const j = parseTriage(JSON.parse(readFileSync(join(a.outDir, "triage.json"), "utf8")));

@@ -48,7 +48,7 @@ const RuleSchema = z.strictObject({
     check: z.string().min(1).optional(),
     // A substring of the case's reason; never empty (the empty string is in every reason).
     reason: z.string().min(1).optional(),
-  }),
+  }).refine((m) => Object.values(m).some((v) => v !== undefined), "a rule matches on at least one of cell, scenario, layer, check, reason — an empty match is every red, and would hide each untriaged one"),
   gap: z.string().regex(GAP_ID, "an audit gap id or a NEW- gap id"),
   wave: WAVE,
   /** The W1-driving triage rule this one re-keys (P1..P7). */
@@ -272,6 +272,9 @@ export interface RekeyRow {
   /** The gap the new triage gave it; null when it has none (see `why`). */
   now: string | null;
   why?: "not-red" | "untriaged" | "ambiguous" | "not-in-baseline";
+  /** The rule that keyed it and the P-rule that rule says it re-keys, when the rule says one: `was` is checked against it. */
+  rule?: string;
+  ruleWas?: string;
 }
 
 /** Each case the P-rule map keys, with the gap the new triage gave it. A case with no gap says why: it is not red in the
@@ -287,17 +290,24 @@ export function rekey(
   for (const k of keys) {
     if (!have.has(k)) throw new TriageRefused("RekeyUnknownCase", `${k} is not a case of the keyed results — a stale or mistyped map`);
   }
-  const gapOf = new Map(result.rows.map((x) => [x.caseId, x.gap]));
+  const rowOf = new Map(result.rows.map((x) => [x.caseId, x]));
   const untriaged = new Set(result.untriaged);
   const ambiguous = new Set(result.ambiguous.map((x) => x.caseId));
   return keys.map((caseId): RekeyRow => {
     const was = pMap[caseId];
-    const now = gapOf.get(caseId);
-    if (now !== undefined) return { caseId, was, now };
+    const keyed = rowOf.get(caseId);
+    if (keyed !== undefined) return { caseId, was, now: keyed.gap, ...(keyed.was === undefined ? {} : { rule: keyed.rule, ruleWas: keyed.was }) };
     const why = untriaged.has(caseId) ? "untriaged" : ambiguous.has(caseId) ? "ambiguous" : result.seen.has(caseId) ? "not-red" : "not-in-baseline";
     return { caseId, was, now: null, why };
   });
 }
+
+/** The rows whose keying rule says it re-keys a P-rule: the rule's `was` is checked against the map. A rule with no `was`, and a
+ *  case with no gap, have nothing to check. */
+export const wasChecked = (rows: readonly RekeyRow[]): number => rows.filter((x) => x.ruleWas !== undefined).length;
+
+/** Those whose rule's `was` is not the P-rule the map gives the case: one of the two is wrong, and the link is free text. */
+export const wasConflicts = (rows: readonly RekeyRow[]): RekeyRow[] => rows.filter((x) => x.ruleWas !== undefined && x.ruleWas !== x.was);
 
 /** W1-driving's reds that the map does not key: a gap in the map is seen, not assumed away. */
 export function unkeyedReds(w1drv: { readonly cases: readonly { readonly caseId: string; readonly state: CaseState }[] }, pMap: Readonly<Record<string, string>>): string[] {
@@ -365,7 +375,12 @@ export function renderRekey(rows: readonly RekeyRow[], result: Pick<TriageResult
   const keyed = rows.filter((x) => x.now !== null).length;
   const lines: string[] = [
     "# Re-keying the P-rule reds (ruling 63)", "",
-    `${plural(rows.length, "mapped case")} keyed by a P-rule: ${keyed} now carry a gap, ${rows.length - keyed} do not.`, "",
+    `${plural(rows.length, "mapped case")} keyed by a P-rule: ${keyed} now carry a gap, ${rows.length - keyed} do not.`,
+    `The \`was\` of each rule that keyed a case was checked against the map on ${plural(wasChecked(rows), "case")}: ${wasConflicts(rows).length} disagree.`, "",
+    ...(wasConflicts(rows).length === 0 ? [] : [
+      "## Rules whose `was` disagrees with the map", "",
+      ...wasConflicts(rows).map((x) => `- \`${x.caseId}\`: the map says ${x.was}, rule ${x.rule} says ${x.ruleWas}`), "",
+    ]),
     "## By P-rule and gap", "", "| P-rule | now | wave | cases |", "|---|---|---|---|",
   ];
   const groups = new Map<string, { was: string; label: string; wave: string; n: number }>();

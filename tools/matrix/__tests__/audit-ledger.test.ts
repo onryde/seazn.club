@@ -7,22 +7,28 @@
 //   - synthetic audit directories, one defect each, so every refusal is reached;
 //   - the ledger over a real triage.json written by the real triage CLI over real committed results (class 1: a
 //     fixture on both ends proves the fixture).
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../audit-ledger.ts";
 import {
-  AuditParse, LedgerRefused, OUTCOMES, VERDICT_OUTCOMES, buildLedger, failsTitles, parseVerdicts, readAudit, readAuditGaps, renderLedger,
+  AuditParse, LedgerRefused, OUTCOMES, VERDICT_OUTCOMES, buildLedger, failsTitles, findingLine, parseVerdicts, readAudit, readAuditGaps, renderLedger, testCalls,
   type AuditGap, type Verdict,
 } from "../lib/audit-ledger.ts";
+import { LAYERS } from "../lib/results.ts";
 import { parseRouting, parseTriage, type GapRouting, type TriageJson } from "../lib/triage.ts";
 import { main as triageMain } from "../triage.ts";
 import { REPO, TRUTH_RUNS } from "./committed-plans.ts";
+import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 
 const AUDIT_DIR = resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/audit-2026-09-27");
+const PACKAGE_SCRIPTS = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 
 const scratch = mkdtempSync(join(tmpdir(), "w1d-t18-ledger-"));
+// Every test dir lives under this one, so one removal leaves nothing in the temp dir (a leak of ~700 KB per run otherwise).
+afterAll(() => { rmSync(scratch, { recursive: true, force: true }); });
 let n = 0;
 const fresh = (): string => { const d = join(scratch, `d${++n}`); mkdirSync(d, { recursive: true }); return d; };
 /** A directory of files: { "SW-swiss.md": text }. */
@@ -188,6 +194,13 @@ describe("readAuditGaps — refusals and shapes (synthetic directories)", () => 
     expect(readAuditGaps(one(text)).map((g) => g.id)).toEqual(["SW-H1", "SW-H2"]);
   });
 
+  it("a heading on the line right after a table closes the section: the table's last line is not the heading's (the loop steps back one)", () => {
+    // No blank line between the table and `## Counts`: that heading is the very line that ended the table, and it must be
+    // read as a heading, or the section stays open and the ID table below it is read as gaps.
+    const text = ["## Gaps", "", table([row("H1")]), "## Counts", "", table([row("Z9", "not a gap")]), ""].join("\n");
+    expect(readAuditGaps(one(text)).map((g) => g.id)).toEqual(["SW-H1"]);
+  });
+
   it("two tables in one gap section are both read, in file order, and files are read in name order", () => {
     const sw = `## Gaps\n\n${table([row("H2")])}\n\n${table([row("H1")])}\n`;
     const fx = `## Gap table\n\n${table([row("G1")])}\n`;
@@ -310,9 +323,15 @@ const WITNESS = "packages/engine/test/audit-witnesses.test.ts";
 const WITNESS_SRC = `it.fails("ST-G3: tiebreak validation never rejects an unknown key", () => {});\nit("SH-G1: not a failing test", () => {});\n`;
 const readFile = (p: string): string | null => (p === WITNESS ? WITNESS_SRC : null);
 
+/** The runs a baseline triage reads: one per layer (D19: L1, L2, L3), each with its run id. */
+const RUNS: TriageJson["runs"] = [
+  { layer: "L1", runId: "run-l1-a1", plan: null, cases: 1, reds: 0 },
+  { layer: "L2", runId: "run-l2-b2", plan: null, cases: 1, reds: 0 },
+  { layer: "L3", runId: "run-l3-c3", plan: "--set w1-driving", cases: 2, reds: 2 },
+];
 /** A triage.json as the CLI writes it: SW-H1 reproduced by two cases, one works case to cite. */
 const triageJson = (over: Partial<TriageJson> = {}): TriageJson => parseTriage({
-  version: 1, runs: [{ layer: "L3", runId: "r1", plan: "--set w1-driving", cases: 4, reds: 2 }], scanned: 4, checked: 2,
+  version: 1, runs: RUNS, scanned: 4, checked: 2,
   rows: [{ caseId: "swiss|chess|default|M1", layer: "L3", gap: "SW-H1", wave: "W3", rule: "T-1" }, { caseId: "swiss|chess|default|R4", layer: "L3", gap: "SW-H1", wave: "W3", rule: "T-1" }],
   untriaged: [], ambiguous: [], misrouted: [], unknownGap: [],
   works: ["league|generic|default|M1", "knockout|generic|default|F1"],
@@ -428,6 +447,67 @@ describe("buildLedger (D22): each id gets exactly one outcome", () => {
     }
   });
 
+  /** The refusal a ledger build throws, or a failure when it builds. */
+  const refusal = (over: Partial<TriageJson>): LedgerRefused => {
+    try {
+      buildLedger(input({ triage: triageJson(over) }));
+    } catch (e) {
+      expect(e).toBeInstanceOf(LedgerRefused);
+      return e as LedgerRefused;
+    }
+    throw new Error(`the ledger built over ${JSON.stringify(Object.keys(over))}: it should have refused`);
+  };
+
+  it("a triage that read nothing is refused, each way by its own name: no run, no case, or a layer of the baseline missing (I1)", () => {
+    // D19's baseline is three layers; the declaration the ledger reads is pinned here so a fourth layer is a decision.
+    expect([...LAYERS]).toEqual(["L1", "L2", "L3"]);
+    const without = (layer: string): TriageJson["runs"] => RUNS.filter((r) => r.layer !== layer);
+    const nothing = { scanned: 0, checked: 0, runs: RUNS.map((r) => ({ ...r, cases: 0, reds: 0 })), rows: [], gaps: [], works: [] };
+    const cases: [string, Partial<TriageJson>, string, RegExp][] = [
+      ["no run at all", { runs: [] }, "TriageNoRuns", /names no run/],
+      ["no run and no case (a file that read nothing)", { runs: [], scanned: 0, checked: 0, rows: [], gaps: [], works: [] }, "TriageNoRuns", /names no run/],
+      ["runs that hold no case", nothing, "TriageNoCases", /read no case/],
+      ["L1 missing", { runs: without("L1") }, "TriageLayerMissing", /layer L1\b/],
+      ["L2 missing", { runs: without("L2") }, "TriageLayerMissing", /layer L2\b/],
+      ["L3 missing", { runs: without("L3") }, "TriageLayerMissing", /layer L3\b/],
+      ["only L3 (a one-layer triage)", { runs: without("L1").filter((r) => r.layer !== "L2") }, "TriageLayerMissing", /layers L1, L2\b/],
+    ];
+    let refused = 0;
+    for (const [what, over, name, message] of cases) {
+      const e = refusal(over);
+      expect(e.name, what).toBe(name);
+      expect(e.message, what).toMatch(message);
+      refused++;
+    }
+    expect(refused).toBe(cases.length);
+    // …and the same ledger over the full baseline builds: the refusals are the triage's, not the fixture's.
+    expect(buildLedger(input()).findings).toEqual([]);
+  });
+
+  it("a layer is present when a run of it is, however few cases it holds: only a run-less layer is missing", () => {
+    expect(buildLedger(input({ triage: triageJson({ runs: RUNS.map((r) => ({ ...r, cases: 0, reds: 0 })) }) })).findings).toEqual([]);
+  });
+
+  it("the ledger names the runs it was built from, each with its layer, id, plan and counts, in the data and on the page (D19: every claim traceable to a run id)", () => {
+    const l = buildLedger(input());
+    expect(l.runs).toEqual(RUNS);
+    const md = renderLedger(l, { audit: GAPS.length, files: 5, umbrellas: 0, checked: 2 });
+    expect(md).toContain("## Runs");
+    expect(md).toContain("| L1 | run-l1-a1 | — | 1 | 0 |");
+    expect(md).toContain("| L2 | run-l2-b2 | — | 1 | 0 |");
+    expect(md).toContain("| L3 | run-l3-c3 | --set w1-driving | 2 | 2 |");
+    expect(RUNS).toHaveLength(3);
+    // The runs table comes after the problems, so an INCOMPLETE ledger still leads with them.
+    const partial = renderLedger(buildLedger(input({ verdicts: FULL.filter((x) => x.id !== "SH-G1") })), { audit: GAPS.length, files: 5, umbrellas: 0, checked: 2 });
+    expect(partial.indexOf("## Problems")).toBeGreaterThan(0);
+    expect(partial.indexOf("## Problems")).toBeLessThan(partial.indexOf("## Runs"));
+  });
+
+  it("a plan with a pipe is escaped in the runs table", () => {
+    const md = renderLedger(buildLedger(input({ triage: triageJson({ runs: RUNS.map((r) => (r.layer === "L3" ? { ...r, plan: "--set a|b" } : r)) }) })), { audit: GAPS.length, files: 5, umbrellas: 0, checked: 2 });
+    expect(md).toContain("| L3 | run-l3-c3 | --set a\\|b | 2 | 2 |");
+  });
+
   it("a triage row for an umbrella reproduces the umbrella only: its members still owe their own outcome", () => {
     const l = buildLedger(input({
       gaps: [...GAPS, G("SC-C1")], umbrellas: [{ ...G("SC-X1"), members: ["SC-C1"] }],
@@ -437,6 +517,70 @@ describe("buildLedger (D22): each id gets exactly one outcome", () => {
     expect(l.findings).toEqual([]);
     expect(l.umbrellaCases).toEqual([{ id: "SC-X1", members: ["SC-C1"], cases: ["knockout|cricket|t20|F1"] }]);
     expect(l.entries.find((e) => e.id === "SC-C1")?.outcome).toBe("not-exercised");
+  });
+});
+
+// A witness that never runs flips nothing when the gap is fixed (task 19's brief: "a real, running witness"). The reader
+// accepts a `.fails` call only when every ancestor up to the file is a statement, a block or a bare describe's callback.
+describe("testCalls: only an it.fails that runs is a witness (m2)", () => {
+  const T = "ST-G3: a witness";
+  /** [what, source, whether the file's one it.fails runs]. */
+  const FORMS: readonly (readonly [string, string, boolean])[] = [
+    ["a bare it.fails", `it.fails("${T}", () => {});`, true],
+    ["a bare test.fails", `test.fails("${T}", () => {});`, true],
+    ["an it.fails in a describe", `describe("d", () => { it.fails("${T}", () => {}); });`, true],
+    ["an it.fails two describes deep", `describe("d", () => { describe("e", () => { it.fails("${T}", () => {}); }); });`, true],
+    ["it.skip.fails", `it.skip.fails("${T}", () => {});`, false],
+    ["it.fails.skip", `it.fails.skip("${T}", () => {});`, false],
+    ["test.skip.fails", `test.skip.fails("${T}", () => {});`, false],
+    ["it.fails.todo", `it.fails.todo("${T}");`, false],
+    ["an it.fails in describe.skip", `describe.skip("d", () => { it.fails("${T}", () => {}); });`, false],
+    ["an it.fails two describes deep, the outer one skipped", `describe.skip("d", () => { describe("e", () => { it.fails("${T}", () => {}); }); });`, false],
+    ["an it.fails in describe.skipIf(true)", `describe.skipIf(true)("d", () => { it.fails("${T}", () => {}); });`, false],
+    ["an it.fails under if (false)", `if (false) { it.fails("${T}", () => {}); }`, false],
+    ["an it.fails under if (false) in a describe", `describe("d", () => { if (false) { it.fails("${T}", () => {}); } });`, false],
+    ["an it.fails behind a && that is false", `const on = false;\non && it.fails("${T}", () => {});`, false],
+    ["an it.fails in a function nothing calls", `function never() { it.fails("${T}", () => {}); }`, false],
+  ];
+
+  it("each form is read as one it.fails call carrying the title, and it runs exactly when nothing above it can stop it", () => {
+    let live = 0;
+    let dead = 0;
+    for (const [what, src, runs] of FORMS) {
+      const mine = testCalls(src).filter((c) => c.title === T);
+      expect(mine, `${what}: one call with the title`).toHaveLength(1);
+      expect(mine[0]!.fails, `${what}: it is a fails call`).toBe(true);
+      expect(mine[0]!.runs, what).toBe(runs);
+      expect(failsTitles(src), what).toEqual(runs ? [T] : []);
+      if (runs) live++; else dead++;
+    }
+    // Anti-vacuity: the table has both kinds, and every row was checked.
+    expect(live).toBeGreaterThanOrEqual(3);
+    expect(dead).toBeGreaterThanOrEqual(5);
+    expect(live + dead).toBe(FORMS.length);
+  });
+
+  it("a verdict whose it.fails never runs is a finding naming why, never a witness; a running one is none", () => {
+    const verdict = (src: string) => buildLedger(input({ readFile: (p) => (p === WITNESS ? src : null) })).findings.flatMap((f) => (f.kind === "test-not-found" ? [f.reason] : []));
+    const title = "ST-G3: tiebreak validation never rejects an unknown key";
+    let refused = 0;
+    for (const [what, src, runs] of FORMS) {
+      const body = src.replaceAll(T, title);
+      expect(verdict(body), what).toEqual(runs ? [] : ["witness-not-run"]);
+      if (!runs) refused++;
+    }
+    expect(refused).toBe(FORMS.filter(([, , runs]) => !runs).length);
+    expect(refused).toBeGreaterThan(0);
+    const f = buildLedger(input({ readFile: () => `it.skip.fails("${title}", () => {});` })).findings.find((x) => x.kind === "test-not-found");
+    expect(f && findingLine(f)).toMatch(/never runs/);
+  });
+
+  it("a plain test and a missing title keep their own reasons, and a plain test beside a skipped witness of the same title is the witness's reason", () => {
+    const title = "ST-G3: tiebreak validation never rejects an unknown key";
+    const reason = (src: string) => buildLedger(input({ readFile: () => src })).findings.flatMap((f) => (f.kind === "test-not-found" ? [f.reason] : []));
+    expect(reason(`it("${title}", () => {});`)).toEqual(["not-a-fails-test"]);
+    expect(reason(`it.fails("ST-G3: another", () => {});`)).toEqual(["title-missing"]);
+    expect(reason(`it.skip.fails("${title}", () => {});`)).toEqual(["witness-not-run"]);
   });
 });
 
@@ -521,7 +665,7 @@ describe("audit-ledger CLI", () => {
     expect(said()).toMatch(/ST-G3: the failing test .* is not in the repo/);
   });
 
-  it("exit 2, nothing written: usage, an unreadable file, a verdicts file the schema refuses, an audit dir with zero gaps, and a triage that is not clean", () => {
+  it("exit 2, nothing written: usage, an unreadable file, a verdicts file the schema refuses, an audit dir with zero gaps, a triage that is not clean, and a triage that read nothing", () => {
     const cases: [string, string[]][] = [
       ["no flags", []],
       ["a missing required flag", (() => { const a = cliArgs().argv; return a.slice(0, a.indexOf("--out")); })()],
@@ -532,6 +676,9 @@ describe("audit-ledger CLI", () => {
       ["a verdicts file the schema refuses", cliArgs({ verdicts: { verdicts: [v({ outcome: "fine" })] } }).argv],
       ["an empty audit dir", cliArgs({ audit: auditDir({}) }).argv],
       ["a triage that is not clean", cliArgs({ triage: triageJson({ untriaged: ["a|b|c|M1"] }) }).argv],
+      ["a triage with no run", cliArgs({ triage: triageJson({ runs: [] }) }).argv],
+      ["a triage that read no case", cliArgs({ triage: triageJson({ scanned: 0, checked: 0, runs: RUNS.map((r) => ({ ...r, cases: 0, reds: 0 })), rows: [], gaps: [], works: [] }) }).argv],
+      ["a triage with one layer of the three", cliArgs({ triage: triageJson({ runs: RUNS.filter((r) => r.layer === "L3") }) }).argv],
     ];
     let refused = 0;
     for (const [what, argv] of cases) {
@@ -549,6 +696,45 @@ describe("audit-ledger CLI", () => {
     expect(main(cliArgs({ triage: triageJson({ untriaged: ["a|b|c|M1"] }) }).argv)).toBe(2);
     expect(said()).toMatch(/audit-ledger: TriageNotClean: /);
   });
+
+  it("a triage that read nothing is refused with the name of what is missing, never a bare exit 2 (I1)", () => {
+    const cases: [string, Partial<TriageJson>, RegExp][] = [
+      ["no run", { runs: [] }, /audit-ledger: TriageNoRuns: /],
+      ["no case", { scanned: 0, checked: 0, runs: RUNS.map((r) => ({ ...r, cases: 0, reds: 0 })), rows: [], gaps: [], works: [] }, /audit-ledger: TriageNoCases: /],
+      ["one layer of three", { runs: RUNS.filter((r) => r.layer === "L3") }, /audit-ledger: TriageLayerMissing: .*layers L1, L2/],
+    ];
+    for (const [what, over, re] of cases) {
+      out = []; err = [];
+      const { argv, ledger } = cliArgs({ repo: witnessRepo(), triage: triageJson(over) });
+      expect(main(argv), what).toBe(2);
+      expect(said(), what).toMatch(re);
+      expect(readdirSync(dirname(ledger)), `${what}: nothing written`).toEqual([]);
+    }
+  });
+
+  it("the run ids the ledger was built from are printed and written (D19), one layer each", () => {
+    const { argv, ledger } = cliArgs({ repo: witnessRepo() });
+    expect(main(argv), said()).toBe(0);
+    expect(said()).toContain("runs: L1 run-l1-a1, L2 run-l2-b2, L3 run-l3-c3");
+    const md = readFileSync(ledger, "utf8");
+    for (const r of RUNS) expect(md, r.runId).toContain(r.runId);
+    expect(RUNS).toHaveLength(3);
+  });
+
+  it("the documented form `pnpm run matrix:ledger -- <flags>` works: pnpm hands the script a literal `--` first (m1)", () => {
+    const a = cliArgs({ repo: witnessRepo() });
+    expect(main(["--", ...a.argv]), said()).toBe(0);
+    expect(readFileSync(a.ledger, "utf8")).toContain("# Audit ledger");
+    // …and through a real process, its argv built as pnpm builds it: the package script's words, then `--`, then the flags.
+    const words = PACKAGE_SCRIPTS["matrix:ledger"]!.split(" ");
+    expect(words[0]).toBe("node");
+    expect(words.at(-1)).toBe("tools/matrix/audit-ledger.ts");
+    const b = cliArgs({ repo: witnessRepo() });
+    const r = spawnSync(process.execPath, [...words.slice(1), "--", ...b.argv], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS, env: { PATH: process.env.PATH ?? "" } });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain("exit 0:");
+    expect(readFileSync(b.ledger, "utf8")).toContain("# Audit ledger");
+  }, spawnBudget(1));
 
   it("the defaults are the committed ones: without --routing the committed gap-routing.json judges the wave, without --repo this repo's files are read", () => {
     const wrong = v({ id: "SW-H2", wave: "W4" });
@@ -588,19 +774,28 @@ describe("audit-ledger CLI", () => {
 
 describe("the ledger over a triage.json the triage CLI wrote, on real committed results and the real audit files (class 1)", () => {
   it("every one of the 150 real ids gets exactly one outcome, and the id the triage reproduced is the one counted as reproduced", () => {
+    // The three layers of the baseline (D19), each a committed results.json: the ledger refuses a triage of fewer.
+    const l1 = join(REPO, TRUTH_RUNS, "w1drv-l1/w1drv-l1-r1/results.json");
+    const l2 = join(REPO, TRUTH_RUNS, "w1c-l2/results.json");
     const l3 = join(REPO, TRUTH_RUNS, "w1drv-l3/results.json");
+    type Raw = { runId: string; layer: string; cases: { state: string }[] };
+    const raws = [l1, l2, l3].map((f) => JSON.parse(readFileSync(f, "utf8")) as Raw);
+    expect(raws.map((r) => r.layer)).toEqual(["L1", "L2", "L3"]);
     // A catalogue of one rule: every red is SW-H1 (the real id, routed by the real prefix route).
     const cat = fresh();
-    writeFileSync(join(cat, "triage-rules.json"), JSON.stringify({ rules: [{ id: "T-ALL", match: {}, gap: "SW-H1", wave: "W3", note: "every red, for the seam test" }] }));
+    writeFileSync(join(cat, "triage-rules.json"), JSON.stringify({ rules: [{ id: "T-ALL", match: { cell: "*|*" }, gap: "SW-H1", wave: "W3", note: "every red, for the seam test" }] }));
     writeFileSync(join(cat, "gap-routing.json"), JSON.stringify({ note: "seam test", routes: { "SW-*": "W3", "FX-*": "W5", "ST-*": "W5", "SC-*": "W2", "SH-*": "W8" } }));
     writeFileSync(join(cat, "new-gaps.json"), JSON.stringify({ gaps: [] }));
     const tdir = fresh();
-    expect(triageMain(["--runs", l3, "--catalogue", cat, "--audit", AUDIT_DIR, "--out", tdir])).toBe(0);
+    expect(triageMain(["--runs", l1, l2, l3, "--catalogue", cat, "--audit", AUDIT_DIR, "--out", tdir])).toBe(0);
     const triage = parseTriage(JSON.parse(readFileSync(join(tdir, "triage.json"), "utf8")));
-    // 194 reds in the committed run (the file's own tally), independent of the tool.
-    const reds = (JSON.parse(readFileSync(l3, "utf8")) as { cases: { state: string }[] }).cases.filter((c) => c.state === "red").length;
-    expect(reds).toBe(194);
+    // 194 + 1 + 0 reds in the committed runs (each file's own tally), independent of the tool.
+    const redsOf = (r: Raw): number => r.cases.filter((c) => c.state === "red").length;
+    const reds = raws.map(redsOf).reduce((a, b) => a + b, 0);
+    expect(raws.map(redsOf)).toEqual([1, 0, 194]);
+    expect(reds).toBe(195);
     expect(triage.rows).toHaveLength(reds);
+    expect(triage.runs.map((r) => [r.layer, r.runId])).toEqual(raws.map((r) => [r.layer, r.runId]));
 
     // Every other id gets a verdict, typed from an independent regexp scan of the real files (never from readAuditGaps).
     const ids = readdirSync(AUDIT_DIR).filter((f) => /^(?:SW|FX|ST|SC|SH)-.*\.md$/.test(f)).flatMap((f) => {
@@ -615,7 +810,12 @@ describe("the ledger over a triage.json the triage CLI wrote, on real committed 
     expect(main(["--audit", AUDIT_DIR, "--triage", join(tdir, "triage.json"), "--verdicts", vfile, "--routing", join(cat, "gap-routing.json"), "--out", ledger]), said()).toBe(0);
     expect(said()).toMatch(/reproduced 1, exercised-not-reproduced 0, not-exercised 149, verified-by-read 0, verified-by-failing-test 0 \(150 audit ids\)/);
     const md = readFileSync(ledger, "utf8");
-    expect(md).toMatch(/## Reproduced[\s\S]*SW-H1[\s\S]*194 cases/);
+    expect(md).toMatch(/## Reproduced[\s\S]*SW-H1[\s\S]*195 cases/);
+    // Every claim traces to a run: the committed runs' own ids are on the page and on stdout.
+    for (const r of raws) {
+      expect(md, r.runId).toContain(r.runId);
+      expect(said(), r.runId).toContain(r.runId);
+    }
 
     // …and one verdict short is exit 1 naming exactly the id left out.
     out = []; err = [];
@@ -631,5 +831,20 @@ describe("the ledger over a triage.json the triage CLI wrote, on real committed 
     expect((said().match(/has no outcome/g) ?? []).length).toBe(50);
     expect(said()).toContain("… and 99 more (the ledger has every one)");
     expect((readFileSync(none, "utf8").match(/has no outcome/g) ?? []).length).toBe(149);
+  });
+
+  it("a one-layer triage, which the triage CLI writes without complaint, is refused by the ledger CLI naming the layers it lacks (I1)", () => {
+    const cat = fresh();
+    writeFileSync(join(cat, "triage-rules.json"), JSON.stringify({ rules: [{ id: "T-ALL", match: { cell: "*|*" }, gap: "SW-H1", wave: "W3", note: "every red, for the seam test" }] }));
+    writeFileSync(join(cat, "gap-routing.json"), JSON.stringify({ note: "seam test", routes: { "SW-*": "W3", "FX-*": "W5", "ST-*": "W5", "SC-*": "W2", "SH-*": "W8" } }));
+    writeFileSync(join(cat, "new-gaps.json"), JSON.stringify({ gaps: [] }));
+    const tdir = fresh();
+    expect(triageMain(["--runs", join(REPO, TRUTH_RUNS, "w1drv-l3/results.json"), "--catalogue", cat, "--audit", AUDIT_DIR, "--out", tdir])).toBe(0);
+    out = []; err = [];
+    const ledger = join(fresh(), "AUDIT-LEDGER.md");
+    const verdictFile = put("audit-verdicts.json", { verdicts: [] });
+    expect(main(["--audit", AUDIT_DIR, "--triage", join(tdir, "triage.json"), "--verdicts", verdictFile, "--routing", join(cat, "gap-routing.json"), "--out", ledger])).toBe(2);
+    expect(said()).toMatch(/audit-ledger: TriageLayerMissing: .*layers L1, L2/);
+    expect(readdirSync(dirname(ledger))).toEqual([]);
   });
 });
