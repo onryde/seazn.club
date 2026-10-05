@@ -920,7 +920,8 @@ unchanged.
 - **Copy:** every string is in en, es, fr and nl, followed by the `gen-keys` regen. The key families are
   `stream.code.*`, `stream.phone.*` and `stream.end.*`, with the names indicative.
 - **Mockups (house rule "≥2 UI options before building").** A plan task (PR-1 Task 2) produces two static options for the
-  Ready states, the warming and live countdowns (W24) and the restart count (W23) at 320, 768 and 1280, under `2026-10-01-capture-qr-v2-mockups/`. **The owner signs one off before the
+  Ready states, the warming and live countdowns (W24) and the restart count (W23) at 320, 768 and 1280. **Mockups are built out of tree (a scratchpad or a private Artifact) and are never committed**
+  (owner, 2026-10-05). **The owner signs one off before the
   panel task starts.** The PR-1 build of the panel waits on that; the server work does not.
 - **Signed off: Option B ("Chain first"), rev 2. The owner approved it on 2026-10-01.** T11 builds this. Where a
   table row above says otherwise, these rulings win.
@@ -955,10 +956,9 @@ unchanged.
     - `stream.code.reissue.confirm.title`: "Make a new code?"
     - `stream.code.reissue.confirm.body`: "The current code stops working. Any phone using it must scan the new one."
     - `stream.code.reissue.confirm.button`: "Make new code"
-  - **The mockup of record** is `2026-10-01-capture-qr-v2-mockups/option-b.html`. Its captures are
-    `shots/b-{320,768,1280}-*.png`, and `shots/extra/b-*-paired-open.png` and `shots/extra/b-{320,1280}-reissue-confirm.png`
-    show the disclosure and the confirm open. `option-a.html` is kept as the rejected alternative. §11.1.8's visual
-    comparison is against Option B rev 2.
+  - **The design of record** is Option B rev 2 as described in this section. Its mockup pages were not committed
+    (owner, 2026-10-05). The record of what shipped is the owner's per-screen sign-off of the built panel (18 of 18
+    screens, 2026-10-05), in PR #920's description. §11.1.8's visual comparison was against Option B rev 2.
 
 ### 6.13 v1 removal (W4): a hard cut
 
@@ -1118,8 +1118,8 @@ This fills fixture-page §3.4's reserved slot, the `phoneStatus` prop of `Signal
 
 ### 7.6 Mockups — a gate (W9)
 
-- **Before any PR-2 UI code,** static mockups at **320, 768 and 1280** go to the owner for sign-off, under
-  `2026-10-01-capture-qr-v2-mockups/pr2/`.
+- **Before any PR-2 UI code,** static mockups at **320, 768 and 1280** go to the owner for sign-off. They are built out of tree (a
+  scratchpad or a private Artifact) and are never committed (owner, 2026-10-05).
 - **At least two options** are owed for the health line and the notice (the house rule).
 - **States covered:**
   - Ready with auto off and with auto on;

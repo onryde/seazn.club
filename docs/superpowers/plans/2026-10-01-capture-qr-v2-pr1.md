@@ -450,7 +450,7 @@ and `:169`. Also kept:
 | `docs/contracts/capture-qr.v2.json`, `capture-descriptor.v1.json`, `capture-beat.v1.json`, `capture-start.v1.json` + `fixtures/capture-*/…` | the cross-repo contract | T1 |
 | `apps/web/src/server/api-v1/capture-schemas.ts` | zod twins of the four contracts (re-exported from `schemas.ts`) | T1 |
 | `apps/web/src/server/api-v1/__tests__/capture-contract.test.ts` | checksums, zod ↔ JSON parity, fixtures | T1 |
-| `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/option-{a,b}.html` | the two Ready-state options | T2 |
+| out of tree (never committed, owner 2026-10-05): `option-{a,b}.html` | the two Ready-state options | T2 |
 | `db/migration/deltas/V430__capture_stream_codes.sql` | spec §8.1 | T3 |
 | `apps/web/src/server/relay/domain/stream-code.ts` | C1–C5 | T4a |
 | `apps/web/src/server/relay/domain/pairing.ts` | T1–T7, silent / present / not responding, A14 | T4a |
@@ -859,9 +859,8 @@ Owes: unit (parity, fixtures, the field matrix) and regression (v1 gone; QR has 
 
 **Files:**
 
-- Create: `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/option-a.html`
-- Create: `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/option-b.html`
-- Create: the screenshots `…/shots/{a,b}-{320,768,1280}-{nophone,paired,silent,restarts,warming,reconnecting,paused}.png`
+- Create, **out of tree** (a scratchpad or a private Artifact; never committed, owner 2026-10-05): `option-a.html`,
+  `option-b.html`, and the screenshots `shots/{a,b}-{320,768,1280}-{nophone,paired,silent,restarts,warming,reconnecting,paused}.png`
 
 - [ ] **Step 1: Read** `docs/superpowers/specs/2026-09-30-fixture-page-stream-mockups/option-a.html`. It is the
   Option A frame the panel already ships. Read spec §6.12.

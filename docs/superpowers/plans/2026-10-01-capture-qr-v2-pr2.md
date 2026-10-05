@@ -136,7 +136,7 @@ post-PR-1 main**, because PR-1 changes the files this plan touches.
 
 | Path | Responsibility | Task |
 |---|---|---|
-| `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/pr2/option-{a,b}.html` + `shots/` | the §7.6 options | T1 |
+| out of tree (never committed, owner 2026-10-05): `pr2/option-{a,b}.html` + `shots/` | the §7.6 options | T1 |
 | `db/migration/deltas/V431__auto_stream.sql` | spec §8.2 | T2 |
 | `apps/web/src/server/relay/domain/auto-stream.ts` | `autoStartDue`, `autoStopDue`, `autoRefusalOf` | T3 |
 | `apps/web/src/server/relay/domain/phone-health.ts` | `phoneHealthOf` (the line and the amber pick) | T6 |
@@ -162,8 +162,8 @@ post-PR-1 main**, because PR-1 changes the files this plan touches.
 
 ### Task 1: The PR-2 mockups (owner gate for T8a and T8b)
 
-**Files:** create `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/pr2/option-a.html` and `option-b.html`,
-plus `pr2/shots/{a,b}-{320,768,1280}-{state}.png`.
+**Files:** create, **out of tree** (a scratchpad or a private Artifact; never committed, owner 2026-10-05),
+`pr2/option-a.html` and `option-b.html`, plus `pr2/shots/{a,b}-{320,768,1280}-{state}.png`.
 
 - [ ] **Step 1: Read** spec §7.4–§7.6, PR-1's signed-off option (spec §6.12 records which), and
   `stream-signal-chain.tsx`.
