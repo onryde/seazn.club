@@ -276,6 +276,25 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       await expect(scope.getByTestId("stream-go-live")).toBeEnabled();
       await shoot(page, scope, "02-ready-paired");
 
+      // 2b. Ready, a pick whose save FAILED (STAGED: the PUT refused, B8 re-review n-5) — the picker back on the server's
+      // answer (what the phone streams to), the alert under it. Then two picks that save clear it for the states below.
+      const SETTINGS = `**/api/v1/fixtures/${rig.fixtureId}/stream-settings`;
+      const refuse = (route: Route) => (route.request().method() === "PUT"
+        ? route.fulfill({ status: 500, json: { ok: false, error: { code: "internal", message: "staged" } } })
+        : route.fallback());
+      await page.route(SETTINGS, refuse);
+      const serverAnswer = await scope.getByTestId("stream-target").inputValue();
+      expect(serverAnswer, "premise: the server's answer is the oldest, Riverside TV").toBe(target.data!.id);
+      await scope.getByTestId("stream-target").selectOption(silentDest.data!.id);
+      await expect(scope.getByTestId("stream-pick-error")).toHaveText(EN["stream.dest.pickFailed"]!, { timeout: POLL_WAIT_MS });
+      await expect(scope.getByTestId("stream-target"), "back on the server's answer").toHaveValue(serverAnswer);
+      await shoot(page, scope, "02b-ready-pick-failed");
+      await page.unroute(SETTINGS, refuse);
+      await scope.getByTestId("stream-target").selectOption(silentDest.data!.id);
+      await scope.getByTestId("stream-target").selectOption(target.data!.id);
+      await expect(scope.getByTestId("stream-pick-error")).toHaveCount(0);
+      await expect(scope.getByTestId("stream-target")).toHaveValue(target.data!.id);
+
       // 3. Paired, the code shown again (the same code, re-shown), and 4. Revoke & reissue's confirm (declined).
       await scope.getByTestId("stream-code-disclosure").locator("summary").click();
       await expect(scope.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
@@ -358,13 +377,20 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       await expect(scope.getByTestId("stream-output-warning")).toHaveAttribute("data-cause", "destination", { timeout: D3_WAIT_MS });
 
       // 9. Live, the phone lost (STAGED: the input down, the server's live countdown, the phone silent; the output is the
-      // server's own `connecting`, past 30 s) — D3 moves to the phone, and the strip replaces its box.
+      // server's own `connecting`, past 30 s) — D3 moves to the phone, and the strip replaces its box. The staged gap is
+      // consistent with the REAL session (B8 re-review n-2): the video gone for 20 s of a stream on air for longer, and
+      // W19's lostMinutes default (15) split between elapsed and remaining — never a gap longer than the time on air.
+      const GONE_MS = 20_000;
+      const W19_MS = 15 * 60_000;
+      const onAir = (await (await page.request.get(`/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`)).json()) as { data: { startedAt: string | null } };
+      const onAirMs = Date.now() - Date.parse(onAir.data.startedAt!);
+      expect(onAirMs, "the staged gap fits inside the REAL time on air").toBeGreaterThan(GONE_MS + 5_000);
       const undoCur = await stage(page, CURRENT, (r) => ({
         ...r, ingest: { state: "disconnected", protocol: null },
-        countdown: { kind: "live", reason: "phone_lost", elapsedMs: 160_000, remainingMs: 740_000 },
+        countdown: { kind: "live", reason: "phone_lost", elapsedMs: GONE_MS, remainingMs: W19_MS - GONE_MS },
       }));
       let undoPhone = await stage(page, PHONE, (r) => ({ ...r, phone: { ...(r!.phone as object), present: false, silent: true } }));
-      await expect(scope.getByTestId("stream-phone-strip")).toContainText("12 min", { timeout: POLL_WAIT_MS });
+      await expect(scope.getByTestId("stream-phone-strip")).toContainText("14 min", { timeout: POLL_WAIT_MS });
       await expect(scope.getByTestId("stream-output-warning"), "the strip replaces D3's phone box").toHaveCount(0);
       await expect(scope.getByTestId("stream-chain")).toContainText(EN["stream.chain.word.notReceiving"]!);
       await shoot(page, scope, "09-live-phone-lost");
@@ -433,6 +459,8 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       const node = scope.locator('[data-node="phone"]');
       await expect(node).toContainText(EN["stream.chain.word.notAnswering"]!);
       await expect(node.locator('[data-mark="bang"]'), "the '!' on the phone node").toHaveCount(1);
+      // Link 1 says it too (coordinator ruling, B8 re-review item 6): the amber `problem` dashes.
+      await expect(scope.getByTestId("stream-chain")).toHaveAttribute("data-link1", "problem");
       await expect(scope.getByTestId("stream-chain")).not.toContainText(EN["stream.chain.word.starting"]!);
       // The folded "Paired" line's dot says it too (coordinator ruling): amber, from the same countdown.
       await expect(scope.getByTestId("stream-code-disclosure").locator("summary [data-tone]")).toHaveAttribute("data-tone", "amber");
