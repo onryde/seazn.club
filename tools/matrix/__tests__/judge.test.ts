@@ -302,6 +302,18 @@ describe("matchPlanIds (T4-IDS): the run's case ids are exactly the planner's fo
     expect(PLAN_IDS.length).toBeGreaterThan(1);
   });
 
+  it("a `--set` plan, from committed evidence: the w1drv L3 run (plan `--set w1-driving`) matches the ids its planner makes — the count is the planner's, and the evidence's own", () => {
+    const real = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w1drv-l3", "results.json"), "utf8")));
+    const plan = livePlan("--set w1-driving");
+    const asRun = { ...real, plan: "--set w1-driving" } as unknown as RunResults;
+    // Two independent sources agree: the planner (derived from the registry) and the committed evidence.
+    expect(plan.driven.size + plan.planned.size).toBe(real.cases.length);
+    expect(matchPlanIds(asRun).compared).toBe(real.cases.length);
+    expect(real.cases.length).toBeGreaterThan(900);
+    // …and it is a real check: one case dropped from the committed run is refused.
+    expect(() => matchPlanIds({ ...asRun, cases: asRun.cases.slice(1) })).toThrow(expect.objectContaining({ name: "PlanIdsMismatch" }));
+  });
+
   it("a case dropped (one id missing) is refused PlanIdsMismatch, naming it and the count", () => {
     const r = planRun();
     const dropped = { ...r, cases: r.cases.slice(1) };
@@ -522,6 +534,74 @@ describe("judge across <runA> <runB> <runC> (ruling 61)", () => {
     expect(judgeCli(["across", f(run([], { runId: "e1" })), f(run([], { runId: "e2" })), f(run([], { runId: "e3" }))])).toBe(2);
     expect(said()).toMatch(/NoCases/);
   });
+
+  // Review I1 (ruling T6-I1). matchPlanIds' key drops the variant, and on a plain plan the width too, and AGREE checks
+  // neither, while statesAcross compares FULL ids: three runs of one plan can each pass every other check and share no
+  // case id at all. Before the fix that read "compared 0 cases across 3 runs" at exit 1 (a verdict), and with --json-out
+  // JudgeOutSchema.parse threw an uncaught ZodError (`compared` is min 1) — exit 3, no file, nothing printed.
+  /** A plain-plan BROWSER run (layer L2, widths 375/390 are L2): case i runs at `w(i)` and its id is suffixed @<width>, as the runner writes it. */
+  const browserRun = (runId: string, w: (i: number) => number, layer: "L1" | "L2" = "L2"): RunResults => {
+    const r = planRun([], { runId, layer, driver: "browser" });
+    return { ...r, cases: r.cases.map((c, i) => ({ ...c, caseId: `${c.caseId}@${w(i)}`, layer, driver: "browser" as const, width: w(i) })) };
+  };
+  const otherVariant = (r: RunResults, only?: number): RunResults => ({
+    ...r,
+    cases: r.cases.map((c, i) => (only !== undefined && i !== only ? c : { ...c, caseId: c.caseId.replace("|score|", "|win_loss|"), variant: "win_loss" })),
+  });
+  /** Refused at exit 2, by `name`, both plain and with --json-out; the verdict file is never written and nothing throws. */
+  const refusedBoth = (files: string[], name: string): void => {
+    err = [];
+    expect(judgeCli(["across", ...files])).toBe(2);
+    expect(said(), `${name}, plain`).toContain(`${name}: `);
+    expect(said(), "a refusal is not a verdict").not.toMatch(/compared \d+ cases across/);
+    const p = join(dir, `i1-${++n}.json`);
+    err = [];
+    expect(judgeCli(["across", ...files, "--json-out", p])).toBe(2);
+    expect(said(), `${name}, --json-out`).toContain(`${name}: `);
+    expect(existsSync(p), "a refusal writes nothing").toBe(false);
+  };
+
+  it("I1: three runs of ONE plan at different widths (@375, @390, @375; the same layer) pass every other check — and share no case id: NoneCompared, exit 2, plain and with --json-out", () => {
+    const runs = [browserRun("w1", () => 375), browserRun("w2", () => 390), browserRun("w3", () => 375)];
+    // The precondition that makes it a repro: each run alone is identity-clean against the plan (a plain plan's key drops the width).
+    let clean = 0;
+    for (const r of runs) { expect(matchPlanIds(r).compared).toBe(PLAN_IDS.length); clean++; }
+    expect(clean).toBe(3);
+    // …and statesAcross, on the same runs, counts nothing in common.
+    expect(statesAcross(runs).compared).toBe(0);
+    refusedBoth(runs.map(f), "NoneCompared");
+  });
+
+  it("I1: …and a 1280 run among them (@375, @1280, @375) is a different layer too, so AGREE already refuses it by name — the same-layer widths are the gap", () => {
+    err = [];
+    expect(judgeCli(["across", f(browserRun("x1", () => 375)), f(browserRun("x2", () => 1280, "L1")), f(browserRun("x3", () => 375))])).toBe(2);
+    expect(said()).toMatch(/RunsDisagree: .*layer/);
+  });
+
+  it("I1: runs of one plan whose cases differ ONLY by variant (the key drops it) share no id either: NoneCompared", () => {
+    const runs = [planRun([], { runId: "v1" }), otherVariant(planRun([], { runId: "v2" })), planRun([], { runId: "v3" })];
+    for (const r of runs) expect(matchPlanIds(r).compared).toBe(PLAN_IDS.length);
+    expect(statesAcross(runs).compared).toBe(0);
+    refusedBoth(runs.map(f), "NoneCompared");
+  });
+
+  it("I1: when SOME ids are shared and some are not, it is CaseIdsDiffer — a case id held by only some runs is not one product (width on one case, then variant on one case)", () => {
+    const plain = (runId: string): RunResults => planRun([], { runId });
+    const at375 = (runId: string): RunResults => browserRun(runId, () => 375);
+    for (const [what, siblings, odd] of [
+      ["width", at375, browserRun("p2", (i) => (i === 0 ? 390 : 375))],
+      ["variant", plain, otherVariant(planRun([], { runId: "p2" }), 0)],
+    ] as const) {
+      const runs = [siblings("p1"), odd, siblings("p3")];
+      expect(matchPlanIds(odd).compared, what).toBe(PLAN_IDS.length);
+      const sa = statesAcross(runs);
+      // The precondition: something IS compared (so this is not NoneCompared) and something is missing.
+      expect(sa.compared, what).toBe(PLAN_IDS.length - 1);
+      expect(sa.missing.length, what).toBeGreaterThan(0);
+      refusedBoth(runs.map(f), "CaseIdsDiffer");
+      expect(said(), what).toMatch(/CaseIdsDiffer: .*not in every run/);
+    }
+  });
 });
 
 // --- the CLI: regression ------------------------------------------------------------------------------------------
@@ -561,6 +641,33 @@ describe("judge regression --baseline B --now N --expect E [--rerun R] (D13; Rev
   it("refused (exit 2) — an expected case absent from now, even when the baseline never held it", () => {
     expect(reg(run([ok("a")]), run([ok("a")]), ["a", "d"])).toBe(2);
     expect(said()).toMatch(/ExpectedAbsent: .*\bd\b/);
+  });
+
+  it("refused — an --expect that lists one id twice (a sample cannot plan a case twice): ExpectUnreadable, naming it", () => {
+    const base = f(run([ok("a")]));
+    const now = f(run([ok("a")]));
+    expect(judgeCli(["regression", "--baseline", base, "--now", now, "--expect", ids(["a", "a"])])).toBe(2);
+    expect(said()).toMatch(/ExpectUnreadable: .*a case id is listed twice/);
+    // The positive pair: the same id listed once is judged.
+    out = [];
+    expect(judgeCli(["regression", "--baseline", base, "--now", now, "--expect", ids(["a"])])).toBe(0);
+    expect(out.join("")).toContain("compared 1 cases");
+  });
+
+  it("refused — a case TWICE in --now, [red, works] for one id: regressions() keeps the last, so the red would be hidden; UnexpectedCase names it", () => {
+    const hidden = run([ok("a", "red", "x"), ok("a")]);
+    // What the guard stands in front of: handed straight to the function, the duplicate reads as a clean 'works'.
+    expect(regressions(run([ok("a")]), hidden, ["a"]).regressed).toEqual([]);
+    expect(reg(run([ok("a")]), hidden, ["a"])).toBe(2);
+    expect(said()).toMatch(/UnexpectedCase: .*a case twice: a/);
+    // The positive pair: one red `a` is the regression it is.
+    expect(reg(run([ok("a")]), run([ok("a", "red", "x")]), ["a"])).toBe(1);
+  });
+
+  it("refused — a case twice in --rerun is refused the same way: [red, works] would clear a reproduced regression", () => {
+    const hidden = run([ok("a", "red", "x"), ok("a")]);
+    expect(reg(run([ok("a")]), run([ok("a", "red", "x")]), ["a"], hidden)).toBe(2);
+    expect(said()).toMatch(/UnexpectedCase: .*--rerun.*a case twice: a/);
   });
 
   it("refused — a now case that is not in --expect (a sample that planned something else cannot pass by omission)", () => {

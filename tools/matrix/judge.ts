@@ -18,7 +18,9 @@
 //   2  refused, nothing written: usage; unreadable input (a missing or unreadable file, bad JSON, results the
 //      schema refuses, a v2 run); fewer than 2 runs, one run given twice, runs that differ in layer, driver,
 //      plan, scope or harness commit (three runs of two products are not a flakiness measure, D21); a run whose
-//      case ids are not its recorded plan's, or whose scope is not its plan's; zero cases compared; an expected
+//      case ids are not its recorded plan's, or whose scope is not its plan's; runs of one plan that do not hold
+//      the same case ids (they differ in width or variant, which a plan's ids drop): none shared is NoneCompared,
+//      some shared is CaseIdsDiffer; zero cases compared (across, regression); an expected
 //      case absent from --now, a case in --now or --rerun the sample did not plan, or a regression with no
 //      case in --rerun. Each refusal prints its own name (lib/judge.ts JUDGE_REFUSALS);
 //   3  a crash while it loads, through `pnpm run matrix:judge` (its preload, scripts/lib/crash-exit.ts).
@@ -170,19 +172,27 @@ function acrossMode(cli: Cli): Verdict {
   // Each run is held to its plan's ids before anything is compared: a run that lost a case would otherwise
   // shrink the comparison to the cases it kept.
   for (const r of runs) matchPlanIds(r);
-  // Zero compared is unreachable from here, by construction rather than by a guard no test can reach: every run
-  // holds exactly its plan's ids (matchPlanIds, which refuses NoCases first), and the runs share one plan (AGREE),
-  // so each id is in every run — `compared` is the plan's id count, at least 1. JudgeOut's `compared` is min(1) too.
+  // Each run is its plan's ids, and the runs share one plan — but matchPlanIds' key DROPS the variant, and for a plain
+  // plan the width, so "every run is the plan's" does not mean "every run holds the same case ids" (review I1): three
+  // @375 / @390 / @375 runs of one plan pass every check above and share no id. statesAcross compares full ids, so the
+  // two refusals below are what stand between that and a verdict over nothing (or over an id some runs lack).
   const sa = statesAcross(runs);
+  if (sa.compared === 0) {
+    throw new JudgeRefused("NoneCompared", `the ${runs.length} runs of plan ${JSON.stringify(first.plan)} share no case id (they differ in width or variant, which a plan's ids drop; ${first.runId} holds e.g. ${first.cases[0].caseId}) — nothing compared (vacuous)`);
+  }
+  if (sa.missing.length > 0) {
+    const some = sa.missing.slice(0, 5).map((m) => `${m.caseId} (in run${m.inRuns.length === 1 ? "" : "s"} ${m.inRuns.map((i) => i + 1).join(", ")} of ${runs.length})`).join("; ");
+    throw new JudgeRefused("CaseIdsDiffer", `${sa.missing.length} case id(s) are not in every run — runs of one plan whose case ids differ (width or variant) are not one product: ${some}${sa.missing.length > 5 ? "; …" : ""}`);
+  }
+  // After the two refusals, `missing` is empty by construction, so it is not a term of the verdict and the file's `missing` is [].
   const faults = runs.flatMap((r) => faultsOf(r, cli.plannedNotRun));
-  const bad = sa.differing.length + sa.missing.length + faults.length;
-  const out: JudgeOut = { version: 1, mode: "across", exit: bad > 0 ? 1 : 0, layer: first.layer, runs: runs.map((r) => r.runId), plannedNotRun: cli.plannedNotRun, compared: sa.compared, faults, differing: sa.differing, missing: sa.missing, regressed: [], absent: [] };
+  const bad = sa.differing.length + faults.length;
+  const out: JudgeOut = { version: 1, mode: "across", exit: bad > 0 ? 1 : 0, layer: first.layer, runs: runs.map((r) => r.runId), plannedNotRun: cli.plannedNotRun, compared: sa.compared, faults, differing: sa.differing, missing: [], regressed: [], absent: [] };
   return {
     out,
     lines: [
       `${first.layer}: compared ${sa.compared} cases across ${runs.length} runs; ${sa.differing.length} differing; ${faults.length} faults`,
       ...capped(sa.differing.map((d) => `  differing ${d.caseId}: ${d.states.join(", ")}`)),
-      ...capped(sa.missing.map((m) => `  missing ${m.caseId}: held by run(s) ${m.inRuns.map((i) => i + 1).join(", ")} of ${runs.length}`)),
       ...capped(faults.map((f) => faultLine(f, true))),
     ],
   };

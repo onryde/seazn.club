@@ -81,7 +81,7 @@ describe("one predicate, not copies (T2-PRED)", () => {
     expect(files.filter((f) => COPY.test(read(f)))).toEqual(["lib/results.ts"]);
   });
 
-  it("parity.ts, committed-plans.ts and merge.ts each ask isPlannedShape", () => {
-    for (const f of ["lib/parity.ts", "__tests__/committed-plans.ts", "lib/merge.ts"]) expect(read(f), f).toMatch(/\bisPlannedShape\(/);
+  it("parity.ts, committed-plans.ts, merge.ts and judge.ts each ask isPlannedShape", () => {
+    for (const f of ["lib/parity.ts", "__tests__/committed-plans.ts", "lib/merge.ts", "lib/judge.ts"]) expect(read(f), f).toMatch(/\bisPlannedShape\(/);
   });
 });

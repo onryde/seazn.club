@@ -22,7 +22,7 @@ import { CASE_STATES, LAYERS, VACUOUS_REASONS, isPlannedShape, type CaseResultV2
 /** Every way the judge refuses to judge (exit 2, nothing written). Each is the Error's own `name`. */
 export const JUDGE_REFUSALS = [
   "RunUnreadable", "RunNotV3", "TooFewRuns", "RunRepeated", "RunsDisagree", "NoCases", "PlanMissing", "PlanUnknown", "PlanIdsMismatch", "ScopeMismatch",
-  "ExpectUnreadable", "ExpectedAbsent", "UnexpectedCase", "RerunMissing", "NoneCompared",
+  "ExpectUnreadable", "ExpectedAbsent", "UnexpectedCase", "RerunMissing", "NoneCompared", "CaseIdsDiffer",
 ] as const;
 export type JudgeRefusalName = (typeof JUDGE_REFUSALS)[number];
 
@@ -208,6 +208,7 @@ export const JudgeOutSchema = z.strictObject({
   compared: z.number().int().min(1),
   faults: z.array(z.strictObject({ run: z.string().min(1), caseId: z.string().min(1), kind: z.enum(FAULT_KINDS), reason: z.string() })),
   differing: z.array(z.strictObject({ caseId: z.string().min(1), states: z.array(z.string().min(1)).min(2) })),
+  /** What `statesAcross` returns; the CLI refuses a non-empty list (CaseIdsDiffer) before it writes a verdict, so a file's is always []. */
   missing: z.array(z.strictObject({ caseId: z.string().min(1), inRuns: z.array(z.number().int().min(0)) })),
   /** `rerun` is the same case's state on the re-run, when there was one. */
   regressed: z.array(z.strictObject({ caseId: z.string().min(1), was: z.enum(CASE_STATES), now: z.enum(CASE_STATES), reason: z.string(), rerun: z.enum(CASE_STATES).optional() })),
