@@ -10,6 +10,8 @@
 //       (--expect, written by run-sample.ts); with --rerun, only a regression the re-run reproduces counts.
 //       The baseline is read as catalogue/baseline.json's ruling70 block says (owner ruling 70): the ids it lists
 //       are red whatever the baseline run recorded, so a later works on them is an improvement and a later red no change.
+//       The block qualifies only the run it was written for (its workflowRun): any other --baseline is judged as it shows,
+//       and the block itself is refused (BaselineUnreadable, exit 2) when it names another id set or another baseline L3.
 // --planned-not-run (ruling 65) defaults to allow: a ░ the plan marked planned is not a fault; a ░ on a
 // driven case always is. --json-out writes the verdict as JSON (lib/judge.ts JudgeOut) for `summary --judge`.
 // Exit codes, each with one meaning:
@@ -37,7 +39,7 @@ import { ZodError, z } from "zod";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
 import { EXIT_CODES } from "./lib/exit-codes.ts";
 import { HELD, JudgeOutSchema, JudgeRefused, forceBaselineStates, harnessFaults, matchPlanIds, regressions, statesAcross, type Fault, type JudgeOut, type RunLike } from "./lib/judge.ts";
-import { BaselineUnreadable, baselineOverrides } from "./lib/pr-sample.ts";
+import { BaselineUnreadable, baselineOverrides, ruling70AppliesTo } from "./lib/pr-sample.ts";
 import { mapStrings, redact } from "./lib/redact.ts";
 import { parseResults, type AnyRunResults, type RunResults } from "./lib/results.ts";
 
@@ -232,7 +234,13 @@ function regressionMode(cli: Cli, over: JudgeOver): Verdict {
     if (e instanceof BaselineUnreadable) throw new JudgeRefused("BaselineUnreadable", e.message);
     throw e;
   }
-  const { run: baseline, applied } = forceBaselineStates(read, new Map(overrides === null ? [] : overrides.ids.map((id) => [id, overrides.state] as const)));
+  // The list qualifies the run it was written for (T21 review M1): handed any other baseline (a re-baselined L3, a weekly run) it forces nothing.
+  const applies = overrides !== null && ruling70AppliesTo(overrides, read.runId);
+  const { run: baseline, applied } = forceBaselineStates(read, new Map(overrides === null || !applies ? [] : overrides.ids.map((id) => [id, overrides.state] as const)));
+  // The line says what this verdict did, so it counts the cases of THIS sample (T21 review M7), never the baseline's.
+  const planned = new Set(expect);
+  const heldInSample = applied.filter((id) => planned.has(id));
+  const ruledInSample = overrides === null ? [] : overrides.ids.filter((id) => planned.has(id));
   // The baseline's id is the run's own (forceBaselineStates keeps every field but the cases).
   const r = regressions(baseline, now, expect);
   if (r.compared === 0) throw new JudgeRefused("NoneCompared", `none of the ${expect.length} expected case(s) is in the baseline (${baseline.runId}) and --now (${now.runId}) — nothing compared (vacuous)`);
@@ -253,7 +261,8 @@ function regressionMode(cli: Cli, over: JudgeOver): Verdict {
     out,
     lines: [
       `${now.runId} against the baseline ${baseline.runId}: compared ${r.compared} cases; ${regressed.length} regressions${cli.rerun === undefined ? "" : " reproduced by the re-run"}`,
-      ...(overrides === null || applied.length === 0 ? [] : [`baseline overrides: ${applied.length} case(s) held red (cause ${overrides.cause}, ${overrides.gap}, ${overrides.wave}) — owner ruling 70`]),
+      ...(overrides === null || heldInSample.length === 0 ? [] : [`baseline overrides: ${heldInSample.length} case(s) held red (cause ${overrides.cause}, ${overrides.gap}, ${overrides.wave}) — owner ruling 70`]),
+      ...(overrides === null || applies || ruledInSample.length === 0 ? [] : [`baseline overrides: not applied — the baseline is ${read.runId} and owner ruling 70's list was written for workflow run ${overrides.workflowRun} (tag ${overrides.tag}); ${ruledInSample.length} of its case(s) are in this sample and are judged as that baseline shows them`]),
       ...capped(regressed.map((x) => `  ${x.caseId}: ${x.was} → ${x.now} — ${clip(x.reason)}${x.rerun === undefined ? "" : ` (re-run: ${x.rerun})`}`)),
     ],
   };
