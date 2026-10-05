@@ -23,7 +23,7 @@ const NO_TESTS = ["!src/**/*.test.ts", "!src/**/__tests__/**"];
  *  move it off its statement, and it loses no mutant. A MEMBER cut cannot be loss-free: Stryker keeps a mutant only if its whole
  *  node lies inside one part, so the declaration that holds the cut (its object literal, its function body) lies inside none,
  *  and that container's own mutant ("replace the body with {}") is held by no leg and so never scored. There are 9 of them in
- *  24,842; stryker-unscored.json names each, file:line:mutator, and test/stryker-sizing.test.ts holds the list equal to what the
+ *  24,842; stryker-unscored.json names each by file, mutator, replacement and line text (the line number is information only), and test/stryker-sizing.test.ts holds the list equal to what the
  *  instrumenter finds. scripts/stryker-cuts.mjs resolves the cuts with the TypeScript parser, and test/stryker-cuts.test.ts proves
  *  it with Stryker's own instrumenter, with an edit at the top of cricket.ts. A rename of an anchor is a loud failure (no
  *  statement or member declares it), never a silent loss. The anchors are chosen by `pnpm --filter @seazn/engine mutation:recut

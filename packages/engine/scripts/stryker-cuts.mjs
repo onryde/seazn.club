@@ -25,7 +25,7 @@
 // container's own mutant ("replace the whole object with {}", "empty the whole body"), and nothing else; test/stryker-cuts.test.ts
 // measures it with Stryker's own instrumenter on every real split file and holds it to those containers. Those mutants are
 // never scored: the instrumenter DOES make them (an emptied body can be killed, or can survive), but no part holds them, so no
-// leg runs them and no report counts them. stryker-unscored.json names each, file:line:mutator, and test/stryker-sizing.test.ts
+// leg runs them and no report counts them. stryker-unscored.json names each by file, mutator, replacement and line text (the line number is information only), and test/stryker-sizing.test.ts
 // holds it equal to what the instrumenter finds; its count is the whole of the loss.
 //
 // Plain .mjs, like stryker.groups.mjs: stryker.config.mjs loads it under `stryker`, and the parser is loaded only when a cut is
