@@ -60,3 +60,15 @@ overrides:
   "baseline-browser-mapping@<2.11.0": "^2.11.26"
   "fflate@>=0.4.5 <0.4.9": "^0.4.9"
   "@ai-sdk/provider-utils@>=4.0.0-beta.10 <4.0.33": "^4.0.54"
+
+  # Two peer-metadata pins that keep apps/web's resolution byte-identical when a package that brings a SECOND major of
+  # @babel/core (7 -> 8) or a first rxjs enters the workspace (Stryker, W1d T15; T15-LOCK). pnpm's autoInstallPeers fills a
+  # MISSING peer from the highest version of that name anywhere in the lockfile, and for a range peer it ignores the range:
+  # with Stryker's @babel/core 8.0.6 and rxjs 7.8.2 in the lock, apps/web's `next` / `@sentry/nextjs` / `styled-jsx` were
+  # re-linked to @babel/core 8.0.6 ("unmet peer @babel/core@^7.0.0: found 8.0.6") and `posthog-node` to rxjs 7.8.2. The
+  # @babel/core 7.29.7 that web has always used is named exactly (an exact range is the one form pnpm honours), and
+  # posthog-node's optional rxjs peer is dropped (web never installed one). Both change peer METADATA in the lock's
+  # `packages:` section only; no importer and no `snapshots:` entry of a production package moves.
+  # Drop both when apps/web leaves @babel/core 7, or when packages/engine stops depending on Stryker.
+  "@babel/helper-module-transforms@7.29.7>@babel/core": "7.29.7"
+  "posthog-node>rxjs": "-"
