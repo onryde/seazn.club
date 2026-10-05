@@ -27,7 +27,12 @@ export interface CaptureFacts { phone: StreamPhone["phone"]; countdown: StreamLo
 /**
  * §6.12's phone node over §3.2's row. Only the PHONE node moves; every link, Seazn and the destination stay the table's.
  *  - Ready: Paired (lime) while present, Not answering (amber) while silent, Not connected with no phone;
- *  - waiting: Starting (amber);
+ *  - waiting: Starting (amber) — unless the server counts down to ask 10 (`warming`, `phone_lost`): then the phone
+ *    stopped checking in, and the node says so as the strip under it does — Not answering, with the "!" (B8 re-review
+ *    item 1). The SAME fact as the strip's sentence (`current`'s countdown), never the read model's `present`: inside ask
+ *    10's window the phone is not silent yet (§6.9's threshold IS ask 10's end). The warming timeout's countdown keeps
+ *    Starting with no mark: that phone still checks in (the signed-off mockup's warming state). A warming RECONNECT
+ *    counted down to W19 (`live`) is Reconnecting… with the "!", as live is;
  *  - live with the input not connected: "Reconnecting…" instead of "No signal". The "!" stays on the phone while the
  *    server counts down, is dropped while the phone still beats with a reason (the strip says it), and otherwise follows
  *    the D3 box as today.
@@ -40,7 +45,11 @@ function capturePhone(view: ChainView | null, row: Chain, capture: CaptureFacts)
   switch (view.state) {
     case "requested":
     case "provisioning":
-    case "warming": return node("amber", "starting");
+    case "warming":
+      // A warming RECONNECT (§5.4: first ingest set) is counted down to W19's end, `live` — the strip says the video
+      // stopped, so the node says Reconnecting…, as it does live.
+      if (capture.countdown?.kind === "live") return node("amber", "reconnecting", "bang");
+      return capture.countdown?.reason === "phone_lost" ? node("amber", "notAnswering", "bang") : node("amber", "starting");
     case "live": {
       if (!phoneNoSignal(view)) return row.phone;
       const bang = capture.countdown !== null || (d3Warning(view) === "phone" && reconnectReasonOf(capture.phone) === null);

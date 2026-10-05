@@ -7,8 +7,8 @@
 // One sport is not a question here: the chain reads no sport (the relay is sport-agnostic).
 import { describe, expect, it } from "vitest";
 import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
-import { StreamIngest, StreamOutput, StreamSessionState } from "@/server/api-v1/schemas";
-import { OUTPUT_WARNING_AFTER_MS } from "@/lib/stream-session-view";
+import { StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone, type StreamSessionCurrent } from "@/server/api-v1/schemas";
+import { OUTPUT_WARNING_AFTER_MS, phoneStrip } from "@/lib/stream-session-view";
 import { chainFor, type Chain, type ChainNode } from "../stream-chain";
 
 type State = (typeof StreamSessionState.options)[number];
@@ -303,5 +303,84 @@ describe("chainFor — capture v2's phone node (T11)", () => {
     }
     expect(checked).toBe(StreamSessionState.options.length * ingests.length * outputs.length * 2 * captures.length);
     expect(phoneMoved, "anti-vacuity: the v2 words were reached").toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// B8 re-review item 1: the Phone node and the strip under it are ONE statement. Both read the SAME fact — the server's
+// countdown on `current` (`phoneStrip` keys its sentence on it; `chainFor` gets it as `capture.countdown`) — so for every
+// countdown the wire declares they must say the same thing about the phone. The table is the rule text, written out:
+//  - warming, no_inbound_timeout: the phone checks in and its video has not arrived — "Starting", no mark (the signed-off
+//    mockup's warming state, Option B rev 2 §5);
+//  - warming, phone_lost (ask 10): the phone STOPPED checking in — the node says what Ready's silent node says, "Not
+//    answering", with the "!" (the stream will be cancelled because of the phone);
+//  - live, phone_lost (W19): "Reconnecting…" with the "!" (mockup §6) — in `live`, and in a warming RECONNECT (§5.4: first
+//    ingest set, still live for W19), whose strip says the same sentence.
+// The "!" is on the phone exactly when the sentence is about a LOST phone. The read model's own `present` never moves the
+// node here: in ask 10's window the phone is not yet silent (§6.9's threshold IS ask 10's end), so a node keyed on it
+// would read "Starting" beside "The phone stopped checking in" — the defect this table exists for.
+// ---------------------------------------------------------------------------------------------------------------------
+describe("W24 — the Phone node and the strip agree for every countdown the wire declares", () => {
+  type Countdown = import("@/server/api-v1/schemas").StreamLostCountdown;
+  /** Every (kind, reason) the wire's union declares, read off the schema — a reason added there is swept here. */
+  const WIRE: [Countdown["kind"], Countdown["reason"]][] = StreamLostCountdown.options.flatMap((o) => {
+    const kind = o.shape.kind.value;
+    const reason = o.shape.reason;
+    const reasons = "options" in reason ? (reason.options as Countdown["reason"][]) : [reason.value as Countdown["reason"]];
+    return reasons.map((r) => [kind, r] as [Countdown["kind"], Countdown["reason"]]);
+  });
+  const TABLE: Record<string, { key: string; node: ChainNode }> = {
+    "warming.no_inbound_timeout": { key: "stream.phone.countdown.warming.no_inbound_timeout", node: n("amber", "starting") },
+    "warming.phone_lost": { key: "stream.phone.countdown.warming.phone_lost", node: n("amber", "notAnswering", "bang") },
+    "live.phone_lost": { key: "stream.phone.countdown.live.phone_lost", node: n("amber", "reconnecting", "bang") },
+  };
+  /** The states each kind is served in: `warming` before any video; `live` in live AND in a warming reconnect. */
+  const STATES: Record<Countdown["kind"], readonly ("live" | "warming")[]> = { warming: ["warming"], live: ["live", "warming"] };
+  const projection = (state: "live" | "warming", countdown: Countdown | null) => ({
+    ...v(state, "disconnected", countdown?.kind === "live" ? "unknown" : null, W),
+    countdown,
+  }) as unknown as StreamSessionCurrent;
+  const readModel = (phone: ReturnType<typeof beating>) => ({ legacy: false, phone }) as unknown as StreamPhone;
+
+  it("the table covers exactly the wire's countdowns — no more, no fewer", () => {
+    expect(WIRE.map(([k, r]) => `${k}.${r}`).sort()).toEqual(Object.keys(TABLE).sort());
+    expect(WIRE.length, "anti-vacuity").toBeGreaterThanOrEqual(3);
+  });
+
+  it("every countdown: the strip says the table's sentence and the node the table's word — the '!' exactly when the phone is lost — whatever the read model says of the phone's presence", () => {
+    let checked = 0;
+    let lost = 0;
+    for (const [kind, reason] of WIRE) {
+      const row = TABLE[`${kind}.${reason}`]!;
+      const countdown = { kind, reason, elapsedMs: 40_000, remainingMs: 20_000 } as Countdown;
+      // ask 10's real window has the phone still `present` (not yet silent); a staged one may say silent — both agree.
+      for (const state of STATES[kind]) for (const phone of [beating(), beating({ present: false, silent: true })]) {
+        const session = projection(state, countdown);
+        const where = `${kind}.${reason} in ${state} (present ${phone.present})`;
+        const strip = phoneStrip(readModel(phone), session);
+        expect(strip?.body?.key, `${where}: the strip`).toBe(row.key);
+        const chain = chainFor(session, { capture: { phone, countdown } })!;
+        expect(chain.phone, `${where}: the node`).toEqual(row.node);
+        expect(chain.phone.mark === "bang", `${where}: the '!' iff the phone is lost`).toBe(reason === "phone_lost");
+        if (reason === "phone_lost") lost++;
+        checked++;
+      }
+    }
+    // warming.no_inbound_timeout ×1 state, warming.phone_lost ×1, live.phone_lost ×2 (live, warming reconnect); ×2 phones.
+    expect(checked).toBe(WIRE.reduce((sum, [k]) => sum + STATES[k].length, 0) * 2);
+    expect(checked).toBe(8);
+    expect(lost, "every lost row was reached").toBe(6);
+  });
+
+  it("the empty case: warming with NO countdown — the strip leads with 'Waiting' alone and the node is Starting with no mark, even with the read model saying silent", () => {
+    let checked = 0;
+    for (const phone of [beating(), beating({ present: false, silent: true })]) {
+      const session = projection("warming", null);
+      const strip = phoneStrip(readModel(phone), session);
+      expect(strip).toEqual({ tone: "slate", icon: "clock", lead: "stream.phone.waitingVideo", body: null });
+      expect(chainFor(session, { capture: { phone, countdown: null } })!.phone).toEqual(n("amber", "starting"));
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });

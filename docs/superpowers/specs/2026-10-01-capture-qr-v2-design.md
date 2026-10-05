@@ -1966,6 +1966,14 @@ controller's review. None is the controller's ruling, and none is the seazn.club
 - **The strip replaces D3's phone box.** While a strip shows, D3's phone-cause box is not drawn. With no reason to
   give, D3 draws its box as before. The Phone node's "!" stays while a countdown runs. It is dropped while the phone
   beats with a reason (O5). With no reason, it follows D3's box as before.
+- **The Phone node says what the strip says (B8 re-review item 1, ruling: a defect).** Both read ONE fact, `current`'s
+  countdown, never the read model's `present`. Warming with ask 10's countdown (`warming`, `phone_lost`) is "Not
+  answering" with the "!", beside "The phone stopped checking in — the stream is cancelled in…". The warming timeout's
+  countdown keeps "Starting" with no mark (mockup §5: that phone still checks in). W19's countdown (`live`) is
+  "Reconnecting…" with the "!" in `live` and in a warming reconnect (§5.4) alike. Ask 10's countdown is short by
+  construction: it arms at max(`RECONNECT_QUIET_SECONDS`, cadence + one near poll) of silence and ends at §6.9's
+  max(floor, cadence + slack), so with the defaults it never shows more than 30 s, and inside it the phone is not yet
+  silent (§6.9's threshold IS ask 10's end). That is why the node cannot key on `present`.
 
 **No spec text changes for these:**
 

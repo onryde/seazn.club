@@ -1383,6 +1383,21 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(none).not.toContain("tabular-nums\">9 min");
   });
 
+  it("B8 re-review item 1, rendered: warming with ask 10's countdown → the strip's 'stopped checking in' and the Phone node 'Not answering' WITH the '!' — the phone still `present` in the read model (ask 10's real window); the warming timeout keeps 'Starting' with no mark", () => {
+    const PHONE_BANG = /data-node="phone"[^]*?data-mark="bang"[^]*?data-node="seazn"/;
+    const ask10 = { kind: "warming" as const, reason: "phone_lost" as const, elapsedMs: 40_000, remainingMs: 20_000 };
+    const lostHtml = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session({ countdown: ask10 })} balance={2} phone={readModel({ phone: facts({ state: "paired" }) })} />);
+    expect(lostHtml).toContain(`The phone stopped checking in — the stream is cancelled in <span aria-live="off" class="whitespace-nowrap tabular-nums">20 sec</span>`);
+    expect(lostHtml).toContain(`>${m("stream.chain.word.notAnswering")}<`);
+    expect(lostHtml).not.toContain(`>${m("stream.chain.word.starting")}<`);
+    expect(lostHtml, "the '!' on the phone node").toMatch(PHONE_BANG);
+    // The positive pair: the warming TIMEOUT's countdown (the phone checks in) — Starting, no mark (mockup §5).
+    const timeout = { kind: "warming" as const, reason: "no_inbound_timeout" as const, elapsedMs: 45_000, remainingMs: 555_000 };
+    const waitHtml = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session({ countdown: timeout })} balance={2} phone={readModel({ phone: facts({ state: "paired" }) })} />);
+    expect(waitHtml).toContain(`>${m("stream.chain.word.starting")}<`);
+    expect(waitHtml).not.toMatch(PHONE_BANG);
+  });
+
   it("O5: live, the input down, the phone still beating with notReady camera → 'Reconnecting…' and 'Phone is on a call — video paused', NO countdown, no '!' and no D3 phone box", () => {
     const v = session({ state: "live", startedAt: "2026-09-14T11:50:00Z", output: { state: "unknown", since: "2026-09-14T11:57:00Z", elapsedMs: 180_000 } });
     const phone = readModel({ phone: facts({ notReady: "camera", state: "publishing" }) });
