@@ -65,7 +65,7 @@ export async function listStreamTargets(auth: AuthCtx, orgId: string): Promise<S
   const [rows, hints, holders] = await Promise.all([
     sql<{ id: string; kind: StreamTarget["kind"]; label: string; watch_url: string | null; created_at: string }[]>`
       select id, kind, label, watch_url, created_at from org_stream_targets
-       where org_id = ${orgId} and archived_at is null order by created_at asc`,
+       where org_id = ${orgId} and archived_at is null order by created_at asc, id asc`,
     sql.begin((tx) => readKeyHints(tx, orgId)) as Promise<Map<string, string | null>>,
     holderRows(sql, { orgId }),
   ]);

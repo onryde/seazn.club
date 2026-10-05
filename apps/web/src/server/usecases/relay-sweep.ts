@@ -2,8 +2,9 @@ import "server-only";
 // server/usecases/relay-sweep.ts — the DAILY sweep behind POST /api/cron/relay-sweep (design §6.3 row; owner ruling
 // 2026-09-14: "just run every day is fine"). Because it runs once a day it owns NOTHING time-critical: every timeout,
 // the retry and the wall clock fire lazily on reads (stream-sessions.ts, recommendation B). Here, in this order:
-//   1. BACKSTOP — the same reconcileSession (expiry PLUS one Machine observation) over every non-terminal session AND
-//      every terminal one whose runner is still alive (C27), for the session nobody reads; per-session
+//   1. BACKSTOP — every non-terminal session is TICKED (capture QR v2 T7, §6.11: tickSession — expiry, one Machine
+//      observation, the ingest read and the phone-lost ends), and every terminal one whose runner is still alive (C27) gets
+//      the same reconcileSession (expiry PLUS one Machine observation), for the session nobody reads; per-session
 //      pg_try_advisory_xact_lock, so a concurrent sweep skips what the other holds. NOT applyExpiry: expiry alone cannot
 //      see a Machine that died WITHOUT our stop, or one already auto-destroyed. A TERMINAL row still `lost` after the
 //      reconcile gets its force_destroy re-issued (2C-post m1). One visit that throws is counted and reported; the pass
@@ -19,19 +20,21 @@ import "server-only";
 //      input this database owns (I1(c)), and the terminal inputs; videos
 //      BEFORE inputs (C2), inputs re-planned over what the pass actually deleted; a 409 is reported and retried tomorrow;
 //      a FULL page is flagged, never read as the whole set (A13).
-//   5. VIDEO FACTS (ruling 13 item 5, Dd), 6. SUMMARIES, 7. SAMPLE RETENTION, 8. ONE storage snapshot.
+//   5. VIDEO FACTS (ruling 13 item 5, Dd), 6. SUMMARIES, 7. SAMPLE RETENTION, 7b. PHONE-BEAT RETENTION (W10, 24 h),
+//   8. ONE storage snapshot.
 import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
-import { EST_COST_CURRENCY, MAX_DURATION_MINUTES, SAMPLE_RETENTION_DAYS, relayEnvironment } from "@/server/relay/config";
+import { EST_COST_CURRENCY, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, SAMPLE_RETENTION_DAYS, relayEnvironment } from "@/server/relay/config";
 import { retentionPlan, type RetainedInput, type RetainedVideo } from "@/server/relay/domain/retention";
 import { machineNameFor, type RunnerState } from "@/server/relay/domain/runner";
+import type { DbEndReason } from "@/server/relay/domain/end-reason";
 import { isTerminal, type FailReason, type SessionState } from "@/server/relay/domain/session";
 import type { IngestVideo, RunnerListing } from "@/server/relay/ports";
 import { recordEvent, recordStorageSnapshot } from "@/server/relay/telemetry";
 import {
   ACTIVE_STATES, TERMINAL_STATES, type SessionDeps,
-  apply, destroyListedMachine, estimateCostMinor, reconcileSession, releaseOutput, storageHeadroomMinutes, storageUsageForColumns,
+  apply, destroyListedMachine, estimateCostMinor, reconcileSession, releaseOutput, storageHeadroomMinutes, storageUsageForColumns, tickSession,
 } from "./stream-sessions";
 
 export interface SweepResult {
@@ -48,6 +51,7 @@ export interface SweepResult {
     retried: number;                // G3: a create call made during the visit
     crashed: number;                // machine_* failures
     wallClockEnded: number;
+    phoneLost: number;              // capture QR v2 T7: ask 10 / W19 ended it phone_lost — never counted as a wall clock
     terminalRunnersSettled: number; // C27: a terminal session's runner advanced (the session state did not)
     otherFailures: number;          // a failure the backstop's own rules do not produce — a visit that raced another request
   };
@@ -64,6 +68,7 @@ export interface SweepResult {
   foreignVideosSkipped: number;    // I1(c): past retention, but traceable to no input this database owns — never deleted
   headroomMinutes: number;
   videosSeen: number; recordingsFinalised: number; summariesWritten: number; samplesDeleted: number;   // ruling 13 + Dd
+  beatsDeleted: number;            // W10: phone-beat history past PHONE_BEAT_RETENTION_HOURS
 }
 
 export type BackstopBucket = Exclude<keyof SweepResult["backstop"], "candidates" | "visited" | "skippedLocked" | "errored">;
@@ -103,7 +108,7 @@ const failureBucket = (reason: FailReason | null): BackstopBucket => {
  *  only for an ending → completed visit — the authority for "how did it complete", never inferred from the runner. */
 export function backstopOutcome(
   before: { state: SessionState; runnerState: RunnerState; runnerAttempts: number },
-  after: { state: SessionState; failReason: FailReason | null; runner: { state: RunnerState; attempt: number } },
+  after: { state: SessionState; failReason: FailReason | null; endReason?: DbEndReason | null; runner: { state: RunnerState; attempt: number } },
   completingExpiry: string | null,
 ): BackstopBucket | null {
   // C27: a terminal row cannot fail, retry or complete again — only its runner can move.
@@ -121,6 +126,9 @@ export function backstopOutcome(
     if (completingExpiry === "ending_timeout") return "endingTimedOut";
     return "completedObserved";
   }
+  // T7: the tick's phone-lost end (ask 10 from requested/provisioning/warming, W19 from live) — read from the row's own
+  // end reason, the one authority for why it ended; before this it fell into the wall-clock bucket below (or none).
+  if ((after.state === "ending" || after.state === "completed") && after.endReason === "phone_lost") return "phoneLost";
   if ((after.state === "ending" || after.state === "completed") && (before.state === "live" || before.state === "warming")) return "wallClockEnded";
   return null;
 }
@@ -192,13 +200,13 @@ export async function sweepStreamSessions(
     backstop: {
       candidates: 0, visited: 0, skippedLocked: 0, errored: 0,
       warmingTimedOut: 0, provisionTimedOut: 0, admissionTimedOut: 0, endingTimedOut: 0, graceForced: 0, completedObserved: 0,
-      retried: 0, crashed: 0, wallClockEnded: 0, terminalRunnersSettled: 0, otherFailures: 0,
+      retried: 0, crashed: 0, wallClockEnded: 0, phoneLost: 0, terminalRunnersSettled: 0, otherFailures: 0,
     },
     runnerListing: "not_needed", machinesListed: 0, orphansDestroyed: 0, orphanDestroysFailed: 0, foreignRunnersSkipped: 0,
     runnerGoneConfirmed: 0, runnerGoneDeferred: 0, outputsReleased: 0, outputReleasesFailed: 0,
     videosListed: 0, listingTruncated: false,
     videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0, foreignVideosSkipped: 0,
-    headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0,
+    headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0, beatsDeleted: 0,
   };
 
   // 1. BACKSTOP — every non-terminal session, PLUS (C27) every session whose runner has not finished dying: `reconcileSession`
@@ -218,7 +226,11 @@ export async function sweepStreamSessions(
         const [cur] = await tx<{ state: SessionState; runner_state: RunnerState; runner_attempts: number }[]>`
           select state, runner_state, runner_attempts from fixture_stream_sessions where id = ${c.id}`;
         if (!cur) return null;
-        let after = await reconcileSession(c.id, deps);   // expiry + ONE Machine observation, row-locked on the pooled client
+        // T7 (§6.11): an open session is TICKED — the organiser poll's own path, so a session nobody watches still reads
+        // its ingest and meets ask 10 / W19. A terminal one (C27: its runner still alive) keeps the reconcile alone.
+        let after = isTerminal(cur.state)
+          ? await reconcileSession(c.id, deps)   // expiry + ONE Machine observation, row-locked on the pooled client
+          : (await tickSession(c.id, deps, "sweep")).session;
         if (!after) return null;
         // 2C-post m1: a TERMINAL session holding a `lost` runner has no lazy re-issue — the organiser's poll skips terminal
         // rows, `lost × observed running` has no effect and `evaluate` answers `none` — so its Machine would reach only the
@@ -517,6 +529,17 @@ export async function sweepStreamSessions(
        where s.id = p.session_id and s.sample_summary is not null and s.ended_at < ${cutoff} ${inScopeS()}
        returning p.id`;
     out.samplesDeleted = deleted.length;
+  }
+
+  // 7b. PHONE-BEAT RETENTION (W10, §6.10): the beat HISTORY older than PHONE_BEAT_RETENTION_HOURS goes. The latest beat
+  //     lives on in fixture_stream_sessions.phone_beat and fixture_stream_pairings.last_beat, which this never touches.
+  {
+    const cutoff = new Date(now.getTime() - PHONE_BEAT_RETENTION_HOURS * 3_600_000);
+    const purged = await sql<{ id: number }[]>`
+      delete from fixture_stream_phone_beats
+       where recorded_at < ${cutoff} ${orgIds ? sql`and org_id in ${sql(orgIds)}` : sql``}
+       returning id`;
+    out.beatsDeleted = purged.length;
   }
 
   // 8. ONE storage snapshot per run, on the fitted reading (its CHECK: headroom = limit − used − reserved, in integers).

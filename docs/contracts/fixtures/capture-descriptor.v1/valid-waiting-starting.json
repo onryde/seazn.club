@@ -1,0 +1,13 @@
+{
+  "state": "waiting",
+  "code": "7k3m9p2qx4tz",
+  "label": "Northside Hawks v Riverside Rovers",
+  "venueTimezone": "Europe/London",
+  "scheduledStart": 1790863200,
+  "pollSeconds": 5,
+  "autoAllowed": false,
+  "destinationName": "Club YouTube",
+  "overlayUrl": "https://stg.seazn.club/overlay/fixtures/c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f?style=slate&key=Zk9v3mQ1xT8rWb2Lp6Nc",
+  "heartbeatUrl": "https://stg.seazn.club/api/v1/capture/codes/7k3m9p2qx4tz/beats",
+  "startUrl": "https://stg.seazn.club/api/v1/capture/codes/7k3m9p2qx4tz/start"
+}

@@ -7,13 +7,14 @@
 // server/usecases/__tests__. The eight tables are reached through the plain
 // `sql` client — RLS is FORCEd with zero policies, so `withTenant` (app_user)
 // would see nothing, which is the point of §6.1 and of V366.
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
+import { CAPTURE_CODE_RE } from "@/server/api-v1/capture-schemas";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { MAX_DURATION_MINUTES } from "../config";
 import { ACTIVE_STATES, TERMINAL_STATES } from "../domain/session";
-import { STREAM_TABLES } from "./_stream-migration";
+import { lastCheckList, STREAM_TABLES } from "./_stream-migration";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -49,9 +50,9 @@ async function insertSession(r: Awaited<ReturnType<typeof rig>>, state: string) 
 }
 
 describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", () => {
-  it("RLS is enabled AND forced on all EIGHT tables, with zero policies", async () => {
-    // The list is read from the migration file itself (`create table (\w+)`), so a
-    // ninth table added later is guarded the day it lands, not the day someone
+  it("RLS is enabled AND forced on all TWELVE tables (V410's eight, V430's four), with zero policies", async () => {
+    // The list is read from the migration files themselves (`create table (\w+)` over the
+    // stream fold), so a table added later is guarded the day it lands, not the day someone
     // remembers this test. STREAM_TABLES comes from _stream-migration.ts, which
     // rls-static.test.ts and telemetry.test.ts (Task 2) import too.
     const rows = await sql<{ relname: string; rls: boolean; forced: boolean; policies: number }[]>`
@@ -61,7 +62,7 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
       where n.nspname = current_schema()
         and c.relname = any(${STREAM_TABLES})
       order by c.relname`;
-    expect(STREAM_TABLES.length).toBe(8);
+    expect(STREAM_TABLES.length).toBe(8 + 4);
     expect(rows.map((r) => r.relname)).toEqual([...STREAM_TABLES].sort());
     for (const r of rows) {
       expect(r.rls, r.relname).toBe(true);
@@ -256,7 +257,7 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
 
   // ---- Task 0 data rulings (2026-09-14): the session facts ----------------
 
-  it("session facts: the snapshot's not-null columns refuse null; entitlement_via_override has NO default; recording_bytes, credentials_reveal_count and est_cost_minor refuse a negative; est_cost_currency refuses 'GBP' and 'gb'; the accepted twin lands every fact, with a venue id no row has (no FK)", async () => {
+  it("session facts: the snapshot's not-null columns refuse null; entitlement_via_override has NO default; recording_bytes, credentials_served_count (V430's rename) and est_cost_minor refuse a negative; est_cost_currency refuses 'GBP' and 'gb'; the accepted twin lands every fact, with a venue id no row has (no FK)", async () => {
     const r = await rig();
     // No default: an insert that omits entitlement_via_override is refused — a default would hide a missing producer (Task 10).
     await expect(sql`
@@ -269,17 +270,17 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
       await expect(sql`update fixture_stream_sessions set ${sql(col)} = null where id = ${sid}`, col).rejects.toMatchObject({ code: "23502" });
     }
     // The two counters start at the sum of nothing.
-    const [zero] = await sql<{ recording_bytes: number; credentials_reveal_count: number }[]>`
-      select recording_bytes::int as recording_bytes, credentials_reveal_count from fixture_stream_sessions where id = ${sid}`;
-    expect(zero).toEqual({ recording_bytes: 0, credentials_reveal_count: 0 });
-    for (const [col, bad] of [["recording_bytes", -1], ["credentials_reveal_count", -1], ["est_cost_minor", -1], ["est_cost_currency", "GBP"], ["est_cost_currency", "gb"]] as const) {
+    const [zero] = await sql<{ recording_bytes: number; credentials_served_count: number }[]>`
+      select recording_bytes::int as recording_bytes, credentials_served_count from fixture_stream_sessions where id = ${sid}`;
+    expect(zero).toEqual({ recording_bytes: 0, credentials_served_count: 0 });
+    for (const [col, bad] of [["recording_bytes", -1], ["credentials_served_count", -1], ["est_cost_minor", -1], ["est_cost_currency", "GBP"], ["est_cost_currency", "gb"]] as const) {
       await expect(sql`update fixture_stream_sessions set ${sql(col)} = ${bad} where id = ${sid}`, `${col} = ${bad}`).rejects.toMatchObject({ code: "23514" });
     }
     // The accepted twin: every Task 0 fact lands; the nullable snapshot columns take null (no court, no schedule,
     // an org with no timezone) and venue_id takes an id no venue has — a snapshot, not a reference.
     await sql`
       update fixture_stream_sessions
-         set recording_bytes = 734003200, credentials_reveal_count = 2, qr_issued_first_at = now(), credentials_revealed_first_at = now(),
+         set recording_bytes = 734003200, credentials_served_count = 2, credentials_served_first_at = now(),
              est_cost_minor = 0, est_cost_currency = 'usd', output_uid = 'out-uid-1',
              fixture_scheduled_at = null, venue_id = gen_random_uuid(), venue_address = null, org_timezone = null
        where id = ${sid}`;
@@ -665,5 +666,263 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(accepted).toBe(TERMINAL_STATES.length);
     expect(noOutput).toBe(TERMINAL_STATES.length);
     expect(refused * accepted).toBeGreaterThan(0);
+  });
+});
+
+// ---- V430 (capture QR v2 PR-1 T3, spec §8.1 amended by §17.1/§17.3) -------------------------
+// The stable stream code, its pairings, the per-fixture settings and the phone-beat history; the
+// session columns the code and pairing hang off; the drop and the rename (R3); end_reason's five
+// and events.source's 'phone'. Every refusal has its accepted twin; every enum is read from the
+// parsed fold (_stream-migration.ts lastCheckList), never typed.
+
+/** A well-formed code from the Crockford alphabet the contract publishes (CAPTURE_CODE_RE). */
+const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
+const newCode = (): string => Array.from(randomBytes(12), (b) => CROCKFORD[b % 32]).join("");
+const tokHash = (): string => createHash("sha256").update(randomBytes(16)).digest("hex");
+
+async function insertCode(r: Awaited<ReturnType<typeof rig>>, over: { code?: string; tokEnc?: Buffer | null } = {}) {
+  const [row] = await sql<{ id: string }[]>`
+    insert into fixture_stream_codes (org_id, fixture_id, code, tok_hash, tok_enc, issued_by)
+    values (${r.orgId}, ${r.fixtureId}, ${over.code ?? newCode()}, ${tokHash()},
+            ${over.tokEnc === undefined ? Buffer.from("sealed-envelope") : over.tokEnc}, ${r.userId})
+    returning id`;
+  return row!.id;
+}
+
+async function insertPairing(orgId: string, codeId: string, over: { slot?: number; phone?: string; ended?: boolean } = {}) {
+  const [row] = await sql<{ id: string }[]>`
+    insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, claimed_at, last_beat_at,
+                                         answered_poll_seconds, ended_at, end_cause)
+    values (${orgId}, ${codeId}, ${over.slot ?? 0}, ${over.phone ?? "phone-" + randomUUID()}, 'new', now(), now(),
+            10, ${over.ended ? sql`now()` : null}, ${over.ended ? "replaced" : null})
+    returning id`;
+  return row!.id;
+}
+
+const V430_TABLES = ["fixture_stream_codes", "fixture_stream_settings", "fixture_stream_pairings", "fixture_stream_phone_beats"];
+
+describe.skipIf(!HAS_DB)("V430__capture_stream_codes.sql — the constraints are real", () => {
+  it("the four new tables exist, each with RLS enabled AND forced and NO row in pg_policies (R1: the V410 pattern)", async () => {
+    const rows = await sql<{ relname: string; rls: boolean; forced: boolean; policies: number }[]>`
+      select c.relname, c.relrowsecurity as rls, c.relforcerowsecurity as forced,
+             (select count(*) from pg_policies p where p.schemaname = n.nspname and p.tablename = c.relname)::int as policies
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = current_schema() and c.relname = any(${V430_TABLES})
+       order by c.relname`;
+    expect(rows.map((r) => r.relname)).toEqual([...V430_TABLES].sort());
+    for (const r of rows) expect(r, r.relname).toMatchObject({ rls: true, forced: true, policies: 0 });
+    // R1: no tenant trigger either — the use-case writes org_id from the code or session row.
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_trigger t join pg_class c on c.oid = t.tgrelid
+       where c.relname = any(${V430_TABLES}) and t.tgname = 'trg_set_org'`;
+    expect(n).toBe(0);
+  });
+
+  it("fixture_stream_codes_one_active and fixture_stream_pairings_one_current are PARTIAL UNIQUE indexes, pinned by name and predicate — and each refuses a second live row while an ended one never collides", async () => {
+    const idx = await sql<{ indexname: string; indexdef: string }[]>`
+      select indexname, indexdef from pg_indexes
+       where schemaname = current_schema()
+         and indexname in ('fixture_stream_codes_one_active', 'fixture_stream_pairings_one_current')
+       order by indexname`;
+    expect(idx.map((i) => i.indexname)).toEqual(["fixture_stream_codes_one_active", "fixture_stream_pairings_one_current"]);
+    expect(idx[0]!.indexdef).toMatch(/^CREATE UNIQUE INDEX fixture_stream_codes_one_active ON \w+\.fixture_stream_codes USING btree \(fixture_id\) WHERE \(ended_at IS NULL\)$/);
+    expect(idx[1]!.indexdef).toMatch(/^CREATE UNIQUE INDEX fixture_stream_pairings_one_current ON \w+\.fixture_stream_pairings USING btree \(code_id, slot\) WHERE \(ended_at IS NULL\)$/);
+
+    const r = await rig();
+    const first = await insertCode(r);
+    await expect(insertCode(r), "a second ACTIVE code on one fixture").rejects.toMatchObject({ code: "23505", constraint_name: "fixture_stream_codes_one_active" });
+    await sql`update fixture_stream_codes set ended_at = now(), end_cause = 'reissued', tok_enc = null where id = ${first}`;
+    const second = await insertCode(r);                                   // the ended one never collides (C3: reissue)
+
+    await insertPairing(r.orgId, second, { slot: 0 });
+    await expect(insertPairing(r.orgId, second, { slot: 0 }), "a second CURRENT pairing on (code, slot)").rejects.toMatchObject({ code: "23505", constraint_name: "fixture_stream_pairings_one_current" });
+    await insertPairing(r.orgId, second, { slot: 0, ended: true });       // an ENDED pairing never collides
+    await insertPairing(r.orgId, second, { slot: 1 });                    // another slot is another key
+  });
+
+  it("fixture_stream_codes: tok_enc is NULLABLE and `ended_at is null or tok_enc is null` holds — an ended code with its envelope is refused, wiped it lands; the code pattern IS the contract's CAPTURE_CODE_RE; tok_hash is 64 hex; ended_at and end_cause move together", async () => {
+    const [shape] = await sql<{ data_type: string; is_nullable: string }[]>`
+      select data_type, is_nullable from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_codes' and column_name = 'tok_enc'`;
+    expect(shape).toEqual({ data_type: "bytea", is_nullable: "YES" });
+    const r = await rig();
+    const id = await insertCode(r);
+    await expect(sql`update fixture_stream_codes set ended_at = now(), end_cause = 'expired' where id = ${id}`, "ended with its tok still sealed")
+      .rejects.toMatchObject({ code: "23514" });
+    await expect(sql`update fixture_stream_codes set ended_at = now(), tok_enc = null where id = ${id}`, "ended_at without end_cause")
+      .rejects.toMatchObject({ code: "23514" });
+    await expect(sql`update fixture_stream_codes set ended_at = now(), end_cause = 'stolen', tok_enc = null where id = ${id}`, "an end_cause outside the list")
+      .rejects.toMatchObject({ code: "23514" });
+    await sql`update fixture_stream_codes set ended_at = now(), end_cause = 'expired', tok_enc = null where id = ${id}`;
+    // The DB's pattern is the contract's, read from pg_constraint — never a second copy typed here.
+    const defs = await sql<{ def: string }[]>`
+      select pg_get_constraintdef(oid) as def from pg_constraint
+       where conrelid = 'fixture_stream_codes'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%code ~%'`;
+    expect(defs).toHaveLength(1);
+    expect(defs[0]!.def).toContain(`'${CAPTURE_CODE_RE.source}'`);
+    const r2 = await rig();
+    for (const bad of ["abcdefghijkl", "ABCDEFGHJKMN", "abcdefghjkm", "abcdefghjkmnp"]) {   // i/l, upper case, 11, 13
+      expect(CAPTURE_CODE_RE.test(bad), bad).toBe(false);
+      await expect(insertCode(r2, { code: bad }), bad).rejects.toMatchObject({ code: "23514" });
+    }
+    await expect(sql`insert into fixture_stream_codes (org_id, fixture_id, code, tok_hash, issued_by)
+                     values (${r2.orgId}, ${r2.fixtureId}, ${newCode()}, 'not-hex', ${r2.userId})`).rejects.toMatchObject({ code: "23514" });
+    await insertCode(r2, { tokEnc: null });                               // an active code with no envelope is admitted (ensure re-mints)
+  });
+
+  it("fixture_stream_pairings and fixture_stream_phone_beats: every enum and bound refuses, and the accepted twin lands", async () => {
+    const r = await rig();
+    const codeId = await insertCode(r);
+    const base = { org: r.orgId, code: codeId };
+    const pairing = (col: string, value: unknown) => sql`
+      insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, claimed_at, last_beat_at, answered_poll_seconds)
+      values (${base.org}, ${base.code}, 7, ${"phone-" + randomUUID()}, 'new', now(), now(), 10)
+      returning id`.then(async ([row]) => {
+        try { await sql`update fixture_stream_pairings set ${sql(col)} = ${value as never} where id = ${row!.id}`; }
+        finally { await sql`update fixture_stream_pairings set ended_at = now(), end_cause = 'replaced' where id = ${row!.id}`; }
+      });
+    const refusals: [string, unknown][] = [
+      ["slot", -1], ["phone", "short"], ["phone", "p".repeat(65)], ["claim_kind", "steal"], ["device_model", "m".repeat(81)],
+      ["app_version", "v".repeat(41)], ["mode", "manual"], ["not_ready", "battery"], ["start_failed", "boom"],
+      ["answered_poll_seconds", 4], ["answered_poll_seconds", 301], ["end_cause", "replaced"],
+    ];
+    for (const [col, bad] of refusals) await expect(pairing(col, bad), `${col} = ${String(bad)}`).rejects.toMatchObject({ code: "23514" });
+    // The accepted twin: every bound at its edge.
+    const pid = await insertPairing(r.orgId, codeId, { slot: 0, phone: "p".repeat(16) });
+    await sql`update fixture_stream_pairings set phone = ${"p".repeat(64)}, answered_poll_seconds = 5, mode = 'operator', not_ready = 'held',
+                start_failed = 'cred-host', device_model = ${"m".repeat(80)}, app_version = ${"v".repeat(40)} where id = ${pid}`;
+    await sql`update fixture_stream_pairings set answered_poll_seconds = 300 where id = ${pid}`;
+
+    const beat = (over: Record<string, unknown>) => sql`
+      insert into fixture_stream_phone_beats ${sql({ org_id: r.orgId, pairing_id: pid, recorded_at: new Date(), kind: "minute", raw: sql.json({}), ...over } as never)}`;
+    for (const [col, bad] of [["kind", "hour"], ["battery_pct", 101], ["battery_pct", -1], ["delivery", "lost"]] as const) {
+      await expect(beat({ [col]: bad }), `${col} = ${bad}`).rejects.toMatchObject({ code: "23514" });
+    }
+    await beat({ kind: "change", battery_pct: 0, delivery: "stalled", flags: ["battery_low", "hot"], delivered_lag_s: 12.3 });
+    await beat({ kind: "minute", battery_pct: 100, delivery: "ok" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_phone_beats where pairing_id = ${pid}`;
+    expect(n).toBe(2);
+  });
+
+  it("fixture_stream_sessions: start_cause defaults to 'organiser' and admits exactly organiser/operator/automatic (read from the fold); code_id, pairing_id, phone_beat, phone_beat_at and warming_at are NULLABLE with no default", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const [row] = await sql<Record<string, unknown>[]>`
+      select start_cause, code_id, pairing_id, phone_beat, phone_beat_at, warming_at from fixture_stream_sessions where id = ${sid}`;
+    expect(row).toEqual({ start_cause: "organiser", code_id: null, pairing_id: null, phone_beat: null, phone_beat_at: null, warming_at: null });
+    const causes = lastCheckList("fixture_stream_sessions", "start_cause");
+    expect(causes, "the fold declares start_cause's list").toHaveLength(3);
+    for (const cause of causes) await sql`update fixture_stream_sessions set start_cause = ${cause} where id = ${sid}`;
+    await expect(sql`update fixture_stream_sessions set start_cause = 'phone' where id = ${sid}`).rejects.toMatchObject({ code: "23514" });
+    const cols = await sql<{ column_name: string; is_nullable: string; column_default: string | null }[]>`
+      select column_name, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions'
+         and column_name in ('code_id', 'pairing_id', 'phone_beat', 'phone_beat_at', 'warming_at')
+       order by column_name`;
+    expect(cols).toEqual(["code_id", "pairing_id", "phone_beat", "phone_beat_at", "warming_at"].map((c) => ({ column_name: c, is_nullable: "YES", column_default: null })));
+  });
+
+  it("fixture_stream_sessions.ingest_read_failed (B7 re-review, the outage gap): boolean NOT NULL default false — a new session starts with no failed read, and null is refused", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const [row] = await sql<{ ingest_read_failed: unknown }[]>`select ingest_read_failed from fixture_stream_sessions where id = ${sid}`;
+    expect(row).toEqual({ ingest_read_failed: false });
+    const [col] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name = 'ingest_read_failed'`;
+    expect(col).toEqual({ data_type: "boolean", is_nullable: "NO", column_default: "false" });
+    await expect(sql`update fixture_stream_sessions set ingest_read_failed = null where id = ${sid}`).rejects.toMatchObject({ code: "23502" });
+  });
+
+  it("the drop and the rename (R3): qr_issued_first_at is GONE, credentials_served_first_at and credentials_served_count are present, the pre-rename names are absent", async () => {
+    const cols = await sql<{ column_name: string }[]>`
+      select column_name from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions'
+         and column_name in ('qr_issued_first_at', 'credentials_revealed_first_at', 'credentials_reveal_count',
+                             'credentials_served_first_at', 'credentials_served_count')
+       order by column_name`;
+    expect(cols.map((c) => c.column_name)).toEqual(["credentials_served_count", "credentials_served_first_at"]);
+    // The counter's check follows the column's name (B3 review m-7), and still refuses a negative (the session-facts case).
+    const checks = await sql<{ conname: string }[]>`
+      select conname from pg_constraint
+       where conrelid = 'fixture_stream_sessions'::regclass and conname like 'fixture_stream_sessions_credentials_%'
+       order by conname`;
+    expect(checks.map((c) => c.conname)).toEqual(["fixture_stream_sessions_credentials_served_count_check"]);
+  });
+
+  it("end_reason admits EXACTLY the fold's five — every one lands on an ending session, anything else is refused — and the live constraint lists the same five", async () => {
+    const five = lastCheckList("fixture_stream_sessions", "end_reason");
+    expect(five, "read from the parsed delta, never typed").toHaveLength(5);
+    const r = await rig();
+    let admitted = 0;
+    for (const reason of five) {
+      const sid = await insertSession(r, "ending");
+      await sql`update fixture_stream_sessions set end_reason = ${reason} where id = ${sid}`;
+      await sql`update fixture_stream_sessions set state = 'completed' where id = ${sid}`;   // frees the one-active slot
+      admitted++;
+    }
+    expect(admitted).toBe(5);
+    const sid = await insertSession(r, "ending");
+    await expect(sql`update fixture_stream_sessions set end_reason = 'crashed' where id = ${sid}`).rejects.toMatchObject({ code: "23514", constraint_name: "fixture_stream_sessions_end_reason_check" });
+    await sql`update fixture_stream_sessions set state = 'completed' where id = ${sid}`;   // leave no open row behind
+    const [def] = await sql<{ def: string }[]>`
+      select pg_get_constraintdef(oid) as def from pg_constraint
+       where conrelid = 'fixture_stream_sessions'::regclass and conname = 'fixture_stream_sessions_end_reason_check'`;
+    expect([...def!.def.matchAll(/'([^']+)'::text/g)].map((m) => m[1]!).sort()).toEqual([...five].sort());
+  });
+
+  it("the end-reason value check keeps Postgres's DEFAULT name for V410's inline check — fixture_stream_sessions_end_reason_check, read from pg_constraint (A4) — and the named state check is unchanged", async () => {
+    const rows = await sql<{ conname: string; def: string }[]>`
+      select conname, pg_get_constraintdef(oid) as def from pg_constraint
+       where conrelid = 'fixture_stream_sessions'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%end_reason%'
+       order by conname`;
+    expect(rows.map((r) => r.conname)).toEqual(["fixture_stream_sessions_end_reason_check", "fixture_stream_sessions_end_reason_state"]);
+    expect(rows[1]!.def).toBe("CHECK (((end_reason IS NULL) OR (state = ANY (ARRAY['ending'::text, 'completed'::text]))))");
+  });
+
+  it("fixture_stream_events.source admits 'phone' (the fold's list, V410's eight kept), and still refuses an unknown source", async () => {
+    const sources = lastCheckList("fixture_stream_events", "source");
+    expect(sources).toContain("phone");
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    let seq = 0;
+    for (const source of sources) {
+      seq++;
+      await sql`insert into fixture_stream_events (session_id, org_id, seq, source, kind, type) values (${sid}, ${r.orgId}, ${seq}, ${source}, 'observed', 'probe')`;
+    }
+    expect(seq).toBe(sources.length);
+    await expect(sql`insert into fixture_stream_events (session_id, org_id, seq, source, kind, type) values (${sid}, ${r.orgId}, ${seq + 1}, 'ufo', 'observed', 'probe')`)
+      .rejects.toMatchObject({ code: "23514", constraint_name: "fixture_stream_events_source_check" });
+  });
+
+  it("fixtures.finished_at is a NULLABLE timestamptz with no default, kept by the BEFORE INSERT OR UPDATE OF status trigger fixtures_track_finished", async () => {
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixtures' and column_name = 'finished_at'`;
+    expect(shape).toEqual({ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null });
+    const [trg] = await sql<{ def: string }[]>`
+      select pg_get_triggerdef(t.oid) as def from pg_trigger t
+       where t.tgrelid = 'fixtures'::regclass and t.tgname = 'fixtures_track_finished'`;
+    expect(trg?.def).toMatch(/^CREATE TRIGGER fixtures_track_finished BEFORE INSERT OR UPDATE OF status ON \w+\.fixtures FOR EACH ROW EXECUTE FUNCTION fixtures_track_finished\(\)$/);
+  });
+
+  it("T35: deleting the fixture deletes its codes, pairings, beat history and settings (cascade); the session survives with fixture_id, code_id and pairing_id all null", async () => {
+    const r = await rig();
+    const codeId = await insertCode(r);
+    const pid = await insertPairing(r.orgId, codeId);
+    await sql`insert into fixture_stream_phone_beats (org_id, pairing_id, recorded_at, kind, raw) values (${r.orgId}, ${pid}, now(), 'minute', '{}'::jsonb)`;
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, target_id) values (${r.fixtureId}, ${r.orgId}, ${r.targetId})`;
+    const sid = await insertSession(r, "live");
+    await sql`update fixture_stream_sessions set code_id = ${codeId}, pairing_id = ${pid}, start_cause = 'operator' where id = ${sid}`;
+    await sql`delete from fixtures where id = ${r.fixtureId}`;
+    const [left] = await sql<{ codes: number; pairings: number; beats: number; settings: number }[]>`
+      select (select count(*) from fixture_stream_codes where id = ${codeId})::int as codes,
+             (select count(*) from fixture_stream_pairings where id = ${pid})::int as pairings,
+             (select count(*) from fixture_stream_phone_beats where pairing_id = ${pid})::int as beats,
+             (select count(*) from fixture_stream_settings where fixture_id = ${r.fixtureId})::int as settings`;
+    expect(left).toEqual({ codes: 0, pairings: 0, beats: 0, settings: 0 });
+    const [session] = await sql<{ fixture_id: string | null; code_id: string | null; pairing_id: string | null; start_cause: string }[]>`
+      select fixture_id, code_id, pairing_id, start_cause from fixture_stream_sessions where id = ${sid}`;
+    expect(session).toEqual({ fixture_id: null, code_id: null, pairing_id: null, start_cause: "operator" });
   });
 });

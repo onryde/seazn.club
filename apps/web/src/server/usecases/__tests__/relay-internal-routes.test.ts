@@ -32,7 +32,7 @@ import { MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS
 import { failReasonFromExit, type ExitInfo } from "@/server/relay/domain/runner";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
-import { rigUser } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { recordEvent, recordSample } from "@/server/relay/telemetry";
 import { mintRelayToken, verifyRelayToken } from "@/server/relay/tokens";
 import { GET as facts } from "@/app/api/internal/relay/sessions/[sid]/route";
@@ -81,6 +81,7 @@ async function session(mode: Mode = "composed") {
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
   const runner = new FakeRunner();
   setRelayDriversForTest({ ingest, runner });
+  await pairPresentPhone(fixtureId);   // A7 (capture QR v2 T6): W5 refuses a Go live with no present phone
   const { sessionId } = await createSession(auth, fixtureId, { mode, targetId: target.id }, defaultDeps("http://app.test"));
   // A passthrough session has no Machine, so no runner ever mints its job token; the 410 case mints one the same way.
   const jobToken = mode === "composed"

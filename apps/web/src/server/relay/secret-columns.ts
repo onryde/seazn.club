@@ -342,3 +342,50 @@ export async function replaceTargetKey(tx: Tx, orgId: string, targetId: string, 
   if (!winner) throw new StreamTargetVanishedError();
   return { ok: false, reason: "duplicate", other: { id: winner.id, label: winner.label } };
 }
+
+// ---------------------------------------------------------------------------
+// Capture QR v2 §6.1 (T5) — the stream code's sealed tok. `tok_hash` (sha256 hex) is what a phone's call is checked
+// against; `tok_enc` exists only so the organiser's ensure can RE-SHOW the same QR. The caller seals (sealWith
+// "RELAY_KEK") BEFORE it calls any writer here, so a missing KEK writes nothing (the device-links Q1 order).
+// ---------------------------------------------------------------------------
+
+/** Mint one ACTIVE code. The partial unique index `fixture_stream_codes_one_active` admits one per fixture and the
+ *  `code` column is globally unique — a collision is the caller's to retry (it surfaces as 23505
+ *  `fixture_stream_codes_code_key`). `orgId` is the FIXTURE's org (R1: no tenant policy on this table). */
+export async function insertStreamCode(
+  tx: Tx,
+  a: { orgId: string; fixtureId: string; code: string; tokHash: string; tokEnc: Buffer; issuedBy: string },
+): Promise<{ id: string; createdAt: Date }> {
+  const [row] = await tx<{ id: string; created_at: Date }[]>`
+    insert into fixture_stream_codes (org_id, fixture_id, code, tok_hash, tok_enc, issued_by)
+    values (${a.orgId}, ${a.fixtureId}, ${a.code}, ${a.tokHash}, ${a.tokEnc}, ${a.issuedBy})
+    returning id, created_at`;
+  return { id: row!.id, createdAt: row!.created_at };
+}
+
+/** The code's tok, opened — or null when there is nothing to re-show: no such row, an ENDED code (its envelope was
+ *  wiped), or an envelope that will not open under a VALID KEK (logged: an unopenable envelope is how a KEK change
+ *  shows itself, and the caller reissues). A missing or malformed KEK is the deployment's fault and throws the KEK's own
+ *  error (M3), never null — so it can never read as "reissue". */
+export async function openStreamCodeTok(tx: Tx, codeId: string): Promise<string | null> {
+  const [row] = await tx<{ tok_enc: Uint8Array | null }[]>`select tok_enc from fixture_stream_codes where id = ${codeId}`;
+  if (!row || row.tok_enc === null) return null;
+  try {
+    return open(row.tok_enc);
+  } catch (err) {
+    rethrowKekFault(err);
+    log.warn({ codeId }, "stream code: the sealed tok will not open under the current key");
+    return null;
+  }
+}
+
+/** End an ACTIVE code and wipe its sealed tok in the same write (V430: an ended row holds no envelope). A code already
+ *  ended is left exactly as it is — its first cause and time stand. */
+export async function wipeStreamCodeTok(
+  tx: Tx, codeId: string, cause: "reissued" | "expired", endedBy: string | null,
+): Promise<void> {
+  await tx`
+    update fixture_stream_codes
+       set ended_at = now(), end_cause = ${cause}, ended_by = ${endedBy}, tok_enc = null
+     where id = ${codeId} and ended_at is null`;
+}

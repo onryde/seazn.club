@@ -16,7 +16,8 @@ const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", mac
 const S = (over: Partial<Session> = {}): Session => ({
   id: "s1", fixtureId: "f1", orgId: "o1", mode: "passthrough", state: "warming", desiredState: "live",
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
-  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: MAX_DURATION_MINUTES, outputUid: null, ...over,
+  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: MAX_DURATION_MINUTES, outputUid: null,
+  startCause: "organiser", warmingAt: null, ...over,
 });
 
 describe("evaluate", () => {
@@ -95,6 +96,22 @@ describe("evaluate", () => {
   it("warming ≥ 10 min → warming_timeout at the threshold, none one second before", () => {
     expect(evaluate(S(), at(WARMING_TIMEOUT_MINUTES * 60 - 1))).toEqual({ kind: "none" });
     expect(evaluate(S(), at(WARMING_TIMEOUT_MINUTES * 60))).toEqual({ kind: "warming_timeout" });
+  });
+  // A8 (capture QR v2 §5.3): the warming timeout is anchored on warming ENTRY, so time spent provisioning no longer eats
+  // the phone's pre-flight window. The 179 s is a provisioning that ran long; the two anchors then differ, and only the
+  // warming one may decide. The null fallback is LOAD-BEARING: a session opened before V430 has no warming_at.
+  it("A8: provisioning took 179 s — the warming timeout runs the full WARMING_TIMEOUT_MINUTES from warmingAt: NOT timed out at createdAt + limit, timed out at warmingAt + limit (and not one second before)", () => {
+    const PROVISIONED_AFTER_S = 179;
+    const s = S({ warmingAt: at(PROVISIONED_AFTER_S) });
+    const limit = WARMING_TIMEOUT_MINUTES * 60;
+    expect(evaluate(s, at(limit)), "createdAt + limit: the old anchor would fire here").toEqual({ kind: "none" });
+    expect(evaluate(s, at(PROVISIONED_AFTER_S + limit - 1))).toEqual({ kind: "none" });
+    expect(evaluate(s, at(PROVISIONED_AFTER_S + limit))).toEqual({ kind: "warming_timeout" });
+  });
+  it("A8 null fallback: a session with warmingAt null (opened before V430) times out at createdAt + limit, not one second before", () => {
+    const s = S({ warmingAt: null });
+    expect(evaluate(s, at(WARMING_TIMEOUT_MINUTES * 60 - 1))).toEqual({ kind: "none" });
+    expect(evaluate(s, at(WARMING_TIMEOUT_MINUTES * 60))).toEqual({ kind: "warming_timeout" });
   });
   it("live: wall clock from started_at ≥ max_duration → wall_clock (boundary both sides); warming measures from created_at", () => {
     const live = S({ state: "live", startedAt: at(60) });

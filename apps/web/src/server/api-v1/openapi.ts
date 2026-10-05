@@ -48,6 +48,10 @@ interface RouteSpec {
   query?: Record<string, { schema: object; description?: string }>;
   public?: boolean; // no auth, cacheable
   errors?: number[]; // extra documented error statuses
+  /** Capture QR v2 §6.3 (the phone's routes): the 2xx is the BARE `response` shape and every refusal the bare
+   *  `{code, message}` of the capture-refusal contract — no `{ok, data | error, requestId}` envelope, no 400 (a bad
+   *  request is 422 `invalid`) — and the Bearer is the stream code's tok, never a session or an API key. */
+  bare?: boolean;
 }
 
 const PAGE_QUERY = {
@@ -165,9 +169,19 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}", method: "patch", summary: "Schedule move, venue, officials, pin/lock — blocking conflicts → 409, warn-level ones come back in `conflicts`", tag: "fixtures", request: S.PatchFixture, response: S.PatchedFixture, errors: [402, 409, 422] },
   { path: "/fixtures/{id}/stream", method: "put", summary: "Set or clear the fixture's public broadcast link (https, exact-host allowlist: YouTube, Facebook, Twitch, Kick) — surfaces as \"Watch live\" on the public match page", tag: "fixtures", request: S.PutFixtureStream, response: S.FixtureStream, errors: [403, 404, 422] },
   // Streaming R1 — phone relay sessions (design §6.3). Never key-reachable (key-scopes.ts).
-  { path: "/fixtures/{id}/stream-sessions", method: "post", summary: "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 503 storage_exhausted (no row is written)", tag: "fixtures", request: S.CreateStreamSession, response: S.StreamSessionCreated, status: 201, errors: [402, 403, 404, 409, 422, 503] },
-  { path: "/fixtures/{id}/stream-sessions/current", method: "get", summary: "The fixture's latest relay session as the organiser sees it (state, health, the QR payload while warming) — null when none exists", tag: "fixtures", response: S.StreamSessionCurrent.nullable(), query: { reveal: { schema: { type: "string", enum: ["1"] }, description: "`1` marks this read a credential REVEAL (the QR first shown, or Copy tapped) and counts it; absent, the read is a poll and counts nothing; any other value is 400" } }, errors: [403, 404] },
+  { path: "/fixtures/{id}/stream-sessions", method: "post", summary: "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 phone_not_paired (no phone is paired and answering on the fixture's stream code — scan it first; asked after active_session and before credits, so no row is written and no credit spent), 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 503 storage_exhausted (no row is written)", tag: "fixtures", request: S.CreateStreamSession, response: S.StreamSessionCreated, status: 201, errors: [402, 403, 404, 409, 422, 503] },
+  { path: "/fixtures/{id}/stream-sessions/current", method: "get", summary: "The fixture's latest relay session as the organiser sees it (state, health, the phone-lost countdown, the restart allowance) — null when none exists. Carries no credential. A `reveal` query parameter (the removed v1 QR's) is 400", tag: "fixtures", response: S.StreamSessionCurrent.nullable(), errors: [403, 404] },
   { path: "/fixtures/{id}/stream-sessions/{sid}/stop", method: "post", summary: "Ask a running relay session to end (desired_state = ending); a passthrough session completes at once. Idempotent: a session already ending or ended answers the same projection and decides nothing (no transition, no provider call) — a tap on a session still ending is recorded as the organiser's action, one on an ended session writes nothing; 409 not_active when the fixture has since started a newer session", tag: "fixtures", response: S.StreamSessionCurrent, errors: [403, 404, 409] },
+  // Capture QR v2 (T5) — the stable stream code and the destination pre-pick. Never key-reachable (key-scopes.ts).
+  { path: "/fixtures/{id}/stream-code", method: "post", summary: "The fixture's stable stream code (editor session only): re-shows the ACTIVE code (the same QR) or mints one; never ends a code. Served private, no-store (the tok is live). 402 without streaming.relay, 422 fixture_finished (the match is over: nothing left to start), 503 RELAY_KEK_MISSING (the server has no key; nothing is written)", tag: "fixtures", response: S.StreamCodeShown, errors: [402, 403, 404, 422, 503] },
+  { path: "/fixtures/{id}/stream-code/reissue", method: "post", summary: "Revoke & reissue the fixture's stream code: the ACTIVE code ends at once (a phone already streaming keeps its session until it ends) and a fresh one is minted and shown. 402 without streaming.relay, 422 fixture_finished, 503 RELAY_KEK_MISSING (the old code is untouched)", tag: "fixtures", response: S.StreamCodeShown, errors: [402, 403, 404, 422, 503] },
+  // Capture QR v2 §6.3 — the phone's routes, under the internal `capture` tag: never key-reachable (key-scopes.ts), so
+  // never in the published spec. The JSON contracts (docs/contracts/capture-*.json) stay the cross-repo authority.
+  { path: "/capture/codes/{code}", method: "get", summary: "The phone's descriptor (Bearer: the stream code's tok). With `phone`, it follows the fixture's latest session: open (warming, live, ending) → the session shape, with `cred` only for that session's own phone; ended after warming → completed or failed with its endReason; otherwise, and always without `phone`, the waiting shape. Served private, no-store. 401 code_ended (unknown, wrong tok, ended, or no Bearer — one body), 404 not_a_stream_code, 422 invalid (a slot other than 0, or a `phone` that is not 16–64 characters), 429 rate_limited, 503 unavailable. Never 410", tag: "capture", bare: true, response: S.CaptureDescriptor, query: { slot: { schema: { type: "integer", enum: [0] }, description: "The camera slot; omitted = 0, any other is 422 invalid" }, phone: { schema: { type: "string", minLength: 16, maxLength: 64 }, description: "The phone's id: picks the session shape, and `cred` for the session's own phone" } }, errors: [422, 429, 503] },
+  { path: "/capture/codes/{code}/beats", method: "post", summary: "The phone's beat (Bearer: the stream code's tok), every pollSeconds. A strict body: a claim (new/resume) decides who holds slot 0 (a live slot is `taken` unless its phone is dead — no beat, no video and a fresh read not connected for 60 s); the current phone's beat is stored on the server's clock; `ended` from the session's phone is the operator's Stop (it ends the pairing), and `stopped` closes that sid unless another current phone holds it. Answers by state: waiting, go-live (sid, startedBy), live (sid), over (sid, endReason), replaced, taken — each with the waiting fields and pollSeconds. Served private, no-store. 401 code_ended, 404 not_a_stream_code, 422 invalid (a malformed body, a slot other than 0, a body naming another code), 429 rate_limited, 503 unavailable. Never 410", tag: "capture", bare: true, request: S.CaptureBeat, response: S.CaptureBeatAnswer, errors: [422, 429, 503] },
+  { path: "/capture/codes/{code}/start", method: "post", summary: "The phone's own start (Bearer: the stream code's tok), body {phone}: the CURRENT phone starts its match on the organiser's pre-picked destination, cause operator, through the one start path. 200 {sid}. 409 already_live {sid, startedBy} (a session is running — a retry after a lost 200 meets this with the same sid), 409 replaced (not the current phone), 409 no_destination (no pre-pick, archived, held by another match, not allowed, or its key unreadable), 402 no_credit, 403 not_entitled, 503 unavailable (storage exhausted, the ingest unavailable, the relay disabled). 401 code_ended (an ended code starts nothing), 404 not_a_stream_code, 422 invalid, 429 rate_limited with Retry-After. Served private, no-store. Not idempotent. Never 410", tag: "capture", bare: true, request: S.CaptureStartBody, response: S.CaptureStartOk, errors: [402, 403, 409, 422, 429, 503] },
+  { path: "/fixtures/{id}/stream-phone", method: "get", summary: "The organiser panel's phone read model (editor session only): the fixture's stream code (active, finishing or ended, with its end cause), its paired phone — present, silent and not responding judged on the server's clock, its model, app version, mode, state, readiness and latest beat (battery, bitrate, delivery, thermal, data used), with elapsedMs since that beat on the server's clock — the destination pre-pick (null when archived), and the last time another phone took the slot. A session with no phone (opened before stream codes) shows no phone. Carries no secret. Served private, no-store", tag: "fixtures", response: S.StreamPhone, errors: [403, 404] },
+  { path: "/fixtures/{id}/stream-settings", method: "put", summary: "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it). 404 when the target is not this org's, is archived, or does not exist", tag: "fixtures", request: S.PutStreamSettings, response: S.StreamSettings, errors: [403, 404] },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "get", summary: "Get a side's lineup", tag: "fixtures" },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "put", summary: "Replace a side's lineup", tag: "fixtures", request: S.PutLineup, errors: [422] },
   { path: "/fixtures/{id}/events", method: "post", summary: "Append a score event (THE scoring endpoint). 403 RESULT_CARRIED_FORWARD: a device link writing to a fixture whose settled result has already moved the competition on (its winner or loser feed seated, the next Swiss round paired, or its stage complete) — corrections are then the organiser's. A keyed retry of a write the ledger already holds still gets its original answer", tag: "scoring", request: S.AppendEventRequest, response: S.AppendEventResponse, status: 201, errors: [403, 409, 422, 429] },
@@ -696,9 +710,11 @@ function pathParams(path: string): object[] {
     name,
     in: "path",
     required: true,
-    schema: name.endsWith("Slug") || name === "slug" || name === "sport"
-      ? { type: "string" }
-      : { type: "string", format: "uuid" },
+    schema: name === "code"
+      ? { type: "string", pattern: S.CAPTURE_CODE_RE.source }   // capture QR v2: the stream code, not a uuid
+      : name.endsWith("Slug") || name === "slug" || name === "sport"
+        ? { type: "string" }
+        : { type: "string", format: "uuid" },
   }));
 }
 
@@ -761,22 +777,24 @@ function requiredScope(route: RouteSpec): string | null {
 
 function operation(route: RouteSpec): Record<string, unknown> {
   const scope = requiredScope(route);
+  // A bare route (capture QR v2) answers the shape itself and refuses with the capture-refusal body.
+  const errorBody = route.bare ? toSchema(S.CaptureRefusal) : ERROR_ENVELOPE;
   const responses: Record<string, unknown> = {
     [String(route.status ?? 200)]: {
       description: "Success",
-      content: { "application/json": { schema: envelope(route.response) } },
+      content: { "application/json": { schema: route.bare && route.response ? toSchema(route.response) : envelope(route.response) } },
     },
-    "400": { description: "Validation error", content: { "application/json": { schema: ERROR_ENVELOPE } } },
   };
+  if (!route.bare) responses["400"] = { description: "Validation error", content: { "application/json": { schema: ERROR_ENVELOPE } } };
   if (!route.public) {
-    responses["401"] = { description: "Not authenticated", content: { "application/json": { schema: ERROR_ENVELOPE } } };
+    responses["401"] = { description: "Not authenticated", content: { "application/json": { schema: errorBody } } };
   }
-  responses["404"] = { description: "Not found", content: { "application/json": { schema: ERROR_ENVELOPE } } };
+  responses["404"] = { description: "Not found", content: { "application/json": { schema: errorBody } } };
   const overrides = ERROR_SCHEMA_OVERRIDES[`${route.method.toUpperCase()} ${route.path}`];
   for (const status of route.errors ?? []) {
     responses[String(status)] = {
       description: { 402: "Plan upgrade required", 409: "Conflict", 422: "Rejected by the engine", 429: "Rate limited" }[status] ?? "Error",
-      content: { "application/json": { schema: overrides?.[status] ?? ERROR_ENVELOPE } },
+      content: { "application/json": { schema: overrides?.[status] ?? errorBody } },
     };
   }
   // Response example: success envelope around a data sample.
@@ -784,11 +802,10 @@ function operation(route: RouteSpec): Record<string, unknown> {
     content?: { "application/json": { schema: unknown; example?: unknown } };
   };
   if (success?.content) {
-    success.content["application/json"].example = {
-      ok: true,
-      data: route.response ? exampleOf(toSchema(route.response)) : {},
-      requestId: "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-    };
+    const data = route.response ? exampleOf(toSchema(route.response)) : {};
+    success.content["application/json"].example = route.bare
+      ? data
+      : { ok: true, data, requestId: "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b" };
   }
   return {
     summary: route.summary,
@@ -820,7 +837,7 @@ function operation(route: RouteSpec): Record<string, unknown> {
         }
       : {}),
     responses,
-    security: route.public ? [] : [{ sessionCookie: [] }, { apiKey: [] }],
+    security: route.public ? [] : route.bare ? [{ captureTok: [] }] : [{ sessionCookie: [] }, { apiKey: [] }],
   };
 }
 
@@ -846,7 +863,7 @@ export function buildOpenApiDocument(
     { name: "device-links" }, { name: "api-keys" }, { name: "registration" },
     { name: "clubs" }, { name: "officials" }, { name: "sponsors" }, { name: "venues" }, { name: "history" },
     { name: "exports" }, { name: "stats" }, { name: "discipline" }, { name: "news" },
-    { name: "public" },
+    { name: "public" }, { name: "capture" },
   ].filter((t) => usedTags.has(t.name));
   return {
     openapi: "3.1.0",
@@ -878,6 +895,16 @@ export function buildOpenApiDocument(
             "Pro API key: `Authorization: Bearer sc_…` (entitlement api.access). " +
             "Scopes: read < score < manage; see x-required-scope per operation.",
         },
+        // The capture routes are internal (never key-reachable), so the PUBLISHED spec neither lists them nor this.
+        ...(opts.published ? {} : {
+          captureTok: {
+            type: "http",
+            scheme: "bearer",
+            description:
+              "Capture QR v2 (§6.3): the phone's Bearer is the stream code's `tok` from the QR — accepted ONLY by " +
+              "the `capture` routes of ITS code. Unknown, wrong, ended or missing → 401 code_ended (one body).",
+          },
+        }),
         deviceLink: {
           type: "http",
           scheme: "bearer",

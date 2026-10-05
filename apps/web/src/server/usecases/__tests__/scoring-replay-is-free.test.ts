@@ -36,11 +36,11 @@ const send = (fixtureId: string, key: string) =>
  *  so the write and replay buckets cannot mask one another. */
 function recordingCounter(seen: string[]) {
   const counts = new Map<string, number>();
-  return async (key: string) => {
+  return async (key: string, windowSeconds: number) => {
     seen.push(key);
     const next = (counts.get(key) ?? 0) + 1;
     counts.set(key, next);
-    return next;
+    return { count: next, ttlMs: windowSeconds * 1000 };
   };
 }
 

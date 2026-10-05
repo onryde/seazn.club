@@ -94,6 +94,10 @@ export const FixtureSnapshot = z.object({
   outcome: JsonObject.nullable().optional(),
   /** Did the row carry score events? They cascade away with the delete. */
   scored: z.boolean().optional(),
+  /** When the row entered the finished set (V430). Restored with `status` /
+   *  `outcome`, on an unscored row only; V430's insert trigger keeps a supplied
+   *  stamp and stamps now() when there is none (an older snapshot). */
+  finished_at: z.string().nullable().optional(),
 });
 export type FixtureSnapshot = z.infer<typeof FixtureSnapshot>;
 

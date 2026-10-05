@@ -77,7 +77,7 @@ vi.mock("@/lib/cache", async (importOriginal) => {
     ...actual,
     incrWindow: (key: string) => {
       limiter.calls.push(key);
-      return Promise.resolve(limiter.calls.filter((k) => k === key).length);
+      return Promise.resolve({ count: limiter.calls.filter((k) => k === key).length, ttlMs: 60_000 });
     },
   };
 });

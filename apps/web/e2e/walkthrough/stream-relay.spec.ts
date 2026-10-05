@@ -49,6 +49,7 @@ import {
   shotQr,
   wakeLockCounts,
 } from "../helpers/qr-enlarge";
+import { disposeFakePhones, pairPhoneOnFixture, pairedPhone, parseCaptureQr, QR_KEYS } from "../helpers/fake-capture-phone";
 import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
@@ -59,7 +60,7 @@ import {
   FakeIngest,
   fakeRecoveringKey,
 } from "../../src/server/relay/fakes";
-import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
+import { FREE_RESTARTS_PER_WINDOW, MAX_DURATION_MINUTES } from "../../src/server/relay/config";
 
 // ===========================================================================
 // Kit (file-local)
@@ -183,7 +184,13 @@ async function teardownStreams(): Promise<void> {
 }
 
 test.afterEach(async () => {
-  await teardownStreams();
+  // Capture QR v2 (W5): every Go live here pairs a fake phone first (helpers/fake-capture-phone.ts); its keep-alive is
+  // stopped before the streams are, and a contract break it recorded in the background reds the test here.
+  try {
+    await disposeFakePhones();
+  } finally {
+    await teardownStreams();
+  }
 });
 
 // Copy, from the dictionaries themselves — never typed here, so a copy edit moves the expectation with it.
@@ -345,9 +352,12 @@ async function addTargetApi(
 /** The picker's option for a destination (T8): its name and its platform, e.g. "Club (YouTube)". */
 const optionText = (label: string, kind: keyof typeof STREAM_KIND_BRAND = "youtube"): string => `${label} (${STREAM_KIND_BRAND[kind]})`;
 
-/** SETUP: a session LIVE through the API — create, then read `current` (the server's tick) until it goes live. */
-async function goLiveApi(page: Page, fixtureId: string, targetId: string): Promise<{ id: string }> {
+/** SETUP: a session LIVE through the API — a phone paired on the fixture's code (capture QR v2 W5: the create refuses
+ *  `phone_not_paired` without one; `pairPhoneOnFixture` uses a second tab, so `page` is left as it was), then create,
+ *  then read `current` (the server's tick) until it goes live. */
+async function goLiveApi(page: Page, fixtureId: string, targetId: string, fixturePath: string): Promise<{ id: string }> {
   await streamSlot();
+  await pairPhoneOnFixture(page, fixturePath);
   const made = await apiJson<{ id: string }>(page.request, `/api/v1/fixtures/${fixtureId}/stream-sessions`, "POST", {
     mode: "passthrough",
     targetId,
@@ -477,7 +487,9 @@ async function expectTapTargets(scope: Locator, min = 44): Promise<number> {
   const failures: string[] = [];
   for (const h of handles) {
     if (!(await h.isVisible())) continue;
-    await h.scrollIntoViewIfNeeded();
+    // To the viewport's middle, where a thumb meets it once scrolled to: a nearest-edge scroll parks a control above
+    // the fold UNDER the sticky site header, and the probe then measures the header, not the control.
+    await h.evaluate((el: HTMLElement) => el.scrollIntoView({ block: "center", inline: "nearest" }));
     const res = await h.evaluate((el: HTMLElement) => {
       const r = el.getBoundingClientRect();
       const id = el.dataset.testid ?? `${el.tagName.toLowerCase()}:${(el.textContent ?? "").trim().slice(0, 30)}`;
@@ -530,7 +542,7 @@ const WIDTHS = [320, 768, 1280] as const;
 // A1 — the full run, once per width
 // ===========================================================================
 for (const width of WIDTHS) {
-  test(`A1 @${width}: add a destination (in Directory, D1) → pick it → Go live → QR while the camera warms → LIVE (pill, REC, a ticking clock) → Stop → ENDED with its duration and "1 credit used"; the ledger holds one monthly consume`, async ({
+  test(`A1 @${width}: add a destination (in Directory, D1) → pick it → the code card's QR (v2: four keys, no credential) with Go live waiting for a phone → a phone scans and pairs → Go live → the phone hears go-live while the camera warms → LIVE (pill, REC, a ticking clock) → Stop → ENDED with its duration and "1 credit used", and the phone hears it over; the ledger holds one monthly consume`, async ({
     page,
   }) => {
     const NAVS = 3; // openPhoneTab, Directory → Streaming, openPhoneTab again
@@ -585,31 +597,59 @@ for (const width of WIDTHS) {
     // …and back on the match, the picker offers it, selected.
     await openPhoneTab(page, rig, f);
     await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(label));
-    await expect(goLive, "the positive half: with a destination, Go live can start").toBeEnabled();
     const chain = body.getByTestId("stream-chain");
     await expect(chain).toHaveAttribute("data-phone", "notConnected");
     await expect(chain).toHaveAttribute("data-dest", "notLive");
 
-    // GO LIVE → the QR while the camera warms.
-    await streamSlot(); // this test's share of the deployment's stream capacity
-    await goLive.click();
-    await expect(body.getByTestId("stream-qr"), "the QR is drawn in the browser").toBeVisible({ timeout: POLL_WAIT_MS });
-    await expect(pill).toHaveText(eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming"));
-    // §2: waiting for the phone — the Stream control's dot is amber, still "Stream".
-    await expect(streamControl(page)).toHaveAttribute("data-dot", "amber");
-    const session = await latestSession(f.id);
-    const payload = JSON.parse(await body.getByTestId("stream-qr-text").inputValue()) as { v?: number; sid?: string };
-    expect(payload.sid, "the paste code IS the QR payload, for THIS session").toBe(session.id);
-    // T10 (D7): the Seazn QR — an SVG with the logo, drawn by `renderSeaznQr` — never the old raster PNG.
-    await expect(body.getByTestId("stream-qr")).toHaveAttribute("src", /^data:image\/svg\+xml;charset=utf-8,/);
-    await expect(chain).toHaveAttribute("data-phone", "waiting");
-    await expect(chain).toHaveAttribute("data-link1", "connecting");
-    // Everything that reads the QR state goes first — it lasts only until the server's first read after the connect.
+    // READY, NO PHONE (capture QR v2 §6.12): the code card holds the QR — the code to scan BEFORE Go live — and Go live
+    // waits for a phone (W5). The QR is the Seazn QR (T10, D7: an SVG with the logo, drawn by `renderSeaznQr`, never the
+    // old raster PNG), and its paste code is the v2 payload: exactly the four keys, and no credential (§6.2).
+    const card = body.getByTestId("stream-code-card");
+    await expect(card).toBeVisible({ timeout: POLL_WAIT_MS });
+    await expect(card.getByTestId("stream-qr"), "the QR is drawn in the browser").toBeVisible({ timeout: POLL_WAIT_MS });
+    await expect(card.getByTestId("stream-qr")).toHaveAttribute("src", /^data:image\/svg\+xml;charset=utf-8,/);
+    const pasted = await card.getByTestId("stream-qr-text").inputValue();
+    expect(Object.keys(JSON.parse(pasted) as object), "the paste code IS the v2 QR payload, key for key").toEqual([...QR_KEYS]);
+    expect(parseCaptureQr(pasted).v, "v2").toBe(2);
+    await expect(body.getByTestId("stream-phone-strip")).toContainText(en("stream.phone.pairFirst"));
+    await expect(goLive, "a destination but no phone: Go live waits for one (W5)").toBeDisabled();
     await shot(panel, `A1-${width}-2-qr.png`);
     await expectNoHorizontalScroll(page);
     if (width === 320) expect(await expectTapTargets(body), "QR-state controls hit-tested").toBeGreaterThan(0);
-    // One shot, no retry: the checks above measured the QR state, not what came after it.
-    await expect(body.getByTestId("stream-qr"), "the QR state outlasted every check made of it").toBeVisible({ timeout: 1 });
+
+    // A PHONE SCANS IT — the fake phone reads the paste code the panel painted and claims through the real beat route.
+    // The card folds to "Paired · Show the code again", the phone node says Paired, and Go live can start.
+    const phone = await pairedPhone(page);
+    await expect(card, "paired: the card folds away").toHaveCount(0);
+    await expect(chain).toHaveAttribute("data-phone", "paired");
+    await expect(goLive, "the positive half: a destination and a paired phone — Go live can start").toBeEnabled();
+
+    // GO LIVE → waiting for the camera.
+    await streamSlot(); // this test's share of the deployment's stream capacity
+    await goLive.click();
+    await expect(pill).toHaveText(eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming"), { timeout: POLL_WAIT_MS });
+    // §2: waiting for the phone — the Stream control's dot is amber, still "Stream".
+    await expect(streamControl(page)).toHaveAttribute("data-dot", "amber");
+    const session = await latestSession(f.id);
+    await expect(chain).toHaveAttribute("data-phone", "starting");
+    await expect(chain).toHaveAttribute("data-link1", "connecting");
+    // Everything that reads the waiting state goes first — it lasts only until the server's first read after the connect.
+    await shot(panel, `A1-${width}-2b-waiting.png`);
+    await expectNoHorizontalScroll(page);
+    if (width === 320) expect(await expectTapTargets(body), "waiting-state controls hit-tested").toBeGreaterThan(0);
+    // One shot, no retry: the checks above measured the waiting state, not what came after it.
+    await expect(pill, "the waiting state outlasted every check made of it").toHaveText(
+      eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming"),
+      { timeout: 1 },
+    );
+    // THE PHONE hears it: a beat answers go-live for THIS session, started by the organiser (§6.3.3) — once the
+    // session is armed (requested and provisioning answer waiting) — and its descriptor then carries the credential.
+    await expect
+      .poll(async () => (await phone.beat()).ok?.state, { message: "the phone hears go-live", timeout: LIVE_WAIT_MS, intervals: [1_000] })
+      .toBe("go-live");
+    expect(phone.sid, "the go-live names THIS session").toBe(session.id);
+    const own = await phone.get();
+    expect(own.ok && "cred" in own.ok && own.ok.cred, "the session's phone gets its credential").toBeTruthy();
 
     // LIVE — decided by the server on the tab's own poll.
     await expect(pill).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
@@ -661,6 +701,10 @@ for (const width of WIDTHS) {
     await expect(body.getByTestId("stream-ended-never-live")).toHaveCount(0);
     await expect(chain, "§3.2: ended draws no chain").toHaveCount(0);
     expect((await ledger(rig.orgId)).total, "stopping spends nothing more").toBe(rate - 1);
+    // …and the phone that held it hears over, stopped — then, the slot free again, waiting (§6.3.3 rows 3 and 4).
+    const over = await phone.beat({ sid: session.id, state: "publishing" });
+    expect(over.ok, "the phone hears over, stopped").toMatchObject({ state: "over", sid: session.id, endReason: "stopped" });
+    expect((await phone.beat()).ok?.state, "and then waits for the next start").toBe("waiting");
     await expectNoHorizontalScroll(page);
     if (width === 320) expect(await expectTapTargets(body), "ended controls hit-tested").toBeGreaterThan(0);
     await shot(panel, `A1-${width}-4-ended.png`);
@@ -690,6 +734,7 @@ test("A2: monthly + 2 bought → Go live draws the MONTHLY credit (monthly − 1
   await expect(body.getByTestId("stream-credits-split")).toHaveText(en("stream.credits.split", { m: rate, p: bought }));
   await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label));
 
+  await pairedPhone(page); // W5: Go live needs a paired phone
   await streamSlot(); // this test's share of the deployment's stream capacity
   await body.getByTestId("stream-go-live").click();
   await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
@@ -729,7 +774,7 @@ const A3_BALANCES = [
 ] as const;
 
 for (const v of A3_BALANCES) {
-  test(`A3 (${v.id}): a stopped match restarts FREE inside the reuse window — the restart line shows and Go live stays (no forced chooser), it goes live again, the balance chip does not move, and the ledger still holds ONE consume`, async ({
+  test(`A3 (${v.id}): a stopped match restarts FREE inside the reuse window — the restart line shows (0 of ${FREE_RESTARTS_PER_WINDOW} used) and Go live stays (no forced chooser), it goes live again, the balance chip does not move, and the ledger still holds ONE consume`, async ({
     page,
   }) => {
     const NAVS = 2; // openFixture (the grant) + openPhoneTab
@@ -753,10 +798,11 @@ for (const v of A3_BALANCES) {
       else await expect(chip, `${why} (balance 0: no chip)`).toHaveCount(0);
     };
     await expectChip(start, "before the first run");
-    await expect(body.getByTestId("stream-restart-free"), "nothing consumed yet → no reuse window, no restart line").toHaveCount(0);
+    await expect(body.getByTestId("stream-restart"), "nothing consumed yet → no reuse window, no restart line").toHaveCount(0);
     await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label));
 
-    // First run: go live (one credit), stop.
+    // First run: go live (one credit), stop. W5: one phone, paired once — it stays paired across both runs.
+    await pairedPhone(page);
     await streamSlot(); // this test's share of the deployment's stream capacity
     await body.getByTestId("stream-go-live").click();
     await expect(pill).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
@@ -771,7 +817,11 @@ for (const v of A3_BALANCES) {
     // Start another → idle INSIDE the window: the restart line, and Go live — not the forced chooser.
     await body.getByTestId("stream-again").click();
     await expect(pill).toHaveText(en("stream.phone.state.idle"));
-    await expect(body.getByTestId("stream-restart-free")).toHaveText(en("stream.phone.restartFree"));
+    // W23: the restart line counts the restarts that reached video since the paying run — none yet — against the window's
+    // free allowance (config's FREE_RESTARTS_PER_WINDOW), emerald below it.
+    const restart = body.getByTestId("stream-restart");
+    await expect(restart).toHaveText(en("stream.restart.used", { used: 0, limit: FREE_RESTARTS_PER_WINDOW }));
+    await expect(restart).toHaveAttribute("data-tone", "emerald");
     await expect(body.locator('[data-testid^="stream-buy-pack-"]'), "no forced chooser inside the reuse window").toHaveCount(0);
     const goLive = body.getByTestId("stream-go-live");
     await expect(goLive).toBeEnabled();
@@ -813,7 +863,7 @@ test("A4: balance 0 with the reuse window CLOSED → the forced credits chooser 
   await openFixture(page, rig, played); // the fixture page's read grants the month
   await drainMonthlyTo(rig.orgId, 1);
   // SETUP: spend the last credit on `played` and stop it.
-  const live = await goLiveApi(page, played.id, target.id);
+  const live = await goLiveApi(page, played.id, target.id, `${rig.divPath}/f/${played.no}`);
   const stop = await page.request.post(`/api/v1/fixtures/${played.id}/stream-sessions/${live.id}/stop`);
   expect(stop.status(), "setup stop").toBeLessThan(300);
   expect((await ledger(rig.orgId)).total, "premise: balance 0").toBe(0);
@@ -846,13 +896,14 @@ test("A4: balance 0 with the reuse window CLOSED → the forced credits chooser 
   // `current` answers the finished session; Start another puts the tab back to idle.
   await playedBody.getByTestId("stream-again").click();
   await expect(playedBody.getByTestId("stream-go-live")).toBeEnabled();
-  await expect(playedBody.getByTestId("stream-restart-free")).toBeVisible();
+  await expect(playedBody.getByTestId("stream-restart")).toHaveText(en("stream.restart.used", { used: 0, limit: FREE_RESTARTS_PER_WINDOW }));
   await expect(playedBody.locator('[data-testid^="stream-buy-pack-"]')).toHaveCount(0);
 
   // Close's positive half: with a credit the chooser is not forced — Buy more opens it, and an OPENED chooser has Close.
   await grantRigPackCredits(rig.orgId, 1);
   const again = (await openPhoneTab(page, rig, fresh)).locator("[data-phone-body]");
   await expect(again.getByTestId("stream-balance"), "a bought credit: balance 1").toHaveText(creditsChip(1));
+  await pairedPhone(page); // W5: Go live is offered to a paired phone
   await expect(again.getByTestId("stream-go-live"), "not forced: Go live is back").toBeEnabled();
   await expect(again.locator('[data-testid^="stream-buy-pack-"]'), "not forced: no chooser until asked").toHaveCount(0);
   await again.getByTestId("stream-buy-more").click();
@@ -885,8 +936,33 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
   const tab2 = await page.context().newPage();
   await tab2.setViewportSize({ width: 1280, height: 900 });
   const body1 = (await openPhoneTab(page, rig, f1)).locator("[data-phone-body]");
+  // Capture QR v2 (B8 review I-2): a tab open at Ready polls the phone read model, which names the fixture's open
+  // session, and reads `current` once for a new one — so tab 2 would pick up tab 1's start within one read-model poll and
+  // lose its Go live. The double start this case is about is the tab that has NOT polled since: tab 2's read-model
+  // answers are HELD at the last one before tab 1's tap (Ready, the phone paired), so its tap is the stale one. The hold
+  // is released before tab 2 moves on to f2.
+  const READ_MODEL = new RegExp(`/api/v1/fixtures/${f1.id}/stream-phone(\\?.*)?$`);
+  let lastRead: string | null = null;
+  let held: string | null = null;
+  let heldReads = 0;
+  await tab2.route(READ_MODEL, async (route) => {
+    if (held !== null) {
+      heldReads++;
+      return route.fulfill({ status: 200, contentType: "application/json", body: held });
+    }
+    const res = await route.fetch();
+    const text = await res.text();
+    if (res.ok()) lastRead = text;
+    return route.fulfill({ response: res, body: text });
+  });
   const body2 = (await openPhoneTab(tab2, rig, f1)).locator("[data-phone-body]");
   await expect(body2.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.idle"));
+  // W5: one phone paired on f1 — both tabs see it before tab 1 taps.
+  await pairedPhone(page);
+  await expect(body2.getByTestId("stream-code-disclosure"), "tab 2 read the paired phone").toBeAttached({ timeout: POLL_WAIT_MS });
+  await expect(body2.getByTestId("stream-go-live")).toBeEnabled();
+  expect(lastRead, "premise: tab 2 holds a read-model answer to freeze").not.toBeNull();
+  held = lastRead;
 
   // ONE slot, like every other case: the refused starts need no room. Since F-A5 (owner ruling 2026-09-29) admission
   // answers a fixture's own running stream straight after the plan gates, so the double start below reads "already
@@ -902,7 +978,7 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
     { timeout: POLL_WAIT_MS },
   );
   expect((await sessionsOf({ fixtureId: f1.id })).length, "tab 1's tap made the session").toBe(1);
-  // Tab 2 still shows idle (idle does not poll), and its tap is the double start.
+  // Tab 2 still shows idle (its read model is held at the pre-start answer), and its tap is the double start.
   await expect(body2.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.idle"));
   await body2.getByTestId("stream-go-live").click();
   await expect(body2.getByTestId("stream-create-error")).toHaveText(en("stream.error.active_session"));
@@ -911,11 +987,15 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
     eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming", "stream.phone.state.live"),
   );
   expect((await sessionsOf({ fixtureId: f1.id })).length, "ONE session row on the fixture").toBe(1);
+  test.info().annotations.push({ type: "A5 hold", description: `${heldReads} read-model poll(s) of tab 2 answered from the held pre-start answer` });
+  await tab2.unroute(READ_MODEL);
 
-  // Another match, the SAME destination, while f1 holds it.
+  // Another match, the SAME destination, while f1 holds it — with its own phone paired (W5 is checked before the
+  // destination, so without one the refusal would be phone_not_paired).
   const row3 = await openPhoneTab(tab2, rig, f2);
   const body3 = row3.locator("[data-phone-body]");
   await expect(body3.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label));
+  await pairedPhone(tab2);
   await body3.getByTestId("stream-go-live").click();
   // T3 (spec §3.3, §5.5): the refusal names the MATCH and its court — f1's own number through the locale's
   // breadcrumb.match — and says whether f1's phone is live or still awaited. f1 may be in either state at this instant
@@ -968,6 +1048,7 @@ test("A6: a destination that refuses the stream key → FAILED with the target_r
   await expect(body.getByTestId("stream-balance")).toHaveText(creditsChip(rig.monthlyRate));
   await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label));
 
+  await pairedPhone(page); // W5: Go live needs a paired phone — and Try again finds it still paired
   await streamSlot(); // this test's share of the deployment's stream capacity
   await body.getByTestId("stream-go-live").click();
   await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.failed"), { timeout: LIVE_WAIT_MS });
@@ -1051,11 +1132,15 @@ for (const width of [320, 1280] as const) {
     // READY: the chain is drawn to the picked destination — all slate (§3.2's idle row).
     await expect(chain).toHaveAttribute("data-phone", "notConnected");
     await expect(chain).toHaveAttribute("data-dest", "notLive");
+    // W5: a phone pairs — the phone node says Paired (capture QR v2 §6.12), the destination half unchanged.
+    await pairedPhone(page);
+    await expect(chain).toHaveAttribute("data-phone", "paired");
+    await expect(chain).toHaveAttribute("data-dest", "notLive");
 
     await streamSlot();
     await body.getByTestId("stream-go-live").click();
-    // WAITING: the phone half amber, link 1 animated — the phone connecting.
-    await expect(chain).toHaveAttribute("data-phone", "waiting", { timeout: POLL_WAIT_MS });
+    // WAITING: the phone half amber ("Starting", §6.12's waiting word for a paired phone), link 1 animated.
+    await expect(chain).toHaveAttribute("data-phone", "starting", { timeout: POLL_WAIT_MS });
     await expect(chain).toHaveAttribute("data-link1", "connecting");
     await expect(chain).toHaveAttribute("data-dest", "notLive");
 
@@ -1194,7 +1279,7 @@ for (const width of [320, 1280] as const) {
     const target = await addTargetApi(page, rig.orgId, { label: `A1b ${width}` });
     const f = rig.fixtures[0]!;
     await openFixture(page, rig, f); // the fixture page's read grants the month
-    await goLiveApi(page, f.id, target.id);
+    await goLiveApi(page, f.id, target.id, `${rig.divPath}/f/${f.no}`);
     let currentGets = 0;
     page.on("request", (r) => {
       if (r.method() === "GET" && new URL(r.url()).pathname.endsWith(`/fixtures/${f.id}/stream-sessions/current`)) currentGets++;
@@ -1263,7 +1348,7 @@ for (const sw of A7_SWITCHES) {
     const target = await addTargetApi(page, rig.orgId, { label: `A7${sw.id} destination` });
     const f = rig.fixtures[0]!;
     await openFixture(page, rig, f); // the fixture page's read grants the month
-    const live = await goLiveApi(page, f.id, target.id);
+    const live = await goLiveApi(page, f.id, target.id, `${rig.divPath}/f/${f.no}`);
 
     await sw.apply(rig.orgId);
     await invalidateOrgEntitlements(page.request, rig.orgId);
@@ -1338,7 +1423,7 @@ test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring sect
   const target = await addTargetApi(page, rig.orgId, { label: "A7d destination" });
   const f = rig.fixtures[0]!;
   await openFixture(page, rig, f); // the fixture page's read grants the month
-  const live = await goLiveApi(page, f.id, target.id);
+  const live = await goLiveApi(page, f.id, target.id, `${rig.divPath}/f/${f.no}`);
   // SETUP: start the division (scoring is closed until then), the result, then the finalize — through the API, the
   // requests the desk and the console themselves send.
   const started = await apiJson(page.request, `/api/v1/divisions/${rig.divisionId}/start`, "POST");
@@ -1412,11 +1497,13 @@ for (const width of [320, 1280] as const) {
     await withDb((sql) => sql`update fixtures set scheduled_at = now() where id = ${timedToday.id}`);
     const fixturePath = `${rig.divPath}/f/${f.no}`;
 
-    // 1. Go live — tapped on the fixture page — and leave as soon as the QR says the camera is warming.
+    // 1. Go live — tapped on the fixture page, a phone paired first (W5) — and leave as soon as the tab says the camera
+    //    is warming.
     const body = (await openPhoneTab(page, rig, f)).locator("[data-phone-body]");
+    await pairedPhone(page);
     await streamSlot(); // this test's share of the deployment's stream capacity
     await body.getByTestId("stream-go-live").click();
-    await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming"), { timeout: POLL_WAIT_MS });
 
     // 2. The division, on the filter it mounts on: "Today" (premise). WAITING, with the premise read from the DB (nothing
     //    has read `current` since the QR).
@@ -1531,6 +1618,8 @@ for (const width of [320, 1280] as const) {
     const loadError = body.getByTestId("stream-dest-load-error");
     await expect(loadError).toBeVisible({ timeout: POLL_WAIT_MS });
     await expect(loadError).toContainText(en("stream.dest.loadError"));
+    // W5: a phone pairs, so the disabled Go live below is the load error's alone (and the Retry's enabled one is real).
+    await pairedPhone(page);
     expect(failed, "the list read WAS refused").toBeGreaterThan(0);
     await expect(body.getByTestId("stream-dest-empty"), "an unread list is not an empty one").toHaveCount(0);
     await expect(body.getByTestId("stream-go-live")).toBeDisabled();
@@ -1558,6 +1647,7 @@ test("A9: the Phone tab offers the SAME controls — membership, order and repea
   const f = rig.fixtures[0]!;
   const row = await openPhoneTab(page, rig, f);
   const body = row.locator("[data-phone-body]");
+  await pairedPhone(page); // W5: Go live is offered to a paired phone
   await expect(body.getByTestId("stream-go-live")).toBeEnabled();
 
   // B3 fix round 1, Minor 5: ONE open panel at a time, TAPPED at both widths — `nextOpenPanel` is pinned as a pure pair
@@ -1598,10 +1688,11 @@ test("A9: the Phone tab offers the SAME controls — membership, order and repea
   const idle = await compare("idle", 4);
   await streamSlot(); // this test's share of the deployment's stream capacity
   await body.getByTestId("stream-go-live").click();
-  // WAITING (B5 review m-5): the QR state is the third shape the tab takes; it lasts until the phone connects.
-  await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
+  // WAITING (B5 review m-5): the third shape the tab takes; it lasts until the phone connects.
+  const pill = body.getByTestId("stream-state-pill");
+  await expect(pill).toHaveText(eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming"), { timeout: POLL_WAIT_MS });
   const waiting = await compare("waiting", 1);
-  await expect(body.getByTestId("stream-qr"), "the diff ran inside the waiting state").toBeVisible({ timeout: 1 });
+  await expect(pill, "the diff ran inside the waiting state").toHaveText(eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming"), { timeout: 1 });
   await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
   const live = await compare("live", 1);
   test.info().annotations.push({ type: "A9", description: `compared ${idle} idle, ${waiting} waiting and ${live} live controls` });
@@ -1651,7 +1742,9 @@ test("A10: in Spanish (es) the Phone tab reads Spanish through idle → live →
 
   await expect(body.getByTestId("stream-state-pill")).toHaveText(es("stream.phone.state.idle"));
   await expect(body.getByTestId("stream-go-live")).toHaveText(es("stream.phone.goLive"));
-  await leaks("idle");
+  await leaks("idle"); // Ready with no phone: the code card's own copy
+  await pairedPhone(page); // W5: Go live needs a paired phone
+  await leaks("paired");
   await streamSlot(); // this test's share of the deployment's stream capacity
   await body.getByTestId("stream-go-live").click();
   await expect(body.getByTestId("stream-state-pill")).toHaveText(es("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
@@ -1671,19 +1764,22 @@ test("A10: in Spanish (es) the Phone tab reads Spanish through idle → live →
 // A11 — the QR at 320 zoomed to 125%
 // ===========================================================================
 /** 320 @ 125 % zoom is a 256-CSS-px layout viewport at the SCREEN's DPR × 1.25 (the controller's 125 % ruling, option
- *  c, 2026-10-01): a 1× desktop panel gives 1.25 — the named edge, where the inline symbol holds one device px per
- *  module for the real payload and the enlarged view is the scan surface — and a 320-CSS-px phone, which is 2×, gives
- *  2.5, where the inline symbol holds three (the ruling's floor). Both decode as painted. */
+ *  c, 2026-10-01): a 1× desktop panel gives 1.25 — the named edge, where the enlarged view is the scan surface — and a
+ *  320-CSS-px phone, which is 2×, gives 2.5. Both decode as painted. `minInline` is the ruling's floor; the v2 symbol
+ *  (57 modules, capture QR v2 §6.2) clears it — the exact painted width is §8a's rule, checked below.
+ *  Capture QR v2 (T11/T12): the QR is the stream CODE's, shown in the code card at Ready while no phone is paired — the
+ *  scan comes BEFORE Go live — so this case reads it there, with no session at all. */
 const A11_SCREENS = [
   { dpr: 1.25, screen: "a 1× desktop panel", minInline: 1, tag: "dpr1.25" },
   { dpr: 2.5, screen: "a 2× phone", minInline: 3, tag: "dpr2.5" },
 ] as const;
 for (const a11 of A11_SCREENS) {
-  test(`A11: at 320 px zoomed to 125% on ${a11.screen} (a 256-px CSS viewport at ${a11.dpr} device px per CSS px) the QR decodes as painted, and it and its paste code fit their box and the page`, async ({
+  test(`A11: at 320 px zoomed to 125% on ${a11.screen} (a 256-px CSS viewport at ${a11.dpr} device px per CSS px) the code card's QR decodes as painted, and it and its paste code fit their card and the page`, async ({
     browser,
   }) => {
     const NAVS = 1; // openPhoneTab
-    test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + NAVS * NAV_MS);
+    const DECODES = 2; // inline and enlarged, each a screenshot and a decode
+    test.setTimeout(SEED_MS + NAVS * NAV_MS + 2 * POLL_WAIT_MS + DECODES * NAV_MS);
     // Browser zoom at 125% on a 320-px screen IS a 256-CSS-px layout viewport at the screen's DPR × 1.25.
     const ctx = await browser.newContext({
       storageState: test.info().project.use.storageState as string,
@@ -1696,8 +1792,7 @@ for (const a11 of A11_SCREENS) {
       await addTargetApi(page, rig.orgId, { label: "A11 destination" });
       const row = await openPhoneTab(page, rig, rig.fixtures[0]!);
       const body = row.locator("[data-phone-body]");
-      await streamSlot(); // this test's share of the deployment's stream capacity
-      await body.getByTestId("stream-go-live").click();
+      await expect(body.getByTestId("stream-code-card"), "Ready with no phone: the code card").toBeVisible({ timeout: POLL_WAIT_MS });
       await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
       // The frame is measured once it exists (its ResizeObserver): wait for the snapped size before reading the boxes —
       // §8a's rule over the sheet's 125 % `available`, for the symbol this page paints.
@@ -1707,7 +1802,7 @@ for (const a11 of A11_SCREENS) {
       const fit = await body.evaluate((b) => {
         const r = (id: string) => b.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect();
         const qr = r("stream-qr");
-        const box = r("stream-qr-box");
+        const box = r("stream-code-card");
         const field = r("stream-qr-field");
         return {
           vw: document.documentElement.clientWidth,
@@ -1718,14 +1813,14 @@ for (const a11 of A11_SCREENS) {
       });
       expect(fit.vw, "the zoomed viewport").toBe(256);
       test.info().annotations.push({ type: `A11 qr @ ${a11.dpr}`, description: `${fit.qr.w} CSS px at 256 CSS px (320 @ 125 % on ${a11.screen})` });
-      // §8a's QR size row (amended 2026-10-01, measured on the fixture page): the box is the row's `available`, read
-      // never typed, and the symbol is a whole number of DEVICE px per module (ruling I-2). For the real v22 payload the
-      // 172 CSS px box holds, on a 2× phone (430 device px), THREE 113-module scales — the row's 135.6 — and on a 1×
-      // desktop panel (215 device px) ONE — the row's 90.4, the edge, where the enlarged view below is the scan surface.
-      // The fake driver's shorter payload holds four and two.
+      // §8a's QR size row (amended 2026-10-05, measured on the fixture page): the card's content is the row's
+      // `available`, read never typed, and the symbol is a whole number of DEVICE px per module (ruling I-2). For the v2
+      // payload (57 modules, every code the same symbol, the fake driver's included) the row records 159.6 CSS px on a
+      // 2× phone (seven per module) and 136.8 on a 1× desktop panel (three).
+      expect(modules125, "§8a: the v2 payload's symbol").toBe(qrSizeRow().modules);
       expect(Math.abs(fit.qr.w - want125), `the sheet's rule at 320 @ 125 % for ${modules125} modules`).toBeLessThanOrEqual(0.5);
-      // The box's own content (less its `p-3` and 1-px border, twice) is the row's 125 % `available`.
-      expect(Math.abs(fit.box.r - fit.box.l - 2 * (12 + 1) - qrSizeRow().avail125), "the sheet's 125 % available").toBeLessThanOrEqual(0.5);
+      // The card's own content (less its `p-3`, twice — it draws a ring, not a border) is the row's 125 % `available`.
+      expect(Math.abs(fit.box.r - fit.box.l - 2 * 12 - qrSizeRow().avail125), "the sheet's 125 % available").toBeLessThanOrEqual(0.5);
       test.info().annotations.push({ type: `A11 qr modules @ ${a11.dpr}`, description: `${modules125} modules → ${fit.qr.w} CSS px` });
       const inline = await expectWholeModuleScale(page, body.getByTestId("stream-qr"), {
         what: `320 @ 125 % on ${a11.screen}, inline`,
@@ -1734,9 +1829,13 @@ for (const a11 of A11_SCREENS) {
       expect(inline.dpr, `PREMISE: the zoom is a ${a11.dpr} DPR`).toBe(a11.dpr);
       // What the browser PAINTED decodes, exactly, to the payload (the paste code is the capture payload, D10a).
       const pasteCode = await body.getByTestId("stream-qr-text").inputValue();
-      expect(pasteCode.length, "PREMISE: a capture payload, not an empty field").toBeGreaterThan(100);
+      expect(Object.keys(parseCaptureQr(pasteCode)), "PREMISE: the v2 capture payload, not an empty field").toEqual([...QR_KEYS]);
       const painted = await expectQrDecodesAsPainted(body.getByTestId("stream-qr"), pasteCode, `320 @ 125 % on ${a11.screen}, inline`);
-      expect(Math.abs(painted.width - inline.width * a11.dpr), "the screenshot is the painted size, in device px").toBeLessThanOrEqual(2);
+      // Playwright clips an element screenshot to the box's ENCLOSING whole CSS px (playwright-core `enclosingIntRect`,
+      // on the CSS box), then scales by the DPR — so the image is wider than the box by its own fractions, up to 2 CSS px
+      // (2.5 device px at 1.25). The clip, derived from the box; the image is that clip's device px, to its rounding.
+      const clipCss = Math.ceil(fit.qr.l + inline.width - 1e-3) - Math.floor(fit.qr.l + 1e-3);
+      expect(Math.abs(painted.width - clipCss * a11.dpr), `the screenshot is the painted box, clipped to ${clipCss} whole CSS px`).toBeLessThanOrEqual(1);
       test.info().annotations.push({ type: `A11 decoded @ ${a11.dpr}`, description: `${painted.width} device px, ${inline.perModule} per module` });
       expect(Math.abs(fit.qr.w - fit.qr.h), "square").toBeLessThan(1);
       expect(fit.qr.l, "the QR starts inside its box").toBeGreaterThanOrEqual(fit.box.l - 0.5);
@@ -1784,14 +1883,13 @@ for (const a11 of A11_SCREENS) {
       await shot(row.getByTestId("stream-panel"), `A11-320-at-125pct-${a11.tag}-qr.png`);
       await page.screenshot({ path: join(process.env.VISUAL_DIR ?? test.info().outputPath(), `A11-320-at-125pct-${a11.tag}-page.png`) });
       // The inline symbol itself, cropped with its box (re-review N-4): the figure the owner is asked to judge.
-      await shotQr(page, body.getByTestId("stream-qr-box"), `b6r2-stream-qr-125pct-${a11.tag}-inline.png`, 0);
-      // One tap: at 1.25 the 224 CSS px room is 280 device px — two 113-module scales, the desktop edge's scan surface —
-      // and at 2.5 it is 560 — four; no Wake Lock stub in this context (the browser's own, or none).
+      await shotQr(page, body.getByTestId("stream-code-card"), `b6r2-stream-qr-125pct-${a11.tag}-inline.png`, 0);
+      // One tap: the enlarged view, the desktop edge's scan surface; no Wake Lock stub in this context (the browser's
+      // own, or none).
       await body.getByTestId("stream-qr-enlarge").click();
       const big = await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
       expect(big.perModule, "enlarged at 125 %: at least two device px per module").toBeGreaterThanOrEqual(2);
-      // Never smaller than inline. (For the real v22 payload it is twice inline — 180.8 against 90.4, the unit's row; the
-      // fake driver's shorter symbol already holds two device px per module inline, so here the two can be equal.)
+      // Never smaller than inline.
       expect(big.width, "enlarged is never smaller than inline").toBeGreaterThanOrEqual(inline.width);
       await expectQrDecodesAsPainted(page.getByTestId("qr-enlarged-img"), pasteCode, `320 @ 125 % on ${a11.screen}, enlarged`);
       await shotQr(page, page.getByTestId("qr-enlarged"), `b6r2-stream-qr-125pct-${a11.tag}-enlarged.png`, 0);
@@ -1809,17 +1907,18 @@ for (const a11 of A11_SCREENS) {
 // ===========================================================================
 // A14 / A15 — the Seazn QR (T10): the stream QR's painted size, and tap to enlarge on the stream and check-in QRs
 // ===========================================================================
-// D7 (every QR carries the Seazn logo, at EC H) moved the stream QR from v16 to v22, so spec §7 put it at ≥ 320 CSS px
-// on desktop and full width on a phone; the binding sheet's `QR size` row was amended to match, and both numbers below
-// are READ from that row. D10: one tap opens the QR full screen — checked by the shared helper at each viewport, in an
-// ordered sequence (open → close, reopen, rotate while open, close each of the three ways, the QR leaving while open).
+// D7 (every QR carries the Seazn logo, at EC H) put the stream QR at ≥ 320 CSS px on desktop and full width on a phone
+// (spec §7); the binding sheet's `QR size` row was amended to match, and every number below is READ from that row.
+// Capture QR v2 (T11) moved the QR to the stream CODE: the v2 payload (§6.2, 57 modules) in the code card at Ready while
+// no phone is paired — the scan comes before Go live. D10: one tap opens the QR full screen — checked by the shared
+// helper at each viewport, in an ordered sequence (open → close, reopen, rotate while open, close each of the three ways,
+// the QR leaving while open).
 
 /** The binding sheet itself (the same file `fixture-stream-panel.test.tsx` reads). */
 const THEMES_PATH = fileURLToPath(new URL("../../../../docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md", import.meta.url));
-/** §8a's `QR size` row: its `min(Npx, available)` cap, the `available` box it records at 320 and at 320 @ 125 %, and
- *  its painted figures for TODAY's real v22 payload (B6 fix round 1, ruling I-2). The walkthroughs run the fake ingest
- *  driver, whose shorter credentials make a smaller symbol, so they apply the row's RULE to the symbol they see. */
-function qrSizeRow(): { cap: number; avail320: number; avail125: number; at1280: number } {
+/** §8a's `QR size` row: its `min(Npx, available)` cap, the `available` box it records at 320 and at 320 @ 125 %, the
+ *  v2 payload's module count, and its painted figure at 1280 (amended 2026-10-05, capture QR v2 T11). */
+function qrSizeRow(): { cap: number; avail320: number; avail125: number; at1280: number; at320: number; modules: number } {
   const row = readFileSync(THEMES_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"));
   if (!row) throw new Error("§8a lost its QR size row");
   const num = (re: RegExp, what: string): number => {
@@ -1832,44 +1931,20 @@ function qrSizeRow(): { cap: number; avail320: number; avail125: number; at1280:
     avail320: num(/of an `available` of \*\*(\d+)\*\* at 320 \(fixture page\)/, "the 320 available"),
     avail125: num(/of an `available` of \*\*(\d+)\*\* at 320 @ 125 % zoom/, "the 125 % available"),
     at1280: num(/\*\*([\d.]+) CSS px at 1280\*\*/, "the 1280 figure"),
+    at320: num(/\*\*([\d.]+) CSS px at 320 \(fixture page\)\*\*/, "the 320 figure"),
+    modules: num(/\*\*(\d+) for the v2 payload/, "the v2 payload's module count"),
   };
 }
 
 /** §8a's rule, in its own words: the largest whole number of device px per module inside the box, in CSS px. */
 const snappedQr = (box: number, modules: number, dpr: number): number => (modules * Math.floor((box * dpr) / modules)) / dpr;
 
-/**
- * Hold WAITING for as long as a case needs it, deterministically: the server flips warming → live only on a read of
- * `current` after the fake's connect delay, so once the tab has seen the waiting projection (with its QR), every
- * further read is answered with THAT projection and never reaches the server. `release` hands the reads back; the
- * next one is the server's tick. Without this the QR state lasts FAKE_CONNECT_MS, too short for four viewports.
- */
-async function holdWaiting(page: Page, fixtureId: string): Promise<{ release: () => Promise<void>; captured: () => boolean; served: () => number }> {
-  const url = new RegExp(`/api/v1/fixtures/${fixtureId}/stream-sessions/current(\\?.*)?$`);
-  let held: string | null = null;
-  let served = 0;
-  const handler = async (route: import("@playwright/test").Route) => {
-    if (route.request().method() !== "GET") return route.fallback();
-    if (held !== null) {
-      served++;
-      return route.fulfill({ status: 200, contentType: "application/json", body: held });
-    }
-    const res = await route.fetch();
-    const text = await res.text();
-    const v = (JSON.parse(text) as { data?: { state?: string; qr?: unknown } | null }).data;
-    if (res.ok() && (v?.state === "provisioning" || v?.state === "warming") && v.qr) held = text;
-    return route.fulfill({ response: res, body: text });
-  };
-  await page.route(url, handler);
-  return { release: () => page.unroute(url, handler), captured: () => held !== null, served: () => served };
-}
-
-test("A14: the stream QR paints at the sheet's 320 CSS px on desktop and its fixture-page width on a phone; ONE tap enlarges it — at 320×568, rotated to 568×320 while open, at 768×1024 and 1280×800 — closed by Esc, ✕ and a tap, the wake lock held while open and released every time, and it closes itself when the phone connects", async ({
+test("A14: the code card's QR paints at the sheet's figures — its desktop figure at 1280 and 768, its fixture-page width at 320; ONE tap enlarges it — at 320×568, rotated to 568×320 while open, at 768×1024 and 1280×800 — closed by Esc, ✕ and a tap, the wake lock held while open and released every time, and it closes itself when a phone pairs", async ({
   page,
 }) => {
   const NAVS = 1; // openPhoneTab
-  const PASSES = 5; // the enlarge passes: 320×568 (+ rotation), 768×1024, 1280×800, the helper, and the one the connect closes
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS + PASSES * NAV_MS);
+  const PASSES = 5; // the enlarge passes: 320×568 (+ rotation), 768×1024, 1280×800, the helper, and the one the pairing closes
+  test.setTimeout(SEED_MS + 2 * POLL_WAIT_MS + NAVS * NAV_MS + PASSES * NAV_MS);
   await installWakeLockStub(page, "counting"); // before the first navigation (review R5)
   await page.setViewportSize({ width: 1280, height: 800 });
   const rig = await seedRelayRig(page);
@@ -1877,54 +1952,57 @@ test("A14: the stream QR paints at the sheet's 320 CSS px on desktop and its fix
   const f = rig.fixtures[0]!;
   const row = await openPhoneTab(page, rig, f);
   const body = row.locator("[data-phone-body]");
-  await expect(body.getByTestId("stream-go-live")).toBeEnabled();
+  // Ready with no phone (§6.12): the code card holds the QR, and Go live waits for a phone.
+  const card = body.getByTestId("stream-code-card");
+  await expect(card).toBeVisible({ timeout: POLL_WAIT_MS });
+  await expect(body.getByTestId("stream-go-live")).toBeDisabled();
   expect(await wakeLockCounts(page), "nothing holds the screen before a QR is enlarged").toEqual({ requests: 0, releases: 0 });
 
-  const hold = await holdWaiting(page, f.id);
-  await streamSlot(); // this test's share of the deployment's stream capacity
-  await body.getByTestId("stream-go-live").click();
-  const qr = body.getByTestId("stream-qr");
+  const qr = card.getByTestId("stream-qr");
   await expect(qr, "the QR is drawn in the browser").toBeVisible({ timeout: POLL_WAIT_MS });
-  await expect.poll(() => hold.captured(), { message: "the hold has the waiting projection", timeout: POLL_WAIT_MS }).toBe(true);
   await expect(qr).toHaveAttribute("src", /^data:image\/svg\+xml;charset=utf-8,/);
   // D10a: the paste code is the same payload as text, and carries the same replay block.
-  await expect(body.getByTestId("stream-qr-text")).toHaveClass(/\bph-no-capture\b/);
+  await expect(card.getByTestId("stream-qr-text")).toHaveClass(/\bph-no-capture\b/);
 
-  // §8a (amended 2026-10-01, ruling I-2): the painted width — a whole number of device px per module, the largest that
-  // fits min(cap, the box) — is the sheet's figure at each width: the cap's scale on desktop (and at 768, where the
-  // column has room for it), its fixture-page figure on a phone.
+  // §8a (amended 2026-10-05, ruling I-2): the painted width — a whole number of device px per module, the largest that
+  // fits min(cap, the card's content) — is the sheet's figure at each width: the cap's scale on desktop (and at 768,
+  // where the card's column has room for it), its fixture-page figure on a phone.
   const sheet = qrSizeRow();
-  expect(sheet.at1280, "spec §7: ≥ 320 CSS px on desktop, for the real v22 payload").toBeGreaterThanOrEqual(320);
+  expect(sheet.at1280, "spec §7: ≥ 320 CSS px on desktop").toBeGreaterThanOrEqual(320);
   expect(sheet.at1280, "the desktop figure fits the cap").toBeLessThanOrEqual(sheet.cap);
-  // The rule applied to the symbol THIS page paints (the fake driver's credentials are shorter than Cloudflare's).
+  // The sheet's figures are its rule applied to its own symbol — two statements of one fact, checked against each other.
+  expect(snappedQr(sheet.cap, sheet.modules, 1), "the sheet's 1280 figure is its rule at the cap").toBeCloseTo(sheet.at1280, 1);
+  expect(snappedQr(sheet.avail320, sheet.modules, 1), "the sheet's 320 figure is its rule at its 320 available").toBeCloseTo(sheet.at320, 1);
   const modules = await qrModulesOf(qr);
   test.info().annotations.push({ type: "A14 qr modules", description: String(modules) });
+  expect(modules, "§8a: every v2 code paints the same symbol").toBe(sheet.modules);
   const painted: Record<number, number> = {};
   const perModule: Record<number, number> = {};
   const available: Record<number, number> = {};
-  const rows = [[1280, 800, snappedQr(sheet.cap, modules, 1)], [768, 1024, snappedQr(sheet.cap, modules, 1)], [320, 568, snappedQr(sheet.avail320, modules, 1)]] as const;
+  const rows = [[1280, 800, sheet.at1280], [768, 1024, sheet.at1280], [320, 568, sheet.at320]] as const;
   for (const [w, h, want] of rows) {
     await page.setViewportSize({ width: w, height: h });
     await qr.scrollIntoViewIfNeeded();
     // The frame is re-measured after a resize (its ResizeObserver), so the width is polled, not read once.
-    await expect.poll(async () => (await qr.boundingBox())!.width, { message: `${w}: §8a's rule for ${modules} modules (${want})` }).toBeCloseTo(want, 1);
+    await expect.poll(async () => (await qr.boundingBox())!.width, { message: `${w}: §8a's figure for ${modules} modules (${want})` }).toBeCloseTo(want, 1);
     const m = await expectWholeModuleScale(page, qr, { what: `stream @ ${w}`, minPerModule: w === 320 ? 1 : 3 });
     painted[w] = m.width;
     perModule[w] = m.perModule;
-    // The box's own content (less its `p-3` and 1-px border, twice): the sheet's `available`. At 1280 and 768 it holds
-    // the whole cap — what lets the real v22 payload reach 339 there — and at 320 it is the row's figure.
-    const box = (await row.getByTestId("stream-qr-box").boundingBox())!.width - 2 * (12 + 1);
+    // The card's own content (less its `p-3`, twice — a ring, not a border): the sheet's `available`. At 1280 and 768 it
+    // holds the desktop figure whole, and at 320 it is the row's figure.
+    const box = (await card.boundingBox())!.width - 2 * 12;
     available[w] = box;
     if (w === 320) expect(Math.abs(box - sheet.avail320), `320: the sheet's available (${sheet.avail320})`).toBeLessThanOrEqual(0.5);
-    else expect(box, `${w}: the box holds the cap (${sheet.cap})`).toBeGreaterThanOrEqual(sheet.cap - 0.5);
+    else expect(box, `${w}: the card holds the desktop figure (${sheet.at1280})`).toBeGreaterThanOrEqual(sheet.at1280 - 0.5);
     await expectNoHorizontalScroll(page);
-    await shotQr(page, row.getByTestId("stream-qr-box"), `b6-stream-qr-${w}-normal.png`);
+    await shotQr(page, card, `b6-stream-qr-${w}-normal.png`);
   }
   test.info().annotations.push({ type: "A14 painted", description: JSON.stringify({ painted, perModule, available }) });
-  expect(await expectTapTargets(body), "the enlarge trigger joins the QR state's controls at 320").toBeGreaterThan(1);
+  expect(Object.keys(painted).length, "every width was measured").toBe(rows.length);
+  expect(await expectTapTargets(body), "the enlarge trigger joins Ready's controls at 320").toBeGreaterThan(1);
 
   // D10, in order. 320×568: one tap opens it; Esc closes it; the lock is held while open and released on close.
-  const trigger = body.getByTestId("stream-qr-enlarge");
+  const trigger = card.getByTestId("stream-qr-enlarge");
   let opens = 0;
   const open = async () => {
     await trigger.click(); // one tap
@@ -1970,22 +2048,20 @@ test("A14: the stream QR paints at the sheet's 320 CSS px on desktop and its fix
   await expectQrEnlarges(page, "stream-qr", { sensitive: true });
   opens++;
   await closed();
-  expect((await latestSession(f.id)).state, "every check above ran inside the WAITING state").toMatch(/^(provisioning|warming)$/);
+  await expect(card, "every check above ran at Ready with no phone: the card is still up").toBeVisible();
+  expect(await sessionsOf({ fixtureId: f.id }), "…and nothing was started").toEqual([]);
 
-  // The QR LEAVES while enlarged: open it, hand the reads back, and the phone's connect (the server's tick on the next
-  // read) takes the QR — and its overlay, and the wake lock — away. Nothing is left over the live tab.
+  // The QR LEAVES while enlarged: open it, and a phone scans the code and pairs — the read model's next answer folds the
+  // card to "Paired · Show the code again", taking the QR — and its overlay, and the wake lock — away with it. Nothing
+  // is left over the Ready tab, and Go live is offered.
   await open();
-  test.info().annotations.push({ type: "A14 hold", description: `${hold.served()} poll(s) answered from the held waiting projection` });
-  await hold.release();
-  await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
-  await expect(page.getByTestId("qr-enlarged"), "the overlay went with the QR").toHaveCount(0);
-  await expect(qr, "live: the QR is gone").toHaveCount(0);
+  await pairedPhone(page);
+  await expect(page.getByTestId("qr-enlarged"), "the overlay went with the QR").toHaveCount(0, { timeout: POLL_WAIT_MS });
+  await expect(card, "paired: the card folded").toHaveCount(0);
+  await expect(body.getByTestId("stream-qr"), "folded: the QR is gone").toHaveCount(0);
   await closed();
-  expect(opens, "every pass opened the overlay: 320 (+ rotation), 768, 1280, the helper, and the one the connect closed").toBe(5);
-
-  await body.getByTestId("stream-stop").click();
-  await confirmStop(page);
-  await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+  expect(opens, "every pass opened the overlay: 320 (+ rotation), 768, 1280, the helper, and the one the pairing closed").toBe(PASSES);
+  await expect(body.getByTestId("stream-go-live"), "paired: Go live is offered").toBeEnabled();
 });
 
 test("A15: the CHECK-IN QR on a scheduled fixture — minted by a tap, a REAL link at ≥ 3 px per module with no horizontal scroll at 320, ph-no-capture on the QR, its enlarged view and its link text; ONE tap enlarges it at 320×568 (Esc), again (✕), again (a tap), at 768 and 1280 — with NO Wake Lock API — and the check-in dialog is still open after each close", async ({
@@ -2129,6 +2205,7 @@ for (const width of WIDTHS) {
     body = scope.locator("[data-phone-body]");
     const picker = body.getByTestId("stream-target");
     await expect(picker.locator("option:checked")).toHaveText(optionText(LONG_DEST));
+    await pairedPhone(page); // W5: Ready with a paired phone is the state that offers Go live
     await expect(body.getByTestId("stream-go-live")).toBeEnabled();
     await expect(body.getByTestId("stream-chain")).toHaveAttribute("data-dest", "notLive");
     // B7 at every width: the field, its mark and its chevron stay inside the panel; the select keeps its chevron gutter.
@@ -2148,7 +2225,7 @@ for (const width of WIDTHS) {
     await capture(scope, "ready-long-name");
 
     // 4. IN USE — another match holds the long-named destination; Go live here is refused on the picker.
-    const holder = await goLiveApi(page, fHold.id, long.id);
+    const holder = await goLiveApi(page, fHold.id, long.id, `${rig.divPath}/f/${fHold.no}`);
     scope = await openPhoneTab(page, rig, fReady);
     body = scope.locator("[data-phone-body]");
     await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(LONG_DEST));
@@ -2167,13 +2244,15 @@ for (const width of WIDTHS) {
     scope = await openPhoneTab(page, rig, fD3);
     body = scope.locator("[data-phone-body]");
     const chain = body.getByTestId("stream-chain");
+    await pairedPhone(page);
     await body.getByTestId("stream-target").selectOption(dialling.id);
     await body.getByTestId("stream-go-live").click();
-    await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
-    await expect(chain).toHaveAttribute("data-phone", "waiting");
-    // The QR lasts until the server's first read after the connect: the crop first, axe after it would outlast it.
+    const pill = body.getByTestId("stream-state-pill");
+    await expect(pill).toHaveText(eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming"), { timeout: POLL_WAIT_MS });
+    await expect(chain).toHaveAttribute("data-phone", "starting");
+    // Waiting lasts until the server's first read after the connect: the crop first, axe after it would outlast it.
     await capture(scope, "waiting", { axe: false });
-    await expect(body.getByTestId("stream-qr"), "the QR state outlasted the crop").toBeVisible({ timeout: 1 });
+    await expect(pill, "the waiting state outlasted the crop").toHaveText(eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming"), { timeout: 1 });
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
     await expect(chain).toHaveAttribute("data-dest", "connecting");
     await expect(body.getByTestId("stream-output-warning")).toHaveCount(0);
@@ -2193,7 +2272,8 @@ for (const width of WIDTHS) {
     await reshape((v) => {
       v.ingest = { ...(v.ingest as Record<string, unknown>), state: "disconnected" };
     });
-    await expect(chain).toHaveAttribute("data-phone", "noSignal", { timeout: POLL_WAIT_MS });
+    // Capture QR v2 §6.12: a paired phone's node says "Reconnecting…" where the legacy chain said "No signal".
+    await expect(chain).toHaveAttribute("data-phone", "reconnecting", { timeout: POLL_WAIT_MS });
     await expect(chain).toHaveAttribute("data-link1", "problem");
     // I-1 (owner 2026-10-01, option a): past the hold with NO SIGNAL from the phone, the D3 box points at the phone — the
     // owner's sentence, nothing to open in Directory — and the stream keeps running (still live, Stop enabled, amber dot).
@@ -2260,6 +2340,7 @@ for (const width of WIDTHS) {
     scope = await openPhoneTab(page, rig, fOk);
     body = scope.locator("[data-phone-body]");
     await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(LONG_DEST));
+    await pairedPhone(page);
     await body.getByTestId("stream-go-live").click();
     await expect(body.getByTestId("stream-chain")).toHaveAttribute("data-dest", "live", { timeout: LIVE_WAIT_MS });
     await expect(body.getByTestId("stream-on-air")).toHaveText(en("stream.onAir"));
@@ -2280,6 +2361,7 @@ for (const width of WIDTHS) {
     // 12. FAILED — the destination refuses the key.
     scope = await openPhoneTab(page, rig, fFail);
     body = scope.locator("[data-phone-body]");
+    await pairedPhone(page);
     await body.getByTestId("stream-target").selectOption(refused.id);
     await body.getByTestId("stream-go-live").click();
     await expect(body.getByTestId("stream-failed")).toBeVisible({ timeout: LIVE_WAIT_MS });
@@ -2316,6 +2398,8 @@ test("B5 N-1 @320 fr: a WAITING chip on a run-sheet row — line 2 fits the row,
   const f = rig.fixtures[0]!;
   await openFixture(page, rig, f); // the month's grant (R3b)
   await streamSlot();
+  // W5: a phone paired on the match's code (its keep-alive beats name no session, so they tick nothing).
+  await pairPhoneOnFixture(page, `${rig.divPath}/f/${f.no}`);
   // WAITING, held: made through the API and never read (the server flips it live only on a read of `current`).
   const made = await apiJson<{ id: string }>(page.request, `/api/v1/fixtures/${f.id}/stream-sessions`, "POST", { mode: "passthrough", targetId: target.id });
   expect(made.status, `SETUP: create -> ${JSON.stringify(made.error)}`).toBe(201);

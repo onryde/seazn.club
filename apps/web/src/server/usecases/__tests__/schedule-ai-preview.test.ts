@@ -36,10 +36,10 @@ const {
     architectParse: vi.fn(),
     isServerFeatureEnabled: vi.fn(),
     captureServer: vi.fn(),
-    incrWindow: vi.fn(async (key: string): Promise<number | null> => {
+    incrWindow: vi.fn(async (key: string): Promise<{ count: number; ttlMs: number } | null> => {
       const n = (rlCounts.get(key) ?? 0) + 1;
       rlCounts.set(key, n);
-      return n;
+      return { count: n, ttlMs: 60_000 };
     }),
     // Default false — no REDIS_URL in the test env, which is what the real
     // `cacheEnabled` would answer. Only the fail-closed test flips it, because
@@ -243,7 +243,7 @@ beforeEach(() => {
   incrWindow.mockReset().mockImplementation(async (key: string) => {
     const n = (rlCounts.get(key) ?? 0) + 1;
     rlCounts.set(key, n);
-    return n;
+    return { count: n, ttlMs: 60_000 };
   });
   cacheEnabled.mockReset().mockReturnValue(false);
   process.env.ANTHROPIC_API_KEY = "test-key";

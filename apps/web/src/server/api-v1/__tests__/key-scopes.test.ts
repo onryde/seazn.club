@@ -48,6 +48,32 @@ describe("matchKeyRoute", () => {
     expect(NEVER_KEY_ROUTES).toContain("DELETE /competitions/:id");
   });
 
+  it("capture QR v2 (T8a, A16): the phone's descriptor is never key-reachable — an explicit ban, matched on a concrete path", () => {
+    expect(NEVER_KEY_ROUTES).toContain("GET /capture/codes/:code");
+    expect(matchKeyRoute("GET", "/api/v1/capture/codes/0123456789ab")).toBeNull();
+  });
+
+  it("capture QR v2 (T8b, A16): the phone's beats are never key-reachable — an explicit ban, matched on a concrete path", () => {
+    expect(NEVER_KEY_ROUTES).toContain("POST /capture/codes/:code/beats");
+    expect(matchKeyRoute("POST", "/api/v1/capture/codes/0123456789ab/beats")).toBeNull();
+  });
+
+  it("capture QR v2 (T8c, A16): the phone's start is never key-reachable — and an org API key on EACH of the three phone routes finds no key rule", () => {
+    expect(NEVER_KEY_ROUTES).toContain("POST /capture/codes/:code/start");
+    const phoneRoutes: [string, string][] = [
+      ["GET", "/capture/codes/:code"],
+      ["POST", "/capture/codes/:code/beats"],
+      ["POST", "/capture/codes/:code/start"],
+    ];
+    let checked = 0;
+    for (const [method, path] of phoneRoutes) {
+      expect(NEVER_KEY_ROUTES, `${method} ${path}`).toContain(`${method} ${path}`);
+      expect(matchKeyRoute(method, `/api/v1${path.replace(":code", "0123456789ab")}`), `${method} ${path}`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("maps the scoring doors to the score scope with a pin", () => {
     const events = matchKeyRoute("POST", "/api/v1/fixtures/11111111-1111-1111-1111-111111111111/events");
     expect(events).toMatchObject({ scope: "score", pin: "fixture" });

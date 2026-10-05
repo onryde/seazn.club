@@ -21,12 +21,13 @@
 //                       unknown. E5: storage lives ONLY here; no_credits lives
 //                       in BOTH (a balance can pass create and be gone at live),
 //                       and that asymmetry is the design, not an oversight.
-import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
-import type { StreamEndReason, StreamFailReason, StreamSessionCurrent } from "@/server/api-v1/schemas";
+import type {
+  StreamEndReason, StreamFailReason, StreamLostCountdown, StreamPhone, StreamSessionCurrent,
+} from "@/server/api-v1/schemas";
 
 /** Prompt watch 4 closed: `live-score.tsx` exports no POLL_MS after W1's lift;
  *  the desk's LIVE_POLL_MS (20 s) is too slow for an organiser holding a
@@ -121,12 +122,16 @@ export const FAIL_REASON_KEYS: Record<StreamFailReason, MessageKey> = {
 /** How a COMPLETED session ended — shown as a chip in the ended state. */
 export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
   stopped: "stream.phone.ended.reason.stopped",
+  // Capture QR v2 (T6, spec §6.8.4 copy table): the three stops the phone and the automatic mode make.
+  operator_stopped: "stream.phone.ended.reason.operator_stopped",
+  auto_stopped: "stream.phone.ended.reason.auto_stopped",
+  phone_lost: "stream.phone.ended.reason.phone_lost",
   max_duration: "stream.phone.ended.reason.max_duration",
 };
 
 /** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. */
 export const CREATE_ERROR_CODES = [
-  "no_credits", "overlay_required", "active_session", "storage_exhausted", "ingest_unavailable",
+  "no_credits", "overlay_required", "active_session", "phone_not_paired", "storage_exhausted", "ingest_unavailable",
   "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
@@ -135,6 +140,8 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   no_credits: "stream.error.no_credits",
   overlay_required: "stream.error.overlay_required",
   active_session: "stream.error.active_session",
+  // Capture QR v2 W5: no phone paired and answering on the stream code (an expired code answers it too, B7 m-b).
+  phone_not_paired: "stream.error.phone_not_paired",
   storage_exhausted: "stream.error.storage_exhausted",
   ingest_unavailable: "stream.error.ingest_unavailable",
   // T3: the ONE holder-less "elsewhere" sentence; a holder with a match is named by `inUseText` (stream.inUse.*).
@@ -150,7 +157,7 @@ const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unkn
 
 /** The lower-case domain codes createSession puts on the wire VERBATIM (stream-sessions.ts `refuse`, `targetInUse`). */
 const VERBATIM_CODES: readonly CreateErrorCode[] = [
-  "no_credits", "overlay_required", "active_session", "storage_exhausted", "ingest_unavailable", "target_in_use",
+  "no_credits", "overlay_required", "active_session", "phone_not_paired", "storage_exhausted", "ingest_unavailable", "target_in_use",
 ];
 
 /** The plan gates createSession refuses with `PaymentRequiredError(featureKey)` — read from the ONE authority the
@@ -277,7 +284,154 @@ export function elapsedLabel(startedAt: string | null, now: Date): string {
   return `${h > 0 ? `${h}:` : ""}${mm}:${String(s).padStart(2, "0")}`;
 }
 
-/** The paste code IS the QR payload — one contract, two carriers. */
-export function qrText(qr: CaptureQrV1): string {
-  return JSON.stringify(qr);
+// ---------------------------------------------------------------------------------------------------------------------
+// Capture QR v2 §6.12 (T11) — the Ready states, signed off as Option B rev 2. Every function here is a reading of the
+// server's two projections (`current` and the `stream-phone` read model); none consults a clock. The countdown above all
+// is rendered AS GIVEN (carry: "never compute a countdown in the panel").
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** §6.12's rows, as the panel's body switches on them. */
+export const READY_STATES = ["no_phone", "paired", "silent", "waiting", "live", "ended", "code_ended"] as const;
+export type ReadyState = (typeof READY_STATES)[number];
+
+/** C5: "This match is over" needs the FIXTURE finished AND no live code — a reverted result clears `finished` while the
+ *  expired code stays ended (and Ready may mint again); a code still FINISHING inside the grace is not over yet. */
+export function matchOver(phone: StreamPhone | null): boolean {
+  return phone !== null && phone.finished && (phone.code === null || phone.code.state === "ended");
+}
+
+/**
+ * §6.12's row for the panel. A session in flight is its own row whatever the phone says (requested, provisioning and
+ * warming wait; live and ending are live; completed and failed are the summary cards). With no session: the match over
+ * (C5), else the phone — none, present (paired) or not answering (silent, §6.9). The EMPTY case — nothing read yet —
+ * is no_phone, which never offers Go live.
+ */
+export function readyStateOf(phone: StreamPhone | null, session: StreamSessionCurrent | null): ReadyState {
+  if (session) {
+    switch (session.state) {
+      case "requested":
+      case "provisioning":
+      case "warming": return "waiting";
+      case "live":
+      case "ending": return "live";
+      case "completed":
+      case "failed": return "ended";
+    }
+  }
+  if (matchOver(phone)) return "code_ended";
+  if (!phone?.phone) return "no_phone";
+  return phone.phone.present ? "paired" : "silent";
+}
+
+/** §6.12: Go live is enabled ONLY with a phone paired and answering — W5's own gate (`phone_not_paired`) on the server. */
+export const canGoLive = (state: ReadyState): boolean => state === "paired";
+
+/** O5 (§6.12, ruled 2026-10-01): why a live phone that still beats sends no video. */
+export type ReconnectReason = "camera" | "sound" | "network" | "held" | "weak";
+export const RECONNECT_REASON_KEYS: Record<ReconnectReason, MessageKey> = {
+  camera: "stream.phone.paused.camera",
+  sound: "stream.phone.paused.sound",
+  network: "stream.phone.paused.network",
+  held: "stream.phone.paused.held",
+  weak: "stream.phone.paused.weak",
+};
+
+/** §6.12's O5 mapping: the latest beat's `notReady` (camera, sound, network, held) outranks its state; otherwise
+ *  `degraded` or `reconnecting` is a weak connection; anything else (publishing included) carries no reason. */
+export function reconnectReasonOf(phone: StreamPhone["phone"]): ReconnectReason | null {
+  if (!phone) return null;
+  if (phone.notReady) return phone.notReady;
+  if (phone.state === "degraded" || phone.state === "reconnecting") return "weak";
+  return null;
+}
+
+/** Each (kind, reason) pair the wire's union declares — distributed per member, never the cross product. */
+type CountdownCombo = StreamLostCountdown extends infer C
+  ? C extends { kind: infer K extends string; reason: infer R extends string }
+    ? `${K}.${R}`
+    : never
+  : never;
+
+/** W24: one sentence per end the countdown can name — keyed by the wire's own (kind, reason). */
+export const COUNTDOWN_KEYS = {
+  "warming.no_inbound_timeout": "stream.phone.countdown.warming.no_inbound_timeout",
+  "warming.phone_lost": "stream.phone.countdown.warming.phone_lost",
+  "live.phone_lost": "stream.phone.countdown.live.phone_lost",
+} as const satisfies Record<CountdownCombo, MessageKey>;
+
+export function countdownKey(c: StreamLostCountdown): MessageKey {
+  return COUNTDOWN_KEYS[`${c.kind}.${c.reason}` as keyof typeof COUNTDOWN_KEYS];
+}
+
+/**
+ * A server-measured duration in the viewer's locale, short: "9 min, 15 sec" (en), "9 min y 15 s" (es). Whole seconds,
+ * floored; zero units dropped; zero itself is "0 sec". Built from `Intl.NumberFormat` units joined by `Intl.ListFormat`
+ * (type "unit") — what `Intl.DurationFormat` prints, without needing it: lib/format.ts's `fmtDuration` keeps to the same
+ * universally supported pair, and rounds to whole minutes, which a countdown cannot.
+ */
+export function durationLabel(ms: number, locale: string): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const unit = (value: number, u: "hour" | "minute" | "second") =>
+    new Intl.NumberFormat(locale, { style: "unit", unit: u, unitDisplay: "short" }).format(value);
+  const parts: string[] = [];
+  if (h > 0) parts.push(unit(h, "hour"));
+  if (m > 0) parts.push(unit(m, "minute"));
+  if (sec > 0 || parts.length === 0) parts.push(unit(sec, "second"));
+  return new Intl.ListFormat(locale, { type: "unit", style: "short" }).format(parts);
+}
+
+/** The strip under the chain (Option B rev 2): its tone and icon, an optional bold lead, and a sentence. A countdown
+ *  body carries the server's two durations, verbatim, for the panel to format. */
+export type PhoneStrip = {
+  tone: "slate" | "amber";
+  icon: "phone" | "alert" | "clock" | "pause";
+  lead: MessageKey | null;
+  body: { key: MessageKey; elapsedMs?: number; remainingMs?: number } | null;
+};
+
+/**
+ * Which message the strip shows, from the two projections. None for a LEGACY session (C-1: today's panel), for a paired
+ * phone, for the summary cards and for a match that is over (its own line, not the phone's).
+ *  - no phone → "Pair a phone first…" (slate); silent → "The phone stopped checking in…" (amber);
+ *  - waiting → "Waiting for the phone's video", and once the server sends the warming countdown, its sentence (amber);
+ *  - live → the countdown when the server sends one; otherwise, while the input is not connected, the phone's O5 reason
+ *    (the phone still beats, so W19 cannot fire and there is no countdown — O5); otherwise nothing.
+ * `session.countdown` is the ONLY source of a countdown: an input that is down is not one (mutant: render it whenever
+ * the input is down → the O5 case reds).
+ */
+export function phoneStrip(phone: StreamPhone | null, session: StreamSessionCurrent | null): PhoneStrip | null {
+  if (phone?.legacy) return null;
+  const state = readyStateOf(phone, session);
+  const timed = (c: StreamLostCountdown) => ({ key: countdownKey(c), elapsedMs: c.elapsedMs, remainingMs: c.remainingMs });
+  switch (state) {
+    case "no_phone": return { tone: "slate", icon: "phone", lead: null, body: { key: "stream.phone.pairFirst" } };
+    case "silent": return { tone: "amber", icon: "alert", lead: null, body: { key: "stream.phone.silent" } };
+    case "waiting":
+      return session?.countdown
+        ? { tone: "amber", icon: "clock", lead: "stream.phone.waitingVideo", body: timed(session.countdown) }
+        : { tone: "slate", icon: "clock", lead: "stream.phone.waitingVideo", body: null };
+    case "live": {
+      if (session?.countdown) return { tone: "amber", icon: "clock", lead: null, body: timed(session.countdown) };
+      const reason = session && phoneNoSignal(session) ? reconnectReasonOf(phone?.phone ?? null) : null;
+      return reason ? { tone: "amber", icon: "pause", lead: null, body: { key: RECONNECT_REASON_KEYS[reason] } } : null;
+    }
+    case "paired":
+    case "ended":
+    case "code_ended": return null;
+  }
+}
+
+/** W23: the restart line above Go live (and on the Ended card) — emerald below the limit, amber at it with the credit
+ *  suffix. Null while no reuse window is open. The numbers are the server's allowance, never a count kept here. */
+export function restartLine(
+  restart: StreamSessionCurrent["restart"],
+): { tone: "emerald" | "amber"; key: MessageKey; vars: { used: number; limit: number } } | null {
+  if (!restart) return null;
+  const vars = { used: restart.used, limit: restart.limit };
+  return restart.free
+    ? { tone: "emerald", key: "stream.restart.used", vars }
+    : { tone: "amber", key: "stream.restart.usedCredit", vars };
 }

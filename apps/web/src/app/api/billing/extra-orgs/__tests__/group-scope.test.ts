@@ -24,7 +24,7 @@ vi.mock("@/lib/cache", () => ({
   cacheGet: async () => null,
   cacheSet: async () => {},
   cacheDelPattern: async () => {},
-  incrWindow: async () => 1,
+  incrWindow: async () => ({ count: 1, ttlMs: 60_000 }),
 }));
 
 /** A miniature Stripe: one item list per subscription id, mutated in place, so

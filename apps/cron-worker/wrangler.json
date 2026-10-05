@@ -21,12 +21,12 @@
   "env": {
     "stg": {
       "name": "seazn-cron-stg",
-      "triggers": { "crons": ["17 * * * *"] },
+      "triggers": { "crons": ["17 * * * *", "*/5 * * * *"] },
       "vars": { "ENV_NAME": "stg", "BASE_URL": "https://stg.seazn.club", "ACTIVE": "true" }
     },
     "prod": {
       "name": "seazn-cron-prod",
-      "triggers": { "crons": ["17 * * * *"] },
+      "triggers": { "crons": ["17 * * * *", "*/5 * * * *"] },
       "vars": { "ENV_NAME": "prod", "BASE_URL": "https://seazn.club", "ACTIVE": "true" }
     }
   }

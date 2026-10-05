@@ -53,7 +53,7 @@ const req = (body: unknown) =>
 let limiterKeys: [string, number][] = [];
 const counter = (n: number) => async (key: string, windowSeconds: number) => {
   limiterKeys.push([key, windowSeconds]);
-  return n;
+  return { count: n, ttlMs: windowSeconds * 1000 };
 };
 
 beforeEach(() => {

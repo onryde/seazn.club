@@ -774,12 +774,23 @@ jobs:
           # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
           ENV_NAME: ci
+          # Capture QR v2: the panel's phone-camera option is behind the PostHog flag capture-qr-v2
+          # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
+          # Exactly "1". Staging and prod never set it.
+          CAPTURE_QR_V2_ALWAYS: "1"
           # The fake ingest reports the phone "connected" this long after a stream's input is
           # made (server/relay/fakes.ts; default 3000). stream-relay.spec.ts asserts the QR the
           # Phone tab draws while the camera warms, which stays on screen only until the server's
           # next read after the connect; 3 s is inside a loaded runner's create + first read.
           # The Playwright step below is told the same value: the spec budgets its waits from it.
           FAKE_INGEST_CONNECT_AFTER_MS: "10000"
+          # Capture QR v2 R10: capture-phone.spec.ts runs the dead-phone takeover, a live phone lost (W19)
+          # and the silent floor in seconds, not minutes. Honoured only because ENV_NAME is ci (config.ts
+          # `tunable`); a deployment always runs the defaults (60 s, 15 min, 60 s). The Playwright step
+          # below is told the same values: the spec budgets its waits from them and refuses unshortened ones.
+          DEAD_PHONE_TAKEOVER_SECONDS: "3"
+          PHONE_LOST_LIVE_MINUTES: "1"
+          PHONE_SILENT_FLOOR_SECONDS: "5"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -832,6 +843,10 @@ jobs:
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
           # The same value the server was started with (see "Start server"): the spec's waits derive from it.
           FAKE_INGEST_CONNECT_AFTER_MS: "10000"
+          # Capture QR v2 R10: the server's shortened timings, the same values (see "Start server").
+          DEAD_PHONE_TAKEOVER_SECONDS: "3"
+          PHONE_LOST_LIVE_MINUTES: "1"
+          PHONE_SILENT_FLOOR_SECONDS: "5"
 
       # Distinct from "Connect walkthrough not configured" above: that one
       # keys on STRIPE_CONNECT_TEST_ACCOUNT and covers the REGISTRATION money
@@ -1224,6 +1239,10 @@ jobs:
           # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
           ENV_NAME: ci
+          # Capture QR v2: the panel's phone-camera option is behind the PostHog flag capture-qr-v2
+          # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
+          # Exactly "1". Staging and prod never set it.
+          CAPTURE_QR_V2_ALWAYS: "1"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -1570,6 +1589,10 @@ jobs:
           # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
           ENV_NAME: ci
+          # Capture QR v2: the panel's phone-camera option is behind the PostHog flag capture-qr-v2
+          # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
+          # Exactly "1". Staging and prod never set it.
+          CAPTURE_QR_V2_ALWAYS: "1"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

@@ -25,6 +25,9 @@ import {
   EMAIL_LIMIT,
   WEBHOOK_LIMIT,
   MUTATION_LIMIT,
+  CAPTURE_CODE_LIMIT,
+  CAPTURE_FAIL_LIMIT,
+  CAPTURE_START_LIMIT,
   __setRateLimitCounterForTests,
 } from "@/lib/rate-limit";
 
@@ -43,19 +46,19 @@ afterEach(() => {
 
 describe("rateLimit (Upstash-only)", () => {
   it("passes when the count is within the cap", async () => {
-    cacheMock.incrWindow.mockResolvedValue(3);
+    cacheMock.incrWindow.mockResolvedValue({ count: 3, ttlMs: 30_000 });
     await expect(rateLimit("login:1.2.3.4", CFG)).resolves.toBeUndefined();
   });
 
   it("throws 429 once the count exceeds the cap", async () => {
-    cacheMock.incrWindow.mockResolvedValue(4);
+    cacheMock.incrWindow.mockResolvedValue({ count: 4, ttlMs: 30_000 });
     await expect(rateLimit("login:1.2.3.4", CFG)).rejects.toMatchObject(
-      new HttpError(429, "Too many requests — slow down and try again."),
+      new HttpError(429, "Too many requests — slow down and try again.", undefined, undefined, { "Retry-After": "30" }),
     );
   });
 
   it("prefixes the key with rl: and forwards the window", async () => {
-    cacheMock.incrWindow.mockResolvedValue(1);
+    cacheMock.incrWindow.mockResolvedValue({ count: 1, ttlMs: 60_000 });
     await rateLimit("login:1.2.3.4", CFG);
     expect(cacheMock.incrWindow).toHaveBeenCalledWith("rl:login:1.2.3.4", 60);
   });
@@ -102,10 +105,10 @@ describe("rateLimit (Upstash-only)", () => {
 
 function countingWindow() {
   const counts = new Map<string, number>();
-  return async (key: string) => {
+  return async (key: string, windowSeconds: number) => {
     const next = (counts.get(key) ?? 0) + 1;
     counts.set(key, next);
-    return next;
+    return { count: next, ttlMs: windowSeconds * 1000 };
   };
 }
 
@@ -164,9 +167,71 @@ describe("rateLimit (injected counter)", () => {
 // (http.ts:83) rather than a code the pad would have to learn. The earlier
 // version asserted only the first of the two and named the second in its title.
 it("the limiter's HttpError is a bare 429, so the envelope code is RATE_LIMITED", async () => {
-  __setRateLimitCounterForTests(async () => 99);
+  __setRateLimitCounterForTests(async () => ({ count: 99, ttlMs: 1_000 }));
   const err = await rateLimit("t:d", { max: 1, windowSeconds: 1 }).catch((e) => e);
   expect(err).toBeInstanceOf(HttpError);
   expect((err as HttpError).status).toBe(429);
   expect((err as HttpError).code).toBeUndefined();
+});
+
+// ─── Retry-After (capture QR v2 §10.4, amended §17.4 R4; A15) ────────────────
+//
+// The 429 carries the window's TRUE remaining seconds, read from the counter key's TTL in the same Lua script as the
+// increment: an integer, rounded UP, never 0 (a 0 makes a client hammer). Every expected value below is derived from the
+// `ttlMs` the test hands the seam, never from the limiter.
+const retryAfterOf = async (p: Promise<unknown>): Promise<string | undefined> => {
+  const err = await p.then(() => null, (e: unknown) => e);
+  expect(err, "the limiter refused").toBeInstanceOf(HttpError);
+  expect((err as HttpError).status).toBe(429);
+  return (err as HttpError).headers?.["Retry-After"];
+};
+const ceilSeconds = (ttlMs: number) => String(Math.ceil(ttlMs / 1000));
+
+describe("Retry-After (R4)", () => {
+  it("the limiter's 429 carries the window's remaining seconds, rounded up: ttlMs 42 500 → \"43\"", async () => {
+    __setRateLimitCounterForTests(async () => ({ count: 4, ttlMs: 42_500 }));
+    expect(await retryAfterOf(rateLimit("t:r1", CFG))).toBe(ceilSeconds(42_500));
+    expect(ceilSeconds(42_500)).toBe("43");
+  });
+
+  it("the boundary: a TTL under one second (400 ms) answers \"1\", never \"0\"", async () => {
+    __setRateLimitCounterForTests(async () => ({ count: 4, ttlMs: 400 }));
+    expect(await retryAfterOf(rateLimit("t:r2", CFG))).toBe("1");
+  });
+
+  it("the production backend (incrWindow) carries the same header: ttlMs 7 001 → \"8\"", async () => {
+    cacheMock.incrWindow.mockResolvedValue({ count: 4, ttlMs: 7_001 });
+    expect(await retryAfterOf(rateLimit("t:r3", CFG))).toBe(ceilSeconds(7_001));
+  });
+
+  it("a key with no TTL to read (PTTL -1 / -2: a guard, the Lua sets one on the first hit) answers the FULL window, never 0", async () => {
+    for (const ttlMs of [-1, -2, 0]) {
+      __setRateLimitCounterForTests(async () => ({ count: 4, ttlMs }));
+      expect(await retryAfterOf(rateLimit("t:r4", { max: 3, windowSeconds: 90 })), `ttlMs ${ttlMs}`).toBe("90");
+    }
+  });
+
+  it("fail-closed (Redis configured but unreachable): no window to read, so Retry-After is the FULL windowSeconds", async () => {
+    __setRateLimitCounterForTests(async () => null);
+    cacheMock.cacheEnabled.mockReturnValue(true);
+    expect(await retryAfterOf(rateLimit("t:r5", { max: 3, windowSeconds: 300, failClosed: true }))).toBe("300");
+  });
+
+  it("the positive pairs: Redis NOT configured is inert even for failClosed, a fail-open limit allows a null count, and a count within the cap passes — no 429 in any", async () => {
+    __setRateLimitCounterForTests(async () => null);
+    cacheMock.cacheEnabled.mockReturnValue(false);
+    await expect(rateLimit("t:r6", { max: 3, windowSeconds: 300, failClosed: true })).resolves.toBeUndefined();
+    cacheMock.cacheEnabled.mockReturnValue(true);
+    await expect(rateLimit("t:r6", { max: 3, windowSeconds: 300 })).resolves.toBeUndefined();
+    __setRateLimitCounterForTests(async () => ({ count: 3, ttlMs: 400 }));
+    await expect(rateLimit("t:r6", CFG)).resolves.toBeUndefined();
+  });
+});
+
+describe("the capture presets (spec §10.4)", () => {
+  it("CAPTURE_CODE_LIMIT 120 / 60 s, CAPTURE_FAIL_LIMIT 30 / 60 s, CAPTURE_START_LIMIT 6 / 60 s — all fail OPEN: a Redis blip must not stop a broadcast's beats", () => {
+    expect(CAPTURE_CODE_LIMIT).toEqual({ max: 120, windowSeconds: 60 });
+    expect(CAPTURE_FAIL_LIMIT).toEqual({ max: 30, windowSeconds: 60 });
+    expect(CAPTURE_START_LIMIT).toEqual({ max: 6, windowSeconds: 60 });
+  });
 });

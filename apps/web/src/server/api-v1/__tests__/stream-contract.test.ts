@@ -9,11 +9,12 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { z } from "zod";
 import * as S from "../schemas";
-import { CaptureQrV1 } from "@/lib/capture-qr";
 import { buildOpenApiDocument, ROUTES } from "../openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "../key-scopes";
 import { ACTIVE_STATES, TERMINAL_STATES, type FailReason } from "@/server/relay/domain/session";
-import { MIGRATION } from "@/server/relay/__tests__/_stream-migration";
+import { DB_END_REASONS } from "@/server/relay/domain/end-reason";
+import { EVENT_SOURCES } from "@/server/relay/telemetry";
+import { deltaText, lastCheckList, MIGRATION, STREAM_DELTA_COUNT, STREAM_DELTA_FILES } from "@/server/relay/__tests__/_stream-migration";
 import {
   DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_KEY_EMPTY, STREAM_PLATFORMS,
   STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
@@ -36,7 +37,10 @@ describe("relay wire enums equal their declarations", () => {
     ["StreamSessionState ↔ fixture_stream_sessions.state", S.StreamSessionState.options, checkList("fixture_stream_sessions", "state")],
     ["StreamSessionCurrent.desiredState ↔ fixture_stream_sessions.desired_state", S.StreamSessionCurrent.shape.desiredState.options, checkList("fixture_stream_sessions", "desired_state")],
     ["RelayHeartbeatReply.desiredState ↔ fixture_stream_sessions.desired_state", S.RelayHeartbeatReply.shape.desiredState.options, checkList("fixture_stream_sessions", "desired_state")],
-    ["StreamEndReason ↔ fixture_stream_sessions.end_reason", S.StreamEndReason.options, checkList("fixture_stream_sessions", "end_reason")],
+    // T6 (capture QR v2 §6.8.4): V430 drops V410's inline end_reason check and re-adds it with five members, so the list
+    // is the FOLD's last definition (T3's lastCheckList), never V410's alone — which would still answer two.
+    ["StreamEndReason ↔ fixture_stream_sessions.end_reason (folded)", S.StreamEndReason.options, lastCheckList("fixture_stream_sessions", "end_reason")],
+    ["StreamSessionCurrent.startCause ↔ fixture_stream_sessions.start_cause (V430)", S.StreamSessionCurrent.shape.startCause.options, lastCheckList("fixture_stream_sessions", "start_cause")],
     ["StreamIngest.protocol ↔ fixture_stream_sessions.ingest_protocol", S.StreamIngest.shape.protocol.unwrap().options, checkList("fixture_stream_sessions", "ingest_protocol")],
     ["StreamTargetKind ↔ org_stream_targets.kind", S.StreamTargetKind.options, checkList("org_stream_targets", "kind")],
   ];
@@ -50,6 +54,23 @@ describe("relay wire enums equal their declarations", () => {
     }
     expect(checked, "pairs checked").toBe(pairs.length);
     expect(checked).toBeGreaterThan(0);
+  });
+
+  it("T6: StreamEndReason is exactly T4b's DB_END_REASONS — five — and the folded CHECK list agrees in both directions", () => {
+    const declared = lastCheckList("fixture_stream_sessions", "end_reason");
+    expect(declared).toHaveLength(5);
+    expect(sorted(S.StreamEndReason.options)).toEqual(sorted(DB_END_REASONS));
+    expect(sorted(declared)).toEqual(sorted(DB_END_REASONS));
+  });
+
+  it("A6: EventSource ↔ fixture_stream_events.source — telemetry's runtime list equals the folded CHECK list in both directions, and 'phone' is in both", () => {
+    const declared = lastCheckList("fixture_stream_events", "source");
+    let checked = 0;
+    for (const source of EVENT_SOURCES) { expect(declared, `telemetry writes ${source}; the CHECK must admit it`).toContain(source); checked++; }
+    for (const source of declared) { expect(EVENT_SOURCES as readonly string[], `the CHECK admits ${source}; EventSource must name it`).toContain(source); checked++; }
+    expect(checked, "sources compared").toBeGreaterThan(0);
+    expect(checked).toBe(EVENT_SOURCES.length + declared.length);
+    expect(declared).toContain("phone");
   });
 
   it("StreamSessionState is exactly the domain's active + terminal states", () => {
@@ -73,9 +94,15 @@ describe("relay wire enums equal their declarations", () => {
     expect(S.StreamFailReason.options.filter((r) => (S.StreamEndReason.options as readonly string[]).includes(r))).toEqual([]);
   });
 
-  it("the QR schema is RE-EXPORTED, never re-typed: schemas.ts's CaptureQrV1 IS lib/capture-qr.ts's", () => {
-    expect(S.CaptureQrV1).toBe(CaptureQrV1);
-    expect(S.StreamSessionCurrent.shape.qr.unwrap()).toBe(CaptureQrV1);
+  // Capture QR v2 §6.13 (W4, T11): the v1 QR and the derived free-restart boolean are gone from the wire — the organiser
+  // never sees credentials, and `restart` (W23) is the one restart field. The EXACT key set is pinned, so neither can
+  // come back (nor a new field arrive) without this list moving; and schemas.ts re-exports no capture QR schema at all.
+  it("W4 + A9: StreamSessionCurrent's exact key set — no `qr`, `restart` the one restart field — and no QR schema re-exported", () => {
+    expect(Object.keys(S.StreamSessionCurrent.shape).sort()).toEqual([
+      "balance", "countdown", "creditUsed", "desiredState", "endReason", "endedAt", "failReason", "fixtureDecided", "fixtureId",
+      "health", "id", "ingest", "mode", "output", "replayUrl", "restart", "startCause", "startedAt", "state", "target",
+    ]);
+    expect(Object.keys(S).filter((k) => /^CaptureQr/.test(k))).toEqual([]);
   });
 
   it("the four inferred types the Task 9 brief promised are EXPORTED, each exactly its schema's z.infer (review minor 6)", () => {
@@ -99,6 +126,58 @@ describe("relay wire enums equal their declarations", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// Capture QR v2 T3 (A4): a CHECK list is the LAST declaration in version order across the stream
+// fold, in either form — V410's inline unnamed column check, or a later `add constraint … check`.
+// Every expectation below is read straight off ONE file's own `in (…)` list with a regex local to
+// this test, never typed and never through lastCheckList itself.
+describe("the stream delta fold — lastCheckList reads both CHECK forms, last definition wins (A4)", () => {
+  const V410 = deltaText(410);
+  const V430 = deltaText(430);
+  const list = (m: RegExpMatchArray | null): string[] => (m ? [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!) : []);
+  // V410 :175 and :307 — the inline unnamed form.
+  const v410EndReasons = list(V410.match(/\n\s*end_reason\s+text null check \(end_reason in \(([^)]*)\)\)/));
+  const v410Sources = list(V410.match(/\n\s*source\s+text not null check \(source in \(([^)]*)\)\)/));
+  // V430 — the named form, under Postgres's default name for V410's inline check.
+  const v430EndReasons = list(V430.match(/add constraint fixture_stream_sessions_end_reason_check\s+check \(end_reason in \(([^)]*)\)\)/));
+  const v430Sources = list(V430.match(/add constraint fixture_stream_events_source_check\s+check \(source in \(([^)]*)\)\)/));
+
+  it("anti-vacuity: the fold read files, V410 and V430 among them BY NAME, and each file's own list parsed non-empty", () => {
+    expect(STREAM_DELTA_COUNT).toBeGreaterThan(0);
+    expect(STREAM_DELTA_COUNT).toBe(STREAM_DELTA_FILES.length);
+    expect(STREAM_DELTA_FILES).toContain("V410__stream_sessions.sql");
+    expect(STREAM_DELTA_FILES).toContain("V430__capture_stream_codes.sql");
+    expect(STREAM_DELTA_FILES.indexOf("V410__stream_sessions.sql")).toBeLessThan(STREAM_DELTA_FILES.indexOf("V430__capture_stream_codes.sql"));
+    expect([v410EndReasons.length, v430EndReasons.length, v410Sources.length, v430Sources.length].every((n) => n > 0)).toBe(true);
+  });
+
+  it("ordering differential: V410 alone folds to V410's two end reasons; V410 then V430 folds to V430's five; the reverse order folds back to V410's", () => {
+    expect(v410EndReasons).toHaveLength(2);
+    expect(v430EndReasons).toHaveLength(5);
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [V410])).toEqual(v410EndReasons);       // the INLINE form
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [V430])).toEqual(v430EndReasons);       // the NAMED form
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [V410, V430])).toEqual(v430EndReasons);
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [V430, V410])).toEqual(v410EndReasons); // order decides
+    expect(lastCheckList("fixture_stream_sessions", "end_reason")).toEqual(v430EndReasons);               // the whole fold
+    // V430 keeps both of V410's reasons — it widens, never narrows.
+    for (const r of v410EndReasons) expect(v430EndReasons).toContain(r);
+  });
+
+  it("fixture_stream_events.source: the folded list contains 'phone', V410's alone does not, and every V410 source is kept", () => {
+    const folded = lastCheckList("fixture_stream_events", "source");
+    expect(lastCheckList("fixture_stream_events", "source", [V410])).toEqual(v410Sources);
+    expect(folded).toEqual(v430Sources);
+    expect(folded).toContain("phone");
+    expect(v410Sources).not.toContain("phone");
+    expect([...folded].filter((x) => x !== "phone").sort()).toEqual([...v410Sources].sort());
+  });
+
+  it("the empty case: a column no folded file checks reads [], never a default", () => {
+    expect(lastCheckList("fixture_stream_sessions", "no_such_column")).toEqual([]);
+    expect(lastCheckList("no_such_table", "end_reason")).toEqual([]);
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [])).toEqual([]);
   });
 });
 
@@ -168,14 +247,72 @@ describe("relay request schemas refuse what they must", () => {
     expect(S.RelayHeartbeat.safeParse({}).success).toBe(false);
   });
 
-  it("StreamSessionCurrent is strict, and its qr is the v1 payload or null — never a default object", () => {
+  it("StreamSessionCurrent is strict — a v1 `qr` riding along is refused", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
-      health: null, ingest: null, output: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
+      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
-      restartFree: false,
+      startCause: "organiser", restart: null, countdown: null,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
+    // T9 (W24): countdown is REQUIRED (null when there is none) and closed — a kind the panel has no copy for, a
+    // negative or fractional duration, or an extra key is refused.
+    const withoutCountdown: Record<string, unknown> = { ...current };
+    delete withoutCountdown.countdown;
+    expect(S.StreamSessionCurrent.safeParse(withoutCountdown).success).toBe(false);
+    // Controller ruling 2026-10-04: the countdown carries the reason of the end it names — `live` only W19's phone_lost,
+    // `warming` the timeout or ask 10's phone_lost — so the panel never has to guess which end is coming.
+    let acceptedCountdowns = 0;
+    for (const ok of [
+      { kind: "live", reason: "phone_lost", elapsedMs: 31_000, remainingMs: 869_000 },
+      { kind: "warming", reason: "no_inbound_timeout", elapsedMs: 31_000, remainingMs: 569_000 },
+      { kind: "warming", reason: "phone_lost", elapsedMs: 60_000, remainingMs: 30_000 },
+    ]) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, countdown: ok }).success, JSON.stringify(ok)).toBe(true);
+      acceptedCountdowns++;
+    }
+    expect(acceptedCountdowns).toBe(3);
+    let refusedCountdowns = 0;
+    for (const bad of [
+      { kind: "lost", reason: "phone_lost", elapsedMs: 0, remainingMs: 0 }, { kind: "live", reason: "phone_lost", elapsedMs: -1, remainingMs: 0 },
+      { kind: "warming", reason: "no_inbound_timeout", elapsedMs: 0, remainingMs: 1.5 }, { kind: "live", reason: "phone_lost", elapsedMs: 0, remainingMs: 0, at: "x" },
+      { kind: "live", elapsedMs: 0, remainingMs: 0 }, { kind: "warming", elapsedMs: 0, remainingMs: 0 },
+      { kind: "live", reason: "no_inbound_timeout", elapsedMs: 0, remainingMs: 0 }, { kind: "warming", reason: "stopped", elapsedMs: 0, remainingMs: 0 },
+    ]) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, countdown: bad }).success, JSON.stringify(bad)).toBe(false);
+      refusedCountdowns++;
+    }
+    expect(refusedCountdowns).toBe(8);
+    // T6: startCause is REQUIRED and closed — the panel names who started the broadcast from it.
+    const withoutStartCause: Record<string, unknown> = { ...current };
+    delete withoutStartCause.startCause;
+    expect(S.StreamSessionCurrent.safeParse(withoutStartCause).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, startCause: "phone" }).success).toBe(false);
+    let causes = 0;
+    for (const startCause of ["organiser", "operator", "automatic"] as const) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, startCause }).success, startCause).toBe(true);
+      causes++;
+    }
+    expect(causes).toBe(3);
+    // T6b (A9(a)): restart is REQUIRED — null (no window open) or the allowance, strict, its count a whole non-negative
+    // number and its limit a positive one. (T11 retired the derived boolean beside it.)
+    const withoutRestart: Record<string, unknown> = { ...current };
+    delete withoutRestart.restart;
+    expect(S.StreamSessionCurrent.safeParse(withoutRestart).success, "absent").toBe(false);
+    const allowance = { windowOpen: true, used: 2, limit: 3, free: true };
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: allowance }).success, "the positive pair").toBe(true);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: { ...allowance, used: -1 } }).success, "negative used").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: { ...allowance, used: 1.5 } }).success, "fractional used").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: { ...allowance, limit: 0 } }).success, "zero limit").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: { ...allowance, extra: 1 } }).success, "strict").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: {} }).success, "never a default object").toBe(false);
+    // T6: every DB end reason is a legal wire value on a completed session's projection.
+    let reasons = 0;
+    for (const endReason of DB_END_REASONS) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, state: "completed", endReason }).success, endReason).toBe(true);
+      reasons++;
+    }
+    expect(reasons).toBe(5);
     // T4 D3: output is REQUIRED (null, or {state, since, elapsedMs}) — an absent field would read as "nothing to warn about".
     const withoutOutput: Record<string, unknown> = { ...current };
     delete withoutOutput.output;
@@ -198,14 +335,9 @@ describe("relay request schemas refuse what they must", () => {
     delete withoutCreditUsed.creditUsed;
     expect(S.StreamSessionCurrent.safeParse(withoutCreditUsed).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, creditUsed: 1 }).success).toBe(false);
-    // I-1: restartFree likewise — an absent field would read as "not free" and force the chooser on a free restart.
-    const withoutRestartFree: Record<string, unknown> = { ...current };
-    delete withoutRestartFree.restartFree;
-    expect(S.StreamSessionCurrent.safeParse(withoutRestartFree).success).toBe(false);
-    expect(S.StreamSessionCurrent.safeParse({ ...current, restartFree: "yes" }).success).toBe(false);
-    expect(S.StreamSessionCurrent.safeParse({ ...current, restartFree: true }).success, "the positive pair").toBe(true);
+    // T11 (W4): the retired field is refused, not ignored — a server that still sent it would fail the parse.
+    expect(S.StreamSessionCurrent.safeParse({ ...current, qr: null }).success, "qr: null").toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, streamKey: "k" }).success).toBe(false);
-    expect(S.StreamSessionCurrent.safeParse({ ...current, qr: {} }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, failReason: "storage_exhausted" }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, balance: 1.5 }).success).toBe(false);
   });
@@ -217,19 +349,48 @@ describe("relay request schemas refuse what they must", () => {
 
 /** OpenAPI `{id}` template → the key table's `:id` form. */
 const keyForm = (method: string, path: string) => `${method.toUpperCase()} ${path.replace(/\{([^}]+)\}/g, ":$1")}`;
-const STREAM_ROUTE = /\/(stream-sessions|stream-targets)(\/|$)/;
+// T6 (plan premise 10): widened so the capture QR v2 organiser routes enter the pin — without it they were invisible here
+// and the count stayed at seven, a vacuous pass. T9's GET …/stream-phone makes eleven (spec §9 "7 to 11").
+const STREAM_ROUTE = /\/(stream-sessions|stream-targets|stream-code|stream-phone|stream-settings)(\/|$)/;
 const streamRoutes = ROUTES.filter((r) => STREAM_ROUTE.test(r.path));
 
+// The relay pin's sibling for the PHONE's routes (capture QR v2 A16): the internal `capture` tag holds exactly the three
+// operations the capture app calls, each banned from API keys by name, never merely unlisted.
+const captureRoutes = ROUTES.filter((r) => r.tag === "capture");
+
+describe("the phone's capture routes are never key-reachable (A16)", () => {
+  it("the `capture` tag holds exactly the THREE phone operations; each is an explicit NEVER_KEY_ROUTES entry AND resolves to no key rule on a concrete path", () => {
+    expect(captureRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
+      "GET /capture/codes/:code",
+      "POST /capture/codes/:code/beats",
+      "POST /capture/codes/:code/start",
+    ]);
+    let checked = 0;
+    for (const r of captureRoutes) {
+      const entry = keyForm(r.method, r.path);
+      expect(NEVER_KEY_ROUTES, entry).toContain(entry);
+      const concrete = `/api/v1${r.path.replace("{code}", "0123456789ab")}`;
+      expect(matchKeyRoute(r.method, concrete), `${r.method.toUpperCase()} ${concrete}`).toBeNull();
+      checked++;
+    }
+    expect(checked, "capture routes checked").toBe(3);
+  });
+});
+
 describe("the relay's routes are never key-reachable", () => {
-  it("ROUTES declares exactly the SEVEN relay operations (design §6.3 / §6.1; spec §5.2 adds rename/replace + remove)", () => {
+  it("ROUTES declares exactly the ELEVEN relay operations (design §6.3 / §6.1; spec §5.2 adds rename/replace + remove; capture QR v2 T5 adds the stream code, its reissue and the stream settings; T9 the panel's stream-phone read model — spec §9 \"7 to 11\")", () => {
     expect(streamRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
       "DELETE /orgs/:id/stream-targets/:targetId",
+      "GET /fixtures/:id/stream-phone",
       "GET /fixtures/:id/stream-sessions/current",
       "GET /orgs/:id/stream-targets",
       "PATCH /orgs/:id/stream-targets/:targetId",
+      "POST /fixtures/:id/stream-code",
+      "POST /fixtures/:id/stream-code/reissue",
       "POST /fixtures/:id/stream-sessions",
       "POST /fixtures/:id/stream-sessions/:sid/stop",
       "POST /orgs/:id/stream-targets",
+      "PUT /fixtures/:id/stream-settings",
     ]);
   });
 
@@ -312,9 +473,14 @@ describe("the relay's routes are never key-reachable", () => {
     for (const [path, ops] of Object.entries(doc.paths)) {
       for (const [method, o] of Object.entries(ops)) {
         if (refusesDestinations.has(`${method} ${path}`)) continue;
-        const e = o.responses["422"]?.content["application/json"].schema.properties.error;
-        if (!e) continue;
-        expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("rule");
+        const schema = o.responses["422"]?.content["application/json"].schema as
+          | { properties?: { error?: ErrorProps }; anyOf?: ErrorProps[] } | undefined;
+        if (!schema) continue;
+        // Capture QR v2 (T8a): a BARE phone route refuses with the capture-refusal body itself — its branches are the
+        // error objects, there is no envelope `error`. Either way every error object is checked.
+        const errors = schema.properties?.error ? [schema.properties.error] : (schema.anyOf ?? []);
+        expect(errors.length, `${method} ${path}: a 422 with no error object to check`).toBeGreaterThan(0);
+        for (const e of errors) expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("rule");
         others++;
       }
     }
@@ -356,7 +522,8 @@ describe("the relay's routes are never key-reachable", () => {
   // so the create route's 409 documents it (next to active_session's `sessionId`), SCOPED to that route.
   it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, href, matchNo, courtName, label, state }`; the Directory's PATCH/DELETE 409 document TARGET_IN_USE's `holder`, and PATCH alone DESTINATION_DUPLICATE's `other`; no other route's 409 gains `holder`", () => {
     type Prop = { type?: string | string[]; properties?: Record<string, Prop> };
-    type Doc = { paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: Prop } } } } }> }>> };
+    // A bare capture route's refusal is the capture-refusal union (anyOf), not the `{ok, error}` envelope.
+    type Doc = { paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: Prop }; anyOf?: Prop[] } } } }> }>> };
     const doc = buildOpenApiDocument() as Doc;
     const err409 = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.responses["409"]!.content["application/json"].schema.properties.error;
     expect(Object.keys(err409.properties ?? {}).sort()).toEqual(["code", "current_seq", "holder", "message", "sessionId"]);
@@ -392,9 +559,11 @@ describe("the relay's routes are never key-reachable", () => {
     for (const [path, ops] of Object.entries(doc.paths)) {
       for (const [method, o] of Object.entries(ops)) {
         if (documentsHolder.has(`${method} ${path}`)) continue;
-        const e = o.responses["409"]?.content["application/json"].schema.properties.error;
-        if (!e) continue;
-        expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("holder");
+        const schema = o.responses["409"]?.content["application/json"].schema;
+        if (!schema) continue;
+        const bodies = schema.properties?.error ? [schema.properties.error] : (schema.anyOf ?? []);
+        expect(bodies.length, `${method} ${path}: a 409 with no body to read`).toBeGreaterThan(0);
+        for (const e of bodies) expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("holder");
         others++;
       }
     }

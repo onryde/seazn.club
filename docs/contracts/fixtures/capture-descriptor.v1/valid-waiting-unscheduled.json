@@ -1,0 +1,12 @@
+{
+  "state": "waiting",
+  "code": "7k3m9p2qx4tz",
+  "label": "Match 3",
+  "venueTimezone": "UTC",
+  "pollSeconds": 60,
+  "autoAllowed": false,
+  "destinationName": null,
+  "overlayUrl": null,
+  "heartbeatUrl": "https://stg.seazn.club/api/v1/capture/codes/7k3m9p2qx4tz/beats",
+  "startUrl": "https://stg.seazn.club/api/v1/capture/codes/7k3m9p2qx4tz/start"
+}

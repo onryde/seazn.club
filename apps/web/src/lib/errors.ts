@@ -5,13 +5,17 @@ export class AuthError extends Error {}
  *  overrides the generic status→code mapping in the /api/v1 envelope (e.g.
  *  LINK_EXPIRED on a 401 so the device-link pad can render it, doc 13 §7).
  *  `extra` fields merge into the error body — machine-readable hints like
- *  DIVISION_HAS_RESULTS carrying `{archive: true}` (v3/09 §4). */
+ *  DIVISION_HAS_RESULTS carrying `{archive: true}` (v3/09 §4). `headers` ride
+ *  on the response — the rate limiter's `Retry-After` (capture QR v2 §10.4) —
+ *  and both handler() and v1() set them (v1 merges them with its own
+ *  X-RateLimit-* headers; neither replaces the other). */
 export class HttpError extends Error {
   constructor(
     public readonly status: number,
     message: string,
     public readonly code?: string,
     public readonly extra?: Record<string, unknown>,
+    public readonly headers?: Record<string, string>,
   ) {
     super(message);
   }

@@ -44,6 +44,12 @@ describe("schedule ↔ routes drift guard", () => {
   });
 });
 
+/** Comments out, code in (apps/web enc-boundary.test.ts claim 4's stripper): prose that names a field is not a
+ *  declaration of it (B5 review I-2: a doc comment saying "failed: number" kept this check green with the field gone). */
+const stripComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+/** Does `src`'s CODE declare `leaf` as a number? The one judgement both the scan and its self-test use. */
+const declaresNumber = (src: string, leaf: string): boolean => new RegExp(`\\b${leaf}\\s*:\\s*number\\b`).test(stripComments(src));
+
 describe("R3 failure counters ↔ the usecases' return types", () => {
   const WEB_SRC = join(REPO, "apps/web/src");
   /** The source text of every module a route imports through the `@/` alias. */
@@ -61,11 +67,23 @@ describe("R3 failure counters ↔ the usecases' return types", () => {
       expect(src.length, `${j.id}: imported modules found`).toBeGreaterThan(0);
       for (const path of j.failureCounts) {
         const leaf = path.split(".").at(-1)!;
-        expect(new RegExp(`\\b${leaf}\\s*:\\s*number\\b`).test(src), `${j.id}: ${path} → a "${leaf}: number" field`).toBe(true);
+        expect(declaresNumber(src, leaf), `${j.id}: ${path} → a "${leaf}: number" field in code`).toBe(true);
         checked++;
       }
     }
-    expect(checked, "counters checked").toBe(6);
+    expect(checked, "counters checked").toBe(7);   // T7b: + stream-tick's data.failed
+  });
+
+  it("the scan reads CODE, not prose: a field named only in a block or line comment is not declared; the same field in a type is", () => {
+    const cases: [string, boolean][] = [
+      ["/** the Worker reads `failed: number` */\nexport type R = { ticked: number };", false],
+      ["// failed: number\nexport type R = { ticked: number };", false],
+      ["/* failed: number */ export type R = { failures: number };", false],
+      ["export type R = { ticked: number; failed: number };", true],
+      ["/** a doc comment */\nexport type R = {\n  failed : number; // the counter\n};", true],
+    ];
+    for (const [src, want] of cases) expect(declaresNumber(src, "failed"), JSON.stringify(src)).toBe(want);
+    expect(cases.length, "cases checked").toBe(5);
   });
 });
 

@@ -27,6 +27,7 @@ import { STREAM_PLATFORMS, type StreamPlatform } from "../../src/lib/stream-dest
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
+import { disposeFakePhones, pairPhoneOnFixture, pairedPhone } from "../helpers/fake-capture-phone";
 
 // ===========================================================================
 // Kit (file-local; the stream-relay.spec.ts shapes)
@@ -132,7 +133,12 @@ async function teardownStreams(): Promise<void> {
 }
 
 test.afterEach(async () => {
-  await teardownStreams();
+  // Capture QR v2 (W5): the phones paired for a Go live stop beating before the streams are stopped.
+  try {
+    await disposeFakePhones();
+  } finally {
+    await teardownStreams();
+  }
 });
 
 // Copy, from the dictionaries themselves.
@@ -227,9 +233,12 @@ async function addTargetApi(page: Page, orgId: string, t: { label: string; kind?
   return res.data!;
 }
 /** SETUP: a session made through the API and NOT read — WAITING (the server flips warming → live only on a read of
- *  `current`, so nothing here advances it). The premise is asserted from the table. */
-async function holdWaiting(page: Page, fixtureId: string, targetId: string): Promise<void> {
+ *  `current`, so nothing here advances it). The premise is asserted from the table. Capture QR v2 (W5): a phone is
+ *  paired on the match's code first — from a second tab, so `page` is untouched; its beats name no session and tick
+ *  nothing. */
+async function holdWaiting(page: Page, fixtureId: string, targetId: string, fixturePath: string): Promise<void> {
   await streamSlot();
+  await pairPhoneOnFixture(page, fixturePath);
   const made = await apiJson(page.request, `/api/v1/fixtures/${fixtureId}/stream-sessions`, "POST", { mode: "passthrough", targetId });
   if (made.status !== 201 && made.status !== 200) throw new Error(`holdWaiting -> ${made.status} ${JSON.stringify(made.error)}`);
 }
@@ -368,6 +377,7 @@ for (const width of [320, 1280] as const) {
     await body.getByTestId("stream-target").selectOption(id);
     await expect(body.getByTestId("stream-target").locator("option:checked")).toContainText(label);
     await streamSlot();
+    await pairedPhone(page); // W5: Go live needs a paired phone
     await body.getByTestId("stream-go-live").click();
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
 
@@ -597,7 +607,7 @@ test("5: the in-use lock — WAITING (refused, names the match), then LIVE, then
   const f = rig.fixtures[0]!;
   const t = await addTargetApi(page, rig.orgId, { label: `Held ${rig.tag}` });
   const log = mutationLog(page);
-  await holdWaiting(page, f.id, t.id);
+  await holdWaiting(page, f.id, t.id, `${rig.divPath}/f/${f.no}`);
   const [s] = await sessionsOf(rig.orgId);
   expect(["requested", "provisioning", "warming"], `premise: the session is WAITING (got ${s?.state})`).toContain(s?.state);
 
@@ -690,7 +700,7 @@ test("8+9: three rows (one HELD, one Twitch, one legacy with an unreadable key) 
   // A legacy kind (spec §5.4: stored rows keep listing until removed) whose sealed key will not open.
   const [legacy] = await withDb((sql) => sql<{ id: string }[]>`
     insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${rig.orgId}, 'facebook', ${"Old Facebook " + rig.tag}, '\\x00'::bytea) returning id`);
-  await holdWaiting(page, f.id, held.id);
+  await holdWaiting(page, f.id, held.id, `${rig.divPath}/f/${f.no}`);
 
   let checked = 0;
   for (const width of WIDTHS) {
@@ -814,7 +824,7 @@ test("E: refusals read the page's own copy — a bad watch link, a duplicate key
 
   // TARGET_IN_USE (409): tab 2 still shows Alpha free; a match takes it; tab 2's Remove is refused naming the match, and
   // the refusal re-reads the list, so the row locks with its badge.
-  await holdWaiting(page, f.id, a.id);
+  await holdWaiting(page, f.id, a.id, `${rig.divPath}/f/${f.no}`);
   await rowOf(tab2, a.id).getByTestId("stream-dest-remove").click();
   await confirmRemove(tab2, a.label);
   await expect(tab2.getByTestId("stream-dest-error")).toHaveText(en("streamDest.stopFirst", { match: matchName(f.no) }), { timeout: SAVE_MS });
@@ -928,6 +938,7 @@ for (const width of [320, 1280] as const) {
 
     // 1. NO destinations: the empty copy, and Go live disabled.
     const body = await openPhoneTab(page, rig, f.no);
+    await pairedPhone(page); // W5: a paired phone, so every Go live below is decided by the destinations alone
     await expect(body.getByTestId("stream-dest-empty")).toHaveText(en("stream.dest.empty"));
     await expect(picker(body)).toHaveCount(0);
     await expect(goLive(body)).toBeDisabled();

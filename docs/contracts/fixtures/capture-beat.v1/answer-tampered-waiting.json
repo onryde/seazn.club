@@ -1,0 +1,10 @@
+{
+  "state": "waiting",
+  "label": "Match 3",
+  "scheduledStart": null,
+  "autoAllowed": false,
+  "destinationName": null,
+  "overlayUrl": null,
+  "pollSeconds": 5,
+  "hint": "claim"
+}

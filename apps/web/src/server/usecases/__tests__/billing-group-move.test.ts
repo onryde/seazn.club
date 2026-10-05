@@ -40,7 +40,7 @@ vi.mock("@/lib/cache", () => ({
     );
     for (const key of [...store.keys()]) if (re.test(key)) store.delete(key);
   },
-  incrWindow: async () => 1,
+  incrWindow: async () => ({ count: 1, ttlMs: 60_000 }),
 }));
 
 // A stateful Stripe double. `cards` is mutated by paymentMethods.detach so the

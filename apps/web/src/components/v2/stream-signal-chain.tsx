@@ -4,11 +4,11 @@
 // that one mapping, so this file decides nothing about a session. Lime is a ring or a line, never text (D5); the words
 // use ink and muted colours. The walkthrough reads the chain by its data attributes, never by its colours.
 import type { ReactNode } from "react";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { platformName } from "@/components/v2/stream-platform-mark";
 import type { Chain, ChainNode, ChainWord, LinkStyle, NodeTone } from "@/lib/stream-chain";
 import type { MessageKey } from "@/lib/messages";
-import type { D3Box } from "@/lib/stream-session-view";
+import { durationLabel, type D3Box, type PhoneStrip } from "@/lib/stream-session-view";
 import type { StreamTargetKind } from "@/server/api-v1/schemas";
 
 const TONE_RING: Record<NodeTone, string> = {
@@ -41,6 +41,10 @@ const WORD_KEYS: Record<ChainWord, MessageKey> = {
   notReceiving: "stream.chain.word.notReceiving",
   noSignal: "stream.chain.word.noSignal",
   ending: "stream.chain.word.ending",
+  paired: "stream.chain.word.paired",
+  notAnswering: "stream.chain.word.notAnswering",
+  starting: "stream.chain.word.starting",
+  reconnecting: "stream.chain.word.reconnecting",
 };
 
 const ICON = "h-5 w-5";
@@ -78,7 +82,8 @@ function Node({ id, node, icon, name, wide }: { id: "phone" | "seazn" | "dest"; 
     // `min-w-0`, not the mockup's `shrink-0`: at 125% zoom on a 320-px phone (a 256-px layout, A11) three fixed 64-px nodes
     // pass the viewport. Each keeps its 64 px wherever it fits and gives way below; its ring never does.
     // `data-node` names the node, so a test reads a mark off the node that draws it (the "!" moves with the cause).
-    <div data-node={id} className={`flex w-16 min-w-0 flex-col items-center text-center ${wide ? "md:w-52" : "md:w-24"}`}>
+    // Capture QR v2 §6.12: the PHONE node is 80 px below 768 so "Reconnecting…" keeps one line at 11 px.
+    <div data-node={id} className={`flex ${id === "phone" ? "w-20" : "w-16"} min-w-0 flex-col items-center text-center ${wide ? "md:w-52" : "md:w-24"}`}>
       <span
         data-tone={node.tone}
         className={`relative grid h-10 w-10 shrink-0 place-items-center rounded-full ${node.mark === "bang" ? BANG_RING : TONE_RING[node.tone]}`}
@@ -112,7 +117,8 @@ function Node({ id, node, icon, name, wide }: { id: "phone" | "seazn" | "dest"; 
       ) : (
         <span className="mt-2 max-w-full truncate text-xs font-semibold text-slate-800 md:text-sm">{name}</span>
       )}
-      <span className={`mt-0.5 text-[11px] leading-tight md:text-xs ${TONE_WORD[node.tone]}`}>
+      {/* The word breaks only as a fallback, for a translation longer than the node (§6.12). */}
+      <span className={`mt-0.5 max-w-full text-[11px] leading-tight [overflow-wrap:anywhere] md:text-xs ${TONE_WORD[node.tone]}`}>
         {node.word === "live" && (
           <span aria-hidden className="mr-1 inline-block h-1.5 w-1.5 -translate-y-px rounded-full bg-red-500" />
         )}
@@ -147,11 +153,14 @@ export function SignalChain({
   chain,
   destination,
   phoneStatus,
+  children,
 }: {
   chain: Chain;
   destination: { kind: StreamTargetKind; label: string };
   /** D9 (spec §3.4): the capture-v2 branch's one-line phone summary under the Phone node's word. */
   phoneStatus?: string;
+  /** Capture QR v2 (Option B rev 2): the phone strip, drawn inside the card under the chain, its caret on the phone. */
+  children?: ReactNode;
 }) {
   // D9: reserved for capture v2's heartbeat summary — this branch renders nothing here.
   void phoneStatus;
@@ -193,6 +202,114 @@ export function SignalChain({
         <p data-testid="stream-chain-dest-label" className="mt-2 text-center text-xs text-slate-500 [overflow-wrap:anywhere] md:hidden">
           {toLabel(msg, destination.label)}
         </p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+const STRIP_TONE: Record<PhoneStrip["tone"], { box: string; caret: string; icon: string }> = {
+  slate: { box: "border-slate-200 bg-slate-50 text-slate-700", caret: "border-slate-200 bg-slate-50", icon: "text-purple-700" },
+  amber: { box: "border-amber-300 bg-amber-50 text-amber-900", caret: "border-amber-300 bg-amber-50", icon: "text-amber-600" },
+};
+
+const STRIP_ICON: Record<PhoneStrip["icon"], ReactNode> = {
+  phone: (
+    <>
+      <rect x="7" y="2.5" width="10" height="19" rx="2.5" />
+      <path d="M11 18.5h2" />
+    </>
+  ),
+  alert: (
+    <>
+      <path d="M12 3.5 2.5 20h19z" />
+      <path d="M12 10v4.5M12 17.2v.1" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </>
+  ),
+  pause: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M10 9v6M14 9v6" />
+    </>
+  ),
+};
+
+/** A countdown sentence with the server's two durations set as unbroken runs — split on sentinels, so the locale owns
+ *  the word order around them. The durations are the server's (`remainingMs`, `elapsedMs`), formatted, never computed.
+ *  B8 review m-5: each duration is `aria-live="off"` — the strip is a status region, and a duration that moves on every
+ *  poll would otherwise re-announce the whole sentence every few seconds. A NEW sentence (another kind or reason)
+ *  changes the words around them, which the region still announces — whole, durations included. */
+function timedSentence(
+  msg: ReturnType<typeof useMsg>,
+  locale: string,
+  body: NonNullable<PhoneStrip["body"]>,
+): ReactNode {
+  const S = String.fromCharCode(1);
+  const text = msg(body.key, { elapsed: `${S}elapsed${S}`, remaining: `${S}remaining${S}` });
+  const parts = text.split(S);
+  return parts.map((part, i) => {
+    if (i % 2 === 0) return part;
+    const ms = part === "elapsed" ? body.elapsedMs : body.remainingMs;
+    return (
+      <span key={i} aria-live="off" className="whitespace-nowrap tabular-nums">
+        {durationLabel(ms ?? 0, locale)}
+      </span>
+    );
+  });
+}
+
+/** Capture QR v2 §6.12 (Option B rev 2): the phone's one message under the chain — pair first, not answering, waiting
+ *  with the server's countdown, or the O5 reason. A status box; with a chain above it, a caret points at the phone node.
+ *  `id` is what Go live's `aria-describedby` names. Decides nothing: `strip` is `phoneStrip`'s answer. */
+export function PhoneStripView({ id, strip, caret }: { id: string; strip: PhoneStrip; caret: boolean }) {
+  const msg = useMsg();
+  const locale = useLocaleOrDefault();
+  const tone = STRIP_TONE[strip.tone];
+  const sentence = strip.body ? timedSentence(msg, locale, strip.body) : null;
+  return (
+    <div
+      id={id}
+      data-testid="stream-phone-strip"
+      data-tone={strip.tone}
+      data-icon={strip.icon}
+      role="status"
+      className={`relative mt-3 rounded-md border px-3 py-2 text-sm ${tone.box}`}
+    >
+      {caret && (
+        <span
+          aria-hidden
+          className={`absolute -top-[7px] left-[34px] h-3 w-3 rotate-45 border-l border-t ${tone.caret} md:left-[42px]`}
+        />
+      )}
+      <div className="relative flex gap-2">
+        <svg
+          className={`mt-px h-4 w-4 shrink-0 ${tone.icon}`}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.8}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          {STRIP_ICON[strip.icon]}
+        </svg>
+        <div className="min-w-0">
+          {strip.lead ? (
+            <>
+              <p className="font-medium">{msg(strip.lead)}</p>
+              {sentence && <p className="mt-0.5">{sentence}</p>}
+            </>
+          ) : (
+            sentence
+          )}
+        </div>
       </div>
     </div>
   );

@@ -9,7 +9,8 @@
 //
 // Known limit, recorded not fixed (T9b brief): the poll runs only while a session is NOT terminal, so a session started
 // from ANOTHER device stays invisible to an idle page (no dot) until a read happens — the page's load, or the Phone tab
-// opening (PhoneTab re-reads on mount).
+// opening (PhoneTab re-reads on mount). While the Phone tab is OPEN it is not a limit (B8 review I-2): the tab's read
+// model names the open session, and the tab reads `current` for one it does not show — the paired phone's own start.
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -60,13 +61,11 @@ export function usePhoneSession(fixtureId: string, opts: PhoneSessionOptions = {
   const [readFailed, setReadFailed] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
-  // `reveal` marks a read as the organiser DISCLOSING the credentials rather than the 5-second poll (De). Only two
-  // things set it: the first showing of a session's QR, and a tap on Copy. Mount, poll and post-action reads are polls.
+  // One read of `current`. Capture QR v2 (W4) removed the session QR and its disclosure read: `current` carries no
+  // credential, and the route refuses any query parameter of that name (400).
   const read = useCallback(
-    async (reveal = false) => {
-      const cur = await apiV1<StreamSessionView | null>(
-        `/api/v1/fixtures/${fixtureId}/stream-sessions/current${reveal ? "?reveal=1" : ""}`,
-      );
+    async () => {
+      const cur = await apiV1<StreamSessionView | null>(`/api/v1/fixtures/${fixtureId}/stream-sessions/current`);
       setView(cur);
       setLoaded(true);
       setReadFailed(false);

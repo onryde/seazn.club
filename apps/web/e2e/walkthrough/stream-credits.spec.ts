@@ -39,6 +39,7 @@ import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
 import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
+import { disposeFakePhones, pairPhoneOnFixture } from "../helpers/fake-capture-phone";
 
 /** lib/currency.ts `PASS_KEYS`, restated: that module cannot be imported here — it pulls `@/config/stripe-plans.json`
  *  without an import attribute, and the spec then collects ZERO tests. The B1 registry test pins this list against the
@@ -217,7 +218,12 @@ async function teardownStreams(): Promise<void> {
 }
 
 test.afterEach(async () => {
-  await teardownStreams();
+  // Capture QR v2 (W5): the phone paired for a Go live stops beating before the streams are stopped.
+  try {
+    await disposeFakePhones();
+  } finally {
+    await teardownStreams();
+  }
 });
 
 interface LedgerRow {
@@ -365,9 +371,11 @@ async function expectSplit(page: Page, split: { monthly: number; pack: number })
 }
 
 /** A control a thumb can actually hit: its centre is ITS OWN (elementFromPoint, not the painted box — AGENTS.md
- *  class 2), and below `md` it is at least 44 px each way. */
+ *  class 2), and below `md` it is at least 44 px each way. It is probed in the viewport's middle, where a thumb meets
+ *  it once scrolled to: a nearest-edge scroll parks a control above the fold UNDER the sticky site header, and the
+ *  probe then measures the header, not the control (controller ruling 2026-10-05, the A14 reasoning). */
 async function expectTappable(page: Page, loc: Locator, label: string): Promise<void> {
-  await loc.scrollIntoViewIfNeeded();
+  await loc.evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
   const probe = await loc.evaluate((el) => {
     const r = el.getBoundingClientRect();
     const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -1100,6 +1108,8 @@ test("B6 · mid-stream at 320px, a checkout sheet whose code cannot load says so
     streamKey: `b6-${randomBytes(6).toString("hex")}`,
   });
   expect(target.status, `POST stream-targets -> ${JSON.stringify(target.error)}`).toBeLessThan(300);
+  // W5: a phone paired on the match's code (a second tab; its beats name no session and tick nothing).
+  await pairPhoneOnFixture(page, await fixturePath(rig));
   const started = await apiJson(page.request, `/api/v1/fixtures/${rig.fixtureId}/stream-sessions`, "POST", {
     mode: "passthrough",
     targetId: target.data!.id,

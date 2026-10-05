@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { handleManual } from "../src/manual";
 import { RUN_DEADLINE_MS, runDue, type Env, type RunDeps } from "../src/run";
-import { JOBS, TRIGGER_CRON, type Job } from "../src/schedule";
+import { TRIGGER_CRON } from "../src/schedule";
 
 const MONDAY_0817 = new Date("2026-09-28T08:17:00Z");
 const TUESDAY_1417 = new Date("2026-09-29T14:17:00Z");
 const MONDAY_0805 = new Date("2026-09-28T08:05:00Z");
-const FAST = "*/5 * * * *";
-const TICK: Job = { id: "stream-tick", path: "/api/cron/stream-tick", trigger: FAST, due: { kind: "every" }, retry: false, manual: true };
-const WITH_TICK: readonly Job[] = [...JOBS, TICK];
+/** Capture QR v2 §6.11 (W22): stream-tick's trigger, typed from the spec. */
+const EVERY_5 = "*/5 * * * *";
+/** A well-formed trigger no row names. */
+const UNKNOWN = "*/7 * * * *";
 // A healthy body for every route: the R3 counters read 0, the others ignore it.
 const HEALTHY = JSON.stringify({ ok: true, data: { failed: 0, alerted: 0, orphanGroups: { failed: 0 }, addonPrices: { mismatched: 0 } } });
 const env = (over: Partial<Env> = {}): Env => ({
@@ -194,25 +196,87 @@ describe("runDue: the R4 trigger seam", () => {
   it("refuses an unknown trigger by name: no job, no probe, no Sentry", async () => {
     for (const active of ["true", "false"]) {
       const h = harness();
-      expect(await runDue(TUESDAY_1417, FAST, env({ ACTIVE: active }), h.deps)).toEqual([]);
+      expect(await runDue(TUESDAY_1417, UNKNOWN, env({ ACTIVE: active }), h.deps)).toEqual([]);
       expect(h.calls).toEqual([]);
-      expect(h.lines).toEqual([expect.objectContaining({ event: "unknown-trigger", cron: FAST, env: "prod" })]);
+      expect(h.lines).toEqual([expect.objectContaining({ event: "unknown-trigger", cron: UNKNOWN, env: "prod" })]);
     }
   });
 
   it("a second trigger runs only its own rows: never news-digest or an hourly row, even at Monday 08:05", async () => {
     const h = harness();
-    const results = await runDue(MONDAY_0805, FAST, env(), h.deps, WITH_TICK);
+    const results = await runDue(MONDAY_0805, EVERY_5, env(), h.deps);
     expect(results.map((r) => r.job)).toEqual(["stream-tick"]);
     expect(h.posts()).toEqual(["https://seazn.club/api/cron/stream-tick"]);
-    expect(h.lines.at(-1)).toMatchObject({ event: "run", cron: FAST, jobs: 1 });
+    expect(h.lines.at(-1)).toMatchObject({ event: "run", cron: EVERY_5, jobs: 1 });
   });
 
   it("while inactive, a non-hourly trigger does nothing at all (the probe is hourly only)", async () => {
     const h = harness();
-    expect(await runDue(MONDAY_0805, FAST, env({ ACTIVE: "false" }), h.deps, WITH_TICK)).toEqual([]);
+    expect(await runDue(MONDAY_0805, EVERY_5, env({ ACTIVE: "false" }), h.deps)).toEqual([]);
     expect(h.calls).toEqual([]);
     expect(h.lines).toEqual([]);
+  });
+});
+
+describe("R2 (option S): stream-tick's failures reach Sentry at most once per UTC hour, keyed on the scheduled slot", () => {
+  const HOUR = Date.parse("2026-09-28T08:00:00Z");
+  const slot = (i: number) => new Date(HOUR + i * 5 * 60_000);
+  const failing = () => new Response("down", { status: 500 });
+
+  it("failing on all 12 firings of one hour: exactly ONE event (the :00 slot), and 11 job lines that say sentryThrottled", async () => {
+    const h = harness(failing);
+    let firings = 0;
+    for (let i = 0; i < 12; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps);
+    expect(firings).toBe(12);
+    expect(h.posts(), "every firing still ran the job").toHaveLength(12);
+    expect(h.events().map((e) => e.tags.job)).toEqual(["stream-tick"]);
+    const jobLines = h.lines.filter((l) => l.event === "job");
+    expect(jobLines).toHaveLength(12);
+    expect(jobLines.filter((l) => l.sentryThrottled === true).map((l) => l.scheduledTime)).toEqual(
+      Array.from({ length: 11 }, (_, i) => slot(i + 1).toISOString()),
+    );
+    expect(jobLines[0]).toMatchObject({ scheduledTime: slot(0).toISOString(), status: "error", sentryDelivered: true });
+    expect(jobLines[0]!.sentryThrottled, "the :00 slot is never throttled").toBeUndefined();
+  });
+
+  it("288 firings over 24 h, every one failing: 24 events — one per UTC hour", async () => {
+    const h = harness(failing);
+    let firings = 0;
+    for (let i = 0; i < 288; i++, firings++) await runDue(slot(i), EVERY_5, env(), h.deps);
+    expect(firings, "firings checked").toBe(288);
+    expect(h.events()).toHaveLength(24);
+    expect(h.lines.filter((l) => l.event === "job" && l.sentryThrottled === true)).toHaveLength(288 - 24);
+  });
+
+  it("the pair: a failure ONLY at :05 sends nothing and logs sentryThrottled; a failure ONLY at :00 sends one event", async () => {
+    const at05 = harness(failing);
+    const r05 = await runDue(slot(1), EVERY_5, env(), at05.deps);
+    expect(r05).toEqual([expect.objectContaining({ job: "stream-tick", status: "error", sentryThrottled: true })]);
+    expect(r05[0]!.sentryDelivered, "no event was attempted").toBeUndefined();
+    expect(at05.events()).toEqual([]);
+    expect(at05.lines.find((l) => l.event === "job")).toMatchObject({ job: "stream-tick", status: "error", sentryThrottled: true });
+    const at00 = harness(failing);
+    await runDue(slot(0), EVERY_5, env(), at00.deps);
+    expect(at00.events().map((e) => e.tags.job)).toEqual(["stream-tick"]);
+  });
+
+  it("an OK job at a throttled slot is not marked: sentryThrottled only ever names a suppressed failure", async () => {
+    const h = harness();
+    const [r] = await runDue(slot(1), EVERY_5, env(), h.deps);
+    expect(r).toMatchObject({ job: "stream-tick", status: "ok" });
+    expect(r!.sentryThrottled).toBeUndefined();
+  });
+
+  it("R6: a MANUAL run is never throttled — one failing at :07 sends its event", async () => {
+    const h = harness(failing);
+    h.advance(Date.parse("2026-09-28T08:07:00Z"));   // the manual run's scheduledTime is the Worker's now
+    const res = await handleManual(
+      new Request("https://seazn-cron-prod.example.workers.dev/run?job=stream-tick", { method: "POST", headers: { "x-cron-secret": "s" } }),
+      env(), h.deps,
+    );
+    expect(res.status).toBe(502);
+    expect(h.events()).toEqual([expect.objectContaining({ tags: expect.objectContaining({ job: "stream-tick", run: "manual" }) })]);
+    expect(h.lines.find((l) => l.event === "job")).toMatchObject({ run: "manual", scheduledTime: "2026-09-28T08:07:00.000Z" });
   });
 });
 

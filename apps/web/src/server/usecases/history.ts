@@ -255,7 +255,10 @@ function byeFedSeats(snapshots: readonly FixtureSnapshot[]): Set<string> {
 //   - status / outcome of a row that carried no score events — on such a row
 //     they can only be the generator's own verdicts (a bye's award, a
 //     departed qualifier's walkover or void) or 'scheduled' (see
-//     `restoredVerdict`).
+//     `restoredVerdict`) — and, with them, finished_at (V430): when the row
+//     entered the finished set. V430's insert trigger keeps a supplied stamp,
+//     so a restored bye's award keeps the time it was really awarded; a
+//     snapshot from before V430 carries none and the trigger stamps it.
 //   - The schedule placement: scheduled_at, court_id (both kept before this),
 //     schedule_locked, schedule_source — and venue_id, re-derived from the
 //     restored court rather than stored (its writer's own rule).
@@ -307,6 +310,7 @@ interface SnapshotRow extends FixtureSnapshot {
   court: string | null;
   locked: boolean;
   status: string;
+  finished_at: string | null;
 }
 
 /** The one snapshot read. Unordered: `restoreFixtures` owns the order. */
@@ -327,22 +331,28 @@ async function snapshotFixtures(
            f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
            f.home_slot_label, f.away_slot_label,
            f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
-           f.status, f.outcome,
+           f.status, f.outcome, f.finished_at::text as finished_at,
            exists (select 1 from score_events se where se.fixture_id = f.id) as scored
     from fixtures f where ${where}`;
 }
 
-/** A row that carried no score events comes back with the status and outcome
- *  it had. Every play-driven status is a fold of score events
+/** A row that carried no score events comes back with the status, outcome and
+ *  finished_at it had. Every play-driven status is a fold of score events
  *  (engine-db/append-event.ts), so on an unscored row they can only be the
  *  generator's own — a bye's award, a departed qualifier's walkover or void
  *  (stages.ts first pass) — or plain 'scheduled'. A scored row's evidence went
  *  with the delete's cascade, so it returns unplayed, as it always has.
  *  `scored` must be literally false: a snapshot from before it existed
  *  restores 'scheduled', as it always did. */
-function restoredVerdict(s: FixtureSnapshot): { status: string; outcome: Record<string, unknown> | null } {
-  if (s.scored === false) return { status: s.status ?? "scheduled", outcome: s.outcome ?? null };
-  return { status: "scheduled", outcome: null };
+function restoredVerdict(s: FixtureSnapshot): {
+  status: string;
+  outcome: Record<string, unknown> | null;
+  finishedAt: string | null;
+} {
+  if (s.scored === false) {
+    return { status: s.status ?? "scheduled", outcome: s.outcome ?? null, finishedAt: s.finished_at ?? null };
+  }
+  return { status: "scheduled", outcome: null, finishedAt: null };
 }
 
 /** The one raw re-insert (`pool_entrants_restored` in execute(), and a
@@ -405,12 +415,15 @@ async function restoreFixtures(
     // the KEPT list above) — then null, never a 23505 that sticks Undo.
     // Feed edges are written after every row is in (below): an edge may
     // point at a row later in this same list.
+    // finished_at goes in as TEXT: a parameter the driver types as a
+    // timestamp is serialised through a JS Date, which drops the
+    // microseconds the snapshot read (`::text`) kept.
     const inserted = await tx<{ id: string; ext_key: string | null }[]>`
       insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
                             home_entrant_id, away_entrant_id, scheduled_at, court_id,
                             venue_id, schedule_locked, schedule_source, fixture_no,
                             ext_key, lane, is_final, third_place, conditional,
-                            home_slot_label, away_slot_label, status, outcome)
+                            home_slot_label, away_slot_label, status, outcome, finished_at)
       values (${s.id}, ${s.stage_id!}, ${divisionId},
               (select p.id from pools p where p.id = ${s.pool_id ?? null}),
               ${s.round_no ?? 1}, ${s.seq_in_round ?? 1},
@@ -427,7 +440,7 @@ async function restoreFixtures(
               ${s.lane ?? null}, ${s.is_final === true},
               ${s.third_place === true}, ${s.conditional === true},
               ${jsonb(s.home_slot_label)}, ${jsonb(s.away_slot_label)},
-              ${verdict.status}, ${jsonb(verdict.outcome)})
+              ${verdict.status}, ${jsonb(verdict.outcome)}, ${verdict.finishedAt}::text::timestamptz)
       on conflict (id) do nothing returning id, ext_key`;
     const [row] = inserted;
     if (row === undefined) continue;

@@ -126,9 +126,10 @@ function handlerInner<T>(fn: () => Promise<T>) {
         // because it calls the usecase directly and never crosses this
         // envelope. Omitted entirely when undefined, so the shape is unchanged
         // for the throwers that pass no code.
+        // `headers` (the limiter's Retry-After, capture QR v2 §10.4) ride on the response.
         return NextResponse.json(
           { ok: false, error: err.message, ...(err.code ? { code: err.code } : {}) },
-          { status: err.status },
+          { status: err.status, headers: err.headers },
         );
       }
       // Unexpected error — always capture

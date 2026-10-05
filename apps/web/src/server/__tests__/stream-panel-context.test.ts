@@ -27,6 +27,15 @@ vi.mock("@/server/usecases/stream-credits-checkout", () => ({
 // P1: the currency the relay-checkout route charges — the loader resolves the SAME function for the same org.
 const money = vi.hoisted(() => ({ preferredCurrency: vi.fn<(orgId: string | null, req?: Request) => Promise<string>>(async () => "gbp") }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency: (orgId: string | null, req?: Request) => money.preferredCurrency(orgId, req) }));
+// Capture QR v2 (carry 2, owner 2026-10-04): the PostHog flag that offers the phone-camera option. Doubled at the
+// helper the loader calls, so a test reads WHAT it asked (flag, distinct id, org group, fallback) and decides the answer.
+const flags = vi.hoisted(() => ({
+  isServerFeatureEnabled: vi.fn<(flag: string, distinctId: string, opts?: { orgId?: string; fallback?: boolean }) => Promise<boolean>>(async () => false),
+}));
+vi.mock("@/lib/posthog-server", () => ({
+  isServerFeatureEnabled: (flag: string, distinctId: string, opts?: { orgId?: string; fallback?: boolean }) =>
+    flags.isServerFeatureEnabled(flag, distinctId, opts),
+}));
 vi.mock("@/server/usecases/stream-sessions", () => ({
   relayCredits: async (auth: unknown, orgId: string) => {
     const total = await relay.balance(auth, orgId);
@@ -34,12 +43,13 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
   },
 }));
 
-import { loadStreamPanelContext } from "../stream-panel-context";
+import { CAPTURE_FLAG_TTL_MS, forgetCaptureFlagCache, loadStreamPanelContext } from "../stream-panel-context";
 import { getDictionary } from "@/lib/i18n";
 import { hasFeature } from "@/lib/entitlements";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { verifyOverlayKey } from "@/server/overlay/overlay-key";
 import { SUPPORTED_CURRENCIES } from "@/lib/currency";
+import { PHONE_LOST_LIVE_MINUTES } from "@/server/relay/config";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 const AUTH = { orgId: "org-1", userId: "user-1", role: "owner", via: "session", keyId: null } as unknown as AuthCtx;
@@ -61,19 +71,25 @@ beforeEach(() => {
   money.preferredCurrency.mockReset().mockResolvedValue("gbp");
   vi.mocked(hasFeature).mockReset().mockImplementation(async () => true);
   vi.mocked(getDictionary).mockClear();
+  flags.isServerFeatureEnabled.mockReset().mockResolvedValue(false);
+  vi.stubEnv("CAPTURE_QR_V2_ALWAYS", undefined);
+  forgetCaptureFlagCache();
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("the gate: offered:false reads NOTHING (review #11 — the scorer's and spectator's refresh stays free)", () => {
   it("offered:false reads NOTHING — no entitlement query, no reconcile, no credits, no currency, no dictionary (a read-only viewer or a frozen page)", async () => {
     const got = await load({ status: "success", sessionId: "cs_1" }, { offered: false });
     expect(got).toBeUndefined();
-    const deps = [hasFeature, relay.reconcile, relay.balance, money.preferredCurrency, getDictionary] as const;
+    const deps = [hasFeature, relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled] as const;
     let checked = 0;
     for (const dep of deps) {
       expect(dep).not.toHaveBeenCalled();
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
   });
 
   it("the loader's reads: offered:true calls each dependency AT MOST once per render (hasFeature exactly twice, both competition-scoped) — the count cannot grow unnoticed", async () => {
@@ -86,13 +102,13 @@ describe("the gate: offered:false reads NOTHING (review #11 — the scorer's and
       ["streaming.overlay", "comp-1"],
       ["streaming.relay", "comp-1"],
     ]);
-    const once = [relay.reconcile, relay.balance, money.preferredCurrency, getDictionary] as const;
+    const once = [relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled] as const;
     let checked = 0;
     for (const dep of once) {
       expect(dep).toHaveBeenCalledTimes(1);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(5);
   });
 });
 
@@ -287,5 +303,171 @@ describe("RT: the loader hands the panel one signed overlay key per listed fixtu
     const on = await load(undefined, { fixtureIds: IDS });
     expect(Object.keys(on?.overlayKeys ?? {})).toHaveLength(IDS.length);
     expect(on?.overlayDict).toEqual({ "overlay.vs": "vs" });
+  });
+});
+
+// Capture QR v2 (carry 2, owner 2026-10-04): `capture-qr-v2` offers the phone-camera option, UI-only. Evaluated on the
+// server with `fallback: false` (PostHog unconfigured or down → hidden), against the `organization` group keyed by the
+// org; `CAPTURE_QR_V2_ALWAYS=1` forces it on (CI, e2e). Not NODE_ENV. Routes are not gated (routes.test.ts's).
+describe("capture-qr-v2: the phone-camera option follows the flag, and CAPTURE_QR_V2_ALWAYS=1 forces it", () => {
+  it("flag OFF → hidden; flag ON → shown — and the flag is asked for THIS user, in THIS org's group, falling back to off", async () => {
+    let checked = 0;
+    for (const on of [false, true]) {
+      flags.isServerFeatureEnabled.mockReset().mockResolvedValue(on);
+      forgetCaptureFlagCache();   // a fresh evaluation per case, never the last case's cached answer (m-2)
+      expect((await load())?.phoneCapture, `flag ${on}`).toBe(on);
+      expect(flags.isServerFeatureEnabled.mock.calls).toEqual([["capture-qr-v2", "user-1", { orgId: "org-1", fallback: false }]]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the override: CAPTURE_QR_V2_ALWAYS=1 with the flag OFF → shown (the flag is not even asked); any other value → follows the flag", async () => {
+    vi.stubEnv("CAPTURE_QR_V2_ALWAYS", "1");
+    expect((await load())?.phoneCapture).toBe(true);
+    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+    let checked = 0;
+    for (const value of [undefined, "", "0", "true", "yes", " 1"]) {
+      vi.stubEnv("CAPTURE_QR_V2_ALWAYS", value);
+      for (const on of [false, true]) {
+        flags.isServerFeatureEnabled.mockReset().mockResolvedValue(on);
+        forgetCaptureFlagCache();
+        expect((await load())?.phoneCapture, `override ${JSON.stringify(value)}, flag ${on}`).toBe(on);
+        expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
+        checked++;
+      }
+    }
+    expect(checked).toBe(12);
+  });
+
+  it("not NODE_ENV: a development or test build with the flag off and no override is still hidden", async () => {
+    let checked = 0;
+    for (const env of ["development", "test", "production"]) {
+      vi.stubEnv("NODE_ENV", env);
+      expect((await load())?.phoneCapture, env).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the flag outranks nothing else: off with the relay on still reads the credits (the OBS tab and the stop probe need none, but the loader's other reads are unchanged)", async () => {
+    relay.balance.mockResolvedValue(2);
+    const got = await load();
+    expect(got).toMatchObject({ phoneCapture: false, relayEntitled: true, streamBalance: 2 });
+  });
+
+  it("no panel (overlay off) asks no flag — the switched-off org costs one entitlement query, as before", async () => {
+    vi.mocked(hasFeature).mockImplementation(async () => false);
+    vi.stubEnv("CAPTURE_QR_V2_ALWAYS", undefined);
+    expect((await load())?.phoneCapture).toBe(false);
+    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+
+  it("an API-key caller (no user) is asked by its org — the flag is org-targeted", async () => {
+    flags.isServerFeatureEnabled.mockResolvedValue(true);
+    const keyAuth = { ...AUTH, userId: null, via: "api_key" } as unknown as AuthCtx;
+    expect((await load(undefined, { auth: keyAuth }))?.phoneCapture).toBe(true);
+    expect(flags.isServerFeatureEnabled.mock.calls[0]).toEqual(["capture-qr-v2", "org-1", { orgId: "org-1", fallback: false }]);
+  });
+});
+
+// B8 review m-2: the flag is a remote call on every fixture-page render. One answer per org for CAPTURE_FLAG_TTL_MS.
+describe("capture-qr-v2: the flag is asked once per org per minute, not once per render", () => {
+  it("two loads inside the TTL make ONE call and agree; at the TTL a second call; another org asks for itself", async () => {
+    vi.useFakeTimers();
+    try {
+      flags.isServerFeatureEnabled.mockResolvedValue(true);
+      expect((await load())?.phoneCapture).toBe(true);
+      // PostHog flips the flag off: renders inside the minute keep the kept answer…
+      flags.isServerFeatureEnabled.mockResolvedValue(false);
+      vi.advanceTimersByTime(CAPTURE_FLAG_TTL_MS - 1);
+      expect((await load())?.phoneCapture, "inside the TTL: the kept answer").toBe(true);
+      expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
+      // …and the first render at the TTL asks again.
+      vi.advanceTimersByTime(1);
+      expect((await load())?.phoneCapture, "at the TTL: asked again").toBe(false);
+      expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(2);
+      // Keyed by org: another club inside the same minute is asked for itself.
+      const other = { ...AUTH, orgId: "org-2" } as unknown as AuthCtx;
+      await load(undefined, { auth: other });
+      expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(3);
+      expect(flags.isServerFeatureEnabled.mock.calls[2]![2]).toEqual({ orgId: "org-2", fallback: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // B8 re-review n-3: the flag is asked for a (distinct id, org group) PAIR, so an answer is kept per pair — never one
+  // user's answer served to their whole org, nor one org's to the same user in another. Correct today only because the
+  // live flag is org-aggregated; this holds it if the flag is ever re-targeted by person.
+  it("kept per (org, user): two users in one org, and one user in two orgs, never share an answer inside the TTL", async () => {
+    flags.isServerFeatureEnabled.mockImplementation(async (_f, distinctId, opts) => distinctId === "user-1" && opts?.orgId === "org-1");
+    const as = (orgId: string, userId: string | null) => ({ ...AUTH, orgId, userId }) as unknown as AuthCtx;
+    const PAIRS: [AuthCtx, boolean][] = [
+      [as("org-1", "user-1"), true],
+      [as("org-1", "user-2"), false],   // another user, the same org
+      [as("org-2", "user-1"), false],   // the same user, another org
+      [as("org-1", null), false],       // an API-key caller in org-1: asked as the org
+    ];
+    let checked = 0;
+    for (const round of [1, 2]) {
+      for (const [auth, want] of PAIRS) {
+        expect((await load(undefined, { auth }))?.phoneCapture, `round ${round}: ${auth.orgId}/${auth.userId}`).toBe(want);
+        checked++;
+      }
+      // Round 1 asks once per pair; round 2 (inside the TTL) is served from the cache, each pair its OWN answer.
+      expect(flags.isServerFeatureEnabled, `after round ${round}`).toHaveBeenCalledTimes(PAIRS.length);
+    }
+    expect(flags.isServerFeatureEnabled.mock.calls.map(([, d, o]) => `${o?.orgId}/${d}`).sort()).toEqual(
+      ["org-1/user-1", "org-1/user-2", "org-2/user-1", "org-1/org-1"].sort(),
+    );
+    expect(checked).toBe(2 * PAIRS.length);
+  });
+
+  it("concurrent renders before the first answer share ONE call", async () => {
+    let release!: (v: boolean) => void;
+    flags.isServerFeatureEnabled.mockImplementation(() => new Promise<boolean>((r) => { release = r; }));
+    const both = Promise.all([load(), load()]);
+    await vi.waitFor(() => expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1));
+    release(true);
+    expect((await both).map((c) => c?.phoneCapture)).toEqual([true, true]);
+    expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it("the override still answers without the cache or the flag", async () => {
+    vi.stubEnv("CAPTURE_QR_V2_ALWAYS", "1");
+    expect((await load())?.phoneCapture).toBe(true);
+    expect((await load())?.phoneCapture).toBe(true);
+    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+});
+
+// W19 (§6.8.5): the ended chip names the window the tick ends a lost phone by. The loader hands the panel that window as
+// the server reads it — config.ts's declaration through `tunable`, the expression the tick judges with — so an override
+// the tick honours (the e2e's 1 minute) is the number the organiser reads, and one it ignores (prod) is not.
+describe("W19: the panel is handed the phone-lost window the tick judges by", () => {
+  it("the declared default; a ci/local override; never an override on a named deployment — and whether or not the relay runs", async () => {
+    expect(PHONE_LOST_LIVE_MINUTES, "premise: the override below differs from the default").not.toBe(7);
+    expect((await load())?.phoneLostMinutes, "no override: the declaration").toBe(PHONE_LOST_LIVE_MINUTES);
+    let checked = 0;
+    for (const envName of ["ci", "local"]) {
+      vi.stubEnv("ENV_NAME", envName);
+      vi.stubEnv("PHONE_LOST_LIVE_MINUTES", "7");
+      expect((await load())?.phoneLostMinutes, `ENV_NAME=${envName} honours the override`).toBe(7);
+      checked++;
+    }
+    for (const envName of ["stg", "prod"]) {
+      vi.stubEnv("ENV_NAME", envName);
+      expect((await load())?.phoneLostMinutes, `ENV_NAME=${envName} ignores it`).toBe(PHONE_LOST_LIVE_MINUTES);
+      checked++;
+    }
+    // The relay off (a switched-off org): still the window — a stream left over from before can still end phone_lost.
+    vi.stubEnv("ENV_NAME", "ci");
+    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.relay");
+    const off = await load();
+    expect(off?.relayEntitled, "premise: the relay is off").toBe(false);
+    expect(off?.phoneLostMinutes).toBe(7);
+    checked++;
+    expect(checked).toBe(5);
   });
 });
