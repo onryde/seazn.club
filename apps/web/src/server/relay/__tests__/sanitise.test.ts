@@ -38,6 +38,11 @@ describe("sanitise — allowlist", () => {
     expect(sanitise(written)).toEqual(written);
     expect(Object.keys(written).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
   });
+  it("capture QR v2 T6: the create action's pairingId and startCause survive — the operator start is traceable to the pairing that made it", () => {
+    const written = { pairingId: "6f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", startCause: "operator", mode: "passthrough", targetId: "t1" };
+    expect(sanitise(written)).toEqual(written);
+    expect(Object.keys(written).filter((k) => !ALLOWED_KEYS.has(k))).toEqual([]);
+  });
   it("the allowlist holds no key that names a credential (the list is the guard; this pins it)", () => {
     for (const k of ALLOWED_KEYS) expect(k).not.toMatch(/key|secret|pass|token|auth|cookie|env/i);
   });

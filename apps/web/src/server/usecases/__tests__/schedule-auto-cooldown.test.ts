@@ -58,7 +58,7 @@ vi.mock("@/lib/cache", async (importOriginal) => {
       limiter.calls.push(key);
       const next = (limiter.counts.get(key) ?? 0) + 1;
       limiter.counts.set(key, next);
-      return Promise.resolve(next);
+      return Promise.resolve({ count: next, ttlMs: 60_000 });
     },
   };
 });

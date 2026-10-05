@@ -33,7 +33,7 @@ vi.mock("@/lib/cache", () => ({
   cacheGet: async () => null,
   cacheSet: async () => {},
   cacheDelPattern: async () => {},
-  incrWindow: async () => 1,
+  incrWindow: async () => ({ count: 1, ttlMs: 60_000 }),
 }));
 
 // checkout.sessions.retrieve is the only Stripe call reconcileCheckout itself

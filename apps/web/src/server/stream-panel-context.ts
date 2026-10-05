@@ -11,8 +11,10 @@ import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
 import { hasFeature } from "@/lib/entitlements";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { preferredCurrency } from "@/lib/currency-server";
+import { isServerFeatureEnabled } from "@/lib/posthog-server";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
+import { PHONE_LOST_LIVE_MINUTES, tunable } from "@/server/relay/config";
 import { relayUnavailable } from "@/server/relay/drivers";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 import { relayCredits } from "@/server/usecases/stream-sessions";
@@ -38,6 +40,39 @@ export async function relayOffer(
   const relayEntitled = entitled && (await hasFeature(orgId, "streaming.relay", competitionId));
   const relayDisabled = relayEntitled && relayUnavailable();
   return { entitled, relayEntitled, relayDisabled };
+}
+
+/** Capture QR v2 (carry 2, owner 2026-10-04): the PostHog flag that offers the phone-camera option — UI-only (the routes
+ *  are not gated). Org-targeted (the `organization` group, keyed by the org id); `fallback: false`, so PostHog
+ *  unconfigured or down hides it. `CAPTURE_QR_V2_ALWAYS=1` forces it on — CI and e2e set it; staging and production leave
+ *  it unset. Deliberately not NODE_ENV. */
+export const CAPTURE_QR_V2_FLAG = "capture-qr-v2";
+/** B8 review m-2: the flag is a REMOTE call (no local evaluation), and this loader runs on every fixture-page render —
+ *  each `router.refresh()` after a scoring send included. So one answer per (org, distinct id) PAIR — exactly what
+ *  PostHog is asked with — is kept for this long, in-process, and shared by every render inside it — the first render's
+ *  own call included, so concurrent renders ask once. Keyed on the pair, not the org (B8 re-review n-3): the live flag is
+ *  org-aggregated today, but one re-targeted by person must never serve one user's answer to their whole org. A flip in
+ *  PostHog shows within a minute; nothing else reads the cache. */
+export const CAPTURE_FLAG_TTL_MS = 60_000;
+const flagByAsk = new Map<string, { until: number; on: Promise<boolean> }>();
+/** Test seam: forget every cached answer (each test starts from a cold process). */
+export function forgetCaptureFlagCache(): void {
+  flagByAsk.clear();
+}
+async function phoneCaptureOffered(auth: AuthCtx): Promise<boolean> {
+  if (process.env.CAPTURE_QR_V2_ALWAYS === "1") return true;
+  const now = Date.now();
+  const distinctId = auth.userId ?? auth.orgId;
+  // JSON, so no id can run into the other: ["a|b","c"] and ["a","b|c"] are different keys.
+  const key = JSON.stringify([auth.orgId, distinctId]);
+  const hit = flagByAsk.get(key);
+  if (hit && now < hit.until) return hit.on;
+  // `isServerFeatureEnabled` never rejects (PostHog down → the `false` fallback), so a cached promise is an answer.
+  const on = isServerFeatureEnabled(CAPTURE_QR_V2_FLAG, distinctId, { orgId: auth.orgId, fallback: false });
+  // Bounded: an expired answer is dropped whenever the map grows past a thousand pairs.
+  if (flagByAsk.size >= 1000) for (const [k, v] of flagByAsk) if (now >= v.until) flagByAsk.delete(k);
+  flagByAsk.set(key, { until: now + CAPTURE_FLAG_TTL_MS, on });
+  return on;
 }
 
 export async function loadStreamPanelContext(args: {
@@ -73,10 +108,13 @@ export async function loadStreamPanelContext(args: {
   // cookies/headers read — so they run together, not one after the other. Both only with the relay (D9's query budget).
   // Task 14b (R3b): `relayCredits` grants this month's free match credits BEFORE it reads (idempotent), and answers the
   // balance split by bucket beside the plan's monthly allowance — the chip stays the total.
-  const [credits, currency] =
-    relayEntitled && !relayDisabled
-      ? await Promise.all([relayCredits(auth, auth.orgId), preferredCurrency(auth.orgId)])
-      : [null, "gbp" as const];
+  // The capture-qr-v2 flag rides the same Promise.all: an independent read, only with the panel (`entitled`).
+  const relayOn = relayEntitled && !relayDisabled;
+  const [credits, currency, phoneCapture] = await Promise.all([
+    relayOn ? relayCredits(auth, auth.orgId) : null,
+    relayOn ? preferredCurrency(auth.orgId) : ("gbp" as const),
+    entitled ? phoneCaptureOffered(auth) : false,
+  ]);
   return {
     entitled,
     relayEntitled,
@@ -95,6 +133,11 @@ export async function loadStreamPanelContext(args: {
     // relay there are no tiles, and nothing reads it.
     currency,
     sportKey: args.sportKey,
+    // Capture QR v2 (carry 2): false hides the Phone tab (the phone-camera option) and nothing else.
+    phoneCapture,
+    // W19 (§6.8.5): the window the ended chip names — the tick's own expression (stream-sessions.ts), so an override the
+    // tick honours (ci/local) is the number the organiser reads, and one it ignores is not. No read: a constant and env.
+    phoneLostMinutes: tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES),
     // RT (lane-close fix, ruled 2026-09-29): each listed fixture's signed overlay key, for the OBS URL its panel copies —
     // the grant a community org's overlay presents to the realtime-token route. Only with the panel (`entitled`); a
     // fixture the server cannot sign for (no AUTH_SECRET) is left out and its URL goes keyless.

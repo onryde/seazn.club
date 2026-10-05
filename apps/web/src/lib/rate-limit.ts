@@ -1,6 +1,6 @@
 import "server-only";
 import { HttpError } from "@/lib/errors";
-import { incrWindow, cacheEnabled } from "@/lib/cache";
+import { incrWindow, cacheEnabled, type WindowCount } from "@/lib/cache";
 
 export interface RateLimitConfig {
   /** Max requests allowed within `windowSeconds`. */
@@ -33,7 +33,7 @@ const TOO_MANY = "Too many requests — slow down and try again.";
  * self-expiring keys). When Redis is momentarily unreachable `incrWindow`
  * returns null and we apply the `failClosed` policy.
  */
-type CounterFn = (key: string, windowSeconds: number) => Promise<number | null>;
+type CounterFn = (key: string, windowSeconds: number) => Promise<WindowCount | null>;
 
 /** Test-only seam. Production always uses `incrWindow`; the suite injects a
  *  deterministic counter so limiter BEHAVIOUR is executed rather than skipped.
@@ -44,25 +44,39 @@ export function __setRateLimitCounterForTests(fn: CounterFn | null): void {
   counterOverride = fn;
 }
 
+/**
+ * Capture QR v2 §10.4 / §17.4 (R4): a 429's `Retry-After` is the window's TRUE remaining seconds, read from the counter
+ * key's TTL in the same Lua script as the increment — an integer, rounded UP, so never 0 while any time remains (a 0
+ * makes a client hammer). A key with no TTL to read (PTTL -1 / -2; the Lua sets one on the first hit, so this is a
+ * guard) answers the full window.
+ */
+export function retryAfterSeconds(ttlMs: number, windowSeconds: number): number {
+  return ttlMs > 0 ? Math.ceil(ttlMs / 1000) : windowSeconds;
+}
+
+const tooMany = (retryAfter: number): HttpError =>
+  new HttpError(429, TOO_MANY, undefined, undefined, { "Retry-After": String(retryAfter) });
+
 export async function rateLimit(
   key: string,
   { max, windowSeconds, failClosed = false }: RateLimitConfig,
 ): Promise<void> {
-  const count = counterOverride
+  const window = counterOverride
     ? await counterOverride(`rl:${key}`, windowSeconds)
     : await incrWindow(`rl:${key}`, windowSeconds);
 
-  if (count === null) {
+  if (window === null) {
     // No count from Redis. Two distinct cases:
     //  - Redis not configured (local dev, e2e): limiter is inert → always allow,
     //    even for failClosed limits, so auth flows work without a Redis.
     //  - Redis configured but unreachable (a real outage): apply failClosed.
-    if (failClosed && cacheEnabled()) throw new HttpError(429, TOO_MANY);
+    //    There is no window to read, so Retry-After is the full window (R4).
+    if (failClosed && cacheEnabled()) throw tooMany(windowSeconds);
     return;
   }
 
-  if (count > max) {
-    throw new HttpError(429, TOO_MANY);
+  if (window.count > max) {
+    throw tooMany(retryAfterSeconds(window.ttlMs, windowSeconds));
   }
 }
 
@@ -103,3 +117,14 @@ export const CONSENT_LIMIT: RateLimitConfig = { max: 20, windowSeconds: 60 };
  * budget. Fail-open — a Redis blip must not stop a registrant paying.
  */
 export const CHECKOUT_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
+
+/**
+ * Capture QR v2 §10.4 — the phone routes (`/api/v1/capture/codes/{code}…`). All three fail OPEN: a Redis blip must not
+ * stop a broadcast's beats or the phone's start, and the tok (128 bits) is the real defence against guessing.
+ *  - CAPTURE_CODE_LIMIT: per code, ONE budget across the three routes — a phone beats every 5–60 s;
+ *  - CAPTURE_FAIL_LIMIT: FAILED 401s per client IP; a failure past it answers 429 — a valid tok is never refused;
+ *  - CAPTURE_START_LIMIT: the phone's start, per code, on top of the code's budget.
+ */
+export const CAPTURE_CODE_LIMIT: RateLimitConfig = { max: 120, windowSeconds: 60 };
+export const CAPTURE_FAIL_LIMIT: RateLimitConfig = { max: 30, windowSeconds: 60 };
+export const CAPTURE_START_LIMIT: RateLimitConfig = { max: 6, windowSeconds: 60 };

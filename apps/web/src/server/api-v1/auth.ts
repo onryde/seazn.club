@@ -67,7 +67,7 @@ const localWindows = new Map<string, { count: number; resetAt: number }>();
 
 async function keyWindowCount(keyId: string, windowSeconds: number): Promise<number> {
   const fromRedis = await incrWindow(`rlk:${keyId}`, windowSeconds);
-  if (fromRedis !== null) return fromRedis;
+  if (fromRedis !== null) return fromRedis.count;
   if (cacheEnabled()) return 0; // Redis blip: fail open, same policy as lib/rate-limit
   const now = Date.now();
   const bucket = localWindows.get(keyId);

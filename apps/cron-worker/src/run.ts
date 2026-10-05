@@ -1,5 +1,5 @@
 import { callJob, userAgent, type CallDeps, type CallOutcome } from "./call";
-import { JOBS, TRIGGER_CRON, dueJobs, triggersOf, type Job } from "./schedule";
+import { JOBS, TRIGGER_CRON, dueJobs, firstSlotOfHour, triggersOf, type Job } from "./schedule";
 import { captureJobFailure, parseDsn } from "./sentry";
 
 export interface Env {
@@ -21,6 +21,8 @@ export interface JobResult extends CallOutcome {
   job: string;
   /** Present only when a Sentry event was attempted for this job: did Sentry accept it (I-3)? */
   sentryDelivered?: boolean;
+  /** R2: a failure NOT sent to Sentry because a scheduled firing is not its trigger's first slot of the UTC hour. */
+  sentryThrottled?: true;
 }
 
 export interface RunContext {
@@ -36,7 +38,9 @@ const PROBE_TIMEOUT_MS = 10_000;
  * A job that is not ok (error, or degraded under R3) also raises ONE Sentry
  * error event when a DSN is set, and its job line says whether Sentry accepted
  * it (`sentryDelivered`, I-3): a failed delivery is logged, never thrown, and
- * never stops the next job. One closing `event:"run"` line names the Sentry
+ * never stops the next job. R2 (option S): a SCHEDULED firing that is not its
+ * trigger's first slot of the UTC hour sends no event; its job line says
+ * `sentryThrottled` instead. A manual run is never throttled (R6). One closing `event:"run"` line names the Sentry
  * state and lists any undelivered events, so a missing DSN or a rejected one
  * shows in the log rather than as silence.
  */
@@ -54,7 +58,9 @@ export async function runJobs(
   const results: JobResult[] = [];
   for (const job of jobs) {
     const result: JobResult = { job: job.id, ...(await callJob(job, target, deps, deadline)) };
-    if (dsn && result.status !== "ok") {
+    if (result.status !== "ok" && ctx.run === "scheduled" && !firstSlotOfHour(job.trigger, scheduledTime)) {
+      result.sentryThrottled = true;
+    } else if (dsn && result.status !== "ok") {
       result.sentryDelivered = await captureJobFailure(deps.fetch, dsn, {
         environment: env.ENV_NAME,
         run: ctx.run,

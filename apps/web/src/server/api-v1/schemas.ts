@@ -41,7 +41,16 @@ import { streamUrlSchema } from "../../lib/stream-url.ts";
 // Streaming R1 (Task 9) — the capture QR's ONE schema (design §7.6), re-exported
 // in the relay block below, never re-typed. Relative + explicit `.ts`, same
 // reason as stream-url.ts above; lib/capture-qr.ts imports zod and nothing else.
-import { CaptureQrV1 } from "../../lib/capture-qr.ts";
+import { CaptureQrV2 } from "../../lib/capture-qr.ts";
+// Capture QR v2 (PR-1 T1) — the phone↔web contract's zod twins (docs/contracts/capture-*.json), re-exported, never
+// re-typed. Relative + explicit `.ts`, same reason as above; capture-schemas.ts imports zod and nothing else.
+export {
+  CAPTURE_CODE_RE, CaptureEndReason, CaptureStartedBy, CaptureCause, CapturePhoneState, CaptureNotReady,
+  CaptureStartFailed, CaptureWaiting, CaptureCred, CaptureSession, CaptureDescriptor, CaptureBeat, CaptureBeatAnswer,
+  CaptureStartBody, CaptureStartOk, CaptureRefusalCode, CaptureRefusal,
+} from "./capture-schemas.ts";
+// T9: the panel's read model (StreamPhone) reuses the beat's own field shapes, so it cannot drift from the contract.
+import { CaptureBeat, CaptureNotReady, CapturePhoneState, CaptureStartFailed } from "./capture-schemas.ts";
 // m2 — the ONE Intl-backed zone validator, reused rather than restated, so
 // `schedule_settings.tz` refuses exactly what `users.timezone` (lib/types.ts)
 // and `organizations.timezone` (api/orgs/[id]/route.ts) already refuse.
@@ -1317,12 +1326,11 @@ export type FixtureStream = z.infer<typeof FixtureStream>;
 
 // ---------------------------------------------------------------------------
 // Streaming R1 — relay sessions (design §6.3 / §6.4 / §7.6). Every shape a
-// route or the panel exchanges lives here; the QR payload's schema is
-// lib/capture-qr.ts (client-safe — the panel renders it) and is RE-EXPORTED,
-// never re-typed (imported at the top of this file with the other relative
-// `.ts` imports the standalone OpenAPI generator needs).
+// route or the panel exchanges lives here. The QR payload's schema is
+// lib/capture-qr.ts (client-safe — the panel renders it), imported at the top of
+// this file with the other relative `.ts` imports the standalone OpenAPI
+// generator needs; capture QR v2 §6.13 (W4, T11) removed the v1 payload.
 // ---------------------------------------------------------------------------
-export { CaptureQrV1 };
 
 export const StreamMode = z.enum(["passthrough", "composed"]);
 export type StreamMode = z.infer<typeof StreamMode>;
@@ -1342,8 +1350,11 @@ export const StreamFailReason = z.enum([
   // M10 (Task 14b review): a deployment with no relay ended a session left up from before.
   "relay_disabled",
 ]);
-/** How a COMPLETED session ended — the deadline is not a failure. */
-export const StreamEndReason = z.enum(["stopped", "max_duration"]);
+/** How a COMPLETED session ended — the deadline is not a failure. Capture QR v2 (T6, §5.3): the five DB reasons
+ *  (domain/end-reason.ts `DB_END_REASONS`, V430's end_reason check) — the organiser's Stop, the phone operator's
+ *  Stop (W12), the automatic stop after the result (W7), the phone and its video gone (W19), and the wall clock.
+ *  stream-contract.test.ts pins this list against both. */
+export const StreamEndReason = z.enum(["stopped", "operator_stopped", "auto_stopped", "phone_lost", "max_duration"]);
 export type StreamEndReason = z.infer<typeof StreamEndReason>;
 export type StreamFailReason = z.infer<typeof StreamFailReason>;
 export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp"]);
@@ -1380,6 +1391,22 @@ export const StreamOutput = z.object({
 });
 export type StreamOutput = z.infer<typeof StreamOutput>;
 
+/** W23: `restartAllowance`'s answer (stream-credits.ts) — inside one reuse window, `limit` restarts that reached video
+ *  are free; `used` have been counted since the window's anchor. */
+export const StreamRestartAllowance = z
+  .object({ windowOpen: z.boolean(), used: z.number().int().nonnegative(), limit: z.number().int().positive(), free: z.boolean() })
+  .strict();
+
+/** W24 (§6.12): `lostCountdown`'s answer — both durations on the server's clock, never below 0. */
+const countdownClock = { elapsedMs: z.number().int().nonnegative(), remainingMs: z.number().int().nonnegative() };
+/** W24 (controller ruling 2026-10-04): the countdown names the end it counts to — `live` only W19's `phone_lost`;
+ *  `warming` the warming timeout (`no_inbound_timeout`) or ask 10's `phone_lost`, whichever lands first. */
+export const StreamLostCountdown = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("live"), reason: z.literal("phone_lost"), ...countdownClock }).strict(),
+  z.object({ kind: z.literal("warming"), reason: z.enum(["no_inbound_timeout", "phone_lost"]), ...countdownClock }).strict(),
+]);
+export type StreamLostCountdown = z.infer<typeof StreamLostCountdown>;
+
 export const StreamSessionCurrent = z
   .object({
     id: z.string(),
@@ -1393,8 +1420,6 @@ export const StreamSessionCurrent = z
     /** D3: null for a composed session, and whenever the server's poll did not read the destination (not warming/live,
      *  or the provider read failed) — never a default object. */
     output: StreamOutput.nullable(),
-    /** Present only while provisioning/warming and only when the slot row exists — else null, never a default object. */
-    qr: CaptureQrV1.nullable(),
     balance: z.number().int(),
     startedAt: z.string().nullable(),
     endedAt: z.string().nullable(),
@@ -1406,14 +1431,102 @@ export const StreamSessionCurrent = z
      *  A restart inside the reuse window consumed nothing, and a refund linked to the session nets its consume out —
      *  both read false, so the "1 credit used" chip is never a false money claim (lane D D3). */
     creditUsed: z.boolean(),
-    /** I-1 (lane-close review): true iff a new start on THIS fixture would cost nothing right now — a consume of this
-     *  fixture still stands inside the reuse window (§5.2 "a restart after a failure is the same match"). Computed through
-     *  the one authority admission asks (`reuseWindowOpen`), so the Phone tab never sells a pack for a restart the server
-     *  would admit at balance 0. A fixture fact, not this session's: a restart that consumed nothing still reads true. */
-    restartFree: z.boolean(),
+    /** W23 (capture QR v2 T6b, A9(a)): the fixture's free-restart allowance in its reuse window — null while no window is
+     *  open (never a default object). `free` is admission's own answer (`restartAllowance`, I-1): a new start on THIS
+     *  fixture would cost nothing right now, so the Phone tab never sells a pack for a restart the server would admit at
+     *  balance 0. A fixture fact, not this session's. T11 retired the derived boolean that stood beside it; this is the one field. */
+    restart: StreamRestartAllowance.nullable(),
+    /** Capture QR v2 §5.3 (T6): who started this session — the organiser's Go live, the phone operator's start, or
+     *  the automatic start. V430's start_cause; set at creation and never changed. */
+    startCause: z.enum(["organiser", "operator", "automatic"]),
+    /** W24 (§6.12, T9): the server-computed countdown to the EARLIEST end the tick will make, carrying that end's
+     *  `reason` — `live`: W19's phone-lost end, from the SHORTER of the two silences (no beat, no video), shown after
+     *  RECONNECT_QUIET_SECONDS; `warming`: the warming deadline, or ask 10's once the phone's beats have stopped, whichever
+     *  is first. `lostCountdown` (domain/phone-lost.ts) on the server's clock, from the same clocks the tick judges.
+     *  null when there is nothing to count down — and always for a session with no phone (pairing_id null: today's
+     *  rules, controller ruling C-1). */
+    countdown: StreamLostCountdown.nullable(),
   })
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
+
+/** Capture QR v2 §6.1 / §9 (T5): the stable stream code as the organiser's panel shows it — `POST …/stream-code` (ensure)
+ *  and `POST …/stream-code/reissue`. `qr` is the v2 payload (lib/capture-qr.ts, re-used, never re-typed); `issuedAt`
+ *  is when this code was minted, so a re-show answers the same instant. Served `private, no-store`: the tok is live. */
+export const StreamCodeShown = z.object({ qr: CaptureQrV2, issuedAt: z.string() }).strict();
+export type StreamCodeShown = z.infer<typeof StreamCodeShown>;
+/** §6.7.3: the destination pre-pick. PR-1 carries `targetId` only (PR-2 adds `autoStream`); `null` clears it. */
+export const PutStreamSettings = z.object({ targetId: z.string().uuid().nullable() }).strict();
+export type PutStreamSettings = z.infer<typeof PutStreamSettings>;
+export const StreamSettings = z.object({ targetId: z.string().uuid().nullable() }).strict();
+export type StreamSettings = z.infer<typeof StreamSettings>;
+
+/** Capture QR v2 §9 / §6.12 (T9): the phone's latest beat as the panel reads it — each field picked by name from the
+ *  stored beat (§6.10's allowlisted `raw`), null when the beat carried none. The beat's own shapes, never re-typed. */
+export const StreamPhoneBeat = z
+  .object({
+    battery: CaptureBeat.shape.battery,
+    bitrateKbps: CaptureBeat.shape.bitrateKbps,
+    delivery: CaptureBeat.shape.delivery.nullable(),
+    thermal: CaptureBeat.shape.thermal,
+    dataUsedMB: CaptureBeat.shape.dataUsedMB,
+  })
+  .strict();
+/** Capture QR v2 §9 / §6.12 (T9): `GET /api/v1/fixtures/{id}/stream-phone`, the organiser panel's phone read model. It
+ *  carries NO secret — never the tok or its hash, never `cred`, never a destination's stream key: every field is picked
+ *  by name. `code` is the fixture's stream code (the active one, else the latest ended); `phone` the slot's phone (§6.9's
+ *  present / silent / not responding, on the server's clock); `destination` what the phone's start opens on (I-1);
+ *  `lastTakeover` the latest time another phone took the slot (§7.5); `auto` is PR-2's, always null here. */
+export const StreamPhone = z
+  .object({
+    code: z
+      .object({
+        issuedAt: z.string(),
+        state: z.enum(["active", "finishing", "ended"]),
+        endCause: z.enum(["reissued", "expired"]).nullable(),
+      })
+      .strict()
+      .nullable(),
+    phone: z
+      .object({
+        present: z.boolean(),
+        silent: z.boolean(),
+        notResponding: z.boolean(),
+        model: z.string().nullable(),
+        appVersion: z.string().nullable(),
+        mode: CaptureBeat.shape.mode.nullable(),
+        state: CapturePhoneState.nullable(),
+        notReady: CaptureNotReady.nullable(),
+        startFailed: CaptureStartFailed.nullable(),
+        lastBeatAt: z.string(),
+        /** `now − lastBeatAt` on the SERVER's clock at this response (the D3 M6 rule): the panel never compares its own
+         *  clock with a server timestamp. */
+        elapsedMs: z.number().int().nonnegative(),
+        beat: StreamPhoneBeat,
+        /** T11 (§6.6): the cadence the server last ANSWERED this phone was the far one (POLL_FAR_SECONDS) — the panel's
+         *  "checks in every minute" line. A boolean, never the number: the panel words a cadence, it does not do sums. */
+        farPoll: z.boolean(),
+      })
+      .strict()
+      .nullable(),
+    /** B8 review I-1: the destination the phone's own start opens on (`fixtureStreamTarget`) — the panel's picker shows
+     *  it. `saved`: the fixture's choice; `default`: nothing chosen yet, so the org's oldest. Null: no live destination,
+     *  or a choice that was cleared or archived (never swapped for another). */
+    destination: z.object({ id: z.string(), label: z.string(), source: z.enum(["saved", "default"]) }).strict().nullable(),
+    lastTakeover: z.object({ at: z.string(), model: z.string().nullable() }).strict().nullable(),
+    auto: z.null(),
+    /** T11 (controller ruling C-1): the fixture's OPEN session has no pairing (it opened before stream codes) — the panel
+     *  renders today's panel for it. False with no open session, or one that has (or had) a phone. */
+    legacy: z.boolean(),
+    /** T11 (C5): the FIXTURE is finished (`finished_at` set). "This match is over" needs this as well as an ended code — a
+     *  reverted result clears it while the expired code stays ended, and Ready may mint again. */
+    finished: z.boolean(),
+    /** B8 review I-2: the fixture's OPEN session (any starter — the organiser's Go live or the phone's own start), null
+     *  with none. The panel reads `current` when it names one the panel does not show. An id, nothing else. */
+    session: z.object({ id: z.string() }).strict().nullable(),
+  })
+  .strict();
+export type StreamPhone = z.infer<typeof StreamPhone>;
 
 /** D6: the platforms a NEW destination may name — a subset of `StreamTargetKind`, which stays whole for stored rows. */
 export const StreamPlatform = z.enum(STREAM_PLATFORMS);

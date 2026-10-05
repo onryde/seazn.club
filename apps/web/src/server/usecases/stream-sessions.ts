@@ -19,36 +19,39 @@ import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { hasFeature, overrideRow } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "@/server/api-v1/schemas";
-import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { checkDestination } from "@/lib/stream-destinations";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
-  MAX_DURATION_MINUTES, QR_PREFERRED_DEFAULT, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, SRT_LATENCY_MS,
-  relayEnvironment,
+  CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
+  RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, WARMING_TIMEOUT_MINUTES, relayEnvironment, tunable,
 } from "@/server/relay/config";
 import {
   ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, holdStateOf, isTerminal,
-  type Command, type Decision, type Effect, type HoldState, type Session, type SessionState,
+  type Command, type Decision, type Effect, type HoldState, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
+import { isPresent } from "@/server/relay/domain/pairing";
+import { codeStatus } from "@/server/relay/domain/stream-code";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
-import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/expiry";
+import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
+import { type Ask10Phone, livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
-import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
-import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
+import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials, wipeStreamCodeTok } from "@/server/relay/secret-columns";
+import { recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
-  lockOrg, reuseWindowOpen, streamMonthlyRate, type StreamCreditBreakdown,
+  lockOrg, restartAllowance, streamMonthlyRate, type StreamCreditBreakdown,
 } from "./stream-credits";
 import { DestinationNotAllowedError, TargetUnreadableError } from "./stream-targets";
 import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
 import { setFixtureStreamUrl } from "./fixtures";
+import { writeStreamSettings } from "./stream-codes";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
 
@@ -74,6 +77,9 @@ interface Row {
   runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
   created_by: string; created_at: string;
   output_uid: string | null;   // C1: the domain's proof an output exists to release (Session.outputUid)
+  start_cause: Session["startCause"];   // capture QR v2 §5.3 (V430)
+  warming_at: string | null;            // A8 (V430): the warming timeout's anchor
+  ingest_read_failed: boolean;          // V430 (B7 re-review, the outage gap): the latest CLAIMED status read threw
 }
 /** A FUNCTION, not a module-scope fragment: building a `sql` fragment opens the pooled client, and `next build`
  *  evaluates this module (through the daily sweep's cron route) to collect route config in a process with no
@@ -82,7 +88,8 @@ interface Row {
 const cols = () => sql`id, fixture_id, org_id, mode, state, desired_state, fail_reason, end_reason, theme_id, overlay_delay_ms,
   target_id, machine_id, last_heartbeat, heartbeat_at, beat_window_at, started_at, ended_at, ending_at, max_duration_minutes,
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at,
-  runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid`;
+  runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid, start_cause, warming_at,
+  ingest_read_failed`;
 
 const d = (s: string | null): Date | null => (s ? new Date(s) : null);
 
@@ -109,6 +116,9 @@ function toSession(r: Row): Session {
     // which is the exact stranding F22 exists to end. The round-trip test is the only witness.
     endingAt: d(r.ending_at),
     outputUid: r.output_uid,
+    // Capture QR v2 §5.3. A8: dropping warming_at here (or from cols()) is silent to tsc — it reads undefined → null and
+    // the warming timeout quietly falls back to createdAt; "A8: warming_at round-trips" is the witness.
+    startCause: r.start_cause, warmingAt: d(r.warming_at),
     runner: {
       // C3: ONE authority for the attempt — the persisted `runner_attempts` (create calls MADE).
       // Deriving it as `runner_retries + (state === "none" ? 0 : 1)` disagrees with the row after an
@@ -224,6 +234,11 @@ async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command
   if (before.state !== "live" && next.state === "live") {
     await tx`update fixture_stream_sessions set live_at = coalesce(live_at, ${now}) where id = ${next.id}`;
   }
+  // A8 (capture QR v2 §5.3): the instant the session ENTERED warming — the warming timeout's anchor (domain/expiry.ts),
+  // so provisioning time never eats the phone's pre-flight window. Coalesced like live_at: a repeat never moves it.
+  if (before.state !== "warming" && next.state === "warming") {
+    await tx`update fixture_stream_sessions set warming_at = coalesce(warming_at, ${now}) where id = ${next.id}`;
+  }
   if (cmd.type === "stop") {
     await tx`update fixture_stream_sessions set stop_requested_at = coalesce(stop_requested_at, ${now}) where id = ${next.id}`;
   }
@@ -280,8 +295,9 @@ async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command
   }
 }
 
-/** Who asked (ruling 13; PII decision: a user id already in the system, never an IP). */
-export interface Actor { userId: string | null; source: "client" | "admin" }
+/** Who asked (ruling 13; PII decision: a user id already in the system, never an IP). `phone` (capture QR v2 §6.7.1):
+ *  the phone's own call, attributed to its stream code's `issued_by`. */
+export interface Actor { userId: string | null; source: "client" | "admin" | "phone" }
 
 // ---------------------------------------------------------------------------
 // apply — THE seam. Effects that need the transaction run inside it
@@ -291,7 +307,7 @@ export interface Actor { userId: string | null; source: "client" | "admin" }
 // ---------------------------------------------------------------------------
 export async function apply(
   sessionId: string,
-  command: Command | ((s: Session) => Command | null),
+  command: Command | ((s: Session, tx: Tx) => Command | null | Promise<Command | null>),
   deps: SessionDeps,
   actor?: Actor,
 ): Promise<Session | null> {
@@ -331,7 +347,9 @@ export async function apply(
     const row = await lockRow(tx, sessionId);
     if (!row) return null;
     const before = toSession(row);
-    const cmd = typeof command === "function" ? command(before) : command;
+    // T7: a command function may READ on this transaction (never the pool — lib/db.ts's nesting guard) to re-take a
+    // decision whose inputs live outside the Session (the tick's phone-lost ends: a beat, a pairing, a sample).
+    const cmd = typeof command === "function" ? await command(before, tx) : command;
     // T5-a: a command function that returns null read the LOCKED row and found nothing to decide (the row moved on) —
     // write nothing, run nothing. The caller that returned null knows why and acts outside the transaction.
     if (cmd === null) return { session: before, effects: [] };
@@ -1107,6 +1125,8 @@ function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headro
     case "target_not_found": throw new HttpError(404, "stream target not found");
     case "storage_exhausted": throw new HttpError(503, "recording storage is exhausted; no new stream can start", "storage_exhausted", { headroomMinutes: headroom });
     case "active_session": throw new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: refusal.activeSessionId ?? null });
+    // W5 / T10 (capture QR v2 §6.7.1): nothing to stream from — the organiser pairs a phone before anything is weighed.
+    case "phone_not_paired": throw new HttpError(409, "no phone is paired and answering on this match's stream code", "phone_not_paired");
   }
 }
 
@@ -1137,10 +1157,65 @@ async function refuseUnreadableTarget(
   });
 }
 
+export type { StartCause };
+
+/** Capture QR v2 §5.3 (T6): who is starting. `userId` is the person the start is attributed to — the organiser, or for
+ *  the phone's and the automatic start the stream code's `issued_by` (the issuer vouches for the phone, the device-link
+ *  precedent). `pairingId` is the slot-0 pairing the start rides on; null only for an organiser's start on a fixture with
+ *  none (a phone's or the automatic start always rides one, and is refused by name without it). */
+export interface StartActor {
+  userId: string;
+  orgId: string;
+  source: "organiser" | "phone" | "auto";
+  pairingId: string | null;
+}
+
+/** The create action row's source per actor: the organiser's tab is the `client`, the phone is `phone` (A6, V430), and
+ *  the automatic start is the domain's own decision. */
+const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain" } as const satisfies Record<StartActor["source"], EventSource>;
+
+/** W5 / T10 (§6.7.1, §6.9): slot 0's CURRENT pairing on the fixture's ACTIVE stream code, and whether it is present —
+ *  current and not silent on `now` (admission's clock). Through the non-tenant `sql` (R1): V430's tables are FORCE RLS
+ *  with no policy. At most one row: one active code per fixture, one current pairing per (code, slot) — V430's indexes.
+ *  Both filters are load-bearing, and `c.ended_at is null` is the ONLY authority for a revoked code: T30 leaves a reissued
+ *  code's pairings current "until they call", so without it the revoked phone would read present (witnesses: "W5 after
+ *  Revoke & reissue" and "a SUPERSEDED pairing is not current").
+ *  C2 (B7 re-review m-b, §6.12 "Code ended: no Go live"): the lookup EVALUATES the active code, on the same clock. Found
+ *  expired, the first evaluation writes it (ended `expired`, tok wiped), as resolve, ensure and the panel's read do, and
+ *  the code has no current phone: W5 answers `phone_not_paired`. An open session defers it (C2), so a Go live over one
+ *  meets `active_session` as before. */
+async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId: string; present: boolean } | null> {
+  const [c] = await sql<{
+    id: string; finished_at: Date | null; open: boolean; pairing_id: string | null; last_beat_at: Date | null; answered_poll_seconds: number | null;
+  }[]>`
+    select c.id, f.finished_at,
+           exists (select 1 from fixture_stream_sessions s where s.fixture_id = c.fixture_id and s.state in ${sql([...ACTIVE_STATES])}) as open,
+           p.id as pairing_id, p.last_beat_at, p.answered_poll_seconds
+      from fixture_stream_codes c
+      join fixtures f on f.id = c.fixture_id
+      left join fixture_stream_pairings p on p.code_id = c.id and p.slot = 0 and p.ended_at is null
+     where c.fixture_id = ${fixtureId} and c.ended_at is null`;
+  if (!c) return null;
+  const grace = tunable("CODE_GRACE_AFTER_FINISH_MINUTES", CODE_GRACE_AFTER_FINISH_MINUTES);
+  if (codeStatus({ endedAt: null, finishedAt: c.finished_at }, now, c.open, grace) === "expiry_due") {
+    await sql.begin((tx) => wipeStreamCodeTok(tx, c.id, "expired", null));
+    return null;
+  }
+  if (c.pairing_id === null) return null;
+  const p = { id: c.pairing_id, last_beat_at: c.last_beat_at!, answered_poll_seconds: c.answered_poll_seconds! };
+  const present = isPresent(
+    { current: true, lastBeatAt: new Date(p.last_beat_at), answeredPoll: p.answered_poll_seconds },
+    now, tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS),
+  );
+  return { pairingId: p.id, present };
+}
+
+/** The organiser's Go live (the route's caller; unchanged signature). It resolves the actor, asks whether the fixture's
+ *  phone is present (W5), starts through the ONE start path, and saves the destination as the fixture's pre-pick. */
 export async function createSession(
   auth: AuthCtx, fixtureId: string, body: CreateStreamSession, deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
-  const { orgId, competitionId } = await fixtureContext(fixtureId);
+  const { orgId } = await fixtureContext(fixtureId);
   if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");
   // The ACTOR is a guard, not a fallback. `created_by` is `uuid not null` with no FK, and `fillReplayUrl` later acts AS
   // that user when it writes the replay link. The plan wrote `auth.userId ?? orgId`, which for a caller with no user (an
@@ -1149,6 +1224,60 @@ export async function createSession(
   // (device-links.ts, checkin-token.ts) answers 403. A device link carries its issuing organiser, so it passes.
   const actorUserId = auth.userId;
   if (actorUserId === null) throw new HttpError(403, "A stream can only be started by a signed-in organiser");
+  const phone = await currentPhoneOf(fixtureId, deps.now());
+  const started = await startBroadcast(
+    { userId: actorUserId, orgId, source: "organiser", pairingId: phone?.pairingId ?? null },
+    fixtureId,
+    { targetId: body.targetId, startCause: "organiser", phonePresent: phone?.present ?? false, mode: body.mode, themeId: body.themeId ?? null },
+    deps,
+  );
+  // T6 (§6.6): the destination this Go live used becomes the fixture's pre-pick, which the phone's own start reads.
+  // AFTER the start, and never failing it: a broadcast that IS running must not answer an error the organiser would
+  // retry straight into active_session. A failed save is logged and reported; the next Go live saves it again.
+  try {
+    await sql.begin((tx) => writeStreamSettings(tx, { orgId, fixtureId, targetId: body.targetId, updatedBy: actorUserId }));
+  } catch (err) {
+    log.warn({ err, fixtureId, targetId: body.targetId }, "stream session: the destination pre-pick was not saved — the session is running");
+    captureError(err, { orgId, route: "relay.session.pre_pick" });
+  }
+  return started;
+}
+
+/** Capture QR v2 §5.3 / §6.7 (T6): the ONE start path. The organiser's Go live (`createSession`), the phone operator's
+ *  start and the automatic start all come through here, so admission, the destination doors, the storage read, the
+ *  insert and provisioning are the same code for all three (A23); only the actor, `startCause` and `phonePresent`
+ *  differ. `phonePresent` is the caller's answer: the organiser's is read from the pairing, the phone's is true (the
+ *  caller IS the current phone). */
+export async function startBroadcast(
+  actor: StartActor,
+  fixtureId: string,
+  opts: { targetId: string; startCause: StartCause; phonePresent: boolean; mode?: CreateStreamSession["mode"]; themeId?: string | null },
+  deps: SessionDeps,
+): Promise<{ sessionId: string }> {
+  const { orgId, competitionId } = await fixtureContext(fixtureId);
+  if (orgId !== actor.orgId) throw new HttpError(404, "fixture not found");
+  const actorUserId = actor.userId;
+  const body = { mode: opts.mode ?? "passthrough", targetId: opts.targetId, themeId: opts.themeId ?? null };
+  // An assumption made a guard: every caller reads its pairing FROM this fixture's code, so a pairing on another
+  // fixture's code is a caller bug — refused before anything is weighed or written, never a session tied to the wrong
+  // phone. Witness: "startBroadcast refuses a pairing from another fixture's code".
+  const pairing = actor.pairingId === null ? null : (await sql<{ code_id: string; issued_by: string }[]>`
+    select p.code_id, c.issued_by from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id
+     where p.id = ${actor.pairingId} and c.fixture_id = ${fixtureId}`)[0] ?? null;
+  if (actor.pairingId !== null && pairing === null) {
+    throw new Error(`startBroadcast: pairing ${actor.pairingId} is not on fixture ${fixtureId}'s stream code`);
+  }
+  // §6.7.1 "the actor", made a guard (B4 review m-2): a phone's or the automatic start rides the slot's pairing and is
+  // attributed to its stream code's `issued_by`, who vouches for the phone. A caller that names anyone else, or brings
+  // no pairing, is a caller bug — refused by name before anything is weighed or written, so `created_by` and the
+  // action row's actor can only ever be the issuer. Witness: "a phone or automatic start is attributed to its code's
+  // issued_by".
+  if (actor.source !== "organiser") {
+    if (pairing === null) throw new Error(`startBroadcast: a ${actor.source} start rides the slot's pairing, and none was given for fixture ${fixtureId}`);
+    if (actor.userId !== pairing.issued_by) {
+      throw new Error(`startBroadcast: a ${actor.source} start is attributed to its stream code's issuer, not to user ${actor.userId}`);
+    }
+  }
   // R5 (Task 14b): a production deployment with no RELAY_DRIVERS has no relay (drivers.ts `disabledRelayDrivers`).
   // Refused with the ingest's own 503 BEFORE anything else — no expiry, no provider call, no monthly grant, no row —
   // so nothing is faked and no credit moves. The Phone tab already reads this code.
@@ -1211,22 +1340,34 @@ export async function createSession(
     hasFeature(orgId, "streaming.overlay", competitionId),
     hasFeature(orgId, "streaming.relay", competitionId),
     creditBalance(sql, orgId),
-    // I2 (§5.2): a restart of THIS fixture inside the reuse window costs nothing, so `admit` waives the balance gate for
-    // it. The same authority consumeForSession asks at go-live, on the same clock (deps.now()).
-    reuseWindowOpen(sql, { orgId, fixtureId }, deps.now()),
+    // I2 (§5.2) + W23 (T6b): a FREE restart of THIS fixture — inside the reuse window, fewer than three counted since its
+    // anchor — costs nothing, so `admit` waives the balance gate for it. The same authority consumeForSession asks at
+    // go-live, on the same clock (deps.now()). A 4th is an ordinary paid start: the balance gate answers it.
+    restartAllowance(sql, { orgId, fixtureId, excludeSessionId: null }, deps.now()).then((a) => a.free),
     // Dc: HOW the org got `streaming.relay` — a live staff override, or the plan. `overrideRow` is the
     // existing single authority (it already filters expired overrides); no resolver edit. Since V426 every
     // plan grants the relay, so the FALSE branch (plan-granted) is the common one; stream-sessions.test.ts
     // drives it through createSession on an org with no override row.
     overrideRow(orgId, "streaming.relay"),
   ]);
+  // W5 BEFORE the storage read (controller ruling, B4 fix round): a Go live with no phone to stream from asks Cloudflare
+  // nothing. The probe is `admit` itself on everything it can weigh without storage, so the plan gates and
+  // `active_session` (F-A5) still outrank W5 in admit's own order; only a `phone_not_paired` answer is taken here, and
+  // every other refusal is left to the admission below, measurement included (ruling 13). Nothing was measured, so this
+  // refusal records no storage snapshot. The destination doors above still answer first (§17.10).
+  const early = admit({
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phonePresent: opts.phonePresent,
+    headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,
+    activeSessionId: (await activeSessionIdFor(fixtureId)) ?? priorMachineSessionId,
+  });
+  if (!early.ok && early.refusal === "phone_not_paired") refuse(early, 0);
   // M1 (B2 review): a saved key that will not open is refused BEFORE the storage read below — the first provider call a
   // create makes for itself — so an unreadable Go live asks Cloudflare nothing at all. A PROBE only: it answers solely for
   // this org's ACTIVE row (an archived or foreign id falls through to `admit`'s 404, never an oracle), only when `admit`
   // would otherwise pass (F-A5, see `refuseUnreadableTarget`), and the read inside the admission transaction stays the
   // authority for everything that row lock protects.
   await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
-    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true,
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phonePresent: opts.phonePresent,
     headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here
     activeSessionId: activeSessionId ?? priorMachineSessionId,
   }).ok);
@@ -1242,7 +1383,7 @@ export async function createSession(
     const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
-      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom,
+      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom, phonePresent: opts.phonePresent,
       maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: (await activeSessionIdFor(fixtureId, tx)) ?? priorMachineSessionId,   // m2: on the tx, never a 2nd pooled connection
     });
     if (!verdict.ok) {
@@ -1276,11 +1417,13 @@ export async function createSession(
       insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, theme_id, max_duration_minutes, created_by,
                                            storage_minutes_at_admission, reserved_minutes, destination_kind,
                                            sport_key, competition_id, division_id, fixture_scheduled_at,
-                                           venue_id, venue_address, org_timezone, entitlement_via_override)
+                                           venue_id, venue_address, org_timezone, entitlement_via_override,
+                                           start_cause, code_id, pairing_id)
       select ${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId}, ${body.themeId ?? null}, ${MAX_DURATION_MINUTES}, ${actorUserId},
              ${usage.totalStorageMinutes}, ${MAX_DURATION_MINUTES}, (select kind from org_stream_targets where id = ${body.targetId}),
              d.sport_key, d.competition_id, f.division_id, f.scheduled_at,
-             c.venue_id, v.address, o.timezone, ${viaOverride}
+             c.venue_id, v.address, o.timezone, ${viaOverride},
+             ${opts.startCause}, ${pairing?.code_id ?? null}, ${actor.pairingId}
         from fixtures f
         join divisions d on d.id = f.division_id
         join organizations o on o.id = ${orgId}
@@ -1291,8 +1434,8 @@ export async function createSession(
     const sid = s!.id;
     await tx`insert into fixture_stream_inputs (session_id, slot) values (${sid}, 0)`;   // M3: same transaction
     await recordStorageSnapshot(tx, { ...snapshot, sessionId: sid });
-    await recordEvent(tx, { sessionId: sid, orgId, source: "client", kind: "action", type: "create", actorUserId, occurredAt: deps.now(),
-      payload: { mode: body.mode, targetId: body.targetId, headroomMinutes: headroom, credits: balance } });
+    await recordEvent(tx, { sessionId: sid, orgId, source: START_EVENT_SOURCE[actor.source], kind: "action", type: "create", actorUserId, occurredAt: deps.now(),
+      payload: { mode: body.mode, targetId: body.targetId, headroomMinutes: headroom, credits: balance, startCause: opts.startCause, pairingId: actor.pairingId } });
     return sid;
   }) as Promise<string>).catch(async (err: unknown) => {
     // The race backstops, mapped OUTSIDE `sql.begin` — Task 7's `staffRow` idiom and its measured reason: postgres.js
@@ -1432,20 +1575,45 @@ export function holdStatesOf(rows: readonly OpenSessionRow[]): Record<string, Ho
   return out;
 }
 
-export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps, opts: { reveal?: boolean } = {}): Promise<StreamSessionCurrent | null> {
-  const { orgId } = await fixtureContext(fixtureId);
-  if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");
-  let row = await latestRow(fixtureId);
-  if (!row) return null;
+/** T7 (§6.11): what one tick observed. currentSession builds its projection from this, so the projection stays
+ *  byte-identical to the pre-extraction code (A10). The three observation fields are the block's own locals, moved
+ *  verbatim; `coalescedSince`'s three states (Date, null, undefined = not served) all mean something. */
+export type TickObservation = {
+  session: Session | null;
+  ingestState: StreamSessionCurrent["ingest"];
+  outputObserved: OutputState | null;            // D3: what THIS poll read of the destination; null = read nothing
+  coalescedSince: Date | null | undefined;       // I-1 (B0): a served sample's own since; undefined = not served
+  /** T8b (§6.5, A14 conjunct 2): THIS tick's fresh read of the phone — the word W19 judges on (a claimed read's own
+   *  word, or a coalesced sample younger than COALESCED_SAMPLE_MAX_AGE_MS); undefined = no fresh read. */
+  freshIngest: IngestState | undefined;
+  /** W24 (controller ruling 2026-10-04): THIS tick's STATUS read threw (N1). The warming timeout's own observation is
+   *  held by exactly that (`heldByUnknownIngest`), so the warming countdown reads it. An outputs read that threw is not
+   *  it: the timeout's observation never reads the outputs. A coalesced tick answers as the claimed read it defers to
+   *  (`ingest_read_failed`, B7 re-review's outage gap). False when no read was made or deferred to (no input). */
+  phoneReadFailed: boolean;
+};
 
-  if (!isTerminal(row.state)) await reconcileSession(row.id, deps);      // B: the organiser's poll IS the tick — expiry + one Machine observation
-  row = (await latestRow(fixtureId))!;
+/** T7 (§6.11): who advances a session. The organiser poll's reconcile-and-ingest block, extracted so a phone beat and the
+ *  stream-tick job (W22) advance a session nobody is watching. In order: 1. lazy expiry; 2. the coalesced ingest read
+ *  (`claimIngestPoll`; the sample and its event in ONE tx, B0 R-1); 3. warming → live (the credit); 4. target_rejected;
+ *  5. m-5, then ask 10 (§6.8.3); 6. W19 (§6.8.5). `cause` names the caller in the log line of an end it makes. */
+export async function tickSession(sessionId: string, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<TickObservation> {
+  let row = await readRow(sessionId);
+  if (!row) return { session: null, ingestState: null, outputObserved: null, coalescedSince: undefined, freshIngest: undefined, phoneReadFailed: false };
+
+  if (!isTerminal(row.state)) await reconcileSession(row.id, deps);      // expiry + one Machine observation
+  row = (await readRow(sessionId))!;
 
   // The server-side ingest poll (design §6.4): passthrough warming → live on
   // connected; a rejected destination fails it. The client never decides.
   let ingestState: StreamSessionCurrent["ingest"] = null;
   let outputObserved: OutputState | null = null;   // D3: what THIS poll read of the destination; null when it read nothing
   let coalescedSince: Date | null | undefined;      // I-1 (B0 fix round 1): a served sample's own since; undefined = not served
+  // W19 (§6.8.5 clause 2): THIS tick's fresh read of the phone — a claimed read's own word, or (FP17) a coalesced sample
+  // younger than COALESCED_SAMPLE_MAX_AGE_MS. Undefined = no fresh read to judge on (no input, a failed or no-evidence
+  // read, an older sample): W19 skips this tick and never guesses.
+  let freshIngest: IngestState | undefined;
+  let phoneReadFailed = false;
   if (row.mode === "passthrough" && (row.state === "warming" || row.state === "live")) {
     const input = (await sql.begin((tx) => readFirstInput(tx, row!.id))) as Awaited<ReturnType<typeof readFirstInput>>;
     const inputId = input?.ingestInputId ?? null;
@@ -1456,14 +1624,26 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     if (inputId) {
       if (!(await claimIngestPoll(row.id, deps.now()))) coalesced = true;
       else {
+        phoneReadFailed = true;   // until the status read answers
         try {
-          read = { status: await deps.drivers.ingest.inputStatus(inputId, { sessionId: row.id }), output: await deps.drivers.ingest.outputState(inputId, { sessionId: row.id }) };
+          const status = await deps.drivers.ingest.inputStatus(inputId, { sessionId: row.id });
+          phoneReadFailed = false;
+          read = { status, output: await deps.drivers.ingest.outputState(inputId, { sessionId: row.id }) };
         } catch (err) {
           reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
         }
+        // The outage gap (B7 re-review): whether this claimed STATUS read threw, for the polls that coalesce onto it.
+        // Written only when it changes, so a healthy session's polls add no write.
+        if (phoneReadFailed !== row.ingest_read_failed) {
+          await sql`update fixture_stream_sessions set ingest_read_failed = ${phoneReadFailed} where id = ${row.id}`;
+        }
       }
     }
-    if (coalesced) {
+    if (coalesced && row.ingest_read_failed) {
+      // The outage gap (B7 re-review): the claimed read this poll defers to THREW. It answers as that read did, nothing
+      // served and nothing fresh, so the warming countdown is held here exactly as on the claimer's own poll (N1).
+      phoneReadFailed = true;
+    } else if (coalesced) {
       // I-1: no provider call — the view is the latest poll sample's, when it is recent enough to be this interval's
       // reading. Nothing is recorded and nothing is decided: the poll that read decided on what it read. D3's `since`
       // is computed exactly as for a read (events, clamps, this response's clock), from the sampled word — and, B0 fix
@@ -1475,6 +1655,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
         ingestState = phone === null ? null : { state: phone, protocol: sampledProtocol(sample.protocol) };
         outputObserved = sampledOutput(sample.output_state);
         coalescedSince = sample.since;
+        freshIngest = phone ?? undefined;
       }
     }
     if (read) {
@@ -1485,6 +1666,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
       // poll's word forward — never `unknown`, which read as No signal, and never a hold on go-live. With nothing to
       // carry (no poll has read the phone yet) the phone is unseen on this poll: `ingest: null`, as for a failed read.
       const phone: IngestState | null = status.state ?? carriedIngest(prev);
+      freshIngest = status.state ?? undefined;   // a no-evidence read (G-a) is not a fresh word: its carry decides nothing
       ingestState = phone === null ? null : { state: phone, protocol: status.protocol };
       outputObserved = output;
       // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed — for a poll
@@ -1522,43 +1704,177 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
       // unlocked read above leaves a row these no longer apply to, and a plain apply of either was InvalidTransition, a 500.
       if (output === "rejected") await apply(row.id, (s) => (s.state === "warming" || s.state === "live" ? { type: "target_rejected" } : null), deps);
       else if (row.state === "warming" && phone === "connected") await apply(row.id, connectIfWarming, deps);
-      row = (await latestRow(fixtureId))!;
+      row = (await readRow(sessionId))!;
     }
   }
 
-  const qr = (await sql.begin(async (tx): Promise<CaptureQrV1 | null> => {
-    if (row!.state !== "provisioning" && row!.state !== "warming") return null;
-    const input = await readFirstInput(tx, row!.id);
-    if (!input || !input.srt || !input.rtmps) return null;   // the empty case: null, not a default
-    // De, in two halves — and the split is the whole point.
-    // `qr_issued_first_at` is when the payload was first SERVED. Every projection that
-    // carries a QR is a serve, so it is coalesced unconditionally here.
-    // The REVEAL counters are a different fact: a reveal is the organiser's own act of
-    // disclosing the credentials — the tab showing them for the first time this session,
-    // or a tap on Copy — and the caller says so with `reveal`. A POLL IS NOT A REVEAL.
-    // The Phone tab polls `current` every STREAM_POLL_MS (5 s) and WARMING_TIMEOUT_MINUTES
-    // is 10, so counting every projection banks ~120 "reveals" for one disclosure: a
-    // number that scales with how long warming took, is not comparable between sessions,
-    // and reports credentials revealed ~100× more often than they were, under a column
-    // name that says otherwise. Every downstream read (the `_INDEX.md` inventory, any
-    // future admin view) inherits that lie.
-    // The lock this transaction already holds is what makes the increment safe: two
-    // concurrent reveals cannot lose a count. first-at is coalesced and never moves.
-    await lockRow(tx, row!.id);
-    await tx`update fixture_stream_sessions set qr_issued_first_at = coalesce(qr_issued_first_at, ${deps.now()}) where id = ${row!.id}`;
-    if (opts.reveal) {
-      await tx`update fixture_stream_sessions
-                  set credentials_revealed_first_at = coalesce(credentials_revealed_first_at, ${deps.now()}),
-                      credentials_reveal_count = credentials_reveal_count + 1
-                where id = ${row!.id}`;
+  // 5–6: the phone-lost ends, judged on what this tick read and re-taken on the LOCKED row.
+  if (!isTerminal(row.state)) row = await endIfPhoneLost(row, freshIngest, deps, cause);
+  return { session: toSession(row), ingestState, outputObserved, coalescedSince, freshIngest, phoneReadFailed };
+}
+
+/** The facts ask 10, W19 and m-5 judge, in ONE statement (one snapshot). The session's phone is its `pairing_id`
+ *  (§6.5: a takeover moves it).
+ *  - `has_phone` (C-1, controller ruling): the session HAS a phone at all. `pairing_id` is null for every session open
+ *    when V430 deploys and for one whose fixture was deleted (T35: the pairings cascade, `on delete set null`). Such a
+ *    session keeps TODAY's rules: the phone rules never judge it (`phoneLostEnd`).
+ *  - `has_current`: that pairing has not ended. Its CODE's state is deliberately not read (C-2, controller ruling, spec
+ *    C1b/C3): a Revoke & reissue ends the code, and the old code still serves the open session's phone until the
+ *    session ends. The code-active filter belongs to NEW claims and the Go-live lookup (`currentPhoneOf`), never here.
+ *  - `heard_go_live`: the phone has beaten since the session was created, so it is answered at an open session's
+ *    cadence (§6.8.3).
+ *  `exec` is apply's tx when re-taken under the row lock. */
+type PhoneFacts = {
+  first_ingest_at: Date | null; phone_beat_at: Date | null; has_phone: boolean; has_current: boolean; last_beat_at: Date | null;
+  answered_poll_seconds: number | null; heard_go_live: boolean; last_connected_at: Date | null;
+};
+async function phoneFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<PhoneFacts | null> {
+  const [f] = await exec<PhoneFacts[]>`
+    select s.first_ingest_at, s.phone_beat_at, s.pairing_id is not null as has_phone, p.id is not null as has_current,
+           p.last_beat_at, p.answered_poll_seconds,
+           coalesce(p.id is not null and p.last_beat_at > s.created_at, false) as heard_go_live,
+           (select max(x.sampled_at) from fixture_stream_samples x
+             where x.session_id = s.id and x.source = 'poll' and x.ingest_state = 'connected') as last_connected_at
+      from fixture_stream_sessions s
+      left join fixture_stream_pairings p on p.id = s.pairing_id and p.ended_at is null
+     where s.id = ${sessionId}`;
+  return f ?? null;
+}
+
+/** T8b (§6.5, A14 conjunct 3): when a poll sample last read the input connected — null when none ever has. The beat's
+ *  dead-phone takeover reads it on its own transaction (`exec`), through this module because only the samples' writers
+ *  may name that table (enc-boundary claim 4). The same measure W19 judges on (`phoneFactsOf`). */
+export async function lastConnectedSampleAt(exec: Tx | typeof sql, sessionId: string): Promise<Date | null> {
+  const [r] = await exec<{ at: Date | null }[]>`
+    select max(sampled_at) as at from fixture_stream_samples
+     where session_id = ${sessionId} and source = 'poll' and ingest_state = 'connected'`;
+  return r?.at ?? null;
+}
+
+/** Which phone-lost end, if any, a session owes now. `fresh` = this tick's fresh read (undefined: W19 cannot judge).
+ *  - C-1 (controller ruling): a session with no phone (`has_phone` false) is judged by none of the rules below.
+ *  - m-5 (controller ruling): a PASSTHROUGH session live with no first ingest recorded is judged by the warming rule —
+ *    expire warming_timeout at warming_at + WARMING_TIMEOUT_MINUTES (`warmingTimedOut`, evaluate's own clock). Composed
+ *    is excluded by name: a composed session never records first ingest (only the passthrough poll writes it), so the
+ *    rule would end every composed broadcast at its warming deadline — and the domain refuses that cell anyway.
+ *  - ask 10 (§6.8.3) and W19 (§6.8.5): the domain's own predicates, with the tunable timings (§6.15). */
+function phoneLostEnd(s: Session, f: PhoneFacts, fresh: IngestState | undefined, now: Date): { command: Command; rule: "m-5" | "ask-10" | "w19" } | null {
+  if (isTerminal(s.state)) return null;
+  if (!f.has_phone) return null;   // C-1: no phone, no phone rules — the session keeps today's expiry and runner ends
+  if (s.mode === "passthrough" && s.state === "live" && f.first_ingest_at === null && warmingTimedOut(s, now)) {
+    return { command: { type: "expire", expiry: { kind: "warming_timeout" } }, rule: "m-5" };
+  }
+  const silentFloor = tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS);
+  if (warmingPhoneLost({ state: s.state, firstIngestAt: f.first_ingest_at, ...ask10PhoneOf(f) }, now, silentFloor)) {
+    return { command: { type: "stop", reason: "phone_lost" }, rule: "ask-10" };
+  }
+  // m-3 (controller ruling): an `unknown` read — claimed or coalesced — never advances a phone-lost end. A Cloudflare
+  // read blip must not end a paid broadcast as phone_lost; the next fresh word decides, and max_duration still bounds it.
+  if (fresh !== undefined && fresh !== "unknown" && livePhoneLost({
+    state: s.state, firstIngestAt: f.first_ingest_at, phoneBeatAt: f.phone_beat_at,
+    freshReadConnected: fresh === "connected", lastConnectedSampleAt: f.last_connected_at,
+  }, now, tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES))) return { command: { type: "stop", reason: "phone_lost" }, rule: "w19" };
+  return null;
+}
+
+/** Ask 10's phone, from the facts: ONE mapping for the tick's end and the W24 countdown, so the countdown names the
+ *  deadline the tick judges. With no current pairing the cadence is never read (both answer before it). */
+function ask10PhoneOf(f: PhoneFacts): Ask10Phone {
+  return {
+    hasCurrentPairing: f.has_current, lastBeatAt: f.has_current ? f.last_beat_at : null,
+    answeredPollSeconds: f.answered_poll_seconds ?? 0, heardGoLive: f.heard_go_live,
+  };
+}
+
+/** Steps 5–6 of the tick. Judged first on an UNLOCKED read (the common answer is "nothing", and `apply` takes the org's
+ *  money lock), then RE-TAKEN on the locked row inside `apply`: a beat, a Stop or another tick may have landed between
+ *  the two, and the locked answer is the only one that may end a session (witnesses: "a tick racing a phone BEAT" and
+ *  "two ticks AT ONCE"). A row that moved on answers null and nothing is written. */
+async function endIfPhoneLost(row: Row, fresh: IngestState | undefined, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<Row> {
+  const facts = await phoneFactsOf(sql, row.id);
+  if (!facts || phoneLostEnd(toSession(row), facts, fresh, deps.now()) === null) return row;
+  let rule: string | null = null;
+  await apply(row.id, async (s, tx) => {
+    const locked = await phoneFactsOf(tx, s.id);
+    const end = locked ? phoneLostEnd(s, locked, fresh, deps.now()) : null;
+    rule = end?.rule ?? null;
+    return end?.command ?? null;
+  }, deps);
+  const after = (await readRow(row.id)) ?? row;
+  if (rule !== null && isTerminal(after.state)) log.info({ sid: row.id, orgId: row.org_id, cause, rule, state: after.state }, "stream session: ended by the tick");
+  return after;
+}
+
+/** T7b (§6.11, W22): one stream-tick pass's answer. Written out LITERALLY, never inferred: the cron Worker reads
+ *  `data.failed` as its failure counter (R3), and apps/cron-worker/test/drift.test.ts finds that field by reading this
+ *  module's CODE (comments stripped) for its numeric declaration. `deferred` (the budget ran out) is NOT a failure: the
+ *  next firing, five minutes on, reaches those sessions. */
+export type StreamTickResult = { ticked: number; ended: number; failed: number; deferred: number };
+
+/** T7b: the pass stops STARTING ticks once this much wall-clock time has gone. The cron Worker abandons a job at 60 s
+ *  (JOB_TIMEOUT_MS, apps/cron-worker/src/call.ts) and records a timeout; stopping here leaves the tick in flight 15 s to
+ *  finish, so an overrun usually reads `deferred` instead. stream-tick/route.test.ts pins it below the Worker's figure.
+ *  RESIDUAL (B5 review m-2), a flat figure because no derived one exists: one tick's worst case is unbounded — a Fly
+ *  observation can take ~43.5 s across its attempts (config.ts), and the Cloudflare calls set no request timeout
+ *  (ingest-cf.ts) — so a tick started just inside the budget can still outlive the Worker's 60 s. That reads as a Worker
+ *  timeout (status error, one Sentry event an hour under R2), never as silence, and the next firing ticks the rest. */
+export const STREAM_TICK_BUDGET_MS = 45_000;
+
+/** T7b (§6.11, W22): the stream-tick job's pass — `tickSession` on every OPEN session (ACTIVE_STATES, the one definition
+ *  `openStreamStates` and the sweep use), across every org, oldest first, so a phone that dies with no panel open is still
+ *  ended (ask 10, W19, m-5) within one firing. Each session is ticked inside its own try/catch: a throw adds 1 to `failed`
+ *  and is logged, and never stops the next. A terminal result adds 1 to `ended` — "open when selected, terminal after its
+ *  tick", so with two firings overlapping both may count one end; the END itself happens once (the locked re-check).
+ *  Sessions not started before the wall-clock budget is spent are counted in `deferred`.
+ *  TEST-ONLY options: `orgIds` scopes the selection (an empty list is refused — `org_id in ()` silently read as "no
+ *  filter" would tick every org) and `wallClock` scripts the budget's clock. The cron route passes neither. */
+export async function tickOpenSessions(
+  deps: SessionDeps,
+  opts: { orgIds?: readonly string[]; wallClock?: () => number } = {},
+): Promise<StreamTickResult> {
+  const orgIds = opts.orgIds === undefined ? undefined : [...opts.orgIds];
+  if (orgIds !== undefined && orgIds.length === 0) {
+    throw new Error("stream tick: orgIds is empty — omit it to tick every organisation, or name at least one");
+  }
+  const wallClock = opts.wallClock ?? Date.now;
+  const started = wallClock();
+  const open = await sql<{ id: string }[]>`
+    select id from fixture_stream_sessions
+     where state in ${sql([...ACTIVE_STATES])} ${orgIds ? sql`and org_id in ${sql(orgIds)}` : sql``}
+     order by created_at, id`;
+  const out: StreamTickResult = { ticked: 0, ended: 0, failed: 0, deferred: 0 };
+  for (let i = 0; i < open.length; i++) {
+    if (wallClock() - started >= STREAM_TICK_BUDGET_MS) {
+      out.deferred = open.length - i;
+      break;
     }
-    return {
-      v: 1, sid: row!.id, slot: input.slot,
-      cred: { srt: { ...input.srt, latencyMs: SRT_LATENCY_MS }, rtmps: { ...input.rtmps } },
-      preferred: QR_PREFERRED_DEFAULT,
-      exp: Math.floor(relayTokenExpiry({ createdAt: new Date(row!.created_at), startedAt: d(row!.started_at), maxDurationMinutes: row!.max_duration_minutes }).getTime() / 1000),
-    };
-  })) as CaptureQrV1 | null;
+    const sid = open[i]!.id;
+    try {
+      const t = await tickSession(sid, deps, "sweep");
+      out.ticked++;
+      if (t.session && isTerminal(t.session.state)) out.ended++;
+    } catch (err) {
+      // Logged, not reported to Sentry per session: the Worker raises the job's one event from `failed` (R3), throttled
+      // to one an hour (R2); an event per session per firing would be twelve an hour for one stuck row.
+      out.failed++;
+      log.error({ sid, err: err instanceof Error ? err.message : String(err) }, "stream tick: a session's tick threw");
+    }
+  }
+  log.info({ ...out, open: open.length, scoped: orgIds !== undefined }, "stream tick");
+  return out;
+}
+
+export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps): Promise<StreamSessionCurrent | null> {
+  const { orgId } = await fixtureContext(fixtureId);
+  if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");
+  let row = await latestRow(fixtureId);
+  if (!row) return null;
+
+  // B: the organiser's poll IS a tick (§6.11) — expiry + one Machine observation, the coalesced ingest read, warming →
+  // live, target_rejected and the phone-lost ends. T7 (A10): the projection below is built from what THAT tick observed,
+  // exactly as it was from the block's own locals before the extraction.
+  const { ingestState, outputObserved, coalescedSince, freshIngest, phoneReadFailed } = await tickSession(row.id, deps, "poll");
+  row = (await latestRow(fixtureId))!;
 
   const [target] = await sql<{ id: string; kind: StreamSessionCurrent["target"]["kind"]; label: string }[]>`
     select id, kind, label from org_stream_targets where id = ${row.target_id}`;
@@ -1594,10 +1910,26 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     // M6: the elapsed on THIS clock, at this response — the client judges D3 on it, never on the browser's clock.
     output = { state: outputObserved, since: since.toISOString(), elapsedMs: Math.max(0, deps.now().getTime() - since.getTime()) };
   }
+  const allowance = await restartAllowance(sql, { orgId: row.org_id, fixtureId, excludeSessionId: null }, deps.now());
+  // W24 (§6.12, T9): the countdown to the end the tick will make, from the clocks the tick judges (phoneFactsOf: the
+  // phone's beat, the last connected sample, first ingest) and the row's warming entry, on this response's clock, and
+  // from the reading THIS tick judged on (controller rulings 2026-10-04: shown iff that end fires, naming the EARLIEST
+  // end and its reason; lostCountdown gates each end on what it reads). Ask 10's clock is the tick's own mapping. A session with no phone (C-1: pairing_id null) has no phone rules, so it has no
+  // countdown either.
+  const facts = await phoneFactsOf(sql, row.id);
+  const countdown = facts?.has_phone ? lostCountdown({
+    state: row.state, firstIngestAt: facts.first_ingest_at, warmingAt: d(row.warming_at), phoneBeatAt: facts.phone_beat_at,
+    read: { fresh: freshIngest, served: ingestState?.state ?? null, failed: phoneReadFailed }, lastConnectedSampleAt: facts.last_connected_at,
+    phone: ask10PhoneOf(facts),
+  }, deps.now(), {
+    silentFloorSeconds: tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS),
+    lostMinutes: tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES), warmingMinutes: WARMING_TIMEOUT_MINUTES,
+    quietSeconds: RECONNECT_QUIET_SECONDS,
+  }) : null;
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
-    ingest: ingestState, output, qr,
+    ingest: ingestState, output,
     balance: await creditBalance(sql, row.org_id),
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : null,
     endedAt: row.ended_at ? new Date(row.ended_at).toISOString() : null,
@@ -1606,9 +1938,12 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
     endReason: row.end_reason,
     creditUsed: spend!.net < 0,
-    // I-1: admission's own question, on admission's own clock (createSession asks `reuseWindowOpen` with deps.now()), so
-    // the tab's "free restart" and the gate that waives the balance cannot disagree.
-    restartFree: await reuseWindowOpen(sql, { orgId: row.org_id, fixtureId }, deps.now()),
+    // I-1 + W23 (T6b, A9(a)): admission's own question, on admission's own clock (startBroadcast asks `restartAllowance`
+    // with deps.now()), so the tab's "free restart" and the gate that waives the balance cannot disagree. `restart` is the
+    // allowance (null while no window is open) — the one restart field since T11 retired the derived boolean beside it.
+    restart: allowance.windowOpen ? allowance : null,
+    startCause: row.start_cause,
+    countdown,
   };
 }
 
@@ -1645,7 +1980,7 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
   // m1: re-decided on the LOCKED row (T5-a). A session another writer FINISHED after the read above (an expiry, a failure)
   // writes nothing — no decision, no tap, the same as the finished-session branch above — and the projection answers.
   // `ending` is still decided: `ending × stop` is identity, and it records the tap (n5).
-  await apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "stop" }), deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
+  await apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "stop", reason: "stopped" }), deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
   return (await currentSession(auth, fixtureId, deps))!;
 }
 

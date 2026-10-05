@@ -46,4 +46,16 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   "org_stream_credits",
   // Append-only relay history (capture); superuser client only, zero policies.
   "fixture_stream_events",
+  // Capture QR v2 (V430, ruling R1 / spec §17.1): V410's pattern — RLS FORCEd, ZERO policies, no
+  // trg_set_org, no app_user grant; the use-case writes org_id from the code row (the phone routes
+  // carry no org session). relay/__tests__/rls-static.test.ts and migration-shape.test.ts assert
+  // enabled + forced + zero policies on all four.
+  // The stable per-fixture stream code (the sealed tok); non-tenant sql only, zero policies, R1.
+  "fixture_stream_codes",
+  // Per-fixture stream settings, org_id from the code row; non-tenant sql only, zero policies, R1.
+  "fixture_stream_settings",
+  // Phone pairings to a code (claim / takeover history); non-tenant sql only, zero policies, R1.
+  "fixture_stream_pairings",
+  // The phone-beat history (24 h retention); non-tenant sql only, zero policies, R1.
+  "fixture_stream_phone_beats",
 ]);

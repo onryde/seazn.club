@@ -198,10 +198,9 @@ function messageOf(err: unknown): string {
  * carrying it would either never wait or never send, depending on which side
  * of the comparison saw it. Unparseable means absent, never guessed.
  *
- * Nothing under `src/server/api-v1` sets this header today (checked
- * 2026-09-21), so in practice the pad's own derived backoff is what paces a
- * retry. This exists so that a server which later starts sending one is
- * obeyed rather than second-guessed.
+ * Since capture QR v2 (T8c, 2026-10) the app's own limiter sends it on every
+ * 429 (lib/rate-limit.ts: the window's true remaining seconds), and this is
+ * how the pad obeys it rather than second-guessing it.
  */
 export function retryAfterMsOf(res: Response): number | null {
   const raw = res.headers.get("retry-after");

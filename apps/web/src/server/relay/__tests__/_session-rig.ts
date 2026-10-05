@@ -13,6 +13,11 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { seal } from "../crypto";
 import { creditBreakdown, ensureMonthlyStreamGrant } from "@/server/usecases/stream-credits";
+import { ensureStreamCode } from "@/server/usecases/stream-codes";
+import { postBeat } from "@/server/usecases/capture-phone";
+import type { SessionDeps } from "@/server/usecases/stream-sessions";
+import type { RelayDrivers } from "../drivers";
+import { openStreamCodeTok } from "../secret-columns";
 
 /** A real users row. staff_audit_log.actor_id is `not null references users(id)` (V103) and
  *  seedOrg's AuthCtx carries userId: null (_rig.ts) — so every staff credit write needs one. */
@@ -33,17 +38,6 @@ export async function targetEnvelope(targetId: string): Promise<Buffer> {
     select rtmp_enc as env from org_stream_targets where id = ${targetId}`;
   if (!row) throw new Error(`no org_stream_targets row ${targetId}`);
   return Buffer.from(row.env);
-}
-
-/** A session's first input's two sealed credential envelopes as stored, hex-encoded — for Task 10's at-rest assertion
- *  in stream-sessions.test.ts (outside server/relay/**, so it may not name the columns: A9). Throws on a missing row
- *  or a null envelope, for the same reason `targetEnvelope` does. */
-export async function inputEnvelopesHex(sessionId: string): Promise<{ srt: string; rtmps: string }> {
-  const [row] = await sql<{ srt: string | null; rtmps: string | null }[]>`
-    select encode(ingest_srt_key_enc, 'hex') as srt, encode(ingest_rtmps_key_enc, 'hex') as rtmps
-      from fixture_stream_inputs where session_id = ${sessionId} order by slot asc limit 1`;
-  if (!row || row.srt === null || row.rtmps === null) throw new Error(`no sealed input for session ${sessionId}`);
-  return { srt: row.srt, rtmps: row.rtmps };
 }
 
 /** Re-seal a SAVED target's destination to `rtmp` without the allowlist — the state a target is in when the
@@ -133,4 +127,67 @@ export async function streamRig(opts: { fixtures?: 1 | 2; createdBy?: string } =
     return s!.id;
   };
   return { orgId: auth.orgId, createdBy, fixtureIds, session };
+}
+
+/** The rig's beat never reaches a provider: it carries no sid (so it ticks nothing, §6.11) and claims only a slot with
+ *  no current pairing on the active code (so it is never a T4 takeover read). A driver touched anyway is a rig misuse,
+ *  refused by name rather than answered by some fake nobody configured. */
+const NO_DRIVERS = new Proxy({}, {
+  get(_t, prop) {
+    throw new Error(`pairPresentPhone: the rig's beat reached the relay drivers (${String(prop)}) — it must never tick or take over`);
+  },
+}) as RelayDrivers;
+
+/** A7 (capture QR v2 T6, FP25): W5 refuses every organiser start with no PRESENT phone (§6.7.1), so every DB test that
+ *  starts a session pairs one first. Two steps, both REAL:
+ *   1. the fixture's stream code, minted through the REAL `ensureStreamCode` (T5) when it has no active one — so the
+ *      code row, its sealed tok and its `issued_by` are exactly what production writes. Its issuer is a fresh users row
+ *      (`rigUser`). Minting needs `streaming.relay` and RELAY_KEK, as in production; an active code is reused as is, its
+ *      sealed tok opened under RELAY_KEK (`openStreamCodeTok`);
+ *   2. slot 0's pairing, through the REAL beat (`postBeat`, T8b, FP25): a `claim: "new"` beat when the active code has no
+ *      current pairing (T1), else that current phone's own beat with no claim (T8) — sid null, state `paired`, at
+ *      `opts.at ?? now` on the server clock. The pairing's `answered_poll_seconds` is therefore the cadence the beat
+ *      ANSWERED (§6.6), as production stores it.
+ *  A second call for the same fixture REFRESHES the pairing (the current one is kept, never a second one) — so a test
+ *  that advances its clock re-calls it, on that clock, before its next start. A different `opts.phone` is ignored while a
+ *  current pairing exists, and the OLD phone is returned. To pair a different phone, end the current pairing first (B4
+ *  review m-7). A beat the real claim refuses (`taken`, `replaced`) throws, naming the answer. */
+export async function pairPresentPhone(
+  fixtureId: string, opts: { phone?: string; at?: Date } = {},
+): Promise<{ codeId: string; pairingId: string; phone: string }> {
+  const activeCode = async () => (await sql<{ id: string; org_id: string; code: string }[]>`
+    select id, org_id, code from fixture_stream_codes where fixture_id = ${fixtureId} and ended_at is null`)[0] ?? null;
+  let code = await activeCode();
+  let tok: string | null = null;
+  if (!code) {
+    const [fx] = await sql<{ org_id: string }[]>`
+      select c.org_id from fixtures f join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
+       where f.id = ${fixtureId}`;
+    if (!fx) throw new Error(`pairPresentPhone: no fixture ${fixtureId}`);
+    const issuer: AuthCtx = { orgId: fx.org_id, via: "session", userId: await rigUser(), role: "owner", keyId: null };
+    tok = (await ensureStreamCode(issuer, fixtureId)).qr.tok;
+    code = await activeCode();
+    if (!code) throw new Error(`pairPresentPhone: ensureStreamCode left fixture ${fixtureId} with no active code`);
+  }
+  const codeId = code.id;
+  tok ??= (await sql.begin((tx) => openStreamCodeTok(tx, codeId))) as string | null;
+  if (tok === null) throw new Error(`pairPresentPhone: the active code of fixture ${fixtureId} has no tok that opens under RELAY_KEK`);
+  const at = opts.at ?? new Date();
+  const currentOf = async () => (await sql<{ id: string; phone: string }[]>`
+    select id, phone from fixture_stream_pairings where code_id = ${codeId} and slot = 0 and ended_at is null`)[0] ?? null;
+  const before = await currentOf();
+  const phone = before?.phone ?? opts.phone ?? `rig-phone-${fixtureId}`;
+  const deps: SessionDeps = { drivers: NO_DRIVERS, now: () => at, appUrl: "http://rig.test" };
+  const answer = await postBeat(code.code, tok, {
+    code: code.code, slot: 0, phone, claim: before ? null : "new", device: null, sid: null, at: at.toISOString(),
+    state: "paired", cause: null, notReady: null, startFailed: null, stopped: null, mode: "operator", transport: null,
+    bitrateKbps: null, delivery: "unknown", deliveredLagS: null, audioOk: null, battery: null, thermal: null,
+    dataUsedMB: null, appVersion: "session-rig",
+  }, deps, at);
+  if (answer.state === "taken" || answer.state === "replaced") {
+    throw new Error(`pairPresentPhone: the real ${before ? "beat" : "claim"} for ${phone} on fixture ${fixtureId} answered ${answer.state}`);
+  }
+  const p = await currentOf();
+  if (!p) throw new Error(`pairPresentPhone: the beat answered ${answer.state} and left fixture ${fixtureId} with no current pairing`);
+  return { codeId, pairingId: p.id, phone: p.phone };
 }

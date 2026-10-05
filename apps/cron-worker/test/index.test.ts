@@ -52,9 +52,10 @@ describe("worker.scheduled", () => {
   });
 
   it("an unknown trigger is refused by name and calls nothing", async () => {
+    // "*/7": a well-formed trigger no row names ("*/5" is stream-tick's since T7b).
     const net = stubNetwork(0);
-    await worker.scheduled!(controller("*/5 * * * *", MONDAY_0817), env);
+    await worker.scheduled!(controller("*/7 * * * *", MONDAY_0817), env);
     expect(net.done).toEqual([]);
-    expect(net.lines).toEqual([expect.objectContaining({ event: "unknown-trigger", cron: "*/5 * * * *" })]);
+    expect(net.lines).toEqual([expect.objectContaining({ event: "unknown-trigger", cron: "*/7 * * * *" })]);
   });
 });

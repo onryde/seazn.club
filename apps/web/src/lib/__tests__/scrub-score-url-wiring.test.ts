@@ -137,6 +137,33 @@ describe("Sentry server (sentry.server.config.ts, loaded by instrumentation.ts o
     expect(vi.mocked(Sentry.pinoIntegration)).toHaveBeenCalledTimes(1);
   });
 
+  // A18 (capture QR v2 §10.2), through the REAL beforeSend the server config hands the SDK.
+  it("a capture route's error event loses its code, its Bearer and its body; a non-capture route keeps URL and body (the positive pair)", async () => {
+    const options = await sentryInitOptions("../../../sentry.server.config");
+    const CODE = "k3m9p2q7r4t8";
+    const TOK = "Zm9vYmFyYmF6cXV4cXV1eA";
+    const capture = {
+      event_id: "c1",
+      request: {
+        method: "POST",
+        url: `https://seazn.club/api/v1/capture/codes/${CODE}/beats`,
+        headers: { authorization: `Bearer ${TOK}` },
+        data: JSON.stringify({ code: CODE, phone: "phone-x-0123456789" }),
+      },
+    };
+    const out = run(options.beforeSend, capture, {}) as { request: { url: string; headers: Record<string, string>; data?: unknown } };
+    expect(JSON.stringify(out)).not.toContain(CODE);
+    expect(JSON.stringify(out)).not.toContain(TOK);
+    expect(out.request.url).toBe("https://seazn.club/api/v1/capture/codes/[code]/beats");
+    expect(out.request.headers.authorization).toBe("Bearer [tok]");
+    expect(Object.hasOwn(out.request, "data")).toBe(false);
+    const other = {
+      event_id: "o1",
+      request: { method: "POST", url: "https://seazn.club/api/v1/fixtures/f1/stream-sessions", data: JSON.stringify({ targetId: "t1" }) },
+    };
+    expect(run(options.beforeSend, structuredClone(other), {})).toEqual(other);
+  });
+
   it("drops Fly's health-check transactions but still sends an error from that route", async () => {
     const options = await sentryInitOptions("../../../sentry.server.config");
     expect(run(options.beforeSendTransaction, healthCheckTransaction(), {})).toBeNull();

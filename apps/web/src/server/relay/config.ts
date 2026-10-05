@@ -147,6 +147,9 @@ export const RUNNER_MAX_ATTEMPTS = 2;
 export const RUNNER_STOP_SIGNAL = "SIGINT" as const;
 /** §5.2: a consume row for the same fixture within 24 h → no second consume. */
 export const CREDIT_REUSE_HOURS = 24;
+/** W23 (capture QR v2, owner 2026-10-01): inside one reuse window, the first THREE restarts that reach video are free;
+ *  the 4th pays at live and opens a new window (O4). domain/credits.ts `restartIsFree` is the rule. */
+export const FREE_RESTARTS_PER_WINDOW = 3;
 /** §9.1: SRT buffer 1.5–2.5 s, pinned; carried in the QR payload as latencyMs. */
 export const SRT_LATENCY_MS = 2000;
 /** m-c (B5 re-review 3; controller ruling 2026-10-01): how many CONSECUTIVE failed outputs reads (`outputState` → null,
@@ -160,6 +163,40 @@ export const OUTPUT_READ_FAILURES_BEFORE_REPORT = 6;
 /** Ruling R-A / C14: a discriminator the phone obeys; asserts NOTHING about
  *  which leg is production primary — R3 rules that, and this is the config line. */
 export const QR_PREFERRED_DEFAULT: "srt" | "rtmps" = "srt";
+
+/** Capture QR v2 §6.4 / §6.15 (W15, W21): the three ingest settings the phone's descriptor reads. Each is read at the
+ *  request, never cached, so a test (and an operator) can flip it. Typed `Record<…>` for the reason `tunable` gives. */
+const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
+function hostSetting(name: "STREAM_INGEST_HOST" | "STREAM_PLAYBACK_HOST", env: Record<string, string | undefined>): string | null {
+  const v = env[name]?.trim();
+  if (!v) return null;
+  // A bare hostname only: a scheme, port or path here would be served inside a URL the phone dials.
+  if (!HOST_RE.test(v)) throw new Error(`${name} must be a bare hostname (no scheme, port or path), got ${JSON.stringify(v)}`);
+  return v;
+}
+/** W15: the environment's RTMPS ingest host (`live.seazn.club`, `live.stg.seazn.club`). Unset or blank (local, CI) =
+ *  null, and Cloudflare's own host is served. */
+export function streamIngestHost(env: Record<string, string | undefined> = process.env): string | null {
+  return hostSetting("STREAM_INGEST_HOST", env);
+}
+/** The fake driver's playback host (§6.15: local and CI serve "the fake driver's value"). `.invalid` never resolves. */
+export const FAKE_PLAYBACK_HOST = "playback.fake.invalid";
+/** W14: the Stream customer host `playbackUrl` is built on. Unset under the FAKE driver = FAKE_PLAYBACK_HOST. Unset
+ *  under any other mode = null: a real-driver deployment without it answers 503 (`playback_unconfigured`), because a
+ *  guessed host would be a lie (§6.15). */
+export function streamPlaybackHost(env: Record<string, string | undefined> = process.env): string | null {
+  const v = hostSetting("STREAM_PLAYBACK_HOST", env);
+  if (v !== null) return v;
+  return relayDriverMode(env) === "fake" ? FAKE_PLAYBACK_HOST : null;
+}
+/** W21: SRT is offered by DEFAULT — unset or blank means on. `false` is A18's safety net (the descriptor then carries
+ *  `cred.srt: null` and `preferred: "rtmps"`). Anything but true/false throws, naming the variable. */
+export function srtEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  const v = env.STREAM_SRT_ENABLED?.trim().toLowerCase();
+  if (!v || v === "true") return true;
+  if (v === "false") return false;
+  throw new Error(`STREAM_SRT_ENABLED must be "true" or "false" (unset = true), got ${JSON.stringify(env.STREAM_SRT_ENABLED)}`);
+}
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 
@@ -307,4 +344,58 @@ export function liveRunnerIdentity(env: Record<string, string | undefined> = pro
   const environment = envNameOf(env);
   if (!environment) throw new Error(ENV_NAME_MISSING);
   return { app, environment };
+}
+
+// ---- Capture QR v2 (spec docs/superpowers/specs/2026-10-01-capture-qr-v2-design.md) -----------------------------
+// config.test.ts reads each figure back out of the spec, so a change here that the spec does not make reds.
+
+/** C2 (§5.1): a finished fixture's code expires this long after `finished_at`, unless a session is open. */
+export const CODE_GRACE_AFTER_FINISH_MINUTES = 120;
+/** A14, T4 (§6.5): a live phone may be taken over after this long with no beat AND no video. */
+export const DEAD_PHONE_TAKEOVER_SECONDS = 60;
+/** §6.9: silent = no beat for max(this floor, the answered cadence + the slack). */
+export const PHONE_SILENT_FLOOR_SECONDS = 60;
+/** §6.9: the margin a real phone needs past its cadence. Deliberately NOT tunable (plan R10): only the floor shortens. */
+export const PHONE_SILENT_SLACK_SECONDS = 30;
+/** §6.9 (W8): a held phone is not responding after this many answered cadences with no beat. */
+export const NOT_RESPONDING_BEATS = 3;
+/** §6.6 (W17): the cadences the beat answer tells the phone. */
+export const POLL_STARTING_SECONDS = 5;
+export const POLL_NEAR_SECONDS = 10;
+export const POLL_FAR_SECONDS = 60;
+/** §6.6: with no session, the near cadence starts this long before `scheduled_at`. */
+export const POLL_NEAR_WINDOW_MINUTES = 30;
+/** W19 (§6.8.5): a live phone stream whose phone is gone ends after this long with no beat and no video. */
+export const PHONE_LOST_LIVE_MINUTES = 15;
+/** W10 (§6.10): how long the phone-beat history is kept. */
+export const PHONE_BEAT_RETENTION_HOURS = 24;
+/** W24 (§6.12): the hold before the panel's countdown starts, with no video (and, live, no beat). */
+export const RECONNECT_QUIET_SECONDS = 30;
+/** W9 (§7.4): the phone-health line's thresholds. */
+export const LOW_BATTERY_PERCENT = 20;
+export const HOT_THERMAL_STATUS = 3;
+
+/** §6.15 / AGENTS.md #20: the timings a walkthrough may shorten, so A14, ask 10 and W19 run in seconds. */
+export const TUNABLE_NAMES = [
+  "DEAD_PHONE_TAKEOVER_SECONDS", "PHONE_LOST_LIVE_MINUTES", "PHONE_SILENT_FLOOR_SECONDS", "CODE_GRACE_AFTER_FINISH_MINUTES",
+] as const;
+export type TunableName = (typeof TUNABLE_NAMES)[number];
+/** The ENV_NAMEs an override is honoured under: a developer's machine and CI. Never a deployment, never unset. */
+export const TUNABLE_ENV_NAMES: readonly string[] = [LOCAL_ENV_NAME, "ci"];
+
+/** §6.15 / AGENTS.md #20: an override is honoured ONLY when ENV_NAME ∈ {local, ci}; every guard pins the DEFAULT.
+ *  An unset or blank variable is the fallback (never `Number("")` = 0). Under local/ci a value that is not a positive
+ *  whole number THROWS, naming the variable: a typo that silently ran the default would surface as a walkthrough
+ *  blowing its budget, which reports itself as a data defect (AGENTS.md #20). */
+// `env` is typed as relayDriverMode's is: Next augments NodeJS.ProcessEnv with a required NODE_ENV, which a test's
+// literal environment does not carry. process.env is assignable either way.
+export function tunable(name: TunableName, fallback: number, env: Record<string, string | undefined> = process.env): number {
+  const where = envNameOf(env);
+  if (where === null || !TUNABLE_ENV_NAMES.includes(where)) return fallback;
+  const raw = env[name]?.trim();
+  if (!raw) return fallback;
+  if (!/^\d+$/.test(raw) || Number(raw) <= 0) {
+    throw new Error(`${name}=${JSON.stringify(raw)} is not a positive whole number (ENV_NAME=${where} honours the override; unset it to run the default ${fallback})`);
+  }
+  return Number(raw);
 }

@@ -59,4 +59,18 @@ describe("handler (lib/http.ts)", () => {
       logged.mockRestore();
     }
   });
+
+  // Capture QR v2 §10.4 / A15: the limiter's Retry-After rides HttpError.headers; handler() must put them on the wire.
+  it("copies HttpError.headers onto the response (the limiter's Retry-After); an HttpError with none sets none", async () => {
+    const limited = await handler(async () => {
+      throw new HttpError(429, "slow down", undefined, undefined, { "Retry-After": "17" });
+    });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("17");
+    const plain = await handler(async () => {
+      throw new HttpError(409, "conflict");
+    });
+    expect(plain.status).toBe(409);
+    expect(plain.headers.get("retry-after")).toBeNull();
+  });
 });

@@ -36,6 +36,9 @@ export interface Job {
 /** The hourly trigger. Daily and weekly rows hang off it, and it alone runs the inactive probe. */
 export const TRIGGER_CRON = "17 * * * *";
 
+/** Capture QR v2 §6.11 (W22): stream-tick's own trigger. With the hourly one, 2 per env, 4 of the Free plan's 5. */
+export const STREAM_TICK_CRON = "*/5 * * * *";
+
 export const JOBS: readonly Job[] = [
   { id: "registrations", path: "/api/cron/registrations", trigger: TRIGGER_CRON, due: { kind: "every" }, retry: true, manual: true },
   {
@@ -86,6 +89,19 @@ export const JOBS: readonly Job[] = [
     retry: false,
     manual: true,
   },
+  // Capture QR v2 T7b (§6.11, W22): ticks every open stream session so a phone that dies with no panel open is
+  // still ended (ask 10, W19). Never retried: its next firing, 5 minutes later, IS the retry, and a re-send could
+  // overlap a pass still running server-side. `failed` counts sessions whose tick threw; `deferred` (the budget ran
+  // out) is not a failure, because the next firing reaches them.
+  {
+    id: "stream-tick",
+    path: "/api/cron/stream-tick",
+    trigger: STREAM_TICK_CRON,
+    due: { kind: "every" },
+    retry: false,
+    manual: true,
+    failureCounts: ["data.failed"],
+  },
 ];
 
 /** Every distinct trigger the table uses: what wrangler.json must register. */
@@ -102,6 +118,22 @@ function isDue(due: Due, t: Date): boolean {
     case "weekly":
       return t.getUTCDay() === due.weekdayUtc && t.getUTCHours() === due.hourUtc;
   }
+}
+
+/**
+ * R2 (option S, controller 2026-10-01): is `t` the FIRST firing of `trigger` in its UTC hour? A job that keeps
+ * failing on a fast trigger raises one Sentry event per hour, from this slot only; the others log
+ * `sentryThrottled`. Keyed on the SCHEDULED time, like `dueJobs`, so a late invocation is judged by its own slot.
+ * Only the two shapes the table uses are understood: the hourly trigger (every firing is its hour's first) and
+ * `*\/N * * * *` with N in 1..59. Any other shape is refused by name, never guessed: a wrong answer here is either
+ * an alert storm or a silent hour.
+ */
+export function firstSlotOfHour(trigger: string, t: Date): boolean {
+  if (trigger === TRIGGER_CRON) return true;
+  const m = /^\*\/(\d{1,2}) \* \* \* \*$/.exec(trigger);
+  const n = m ? Number(m[1]) : NaN;
+  if (!(n >= 1 && n <= 59)) throw new Error(`firstSlotOfHour: cannot judge trigger ${JSON.stringify(trigger)}`);
+  return t.getUTCMinutes() < n;
 }
 
 /** The rows one firing runs, in table order. The firing TRIGGER picks the

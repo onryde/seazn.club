@@ -5,6 +5,7 @@
 // persist `next`, log `events`, run `effects` through the ports. No I/O, no
 // clock: `now` is an argument. Domain events are records in an array — there
 // is no bus, because nothing present subscribes.
+import type { DbEndReason } from "./end-reason";
 import type { Expiry } from "./expiry";
 import {
   stepRunner, type Runner, type RunnerEffect, type RunnerFailReason, type RunnerState, type RunnerTrigger,
@@ -41,7 +42,7 @@ export interface Session {
   // fixtureId is NULL once the fixture is deleted (V410: `on delete set null`) — the session, its money and
   // its history outlive the fixture and it ends through the normal commands. Nothing in this file reads it.
   id: string; fixtureId: string | null; orgId: string; mode: Mode; state: SessionState;
-  desiredState: "live" | "ending"; failReason: FailReason | null; endReason: "stopped" | "max_duration" | null;
+  desiredState: "live" | "ending"; failReason: FailReason | null; endReason: DbEndReason | null;
   runner: Runner;
   runnerRetries: number; createdAt: Date; startedAt: Date | null; endedAt: Date | null;
   heartbeatAt: Date | null; endingAt: Date | null; maxDurationMinutes: number;   // endingAt: when ending BEGAN — the ending backstop's anchor (F22), persisted as ending_at
@@ -55,19 +56,36 @@ export interface Session {
    *  stopped in `requested` or `provisioning` also passes through `ending`, so the STATE alone cannot say an output exists.
    *  Only the usecase writes it; `decide` never changes it. */
   outputUid: string | null;
+  /** Capture QR v2 §5.3: who started it — set at creation, never changed. */
+  startCause: StartCause;
+  /** §5.3 (A8): when the session ENTERED warming (persisted as warming_at). The warming timeout runs from here, so time
+   *  spent provisioning no longer eats the phone's pre-flight window. Null for a session not yet warming — and for every
+   *  session opened before V430, which is why expiry.ts falls back to createdAt. Only the usecase writes it. */
+  warmingAt: Date | null;
 }
+
+/** §5.3: the three ways a broadcast starts (V430's start_cause check). */
+export type StartCause = "organiser" | "operator" | "automatic";
+/** §5.3: a stop's reason — every DB end reason except the wall clock's, which only `expire` decides. */
+export type StopReason = Exclude<DbEndReason, "max_duration">;
 
 // ---- admission (§6.3 order, amended by owner ruling 2026-09-29 (F-A5): active_session moves up to directly after the
 // plan gates; E5: storage_exhausted is a refusal, never a state)
-export type AdmitRefusal = "plan_lacks_overlay" | "overlay_required" | "plan_lacks_relay" | "no_credits" | "target_not_found" | "storage_exhausted" | "active_session";
+export type AdmitRefusal = "plan_lacks_overlay" | "overlay_required" | "plan_lacks_relay" | "no_credits" | "target_not_found" | "storage_exhausted" | "active_session" | "phone_not_paired";
 export interface AdmitInput {
   overlay: boolean; relay: boolean; balance: number; targetBelongsToOrg: boolean;
   headroomMinutes: number; maxDurationMinutes: number; activeSessionId: string | null;
-  /** §5.2 "a restart after a failure is the same match": this FIXTURE already consumed inside the reuse window, so the
-   *  start will cost nothing and the balance gate does not apply to it (orchestrator ruling 2026-09-28, Task 10 I2). The
-   *  usecase computes it from the ledger through stream-credits.ts's `reuseWindowOpen` — the same authority
-   *  consumeForSession asks — and the domain stays pure. Required, so no caller can forget it and silently refuse. */
+  /** §5.2 "a restart after a failure is the same match", bounded by W23 (capture QR v2 T6b): this start is a FREE
+   *  restart — inside the reuse window of a consume that stands, with fewer than FREE_RESTARTS_PER_WINDOW restarts
+   *  counted since that anchor — so it will cost nothing and the balance gate does not apply to it (orchestrator ruling
+   *  2026-09-28, Task 10 I2). A 4th restart is an ordinary paid start: false here, and the balance gate answers it. The
+   *  usecase computes it through stream-credits.ts's `restartAllowance(...).free` — the same authority consumeForSession
+   *  asks at go-live — and the domain stays pure. Required, so no caller can forget it and silently refuse. */
   restartWithinReuseWindow: boolean;
+  /** Capture QR v2 W5 / T10 (§6.7.1): slot 0's current pairing is present (§6.9). The organiser's Go live asks it of the
+   *  fixture's code; the phone's start and the auto start pass true — the caller IS the current phone. Required, so no
+   *  start path can forget it. */
+  phonePresent: boolean;
 }
 export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: AdmitRefusal; activeSessionId?: string } {
   if (i.relay && !i.overlay) return { ok: false, refusal: "overlay_required" };  // r5: the implication check
@@ -77,6 +95,9 @@ export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: Admit
   // storage are weighed — "already running" is the truth; "no credits" or "storage full" would send the organiser the
   // wrong way while their stream is up.
   if (i.activeSessionId) return { ok: false, refusal: "active_session", activeSessionId: i.activeSessionId };
+  // W5 (§6.7.1, F-A5 kept): nothing to stream from outranks what it would cost — the organiser is sent to pair a phone
+  // before being sold credits.
+  if (!i.phonePresent) return { ok: false, refusal: "phone_not_paired" };
   if (i.balance < 1 && !i.restartWithinReuseWindow) return { ok: false, refusal: "no_credits" };   // I2: ONLY this gate is waived
   if (!i.targetBelongsToOrg) return { ok: false, refusal: "target_not_found" };
   if (i.headroomMinutes < i.maxDurationMinutes) return { ok: false, refusal: "storage_exhausted" };
@@ -87,14 +108,14 @@ export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: Admit
 export type Command =
   | { type: "provision" } | { type: "provisioned" }
   | { type: "ingest_connected" } | { type: "credit_refused" }
-  | { type: "target_rejected" } | { type: "stop" } | { type: "complete" }
+  | { type: "target_rejected" } | { type: "stop"; reason: StopReason } | { type: "complete" }
   | { type: "relay_disabled" }
   | { type: "expire"; expiry: Expiry }
   | { type: "runner"; trigger: RunnerTrigger };
 
 export type DomainEvent =
   | { type: "SessionProvisioning" } | { type: "SessionWarming" }
-  | { type: "SessionWentLive" } | { type: "SessionEnding"; endReason: "stopped" | "max_duration" } | { type: "RunnerRetried"; attempt: number }
+  | { type: "SessionWentLive" } | { type: "SessionEnding"; endReason: DbEndReason } | { type: "RunnerRetried"; attempt: number }
   | { type: "RunnerChanged"; from: RunnerState; to: RunnerState; trigger: RunnerTrigger["type"] }
   | { type: "SessionEnded"; reason: "completed" | FailReason };
 
@@ -181,7 +202,7 @@ function complete(s: Session, now: Date): Decision {
 
 /** Passthrough only: nothing to flush, so ending completes NOW. A composed
  *  session's ending is the RUNNER's (the stop sequence in ./runner). */
-function ending(s: Session, endReason: "stopped" | "max_duration", now: Date): Decision {
+function ending(s: Session, endReason: DbEndReason, now: Date): Decision {
   return { next: { ...s, state: "ending", desiredState: "ending", endReason, endingAt: now }, events: [{ type: "SessionEnding", endReason }], effects: [{ type: "complete_now" }] };
 }
 
@@ -333,12 +354,14 @@ function decideCell(s: Session, c: Command, now: Date): Decision {
       if (s.state !== "warming" && s.state !== "live") throw illegal();
       return fail(s, "target_rejected", now);
     case "stop":
+      // §5.3: `ending × stop` stays identity — the FIRST reason wins.
       if (s.state === "ending") return identity(s);
-      if (s.mode === "passthrough") return ending(s, "stopped", now);
+      if (s.mode === "passthrough") return ending(s, c.reason, now);
       // P1-F-a — composed with NO live Machine (none: never asked for; destroyed: between attempts): nothing to flush, complete NOW.
-      if (s.runner.state === "none" || s.runner.state === "destroyed") return complete({ ...s, endReason: "stopped" }, now);
+      if (s.runner.state === "none" || s.runner.state === "destroyed") return complete({ ...s, endReason: c.reason }, now);
       // creating: the table marks the stop and the session goes ending; booting/playing: SIGINT; stopping/exited/lost: the table.
-      return runner(s, { type: "session_stop" }, now, illegal);
+      // The reason rides the trigger so the runner's ending/completed signal carries THIS stop's reason.
+      return runner(s, { type: "session_stop", reason: c.reason }, now, illegal);
     case "complete":
       if (s.state !== "ending" && s.state !== "live") throw illegal();
       return complete(s, now);
@@ -363,7 +386,12 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
   switch (e.kind) {
     case "none": return identity(s);
     case "warming_timeout":
-      if (s.state !== "warming") throw illegal();
+      // m-5 (controller ruling, capture QR v2 T7): a PASSTHROUGH session that is live with no first ingest recorded is
+      // judged by the warming rule — failed no_inbound_timeout at its warming deadline. `first_ingest_at` is not a
+      // domain field, so the use-case decides WHEN (stream-sessions.ts `tickSession`); the domain admits the cell.
+      // Composed live stays refused: a composed session never records first ingest (only the passthrough poll writes
+      // it), so the same rule would fail EVERY composed broadcast at its warming deadline.
+      if (s.state !== "warming" && !(s.state === "live" && s.mode === "passthrough")) throw illegal();
       // A composed session that never reported playing: tear the Machine down, then fail with the boot reason.
       if (s.mode === "composed" && s.runner.state !== "none") {
         const torn = runner(s, { type: "session_stop" }, now, illegal);

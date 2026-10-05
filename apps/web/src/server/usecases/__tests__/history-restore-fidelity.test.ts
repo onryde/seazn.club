@@ -98,6 +98,14 @@ async function wholeRows(column: "stage_id" | "pool_id", id: string): Promise<Ro
   });
 }
 
+/** finished_at of every fixture in a stage, at MICROSECOND precision, by fixture id. */
+async function finishedStampsUs(stageId: string): Promise<Map<string, string | null>> {
+  const rows = await sql<{ id: string; us: string | null }[]>`
+    select id, (extract(epoch from finished_at) * 1000000)::bigint::text as us
+    from fixtures where stage_id = ${stageId} order by id`;
+  return new Map(rows.map((r) => [r.id, r.us]));
+}
+
 /** What each restored column holds when a restore does NOT write it: its
  *  insert default. A scene only witnesses a column if some row differs. */
 const DROPPED_VALUE: Record<string, unknown> = {
@@ -119,6 +127,9 @@ const DROPPED_VALUE: Record<string, unknown> = {
   venue_id: null,
   schedule_locked: false,
   schedule_source: "none",
+  // V430: null on an unfinished row. A FINISHED row a restore does not write it for is stamped
+  // now() by the insert trigger instead — a drop shows as a later stamp, not as this null.
+  finished_at: null,
 };
 
 /** The scene is not vacuous for `cols`: each has a value a drop would lose. */
@@ -231,7 +242,7 @@ describe.skipIf(!HAS_DB)("restoring an undone generation re-inserts every row ex
       n: 6,
       kind: "knockout" as const,
       config: { thirdPlace: true },
-      witnesses: ["ext_key", "status", "outcome", "third_place", "away_slot_label"],
+      witnesses: ["ext_key", "status", "outcome", "third_place", "away_slot_label", "finished_at"],
     },
   ])("$name — and a regeneration after it recognises every row and changes nothing", async ({ n, kind, config, witnesses }) => {
     const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(n, kind, config);
@@ -289,6 +300,54 @@ describe.skipIf(!HAS_DB)("restoring an undone generation re-inserts every row ex
     await undoThenRestore(auth, divisionId, mainId, laterId);
 
     expect(await codesOf()).toEqual(generated);
+  });
+
+  // C-2 (B3 review, V430). A bye's award is FINISHED at generation, so V430's trigger stamps its
+  // finished_at then. The restore re-inserts the row with the snapshot's own stamp, and the
+  // trigger keeps a supplied one: the stream code's grace (finished_at + 120 min) still runs
+  // from when the row really finished, not from the Undo. Microseconds, read in SQL — a JS Date
+  // rounds to the millisecond and would call two stamps in one millisecond equal.
+  it("a restored finished row keeps the finished_at it was generated with — the restore does not re-stamp it", async () => {
+    const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(6, "knockout", { thirdPlace: true });
+    const before = await finishedStampsUs(mainId);
+    const stamped = [...before.values()].filter((us): us is string => us !== null);
+    expect(stamped.length, "the knockout of 6 has byes, finished at generation").toBeGreaterThan(0);
+    const [{ us: restoreFloor }] = await sql<{ us: string }[]>`
+      select (extract(epoch from clock_timestamp()) * 1000000)::bigint::text as us`;
+    // Not vacuous: a re-stamp at the restore would read LATER than every original stamp.
+    for (const us of stamped) expect(BigInt(us) < BigInt(restoreFloor!)).toBe(true);
+
+    await undoThenRestore(auth, divisionId, mainId, laterId);
+
+    expect(await finishedStampsUs(mainId)).toEqual(before);
+  });
+
+  // The empty case: a snapshot a ledger already holds from before V430 carries no finished_at.
+  // Its finished rows restore with the column's insert behaviour — stamped by the trigger at the
+  // restore, never null in a finished status — exactly as every other column a legacy snapshot
+  // lacks restores with its default.
+  it("a snapshot written before finished_at rode along still restores: its finished rows are stamped at the restore", async () => {
+    const { auth, divisionId, mainId, laterId } = await seedGeneratedStage(6, "knockout", { thirdPlace: true });
+    const before = await finishedStampsUs(mainId);
+    const finishedIds = [...before].filter(([, us]) => us !== null).map(([id]) => id);
+    expect(finishedIds.length).toBeGreaterThan(0);
+    const checkpoint = await createCheckpoint(auth, divisionId, "generated");
+    expect((await undoDivision(auth, divisionId)).applied.type).toBe("fixtures_cleared");
+    const stripped = await sql`
+      update division_events
+         set payload = jsonb_set(payload, '{fixtures}',
+               (select jsonb_agg(f - 'finished_at') from jsonb_array_elements(payload->'fixtures') f))
+       where division_id = ${divisionId} and type = 'fixtures_cleared'
+         and exists (select 1 from jsonb_array_elements(payload->'fixtures') f where f ? 'finished_at')`;
+    expect(stripped.count, "the snapshot carried finished_at before it was stripped").toBe(1);
+    await generateStageFixtures(auth, laterId);
+    const [{ us: restoreFloor }] = await sql<{ us: string }[]>`
+      select (extract(epoch from clock_timestamp()) * 1000000)::bigint::text as us`;
+    expect(await restoreCheckpoint(auth, divisionId, checkpoint.id, true)).toMatchObject({ steps: 2 });
+
+    const after = await finishedStampsUs(mainId);
+    expect([...after].filter(([, us]) => us !== null).map(([id]) => id).sort()).toEqual([...finishedIds].sort());
+    for (const id of finishedIds) expect(BigInt(after.get(id)!) >= BigInt(restoreFloor!), id).toBe(true);
   });
 
   // The other side of the knockout-of-6 case: a verdict recorded by PLAY is a

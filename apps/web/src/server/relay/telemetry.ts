@@ -13,7 +13,10 @@ import { pathTemplate, sanitise } from "./sanitise";
 // the pooled client's type, as in audit.ts / registrations.ts's AnySql.
 type Exec = postgres.Sql | Tx;
 
-export type EventSource = "domain" | "runner" | "ingest" | "output" | "sweep" | "webhook" | "admin" | "client";
+/** Every `fixture_stream_events.source` this module writes — a RUNTIME list so stream-contract.test.ts can pin it against
+ *  the folded CHECK in both directions (A6). `phone` (capture QR v2): the phone's own calls and an operator start. */
+export const EVENT_SOURCES = ["domain", "runner", "ingest", "output", "sweep", "webhook", "admin", "client", "phone"] as const;
+export type EventSource = (typeof EVENT_SOURCES)[number];
 export type EventKind = "event" | "transition" | "runner_transition" | "observed" | "effect" | "action";
 
 export interface EventInput {

@@ -8,17 +8,21 @@ import {
 import { evaluate, type Expiry } from "../expiry";
 import {
   ACTIVE_STATES, InvalidTransition, TERMINAL_STATES, admit, decide, eventRowsOf, isActive, isTerminal,
-  type Command, type Effect, type Session, type SessionState,
+  type Command, type Effect, type Session, type SessionState, type StopReason,
 } from "../session";
-import { InvalidRunnerTransition, OBSERVED_STATES, RUNNER_NONE, RUNNER_STATES, RUNNER_TRIGGER_TYPES, type Runner, type RunnerTrigger } from "../runner";
+import { DB_END_REASONS } from "../end-reason";
+import {
+  InvalidRunnerTransition, OBSERVED_STATES, RUNNER_NONE, RUNNER_STATES, RUNNER_TABLE, RUNNER_TRIGGER_TYPES, type Runner, type RunnerState, type RunnerTrigger,
+} from "../runner";
 
 const T0 = new Date("2026-09-14T10:00:00Z");
 const S = (over: Partial<Session> = {}): Session => ({
   id: "s1", fixtureId: "f1", orgId: "o1", mode: "passthrough", state: "requested", desiredState: "live",
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
-  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null, ...over,
+  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null,
+  startCause: "organiser", warmingAt: null, ...over,
 });
-const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false };
+const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false, phonePresent: true };
 
 // The §6.3 gates IN ORDER — one row per gate: the fields that trip it, and the refusal it yields. Shared by the
 // per-gate `it.each` and the whole-ladder ORDER test, so the order is typed once. Order amended by owner ruling
@@ -29,6 +33,7 @@ const REFUSAL_LADDER = [
   [{ overlay: false, relay: true }, "overlay_required"],       // r5: relay without overlay is the implication check
   [{ relay: false }, "plan_lacks_relay"],
   [{ activeSessionId: "s0" }, "active_session"],
+  [{ phonePresent: false }, "phone_not_paired"],             // W5 / T10 (capture QR v2 §6.7.1): after active_session, before credits
   [{ balance: 0 }, "no_credits"],
   [{ targetBelongsToOrg: false }, "target_not_found"],
   [{ headroomMinutes: 299 }, "storage_exhausted"],           // C3: headroom < max_duration refuses
@@ -61,7 +66,7 @@ describe("admit — the §6.3 gates, in order", () => {
         expect(admit({ ...OK, ...a, ...b }), `${earlier} beside ${later}`).toMatchObject({ ok: false, refusal: earlier });
       }
     }
-    expect(pairs).toBe(19);   // C(7,2) = 21, minus overlay_required beside plan_lacks_overlay and beside plan_lacks_relay
+    expect(pairs).toBe(26);   // C(8,2) = 28, minus overlay_required beside plan_lacks_overlay and beside plan_lacks_relay
   });
   it("F-A5 (owner 2026-09-29): a second start on a match already streaming is told so even when STORAGE is exhausted — active_session, not storage_exhausted", () => {
     expect(admit({ ...OK, activeSessionId: "s0", headroomMinutes: 0 })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
@@ -70,6 +75,16 @@ describe("admit — the §6.3 gates, in order", () => {
   it("F-A5 (owner 2026-09-29): …and even at balance 0 with no reuse window — active_session, not no_credits", () => {
     expect(admit({ ...OK, activeSessionId: "s0", balance: 0, restartWithinReuseWindow: false })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
     expect(admit({ ...OK, activeSessionId: null, balance: 0, restartWithinReuseWindow: false }), "the positive pair: no running session → no_credits").toMatchObject({ refusal: "no_credits" });
+  });
+  it("W5 ORDER differential (§6.7.1): no present phone AND no credits → phone_not_paired, never no_credits; a running session AND no phone → active_session; each with its positive pair", () => {
+    expect(admit({ ...OK, phonePresent: false, balance: 0, restartWithinReuseWindow: false })).toEqual({ ok: false, refusal: "phone_not_paired" });
+    expect(admit({ ...OK, phonePresent: true, balance: 0, restartWithinReuseWindow: false }), "the phone back: the credit gate answers").toMatchObject({ refusal: "no_credits" });
+    expect(admit({ ...OK, phonePresent: false, activeSessionId: "s0" })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
+    expect(admit({ ...OK, phonePresent: false, activeSessionId: null })).toEqual({ ok: false, refusal: "phone_not_paired" });
+    // A plan gate still outranks the phone: an org that cannot stream is told that first.
+    expect(admit({ ...OK, phonePresent: false, relay: false })).toMatchObject({ refusal: "plan_lacks_relay" });
+    // The reuse waiver is the BALANCE gate's alone — it never waives the phone.
+    expect(admit({ ...OK, phonePresent: false, balance: 0, restartWithinReuseWindow: true })).toEqual({ ok: false, refusal: "phone_not_paired" });
   });
   it("active_session carries the running id", () => {
     expect(admit({ ...OK, activeSessionId: "s0" })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
@@ -127,10 +142,10 @@ describe("decide — legal edges", () => {
     expect(l.next).toMatchObject({ state: "failed", failReason: "target_rejected", endedAt: T0 });
   });
   it("stop: passthrough live/warming → ending with desired_state ending and end_reason stopped, completing NOW; a composed stop WITH a Machine is the runner's (Task 2C's tests)", () => {
-    const p = decide(S({ state: "live", startedAt: T0 }), { type: "stop" }, T0);
+    const p = decide(S({ state: "live", startedAt: T0 }), { type: "stop", reason: "stopped" }, T0);
     expect(p.next).toMatchObject({ state: "ending", desiredState: "ending", endReason: "stopped" });
     expect(p.effects).toEqual([{ type: "complete_now" }]);
-    expect(decide(S({ state: "warming" }), { type: "stop" }, T0).next.state).toBe("ending");
+    expect(decide(S({ state: "warming" }), { type: "stop", reason: "stopped" }, T0).next.state).toBe("ending");
   });
   it("stop: a composed session with NO live Machine — runner none (stopped before any create) or destroyed (between attempts) — completes NOW with end_reason stopped, no runner step (P1-F-a; mutant: delete the no-Machine branch → red)", () => {
     // The third column is the replay fill: only a session that went live (startedAt set) has a broadcast to replay (I3).
@@ -139,17 +154,93 @@ describe("decide — legal edges", () => {
       ["destroyed", S({ state: "live", mode: "composed", startedAt: T0, runner: { ...RUNNER_NONE, state: "destroyed", attempt: 1, name: "relay-s1-r1", machineId: "m1", lastExit: { exitCode: 1, oomKilled: false, requestedStop: false } } }), [{ type: "fill_replay" }]],
     ];
     for (const [label, s, effects] of cases) {
-      const d = decide(s, { type: "stop" }, T0);
+      const d = decide(s, { type: "stop", reason: "stopped" }, T0);
       expect(d.next, label).toMatchObject({ state: "completed", desiredState: "ending", endReason: "stopped", failReason: null, endedAt: T0, runner: { state: s.runner.state } });
       expect(d.events, label).toEqual([{ type: "SessionEnded", reason: "completed" }]);
       expect(d.effects, label).toEqual(effects);
     }
   });
+  // §5.3: `stop` carries a reason, and endReason widens to the DB's five (T4b DB_END_REASONS). Swept over every stop
+  // reason the command admits (the four DB reasons that are not the wall clock's) × the three stop shapes: passthrough
+  // ending, composed with no Machine (completes now), composed with a playing Machine (the runner's ending signal).
+  it("§5.3: stop with EACH reason sets endReason to it — passthrough, composed with no Machine, composed through the runner", () => {
+    const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+    const reasons = DB_END_REASONS.filter((r): r is StopReason => r !== "max_duration");
+    expect(reasons).toEqual(["stopped", "operator_stopped", "auto_stopped", "phone_lost"]);
+    const shapes: [string, Session, SessionState][] = [
+      ["passthrough live", S({ state: "live", startedAt: T0 }), "ending"],
+      ["composed, no Machine", S({ state: "provisioning", mode: "composed" }), "completed"],
+      ["composed, playing", S({ state: "live", mode: "composed", startedAt: T0, runner: PLAYING }), "ending"],
+    ];
+    let checked = 0;
+    for (const reason of reasons) {
+      for (const [label, s, state] of shapes) {
+        const d = decide(s, { type: "stop", reason }, T0);
+        expect(d.next, `${label} × ${reason}`).toMatchObject({ state, endReason: reason, desiredState: "ending" });
+        if (state === "ending") expect(d.events, `${label} × ${reason}`).toContainEqual({ type: "SessionEnding", endReason: reason });
+        expect(eventRowsOf(s, d, { type: "stop", reason })[0]!.payload, `${label} × ${reason}`).toMatchObject({ endReason: reason });
+        checked++;
+      }
+    }
+    expect(checked).toBe(12);
+  });
+  // B4 review I-3: the sweep above reaches the runner through ONE cell (playing). Every runner cell that answers a
+  // session_stop with a signal must carry the stop's reason — T8's operator_stopped and PR-2's auto_stopped land on a
+  // composed session mid-create or with its Machine lost too. The cells are DERIVED from RUNNER_TABLE (a cell that
+  // signals ending or completed), so a new signalling cell joins the sweep; the pinned list makes that change visible.
+  it("§5.3 through the RUNNER: every runner state whose session_stop cell signals the session carries EACH stop reason into endReason — the states derived from RUNNER_TABLE", () => {
+    const reasons = DB_END_REASONS.filter((r): r is StopReason => r !== "max_duration");
+    const runnerAt = (state: RunnerState): Runner =>
+      ({ state, attempt: 1, name: "relay-s1-r1", machineId: state === "creating" ? null : "m1", stopRequestedAt: null, lastExit: null });
+    const signalling = RUNNER_STATES.filter((rs) => {
+      const cell = RUNNER_TABLE[rs].session_stop;
+      if (cell === null) return false;
+      const signal = cell(runnerAt(rs), { type: "session_stop", reason: "operator_stopped" }, T0).signal;
+      return signal?.type === "ending" || signal?.type === "completed";
+    });
+    // The table today: creating marks the stop, booting and playing SIGINT the Machine, lost tears it down.
+    expect(signalling).toEqual(["creating", "booting", "playing", "lost"]);
+    // The session state each runner state is met in (a create in flight, a Machine booting, a live one, a lost one).
+    const SESSION_STATE_OF: Partial<Record<RunnerState, SessionState>> = { creating: "provisioning", booting: "warming", playing: "live", lost: "live" };
+    let checked = 0;
+    for (const rs of signalling) {
+      const state = SESSION_STATE_OF[rs];
+      if (state === undefined) throw new Error(`runner state ${rs} signals on session_stop but has no session state here: add one`);
+      for (const reason of reasons) {
+        const s = S({ mode: "composed", state, startedAt: state === "live" ? T0 : null, runner: runnerAt(rs) });
+        const d = decide(s, { type: "stop", reason }, T0);
+        expect(d.next.endReason, `${rs} × ${reason}`).toBe(reason);
+        expect(["ending", "completed"], `${rs} × ${reason}`).toContain(d.next.state);
+        if (d.next.state === "ending") expect(d.events, `${rs} × ${reason}`).toContainEqual({ type: "SessionEnding", endReason: reason });
+        checked++;
+      }
+    }
+    expect(checked).toBe(16);
+  });
+  it("§5.3: a SECOND stop while ending keeps the FIRST reason (identity), passthrough and composed alike — and the runner's completion keeps it too", () => {
+    const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+    let checked = 0;
+    for (const s of [S({ state: "live", startedAt: T0 }), S({ state: "live", mode: "composed", startedAt: T0, runner: PLAYING })]) {
+      const first = decide(s, { type: "stop", reason: "operator_stopped" }, T0);
+      expect(first.next.state).toBe("ending");
+      const second = decide(first.next, { type: "stop", reason: "phone_lost" }, T0);
+      expect(second.next.endReason, s.mode).toBe("operator_stopped");
+      expect(second.events, s.mode).toEqual([]);
+      checked++;
+      if (s.mode === "composed") {
+        const done = decide(second.next, { type: "runner", trigger: { type: "destroy_ok" } }, T0);
+        expect(done.next).toMatchObject({ state: "completed", endReason: "operator_stopped" });
+      } else {
+        expect(decide(second.next, { type: "complete" }, T0).next).toMatchObject({ state: "completed", endReason: "operator_stopped" });
+      }
+    }
+    expect(checked).toBe(2);
+  });
   it("stop on ending is a benign repeat (identity, no events); stop on completed is illegal", () => {
-    const again = decide(S({ state: "ending", desiredState: "ending" }), { type: "stop" }, T0);
+    const again = decide(S({ state: "ending", desiredState: "ending" }), { type: "stop", reason: "stopped" }, T0);
     expect(again.events).toEqual([]);
     expect(again.next.state).toBe("ending");
-    expect(() => decide(S({ state: "completed" }), { type: "stop" }, T0)).toThrow(InvalidTransition);
+    expect(() => decide(S({ state: "completed" }), { type: "stop", reason: "stopped" }, T0)).toThrow(InvalidTransition);
   });
   it("ending → completed on complete: ended_at, SessionEnded, the replay-fill effect", () => {
     const d = decide(S({ state: "ending", desiredState: "ending", endReason: "stopped", startedAt: T0 }), { type: "complete" }, T0);
@@ -159,7 +250,7 @@ describe("decide — legal edges", () => {
   });
   it("fill_replay only for a session that actually WENT LIVE (I3): a passthrough stop → complete from requested, provisioning or warming emits none; from live emits exactly one", () => {
     const replaysAcrossStopAndComplete = (from: Session): number => {
-      const e = decide(from, { type: "stop" }, T0);
+      const e = decide(from, { type: "stop", reason: "stopped" }, T0);
       const c = decide(e.next, { type: "complete" }, T0);
       expect(c.next.state, from.state).toBe("completed");
       return [...e.effects, ...c.effects].filter((x) => x.type === "fill_replay").length;
@@ -170,7 +261,7 @@ describe("decide — legal edges", () => {
     expect(replaysAcrossStopAndComplete(S({ state: "live", startedAt: T0 })), "live").toBe(1);
   });
   it("a terminal session accepts no command (both terminal states, every command)", () => {
-    const commands: Command[] = [{ type: "provision" }, { type: "ingest_connected" }, { type: "stop" }, { type: "complete" }, { type: "target_rejected" }];
+    const commands: Command[] = [{ type: "provision" }, { type: "ingest_connected" }, { type: "stop", reason: "stopped" }, { type: "complete" }, { type: "target_rejected" }];
     for (const state of TERMINAL_STATES) for (const c of commands) {
       expect(() => decide(S({ state }), c, T0), `${state} ${c.type}`).toThrow(InvalidTransition);
     }
@@ -204,14 +295,14 @@ describe("decide — legal edges", () => {
 describe("a session whose fixture was deleted (fixtureId null)", () => {
   it("still ends through the normal commands — passthrough stop → ending → complete → completed, composed no-Machine stop → completed, warming credit refusal → failed — and fixtureId stays null", () => {
     const live = S({ state: "live", startedAt: T0, fixtureId: null });
-    const e = decide(live, { type: "stop" }, T0);
+    const e = decide(live, { type: "stop", reason: "stopped" }, T0);
     expect(e.next).toMatchObject({ state: "ending", desiredState: "ending", endReason: "stopped", endingAt: T0, fixtureId: null });
     expect(e.effects).toEqual([{ type: "complete_now" }]);
     const c = decide(e.next, { type: "complete" }, T0);
     expect(c.next).toMatchObject({ state: "completed", endedAt: T0, endReason: "stopped", fixtureId: null });
     expect(c.events).toEqual([{ type: "SessionEnded", reason: "completed" }]);
 
-    const composed = decide(S({ state: "provisioning", mode: "composed", fixtureId: null }), { type: "stop" }, T0);
+    const composed = decide(S({ state: "provisioning", mode: "composed", fixtureId: null }), { type: "stop", reason: "stopped" }, T0);
     expect(composed.next).toMatchObject({ state: "completed", endReason: "stopped", endedAt: T0, fixtureId: null });
 
     const refused = decide(S({ state: "warming", fixtureId: null }), { type: "credit_refused" }, T0);
@@ -221,7 +312,7 @@ describe("a session whose fixture was deleted (fixtureId null)", () => {
 
 const PASSTHROUGH_COMMANDS: Command[] = [
   { type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" },
-  { type: "target_rejected" }, { type: "stop" }, { type: "complete" }, { type: "relay_disabled" },
+  { type: "target_rejected" }, { type: "stop", reason: "stopped" }, { type: "complete" }, { type: "relay_disabled" },
 ];
 const ALL_STATES: SessionState[] = [...ACTIVE_STATES, ...TERMINAL_STATES];
 
@@ -322,8 +413,8 @@ describe("eventRowsOf — parity with the session table (every state × every pa
   it("a terminal-state payload carries WHY: failReason on failed, endReason on ending (the chip and the inventory read these)", () => {
     const f = decide(S({ state: "warming" }), { type: "credit_refused" }, T0);
     expect(eventRowsOf(S({ state: "warming" }), f, { type: "credit_refused" })[0]!.payload).toEqual({ failReason: "no_credits" });
-    const e = decide(S({ state: "live" }), { type: "stop" }, T0);
-    expect(eventRowsOf(S({ state: "live" }), e, { type: "stop" })[0]!.payload).toEqual({ endReason: "stopped" });
+    const e = decide(S({ state: "live" }), { type: "stop", reason: "stopped" }, T0);
+    expect(eventRowsOf(S({ state: "live" }), e, { type: "stop", reason: "stopped" })[0]!.payload).toEqual({ endReason: "stopped" });
   });
 });
 
@@ -334,7 +425,7 @@ describe("decide — a composed session's Machine events go through the runner t
   const FORCE = { type: "runner", effect: { type: "force_destroy" } };
 
   it("a composed stop routes through the runner: stop_machine SIGINT, ending(stopped), no complete_now", () => {
-    const d = decide(C({ state: "live", startedAt: T0, runner: { ...BOOTING, state: "playing" } }), { type: "stop" }, T0);
+    const d = decide(C({ state: "live", startedAt: T0, runner: { ...BOOTING, state: "playing" } }), { type: "stop", reason: "stopped" }, T0);
     expect(d.next).toMatchObject({ state: "ending", desiredState: "ending", endReason: "stopped", runner: { state: "stopping", stopRequestedAt: T0 } });
     expect(d.effects).toEqual([STOP_EFFECT]);
     expect(d.events).toContainEqual({ type: "SessionEnding", endReason: "stopped" });
@@ -348,6 +439,23 @@ describe("decide — a composed session's Machine events go through the runner t
     const p = decide(S({ state: "warming" }), { type: "expire", expiry: { kind: "warming_timeout" } }, T0);
     expect(p.next).toMatchObject({ state: "failed", failReason: "no_inbound_timeout", endReason: null, runner: RUNNER_NONE });
     expect(p.effects).toEqual([]);
+  });
+
+  it("m-5 (controller ruling): a PASSTHROUGH live session × warming_timeout is failed(no_inbound_timeout), releasing its output and spending nothing; a COMPOSED live one is refused — it never records first ingest, so the rule would end every composed broadcast", () => {
+    const p = decide(S({ state: "live", startedAt: T0, outputUid: "out-1" }), { type: "expire", expiry: { kind: "warming_timeout" } }, T0);
+    expect(p.next).toMatchObject({ state: "failed", failReason: "no_inbound_timeout", endReason: null, endedAt: T0 });
+    expect(p.effects).toEqual([{ type: "release_output" }]);
+    expect(p.events).toEqual([{ type: "SessionEnded", reason: "no_inbound_timeout" }]);
+    expect(() => decide(C({ state: "live", startedAt: T0, runner: { ...BOOTING, state: "playing" } }), { type: "expire", expiry: { kind: "warming_timeout" } }, T0)).toThrow(InvalidTransition);
+    // Every other non-warming state still refuses it, either mode.
+    let refused = 0;
+    for (const state of ["requested", "provisioning", "ending"] as const) {
+      for (const mk of [S, C]) {
+        expect(() => decide(mk({ state }), { type: "expire", expiry: { kind: "warming_timeout" } }, T0), `${state}`).toThrow(InvalidTransition);
+        refused++;
+      }
+    }
+    expect(refused).toBe(6);
   });
 
   it("a composed session goes live ONLY through callback_playing (one consume); a replacement's callback_playing on a LIVE session consumes nothing", () => {
@@ -391,7 +499,7 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(decide(midCreate, { type: "runner", trigger: { type: "create_failed", retryable: true, outcomeUnknown: false } }, T0).next).toMatchObject({ state: "failed", runnerRetries: 0, runner: { state: "destroyed" } });
     // The negative pair: a non-cleanup trigger, a session command, and an expiry other than grace_expired still throw on a terminal session.
     expect(() => decide(failed, { type: "runner", trigger: { type: "session_stop" } }, T0)).toThrow(InvalidTransition);
-    expect(() => decide(failed, { type: "stop" }, T0)).toThrow(InvalidTransition);
+    expect(() => decide(failed, { type: "stop", reason: "stopped" }, T0)).toThrow(InvalidTransition);
     expect(() => decide(failed, { type: "expire", expiry: { kind: "none" } }, T0)).toThrow(InvalidTransition);
   });
 
@@ -425,7 +533,7 @@ describe("decide — a composed session's Machine events go through the runner t
     const CREATING: Runner = { ...BOOTING, state: "creating", machineId: null };
     const T1 = new Date(T0.getTime() + 60_000);
     // provisioning: the FIRST create is in flight (Task 10's provisionSession issues create_started before provisioned)
-    const stopped = decide(S({ mode: "composed", state: "provisioning", runner: CREATING }), { type: "stop" }, T0);
+    const stopped = decide(S({ mode: "composed", state: "provisioning", runner: CREATING }), { type: "stop", reason: "stopped" }, T0);
     expect(stopped.next).toMatchObject({ state: "ending", desiredState: "ending", endReason: "stopped", endedAt: null, runner: { state: "creating", stopRequestedAt: T0 } });
     expect(stopped.effects).toEqual([]);
     expect(stopped.events).toEqual([{ type: "RunnerChanged", from: "creating", to: "creating", trigger: "session_stop" }, { type: "SessionEnding", endReason: "stopped" }]);
@@ -456,7 +564,7 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(found.next).toMatchObject({ state: "completed", endReason: "stopped", runner: { state: "destroyed" } });
     expect(found.effects).toEqual([FORCE]);
     // a replacement's create in flight in a LIVE session takes the same edge
-    expect(decide(C({ state: "live", startedAt: T0, runner: { ...CREATING, attempt: 2, name: "relay-s1-r2" } }), { type: "stop" }, T0).next)
+    expect(decide(C({ state: "live", startedAt: T0, runner: { ...CREATING, attempt: 2, name: "relay-s1-r2" } }), { type: "stop", reason: "stopped" }, T0).next)
       .toMatchObject({ state: "ending", endReason: "stopped", runner: { state: "creating", stopRequestedAt: T0 } });
   });
 
@@ -527,7 +635,7 @@ describe("decide — a composed session's Machine events go through the runner t
     const dead = decide(C({ state: "live", startedAt: T0, runner: lost }), { type: "expire", expiry: { kind: "wall_clock" } }, T1);
     expect(dead.next).toMatchObject({ state: "completed", endReason: "max_duration", endedAt: T1, runnerRetries: 0, runner: { state: "destroyed" } });
     expect(dead.effects).toEqual([FORCE, { type: "fill_replay" }]);
-    const stopped = decide(C({ state: "live", startedAt: T0, runner: lost }), { type: "stop" }, T1);
+    const stopped = decide(C({ state: "live", startedAt: T0, runner: lost }), { type: "stop", reason: "stopped" }, T1);
     expect(stopped.next).toMatchObject({ state: "completed", endReason: "stopped", runnerRetries: 0 });
     // and a session already ENDING refuses the retry outright, however its lost runner got there: it completes.
     // (C4: the fixture WENT live — startedAt T0 — so the replay fill below is owed; without it the row would expect none.)
@@ -774,7 +882,7 @@ describe("decide — a composed session's Machine events go through the runner t
           const label = `attempt ${attempt} / ${endReason} / ${confirm.type}`;
           const playing: Runner = { ...BOOTING, state: "playing", attempt, name: `relay-s1-r${attempt}` };
           const live = C({ state: "live", startedAt: T0, heartbeatAt: T0, runnerRetries: attempt - 1, runner: playing });
-          const end: Command = endReason === "stopped" ? { type: "stop" } : { type: "expire", expiry: { kind: "wall_clock" } };
+          const end: Command = endReason === "stopped" ? { type: "stop", reason: "stopped" } : { type: "expire", expiry: { kind: "wall_clock" } };
           const stopping = decide(live, end, at(0));
           expect(stopping.next, label).toMatchObject({ state: "ending", endReason, runner: { state: "stopping" } });
           expect(evaluate(stopping.next, at(grace)), label).toEqual({ kind: "grace_expired" });
@@ -812,7 +920,7 @@ describe("decide — a composed session's Machine events go through the runner t
   // later failed provision_timeout. It completes stopped, like the same stop on a live or warming session (F17).
   it("G1: the organiser's stop on a PROVISIONING session whose runner is lost completes it stopped (no replay: it never went live) — never swallowed into a later provision_timeout", () => {
     const provisioning = C({ state: "provisioning", runner: { ...BOOTING, state: "lost" } });
-    const d = decide(provisioning, { type: "stop" }, T0);
+    const d = decide(provisioning, { type: "stop", reason: "stopped" }, T0);
     expect(d.next).toMatchObject({ state: "completed", desiredState: "ending", endReason: "stopped", failReason: null, endedAt: T0, runner: { state: "destroyed", machineId: "m1" } });
     expect(d.effects).toEqual([FORCE]);
     expect(d.events).toEqual([{ type: "RunnerChanged", from: "lost", to: "destroyed", trigger: "session_stop" }, { type: "SessionEnded", reason: "completed" }]);
@@ -834,7 +942,7 @@ describe("decide — a composed session's Machine events go through the runner t
     : t === "create_ok" ? [{ type: "create_ok", machineId: "m9" }]
     : [{ type: t } as RunnerTrigger]);
   const EXPIRIES: Expiry["kind"][] = ["none", "requested_timeout", "provision_timeout", "warming_timeout", "wall_clock", "stale_beat", "grace_expired", "ending_timeout"];
-  const SESSION_COMMANDS: Command[] = [{ type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" }, { type: "stop" }, { type: "complete" }];
+  const SESSION_COMMANDS: Command[] = [{ type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" }, { type: "stop", reason: "stopped" }, { type: "complete" }];
   const commandsFor = (s: Session): Command[] => [
     ...triggers(s.runner).map((trigger): Command => ({ type: "runner", trigger })),
     ...EXPIRIES.map((kind): Command => ({ type: "expire", expiry: { kind } } as Command)),
@@ -853,9 +961,9 @@ describe("decide — a composed session's Machine events go through the runner t
     const CREATING: Runner = { ...BOOTING, state: "creating", machineId: null };
     const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
     const seeds: [string, Session, Command][] = [
-      ["provisioning × stop", C({ state: "provisioning", runner: CREATING }), { type: "stop" }],
-      ["warming × stop", C({ state: "warming", runner: CREATING }), { type: "stop" }],
-      ["live replacement × stop", C({ state: "live", startedAt: T0, runner: { ...CREATING, attempt: 2, name: "relay-s1-r2" } }), { type: "stop" }],
+      ["provisioning × stop", C({ state: "provisioning", runner: CREATING }), { type: "stop", reason: "stopped" }],
+      ["warming × stop", C({ state: "warming", runner: CREATING }), { type: "stop", reason: "stopped" }],
+      ["live replacement × stop", C({ state: "live", startedAt: T0, runner: { ...CREATING, attempt: 2, name: "relay-s1-r2" } }), { type: "stop", reason: "stopped" }],
       ["live replacement × wall_clock", C({ state: "live", startedAt: T0, runner: { ...CREATING, attempt: 2, name: "relay-s1-r2" } }), { type: "expire", expiry: { kind: "wall_clock" } }],
       ["ending × ending_timeout (C5)", C({ state: "ending", desiredState: "ending", endReason: "stopped", startedAt: T0, endingAt: T0, runner: CREATING }), { type: "expire", expiry: { kind: "ending_timeout" } }],
       ["warming × warming_timeout", C({ state: "warming", runner: CREATING }), { type: "expire", expiry: { kind: "warming_timeout" } }],
@@ -906,7 +1014,7 @@ describe("decide — a composed session's Machine events go through the runner t
       ["warming, never went live", C({ state: "warming", runner: BOOTING })],
     ];
     for (const [name, before] of cases) {
-      const stopping = decide(before, { type: "stop" }, at(0));
+      const stopping = decide(before, { type: "stop", reason: "stopped" }, at(0));
       expect(stopping.next, name).toMatchObject({ state: "ending", endReason: "stopped", endingAt: at(0), runner: { state: "stopping", stopRequestedAt: at(0) } });
       for (const via of ["stopping", "exited"] as const) {
         const label = `${name} / ${via}`;
@@ -993,13 +1101,13 @@ describe("decide — a composed session's Machine events go through the runner t
       const booting: Runner = { ...BOOTING, attempt, name: `relay-s1-r${attempt}` };
       const playing: Runner = { ...booting, state: "playing" };
       seeds.push(
-        [`live/playing r${attempt} × stop`, C({ state: "live", startedAt: T0, runner: playing }), { type: "stop" }],
+        [`live/playing r${attempt} × stop`, C({ state: "live", startedAt: T0, runner: playing }), { type: "stop", reason: "stopped" }],
         [`live/playing r${attempt} × wall_clock`, C({ state: "live", startedAt: T0, runner: playing }), { type: "expire", expiry: { kind: "wall_clock" } }],
-        [`live/booting r${attempt} × stop`, C({ state: "live", startedAt: T0, runner: booting }), { type: "stop" }],
+        [`live/booting r${attempt} × stop`, C({ state: "live", startedAt: T0, runner: booting }), { type: "stop", reason: "stopped" }],
         [`live/booting r${attempt} × wall_clock`, C({ state: "live", startedAt: T0, runner: booting }), { type: "expire", expiry: { kind: "wall_clock" } }],
-        [`warming/booting r${attempt} × stop`, C({ state: "warming", runner: booting }), { type: "stop" }],
+        [`warming/booting r${attempt} × stop`, C({ state: "warming", runner: booting }), { type: "stop", reason: "stopped" }],
         [`warming/booting r${attempt} × wall_clock`, C({ state: "warming", runner: booting }), { type: "expire", expiry: { kind: "wall_clock" } }],
-        [`provisioning/booting r${attempt} × stop`, C({ state: "provisioning", runner: booting }), { type: "stop" }],
+        [`provisioning/booting r${attempt} × stop`, C({ state: "provisioning", runner: booting }), { type: "stop", reason: "stopped" }],
         [`ending/playing r${attempt} × ending_timeout`, C({ state: "ending", desiredState: "ending", endReason: "max_duration", startedAt: T0, endingAt: T0, runner: playing }), { type: "expire", expiry: { kind: "ending_timeout" } }],
         [`warming/booting r${attempt} × warming_timeout`, C({ state: "warming", runner: booting }), { type: "expire", expiry: { kind: "warming_timeout" } }],
         [`warming/booting r${attempt} × credit_refused`, C({ state: "warming", runner: booting }), { type: "credit_refused" }],
@@ -1208,7 +1316,7 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
   };
   const COMMANDS: Record<Command["type"], Command[]> = {
     provision: [{ type: "provision" }], provisioned: [{ type: "provisioned" }], ingest_connected: [{ type: "ingest_connected" }],
-    credit_refused: [{ type: "credit_refused" }], target_rejected: [{ type: "target_rejected" }], stop: [{ type: "stop" }],
+    credit_refused: [{ type: "credit_refused" }], target_rejected: [{ type: "target_rejected" }], stop: [{ type: "stop", reason: "stopped" }],
     complete: [{ type: "complete" }], relay_disabled: [{ type: "relay_disabled" }],
     expire: Object.values(EXPIRIES).map((expiry) => ({ type: "expire" as const, expiry })),
     runner: [{ type: "runner", trigger: { type: "observed", state: "destroyed" } }],
@@ -1221,6 +1329,8 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
     "requested × expire:requested_timeout", "provisioning × expire:provision_timeout",
     "warming × credit_refused", "warming × target_rejected", "warming × expire:warming_timeout",
     "live × target_rejected", "live × complete",
+    // m-5 (controller ruling, capture QR v2 T7): a passthrough live session with no first ingest is judged by the warming rule.
+    "live × expire:warming_timeout",
     "ending × complete", "ending × expire:ending_timeout",
     // M10: a deployment with no relay ends a session from every state that is still up.
     "requested × relay_disabled", "provisioning × relay_disabled", "warming × relay_disabled", "live × relay_disabled",
@@ -1252,7 +1362,7 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
   });
 
   it("the stop and the wall clock: ending emits nothing to release, the completion that follows releases exactly once — and a session stopped before it was ever provisioned (no output) releases nothing", () => {
-    for (const first of [{ type: "stop" }, { type: "expire", expiry: { kind: "wall_clock" } }] as Command[]) {
+    for (const first of [{ type: "stop", reason: "stopped" }, { type: "expire", expiry: { kind: "wall_clock" } }] as Command[]) {
       const live = S({ state: "live", startedAt: T0, outputUid: "out-1" });
       const ending = decide(live, first, T0);
       expect(ending.next.state, label(first)).toBe("ending");
@@ -1262,7 +1372,7 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
       expect(releases(done.effects), label(first)).toBe(1);
     }
     for (const state of ["requested", "provisioning"] as const) {
-      const ending = decide(S({ state }), { type: "stop" }, T0);
+      const ending = decide(S({ state }), { type: "stop", reason: "stopped" }, T0);
       expect(ending.next.state, state).toBe("ending");
       expect(releases(decide(ending.next, { type: "complete" }, T0).effects), state).toBe(0);
     }

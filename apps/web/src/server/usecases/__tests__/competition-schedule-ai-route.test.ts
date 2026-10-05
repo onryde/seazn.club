@@ -33,7 +33,7 @@ const { parse, isServerFeatureEnabled, captureServer, incrWindow, rlCounts, Mock
       incrWindow: vi.fn(async (key: string) => {
         const n = (rlCounts.get(key) ?? 0) + 1;
         rlCounts.set(key, n);
-        return n;
+        return { count: n, ttlMs: 60_000 };
       }),
       rlCounts,
     };

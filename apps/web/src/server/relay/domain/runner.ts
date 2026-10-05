@@ -49,18 +49,25 @@ export type RunnerTrigger =
   // never arrive with the domain's licence to create attempt + 1 under a different name.
   | { type: "create_failed"; retryable: boolean; outcomeUnknown: boolean } | { type: "callback_playing" } | { type: "callback_stopped" }
   | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null } | { type: "stale_beat" } | { type: "deadline" }
-  | { type: "session_stop" } | { type: "grace_expired" } | { type: "destroy_ok" } | { type: "orphan_listed" };
+  // Capture QR v2 §5.3: the stop's reason. Optional on purpose: the teardown producers (a timeout or a credit refusal
+  // tearing a Machine down before `fail`) drop the stop's ending, or keep the session's own reason (M2), so for them the
+  // reason is never read; absent reads "stopped" — the reason every session_stop carried before §5.3.
+  | { type: "session_stop"; reason?: StopEndReason } | { type: "grace_expired" } | { type: "destroy_ok" } | { type: "orphan_listed" };
 
 export type RunnerEffect =
   | { type: "persist_intent" } | { type: "create_machine" }
   | { type: "stop_machine"; signal: "SIGINT"; timeoutSeconds: number } | { type: "force_destroy" };
 
 export type RunnerFailReason = "machine_create_failed" | "machine_boot_timeout" | "machine_exit_nonzero" | "machine_oom" | "machine_crash";
+/** The reasons a runner signal can carry: a stop's (§5.3) or the wall clock's. */
+export type StopEndReason = "stopped" | "operator_stopped" | "auto_stopped" | "phone_lost";
+export type RunnerEndReason = StopEndReason | "max_duration";
+const stopReasonOf = (t: RunnerTrigger): StopEndReason => (t.type === "session_stop" ? t.reason ?? "stopped" : "stopped");
 export type SessionSignal =
-  | { type: "went_live" } | { type: "ending"; endReason: "stopped" | "max_duration" }
+  | { type: "went_live" } | { type: "ending"; endReason: RunnerEndReason }
   // F17: `completed` carries the reason when the completion IS the ending — a LOST runner the deadline or
   // the organiser's stop tore down never passes through `ending`, so the reason has nowhere else to ride.
-  | { type: "completed"; endReason?: "stopped" | "max_duration" }
+  | { type: "completed"; endReason?: RunnerEndReason }
   | { type: "retry" } | { type: "failed"; reason: RunnerFailReason };
 
 export interface RunnerStep { next: Runner; effects: RunnerEffect[]; signal: SessionSignal | null }
@@ -107,7 +114,7 @@ function afterLostDestroyed(r: Runner): RunnerStep {
   return { next, effects: [], signal };
 }
 
-function toStopping(r: Runner, endReason: "stopped" | "max_duration", now: Date): RunnerStep {
+function toStopping(r: Runner, endReason: RunnerEndReason, now: Date): RunnerStep {
   return { next: { ...r, state: "stopping", stopRequestedAt: now }, effects: [STOP], signal: { type: "ending", endReason } };
 }
 
@@ -126,7 +133,7 @@ const forceDestroyed = (r: Runner): RunnerStep => ({ next: { ...r, state: "destr
  *  what changes is that the SESSION is told, so this destroy COMPLETES it. Without the signal the session
  *  stayed live and the ONE retry `destroy_ok` still owes would boot a replacement past the wall clock —
  *  a retry belongs only to a session that still wants to be live (Task 2A's `runner()` retry arm). */
-const lostTornDown = (r: Runner, endReason: "stopped" | "max_duration"): RunnerStep =>
+const lostTornDown = (r: Runner, endReason: RunnerEndReason): RunnerStep =>
   ({ next: { ...r, state: "destroyed" }, effects: [FORCE_DESTROY], signal: { type: "completed", endReason } });
 
 /** P1-F-a: the organiser stopped while the create call was in flight. Whatever the call returns,
@@ -137,7 +144,7 @@ const stoppedDuringCreate = (r: Runner, machineId: string | null, destroy: boole
 /** P1-F-a / F14: a stop or a deadline while the create call is in flight. Marking IS the whole step —
  *  no effect can be sent at a Machine we have no id for. The mark also starts the F15 grace clock
  *  (`evaluate` reads `stopRequestedAt` in stopping, exited and creating). */
-const markedDuringCreate = (r: Runner, now: Date, endReason: "stopped" | "max_duration"): RunnerStep =>
+const markedDuringCreate = (r: Runner, now: Date, endReason: RunnerEndReason): RunnerStep =>
   ({ next: { ...r, stopRequestedAt: r.stopRequestedAt ?? now }, effects: [], signal: { type: "ending", endReason } });
 
 /** A create call that returns AFTER the runner moved on — we gave up (F15's grace, a teardown another reader
@@ -217,7 +224,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     stale_beat: (r, t) => toLost(r, t),
     // The call is in flight: mark and end the session — the call's return tears down (P1-F-a for the stop, F14 for the deadline).
     deadline: (r, _t, now) => markedDuringCreate(r, now, "max_duration"),
-    session_stop: (r, _t, now) => markedDuringCreate(r, now, "stopped"),
+    session_stop: (r, t, now) => markedDuringCreate(r, now, stopReasonOf(t)),
     // F15: marked, and nothing ever came back. The lazy grace check ends it; force_destroy is the
     // by-name teardown for a Machine the call may still have made (Task 10 resolves the name).
     grace_expired: (r) => stoppedDuringCreate(r, null, true),
@@ -230,7 +237,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     observed: observedFrom("booting"),
     stale_beat: (r, t) => toLost(r, t),                            // only reachable for a replacement booting in a LIVE session (expiry.ts)
     deadline: (r, _t, now) => toStopping(r, "max_duration", now),
-    session_stop: (r, _t, now) => toStopping(r, "stopped", now),
+    session_stop: (r, t, now) => toStopping(r, stopReasonOf(t), now),
     grace_expired: null, destroy_ok: null, orphan_listed: null,
   },
   playing: {
@@ -242,7 +249,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     observed: observedFrom("playing"),
     stale_beat: (r, t) => toLost(r, t),
     deadline: (r, _t, now) => toStopping(r, "max_duration", now),
-    session_stop: (r, _t, now) => toStopping(r, "stopped", now),
+    session_stop: (r, t, now) => toStopping(r, stopReasonOf(t), now),
     grace_expired: null, destroy_ok: null, orphan_listed: null,
   },
   stopping: {
@@ -276,7 +283,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     // stale_beat arm restarts the beat window (the session's beatWindowAt), since no beat arrives from a lost runner.
     stale_beat: (r) => reissueDestroy(r),
     // F17 — a deadline or a stop here ENDS the session (completed: no retry can follow on a session that stopped wanting live).
-    deadline: (r) => lostTornDown(r, "max_duration"), session_stop: (r) => lostTornDown(r, "stopped"),
+    deadline: (r) => lostTornDown(r, "max_duration"), session_stop: (r, t) => lostTornDown(r, stopReasonOf(t)),
     // Fix round 3, ruling (a): our own teardown timing out, or the sweep finding the Machine, is NOT a confirmation — both
     // re-issue the force_destroy and stay lost. Round 2 measured the defect they closed: → destroyed on a force alone, then
     // the next stale beat re-signalled the retry while attempt 1 might still be up. Only destroy_ok leaves to the ONE retry.

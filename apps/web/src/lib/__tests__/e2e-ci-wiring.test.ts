@@ -33,6 +33,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { sitemapWindowOverride } from "../sitemap-window";
 import { FakeIngest } from "../../server/relay/fakes";
+import { DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, TUNABLE_NAMES, tunable } from "../../server/relay/config";
 
 /** apps/web — this file lives at apps/web/src/lib/__tests__/. */
 const WEB = resolve(import.meta.dirname, "../../..");
@@ -464,6 +465,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // checkout return to an untimed fixture), the Event Pass grant, a checkout sheet that
   // cannot load.
   "stream-credits.spec.ts",
+  // Capture QR v2 (T12) — Seazn Capture's phone routes driven by a fake phone that reads the panel's own paste code:
+  // W5's pairing gate, the operator start and its refusals, the dead-phone takeover, the operator stop, the late stop,
+  // ask 10 and W19 (on R10's shortened tunables), the cron end, the free restarts, Revoke & reissue, a finished
+  // fixture's code, and the panel's states at three widths.
+  "capture-phone.spec.ts",
 ];
 
 afterEach(() => {
@@ -960,6 +966,62 @@ describe("the walkthrough's fake phone-connect delay", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+// Capture QR v2 R10 (T12 Step 1b, owner OK OG15 2026-10-05): capture-phone.spec.ts drives A14, ask 10 and W19 in
+// seconds on SHORTENED server timings (config.ts `tunable`, honoured only under ENV_NAME local or ci), and its waits are
+// budgeted from the same variables — so, like FAKE_INGEST_CONNECT_AFTER_MS above, each must reach BOTH e2e-parallel's
+// server and its Playwright runner with one value. Nowhere else: e2e-serial and e2e-mobile run no capture walkthrough,
+// and a shortened timing there would only end their sessions early. The DEFAULTS stay pinned by config.test.ts (class 20);
+// this pins the CI value. The names are read from the walkthrough's own env guard, not typed here.
+describe("the capture walkthrough's shortened timings (R10)", () => {
+  const strip = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+  const valueOf = (body: string, name: string) => new RegExp(`^\\s+${name}: *"?([^"\\s]*)"?\\s*$`, "m").exec(body)?.[1];
+  const DEFAULTS: Record<string, number> = { DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS };
+
+  it("each tunable the capture walkthrough demands is set, to the SAME shortened value, on e2e-parallel's Start server and Playwright steps — and on no other job", async () => {
+    const spec = readFileSync(join(WEB, "e2e/walkthrough/capture-phone.spec.ts"), "utf8");
+    const names = [...spec.matchAll(/wholeEnv\("([A-Z_]+)"/g)].map((m) => m[1]!).filter((n) => (TUNABLE_NAMES as readonly string[]).includes(n));
+    expect(names, "the walkthrough's env guard names exactly these three server tunables").toEqual(["DEAD_PHONE_TAKEOVER_SECONDS", "PHONE_LOST_LIVE_MINUTES", "PHONE_SILENT_FLOOR_SECONDS"]);
+    const walkthrough = projectNamed(await configFor(undefined), "walkthrough");
+    expect(selects(walkthrough, "walkthrough/capture-phone.spec.ts"), "premise: the walkthrough project selects capture-phone.spec.ts").toBe(true);
+
+    const yml = strip(readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8"));
+    const start = yml.indexOf("\n  e2e-parallel:\n");
+    const end = yml.indexOf("\n  e2e-serial:\n");
+    expect(start, "no e2e-parallel job").toBeGreaterThan(-1);
+    expect(end, "no e2e-serial job after it").toBeGreaterThan(start);
+    const job = yml.slice(start, end);
+    expect(job, "premise: e2e-parallel runs the walkthrough project").toMatch(/^\s+project: walkthrough\s*$/m);
+    const elsewhere = yml.slice(0, start) + yml.slice(end);
+    expect(elsewhere, "premise: e2e-serial is read").toContain("\n  e2e-serial:\n");
+    expect(elsewhere, "premise: e2e-mobile is read").toContain("\n  e2e-mobile:\n");
+    const servers = [...job.matchAll(/- name: Start server\n([\s\S]*?)(?=\n      - name: )/g)].map((m) => m[1]!);
+    const runs = [...job.matchAll(/- name: Run Playwright e2e[^\n]*\n([\s\S]*?)(?=\n      - name: )/g)].map((m) => m[1]!);
+    expect(servers.length, "e2e-parallel starts one server").toBe(1);
+    expect(runs.length, "e2e-parallel has one Playwright step").toBe(1);
+
+    let checked = 0;
+    for (const name of names) {
+      const server = valueOf(servers[0]!, name);
+      const runner = valueOf(runs[0]!, name);
+      expect(server, `Start server does not set ${name}`).toBeDefined();
+      expect(runner, `the Playwright step does not set ${name}`).toBeDefined();
+      expect(runner, `${name}: the runner budgets from a different value than the server runs`).toBe(server);
+      // The server's own parse under CI's ENV_NAME: honoured (a junk value throws at the first stream), and SHORTER
+      // than the default, which is what the walkthrough's guard demands.
+      const honoured = tunable(name as (typeof TUNABLE_NAMES)[number], DEFAULTS[name]!, { ENV_NAME: "ci", [name]: server });
+      expect(honoured, `${name}=${server} is not what the server runs under ENV_NAME=ci`).toBe(Number(server));
+      expect(honoured, `${name}=${server} is not shorter than its default ${DEFAULTS[name]}`).toBeLessThan(DEFAULTS[name]!);
+      expect(new RegExp(`^\\s+${name}:`, "m").test(elsewhere), `${name} reaches a job other than e2e-parallel`).toBe(false);
+      checked++;
+    }
+    expect(checked, "tunables checked").toBe(3);
   });
 });
 

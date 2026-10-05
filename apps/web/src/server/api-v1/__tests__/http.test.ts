@@ -4,6 +4,7 @@ import { z } from "zod";
 import { EngineError, EngineErrorCode } from "@seazn/engine/core";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { getRequestContext } from "@/server/request-context";
+import { setRateLimitInfo } from "../context";
 import { log } from "@/server/logger";
 import {
   ENGINE_HTTP,
@@ -252,6 +253,23 @@ describe("v1 envelope", () => {
     expect((await v1(async () => { throw new AuthError("no"); })).status).toBe(401);
     expect((await v1(async () => { throw new HttpError(404, "gone"); })).status).toBe(404);
     expect((await v1(async () => { throw new HttpError(429, "slow"); })).status).toBe(429);
+  });
+
+  // A15 / R4: v1() MERGES HttpError.headers with its own rate-limit headers — neither replaces the other.
+  it("a 429 carrying BOTH an HttpError Retry-After and the request's X-RateLimit-* keeps both", async () => {
+    const res = await v1(async () => {
+      setRateLimitInfo({ limit: 60, remaining: 0, reset: 1_790_000_060 });
+      throw new HttpError(429, "slow", undefined, undefined, { "Retry-After": "23" });
+    });
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("23");
+    expect(res.headers.get("x-ratelimit-limit")).toBe("60");
+    expect(res.headers.get("x-ratelimit-remaining")).toBe("0");
+    expect(res.headers.get("x-ratelimit-reset")).toBe("1790000060");
+    // The positive pair: with no rate-limit info, the error's own header still rides alone.
+    const alone = await v1(async () => { throw new HttpError(429, "slow", undefined, undefined, { "Retry-After": "5" }); });
+    expect(alone.headers.get("retry-after")).toBe("5");
+    expect(alone.headers.get("x-ratelimit-limit")).toBeNull();
   });
 
   it("maps ZodError → 400 with issues", async () => {

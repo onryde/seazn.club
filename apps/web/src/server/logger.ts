@@ -21,11 +21,20 @@
 import pino from "pino";
 import { getRequestContext } from "./request-context";
 
-export const log = pino(
-  {
-    name: "web",
-    level: process.env.LOG_LEVEL ?? "info",
-    mixin: () => getRequestContext(),
-  },
-  pino.destination({ sync: false }),
-);
+//
+// `redact` (capture QR v2 §10.2): a phone route never logs its Bearer, the code's tok, the descriptor's `cred` or a
+// stream key or SRT passphrase. pino's `*.x` matches ONE level below the top only, so each name is also listed at the
+// top level, the shape `log.warn({ tok }, …)` would take. A safety net under "never log a header or a body", not a
+// licence to; logger-redact.test.ts pins each path.
+export const LOGGER_OPTIONS = {
+  name: "web",
+  level: process.env.LOG_LEVEL ?? "info",
+  mixin: () => getRequestContext(),
+  redact: [
+    "req.headers.authorization",
+    "*.tok", "*.cred", "*.streamKey", "*.passphrase",
+    "tok", "cred", "streamKey", "passphrase",
+  ],
+} satisfies pino.LoggerOptions;
+
+export const log = pino(LOGGER_OPTIONS, pino.destination({ sync: false }));

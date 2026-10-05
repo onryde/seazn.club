@@ -295,6 +295,74 @@ describe("scrubSentryEvent", () => {
   });
 });
 
+// Capture QR v2 §10.2 (A18, FP18): a phone route's code is half its credential and its Bearer the other half; the beat
+// body names the code again. A capture route's event loses all three. Every other event keeps its URL and body.
+describe("scrubSentryEvent — the capture phone routes (A18)", () => {
+  /** A real-shaped code (CAPTURE_CODE_RE) and tok (16 random bytes, base64url). */
+  const CODE = "k3m9p2q7r4t8";
+  const TOK = "Zm9vYmFyYmF6cXV4cXV1eA";
+  const captureEvent = (path: string, headerName = "authorization"): Event => ({
+    event_id: "c1",
+    transaction: `POST /api/v1/capture/codes/${CODE}${path}`,
+    request: {
+      method: "POST",
+      url: `https://seazn.club/api/v1/capture/codes/${CODE}${path}`,
+      headers: { [headerName]: `Bearer ${TOK}`, "content-type": "application/json" },
+      data: JSON.stringify({ code: CODE, phone: "phone-x-0123456789" }),
+    },
+    breadcrumbs: [{ category: "fetch", data: { url: `/api/v1/capture/codes/${CODE}/start` } }],
+  });
+
+  it("each phone route (GET, beats, start), either header case: the code in every string, the Bearer and the request body are gone", () => {
+    let checked = 0;
+    for (const path of ["", "/beats", "/start"]) {
+      for (const headerName of ["authorization", "Authorization"]) {
+        const out = scrubSentryEvent(captureEvent(path, headerName));
+        const text = JSON.stringify(out);
+        expect(text, `${path} ${headerName}`).not.toContain(CODE);
+        expect(text).not.toContain(TOK);
+        expect(out.request?.url).toBe(`https://seazn.club/api/v1/capture/codes/[code]${path}`);
+        expect(out.transaction).toBe(`POST /api/v1/capture/codes/[code]${path}`);
+        expect(out.request?.headers?.[headerName]).toBe("Bearer [tok]");
+        expect(out.request?.headers?.["content-type"], "other headers are kept").toBe("application/json");
+        expect(Object.hasOwn(out.request!, "data"), "the body is dropped").toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("an event that names the route in its TRANSACTION alone (no request URL) is a capture event too: Bearer and body gone", () => {
+    const event = captureEvent("/start");
+    delete event.request!.url;
+    const out = scrubSentryEvent(event);
+    expect(out.request?.headers?.authorization).toBe("Bearer [tok]");
+    expect(Object.hasOwn(out.request!, "data")).toBe(false);
+    expect(JSON.stringify(out)).not.toContain(TOK);
+  });
+
+  it("the input event is never mutated", () => {
+    const event = captureEvent("/beats");
+    const before = JSON.stringify(event);
+    scrubSentryEvent(event);
+    expect(JSON.stringify(event)).toBe(before);
+  });
+
+  it("the positive pair: a non-capture route keeps its URL, its headers and its body exactly", () => {
+    const other: Event = {
+      event_id: "o1",
+      transaction: "POST /api/v1/fixtures/f1/stream-sessions",
+      request: {
+        method: "POST",
+        url: "https://seazn.club/api/v1/fixtures/f1/stream-sessions",
+        headers: { authorization: "Bearer sk_live_example", "content-type": "application/json" },
+        data: JSON.stringify({ targetId: "t1" }),
+      },
+    };
+    expect(scrubSentryEvent(other)).toEqual(other);
+  });
+});
+
 describe("scrubRecordingEvent (Sentry Replay's beforeAddRecordingEvent)", () => {
   // Only CUSTOM frames (rrweb type 5) reach this hook: @sentry/replay 10.62
   // gates the callback on `isCustomEvent`. These are the two custom frames that

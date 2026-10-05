@@ -29,9 +29,10 @@ import { StreamFailReason } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { IngestProvider, RunnerProvider } from "@/server/relay/ports";
-import { rigUser } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import {
-  CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS,
+  CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, PHONE_LOST_LIVE_MINUTES,
+  PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS,
   REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
   relayEnvironment,
 } from "@/server/relay/config";
@@ -90,6 +91,7 @@ async function rig(mode: "passthrough" | "composed" = "passthrough") {
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
   const runner = new FakeRunner();
   const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test" };
+  await pairPresentPhone(fixtureId, { at: deps.now() });   // A7 (capture QR v2 T6): W5 refuses a Go live with no present phone
   const { sessionId } = await createSession(auth, fixtureId, { mode, targetId: target.id }, deps);
   const state = async (sid = sessionId) => (await sql<{
     state: string; fail_reason: string | null; machine_id: string | null; runner_retries: number; runner_state: string; runner_gone_confirmed_at: Date | null;
@@ -163,7 +165,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
 
   it("BACKSTOP: a warming session nobody reads past the warming timeout is failed by the sweep, and counted in ITS bucket (mutant: delete the sweep's reconcileSession call → red)", async () => {
     const r = await rig();
-    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${r.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}), warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${r.sessionId}`;
     const res = await sweep(r);
     expect(res.backstop).toMatchObject({ candidates: 1, visited: 1, skippedLocked: 0, errored: 0, warmingTimedOut: 1, crashed: 0 });
     expect(await r.state()).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
@@ -205,6 +207,49 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(res.backstop).toMatchObject({ candidates: 1, visited: 1, retried: 1 });
     expect(await lost.state()).toMatchObject({ state: "live", runner_retries: 1 });
     expect((await lost.state()).machine_id).not.toBe(m2);
+  });
+
+  it("T7: the backstop TICKS an open session — a live passthrough whose phone AND video are gone past PHONE_LOST_LIVE_MINUTES is ended phone_lost and counted in ITS bucket, never the wall clock's (mutant: the backstop reconciles instead of ticking → still live)", async () => {
+    const r = await rig();
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+    const [{ input_id }] = await sql<{ input_id: string }[]>`select ingest_input_id as input_id from fixture_stream_inputs where session_id = ${r.sessionId}`;
+    r.ingest.setState(input_id, "disconnected");
+    // W19's clocks moved back past the limit (the sweep runs on the real clock), with the 60 s margin; the claim is freed
+    // so the sweep's tick makes the fresh read.
+    const past = PHONE_LOST_LIVE_MINUTES * 60 + 60;
+    await sql`update fixture_stream_sessions set first_ingest_at = now() - make_interval(secs => ${past}), phone_beat_at = null, ingest_polled_at = null where id = ${r.sessionId}`;
+    await sql`update fixture_stream_samples set sampled_at = now() - make_interval(secs => ${past}) where session_id = ${r.sessionId}`;
+    const res = await sweep(r);
+    expect(res.backstop).toMatchObject({ candidates: 1, visited: 1, errored: 0, phoneLost: 1, wallClockEnded: 0, otherFailures: 0 });
+    const [row] = await sql<{ state: string; end_reason: string | null }[]>`select state, end_reason from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(row).toEqual({ state: "completed", end_reason: "phone_lost" });
+  });
+
+  it("W10: the sweep deletes phone-beat history older than PHONE_BEAT_RETENTION_HOURS — and keeps the session's FINAL beat, its phone_beat, the pairing's last_beat, and another org's old beat outside the scope (mutant: the cutoff at the sweep's own clock → the final beat goes)", async () => {
+    const r = await rig();
+    const other = await rig();
+    const beat = async (x: Rig, ageMinutes: number) => {
+      const [{ pairing_id }] = await sql<{ pairing_id: string }[]>`select pairing_id from fixture_stream_sessions where id = ${x.sessionId}`;
+      const [{ id }] = await sql<{ id: number }[]>`
+        insert into fixture_stream_phone_beats (org_id, pairing_id, session_id, recorded_at, kind, raw)
+        values (${x.orgId}, ${pairing_id}, ${x.sessionId}, now() - make_interval(mins => ${ageMinutes}), 'minute', '{}'::jsonb) returning id`;
+      return { id: Number(id), pairingId: pairing_id };
+    };
+    const H = PHONE_BEAT_RETENTION_HOURS * 60;
+    const old = await beat(r, H + 5);
+    const final = await beat(r, H - 5);   // the session's latest beat in the history
+    const foreign = await beat(other, H + 5);
+    await sql`update fixture_stream_sessions set phone_beat = ${sql.json({ battery: 41 })} where id = ${r.sessionId}`;
+    await sql`update fixture_stream_pairings set last_beat = ${sql.json({ battery: 41 })} where id = ${old.pairingId}`;
+    const res = await sweep(r);
+    expect(res.beatsDeleted).toBe(1);
+    const left = (await sql<{ id: string }[]>`select id from fixture_stream_phone_beats where id in (${old.id}, ${final.id}, ${foreign.id}) order by id`).map((b) => Number(b.id));
+    expect(left).toEqual([final.id, foreign.id]);
+    const [{ phone_beat }] = await sql<{ phone_beat: unknown }[]>`select phone_beat from fixture_stream_sessions where id = ${r.sessionId}`;
+    const [{ last_beat }] = await sql<{ last_beat: unknown }[]>`select last_beat from fixture_stream_pairings where id = ${old.pairingId}`;
+    expect(phone_beat).toEqual({ battery: 41 });
+    expect(last_beat).toEqual({ battery: 41 });
   });
 
   it("ORPHANS: a Machine with no session, one whose metadata names no session at all, and one whose session is terminal are destroyed — the terminal one through the shared forceDestroy, on EVERY pass (A22(a)); a live session's Machine is kept", async () => {
@@ -602,7 +647,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
 
   it("the sweep lock: a session held by another sweep's transaction is skipped; released → visited", async () => {
     const r = await rig();
-    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${r.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}), warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${r.sessionId}`;
     let release!: () => void;
     const held = new Promise<void>((res) => (release = res));
     let locked!: () => void;
@@ -627,7 +672,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     const bad = await rig("composed");
     const mb = await goLive(bad);
     const good = await rig();
-    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${good.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}), warming_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${good.sessionId}`;
     const boom = new Error("observe exploded");
     const runner = Object.assign(Object.create(bad.runner) as FakeRunner, {
       async observe(id: string) { if (id === mb) throw boom; return bad.runner.observe(id); },
@@ -775,6 +820,10 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(n).toBeGreaterThan(0);
     const [live] = await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${r.sessionId}`;
     expect(TERMINAL_STATES as readonly string[]).not.toContain(live!.state);
+    // T7 (capture QR v2): the sweep now TICKS an open session, and a tick that claims the ingest read records a poll
+    // sample. The claim is held here, as a concurrent organiser poll would hold it, so the count below is this row's
+    // heartbeat samples alone — retention's guard is under test, not the tick.
+    await sql`update fixture_stream_sessions set ingest_polled_at = now() where id = ${r.sessionId}`;
     const skipped = await sweep(r, { sampleRetentionDays: 1 });
     expect(skipped.summariesWritten).toBe(0);
     expect(skipped.samplesDeleted).toBe(0);
@@ -1114,6 +1163,12 @@ describe("relay sweep — pure parts", () => {
       ["ending timeout", [{ ...live, state: "ending" }, { state: "completed", failReason: null, runner: { state: "destroyed", attempt: 1 } }, "ending_timeout"], "endingTimedOut"],
       ["observed completion", [{ ...live, state: "ending" }, { state: "completed", failReason: null, runner: { state: "destroyed", attempt: 1 } }, null], "completedObserved"],
       ["wall clock", [live, { state: "ending", failReason: null, runner: { state: "stopping", attempt: 1 } }, "wall_clock"], "wallClockEnded"],
+      ["wall clock, its end reason on the row", [live, { state: "ending", failReason: null, endReason: "max_duration", runner: { state: "stopping", attempt: 1 } }, "wall_clock"], "wallClockEnded"],
+      // T7: the tick's phone-lost ends — W19 from live, ask 10 from warming and from before provisioning finished.
+      ["W19 phone lost (live → completed)", [live, { state: "completed", failReason: null, endReason: "phone_lost", runner: { state: "none", attempt: 0 } }, null], "phoneLost"],
+      ["ask 10 phone lost (warming → completed)", [{ state: "warming", runnerState: "none", runnerAttempts: 0 }, { state: "completed", failReason: null, endReason: "phone_lost", runner: { state: "none", attempt: 0 } }, null], "phoneLost"],
+      ["ask 10 phone lost (requested → completed)", [{ state: "requested", runnerState: "none", runnerAttempts: 0 }, { state: "completed", failReason: null, endReason: "phone_lost", runner: { state: "none", attempt: 0 } }, null], "phoneLost"],
+      ["a composed phone lost still ending", [live, { state: "ending", failReason: null, endReason: "phone_lost", runner: { state: "stopping", attempt: 1 } }, null], "phoneLost"],
       ["terminal runner settles", [{ state: "completed", runnerState: "lost", runnerAttempts: 1 }, { state: "completed", failReason: null, runner: { state: "destroyed", attempt: 1 } }, null], "terminalRunnersSettled"],
       ["terminal runner unchanged", [{ state: "failed", runnerState: "playing", runnerAttempts: 1 }, { state: "failed", failReason: "machine_crash", runner: { state: "playing", attempt: 1 } }, null], null],
       ["a failed row with no reason", [live, { state: "failed", failReason: null, runner: { state: "destroyed", attempt: 1 } }, null], "otherFailures"],

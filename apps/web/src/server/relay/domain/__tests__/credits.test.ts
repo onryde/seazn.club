@@ -3,8 +3,8 @@
 // ever see it). C3's arithmetic is pure here so the differential is a
 // millisecond test, and Task 10's DB test proves the SAME function is wired.
 import { describe, expect, it } from "vitest";
-import { CREDIT_REUSE_HOURS } from "../../config";
-import { InsufficientCredits, credit, debit, headroomAfterReservations, withinReuseWindow } from "../credits";
+import { CREDIT_REUSE_HOURS, FREE_RESTARTS_PER_WINDOW } from "../../config";
+import { InsufficientCredits, credit, debit, headroomAfterReservations, restartIsFree, withinReuseWindow } from "../credits";
 
 describe("debit / credit", () => {
   it("debit 1 from 1 → 0 (exactly zero is allowed); from 0 → InsufficientCredits", () => {
@@ -37,5 +37,38 @@ describe("headroomAfterReservations (C3)", () => {
     expect(headroomAfterReservations(usage, [300, 300])).toBe(300);
     expect(headroomAfterReservations(usage, [300, 300, 300])).toBe(0);
     expect(headroomAfterReservations(usage, [300, 300, 300, 300])).toBe(-300);
+  });
+});
+
+// W23 (capture QR v2, owner 2026-10-01): "three free restarts per reuse window". The number is the RULE TEXT's, pinned
+// here against the constant — the boundary rows below then take the limit from the constant, so a change to the rule
+// moves one place and this pin says so.
+describe("restartIsFree (W23: three free restarts per reuse window)", () => {
+  it("the rule text's number: FREE_RESTARTS_PER_WINDOW is three", () => {
+    expect(FREE_RESTARTS_PER_WINDOW).toBe(3);
+  });
+  it("the EMPTY case first: a closed window is never free, whatever the count — the reuse waiver needs a consume that stands", () => {
+    let checked = 0;
+    for (let used = 0; used <= FREE_RESTARTS_PER_WINDOW + 1; used++) {
+      expect(restartIsFree({ windowOpen: false, used }, FREE_RESTARTS_PER_WINDOW), `closed, used ${used}`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(FREE_RESTARTS_PER_WINDOW + 2);
+  });
+  it("an open window: used 0, 1, 2 → free; used 3 → not free (the 4th restart pays); beyond → not free", () => {
+    const rows: [number, boolean][] = [[0, true], [1, true], [2, true], [3, false], [4, false]];
+    let checked = 0;
+    for (const [used, free] of rows) {
+      expect(restartIsFree({ windowOpen: true, used }, FREE_RESTARTS_PER_WINDOW), `open, used ${used}`).toBe(free);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+  it("a count that is not a whole non-negative number, or a limit that is not a positive integer, is refused by name — never read as free", () => {
+    expect(() => restartIsFree({ windowOpen: true, used: -1 }, 3)).toThrow(/used/);
+    expect(() => restartIsFree({ windowOpen: true, used: 1.5 }, 3)).toThrow(/used/);
+    expect(() => restartIsFree({ windowOpen: true, used: Number.NaN }, 3)).toThrow(/used/);
+    expect(() => restartIsFree({ windowOpen: true, used: 0 }, 0)).toThrow(/limit/);
+    expect(restartIsFree({ windowOpen: true, used: 0 }, 1), "the positive pair").toBe(true);
   });
 });

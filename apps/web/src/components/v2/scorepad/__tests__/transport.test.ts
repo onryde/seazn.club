@@ -550,9 +550,9 @@ describe("429 is throttled, not offline", () => {
     expect(outcome).toEqual({ kind: "throttled", message: "Too many requests", retryAfterMs: null });
   });
 
-  // Our own API does not send `Retry-After` today (nothing under
-  // `src/server/api-v1` sets it) — this reads one if a server ever does, and
-  // must degrade to `null` rather than NaN until then.
+  // Since capture QR v2 (T8c) our own limiter sends `Retry-After` on its 429
+  // (lib/rate-limit.ts: the window's true remaining seconds) — the pad reads
+  // it, and an unusable one degrades to `null` rather than NaN.
   it("carries a numeric Retry-After as milliseconds", async () => {
     const { fn } = fakeFetch(() => fakeResponse(429, limited, { "Retry-After": "3" }));
     const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
