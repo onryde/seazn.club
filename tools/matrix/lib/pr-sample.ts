@@ -149,20 +149,50 @@ export class BaselineUnreadable extends Error {
   }
 }
 
-const BaselineFile = z.object({ L3: z.string() });
+/** Owner ruling 70 (2026-10-05): cases the baseline records in ONE state whatever the baseline run showed, because the
+ *  product's own randomness (a UUID-hashed lots draw, by design) exposes a defect in some runs and not in others. Triage keys
+ *  only reds, so a case the baseline run saw WORK has no rule to say it is red; the override is the baseline's own say-so.
+ *  `state` can only be red: forcing a case to a HELD state would hide a regression, and nothing asks for that. */
+const Ruling70 = z.strictObject({
+  note: z.string().min(1),
+  state: z.literal("red"),
+  /** The defect's id in the W1-driving map (P6), its audit gap (SW-H1) and the wave that owns it. */
+  cause: z.string().min(1),
+  gap: z.string().min(1),
+  wave: z.string().min(1),
+  ids: z.array(z.string().min(1)).min(1),
+}).superRefine((v, ctx) => {
+  const dup = v.ids.find((id, i) => v.ids.indexOf(id) !== i);
+  if (dup !== undefined) ctx.addIssue({ code: "custom", path: ["ids"], message: `the id ${dup} is listed twice` });
+});
+export type Ruling70Overrides = z.infer<typeof Ruling70>;
 
-/** The committed L3 baseline's results.json, resolved against the repo root: catalogue/baseline.json names it
- *  (`{ "L3": "<repo-relative path>" }`; PR-B moves the name to its own evidence). Refused when the file is missing, is
- *  not that shape, or names a file that is not there. */
-export function baselineL3Path(dirs: { catalogue?: string; repo?: string } = {}): string {
+const BaselineFile = z.object({ L3: z.string(), ruling70: Ruling70.optional() });
+
+/** catalogue/baseline.json, read and parsed: refused by name when it is missing, not JSON, or not the shape. */
+function readBaselineFile(dirs: { catalogue?: string; repo?: string }): { file: string; data: z.infer<typeof BaselineFile> } {
   const file = resolve(dirs.catalogue ?? resolve(MATRIX, "catalogue"), "baseline.json");
   let text: string;
   try { text = readFileSync(file, "utf8"); } catch { throw new BaselineUnreadable(file, "it cannot be read"); }
   let json: unknown;
   try { json = JSON.parse(text); } catch { throw new BaselineUnreadable(file, "it is not JSON"); }
   const parsed = BaselineFile.safeParse(json);
-  if (!parsed.success) throw new BaselineUnreadable(file, `it is not { "L3": "<path>" } — ${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}`);
-  const path = resolve(dirs.repo ?? REPO, parsed.data.L3);
-  if (!existsSync(path) || !statSync(path).isFile()) throw new BaselineUnreadable(file, `its L3 names ${parsed.data.L3}, which is not a file there`);
+  if (!parsed.success) throw new BaselineUnreadable(file, `it is not { "L3": "<path>", "ruling70"?: { … } } — ${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}`);
+  return { file, data: parsed.data };
+}
+
+/** The committed L3 baseline's results.json, resolved against the repo root: catalogue/baseline.json names it
+ *  (`{ "L3": "<repo-relative path>" }`; PR-B moves the name to its own evidence). Refused when the file is missing, is
+ *  not that shape, or names a file that is not there. */
+export function baselineL3Path(dirs: { catalogue?: string; repo?: string } = {}): string {
+  const { file, data } = readBaselineFile(dirs);
+  const path = resolve(dirs.repo ?? REPO, data.L3);
+  if (!existsSync(path) || !statSync(path).isFile()) throw new BaselineUnreadable(file, `its L3 names ${data.L3}, which is not a file there`);
   return path;
+}
+
+/** The baseline's ruling-70 override list, or null when baseline.json carries none. `judge regression` applies it to the
+ *  baseline it is given, so every caller that judges against the baseline (matrix:sample, a weekly run) honours it. */
+export function baselineOverrides(dirs: { catalogue?: string; repo?: string } = {}): Ruling70Overrides | null {
+  return readBaselineFile(dirs).data.ruling70 ?? null;
 }

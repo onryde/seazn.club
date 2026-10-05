@@ -8,6 +8,8 @@
 //   regression --baseline <file> --now <file> --expect <ids.json> [--rerun <file>]
 //       a sample against the committed baseline, restricted to EXACTLY the ids the sample planned
 //       (--expect, written by run-sample.ts); with --rerun, only a regression the re-run reproduces counts.
+//       The baseline is read as catalogue/baseline.json's ruling70 block says (owner ruling 70): the ids it lists
+//       are red whatever the baseline run recorded, so a later works on them is an improvement and a later red no change.
 // --planned-not-run (ruling 65) defaults to allow: a ░ the plan marked planned is not a fault; a ░ on a
 // driven case always is. --json-out writes the verdict as JSON (lib/judge.ts JudgeOut) for `summary --judge`.
 // Exit codes, each with one meaning:
@@ -20,7 +22,8 @@
 //      plan, scope or harness commit (three runs of two products are not a flakiness measure, D21); a run whose
 //      case ids are not its recorded plan's, or whose scope is not its plan's; runs of one plan that do not hold
 //      the same case ids (they differ in width or variant, which a plan's ids drop): none shared is NoneCompared,
-//      some shared is CaseIdsDiffer; zero cases compared (across, regression); an expected
+//      some shared is CaseIdsDiffer; a catalogue/baseline.json that cannot be used (BaselineUnreadable: regression);
+//      zero cases compared (across, regression); an expected
 //      case absent from --now, a case in --now or --rerun the sample did not plan, or a regression with no
 //      case in --rerun. Each refusal prints its own name (lib/judge.ts JUDGE_REFUSALS);
 //   3  a crash while it loads, through `pnpm run matrix:judge` (its preload, scripts/lib/crash-exit.ts).
@@ -33,7 +36,8 @@ import { parseArgs } from "node:util";
 import { ZodError, z } from "zod";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
 import { EXIT_CODES } from "./lib/exit-codes.ts";
-import { HELD, JudgeOutSchema, JudgeRefused, harnessFaults, matchPlanIds, regressions, statesAcross, type Fault, type JudgeOut, type RunLike } from "./lib/judge.ts";
+import { HELD, JudgeOutSchema, JudgeRefused, forceBaselineStates, harnessFaults, matchPlanIds, regressions, statesAcross, type Fault, type JudgeOut, type RunLike } from "./lib/judge.ts";
+import { BaselineUnreadable, baselineOverrides } from "./lib/pr-sample.ts";
 import { mapStrings, redact } from "./lib/redact.ts";
 import { parseResults, type AnyRunResults, type RunResults } from "./lib/results.ts";
 
@@ -213,11 +217,23 @@ function holdsExactly(label: string, run: RunLike, runId: string, expect: readon
   if (absent.length > 0) throw new JudgeRefused("ExpectedAbsent", `${label} (${runId}) lacks ${absent.length} case(s) the sample planned: ${absent.slice(0, 5).join(", ")}${absent.length > 5 ? ", …" : ""}`);
 }
 
-function regressionMode(cli: Cli): Verdict {
-  const baseline = readRun(cli.baseline as string);
+/** Where the judge reads catalogue/baseline.json from: the harness's own, unless a test points it elsewhere. */
+interface JudgeOver { catalogue?: string }
+
+function regressionMode(cli: Cli, over: JudgeOver): Verdict {
+  const read = readRun(cli.baseline as string);
   const now = readRun(cli.now as string);
   const expect = readExpect(cli.expect as string);
   holdsExactly("--now", now, now.runId, expect, true);
+  // Owner ruling 70: the baseline's override list is applied HERE, in the one reader of a baseline, so matrix:sample and any other
+  // caller judge the same baseline. An unreadable list is a refusal, never a judgement made without it.
+  let overrides: ReturnType<typeof baselineOverrides>;
+  try { overrides = baselineOverrides(over.catalogue === undefined ? {} : { catalogue: over.catalogue }); } catch (e) {
+    if (e instanceof BaselineUnreadable) throw new JudgeRefused("BaselineUnreadable", e.message);
+    throw e;
+  }
+  const { run: baseline, applied } = forceBaselineStates(read, new Map(overrides === null ? [] : overrides.ids.map((id) => [id, overrides.state] as const)));
+  // The baseline's id is the run's own (forceBaselineStates keeps every field but the cases).
   const r = regressions(baseline, now, expect);
   if (r.compared === 0) throw new JudgeRefused("NoneCompared", `none of the ${expect.length} expected case(s) is in the baseline (${baseline.runId}) and --now (${now.runId}) — nothing compared (vacuous)`);
   let regressed: JudgeOut["regressed"] = r.regressed;
@@ -237,6 +253,7 @@ function regressionMode(cli: Cli): Verdict {
     out,
     lines: [
       `${now.runId} against the baseline ${baseline.runId}: compared ${r.compared} cases; ${regressed.length} regressions${cli.rerun === undefined ? "" : " reproduced by the re-run"}`,
+      ...(overrides === null || applied.length === 0 ? [] : [`baseline overrides: ${applied.length} case(s) held red (cause ${overrides.cause}, ${overrides.gap}, ${overrides.wave}) — owner ruling 70`]),
       ...capped(regressed.map((x) => `  ${x.caseId}: ${x.was} → ${x.now} — ${clip(x.reason)}${x.rerun === undefined ? "" : ` (re-run: ${x.rerun})`}`)),
     ],
   };
@@ -244,7 +261,7 @@ function regressionMode(cli: Cli): Verdict {
 
 // --- main --------------------------------------------------------------------------------------------------------
 
-export function main(argv: readonly string[]): number {
+export function main(argv: readonly string[], over: JudgeOver = {}): number {
   const cli = parseCli(argv);
   if ("usage" in cli) {
     process.stderr.write(`judge: ${redact(cli.usage)}\n`);
@@ -252,7 +269,7 @@ export function main(argv: readonly string[]): number {
   }
   let verdict: Verdict;
   try {
-    verdict = cli.mode === "across" ? acrossMode(cli) : cli.mode === "faults" ? faultsMode(cli) : regressionMode(cli);
+    verdict = cli.mode === "across" ? acrossMode(cli) : cli.mode === "faults" ? faultsMode(cli) : regressionMode(cli, over);
   } catch (e) {
     if (e instanceof JudgeRefused) {
       // The refusal's NAME is ours and is printed as it is: redact() reads `Name: <path>:` as a key/value pair.
