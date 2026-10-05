@@ -15,6 +15,16 @@
 // that statement, no mutant can fall on it, and nothing is lost by construction. test/stryker-cuts.test.ts proves it with
 // Stryker's own instrumenter on the real kernels, with an edit at the top of cricket.ts.
 //
+// MEMBER CUTS (W1d Task 20 pre-step, T20-PRE). A single top-level statement can hold more mutants than a leg may (cricket's
+// module object alone is 1,017, and at the hosted cost of one mutant that is over seven hours), so a cut may also fall between
+// the MEMBERS of one named declaration: `Host.member` is the member that starts the next part. The members are those of an
+// object-literal `const`, of a class, and of a function's body (its statements, `return` as one of them, then the members of
+// the object that `return` ends with). The first member is never an anchor (a cut before it leaves only the declaration's
+// opening line above). A member cut CANNOT be loss-free, unlike a statement cut: the node that contains the cut (the object
+// literal, the function body) lies inside no part, and Stryker drops a mutant whose node is in no range. That loss is the
+// container's own mutant ("replace the whole object with {}", "empty the whole body"), and nothing else; test/stryker-cuts.test.ts
+// measures it with Stryker's own instrumenter on every real split file and holds it to those containers.
+//
 // Plain .mjs, like stryker.groups.mjs: stryker.config.mjs loads it under `stryker`, and the parser is loaded only when a cut is
 // resolved, so scripts/stryker-matrix.mjs (which needs only the group names and runs before any install) never touches it.
 // scripts/stryker-cuts.d.mts types it for the engine's .ts tests; a test holds the two equal.
@@ -64,39 +74,157 @@ function declaredNames(ts, statement) {
   return [];
 }
 
+/** The TypeScript source file of `text`, and a 1-based line of a position in it. */
+function parseText(text) {
+  const ts = typescript();
+  const source = ts.createSourceFile("cut.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  return { ts, source, line: (pos) => source.getLineAndCharacterOfPosition(pos).line + 1 };
+}
+
 /** The top-level statements of `text`, in source order: `{index, names, startLine, endLine}` with lines 1-based. A statement
  *  starts at its first token (a comment above it, its JSDoc included, belongs to the gap before it) and ends where its last
  *  token does, so the lines of two statements never overlap unless they share a line. */
 export function topLevelStatements(text) {
-  const ts = typescript();
-  const source = ts.createSourceFile("cut.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const line = (pos) => source.getLineAndCharacterOfPosition(pos).line + 1;
+  const { ts, source, line } = parseText(text);
   return source.statements.map((s, index) => ({ index, names: declaredNames(ts, s), startLine: line(s.getStart(source)), endLine: line(s.getEnd()) }));
 }
 
-/** The index of the top-level statement that `anchor` names, or the reason it cannot be one. */
-function anchorIndex(statements, anchor, label) {
-  const declaring = statements.filter((s) => s.names.includes(anchor));
-  if (declaring.length === 0) throw new Error(`${label}: no top-level statement declares "${anchor}"`);
-  if (declaring.length > 1) throw new Error(`${label}: "${anchor}" is declared by ${declaring.length} top-level statements (an overload set, or a type and a value of one name), so a cut before it is ambiguous; anchor on another statement`);
-  return declaring[0].index;
+/** The name a property, method or class member declares, or undefined (a spread, a computed key, a destructuring). */
+function memberName(ts, node) {
+  const n = node.name;
+  if (n === undefined) return undefined;
+  return ts.isIdentifier(n) || ts.isStringLiteral(n) || ts.isNumericLiteral(n) || ts.isPrivateIdentifier(n) ? n.text : undefined;
+}
+
+/** An expression with its parentheses, `as` and `satisfies` taken off. */
+function unwrap(ts, expression) {
+  let e = expression;
+  while (e !== undefined && (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isTypeAssertionExpression(e))) e = e.expression;
+  return e;
+}
+
+/** The members of one node a cut can fall between, in source order, or null when it has none: an object literal (its
+ *  properties), a class (its members), a function-like with a block body (the body's statements, `return` named "return", then
+ *  the members of the object literal the LAST statement returns), and a `const` statement, a property or a class field bound to
+ *  one of those (through its initializer). A member is `{names, startLine, endLine, prevEnd, node}`: `prevEnd` is the last line
+ *  of the member before it (null for the first, which is never an anchor), `node` is the member itself (a member that is a
+ *  container can be opened in turn), and a member that names nothing (a spread) keeps its place as a neighbour but carries no name.
+ *  @returns {{names: string[], startLine: number, endLine: number, prevEnd: number | null, node: import("typescript").Node}[] | null} */
+function membersOf(ts, source, line, node) {
+  const run = (nodes, namesOf) => {
+    let prev = null;
+    return nodes.map((n) => {
+      const m = { names: namesOf(n), startLine: line(n.getStart(source)), endLine: line(n.getEnd()), prevEnd: prev, node: n };
+      prev = m.endLine;
+      return m;
+    });
+  };
+  const ofName = (n) => {
+    const name = memberName(ts, n);
+    return name === undefined ? [] : [name];
+  };
+  const ofBody = (body) => {
+    const stmts = body.statements;
+    const own = run([...stmts], (st) => (ts.isReturnStatement(st) ? ["return"] : declaredNames(ts, st)));
+    const last = stmts[stmts.length - 1];
+    const returned = last !== undefined && ts.isReturnStatement(last) ? unwrap(ts, last.expression) : undefined;
+    return returned !== undefined && ts.isObjectLiteralExpression(returned) ? [...own, ...run([...returned.properties], ofName)] : own;
+  };
+  const viaInitializer = (initializer) => (initializer === undefined ? null : membersOf(ts, source, line, unwrap(ts, initializer)));
+  if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) return run([...node.members], ofName);
+  if (ts.isObjectLiteralExpression(node)) return run([...node.properties], ofName);
+  if ((ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isMethodDeclaration(node) || ts.isArrowFunction(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node) || ts.isConstructorDeclaration(node)) && node.body !== undefined && ts.isBlock(node.body)) return ofBody(node.body);
+  if (ts.isVariableStatement(node)) return node.declarationList.declarations.length === 1 ? viaInitializer(node.declarationList.declarations[0].initializer) : null;
+  if (ts.isVariableDeclaration(node) || ts.isPropertyAssignment(node) || ts.isPropertyDeclaration(node)) return viaInitializer(node.initializer);
+  return null;
+}
+
+/** The units a cut can fall before in `text`, in source order, with the declarations named in `open` opened up: a top-level
+ *  statement is one unit; an opened declaration is its own unit (its head, up to its first member) followed by one unit per
+ *  named member after the first, named `Host.member`. A member that is itself big can be opened too, by its path
+ *  (`Host.member`), and its members are `Host.member.sub`. A unit is `{names, startLine, endLine, prevEnd}`: `prevEnd` is the last
+ *  line of the unit (or, inside an opened declaration, member) before it, null when there is none; a cut before it falls on that
+ *  line, so it is a cut-able place only when `prevEnd` is below `startLine`. */
+export function cutUnits(text, open = []) {
+  const { ts, source, line } = parseText(text);
+  const units = [];
+  const wanted = new Set(open);
+  const used = new Set();
+  /** The members of `node` as units named `${prefix}.${member}`, opening those whose path is wanted. */
+  const emit = (prefix, node) => {
+    const members = membersOf(ts, source, line, node);
+    if (members === null) throw new Error(`"${prefix}" has no members a cut can use (an object literal, a class, a function body)`);
+    for (const m of members) {
+      const named = m.names.filter((n) => n.length > 0);
+      if (m.prevEnd !== null && named.length > 0) units.push({ names: named.map((n) => `${prefix}.${n}`), startLine: m.startLine, endLine: m.endLine, prevEnd: m.prevEnd });
+      for (const n of named) {
+        if (wanted.has(`${prefix}.${n}`)) {
+          used.add(`${prefix}.${n}`);
+          emit(`${prefix}.${n}`, m.node);
+        }
+      }
+    }
+  };
+  source.statements.forEach((s, i) => {
+    const names = declaredNames(ts, s);
+    units.push({ names, startLine: line(s.getStart(source)), endLine: line(s.getEnd()), prevEnd: i === 0 ? null : line(source.statements[i - 1].getEnd()) });
+    const host = names.find((n) => wanted.has(n));
+    if (host === undefined) return;
+    used.add(host);
+    emit(host, s);
+  });
+  for (const w of wanted) {
+    if (used.has(w)) continue;
+    throw new Error(w.includes(".") ? `"${w}" is not a member of an opened declaration (open its host too, and name the member as it is declared)` : `no top-level statement declares "${w}"`);
+  }
+  return units;
+}
+
+/** Where a cut before `anchor` falls: the line the anchored unit starts on and the last line of what comes before it. An anchor
+ *  is a top-level name, or a path `Host.member` (`Host.member.sub` for a member of a member) for a member of a declaration (see
+ *  cutUnits). */
+function locate(ts, source, line, statements, anchor, label) {
+  const [hostName, ...path] = anchor.split(".");
+  const declaring = statements.filter((s) => s.names.includes(hostName));
+  if (declaring.length === 0) throw new Error(`${label}: no top-level statement declares "${hostName}"`);
+  if (declaring.length > 1) throw new Error(`${label}: "${hostName}" is declared by ${declaring.length} top-level statements (an overload set, or a type and a value of one name), so a cut before it is ambiguous; anchor on another statement`);
+  const at = declaring[0].index;
+  if (path.length === 0) {
+    if (at === 0) throw new Error(`${label}: "${anchor}" is the first statement, and a cut before it leaves an empty part`);
+    return { startLine: statements[at].startLine, prevEnd: statements[at - 1].endLine, what: "statement" };
+  }
+  let node = source.statements[at];
+  let walked = hostName;
+  let m;
+  for (const step of path) {
+    const members = membersOf(ts, source, line, node);
+    if (members === null) throw new Error(`${label}: "${walked}" has no members a cut can use (an object literal, a class, a function body)`);
+    const named = members.filter((x) => x.names.includes(step));
+    if (named.length === 0) throw new Error(`${label}: no member of "${walked}" is named "${step}"`);
+    if (named.length > 1) throw new Error(`${label}: "${walked}.${step}" names ${named.length} members of "${walked}", so a cut before it is ambiguous; anchor on another member`);
+    m = named[0];
+    node = m.node;
+    walked = `${walked}.${step}`;
+  }
+  const container = walked.slice(0, walked.lastIndexOf("."));
+  if (m.prevEnd === null) throw new Error(`${label}: "${anchor}" is the first member of "${container}", and a cut before it leaves only the declaration's opening line above it; anchor on a later member`);
+  return { startLine: m.startLine, prevEnd: m.prevEnd, what: "member" };
 }
 
 /** The ranges `file:a-b` that `anchors` cut a file into: the parts tile lines 1..TO_END_OF_FILE exactly. Part k ends on the
- *  last line of the statement before its next anchor, and the next part starts on the line after it (so a comment, a JSDoc or
- *  a blank line between two statements goes with the statement BELOW it). `label` names the file in a refusal. */
+ *  last line of the statement (or member) before its next anchor, and the next part starts on the line after it (so a comment, a
+ *  JSDoc or a blank line between two statements goes with the one BELOW it). `label` names the file in a refusal. */
 export function resolveSplit(text, anchors, label = "the file") {
-  const statements = topLevelStatements(text);
+  const { ts, source, line } = parseText(text);
+  const statements = source.statements.map((s, index) => ({ index, names: declaredNames(ts, s), startLine: line(s.getStart(source)), endLine: line(s.getEnd()) }));
   const ends = [];
-  let previous = -1;
+  let previous = { anchor: null, startLine: 0 };
   for (const anchor of anchors) {
-    const at = anchorIndex(statements, anchor, label);
-    if (at === 0) throw new Error(`${label}: "${anchor}" is the first statement, and a cut before it leaves an empty part`);
-    if (at <= previous) throw new Error(`${label}: "${anchor}" must come after the previous anchor in the file (anchors are listed in source order, each once); it is at statement ${at + 1} and the one before it at ${previous + 1}`);
-    const before = statements[at - 1];
-    if (before.endLine >= statements[at].startLine) throw new Error(`${label}: "${anchor}" starts on line ${statements[at].startLine}, the same line the statement before it ends, and a line range cannot cut between them`);
-    ends.push(before.endLine);
-    previous = at;
+    const at = locate(ts, source, line, statements, anchor, label);
+    if (at.startLine <= previous.startLine) throw new Error(`${label}: "${anchor}" must come after the previous anchor in the file (anchors are listed in source order, each once); it starts on line ${at.startLine} and the one before it${previous.anchor === null ? "" : `, "${previous.anchor}",`} on line ${previous.startLine}`);
+    if (at.prevEnd >= at.startLine) throw new Error(`${label}: "${anchor}" starts on line ${at.startLine}, the same line the ${at.what} before it ends, and a line range cannot cut between them`);
+    ends.push(at.prevEnd);
+    previous = { anchor, startLine: at.startLine };
   }
   const ranges = [];
   let from = 1;
@@ -145,6 +273,21 @@ export function statementMutants(statements, startLines) {
   for (const line of startLines) {
     const at = statements.findIndex((s) => line >= s.startLine && line <= s.endLine);
     if (at === -1) throw new Error(`a mutant starts on line ${line}, outside every top-level statement`);
+    weights[at]++;
+  }
+  return weights;
+}
+
+/** How many of the mutants that START on `startLines` (1-based) fall in each of `units` (cutUnits' output): a mutant belongs to
+ *  the last unit that starts on or before its line, so a declaration's head takes the mutants above its first member, and the
+ *  last member takes those below it. A mutant outside every top-level statement (`statements`) is refused, as in
+ *  statementMutants. */
+export function unitMutants(units, statements, startLines) {
+  const weights = units.map(() => 0);
+  for (const startLine of startLines) {
+    if (!statements.some((s) => startLine >= s.startLine && startLine <= s.endLine)) throw new Error(`a mutant starts on line ${startLine}, outside every top-level statement`);
+    let at = -1;
+    for (let i = 0; i < units.length; i++) if (units[i].startLine <= startLine) at = i;
     weights[at]++;
   }
   return weights;

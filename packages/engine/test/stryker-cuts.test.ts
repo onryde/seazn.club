@@ -17,7 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { STRYKER_SPLITS } from "../stryker.groups.mjs";
-import { planSplit, resolveEntries, resolveSplit, statementMutants, topLevelStatements } from "../scripts/stryker-cuts.mjs";
+import { cutUnits, planSplit, resolveEntries, resolveSplit, statementMutants, topLevelStatements, unitMutants } from "../scripts/stryker-cuts.mjs";
 import { mutantsOfText } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
@@ -142,36 +142,58 @@ describe("resolveEntries swaps `file#N` for the range of part N and leaves every
   });
 });
 
-describe("the real kernels: the cuts lose no mutant, and an edit at the top of cricket.ts moves none of them (Stryker's own instrumenter)", () => {
+describe("the real kernels: a cut between statements loses no mutant, a cut inside a declaration loses exactly the mutants whose node spans it, and an edit at the top of cricket.ts moves none of them (Stryker's own instrumenter)", () => {
   const files = Object.keys(STRYKER_SPLITS);
+  /** The mutants of a file whose node runs across the last line of a part (so no range holds them): `places` are the whole file's
+   *  mutants as the instrumenter locates them (0-based lines), `ranges` the parts (1-based, inclusive). */
+  const spanning = (places: { start: { line: number }; end: { line: number } }[], ranges: readonly (readonly [number, number])[]): number => {
+    const bounds = ranges.slice(0, -1).map(([, to]) => to);
+    return places.filter((m) => bounds.some((b) => m.start.line + 1 <= b && m.end.line + 1 > b)).length;
+  };
 
   it("every split file's anchors resolve, and the parts' mutants add up to the whole file's, for every file", async () => {
     expect(files.length, "split files").toBeGreaterThanOrEqual(5);
     let parts = 0;
+    let statementOnly = 0;
+    let lost = 0;
     for (const file of files) {
       const text = read(file);
       const ranges = resolveSplit(text, STRYKER_SPLITS[file]!);
-      const whole = (await mutantsOfText(file, text, "all")).length;
+      const places = await mutantsOfText(file, text, "all");
+      const whole = places.length;
       let sum = 0;
       for (const r of ranges) {
         sum += (await mutantsOfText(file, text, [r])).length;
         parts++;
       }
-      expect(sum, `${file}: ${whole - sum} mutant(s) lost to a cut`).toBe(whole);
+      // the loss is the instrumenter's own count of the nodes that span a cut, never the resolver's: Stryker keeps a mutant only if
+      // its whole node is inside the range
+      expect(whole - sum, `${file}: ${whole - sum} mutant(s) lost to a cut`).toBe(spanning(places, ranges));
+      lost += whole - sum;
+      // a split whose every cut is BETWEEN top-level statements (no \`Host.member\` anchor) loses nothing: the rule's own claim
+      if (!STRYKER_SPLITS[file]!.some((a) => a.includes("."))) {
+        expect(sum, `${file}: cut only between statements`).toBe(whole);
+        statementOnly++;
+      }
       expect(whole, `${file} has mutants`).toBeGreaterThan(0);
     }
     expect(parts).toBeGreaterThan(files.length);
+    expect(statementOnly, "split files cut only between statements").toBeGreaterThan(0);
+    expect(lost, "mutants lost to member cuts (the sizing test enumerates them by file)").toBeGreaterThan(0);
   }, INSTRUMENT_BUDGET_MS);
 
-  it("cricket.ts with a blank line, a comment and a new statement added at the top: the same anchors, the same statements, no mutant lost", async () => {
+  it("cricket.ts with a blank line, a comment and a new statement added at the top: the same anchors, the same statements, the same mutants in every part", async () => {
     const file = "src/sports/cricket/cricket.ts";
     const anchors = STRYKER_SPLITS[file]!;
     const text = read(file);
     const baseRanges = resolveSplit(text, anchors);
     const baseCounts: number[] = [];
     for (const r of baseRanges) baseCounts.push((await mutantsOfText(file, text, [r])).length);
-    const baseWhole = (await mutantsOfText(file, text, "all")).length;
-    expect(baseCounts.reduce((a, b) => a + b, 0)).toBe(baseWhole);
+    const basePlaces = await mutantsOfText(file, text, "all");
+    const baseWhole = basePlaces.length;
+    const baseLoss = spanning(basePlaces, baseRanges);
+    expect(baseCounts.reduce((a, b) => a + b, 0), "the parts hold the whole file's mutants but the ones whose node spans a cut").toBe(baseWhole - baseLoss);
+    expect(baseLoss, "cricket.ts is cut inside its big declarations, which loses their containers").toBeGreaterThan(0);
 
     const added = { blank: 1, comment: 1, statement: 2 };
     const NEW = "export const scratchAddedStatement = (n: number): number => n + 1;"; // one statement, with mutants of its own
@@ -194,7 +216,9 @@ describe("the real kernels: the cuts lose no mutant, and an edit at the top of c
       for (const r of ranges) counts.push((await mutantsOfText(file, edited, [r])).length);
       const gained = e.extra === -1 ? newStatementMutants : 0;
       expect(counts, e.name).toEqual(baseCounts.map((c, i) => (i === 0 ? c + gained : c)));
-      expect(counts.reduce((a, b) => a + b, 0), `${e.name}: no mutant lost`).toBe((await mutantsOfText(file, edited, "all")).length);
+      const editedPlaces = await mutantsOfText(file, edited, "all");
+      expect(counts.reduce((a, b) => a + b, 0), `${e.name}: no mutant lost but the same ones that span a cut`).toBe(editedPlaces.length - baseLoss);
+      expect(spanning(editedPlaces, ranges), `${e.name}: the same containers are lost`).toBe(baseLoss);
     }
   }, INSTRUMENT_BUDGET_MS);
 
@@ -208,6 +232,200 @@ describe("the real kernels: the cuts lose no mutant, and an edit at the top of c
     for (const r of OLD_RANGES) sum += (await mutantsOfText(file, edited, [r])).length;
     expect(whole - sum, "mutants the old line-number cuts lose to one blank line").toBeGreaterThan(0);
   }, INSTRUMENT_BUDGET_MS);
+});
+
+// W1d Task 20 PRE-STEP (T20-PRE): a statement of its own can hold more mutants than a leg may (cricket's module object is 1,017
+// at 77 runner-seconds each, the hosted rate, 441 minutes alone), so a cut may also fall BETWEEN THE MEMBERS of one named
+// declaration: `Host.member` names the member that starts the next part. The members of an object-literal `const`, of a class,
+// of a function's body (its statements, and the members of a `return { ... }` that ends it). Such a cut cannot be loss-free:
+// Stryker keeps a mutant only when its whole node lies inside one range, so the node that CONTAINS the cut (the object literal,
+// or the function body) is in no part. The loss is exactly those container nodes and is accounted for below, never silent.
+//
+// Hand-numbered again, so every expected line is read off this list:
+const HOSTS = [
+  "// header",                                  //  1
+  "export const mod = {",                       //  2
+  "  key: 'k',",                                //  3
+  "  apply(state) {",                           //  4
+  "    return state;",                          //  5
+  "  },",                                       //  6
+  "  // about summary",                         //  7
+  "  summary: (s) => s,",                       //  8
+  "  ...rest,",                                 //  9  a spread names nothing
+  "  last: 1,",                                 // 10
+  "};",                                         // 11
+  "",                                           // 12
+  "export function make(p: number) {",          // 13
+  "  const a = p + 1;",                         // 14
+  "  const b = a * 2;",                         // 15
+  "  function c() { return b; }",               // 16
+  "  return {",                                 // 17
+  "    one: a,",                                // 18
+  "    two() { return c(); },",                 // 19
+  "    three: b,",                              // 20
+  "  };",                                       // 21
+  "}",                                          // 22
+  "",                                           // 23
+  "export class K {",                           // 24
+  "  x = 1;",                                   // 25
+  "  m() { return 2; }",                        // 26
+  "  n() { return 3; }",                        // 27
+  "}",                                          // 28
+  "export const plain = 1;",                    // 29
+  "export const crowded = { a: 1, b: 2 };",     // 30  two members on one line
+  "export const twice = {",                     // 31
+  "  d: 1,",                                    // 32
+  "  d: 2,",                                    // 33  a repeated key (legal, ambiguous as an anchor)
+  "};",                                         // 34
+  "export const big = {",                       // 35
+  "  first: 1,",                                // 36
+  "  work(x) {",                                // 37  a member that is a function: it can be opened in turn
+  "    const p = x + 1;",                       // 38
+  "    const q = p * 2;",                       // 39
+  "    return q;",                              // 40
+  "  },",                                       // 41
+  "};",                                         // 42
+].join("\n");
+
+describe("a member cut: `Host.member` starts the next part, inside one declaration (T20-PRE)", () => {
+  it("an object literal's member: the part before ends on the last line of the member before it, the next starts on the line after", () => {
+    expect(resolveSplit(HOSTS, ["mod.apply"])).toEqual([[1, 3], [4, 99999]]);
+    // a comment above `summary` (line 7) goes with the part BELOW the cut; apply's closing line 6 ends the part above
+    expect(resolveSplit(HOSTS, ["mod.summary"])).toEqual([[1, 6], [7, 99999]]);
+    // the spread on line 9 names nothing, but it is a member: `last` follows it
+    expect(resolveSplit(HOSTS, ["mod.last"])).toEqual([[1, 9], [10, 99999]]);
+    expect(resolveSplit(HOSTS, ["mod.apply", "mod.last"])).toEqual([[1, 3], [4, 9], [10, 99999]]);
+  });
+
+  it("a function's body statements, its final `return`, and the members of the object it returns", () => {
+    expect(resolveSplit(HOSTS, ["make.b"])).toEqual([[1, 14], [15, 99999]]);
+    expect(resolveSplit(HOSTS, ["make.c"])).toEqual([[1, 15], [16, 99999]]);
+    expect(resolveSplit(HOSTS, ["make.return"])).toEqual([[1, 16], [17, 99999]]);
+    expect(resolveSplit(HOSTS, ["make.two"])).toEqual([[1, 18], [19, 99999]]);
+    expect(resolveSplit(HOSTS, ["make.three"])).toEqual([[1, 19], [20, 99999]]);
+    expect(resolveSplit(HOSTS, ["make.b", "make.return", "make.three"])).toEqual([[1, 14], [15, 16], [17, 19], [20, 99999]]);
+  });
+
+  it("a class member, and a top-level cut mixed with a member cut in one list", () => {
+    expect(resolveSplit(HOSTS, ["K.m"])).toEqual([[1, 25], [26, 99999]]);
+    // `make` cuts after mod's closing line 11, `make.c` after `b` on line 15, `K` after make's closing line 22
+    expect(resolveSplit(HOSTS, ["make", "make.c", "K"])).toEqual([[1, 11], [12, 15], [16, 22], [23, 99999]]);
+  });
+
+  it("a member that is itself a function is cut by a path of three names: `Host.member.statement`", () => {
+    expect(resolveSplit(HOSTS, ["big.work.q"])).toEqual([[1, 38], [39, 99999]]);
+    expect(resolveSplit(HOSTS, ["big.work.return"])).toEqual([[1, 39], [40, 99999]]);
+    expect(resolveSplit(HOSTS, ["big.work", "big.work.return"])).toEqual([[1, 36], [37, 39], [40, 99999]]);
+    expect(() => resolveSplit(HOSTS, ["big.work.p"])).toThrow(/"big\.work\.p" is the first member of "big\.work"/);
+    expect(() => resolveSplit(HOSTS, ["big.nosuch.q"])).toThrow(/no member of "big" is named "nosuch"/);
+    expect(() => resolveSplit(HOSTS, ["big.first.q"])).toThrow(/"big\.first" has no members a cut can use/);
+    expect(() => resolveSplit(HOSTS, ["big.work.nosuch"])).toThrow(/no member of "big\.work" is named "nosuch"/);
+  });
+
+  it("refuses a host that is not there, a name that is not a member, a declaration with no members to cut, and a first member", () => {
+    expect(() => resolveSplit(HOSTS, ["nosuch.x"])).toThrow(/no top-level statement declares "nosuch"/);
+    expect(() => resolveSplit(HOSTS, ["mod.nosuch"])).toThrow(/no member of "mod" is named "nosuch"/);
+    expect(() => resolveSplit(HOSTS, ["plain.x"])).toThrow(/"plain" has no members a cut can use/);
+    // the first member would leave only the declaration's opening line before the cut
+    expect(() => resolveSplit(HOSTS, ["mod.key"])).toThrow(/"mod\.key" is the first member of "mod"/);
+    expect(() => resolveSplit(HOSTS, ["make.a"])).toThrow(/"make\.a" is the first member of "make"/);
+    expect(() => resolveSplit(HOSTS, ["make.one"])).toThrow(/"make\.one" is the first member of "make"/);
+    expect(() => resolveSplit(HOSTS, ["K.x"])).toThrow(/"K\.x" is the first member of "K"/);
+  });
+
+  it("refuses a member name that two members share, and members that share a line (a line range cannot cut between them)", () => {
+    expect(() => resolveSplit(HOSTS, ["twice.d"])).toThrow(/"twice\.d" names 2 members/);
+    expect(() => resolveSplit(HOSTS, ["crowded.b"])).toThrow(/"crowded\.b" starts on line 30, the same line the member before it ends/);
+  });
+
+  it("anchors stay in source order across top-level and member anchors, and a repeat is refused", () => {
+    expect(() => resolveSplit(HOSTS, ["make.c", "mod.apply"])).toThrow(/"mod\.apply".*(before|after|order)/s);
+    expect(() => resolveSplit(HOSTS, ["mod.apply", "mod.apply"])).toThrow(/"mod\.apply".*(before|after|order)/s);
+    expect(() => resolveSplit(HOSTS, ["make.return", "make.c"])).toThrow(/"make\.c".*(before|after|order)/s);
+  });
+
+  it("an edit above or inside a member moves the cut with it and never off its member (every boundary shifts by the lines added)", () => {
+    const anchors = ["mod.apply", "make.return", "make.three"];
+    const before = resolveSplit(HOSTS, anchors);
+    const lines = HOSTS.split("\n");
+    const edits = [
+      { name: "a blank line on top", added: 1, text: `\n${HOSTS}` },
+      { name: "a comment on top", added: 1, text: `// added\n${HOSTS}` },
+      // a statement added inside make's body, above `return`: only the cuts after it move
+      { name: "a line inside make's body", added: 1, text: [...lines.slice(0, 15), "  const mid = 1;", ...lines.slice(15)].join("\n"), from: 1 },
+    ];
+    for (const e of edits) {
+      const after = resolveSplit(e.text, anchors);
+      expect(after.length, e.name).toBe(before.length);
+      for (let i = 0; i < before.length - 1; i++) expect(after[i]![1], `${e.name}: cut ${i + 1}`).toBe(before[i]![1] + (e.from !== undefined && i < e.from ? 0 : e.added));
+    }
+  });
+});
+
+describe("cutUnits and unitMutants: the recut helper's view of a file with some declarations opened up", () => {
+  it("with nothing opened it is the top-level statements (each unit's names, lines and the line the statement before it ended on)", () => {
+    const units = cutUnits(SRC, []);
+    expect(units.map((u) => [u.names, u.startLine, u.endLine, u.prevEnd])).toEqual([
+      [[], 3, 3, null],
+      [["alpha"], 6, 8, 3],
+      [["beta"], 11, 13, 8],
+      [["Gamma"], 14, 14, 13],
+      [["T"], 15, 15, 14],
+      [["d"], 15, 15, 15],
+      [["Delta"], 16, 16, 15],
+    ]);
+  });
+
+  it("an opened declaration is its own head, then its members after the first, each named `Host.member`, in source order", () => {
+    const units = cutUnits(HOSTS, ["mod", "make", "K"]);
+    const rows = units.map((u) => [u.names.join("|"), u.startLine, u.prevEnd]);
+    expect(rows).toEqual([
+      ["mod", 2, null],
+      ["mod.apply", 4, 3],
+      ["mod.summary", 8, 6],   // the unit starts at the member, not at the comment above it; the cut sits after line 6
+      ["mod.last", 10, 9],     // the spread on line 9 names nothing so it is no unit, but it is the member before `last`
+      ["make", 13, 11],
+      ["make.b", 15, 14],
+      ["make.c", 16, 15],
+      ["make.return", 17, 16],
+      ["make.two", 19, 18],
+      ["make.three", 20, 19],
+      ["K", 24, 22],
+      ["K.m", 26, 25],
+      ["K.n", 27, 26],
+      ["plain", 29, 28],
+      ["crowded", 30, 29],
+      ["twice", 31, 30],
+      ["big", 35, 34],
+    ]);
+  });
+
+  it("a member can be opened in turn, by its path: its own members follow it as `Host.member.sub`, and only an opened host's members can be", () => {
+    const rows = cutUnits(HOSTS, ["big", "big.work"]).filter((u) => u.names[0]!.startsWith("big")).map((u) => [u.names.join("|"), u.startLine, u.prevEnd]);
+    expect(rows).toEqual([["big", 35, 34], ["big.work", 37, 36], ["big.work.q", 39, 38], ["big.work.return", 40, 39]]);
+    expect(() => cutUnits(HOSTS, ["big.work"])).toThrow(/"big\.work" is not a member of an opened declaration/);
+    expect(() => cutUnits(HOSTS, ["big", "big.first"])).toThrow(/"big\.first" has no members a cut can use/);
+    expect(() => cutUnits(HOSTS, ["big", "big.nosuch"])).toThrow(/"big\.nosuch" is not a member of an opened declaration/);
+  });
+
+  it("refuses to open a declaration that has no members, or that is not there", () => {
+    expect(() => cutUnits(HOSTS, ["plain"])).toThrow(/"plain" has no members a cut can use/);
+    expect(() => cutUnits(HOSTS, ["nosuch"])).toThrow(/no top-level statement declares "nosuch"/);
+  });
+
+  it("unitMutants gives each unit the mutants that start from its first line up to the next unit's, and refuses a mutant outside every statement", () => {
+    const units = cutUnits(HOSTS, ["mod", "make"]);
+    const statements = topLevelStatements(HOSTS);
+    // 1-based start lines: 2 (mod's own line), 5 (inside apply), 8 (summary), 10 (last), 14 (make's first statement), 19 (two)
+    const weights = unitMutants(units, statements, [2, 5, 8, 10, 14, 19]);
+    expect(units.map((u, i) => [u.names.join("|"), weights[i]])).toEqual([
+      ["mod", 1], ["mod.apply", 1], ["mod.summary", 1], ["mod.last", 1],
+      ["make", 1], ["make.b", 0], ["make.c", 0], ["make.return", 0], ["make.two", 1], ["make.three", 0],
+      ["K", 0], ["plain", 0], ["crowded", 0], ["twice", 0], ["big", 0],
+    ]);
+    expect(() => unitMutants(units, statements, [1])).toThrow(/outside every top-level statement/);
+    expect(unitMutants([], [], [])).toEqual([]);
+  });
 });
 
 describe("statementMutants and planSplit: the recut helper's counting and its choice of cuts", () => {
@@ -319,6 +537,59 @@ describe("pnpm mutation:recut, the helper that proposes the cuts for a target le
     expect(printed).toEqual(sizes);
     expect(r.stdout, "the output says which STRYKER_SPLITS table to paste it into").toMatch(/stryker\.groups\.mjs/);
   }, spawnBudget(1) + INSTRUMENT_BUDGET_MS);
+
+  it("--open: a declaration too big to cut around is opened, the anchors are `Host.member` paths, and the printed sizes are the instrumenter's counts of the resolved ranges, with the mutants the cuts drop reported (T20-PRE)", async () => {
+    const file = "src/sports/period/kernel.ts";
+    const text = read(file);
+    // makePeriodModule alone is 938 mutants: no cut between top-level statements can split it
+    const closed = recut([file, "3"]);
+    expect(closed.status, closed.stderr).toBe(0);
+    const closedMax = Number(/the largest (\d+) mutants/.exec(closed.stdout)![1]);
+    expect(closedMax, "unopened, the biggest statement bounds the largest part").toBeGreaterThanOrEqual(938);
+
+    const r = recut([file, "3", "--open", "makePeriodModule"]);
+    expect(r.status, r.stderr).toBe(0);
+    const entry = /^\s*"src\/sports\/period\/kernel\.ts": \[([^\]]*)\],$/m.exec(r.stdout);
+    expect(entry, `a STRYKER_SPLITS line in:\n${r.stdout}`).not.toBeNull();
+    const anchors = [...entry![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    expect(anchors).toHaveLength(2);
+    expect(anchors.filter((a) => a.startsWith("makePeriodModule.")).length, "the cuts fall inside the opened declaration").toBeGreaterThan(0);
+    const ranges = resolveSplit(text, anchors);
+    const whole = (await mutantsOfText(file, text, "all")).length;
+    const sizes: number[] = [];
+    for (const [a, b] of ranges) sizes.push((await mutantsOfText(file, text, [[a, b]])).length);
+    const printed = [...r.stdout.matchAll(/^\s*part (\d+): (\d+) mutants\b/gm)].map((m) => Number(m[2]));
+    expect(printed, "one printed size per part, each the instrumenter's count of that range").toEqual(sizes);
+    const largest = Number(/the largest (\d+) mutants/.exec(r.stdout)![1]);
+    expect(largest).toBe(Math.max(...sizes));
+    expect(largest, "opening the declaration made the largest part smaller than the unopened plan's").toBeLessThan(closedMax);
+    // the cuts drop the declaration's containers and the output says how many, by the instrumenter's own whole-minus-parts
+    const dropped = whole - sizes.reduce((a, b) => a + b, 0);
+    expect(dropped, "a cut inside a declaration drops its container's mutant").toBeGreaterThan(0);
+    expect(r.stdout).toMatch(new RegExp(`mutants in no part: ${dropped}\\b`));
+    expect(closed.stdout, "a plan with only statement cuts drops nothing, and says so").toMatch(/mutants in no part: 0\b/);
+  }, spawnBudget(2) + INSTRUMENT_BUDGET_MS);
+
+  it("--open refuses a declaration that is not there, a flag with no value and an empty entry, each exit 2 with nothing on stdout and ITS OWN reason", () => {
+    // each case's reason is asserted, not only the exit: an empty entry that was let through would still be refused (exit 2) by the
+    // declaration lookup, and a status-only check cannot tell the entry's own refusal from that one
+    const cases: [string[], RegExp][] = [
+      [["src/sports/period/kernel.ts", "2", "--open", "nosuchDeclaration"], /no top-level statement declares "nosuchDeclaration"/],
+      [["src/sports/period/kernel.ts", "2", "--open"], /Option '--open <value>' argument missing/],
+      [["src/sports/period/kernel.ts", "2", "--open", ""], /--open "" names an empty declaration/],
+      [["src/sports/period/kernel.ts", "2", "--open", "makePeriodModule,"], /--open "makePeriodModule," names an empty declaration/],
+    ];
+    let checked = 0;
+    for (const [args, why] of cases) {
+      const r = recut(args);
+      expect(r.status, `args ${JSON.stringify(args)}: ${r.stderr}`).toBe(2);
+      expect(r.stdout, `args ${JSON.stringify(args)}`).toBe("");
+      expect(r.stderr, `args ${JSON.stringify(args)}`).toMatch(/stryker-recut: /);
+      expect(r.stderr, `args ${JSON.stringify(args)}`).toMatch(why);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  }, spawnBudget(4) + INSTRUMENT_BUDGET_MS);
 
   it("refuses a missing file, a part count under 1 or one the file cannot be cut into, and a stray flag, each with exit 2 and nothing on stdout", () => {
     let checked = 0;
