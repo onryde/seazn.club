@@ -271,7 +271,9 @@ const redactAll = <T>(v: T): T => mapStrings(v, redact);
 function printCell(c: ModelCell): void {
   const f = c.failure;
   if (f !== null) {
-    say(`  FAILURE ${f.check} ${f.known === null ? "(NEW)" : `(known ${f.known})`}: ${f.commands.length === 0 ? "(no command list)" : f.commands.join(" → ")}`);
+    // W1d item 26: a failure two open cases both fit, with no trigger to choose between them, is NEW — and says which cases may be its.
+    const naming = f.known !== null ? `(known ${f.known})` : f.ambiguous.length > 0 ? `(NEW, or ambiguous between ${f.ambiguous.join(" and ")}: the run made more than one roster change, so no trigger names it)` : "(NEW)";
+    say(`  FAILURE ${f.check} ${naming}: ${f.commands.length === 0 ? "(no command list)" : f.commands.join(" → ")}`);
     say(`    seed=${f.seed} path=${f.path === "" ? "(none)" : f.path} replayPath=${f.replayPath ?? "(none)"}${c.interrupted ? ", TIME BOX HIT (unshrunk)" : ""}`);
     for (const e of f.evidence.slice(0, 3)) say(`    evidence: ${e}`);
     for (const [check, cmds] of Object.entries(c.maskedNew)) {
@@ -425,17 +427,13 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
         const real = deps.driverFor(base, session, org.orgId);
         const competitionFor = await competitionSlots(real, cap, (k) => ({ name: `Matrix model ${job.cell}`, slug: `mm-${cli.runId}-${i + 1}${k === 1 ? "" : `-${k}`}` }));
         say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`}${job.replayPath === undefined ? "" : ` replayPath=${job.replayPath}`} maxCommands=${job.maxCommands} fences=${job.fences ? "on" : "off"}${job.replay === null ? "" : ` — replay of ${job.replay.id}`}`);
-        // T16 fix round 1: a replay offers its own case to the matcher first.
-        // Two open cases may share cell, check and match — one bug reached by
-        // two triggers (MB-007, MB-010) — and the first in the file would
-        // otherwise claim the other's replay, which verdictOf then calls NOT
-        // REPRODUCED although it failed as itself. Every other case stays, so
-        // a failure as ANOTHER case is still named as that case.
-        const replay = job.replay;
-        const ranked = replay === null ? regressions : [replay, ...regressions.filter((r) => r.id !== replay.id)];
+        // Two open cases may share cell, check and match — one bug reached by two triggers (MB-007, MB-010) — and
+        // the matcher tells them apart by their `trigger`, read from the failing run's own commands (W1d item 26):
+        // a replay is named by what it did, never by where its case sits in the file. Every case stays offered, so a
+        // failure as ANOTHER case is still named as that case.
         const rep = await runCell({
           cell: job.cell, row: job.row, sport: job.sport, variant, runs: job.runs, maxCommands: job.maxCommands, seed: job.seed, fences: job.fences,
-          timeLimitMs: cli.timeLimitMs, regressions: ranked,
+          timeLimitMs: cli.timeLimitMs, regressions,
           ...(deps.now === undefined ? {} : { now: deps.now }),
           ...(job.path === undefined ? {} : { path: job.path }),
           ...(job.replayPath === undefined ? {} : { replayPath: job.replayPath }),

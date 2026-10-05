@@ -20,21 +20,24 @@
 // grammar heads a block, and a header heads none): the model fake is a round-robin (league) product, and #879 —
 // the one fault these tests drive — is a league fault; the correct-product
 // test sweeps the model's own sports (SLICE_SPORTS) instead.
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { RefusedCall, RequestTimedOut, productMessageOf, type FixtureStateOut, type PostedEvent } from "../lib/driver/types.ts";
 import { ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import { COMMAND_KINDS, ModelViolation, SWISS_BIAS, commandOf, modelCommands, newModelState, type ModelState } from "../lib/model/commands.ts";
-import { FENCES } from "../lib/model/fences.ts";
+import { FENCES, ROSTER_TRIGGERS, triggersOf } from "../lib/model/fences.ts";
 import { MODEL_ERROR, biasFor, regressionFor, runCell, shrinkTarget, vacuityOf, type FailureKey, type RunCellInput } from "../lib/model/run-cell.ts";
-import { MATCH_REQUIRED_CHECKS, loadRegressions } from "../lib/scenario-catalogue.ts";
+import { MATCH_REQUIRED_CHECKS, loadRegressions, type RegressionCase } from "../lib/scenario-catalogue.ts";
 import { LINEUPS_CHECK, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type UnknownLedger } from "../lib/model/state.ts";
 import { STEP_INVARIANTS } from "../lib/invariants.ts";
 import { SLICE_SPORTS } from "../lib/slice.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { MODEL_DEFAULTS } from "../model.ts";
-import { ModelFakeDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
+import { ModelFakeDriver, StaleBracketDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
 
 const CELL = "league|generic";
 const I7 = "I7-rr-no-pair-over-legs";
@@ -981,5 +984,218 @@ describe("Task 14: a row the model does not drive is refused by family through r
     const { driver, report } = runModelCell({ row, sport: "generic", variant: "standard", runs: 5, seed: 1, entrants: 8 });
     await expect(report).rejects.toMatchObject({ name: "ModelUnsupported", wave });
     expect(driver.calls).toEqual([]);
+  });
+});
+
+// W1d Task 13, item 26: MB-007 (Generate after an ADDED entrant) and MB-010 (Generate after a WITHDRAWAL) share a
+// cell, a check and a match: the product says the same words for both. The committed w1drv-t16fr1-model-de run
+// found MB-010's shape and reported it as known MB-007. The roster change that preceded the failing command is
+// what tells them apart; a run that made both names neither. Expected values come from the committed rows and the
+// committed finding reports, never from a table typed here.
+describe("regressionFor — a failure is named by the roster change that tripped it (W1d item 26)", () => {
+  const TRUTH_RUNS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs");
+  type Found = { check: string; seed: number; path: string; commands: string[]; said: string | null; known: string | null };
+  type Report = { runId: string; cells: { cell: string; failure: Found | null }[] };
+  let reports: Report[] | null = null;
+  /** The failure a case was committed from, read from its finding run's committed model report. */
+  const findingOf = (r: RegressionCase): Found => {
+    if (reports === null) {
+      const found: Report[] = [];
+      const walk = (dir: string): void => {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+          if (e.isDirectory()) walk(join(dir, e.name));
+          else if (/^model-report.*\.json$/.test(e.name)) found.push(JSON.parse(readFileSync(join(dir, e.name), "utf8")) as Report);
+        }
+      };
+      walk(TRUTH_RUNS);
+      reports = found;
+    }
+    const hits = reports.filter((rep) => rep.runId === r.runId).flatMap((rep) => rep.cells).filter((c) => c.cell === r.cell && c.failure?.seed === r.seed && c.failure.path === r.path);
+    expect(hits.length, `${r.id}: no committed report of run ${r.runId} holds its failure on ${r.cell}`).toBeGreaterThan(0);
+    return hits[0]!.failure!;
+  };
+  const rows = loadRegressions();
+  /** The open cases that share a cell, a check and a match with another: the ones only a trigger can tell apart. */
+  const colliding = (): RegressionCase[] => rows.filter((r) => r.status === "open" && rows.some((o) => o !== r && o.status === "open" && o.cell === r.cell && o.check === r.check && o.match === r.match));
+  const byTrigger = (t: string): RegressionCase => {
+    const hit = colliding().filter((r) => r.trigger === t);
+    expect(hit.length, `exactly one colliding case carries trigger ${t}`).toBe(1);
+    return hit[0]!;
+  };
+  const kindsOf = (cmds: readonly string[]): string[] => cmds.map((c) => c.split("(")[0]!);
+
+  it("the premise: MB-007 and MB-010 are open, and share a cell, a check and a match — the words alone cannot tell them apart", () => {
+    const pair = colliding();
+    expect(pair.map((r) => r.id)).toEqual(["MB-007", "MB-010"]);
+    expect(new Set(pair.map((r) => `${r.cell}|${r.check}|${r.match}`)).size).toBe(1);
+    // ...and the committed finding run recorded the later one under the earlier one's id: the defect this item closes.
+    const de = findingOf(pair[1]!);
+    expect(de.known, "w1drv-t16fr1-model-de reported its MB-010 failure as known").toBe("MB-007");
+  });
+
+  it("triggersOf: the roster changes before the failing command, distinct, first seen first; the failing command itself and every other kind are not one", () => {
+    expect(triggersOf(["Generate(0,0)", "AddEntrant(0,0)", "Generate(0,0)"])).toEqual(["added"]);
+    expect(triggersOf(["Start(0,0)", "Withdraw(45,0)", "Generate(0,0)"])).toEqual(["withdrawn"]);
+    expect(triggersOf(["Withdraw(1,0)", "AddEntrant(0,0)", "Withdraw(2,0)", "Generate(0,0)"])).toEqual(["withdrawn", "added"]);
+    // The failing command is the last: a Withdraw that failed is not a roster change that tripped itself.
+    expect(triggersOf(["Start(0,0)", "Withdraw(45,0)"])).toEqual([]);
+    expect(triggersOf(["AddEntrant(0,0)"])).toEqual([]);
+    expect(triggersOf(["Start(0,0)", "Score(0,0)", "Generate(0,0)"])).toEqual([]);
+    expect(triggersOf([])).toEqual([]);
+    // A prefix is not a kind: a command whose name merely starts like one is not a roster change.
+    expect(triggersOf(["AddEntrants(0,0)", "Withdrawn(0,0)", "Generate(0,0)"])).toEqual([]);
+  });
+
+  it("the case rows name their triggers, and each is the one its own committed finding shows", () => {
+    const pair = colliding();
+    let checked = 0;
+    for (const r of pair) {
+      expect(r.trigger, `${r.id} names its trigger`).toBeDefined();
+      expect(ROSTER_TRIGGERS as readonly string[], r.id).toContain(r.trigger);
+      expect(triggersOf(findingOf(r).commands), `${r.id}: its finding's commands`).toEqual([r.trigger]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(new Set(pair.map((r) => r.trigger)).size, "the two triggers differ").toBe(2);
+  });
+
+  it("each committed finding is named by ITS case: the withdrawn-trigger failure is MB-010, never MB-007 (and the added-trigger one MB-007)", () => {
+    let checked = 0;
+    for (const r of colliding()) {
+      const f = findingOf(r);
+      // The failure as run-cell reports it: the cell, the check, the product's answer, and the commands that ran.
+      expect(regressionFor(rows, r.cell, f.check, f.said, triggersOf(f.commands)), `${r.id}'s own finding`).toBe(r.id);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The shape the committed run misnamed, pinned on its own commands rather than a case's id.
+    const withdrawn = byTrigger("withdrawn");
+    const f = findingOf(withdrawn);
+    expect(kindsOf(f.commands)).toContain("Withdraw");
+    expect(kindsOf(f.commands)).not.toContain("AddEntrant");
+    expect(regressionFor(rows, withdrawn.cell, f.check, f.said, triggersOf(f.commands))).toBe(withdrawn.id);
+  });
+
+  it("a run that made BOTH roster changes names neither case: ambiguous, never a known id", () => {
+    const [a, b] = colliding();
+    const f = findingOf(b!);
+    const both = ["AddEntrant(0,0)", "Start(0,0)", "Withdraw(45,0)", "Generate(0,0)"];
+    expect(triggersOf(both).length, "the premise: two triggers").toBe(2);
+    const named = regressionFor(rows, b!.cell, f.check, f.said, triggersOf(both));
+    expect(typeof named).toBe("object");
+    expect(named).toEqual({ ambiguous: [a!.id, b!.id] });
+    // Order does not matter: the same two ids whichever way the file lists them.
+    expect(regressionFor([...rows].reverse(), b!.cell, f.check, f.said, triggersOf(both))).toEqual({ ambiguous: [b!.id, a!.id] });
+  });
+
+  it("no roster change before the failure (or no commands at all): neither trigger case names it — NEW, not ambiguous", () => {
+    const [, b] = colliding();
+    const f = findingOf(b!);
+    expect(regressionFor(rows, b!.cell, f.check, f.said, triggersOf(["Start(0,0)", "Generate(0,0)"]))).toBeNull();
+    expect(regressionFor(rows, b!.cell, f.check, f.said, triggersOf([]))).toBeNull();
+    // A caller that passes no trigger names nothing a trigger case owns.
+    expect(regressionFor(rows, b!.cell, f.check, f.said)).toBeNull();
+  });
+
+  it("a case with no trigger is unchanged: it names its failure whatever roster change preceded it; a trigger case wins over it only when its trigger is the one shown", () => {
+    const neutral = openReg("MB-N", UNEXPECTED_REFUSAL, "would strand home_slot_label");
+    const trig = (id: string, trigger: "added" | "withdrawn") => ({ ...openReg(id, UNEXPECTED_REFUSAL, "would strand home_slot_label"), trigger });
+    const said = new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, "INTERNAL", "generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) f1").message;
+    for (const t of [[], ["added"], ["withdrawn"], ["added", "withdrawn"]] as const) expect(regressionFor([neutral], CELL, UNEXPECTED_REFUSAL, said, t), `neutral alone, shown ${t.join("+")}`).toBe("MB-N");
+    // The case that names the trigger is preferred to the one that names none.
+    expect(regressionFor([neutral, trig("MB-W", "withdrawn")], CELL, UNEXPECTED_REFUSAL, said, ["withdrawn"])).toBe("MB-W");
+    expect(regressionFor([trig("MB-W", "withdrawn"), neutral], CELL, UNEXPECTED_REFUSAL, said, ["withdrawn"])).toBe("MB-W");
+    // A trigger case for the other branch does not claim it: the neutral one stands.
+    expect(regressionFor([neutral, trig("MB-A", "added")], CELL, UNEXPECTED_REFUSAL, said, ["withdrawn"])).toBe("MB-N");
+    // A trigger case alone, for the other branch: nothing names it.
+    expect(regressionFor([trig("MB-A", "added")], CELL, UNEXPECTED_REFUSAL, said, ["withdrawn"])).toBeNull();
+    // Both changes shown: a lone trigger case may or may not be its own — ambiguous, naming it.
+    expect(regressionFor([trig("MB-A", "added")], CELL, UNEXPECTED_REFUSAL, said, ["added", "withdrawn"])).toEqual({ ambiguous: ["MB-A"] });
+  });
+
+  it("two cases that match and none names the trigger: ambiguous, listing both (a file that bypassed the loader's guard)", () => {
+    const one = openReg("MB-X", UNEXPECTED_REFUSAL, "would strand home_slot_label");
+    const two = openReg("MB-Y", UNEXPECTED_REFUSAL, "would strand home_slot_label");
+    const said = new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, "INTERNAL", "generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) f1").message;
+    expect(regressionFor([one, two], CELL, UNEXPECTED_REFUSAL, said, ["added"])).toEqual({ ambiguous: ["MB-X", "MB-Y"] });
+    // The check that carries no answer: two null-match cases are as ambiguous.
+    expect(regressionFor([openReg("MB-P", I7), openReg("MB-Q", I7)], CELL, I7, null)).toEqual({ ambiguous: ["MB-P", "MB-Q"] });
+  });
+
+  // The seam: the trigger reaches regressionFor through the real runCell, from the commands the shrunk failure ran.
+  describe("through runCell: the failing run's own commands decide", () => {
+    const [mb007, mb010] = colliding();
+    const said = findingOf(mb010!).said;
+    const words = said === null ? null : productMessageOf(said);
+    // The cases' own cell is a bracket; the model fake is a round robin, so the cases are relabelled onto its cell.
+    const onCell = (r: RegressionCase): RegressionCase => ({ ...r, cell: CELL });
+    /** The product's 500, in the words the committed findings carry; the fake refuses once `refuses` says. */
+    const productOf = (refuses: (d: StaleBracketDriver) => boolean): RunCellInput["newDriverState"] => async (n) => {
+      const real = new StaleBracketDriver(refuses, words ?? "");
+      const model = await newModelState({ driver: real, row: "league", sport: "generic", variant: "score", entrants: 4, tag: `t${n}` });
+      return { real, model };
+    };
+    const run = (refuses: (d: StaleBracketDriver) => boolean) => runCell({ ...input({ regressions: [mb007!, mb010!].map(onCell), runs: 300, maxCommands: 20, fences: false }), newDriverState: productOf(refuses) });
+
+    it("the premise: the words the fake refuses with are the committed cases' own match", () => {
+      expect(words).not.toBeNull();
+      expect(words!).toContain(mb007!.match!);
+      expect(mb010!.match).toBe(mb007!.match);
+    });
+
+    it("a Generate refused after a WITHDRAWAL is the withdrawn-trigger case, not the first case on the check", async () => {
+      const r = await run((d) => d.withdrew && !d.added);
+      const f = r.failure;
+      if (f === null) throw new Error("the stale bracket found nothing");
+      expect(f.check).toBe(mb010!.check);
+      expect(kindsOf(f.commands)).toContain("Withdraw");
+      expect(triggersOf(f.commands)).toEqual(["withdrawn"]);
+      expect(f.known).toBe(byTrigger("withdrawn").id);
+      expect(f.ambiguous).toEqual([]);
+    });
+
+    it("a Generate refused after an ADDED entrant is the added-trigger case", async () => {
+      const r = await run((d) => d.added && !d.withdrew);
+      const f = r.failure;
+      if (f === null) throw new Error("the stale bracket found nothing");
+      expect(kindsOf(f.commands)).toContain("AddEntrant");
+      expect(triggersOf(f.commands)).toEqual(["added"]);
+      expect(f.known).toBe(byTrigger("added").id);
+      expect(f.ambiguous).toEqual([]);
+    });
+
+    it("a Generate refused only after BOTH is NEW-or-ambiguous: never known, the two ids listed", async () => {
+      const r = await run((d) => d.added && d.withdrew);
+      const f = r.failure;
+      if (f === null) throw new Error("the stale bracket found nothing");
+      expect(triggersOf(f.commands).slice().sort()).toEqual([...ROSTER_TRIGGERS].sort());
+      expect(f.known).toBeNull();
+      expect(f.ambiguous).toEqual([mb007!.id, mb010!.id]);
+    });
+
+    it("the shrink lock reads the trigger too: a trigger case makes its failure KNOWN while shrinking, so a NEW failure met after it displaces it", async () => {
+      // The first stale Generate is the product's 500 (known by its trigger); every later one, met while the shrink
+      // retries smaller command lists, is a different check altogether — a NEW failure, which outranks a known one.
+      const log = { refused: 0 };
+      const r = await runCell({ ...input({ regressions: [mb007!, mb010!].map(onCell), runs: 300, maxCommands: 20, fences: false }),
+        newDriverState: async (n) => {
+          const real = new (class extends StaleBracketDriver {
+            override generate(...a: Parameters<ModelFakeDriver["generate"]>) {
+              if (!this.refuses(this)) return super.generate(...a);
+              return ++log.refused === 1 ? super.generate(...a) : Promise.reject(new ModelViolation(FOLD, ["test: a second failure, on another check"]));
+            }
+          })((d) => d.withdrew && !d.added, words ?? "");
+          return { real, model: await newModelState({ driver: real, row: "league", sport: "generic", variant: "score", entrants: 4, tag: `t${n}` }) };
+        } });
+      expect(log.refused, "the premise: the shrink met the stale roster again after the first refusal").toBeGreaterThan(1);
+      expect(r.failure?.check).toBe(FOLD);
+      expect(r.failure?.known).toBeNull();
+    });
+
+    it("no case in the file: the same failure is plainly NEW, and lists no ambiguity", async () => {
+      const r = await runCell({ ...input({ regressions: [], runs: 300, maxCommands: 20, fences: false }), newDriverState: productOf((d) => d.withdrew && !d.added) });
+      expect(r.failure?.known).toBeNull();
+      expect(r.failure?.ambiguous).toEqual([]);
+    });
   });
 });

@@ -305,6 +305,49 @@ describe("regression cases (R29)", () => {
     }
     expect(refused).toBeGreaterThan(Object.keys(base).length);
   });
+  // W1d item 26: open cases that name one failure by cell, check and match are told apart by their `trigger` alone.
+  describe("trigger (W1d item 26)", () => {
+    const REFUSAL = "model-refusal-named";
+    const words = "would strand home_slot_label";
+    const twin = (id: string, over: Record<string, unknown> = {}) => ({ ...base, id, cell: "double_elim|generic", check: REFUSAL, match: words, fence: "ko-generate-after-roster-change", ...over });
+    it("a case with no trigger parses as before (the field is optional); a trigger is one of the two roster changes, nothing else", () => {
+      expect(parseRegressions(file(base))[0]!.trigger).toBeUndefined();
+      expect(parseRegressions(file(twin("MB-001", { trigger: "added" })))[0]!.trigger).toBe("added");
+      expect(parseRegressions(file(twin("MB-001", { trigger: "withdrawn" })))[0]!.trigger).toBe("withdrawn");
+      let refused = 0;
+      for (const bad of ["", "AddEntrant", "withdraw", "both", null, 1]) {
+        expect(() => parseRegressions(file(twin("MB-001", { trigger: bad }))), JSON.stringify(bad)).toThrow();
+        refused++;
+      }
+      expect(refused).toBe(6);
+    });
+    it("two OPEN cases sharing cell, check and match must each carry a distinct trigger: none, one, or the same twice is refused naming both", () => {
+      expect(parseRegressions(file(twin("MB-007", { trigger: "added" }), twin("MB-010", { trigger: "withdrawn" })))).toHaveLength(2);
+      let refused = 0;
+      for (const [a, b] of [[{}, {}], [{ trigger: "added" }, {}], [{}, { trigger: "added" }], [{ trigger: "added" }, { trigger: "added" }]] as const) {
+        expect(() => parseRegressions(file(twin("MB-007", a), twin("MB-010", b))), JSON.stringify([a, b])).toThrow(/MB-007 and MB-010 share a cell, a check and a match.*distinct "trigger"/);
+        refused++;
+      }
+      expect(refused).toBe(4);
+    });
+    it("a case that differs in cell, check or match does not collide; nor does a FIXED one (it names nothing)", () => {
+      const a = twin("MB-007");
+      let parsed = 0;
+      for (const other of [twin("MB-010", { cell: "knockout|generic" }), twin("MB-010", { check: "model-unexpected-refusal" }), twin("MB-010", { match: "a different answer" }), twin("MB-010", { status: "fixed" })]) {
+        expect(parseRegressions(file(a, other)), JSON.stringify(other)).toHaveLength(2);
+        parsed++;
+      }
+      expect(parsed).toBe(4);
+    });
+    it("the committed file passes the guard, and its two colliding cases carry the distinct triggers (the premise for model-run-cell.test.ts)", () => {
+      const rs = loadRegressions();
+      const open = rs.filter((r) => r.status === "open");
+      const colliding = open.filter((r) => open.some((o) => o !== r && o.cell === r.cell && o.check === r.check && o.match === r.match));
+      expect(colliding.length, "anti-vacuity: the committed file has colliding cases").toBeGreaterThan(1);
+      expect(colliding.every((r) => r.trigger !== undefined)).toBe(true);
+      expect(new Set(colliding.map((r) => r.trigger)).size).toBe(colliding.length);
+    });
+  });
   it("the Task 14 paste stub, as the plan prints it, is refused until its id, title and date are filled", () => {
     // The plan is W1b's record, written while the harness lived at its historical path: every spelling of the file counts.
     const stubs = spellingsOf(REGRESSIONS_PATH).map((p) => `regression stub for ${p}`);

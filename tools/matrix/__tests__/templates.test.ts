@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import {
   TEMPLATE_ROW, TemplateDrifted, TemplateShapeUnsupported, UnknownTemplate, routeViaTemplate, templateBodies, templateField, templateFor, templateRow,
@@ -167,7 +167,7 @@ describe("templateBodies — the stages the product inserts for a template (temp
 // template's card, as the grid's L1 case does (layers.ts planL1Grid). The template's own variant and sport come from
 // the catalog JSON read HERE as text, never from lib/templates.ts.
 describe("routeViaTemplate — the plain browser plan reaches the template cells (W1d item 20)", () => {
-  const spec = (row: string, sport: string, scenario: CaseSpec["scenario"] = "LIFECYCLE", more: Partial<CaseSpec> = {}): CaseSpec =>
+  const spec = (row: RowKey, sport: string, scenario: CaseSpec["scenario"] = "LIFECYCLE", more: Partial<CaseSpec> = {}): CaseSpec =>
     ({ caseId: `${row}|${sport}|builder-default|${scenario}`, row, sport, variant: "builder-default", scenario, canary: false, ...more });
 
   it("a spec on group_only|badminton becomes the box-league card's case: the template's own variant in id and field, template set, every script kept", () => {

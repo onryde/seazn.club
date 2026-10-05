@@ -510,3 +510,29 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     return this.seat(round, home, away);
   }
 }
+
+/** W1d item 26: a bracket whose Generate 500s once the division's roster has changed the way `refuses` says —
+ *  the shape of MB-007 (an entrant added) and MB-010 (one withdrawn), which share the product's words. `message`
+ *  is those words. Per division (createDivision resets it, as model.ts reuses one driver across a cell's runs):
+ *  the model's own setup makes the one addEntrants call, so a second is an AddEntrant that the product took, and
+ *  a Withdraw the product took sets `withdrew`. A round-robin fake stands in for the bracket: only the roster
+ *  change and the refusal matter. */
+export class StaleBracketDriver extends ModelFakeDriver {
+  #adds = 0;
+  withdrew = false;
+  readonly message: string;
+  readonly refuses: (d: StaleBracketDriver) => boolean;
+  constructor(refuses: (d: StaleBracketDriver) => boolean, message: string) {
+    super();
+    this.refuses = refuses;
+    this.message = message;
+  }
+  /** An entrant arrived after the build's own. */
+  get added(): boolean { return this.#adds > 1; }
+  override createDivision(...a: Parameters<ModelFakeDriver["createDivision"]>) { this.#adds = 0; this.withdrew = false; return super.createDivision(...a); }
+  override addEntrants(...a: Parameters<ModelFakeDriver["addEntrants"]>) { return super.addEntrants(...a).then((r) => { this.#adds++; return r; }); }
+  override withdraw(...a: Parameters<ModelFakeDriver["withdraw"]>) { return super.withdraw(...a).then((r) => { this.withdrew = true; return r; }); }
+  override generate(...a: Parameters<ModelFakeDriver["generate"]>) {
+    return this.refuses(this) ? Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, "INTERNAL", this.message)) : super.generate(...a);
+  }
+}

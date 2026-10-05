@@ -84,6 +84,28 @@ export const FENCES: readonly Fence[] = Object.freeze([
   },
 ]);
 
+/** The two roster changes a bracket's Generate 500s after (MB-004/005/007/010), by the name a regressions.json
+ *  row's `trigger` carries: an entrant ADDED (AddEntrant), or one WITHDRAWN (Withdraw). The same two branches
+ *  as GENERATE_AFTER_ADDED_KINDS and GENERATE_AFTER_WITHDRAWN_KINDS above (W1d item 26). */
+export const ROSTER_TRIGGERS = ["added", "withdrawn"] as const;
+export type RosterTrigger = (typeof ROSTER_TRIGGERS)[number];
+const TRIGGER_OF_COMMAND: ReadonlyMap<string, RosterTrigger> = new Map([["AddEntrant", "added"], ["Withdraw", "withdrawn"]]);
+
+/** The roster changes a failing run made BEFORE its failing command — the last one it ran — as distinct triggers,
+ *  first seen first. `commands` are the ran commands' own text ("Generate(0,0)": CommandWrapper.toString, which
+ *  is what a report's `commands` and ModelState.history both hold). One entry names the branch that tripped the
+ *  failure; none means no roster change preceded it; two or more means the run made both, so which one tripped it
+ *  cannot be told from the commands (regressionFor then refuses to name it). */
+export function triggersOf(commands: readonly string[]): RosterTrigger[] {
+  const seen: RosterTrigger[] = [];
+  for (const c of commands.slice(0, -1)) {
+    const kind = /^[A-Za-z]+/.exec(c)?.[0];
+    const t = kind === undefined ? undefined : TRIGGER_OF_COMMAND.get(kind);
+    if (t !== undefined && !seen.includes(t)) seen.push(t);
+  }
+  return seen;
+}
+
 /** The fence that withholds `kind` in this state, or null. `enabled: false`
  *  (--no-fences) lifts every fence. `subject`: the entrant the command would
  *  act on, when it picks one (Withdraw). */

@@ -2127,7 +2127,15 @@ product changes (D4).
 - **F-PP-1, an UNEXPLAINED flake.** Pad proof 1280 r3, cricket: `pad-ledger-as-generated` ❌, tap 15 of 141 on
   fixture `dabf515d-99da-4a03-8e52-c3e052c611e3` timed out at the 15 s `FLOOR_MS`. Clean in the other six runs.
   Machine load is a hypothesis only. → **W1d**: capture tap timestamps or a trace on a tap-wait timeout before
-  judging.
+  judging. **W1d D16:** the timestamps shipped in Task 12 (every pad tap records `{tap, clickedAtMs,
+  ledgerSeenAtMs, waitedMs, budgetMs}`, and a tap-wait timeout's message carries the last 5, redacted), so the next
+  red explains itself in a public log. The local-only trace (`MATRIX_TRACE_ON_TIMEOUT=1`) was **dropped by Task 13**,
+  with its reason: `replayEvents` catches a tap-wait timeout and folds it into a finding string, so the signal never
+  reaches the layer that owns the browser context; a trace needs a new `ReplayResult` field, a driver flag, a
+  stop-and-save path on `CaseBrowser` and a start in `newCaseBrowser` (five production files across three layers, not
+  one small commit), and the unit suite can only fake `context.tracing`, so the seam would ship unproven live. The
+  variable stays absent from every workflow (`matrix-workflow.test.ts`). Reopen it only if a timed-out tap's timings
+  fail to explain a recurrence.
 - **Pad proof has no single-sport scope** (`run.ts:468-469`, `lib/pad-proof-set.ts:16`), so F-PP-1's recurrence was
   not measured → **W1d**.
 - **The match-day run sheet is never driven** (carry 2; "Today" hides the other fixtures) → **W1d**.

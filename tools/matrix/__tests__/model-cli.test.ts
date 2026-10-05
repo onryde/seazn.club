@@ -39,7 +39,7 @@ import { DataDirMismatch } from "../lib/seed-org.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
 import { offlineVariantOrder } from "../lib/variants.ts";
-import { ModelFakeDriver } from "./model-fake-driver.ts";
+import { ModelFakeDriver, StaleBracketDriver } from "./model-fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const MODEL = resolve(REPO, "tools/matrix/model.ts");
@@ -740,28 +740,51 @@ describe("model.ts", () => {
       expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [own] }), ["--run-id", "mmo", "--report-dir", reportDir(), "--regressions"])).toBe(0);
     });
 
-    // T16 fix round 1 (T16-R3): one bug reached by two triggers on one cell —
-    // MB-007 (added entrant) and MB-010 (withdrawal), both double elim, both
-    // the product's same words — is two cases with the same cell, check and
-    // match. Each replay fails AS ITSELF (its check and its match), so each is
-    // known by its own id, in either file order; the first match in the file
-    // must not claim the other's replay.
-    it("T16 fix round 1: two open cases sharing cell, check and match (one bug, two triggers) — each replay is known as itself, in either file order (exit 0)", async () => {
+    // W1d item 26's products: a bracket that 500s a Generate once the roster changed, and the cases found on it.
+    const WORDS = "test: the bracket is stale after a roster change";
+    const FIND = ["--cell", CELL, "--runs", "300", "--max-commands", "20"];
+    // Two finding runs, one product per trigger: a Generate refused after an added entrant, then after a withdrawal.
+    const found = async (tag: string, refuses: (d: StaleBracketDriver) => boolean, id: string, trigger?: "added" | "withdrawn"): Promise<RegressionCase> => {
       const io = capture();
-      expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "tw", "--report-dir", reportDir(), ...ONE])).toBe(1);
-      const a = completedStub(io.out(), { id: "MB-002", issue: null, fence: null, match: "refuses every result" });
-      const b = completedStub(io.out(), { id: "MB-003", issue: null, fence: null, match: "refuses every result" });
+      expect(await runModel(deps({ driverFor: () => new StaleBracketDriver(refuses, WORDS) }), ["--run-id", tag, "--report-dir", reportDir(), ...FIND, "--no-fences"]), tag).toBe(1);
+      return completedStub(io.out(), { id, issue: null, fence: null, match: "bracket is stale", ...(trigger === undefined ? {} : { trigger }) });
+    };
+
+    // T16 fix round 1 (T16-R3), reworked by W1d item 26: one bug reached by two triggers on one cell — MB-007 (an
+    // added entrant) and MB-010 (a withdrawal), both double elim, both the product's same words — is two cases with
+    // the same cell, check and match. They are told apart by their `trigger`, the roster change their own failing
+    // commands show, not by which the file lists first (model.ts used to rank the replayed case first; now it
+    // does not, so the order is the test's to vary). Each replay is known as itself, in either file order.
+    it("W1d item 26: two open cases sharing cell, check and match (one bug, two triggers) — each replay is known as itself by its trigger, in either file order (exit 0)", async () => {
+      const a = await found("tw-a", (d) => d.added && !d.withdrew, "MB-002", "added");
+      const b = await found("tw-b", (d) => d.withdrew && !d.added, "MB-003", "withdrawn");
       expect([a.cell, a.check, a.match]).toEqual([b.cell, b.check, b.match]);
+      expect([a.trigger, b.trigger]).toEqual(["added", "withdrawn"]);
+      expect(() => parseRegressions({ schemaVersion: 1, regressions: [a, b] })).not.toThrow();
       let checked = 0;
       for (const [tag, regs] of [["twab", [a, b]], ["twba", [b, a]]] as const) {
         capture();
         const dir = reportDir();
-        expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [...regs] }), ["--run-id", tag, "--report-dir", dir, "--regressions"]), tag).toBe(0);
-        const rep = JSON.parse(readFileSync(join(dir, tag, "model-report.json"), "utf8")) as { cells: { replayOf: string | null; verdict: string; failure: { known: string | null } | null }[] };
-        expect(rep.cells.map((c) => [c.replayOf, c.verdict, c.failure?.known ?? null]), tag).toEqual(regs.map((r) => [r.id, "known-failure", r.id]));
+        // The replayed product refuses after EITHER change: each case's own commands decide which case it is.
+        expect(await runModel(deps({ driverFor: () => new StaleBracketDriver((d) => d.added || d.withdrew, WORDS), regs: [...regs] }), ["--run-id", tag, "--report-dir", dir, "--regressions"]), tag).toBe(0);
+        const rep = JSON.parse(readFileSync(join(dir, tag, "model-report.json"), "utf8")) as { cells: { replayOf: string | null; verdict: string; failure: { known: string | null; ambiguous: string[] } | null }[] };
+        expect(rep.cells.map((c) => [c.replayOf, c.verdict, c.failure?.known ?? null, c.failure?.ambiguous ?? null]), tag).toEqual(regs.map((r) => [r.id, "known-failure", r.id, []]));
         checked += rep.cells.length;
       }
       expect(checked).toBe(4);
+    });
+
+    it("W1d item 26: a failure the run reached after BOTH roster changes is NEW-or-ambiguous — exit 1, the line names both cases, never known (the cases sit in the file, both open)", async () => {
+      const a = await found("am-a", (d) => d.added && !d.withdrew, "MB-002", "added");
+      const b = await found("am-b", (d) => d.withdrew && !d.added, "MB-003", "withdrawn");
+      const io = capture();
+      const dir = reportDir();
+      // A product that refuses only once the roster changed BOTH ways: no single trigger names it.
+      expect(await runModel(deps({ driverFor: () => new StaleBracketDriver((d) => d.added && d.withdrew, WORDS), regs: [a, b] }), ["--run-id", "am", "--report-dir", dir, ...FIND, "--no-fences"])).toBe(1);
+      expect(failureLine(io.out())).toContain(`(NEW, or ambiguous between ${a.id} and ${b.id}:`);
+      expect(failureLine(io.out())).not.toMatch(/\(known /);
+      const rep = JSON.parse(readFileSync(join(dir, "am", "model-report.json"), "utf8")) as { cells: { verdict: string; failure: { known: string | null; ambiguous: string[] } | null }[] };
+      expect(rep.cells.map((c) => [c.verdict, c.failure?.known ?? null, c.failure?.ambiguous ?? null])).toEqual([["new-failure", null, [a.id, b.id]]]);
     });
 
     it("a FIXED regression that comes back is a NEW failure (exit 1); one that stays fixed is ok (exit 0)", async () => {
