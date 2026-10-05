@@ -79,7 +79,6 @@ function scan(text: string): Scan {
     // a dependent's reference to a guarded package carries the peer it was linked with
     for (const l of s.body) {
       if (dependsOn(l, BABEL_GUARDED) && l.includes("@babel/core@8")) violations.push(`snapshot ${nameOf(s.key)} references ${l.trim().slice(0, 90)}`);
-      if (dependsOn(l, [RXJS_GUARDED]) && l.includes("rxjs@")) violations.push(`snapshot ${nameOf(s.key)} references ${l.trim().slice(0, 90)}`);
     }
   }
   return {

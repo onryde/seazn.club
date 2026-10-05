@@ -153,7 +153,8 @@ export function statementMutants(statements, startLines) {
 /** The split of statements `0..n-1` into `parts` runs that minimises the largest run, where a cut before statement i is allowed
  *  only if `cutable[i]` and every run holds at least one mutant. `extra` mutants (the other files a leg also carries) are
  *  added to the LAST run. Returns `{cuts, sizes, max}` (cuts are the statement indices that start runs 2..parts), or null when
- *  no such split exists. Ties go to the earliest cuts, so a plan is stable. */
+ *  no such split exists. Among the splits that tie on the largest run the first cuts are the earliest (lexicographically first), so a
+ *  plan is stable. */
 export function planSplit({ weights, cutable, parts, extra = 0 }) {
   const n = weights.length;
   const prefix = [0];
@@ -161,25 +162,31 @@ export function planSplit({ weights, cutable, parts, extra = 0 }) {
   const sum = (from, to) => prefix[to] - prefix[from];
   // best[k][i]: the smallest possible largest run when statements i..n-1 are split into k runs; null when impossible
   const best = Array.from({ length: parts + 1 }, () => new Array(n + 1).fill(null));
-  for (let i = 0; i < n; i++) best[1][i] = sum(i, n) > 0 ? { max: sum(i, n) + extra, next: n } : null;
+  for (let i = 0; i < n; i++) best[1][i] = sum(i, n) > 0 ? { max: sum(i, n) + extra } : null;
   for (let k = 2; k <= parts; k++) {
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         if (!cutable[j] || sum(i, j) <= 0 || best[k - 1][j] === null) continue;
         const max = Math.max(sum(i, j), best[k - 1][j].max);
-        if (best[k][i] === null || max < best[k][i].max) best[k][i] = { max, next: j };
+        if (best[k][i] === null || max < best[k][i].max) best[k][i] = { max };
       }
     }
   }
   if (n === 0 || best[parts][0] === null) return null;
+  // The smallest largest run is known (`max`); the cuts are then taken from the front, each as early as it can be while the rest
+  // can still be cut into runs no larger than that: of all the splits that tie, the lexicographically first, which is what keeps a
+  // plan stable when a statement is added at the foot.
+  const max = best[parts][0].max;
   const cuts = [];
   const sizes = [];
   let at = 0;
-  for (let k = parts; k >= 1; k--) {
-    const next = best[k][at].next;
-    sizes.push(sum(at, next === n ? n : next) + (k === 1 ? extra : 0));
-    if (k > 1) cuts.push(next);
-    at = next;
+  for (let k = parts; k > 1; k--) {
+    let j = at + 1;
+    while (j < n && !(cutable[j] && sum(at, j) > 0 && sum(at, j) <= max && best[k - 1][j] !== null && best[k - 1][j].max <= max)) j++;
+    cuts.push(j);
+    sizes.push(sum(at, j));
+    at = j;
   }
-  return { cuts, sizes, max: best[parts][0].max };
+  sizes.push(sum(at, n) + extra);
+  return { cuts, sizes, max };
 }

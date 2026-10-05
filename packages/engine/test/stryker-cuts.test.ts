@@ -219,10 +219,12 @@ describe("statementMutants and planSplit: the recut helper's counting and its ch
     expect(statementMutants([], [])).toEqual([]);
   });
 
-  /** Every way to put `parts - 1` cuts at the cut-able positions, tried one by one: the oracle for the DP. */
-  function bruteForce(weights: number[], cutable: boolean[], parts: number, extra: number): { max: number; count: number } | null {
+  /** Every way to put `parts - 1` cuts at the cut-able positions, tried one by one, in lexicographic order: the oracle for the DP.
+   *  `cuts` is the FIRST (earliest) of the splits that reach the smallest largest part, which is the tie rule a plan is stable by. */
+  function bruteForce(weights: number[], cutable: boolean[], parts: number, extra: number): { max: number; cuts: number[]; count: number } | null {
     const spots = weights.map((_, i) => i).filter((i) => i > 0 && cutable[i]);
     let best: number | null = null;
+    let cuts: number[] = [];
     let count = 0;
     const pick = (from: number, chosen: number[]): void => {
       if (chosen.length === parts - 1) {
@@ -232,13 +234,13 @@ describe("statementMutants and planSplit: the recut helper's counting and its ch
         sizes[sizes.length - 1]! += extra;
         count++;
         const max = Math.max(...sizes);
-        if (best === null || max < best) best = max;
+        if (best === null || max < best) { best = max; cuts = chosen.slice(); }
         return;
       }
       for (let k = from; k < spots.length; k++) pick(k + 1, [...chosen, spots[k]!]);
     };
     pick(0, []);
-    return best === null ? null : { max: best, count };
+    return best === null ? null : { max: best, cuts, count };
   }
 
   it("planSplit's largest part is the smallest any split can reach, over 400 small files (checked against every split, not against itself)", () => {
@@ -252,6 +254,7 @@ describe("statementMutants and planSplit: the recut helper's counting and its ch
     };
     let compared = 0;
     let refused = 0;
+    let ties = 0;
     for (let t = 0; t < 400; t++) {
       const n = 3 + rnd(9);
       const weights = Array.from({ length: n }, () => rnd(7));
@@ -267,6 +270,9 @@ describe("statementMutants and planSplit: the recut helper's counting and its ch
       }
       expect(got, `weights ${weights.join(",")} cutable ${cutable.map(Number).join("")} parts ${parts} extra ${extra}`).not.toBeNull();
       expect(got!.max, `weights ${weights.join(",")} cutable ${cutable.map(Number).join("")} parts ${parts} extra ${extra}`).toBe(want.max);
+      // among splits that tie on the largest part, the EARLIEST (first cut as early as it can be, then the next): a plan is stable
+      expect(got!.cuts, `weights ${weights.join(",")} cutable ${cutable.map(Number).join("")} parts ${parts} extra ${extra}: the earliest of ${want.count} splits`).toEqual(want.cuts);
+      if (want.count > 1 && parts > 1) ties++;
       // the plan is a real split: cuts increase, each is cut-able, every part has mutants, the sizes are the cuts' sums
       expect(got!.cuts).toHaveLength(parts - 1);
       expect(got!.cuts.every((c, k) => c > 0 && cutable[c] === true && (k === 0 || c > got!.cuts[k - 1]!))).toBe(true);
@@ -277,6 +283,12 @@ describe("statementMutants and planSplit: the recut helper's counting and its ch
     }
     expect(compared, "splits compared").toBeGreaterThan(100);
     expect(refused, "inputs with no split at all, also checked").toBeGreaterThan(0);
+    expect(ties, "inputs with more than one split to choose between").toBeGreaterThan(20);
+  });
+
+  it("on a tie planSplit takes the earliest cuts (a zero-weight statement may go to either side: the first cut is the earlier one)", () => {
+    expect(planSplit({ weights: [3, 0, 3], cutable: [true, true, true], parts: 2 })).toEqual({ cuts: [1], sizes: [3, 3], max: 3 });
+    expect(planSplit({ weights: [2, 0, 2, 0, 2], cutable: [true, true, true, true, true], parts: 3 })).toEqual({ cuts: [1, 3], sizes: [2, 2, 2], max: 2 });
   });
 
   it("one part needs no cut and its size is the whole file plus the extra; asking for more parts than cut points is refused, never padded", () => {
