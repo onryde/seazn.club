@@ -13,6 +13,11 @@ name: Matrix truth run
 #  - workflow_call: ci.yml's per-PR sample (R27, D13), scope pr-sample.
 #  - pull_request on this file and tools/matrix/ci/**: the smoke scope proves
 #    the workflow on its own PR (D3) — dispatch only fires main's copy.
+#    THE PATH SCOPE IS NARROW ON PURPOSE (final review M9): an edit to
+#    tools/matrix/lib/** or tools/matrix/run.ts (the harness itself) does NOT
+#    trigger this run. Those changes are covered by ci.yml's per-PR sample (R27,
+#    scope pr-sample, which runs on tools/matrix/** and the engine), and by the
+#    weekly full run; this self-proof exists to prove the WORKFLOW, not the harness.
 # A run that is not COMPLETE is RED: the merge job exits non-zero on any refused
 # merge, harness fault or missing layer, and its summary step runs with
 # --require-complete, so "the last successful run" is a complete one (T8->T9,
@@ -354,6 +359,17 @@ jobs:
           AUTH_DEV_LINKS: "1"
           # The default log level floods the log with every accepted event.
           LOG_LEVEL: warn
+          # The three keys every production boot in this repo carries, the same as ci.yml's smoke
+          # server (apps/web/src/lib/__tests__/relay-drivers-ci-wiring.test.ts sweeps EVERY workflow
+          # and reds smoke-db on a boot without them). R5: server.js runs NODE_ENV=production, where
+          # an unset RELAY_DRIVERS disables streaming; the matrix drives score streams, never a video
+          # stream, but the sweep is by behaviour, so it says fake explicitly. Under production an
+          # explicit fake also needs an ENV_NAME from FAKE_DRIVER_ENV_NAMES: ci is one.
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
+          # The capture panel's phone-camera option sits behind a PostHog flag (fallback false) and a
+          # CI server has no PostHog; the override shows it, exactly "1". Staging and prod never set it.
+          CAPTURE_QR_V2_ALWAYS: "1"
         run: |
           set -euo pipefail
           tar -xzf web.tgz
