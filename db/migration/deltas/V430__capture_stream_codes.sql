@@ -58,6 +58,11 @@ create table fixture_stream_codes (
   check (ended_at is null or tok_enc is null)
 );
 create unique index fixture_stream_codes_one_active on fixture_stream_codes (fixture_id) where ended_at is null;
+-- Final review m-2. The panel's per-poll lastTakeover (stream-phone.ts) reads EVERY code of a fixture, ended ones too,
+-- which the partial index above cannot serve. Each new table also gets V410's (org_id, <its own time column>) index,
+-- so an org delete's cascade has an index to walk.
+create index on fixture_stream_codes (fixture_id);
+create index on fixture_stream_codes (org_id, created_at);
 
 -- 3. Per-fixture stream settings: the destination pre-pick (W6). PR-2 adds the auto columns.
 create table fixture_stream_settings (
@@ -67,6 +72,7 @@ create table fixture_stream_settings (
   updated_by uuid null,
   updated_at timestamptz not null default now()
 );
+create index on fixture_stream_settings (org_id, updated_at);                  -- m-2: V410's per-table org index
 
 -- 4. Pairings (A9, A14).
 create table fixture_stream_pairings (
@@ -92,6 +98,9 @@ create table fixture_stream_pairings (
   check ((ended_at is null) = (end_cause is null))
 );
 create unique index fixture_stream_pairings_one_current on fixture_stream_pairings (code_id, slot) where ended_at is null;
+-- m-2: lastTakeover reads a code's ENDED pairings, newest first, which the partial index above cannot serve.
+create index on fixture_stream_pairings (code_id, ended_at desc);
+create index on fixture_stream_pairings (org_id, claimed_at);
 
 -- 5. Sessions.
 alter table fixture_stream_sessions
@@ -105,6 +114,9 @@ alter table fixture_stream_sessions
   -- claim answers as the read did, so the panel's warming countdown is held there too (N1). Written only on a change.
   add column ingest_read_failed boolean not null default false,
   drop column qr_issued_first_at;
+-- m-2: the two new FKs are `on delete set null`, so a code or pairing delete looks them up here.
+create index on fixture_stream_sessions (code_id);
+create index on fixture_stream_sessions (pairing_id);
 alter table fixture_stream_sessions rename column credentials_revealed_first_at to credentials_served_first_at;
 alter table fixture_stream_sessions rename column credentials_reveal_count to credentials_served_count;
 -- The counter's inline `>= 0` check keeps the name Postgres gave it in V410; renamed with the column so a grep for
@@ -150,6 +162,8 @@ create table fixture_stream_phone_beats (
 );
 create index on fixture_stream_phone_beats (pairing_id, recorded_at desc);
 create index on fixture_stream_phone_beats (recorded_at);
+create index on fixture_stream_phone_beats (session_id);                       -- m-2: the session FK cascades here
+create index on fixture_stream_phone_beats (org_id, recorded_at);              -- m-2: V410's per-table org index
 
 -- 8. RLS: the V410 pattern (R1). Enable + force, no policy.
 alter table fixture_stream_codes        enable row level security;
