@@ -52,7 +52,7 @@ Each row below is the latest word on its subject. Where the log changed its mind
 | W11 | **Overlay on phone streams (Q3).** The descriptor's `overlayUrl` is filled only when the org has the `streaming.overlay` entitlement, and is `null` otherwise. It is **built server-side** from the environment's base URL, on the exact Seazn host, with the signed overlay key. |
 | W12 | **Phone-side Stop (Q4).** A beat with state `ended` ends the session at once: the destination is freed, no further credit is spent, and the panel reads "Stopped from the phone". Silence, reconnecting and degraded only warn. (The condition was met: the phone sends `ended` only on an explicit operator Stop of a live broadcast.) |
 | W13 | **Two PRs.** PR-1 (capture-facing, staging first) and PR-2 (organiser extras). |
-| W14 | **Playback host (Q5).** One Cloudflare account serves staging and production, through the customer subdomain `customer-vv7totdc7j19biah.cloudflarestream.com`. It is not a secret, so it is plain configuration, not a Fly secret. |
+| W14 | **Playback host (Q5).** One Cloudflare account serves staging and production, through the customer subdomain `customer-vv7totdc7j19biah.cloudflarestream.com`. It is not a secret, but it lives in **Doppler** with the other runtime configuration (amended 2026-10-05, OG9): the owner set `STREAM_INGEST_HOST` and `STREAM_PLAYBACK_HOST` in Doppler `stg`, which syncs them to the Fly app, not in `fly.stg.toml [env]`. |
 | W15 | **Ingest hosts.** Credentials use `rtmps://live.seazn.club:443/live/` and `srt://live.seazn.club:778` in production, and `live.stg.seazn.club` on staging, with one environment setting per environment. **SRT on the custom host must be proven with ffmpeg on staging** before it is relied on. **Amended by W21:** SRT stays on Cloudflare's own host from launch; only RTMPS uses the custom host. |
 | W16 | **Allow both** (answering mobile-s1): (1) operator start, as W6; (2) auto stop, as W7. |
 | W18 | **Overlay on every phone stream (O1, ruled YES 2026-10-01, on approving this spec at `137b9ec2b`).** The scorebug goes on phone streams for every plan. The rule stays the `streaming.overlay` entitlement (W11), so an override still switches it off for one org. |
@@ -1002,12 +1002,18 @@ files are the cross-repo authority. The zod schemas mirror them, and parity is a
 
 ### 6.15 Configuration per environment
 
-| Setting | prod (`fly.toml [env]`) | stg (`fly.stg.toml [env]`) | local / CI |
+| Setting | prod (Doppler `prd`) | stg (Doppler `stg`) | local / CI |
 |---|---|---|---|
 | `STREAM_INGEST_HOST` | `live.seazn.club` | `live.stg.seazn.club` | unset (Cloudflare's own hosts) |
 | `STREAM_PLAYBACK_HOST` | `customer-vv7totdc7j19biah.cloudflarestream.com` | same | the fake driver's value |
 | `STREAM_SRT_ENABLED` | unset (on, W21); `false` only as A18's safety net | unset (on); `false` only if S2's SRT check fails | unset (on; the fake driver) |
 | `RELAY_KEK` | existing Fly secret | existing | `.env` |
+
+**Where these live (amended 2026-10-05, OG9).** The stream settings are set in **Doppler** (project `seazn-club`,
+configs `stg` and `prd`), which syncs them to the Fly app as secrets. They are not in `fly.toml` / `fly.stg.toml
+[env]`. A Doppler change reaches the machines only after a secrets deploy: a Doppler sync can leave them *staged*
+until then, so confirm with `fly ssh console -C printenv` on each machine. stg was set and verified on 2026-10-05.
+prod (`STREAM_INGEST_HOST=live.seazn.club`, the same `STREAM_PLAYBACK_HOST`) is owed before the production tag.
 
 - **A real-driver deployment without `STREAM_PLAYBACK_HOST`** answers a session GET with `503` (`playback_unconfigured`)
   and logs an error at boot. `playbackUrl` is required by capture, and a guessed host would be a lie.
