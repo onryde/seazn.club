@@ -1,8 +1,8 @@
 # PR body draft — Capture QR v2, PR-1 (capture-facing)
 
-> Draft written at the lane close (T13, 2026-10-05), on `feat/capture-qr-v2-pr1` at the head named under
-> "Verification". **Nothing is pushed and no PR is open.** Each later step is owner-gated (see "Open owner-gated
-> steps"). Paste everything below the line as the PR description once the owner OKs OG3 and OG4.
+> Written at the lane close (T13, 2026-10-05), and revised after the final whole-branch review. The branch is pushed
+> and open as **draft PR #920** (OG3 and OG4, owner 2026-10-05). Everything below the line is the PR description.
+> Each later step is owner-gated (see "Open owner-gated steps").
 
 ---
 
@@ -59,6 +59,7 @@
   - `POST /api/v1/fixtures/{id}/stream-code` ensures a code.
   - `POST …/stream-code/reissue` is Revoke & reissue.
   - `GET …/stream-phone` is the panel's read model.
+  - `PUT /api/v1/fixtures/{id}/stream-settings` saves the destination pre-pick.
 - **One start path** (`startBroadcast`) for both the organiser and the operator. W5 refuses Go live with no present
   phone (`phone_not_paired`).
 - **One tick** (`tickSession`) for the organiser poll, phone beats, the daily sweep, and the new `stream-tick` job.
@@ -66,6 +67,10 @@
   - It ends a live session after 15 minutes with no beat and no video (W19).
   - `apps/cron-worker` gains a `stream-tick` row on a `*/5 * * * *` trigger. Its Sentry events are throttled to one
     per job per UTC hour (R2).
+- **Every app 429 now carries `Retry-After`** with the true remaining window (R4, `rate-limit.ts` `tooMany`). That
+  includes surfaces outside capture, scoring and billing among them. The scoring pad already obeys `Retry-After` (up
+  to 60 s), so a throttled scorer now waits out the real window instead of the pad's derived backoff. Retrying inside
+  a fixed window only meets another 429, so this is the intended behaviour.
 - **Free restarts are capped at 3 per reuse window** (W23). One authority, `restartAllowance`, serves admission, the
   consume and the panel.
 - **The organiser panel** (Option B rev 2): a chain-first Ready card with the QR, the paste code, Revoke & reissue, the
@@ -87,9 +92,9 @@ They are not the owner's.
 | Panel design | **Option B, revision 2** (chain first, desktop QR ≥ 320 px), plus items 1–4: "1 credit" once; the countdown replaces D3's phone sentence; the four paused reasons; the Revoke & reissue confirm copy. | 2026-10-01 (OG2) |
 | Visual sign-off | **18 of 18 screens approved**, and **departures A and B approved** (see "Per-screen verdicts"). | 2026-10-05 |
 | Feature flag | The PostHog flag `capture-qr-v2` gates the **capture UI only**: the panel's phone-camera option. No route is gated. Fallback is false, so the option is hidden when PostHog is unconfigured or down. The flag is set up in PostHog: Organizations, the test club, 100%. | 2026-10-04 |
-| Local override | `CAPTURE_QR_V2_ALWAYS=1` forces the option visible. It is for **local and e2e only**, and is unset on stg and prod, where the PostHog flag decides. A test proves it is absent from `fly*.toml` and the Dockerfile. | 2026-10-04 |
+| Local override | **Controller ruling, on the owner's question of 2026-10-04** ("in local, always visible?"). `CAPTURE_QR_V2_ALWAYS=1` forces the option visible. It is for **local and e2e only**, and is unset on stg and prod, where the PostHog flag decides. A test proves it is absent from `fly*.toml` and the Dockerfile. | 2026-10-04 |
 | Photographed QR | **Ruling "a":** a scan takes over the slot, and the organiser's **Revoke & reissue is the remedy**. The QR is shown only in the organiser panel. | 2026-10-04 |
-| `e2e.yml` | **OG15 granted.** The R10 tunables are on e2e-parallel's Start server and Run Playwright steps. They go live on merge. | 2026-10-05 |
+| `e2e.yml` | **OG15 granted** for the R10 tunables, on e2e-parallel's Start server and Run Playwright steps (`e2e.yml:791-793`, `:847-849`). The branch also sets `CAPTURE_QR_V2_ALWAYS: "1"` at `e2e.yml:780`, `:1245` and `:1595`, so the walkthroughs see the phone option; **that part is PENDING the owner's extension of OG15.** All of it goes live on merge. | 2026-10-05 |
 | YouTube: one video or many | **PENDING the owner's staging observation**, with Auto-stop on and off, and the gap length. No code depends on it. **Help text is pending.** No help string asserts either behaviour, and the organiser help is written after the observation. | asked 2026-10-04 |
 | Flag off | **Flag off = the OBS path plus credits.** The OBS overlay, then the balance, Buy more and the embedded checkout. **The v1 QR is gone for every org** (W4, §6.13), so the pre-T11 Phone-tab Go live does not return with the flag. This was a coordinator ruling (spec §17.13), and the owner approved screen 14 (flag off) and 14b (flag-off buy) in the visual sign-off. | 2026-10-05 |
 | Stg `*/5` cost | **R9: accepted**, including keeping the stg Fly machine awake. The merge still needs its own OK (OG6). | 2026-10-01 |
@@ -118,8 +123,8 @@ controller's own calls, plus R5, a contract detail agreed with capture. **None o
   (B6 I-2).
 - **An `unknown` ingest read never advances a phone-lost end** (m-3). The panel's countdown is shown only when the end
   it counts to will fire at that deadline. It names the earliest end and that end's reason (§17.12).
-- **A correct tok is never refused by the failure budget** (B6 I-1). Both budgets are keyed on the code plus
-  `sha256(tok)[0:16]` (R-1). The client IP is read from `CF-Connecting-IP`, then `Fly-Client-IP`, then
+- **A correct tok is never refused by the failure budget** (B6 I-1). The code budget and the start budget are keyed
+  on the code plus `sha256(tok)[0:16]` (R-1); the failure budget is per client IP. The client IP is read from `CF-Connecting-IP`, then `Fly-Client-IP`, then
   `X-Forwarded-For`, then `X-Real-IP`.
 - **Any unmapped phone-route error is `503 {code:"unavailable"}`** (B6 M-5). For beats, that is transient. See spec
   §17.14, which this lane close added to §6.3.3.
@@ -128,8 +133,21 @@ controller's own calls, plus R5, a contract detail agreed with capture. **None o
 
 ## Verification at the lane close (T13)
 
-**Code under test:** `554841a50`, rebased onto origin/main `dbaa771c0`. The lane-close commits after it change docs
-only.
+**Code under test by the lane-close gate below:** `554841a50`, rebased onto origin/main `dbaa771c0`. origin/main has
+not moved since, so no further rebase was needed after the final review.
+
+**Commits after `554841a50`, each verified on its own scoped runs.** These are not docs-only:
+
+| Commit | What it changes | Evidence |
+|---|---|---|
+| `3cd42232d` | test only: B9 review fixes in `walkthrough/capture-phone.spec.ts` | capture-phone **16/16 ×2** |
+| `50e48c33e` | **src and copy:** the `phone_lost` chip names the server's W19 window (`tunable(PHONE_LOST_LIVE_MINUTES)`, through the panel context) instead of a typed "15"; all 4 `ui.json` | panel and context vitest **406/406**; the literal-15 mutant red 3 ways; capture-phone **16/16 ×2**. `mobile.spec.ts` was **not** re-run: the chip renders only in an ended `phone_lost` state, which `mobile.spec.ts` never reaches. OG5 covers every width. |
+| `631f73ae1` | test only: B9 re-review minors (hold-on-delivery, the W22 all-or-nothing pool, an exact tick) | capture-phone **16/16 ×4**; capture-phone plus directory-stream-destinations at 3 workers **33/33 ×2** |
+| `2255910f1` | **V430 amend:** 9 indexes from the final review (m-2), covering the per-poll `lastTakeover` query and the FK and `org_id` columns | fresh DB at v430 with all 9 present; `EXPLAIN` uses `fixture_stream_codes_fixture_id_idx` and `fixture_stream_pairings_code_id_ended_at_idx` on 20k codes and 80k pairings, and falls back to seq scans with them dropped; check-rls OK; 13 scoped files **214/214**, including `rls-coverage`, `history-restore-fidelity`, the migration-shape suites and the capture routes; typecheck 0 |
+
+**The final whole-branch review** (`dbaa771c0..631f73ae1`): 0 Critical. 17 of 17 fresh mutants were killed, each
+restored and proven with `cmp`. The contracts are byte-identical, and no inert seam was found. Its findings were PR body
+corrections (this revision), the V430 indexes (`2255910f1`), and one gap for the owner (see "Parked and later").
 
 **Migration number re-checked (T13 Step 1).** Main's newest delta is still `V429__weekly_digest_cron_once.sql`. No
 branch on origin carries a `V43x` delta. `V430` is this branch's alone.
@@ -521,9 +539,9 @@ a peer session's word.
 
 | # | Step | When | Note |
 |---|---|---|---|
-| OG3 | Push `feat/capture-qr-v2-pr1`. **STOP: owner OK required.** | now (after T13) | — |
-| OG4 | Open this PR. **STOP: owner OK required.** | after OG3 | Smoke CI runs on the PR. e2e does **not**. |
-| OG5 | `workflow_dispatch` e2e with the `pr` input. **STOP: owner OK required.** | before merge | The branch edits `e2e.yml` (R10), so dispatch with **`--ref feat/capture-qr-v2-pr1`**, or main's workflow file runs. A main push cancels a dispatched run, so "cancelled" is not a pass. |
+| — | **Rebase onto main** if it has moved, re-run the affected scoped checks, and push with `--force-with-lease` (owner ruling 2026-10-05: "rebase after review"). | before OG5, and again before OG6 if main moves | As of the final review, main had not moved. |
+| OG15+ | Extend OG15 to the `CAPTURE_QR_V2_ALWAYS` lines (`e2e.yml:780`, `:1245`, `:1595`). **STOP: owner OK required.** | before OG5 | See "Owner decisions". |
+| OG5 | `workflow_dispatch` e2e with the `pr` input. **STOP: owner OK required.** | before merge, against the head after any rebase | The branch edits `e2e.yml` (R10), so dispatch with **`--ref feat/capture-qr-v2-pr1`**, or main's workflow file runs. A main push cancels a dispatched run, so "cancelled" is not a pass. |
 | OG6 | Merge to main. **STOP: owner OK required.** | after OG5 | `stg.yml` runs Flyway V430, deploys Fly stg, and deploys the cron Worker (`*/5` live on stg: a Cloudflare write). The R3 window above. OG16 acknowledged first. |
 | OG7 | Act on the e2e run from the push to main. **STOP: owner OK required.** | after OG6 | — |
 | OG8 | Version tag. **STOP: owner OK required.** | after staging | `prod.yml`: prod migration, Fly prod, and the cron Worker on prod (4 of 5 triggers). OG16 acknowledged first. |
@@ -538,7 +556,8 @@ a peer session's word.
 
 - OG1: the T1 hand-off to capture, 2026-10-01.
 - OG2: Option B, 2026-10-01.
-- OG15: `e2e.yml`, 2026-10-05.
+- OG3 and OG4: push, and this PR opened as a draft (#920), 2026-10-05. Smoke CI runs on the PR; e2e does **not**.
+- OG15: the `e2e.yml` tunables, 2026-10-05.
 
 **OG11 (KV) is not triggered,** because R2 is option S.
 
@@ -547,6 +566,12 @@ a peer session's word.
 - **Parked:** `CF-Connecting-IP` can be forged through the open `*.fly.dev` origin. It belongs to the app-wide origin
   lock, **F-CF5**. Today it affects only failure throttling.
 - **Pending the owner:** the YouTube one-vs-many-video behaviour (S10), and the organiser help text that waits on it.
+- **Pending the owner (final review G-1): a stream code outlives its issuer's membership.** A phone start is
+  attributed to the code's `issued_by` (`stream-sessions.ts`, `capture-phone.ts`), and removing a member does not touch
+  `fixture_stream_codes`. A removed staff member, or anyone holding a photo of the QR, can still start that fixture's
+  paid broadcast to the org's own saved destination until Revoke & reissue or code expiry. The damage is bounded to
+  the org's own channel and credits. The controller's recommendation is PR-2: revoke a user's codes when their
+  membership is removed, so the phone sees the existing `code_ended` answer, with no contract change.
 - **Later: PR-2** (spec §7: automatic mode, auto stop, the phone-health line, the takeover notice; migration V431). It
   has its own plan, `docs/superpowers/plans/2026-10-01-capture-qr-v2-pr2.md`.
 
