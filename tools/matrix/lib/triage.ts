@@ -18,7 +18,7 @@ const MATRIX = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const CATALOGUE_DIR = resolve(MATRIX, "catalogue");
 
 export const TRIAGE_REFUSALS = [
-  "NoRun", "NoCases", "DuplicateLayer", "DuplicateCase", "LayerMismatch", "RunUnreadable", "RunNotV3", "CatalogueUnreadable", "RekeyMapEmpty", "RekeyMapUnreadable", "RekeyUnknownCase",
+  "NoRun", "NoCases", "EmptyLayer", "DuplicateLayer", "DuplicateCase", "LayerMismatch", "RunUnreadable", "RunNotV3", "CatalogueUnreadable", "RekeyMapEmpty", "RekeyMapUnreadable", "RekeyUnknownCase",
 ] as const;
 export type TriageRefusalName = (typeof TRIAGE_REFUSALS)[number];
 
@@ -184,6 +184,11 @@ export function triage(runs: readonly TriageRun[], rules: TriageRules, routing: 
     }
   }
   if (scanned === 0) throw new TriageRefused("NoCases", "the runs hold no case at all — nothing to triage (vacuous)");
+  // N1: `scanned` is the sum over the layers, so a layer that read nothing hides behind its neighbours' cases. Each layer given
+  // holds a case; the first that does not is named, so a triage of "three layers" never reads two.
+  for (const run of runs) {
+    if (run.cases.length === 0) throw new TriageRefused("EmptyLayer", `the ${run.layer} run ${run.runId} holds no case — a layer that read nothing is no triage of it (vacuous)`);
+  }
 
   // The rules, judged against the routing whether or not a red matched them.
   const known = new Set(ledger.map((g) => g.id));

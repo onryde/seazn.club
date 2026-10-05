@@ -14,8 +14,8 @@
 //   2  usage or input error, with a message on stderr and nothing written: a missing flag, an unknown flag, a triage,
 //      verdicts or routing file that is unreadable or that its schema refuses, an audit directory with no gap, a triage
 //      that is not clean (an untriaged red could be the very gap a verdict calls not-exercised), or a triage that read
-//      nothing: no run, no case, or a run of one of L1, L2, L3 missing (an id only that layer could reproduce would read
-//      not-exercised);
+//      nothing: no run, no case, a run of one of L1, L2, L3 missing, or a layer whose run holds no case (an id only that
+//      layer could reproduce would read not-exercised);
 //   3  a crash while it loads, through `pnpm run matrix:ledger` (its preload, scripts/lib/crash-exit.ts). Run it only
 //      through that script: without the preload a load crash exits 1.
 // An uncaught throw would exit 1 without the preload, so every input failure is caught here. Every line printed and the

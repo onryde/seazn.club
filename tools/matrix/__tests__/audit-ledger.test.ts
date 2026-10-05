@@ -462,6 +462,7 @@ describe("buildLedger (D22): each id gets exactly one outcome", () => {
     // D19's baseline is three layers; the declaration the ledger reads is pinned here so a fourth layer is a decision.
     expect([...LAYERS]).toEqual(["L1", "L2", "L3"]);
     const without = (layer: string): TriageJson["runs"] => RUNS.filter((r) => r.layer !== layer);
+    const emptied = (...layers: string[]): TriageJson["runs"] => RUNS.map((r) => (layers.includes(r.layer) ? { ...r, cases: 0, reds: 0 } : r));
     const nothing = { scanned: 0, checked: 0, runs: RUNS.map((r) => ({ ...r, cases: 0, reds: 0 })), rows: [], gaps: [], works: [] };
     const cases: [string, Partial<TriageJson>, string, RegExp][] = [
       ["no run at all", { runs: [] }, "TriageNoRuns", /names no run/],
@@ -471,6 +472,11 @@ describe("buildLedger (D22): each id gets exactly one outcome", () => {
       ["L2 missing", { runs: without("L2") }, "TriageLayerMissing", /layer L2\b/],
       ["L3 missing", { runs: without("L3") }, "TriageLayerMissing", /layer L3\b/],
       ["only L3 (a one-layer triage)", { runs: without("L1").filter((r) => r.layer !== "L2") }, "TriageLayerMissing", /layers L1, L2\b/],
+      // N1: `scanned` is the file's own number and may be non-zero while a layer's run read nothing.
+      ["L1 run holds no case (N1)", { runs: emptied("L1") }, "TriageLayerEmpty", /layer L1\b/],
+      ["L2 run holds no case (N1)", { runs: emptied("L2") }, "TriageLayerEmpty", /layer L2\b/],
+      ["L3 run holds no case (N1)", { runs: emptied("L3") }, "TriageLayerEmpty", /layer L3\b/],
+      ["two runs hold no case (N1)", { runs: emptied("L1", "L3") }, "TriageLayerEmpty", /layers L1, L3\b/],
     ];
     let refused = 0;
     for (const [what, over, name, message] of cases) {
@@ -484,8 +490,19 @@ describe("buildLedger (D22): each id gets exactly one outcome", () => {
     expect(buildLedger(input()).findings).toEqual([]);
   });
 
-  it("a layer is present when a run of it is, however few cases it holds: only a run-less layer is missing", () => {
-    expect(buildLedger(input({ triage: triageJson({ runs: RUNS.map((r) => ({ ...r, cases: 0, reds: 0 })) }) })).findings).toEqual([]);
+  it("a layer is present only when a run of it holds a case: one case is enough, none is a refusal of its own name (N1)", () => {
+    // Before N1 this test said the opposite: a triage whose three runs all read nothing built a clean ledger as long as the
+    // file's own `scanned` was not 0 — every id a layer could have reproduced then read not-exercised.
+    expect(() => buildLedger(input({ triage: triageJson({ runs: RUNS.map((r) => ({ ...r, cases: 0, reds: 0 })) }) }))).toThrow(/layers L1, L2, L3\b/);
+    let built = 0;
+    for (const layer of ["L1", "L2", "L3"]) {
+      const one = RUNS.map((r) => (r.layer === layer ? { ...r, cases: 1 } : { ...r, cases: 0, reds: 0 }));
+      // a layer holds one case and its neighbours none: the neighbours are what is refused, never the layer with the case
+      expect(() => buildLedger(input({ triage: triageJson({ runs: one }) })), layer).toThrow(new RegExp(`layers? ${["L1", "L2", "L3"].filter((l) => l !== layer).join(", ")}\\b`));
+      built++;
+    }
+    expect(built).toBe(3);
+    expect(buildLedger(input({ triage: triageJson({ runs: RUNS.map((r) => ({ ...r, cases: 1 })) }) })).findings).toEqual([]);
   });
 
   it("the ledger names the runs it was built from, each with its layer, id, plan and counts, in the data and on the page (D19: every claim traceable to a run id)", () => {
@@ -702,6 +719,7 @@ describe("audit-ledger CLI", () => {
       ["no run", { runs: [] }, /audit-ledger: TriageNoRuns: /],
       ["no case", { scanned: 0, checked: 0, runs: RUNS.map((r) => ({ ...r, cases: 0, reds: 0 })), rows: [], gaps: [], works: [] }, /audit-ledger: TriageNoCases: /],
       ["one layer of three", { runs: RUNS.filter((r) => r.layer === "L3") }, /audit-ledger: TriageLayerMissing: .*layers L1, L2/],
+      ["a layer's run read no case (N1)", { runs: RUNS.map((r) => (r.layer === "L2" ? { ...r, cases: 0, reds: 0 } : r)) }, /audit-ledger: TriageLayerEmpty: .*layer L2\b/],
     ];
     for (const [what, over, re] of cases) {
       out = []; err = [];

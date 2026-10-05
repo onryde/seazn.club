@@ -284,7 +284,7 @@ function carriesId(title: string, id: string): boolean {
 
 /** Every way the ledger refuses to build (exit 2). Each is the Error's own `name`. */
 export class LedgerRefused extends Error {
-  constructor(name: "NoIds" | "TriageNoRuns" | "TriageLayerMissing" | "TriageNoCases" | "TriageNotClean", message: string) {
+  constructor(name: "NoIds" | "TriageNoRuns" | "TriageLayerMissing" | "TriageNoCases" | "TriageLayerEmpty" | "TriageNotClean", message: string) {
     super(message);
     this.name = name;
   }
@@ -367,6 +367,12 @@ export function buildLedger(input: LedgerInput): Ledger {
     throw new LedgerRefused("TriageLayerMissing", `the triage has no run of ${missing.length === 1 ? "layer" : "layers"} ${missing.join(", ")} (it holds ${triage.runs.map((r) => r.layer).join(", ")}): the baseline reads all of ${LAYERS.join(", ")}, and an id only a missing layer could reproduce would read not-exercised`);
   }
   if (triage.scanned === 0) throw new LedgerRefused("TriageNoCases", "the triage read no case at all — nothing was checked (vacuous)");
+  // N1: `scanned` is the file's own number, and a layer's run can hold no case while the others hold some (or while a hand-made
+  // file claims some): an id only that layer could have reproduced would read not-exercised over a layer nobody read.
+  const empty = LAYERS.filter((l) => !triage.runs.some((r) => r.layer === l && r.cases > 0));
+  if (empty.length > 0) {
+    throw new LedgerRefused("TriageLayerEmpty", `the triage read no case of ${empty.length === 1 ? "layer" : "layers"} ${empty.join(", ")} (its runs: ${triage.runs.map((r) => `${r.layer} ${r.cases}`).join(", ")}): an id only a layer that read nothing could reproduce would read not-exercised`);
+  }
   if (!isClean(triage)) {
     throw new LedgerRefused("TriageNotClean", `the triage is not clean (${triage.untriaged.length} untriaged, ${triage.ambiguous.length} ambiguous, ${triage.misrouted.length} misrouted rules, ${triage.unknownGap.length} unknown gaps): an untriaged red could be the very gap a verdict calls not-exercised — fix the triage first`);
   }

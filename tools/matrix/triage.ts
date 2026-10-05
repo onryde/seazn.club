@@ -13,7 +13,7 @@
 //      each listed on stdout;
 //   2  usage or input error, with a message on stderr and nothing written: a missing --runs or --out, an unknown
 //      flag, a run file that is unreadable, not JSON, not a results.json or not a v3 run, two runs of one layer, runs
-//      with no case at all, a catalogue file (a rule with an empty match among them) or audit directory that is
+//      with no case at all, a layer whose run holds none (its neighbours' cases would hide it), a catalogue file (a rule with an empty match among them) or audit directory that is
 //      unreadable, or a P-rule map that is unreadable or names a case the --rekey results do not hold;
 //   3  a crash while it loads, through `pnpm run matrix:triage` (its preload, scripts/lib/crash-exit.ts). Run it only
 //      through that script: without the preload a load crash exits 1.

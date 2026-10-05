@@ -309,6 +309,29 @@ describe("triage (ruling 63)", () => {
     expect(() => triage([run([])], rs, ROUTING, LEDGER, NONE)).toThrow(/no case/);
     for (const f of [() => triage([], rs, ROUTING, LEDGER, NONE)]) expect(f).toThrow(TriageRefused);
   });
+
+  // N1 (T18 re-review): `scanned` is the sum over the layers, so a layer that read nothing hid behind its neighbours' cases and the
+  // triage exited 0 over two layers it called three. Every layer given holds a case, wherever in the list the empty one is.
+  it("refuses a layer that holds no case even when its neighbours hold some, whichever layer is the empty one (N1)", () => {
+    const rs = rules([]);
+    const at = { L1: "@1280", L2: "@375", L3: "" } as const;
+    const full = (layer: Layer): RunResults => run([ok(`a|b|c|M1${at[layer]}`, layer)], layer);
+    const layers: Layer[] = ["L1", "L2", "L3"];
+    let refused = 0;
+    for (const empty of layers) {
+      const runs = layers.map((l) => (l === empty ? run([], l) : full(l)));
+      let caught: unknown;
+      try { triage(runs, rs, ROUTING, LEDGER, NONE); } catch (e) { caught = e; }
+      expect(caught, `${empty} empty`).toBeInstanceOf(TriageRefused);
+      expect((caught as TriageRefused).name, `${empty} empty`).toBe("EmptyLayer");
+      expect((caught as TriageRefused).message, `${empty} empty`).toMatch(new RegExp(`the ${empty} run r-${empty.toLowerCase()} holds no case`));
+      refused++;
+    }
+    expect(refused).toBe(layers.length);
+    // …the all-empty case keeps its own name (the layer check does not swallow it), and the same three layers with a case each triage.
+    expect(() => triage([run([], "L1"), run([], "L2")], rs, ROUTING, LEDGER, NONE)).toThrow(/runs hold no case at all/);
+    expect(triage(layers.map(full), rs, ROUTING, LEDGER, NONE).scanned).toBe(3);
+  });
 });
 
 // --- rekey ---------------------------------------------------------------------------------------------------------
@@ -588,6 +611,8 @@ describe("triage CLI", () => {
       ["a v2 run (no layer)", argsFor({ runs: [v2] }).argv, /RunNotV3/],
       ["two runs of one layer", argsFor({ runs: [good, runFile(mergedRun("L3", "other", [ok("z|z|z|M1")]))] }).argv, /two runs of layer L3/],
       ["runs that hold no case", argsFor({ runs: [runFile(run([]))] }).argv, /no case/],
+      ["a layer that holds no case beside layers that do (N1)", argsFor({ runs: [good, runFile(run([], "L1"))] }).argv, /EmptyLayer: the L1 run r-l1 holds no case/],
+      ["…whichever of the two runs is the empty one (N1)", argsFor({ runs: [runFile(run([], "L1")), good] }).argv, /EmptyLayer: the L1 run r-l1 holds no case/],
       ["unreadable rules", argsFor({ runs: [good], cat: brokenCat }).argv, /CatalogueUnreadable.*triage-rules\.json/],
       ["a catalogue dir with no files", argsFor({ runs: [good], cat: missingCat }).argv, /CatalogueUnreadable/],
       ["rules the schema refuses", argsFor({ runs: [good], cat: catalogue({ rules: { rules: [{ id: "T-1" }] } }) }).argv, /CatalogueUnreadable/],
