@@ -31,12 +31,41 @@ const SPLIT_LINE_MINUTES = 200;
 /** D14: a job's timeout is its estimate times this, capped at GitHub's 300-minute limit the workflow uses. */
 const TIMEOUT_FACTOR = 1.5;
 const TIMEOUT_CAP_MINUTES = 300;
+/** The probe's own run: 134 mutants (the PR self-proof, D3). */
+const PROBE_MUTANTS = 134;
+/** FINAL-FIX I2: the rate above is a LOCAL measurement, and no hosted run has measured it. The probe is D3's self-proof on
+ *  PR-A's own first run, where a timeout would read as "mutation testing is broken", so its timeout carries this extra
+ *  allowance for a hosted core slower than the local one (1.6 to 2 times is the plausible range) plus the job's install,
+ *  cache and upload. It is an allowance, not a measurement: PR-B's first hosted run replaces it (and every leg's timeout)
+ *  with a measured rate. */
+const PROBE_HOSTED_FACTOR = 2;
 /** The hosted runner mutation.yml runs on: 4 vCPUs, 16 GB. Its Stryker concurrency, by the engine's own formula. */
 const CI_CONCURRENCY = strykerConcurrency({ cores: 4, memBytes: 16 * GB, workersPerSandbox: STRYKER_VITEST_WORKERS });
 
 const estimateMinutes = (mutants: number): number => Math.ceil((DRY_RUN_FLOOR_SECONDS + (mutants * RUNNER_SECONDS_PER_MUTANT) / CI_CONCURRENCY) / 60);
 /** The most mutants a leg may hold: the largest count whose estimate is still at the split line. */
 const MAX_MUTANTS = Math.floor(((SPLIT_LINE_MINUTES * 60 - DRY_RUN_FLOOR_SECONDS) * CI_CONCURRENCY) / RUNNER_SECONDS_PER_MUTANT);
+
+/** One leg's timeout fault, or null. The probe has no upper band: its timeout is pinned to its own rule (below). */
+function timeoutFault(leg: string, t: number, est: number): string | null {
+  if (!Number.isInteger(t)) return `${leg}: timeout ${t} is not a whole number of minutes`;
+  if (t < est) return `${leg}: timeout ${t} is below its estimate ${est}`;
+  if (t > TIMEOUT_CAP_MINUTES) return `${leg}: timeout ${t} is above the ${TIMEOUT_CAP_MINUTES}-minute cap`;
+  // not wildly above: 1.5 x the estimate, plus a minute or two of slack for the count drifting since it was written
+  if (leg !== "probe" && t > Math.min(TIMEOUT_CAP_MINUTES, Math.ceil(est * TIMEOUT_FACTOR) + 15)) return `${leg}: timeout ${t} is way over 1.5 x its estimate (${est})`;
+  return null;
+}
+/** The timeouts file the rule produces from the legs' mutant counts: each leg 1.5 x its estimate, the probe its pinned rule. */
+function regeneratedTimeouts(byLeg: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [g, n] of Object.entries(byLeg)) out[g] = g === "probe" ? probeTimeout() : Math.ceil(estimateMinutes(n) * TIMEOUT_FACTOR);
+  return out;
+}
+const probeTimeout = (): number => Math.ceil(estimateMinutes(PROBE_MUTANTS) * TIMEOUT_FACTOR * PROBE_HOSTED_FACTOR);
+/** What a failing timeouts test tells its author: the file to write, whole (FINAL-FIX M3: an engine refactor that moves a
+ *  leg's mutant count reds an unrelated PR, and the author needs the next step, not the rule). */
+const regenerateHint = (byLeg: Record<string, number>): string =>
+  `regenerate: write this to packages/engine/stryker-timeouts.json (each leg is ceil(${TIMEOUT_FACTOR} x its estimate), the probe is its pinned rule; counts from this run):\n${JSON.stringify(regeneratedTimeouts(byLeg), null, 2)}`;
 
 /** A test that runs Stryker's instrumenter over many files: one parse of a big file is under a second, and a loaded runner
  *  is several times slower, so the budget is stated, not left at vitest's 5 s. */
@@ -121,22 +150,49 @@ describe("stryker-timeouts.json covers each leg's estimate (T15-SIZE, D14)", () 
   it("one timeout per leg, none below its estimate, none above the 300-minute cap, and each within the factor of D14 of the estimate", async () => {
     expect(Object.keys(timeouts)).toEqual(legs.map(([g]) => g));
     const byLeg = await counts();
+    const faults: string[] = [];
     let checked = 0;
     for (const [g] of legs) {
-      const est = estimateMinutes(byLeg[g] as number);
-      const t = timeouts[g] as number;
-      expect(Number.isInteger(t), `${g} timeout ${t}`).toBe(true);
-      expect(t, `${g}: timeout against estimate ${est}`).toBeGreaterThanOrEqual(est);
-      expect(t, `${g}: timeout against the cap`).toBeLessThanOrEqual(TIMEOUT_CAP_MINUTES);
-      // not wildly above: 1.5 x the estimate, plus a minute or two of slack for the count drifting since it was written
-      expect(t, `${g}: timeout is way over 1.5 x its estimate (${est})`).toBeLessThanOrEqual(Math.min(TIMEOUT_CAP_MINUTES, Math.ceil(est * TIMEOUT_FACTOR) + 15));
+      const f = timeoutFault(g, timeouts[g] as number, estimateMinutes(byLeg[g] as number));
+      if (f !== null) faults.push(f);
       checked++;
     }
     expect(checked).toBe(legs.length);
+    expect(faults, `${faults.join("\n")}\n${regenerateHint(byLeg)}`).toEqual([]);
   }, INSTRUMENT_BUDGET_MS);
 
-  it("the probe keeps its timeout from its own measured run: 134 mutants, 26 minutes, 39 with the factor", () => {
-    expect(timeouts.probe).toBe(Math.ceil(estimateMinutes(134) * TIMEOUT_FACTOR));
+  it("the probe's timeout is its own measured estimate, times the factor, times the hosted allowance: 134 mutants, 26 minutes, 78 (FINAL-FIX I2)", () => {
+    // typed from the rulebook above (26 min x 1.5 x 2), never from the file under test
+    expect(estimateMinutes(PROBE_MUTANTS)).toBe(26);
+    expect(probeTimeout()).toBe(78);
+    expect(timeouts.probe).toBe(probeTimeout());
+    // the allowance is a real margin over the local-rate timeout the probe used to carry, and under the cap
+    expect(timeouts.probe as number).toBeGreaterThan(Math.ceil(estimateMinutes(PROBE_MUTANTS) * TIMEOUT_FACTOR));
+    expect(timeouts.probe as number).toBeLessThanOrEqual(TIMEOUT_CAP_MINUTES);
+  });
+});
+
+describe("a failing timeouts file tells its author what to write (FINAL-FIX M3)", () => {
+  // synthetic counts, so this needs no instrumenter: one leg whose count fell (its timeout is now far over), one that grew
+  // (its timeout is now below its estimate), one in band, and the probe
+  const byLeg = { shrunk: 400, grown: 1300, steady: 900, probe: PROBE_MUTANTS };
+
+  it("a map with a timeout too high, one too low, one in band and a probe below its estimate names exactly the three, and the hint it prints is a file that passes", () => {
+    const ok = regeneratedTimeouts(byLeg);
+    // by hand from the ruling's arithmetic, never from the helper: est(400) = ceil((344 + 400 x 26 / 3) / 60) = 64, x 1.5 = 96;
+    // est(1300) = 194, x 1.5 = 291; est(900) = 136, x 1.5 = 204; the probe 78
+    expect(ok).toEqual({ shrunk: 96, grown: 291, steady: 204, probe: 78 });
+    const doctored = { ...ok, shrunk: (ok.shrunk as number) + 120, grown: estimateMinutes(1300) - 1, probe: estimateMinutes(PROBE_MUTANTS) - 1 };
+    const faults = Object.entries(doctored).flatMap(([g, t]) => timeoutFault(g, t, estimateMinutes(byLeg[g as keyof typeof byLeg])) ?? []);
+    expect(faults.map((f) => f.split(":")[0])).toEqual(["shrunk", "grown", "probe"]);
+    // the hint carries the regenerated file whole, so the author pastes rather than derives
+    const hint = regenerateHint(byLeg);
+    expect(hint).toContain("stryker-timeouts.json");
+    expect(JSON.parse(hint.slice(hint.indexOf("{")))).toEqual(ok);
+    // and what it regenerates satisfies the very band that failed (anti-circular: the band is the rulebook's, not the hint's)
+    const regenerated = Object.entries(ok).flatMap(([g, t]) => timeoutFault(g, t, estimateMinutes(byLeg[g as keyof typeof byLeg])) ?? []);
+    expect(regenerated).toEqual([]);
+    expect(Object.keys(ok).length, "legs regenerated").toBe(4);
   });
 });
 

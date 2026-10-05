@@ -10,7 +10,9 @@ name: Stryker mutation
 #    are held equal to the keys by matrix-workflow.test.ts. inject_visibility proves the guard live.
 #  - pull_request on this file and the Stryker files: the probe, so the workflow proves itself on its own PR.
 # The matrix (and each job's timeout, from packages/engine/stryker-timeouts.json, at most 300 minutes) is derived by
-# packages/engine/scripts/stryker-matrix.mjs, whose own test spawns it per event. The floor (stryker-floor.json) gates, not
+# packages/engine/scripts/stryker-matrix.mjs, whose own test spawns it per event. THE TIMEOUTS ARE NOT YET MEASURED ON A HOSTED
+# RUNNER: they come from a local per-mutant rate (26 runner-seconds), and the probe's carries an extra x2 allowance. PR-B (Task 20)
+# re-derives every leg's timeout from the per-mutant time of its first hosted run. The floor (stryker-floor.json) gates, not
 # Stryker's `break`, and is kept per FAMILY (ruling 66's ten groups, the sum of their legs: a file cut again never removes a
 # floor), so the `floors` job, not a leg, judges it: it runs after every leg and reads the legs' artifacts. Until PR-B sets a floor
 # it prints "no floor yet" and the families' scores are only logged.
