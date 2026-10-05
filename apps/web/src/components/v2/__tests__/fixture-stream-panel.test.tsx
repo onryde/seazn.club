@@ -2307,6 +2307,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     saved?: { row: false } | { row: true; targetId: string | null };
     /** The read model's read fails while set. */
     failPhone?: boolean;
+    /** The read model's `session` — unset: the server's own, from `current`. Set, it names an open session that
+     *  `current` does not (yet, or any longer) answer: the lag the I-2 once-per-id guard exists for. */
+    openSession?: string | null;
     /** The stream-code ensure (T5). Unset: the active code, as the route re-shows it. */
     code?: () => unknown;
     reissue?: () => unknown;
@@ -2345,7 +2348,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
         return structuredClone({
           ...(s.phone ?? readModel()),
           destination: pick === null ? null : { id: pick.id, label: pick.label, source: pick.source },
-          session: open ? { id: s.current!.id } : null,
+          session: s.openSession !== undefined ? (s.openSession === null ? null : { id: s.openSession }) : open ? { id: s.current!.id } : null,
         });
       }
       if (key === ENSURE) return s.code ? s.code() : { qr: { ...CODE_QR, exp: 1_900_000_000 }, issuedAt: (s.phone ?? readModel()).code?.issuedAt ?? "2026-09-14T11:00:00.000Z" };
@@ -2808,6 +2811,38 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  // B8 re-review P1: the I-2 effect reads `current` ONCE per open id. `view.id` alone stops the second read only once
+  // `current` answers that id; until it does — a lag, or a session already gone by the time it is asked — every phone
+  // poll would ask again. The ref is what holds it to one.
+  it("I-2's once-per-id guard: while `current` keeps answering something else for the read model's open id — nothing at Ready, the old Ended card — it is read ONCE for that id across several polls; a NEW id is read once more", async () => {
+    const POLLS = 4;
+    let checked = 0;
+    for (const [name, start] of [
+      ["Ready, paired", null],
+      ["an Ended card", session({ id: "s0", state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped", creditUsed: true })],
+    ] as const) {
+      apiV1.mockClear();
+      const s = serve({ current: start, targets: TARGETS });
+      // Not tracked: unmounted at the end of its case, so its poll never lands in the next case's count.
+      const island = await mount(s);
+      for (const id of ["s-phone", "s-phone-2"]) {
+        s.openSession = id;   // the read model names it; `current` keeps answering `start`
+        const polls = plainPolls();
+        const reads = phoneReads();
+        for (let i = 0; i < POLLS; i++) {
+          await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+          await settle();
+        }
+        expect(phoneReads() - reads, `${name}, ${id}: PREMISE — the read model was polled every time`).toBeGreaterThanOrEqual(POLLS);
+        expect(plainPolls() - polls, `${name}, ${id}: \`current\` read ONCE across ${POLLS} polls`).toBe(1);
+        expect(bodyOf(island).view?.id ?? null, `${name}, ${id}: \`current\`'s own answer is shown`).toBe(start?.id ?? null);
+        checked++;
+      }
+      island.unmount();
+    }
+    expect(checked).toBe(4);
   });
 
   it("§8a's encoding settings are the helper's: EC-H, a 4-module quiet zone, and the Seazn logo (amended 2026-09-30, D7)", () => {
@@ -3861,6 +3896,24 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
         gated++;
       }
       expect(gated).toBe(2);
+    });
+
+    // B8 re-review P4: the flag clause of the mount. Flag ON, the purchase is the Phone tab's alone — an organiser who
+    // switches to OBS must not get a second purchase UI (at balance 0 a forced chooser, with its own N2 lock beside the
+    // Phone tab's).
+    it("P4: one purchase per panel — flag ON on the OBS tab: none (the Phone tab owns it); flag ON on the Phone tab: exactly the tab's own; flag OFF: exactly one, under the overlay", () => {
+      const owners = (tree: ReactElement[]) => tree.filter((el) => el.type === StreamCredits || el.type === PhoneTab).map((el) => el.type);
+      let checked = 0;
+      for (const streamBalance of [0, 4]) {
+        const onObs = open({ relayEntitled: true, phoneCapture: true, streamBalance }).tree();
+        expect(byTestId(onObs, "stream-lead"), `balance ${streamBalance}: PREMISE — the OBS tab is shown`).toBeDefined();
+        expect(byTestId(onObs, "stream-tab-phone"), `balance ${streamBalance}: PREMISE — flag on, the Phone tab exists`).toBeDefined();
+        expect(owners(onObs), `balance ${streamBalance}: flag on, OBS tab — no second purchase`).toEqual([]);
+        expect(owners(openPanel({ relayEntitled: true, phoneCapture: true, streamBalance }).tree()), `balance ${streamBalance}: flag on, Phone tab`).toEqual([PhoneTab]);
+        expect(owners(openPanel({ relayEntitled: true, phoneCapture: false, streamBalance }).tree()), `balance ${streamBalance}: flag off`).toEqual([StreamCredits]);
+        checked++;
+      }
+      expect(checked).toBe(2);
     });
 
     it("flag OFF → buy credits is REACHABLE: the balance and Buy more; Buy more opens every pack and Close; a tile takes the secret and mounts the embedded sheet; nothing of the phone path is called", async () => {
