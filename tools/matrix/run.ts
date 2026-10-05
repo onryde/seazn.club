@@ -140,6 +140,7 @@ import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver
 import type { FillerName } from "./lib/fillers.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
+import { routeViaTemplate } from "./lib/templates.ts";
 import {
   API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, LAYER_PLANNERS, NoLayerForWidth, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
   type LayerCase, type LayerScope, type PlannedLayerCase,
@@ -915,7 +916,8 @@ type RunItem =
 /** A plain plan's specs all run at the CLI's width (null over HTTP; D9); a
  *  layered plan places each of its cases itself. */
 function runItems(planner: CasePlanner | LayeredPlanner, variantFor: (sport: string) => string, width: BrowserWidth | null): RunItem[] {
-  if (!isLayered(planner)) return planner.plan(variantFor).map((spec) => ({ kind: "driven", spec, layer: width === null ? "L3" : layerOfWidth(width), run: null, width }));
+  // W1d item 20: over a browser (a width), a spec on a template cell drives through the template's card, as the grid's L1 case does. Over HTTP nothing changes: the committed plans stay frozen.
+  if (!isLayered(planner)) return planner.plan(variantFor).map((spec) => ({ kind: "driven", spec: width === null ? spec : routeViaTemplate(spec), layer: width === null ? "L3" : layerOfWidth(width), run: null, width }));
   const items = planner.layered(variantFor).map((c: LayerCase): RunItem => (c.spec !== null ? { kind: "driven", spec: c.spec, layer: c.layer, run: c.run, width: c.width } : { kind: "planned", case: c }));
   if (items.length === 0) throw new NothingPlanned(planner.label);
   const seen = new Set<string>();

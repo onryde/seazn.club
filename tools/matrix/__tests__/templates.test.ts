@@ -8,9 +8,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { API_ONLY_ROWS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import type { CaseSpec } from "../lib/scenarios/types.ts";
 import {
-  TEMPLATE_ROW, TemplateDrifted, TemplateShapeUnsupported, UnknownTemplate, templateBodies, templateField, templateFor, templateRow,
+  TEMPLATE_ROW, TemplateDrifted, TemplateShapeUnsupported, UnknownTemplate, routeViaTemplate, templateBodies, templateField, templateFor, templateRow,
 } from "../lib/templates.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -159,5 +160,62 @@ describe("templateBodies — the stages the product inserts for a template (temp
     const st = { kind: "group", groups: 4, points: { win: 3 }, config: { legs: 2, pools: { count: 5 } } };
     const d = dirWith("box-league", { ...one, divisions: [{ ...one.divisions[0]!, stages: [st] }] });
     expect(templateBodies("box-league", d)[0]!.config).toEqual({ pools: { count: 5 }, points: { win: 3 }, legs: 2 });
+  });
+});
+
+// W1d Task 13, item 20: a plain browser plan's spec on a cell a catalog template reaches drives through that
+// template's card, as the grid's L1 case does (layers.ts planL1Grid). The template's own variant and sport come from
+// the catalog JSON read HERE as text, never from lib/templates.ts.
+describe("routeViaTemplate — the plain browser plan reaches the template cells (W1d item 20)", () => {
+  const spec = (row: string, sport: string, scenario: CaseSpec["scenario"] = "LIFECYCLE", more: Partial<CaseSpec> = {}): CaseSpec =>
+    ({ caseId: `${row}|${sport}|builder-default|${scenario}`, row, sport, variant: "builder-default", scenario, canary: false, ...more });
+
+  it("a spec on group_only|badminton becomes the box-league card's case: the template's own variant in id and field, template set, every script kept", () => {
+    const want = raw("box-league").divisions[0]!;
+    expect([want.sportKey, want.variantKey]).toEqual(["badminton", "short"]);
+    let checked = 0;
+    for (const scenario of ["LIFECYCLE", "M1", "R4", "F1"] as const) {
+      const out = routeViaTemplate(spec("group_only", "badminton", scenario));
+      expect(out, scenario).toEqual({ caseId: `group_only|badminton|${want.variantKey}|${scenario}`, row: "group_only", sport: "badminton", variant: want.variantKey, scenario, canary: false, template: "box-league" });
+      checked++;
+    }
+    expect(checked).toBe(4);
+    const cricket = raw("t20-super8").divisions[0]!;
+    expect(routeViaTemplate(spec("group_group_ko", "cricket"))).toEqual({
+      caseId: `group_group_ko|cricket|${cricket.variantKey}|LIFECYCLE`, row: "group_group_ko", sport: "cricket", variant: cricket.variantKey, scenario: "LIFECYCLE", canary: false, template: "t20-super8",
+    });
+  });
+
+  it("every cell of the grid: exactly the two the catalog reaches are re-planned, every other spec comes back as the SAME object", () => {
+    const reached = new Set(["group_only|badminton", "group_group_ko|cricket"]);
+    let checked = 0;
+    const routed: string[] = [];
+    for (const row of ROW_KEYS) for (const sport of SPORT_KEYS) {
+      const s = spec(row, sport);
+      const out = routeViaTemplate(s);
+      if (reached.has(`${row}|${sport}`)) { expect(out).not.toBe(s); expect(out.template, `${row}|${sport}`).toBeDefined(); routed.push(`${row}|${sport}`); }
+      else expect(out, `${row}|${sport}`).toBe(s);
+      checked++;
+    }
+    expect(checked).toBe(ROW_KEYS.length * SPORT_KEYS.length);
+    expect(checked).toBeGreaterThan(0);
+    expect(routed.sort()).toEqual([...reached].sort());
+  });
+
+  it("a spec that already carries a template, or a variant case's overrides, is left alone: the card sets no rule, and a cricket `test` case is not the t20 card", () => {
+    const onTemplate = spec("group_only", "badminton", "LIFECYCLE", { template: "box-league", variant: "short", caseId: "group_only|badminton|short|LIFECYCLE" });
+    expect(routeViaTemplate(onTemplate)).toBe(onTemplate);
+    // A committed cricket test case on a template cell (variants.json holds one for group_group_ko and group_only).
+    const variantCase = spec("group_group_ko", "cricket", "LIFECYCLE", { variant: "test", overrides: { format: "test" }, caseId: "group_group_ko|cricket|test|LIFECYCLE|id" });
+    expect(routeViaTemplate(variantCase)).toBe(variantCase);
+    expect(variantCase.template).toBeUndefined();
+  });
+
+  it("a second call on its own answer changes nothing, and the input is never mutated", () => {
+    const s = Object.freeze(spec("group_only", "badminton"));
+    const once = routeViaTemplate(s);
+    expect(routeViaTemplate(once)).toBe(once);
+    expect(s.template).toBeUndefined();
+    expect(s.variant).toBe("builder-default");
   });
 });

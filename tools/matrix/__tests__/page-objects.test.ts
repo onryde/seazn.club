@@ -1180,6 +1180,25 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
     expect(g.log.at(-1)).toBe("shot 01-competition-from-template");
   });
 
+  // W1d Task 13, item 20: a template competition is created PUBLIC (the product's default for the omitted
+  // visibility), and the run's org is the case's own (run-cli.test.ts pins one org per case on a template plan), so the
+  // public-dashboard quota that create spends is that org's and never accumulates across cases. Both halves rest on the
+  // gallery sending no `visibility`: read from the product's request body as text.
+  it("the gallery's create request carries no visibility key: its body is template_key, template_version, name, starts_on, ends_on", () => {
+    const product = readFileSync(resolve(REPO, "apps/web/src/components/v2/template-gallery.tsx"), "utf8");
+    const at = product.indexOf('"/api/v1/competitions/from-template"');
+    expect(at, "the gallery no longer posts to from-template").toBeGreaterThan(0);
+    const call = product.slice(at, product.indexOf("});", at));
+    const body = /json:\s*\{([^}]*)\}/.exec(call)?.[1];
+    expect(body, "the request's json body was not found").toBeDefined();
+    const keys = [...body!.matchAll(/^\s*(\w+)\s*[:,]/gm)].map((m) => m[1]);
+    expect(keys).toEqual(["template_key", "template_version", "name", "starts_on", "ends_on"]);
+    expect(keys).not.toContain("visibility");
+    // The parse reads a body that WOULD carry one: the same text with a visibility line yields it.
+    const withVis = /json:\s*\{([^}]*)\}/.exec(call.replace("ends_on: endsOn,", "ends_on: endsOn,\n          visibility: \"public\","))?.[1];
+    expect([...withVis!.matchAll(/^\s*(\w+)\s*[:,]/gm)].map((m) => m[1])).toContain("visibility");
+  });
+
   it("an unsafe or unknown template key is refused by name before any navigation", async () => {
     const g = galleryPage();
     const keys = ["", "box league", "box-league\"]", "no-such-template"];

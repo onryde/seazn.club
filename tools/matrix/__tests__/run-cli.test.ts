@@ -3203,3 +3203,80 @@ describe("runSlice — --set pr-sample and --rows (W1d T7)", () => {
     expect(planOf({ ...base, set: undefined })).toBe("slice");
   });
 });
+
+// W1d Task 13, item 20: a plain browser plan (the slice's fall-through to the w1-driving cells, or any set's specs)
+// reaches the two template cells through their gallery cards, as the grid's L1 case does. It used to throw
+// DriverMisuse naming the template on every script of the cell. Expected values: the catalog JSON read here as
+// text (its sport and variant), and the unrouted plan of the same filter (planW1Driving), which is the baseline.
+describe("runSlice — a plain browser plan reaches the template cells (W1d Task 13, item 20)", () => {
+  const catalog = (key: string) => (JSON.parse(readFileSync(join(REPO, "apps/web/src/server/templates/catalog", `${key}.json`), "utf8")) as { divisions: { sportKey: string; variantKey: string }[] }).divisions[0]!;
+  const onDefaults = (): Deps => {
+    const base = deps();
+    const prior = base.openDb.bind(base);
+    return Object.assign(base, { openDb: async () => ({ ...(await prior()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] }) });
+  };
+  const baseline = (only: string) => planW1Driving((s) => offlineBuilderDefault(s), { only });
+  const idsOf = (dir: string, runId: string) => resultsIn(dir, runId).cases.map((c) => c.caseId);
+
+  it("--driver browser --only group_only|badminton plans every script through the box-league card: its own variant, template set, each case on its own org", async () => {
+    const io = capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = onDefaults();
+    d.openBrowserRun = async () => fb.run;
+    const code = await runSlice(d, ["--only", "group_only|badminton", "--driver", "browser", "--width", "1280", "--run-id", "t20a", "--report-dir", dir]);
+    expect(code, `a refusal or abort would plan nothing: ${io.err()}`).toBeLessThan(EXIT.REFUSED);
+    const plain = baseline("group_only|badminton");
+    expect(plain.length, "the baseline plans the cell").toBeGreaterThan(0);
+    const card = catalog("box-league");
+    expect([card.sportKey, card.variantKey]).toEqual(["badminton", "short"]);
+    // The case has teeth only if the template's variant is not what the builder would have picked.
+    expect(offlineBuilderDefault("badminton")).not.toBe(card.variantKey);
+    expect(fb.opts.map((o) => o.spec)).toEqual(plain.map((s) => ({ ...s, caseId: `group_only|badminton|${card.variantKey}|${s.scenario}`, variant: card.variantKey, template: "box-league" })));
+    expect(idsOf(dir, "t20a")).toEqual(plain.map((s) => `group_only|badminton|${card.variantKey}|${s.scenario}@1280`));
+    // Each case is provisioned its own org, so the public-dashboard quota a template create spends is that org's and
+    // never accumulates across cases (the gallery sends no visibility: page-objects.test.ts pins that text).
+    expect(d.orgs).toHaveLength(plain.length);
+    expect(new Set(d.orgs.map((o) => o.slug)).size).toBe(plain.length);
+    expect(new Set(fb.opts.map((o) => o.orgId)).size).toBe(plain.length);
+  });
+
+  it("--only group_group_ko|cricket: the scripts go through the t20-super8 card, and the committed cricket test cases (they carry overrides) stay unrouted", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = onDefaults();
+    d.openBrowserRun = async () => fb.run;
+    expect(await runSlice(d, ["--only", "group_group_ko|cricket", "--driver", "browser", "--width", "1280", "--run-id", "t20b", "--report-dir", dir])).toBeLessThan(EXIT.REFUSED);
+    const plain = baseline("group_group_ko|cricket");
+    const card = catalog("t20-super8");
+    expect([card.sportKey, card.variantKey]).toEqual(["cricket", "t20"]);
+    const withOverrides = plain.filter((s) => s.overrides !== undefined);
+    expect(withOverrides.length, "the committed variants hold a cricket test case on this cell").toBeGreaterThan(0);
+    expect(plain.length - withOverrides.length, "and the scripts").toBeGreaterThan(0);
+    expect(fb.opts.map((o) => o.spec)).toEqual(plain.map((s) => (s.overrides !== undefined ? s : { ...s, caseId: `group_group_ko|cricket|${card.variantKey}|${s.scenario}`, variant: card.variantKey, template: "t20-super8" })));
+    expect(fb.opts.filter((o) => o.spec.template !== undefined)).toHaveLength(plain.length - withOverrides.length);
+  });
+
+  it("a builder cell and a cell no template reaches are planned exactly as before, in a browser; and over HTTP the template cell keeps its builder variant (the committed w1-driving plan is frozen)", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = onDefaults();
+    d.openBrowserRun = async () => fb.run;
+    let checked = 0;
+    for (const only of ["americano|badminton", "knockout_third_place|badminton", "group_only|generic"]) {
+      fb.opts.length = 0;
+      expect(await runSlice(d, ["--only", only, "--driver", "browser", "--width", "1280", "--run-id", `t20c${checked}`, "--report-dir", dir]), only).toBeLessThan(EXIT.REFUSED);
+      expect(fb.opts.map((o) => o.spec), only).toEqual(baseline(only));
+      expect(fb.opts.length, only).toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // Over HTTP the same filter plans no template: ids carry the builder's variant.
+    const http = onDefaults();
+    expect(await runSlice(http, ["--only", "group_only|badminton", "--run-id", "t20h", "--report-dir", dir])).toBeLessThan(EXIT.REFUSED);
+    expect(idsOf(dir, "t20h")).toEqual(baseline("group_only|badminton").map((s) => s.caseId));
+    expect(idsOf(dir, "t20h").every((id) => !id.includes("|short|"))).toBe(true);
+  });
+});

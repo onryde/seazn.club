@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { API_ONLY_ROWS, stagesForRow, type ApiOnlyRowKey, type StagePostBody } from "./catalogue.ts";
+import type { CaseSpec } from "./scenarios/types.ts";
 
 /** server/templates/catalog/, resolved from this file — never the cwd. */
 export const CATALOG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps/web/src/server/templates/catalog");
@@ -128,6 +129,24 @@ export function templateFor(row: string, sport: string): string | null {
     if (TEMPLATE_ROW[key] === row && templateField(key).sport === sport) return key;
   }
   return null;
+}
+
+/** `spec` re-planned onto catalog template `key` (D11): the case drives through the template's card, so its variant
+ *  (and the id that names it) is the template's own, never the builder default's, and `template` is set. Every other
+ *  field is the spec's. The one builder the grid's L1 cells (layers.ts planL1Grid) and a plain browser plan share. */
+export function onTemplate(spec: Omit<CaseSpec, "variant" | "caseId">, key: string): CaseSpec {
+  const { variant } = templateField(key);
+  return { ...spec, caseId: `${spec.row}|${spec.sport}|${variant}|${spec.scenario}`, variant, template: key };
+}
+
+/** W1d item 20: a plain browser plan's spec on a cell a catalog template reaches drives through that template's
+ *  card, as the grid's L1 case does; before this it threw DriverMisuse naming the template, on every script of the
+ *  cell. Any other spec comes back as the SAME object. Left alone, by name: a spec already on a template, and a
+ *  variant case's (it carries `overrides`: the card sets no rule, and a cricket `test` case is not the t20 card). */
+export function routeViaTemplate(spec: CaseSpec): CaseSpec {
+  if (spec.template !== undefined || spec.overrides !== undefined) return spec;
+  const key = templateFor(spec.row, spec.sport);
+  return key === null ? spec : onTemplate(spec, key);
 }
 
 /** The stage rows the product inserts for `key` (usecases/templates.ts

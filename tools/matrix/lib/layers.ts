@@ -43,7 +43,7 @@
 // the leaf api-only-ui.ts, never from browser-driver.ts.
 import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, type ApiOnlyRowKey, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
-import { templateField, templateRow } from "./templates.ts";
+import { onTemplate, templateField, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
 import { SetTakesNoFilter } from "./probe-set.ts";
 import { ATOMIC, HARNESS_SCENARIO, type AtomicScenario } from "./scenario-catalogue.ts";
@@ -242,10 +242,7 @@ export function planL1Grid(variantFor: (sport: string) => string): LayerCase[] {
       return at({ caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE, canary: false });
     }
     const p = apiOnlyUiPath(row, sport);
-    if (p.reachable) {
-      const { variant } = templateField(p.template);
-      return at({ caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE, canary: false, template: p.template });
-    }
+    if (p.reachable) return at(onTemplate({ row, sport, scenario: LIFECYCLE, canary: false }, p.template));
     const variant = variantFor(sport);
     return {
       spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
