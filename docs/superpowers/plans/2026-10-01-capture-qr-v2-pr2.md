@@ -98,6 +98,16 @@ house rules, scoped runs only, never `seazn-env gate`, `rtk proxy` for tsc and l
    - Expect: exactly one amber sentence, the highest priority (not responding).
    - Owner: T6, case "one amber sentence, by priority".
 
+## Carried from PR-1 (owner decision 2026-10-05)
+
+- **G-1, from PR-1's final review: a stream code outlives its issuer's membership.** A phone or automatic start is
+  attributed to the code's `issued_by`, and member removal never touches `fixture_stream_codes`. **Owner: fix in
+  PR-2.** When a membership is removed (every member-removal path; grep them, do not assume one), end that user's
+  active codes for the org, so the phone gets the existing `code_ended` answer. No contract change. Owed tests: the
+  removal ends the code, then a beat and a phone start are refused `code_ended`; a second member's codes are
+  untouched; re-adding the user does not revive the code; and a mutant that skips the revoke goes red. Assign it to
+  T2 (it touches the same write path) unless the T2 re-pin shows a better owner, and record the choice.
+
 ## Premises re-verified (spec → corrected fact)
 
 These were pinned on 2026-10-01 against `origin/main` 58e8103e3. **Each is re-checked at T2 Step 1 against

@@ -94,7 +94,7 @@ They are not the owner's.
 | Feature flag | The PostHog flag `capture-qr-v2` gates the **capture UI only**: the panel's phone-camera option. No route is gated. Fallback is false, so the option is hidden when PostHog is unconfigured or down. The flag is set up in PostHog: Organizations, the test club, 100%. | 2026-10-04 |
 | Local override | **Controller ruling, on the owner's question of 2026-10-04** ("in local, always visible?"). `CAPTURE_QR_V2_ALWAYS=1` forces the option visible. It is for **local and e2e only**, and is unset on stg and prod, where the PostHog flag decides. A test proves it is absent from `fly*.toml` and the Dockerfile. | 2026-10-04 |
 | Photographed QR | **Ruling "a":** a scan takes over the slot, and the organiser's **Revoke & reissue is the remedy**. The QR is shown only in the organiser panel. | 2026-10-04 |
-| `e2e.yml` | **OG15 granted** for the R10 tunables, on e2e-parallel's Start server and Run Playwright steps (`e2e.yml:791-793`, `:847-849`). The branch also sets `CAPTURE_QR_V2_ALWAYS: "1"` at `e2e.yml:780`, `:1245` and `:1595`, so the walkthroughs see the phone option; **that part is PENDING the owner's extension of OG15.** All of it goes live on merge. | 2026-10-05 |
+| `e2e.yml` | **OG15 granted** for the R10 tunables, on e2e-parallel's Start server and Run Playwright steps (`e2e.yml:791-793`, `:847-849`), and **extended** to `CAPTURE_QR_V2_ALWAYS: "1"` at `e2e.yml:780`, `:1245` and `:1595`, so the walkthroughs see the phone option. All of it goes live on merge. | 2026-10-05 |
 | YouTube: one video or many | **PENDING the owner's staging observation**, with Auto-stop on and off, and the gap length. No code depends on it. **Help text is pending.** No help string asserts either behaviour, and the organiser help is written after the observation. | asked 2026-10-04 |
 | Flag off | **Flag off = the OBS path plus credits.** The OBS overlay, then the balance, Buy more and the embedded checkout. **The v1 QR is gone for every org** (W4, §6.13), so the pre-T11 Phone-tab Go live does not return with the flag. This was a coordinator ruling (spec §17.13), and the owner approved screen 14 (flag off) and 14b (flag-off buy) in the visual sign-off. | 2026-10-05 |
 | Stg `*/5` cost | **R9: accepted**, including keeping the stg Fly machine awake. The merge still needs its own OK (OG6). | 2026-10-01 |
@@ -540,7 +540,6 @@ a peer session's word.
 | # | Step | When | Note |
 |---|---|---|---|
 | — | **Rebase onto main** if it has moved, re-run the affected scoped checks, and push with `--force-with-lease` (owner ruling 2026-10-05: "rebase after review"). | before OG5, and again before OG6 if main moves | As of the final review, main had not moved. |
-| OG15+ | Extend OG15 to the `CAPTURE_QR_V2_ALWAYS` lines (`e2e.yml:780`, `:1245`, `:1595`). **STOP: owner OK required.** | before OG5 | See "Owner decisions". |
 | OG5 | `workflow_dispatch` e2e with the `pr` input. **STOP: owner OK required.** | before merge, against the head after any rebase | The branch edits `e2e.yml` (R10), so dispatch with **`--ref feat/capture-qr-v2-pr1`**, or main's workflow file runs. A main push cancels a dispatched run, so "cancelled" is not a pass. |
 | OG6 | Merge to main. **STOP: owner OK required.** | after OG5 | `stg.yml` runs Flyway V430, deploys Fly stg, and deploys the cron Worker (`*/5` live on stg: a Cloudflare write). The R3 window above. OG16 acknowledged first. |
 | OG7 | Act on the e2e run from the push to main. **STOP: owner OK required.** | after OG6 | — |
@@ -557,7 +556,7 @@ a peer session's word.
 - OG1: the T1 hand-off to capture, 2026-10-01.
 - OG2: Option B, 2026-10-01.
 - OG3 and OG4: push, and this PR opened as a draft (#920), 2026-10-05. Smoke CI runs on the PR; e2e does **not**.
-- OG15: the `e2e.yml` tunables, 2026-10-05.
+- OG15: the `e2e.yml` tunables, and its extension to the `CAPTURE_QR_V2_ALWAYS` lines, 2026-10-05.
 
 **OG11 (KV) is not triggered,** because R2 is option S.
 
@@ -566,12 +565,12 @@ a peer session's word.
 - **Parked:** `CF-Connecting-IP` can be forged through the open `*.fly.dev` origin. It belongs to the app-wide origin
   lock, **F-CF5**. Today it affects only failure throttling.
 - **Pending the owner:** the YouTube one-vs-many-video behaviour (S10), and the organiser help text that waits on it.
-- **Pending the owner (final review G-1): a stream code outlives its issuer's membership.** A phone start is
+- **Later, PR-2 (final review G-1): a stream code outlives its issuer's membership.** A phone start is
   attributed to the code's `issued_by` (`stream-sessions.ts`, `capture-phone.ts`), and removing a member does not touch
   `fixture_stream_codes`. A removed staff member, or anyone holding a photo of the QR, can still start that fixture's
   paid broadcast to the org's own saved destination until Revoke & reissue or code expiry. The damage is bounded to
-  the org's own channel and credits. The controller's recommendation is PR-2: revoke a user's codes when their
-  membership is removed, so the phone sees the existing `code_ended` answer, with no contract change.
+  the org's own channel and credits. **Owner decision 2026-10-05: fixed in PR-2.** A user's codes are revoked when their membership is
+  removed, so the phone sees the existing `code_ended` answer, with no contract change.
 - **Later: PR-2** (spec §7: automatic mode, auto stop, the phone-health line, the takeover notice; migration V431). It
   has its own plan, `docs/superpowers/plans/2026-10-01-capture-qr-v2-pr2.md`.
 
