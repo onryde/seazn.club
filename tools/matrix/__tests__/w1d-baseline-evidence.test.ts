@@ -8,6 +8,8 @@
 //     catalogue, and compared byte for byte (a catalogue edit that moves a gap is then a visible edit of them too);
 //   - the triage-shapes fixture is rebuilt by its generator (catalogue/scripts/gen-shapes.py) from the committed baseline and
 //     dispatch-cuts.json (Task 19 review M4): the generators that read the dispatches are no longer "rebuilt by hand".
+//   - the README's "what differs between the three dispatches" table is re-derived from the committed cut (T21 review M3), and the
+//     README's Reproduce commands are RUN AS PRINTED to write TRIAGE.md, REKEY.md and AUDIT-LEDGER.md (T21 review M4).
 // Every sweep counts what it checked, and zero is a failure.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -123,6 +125,60 @@ describe("README.md says what the committed data says", () => {
     expect(readme).toMatch(/90 days/);
     // A screenshot citation is 1-based (the case-N directory), and the doc says so.
     expect(readme).toMatch(/1-BASED/);
+  });
+
+  /** The failing-check ids of a case, restated from its checks (not read from any tool's summary). */
+  const failingOf = (c: Case): string => ((c.checks ?? []) as { id: string; verdict: string }[]).filter((k) => k.verdict === "fail").map((k) => k.id).sort().join(",");
+  /** A reason with every UUID replaced by <id> and every number by <n>: what is left is what the reason SAYS. */
+  const shapeOf = (c: Case): string => String(c.reason ?? "").replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<id>").replace(/\d+/g, "<n>");
+  const cutsOf = (): { ids: string[]; dispatches: { n: number; cases: Case[] }[] } => JSON.parse(text("dispatch-cuts.json")) as { ids: string[]; dispatches: { n: number; cases: Case[] }[] };
+
+  it("the 'what differs between the three dispatches' table is the data's: L3's three columns are re-derived from the committed cut, every layer's state column is the verbatim across headline, and the cells it names are the cut's (T21 review M3)", () => {
+    const readme = text("README.md");
+    const cuts = cutsOf();
+    const ids = cuts.ids;
+    const byId = (n: number): Map<string, Case> => new Map(cuts.dispatches.find((d) => d.n === n)!.cases.map((c) => [c.caseId, c]));
+    const per = [1, 2, 3].map(byId);
+    const differs = (f: (c: Case) => string): string[] => ids.filter((id) => new Set(per.map((m) => f(m.get(id)!))).size > 1);
+    const stateDiff = differs((c) => c.state);
+    const failDiff = differs(failingOf);
+    const shapeDiff = differs(shapeOf);
+    // The cut is the cells that differ in one of the three ways, and every one of them differs: a cell that did not would be padding.
+    expect(shapeDiff.length + stateDiff.length + failDiff.length, "something differs").toBeGreaterThan(0);
+    for (const id of ids) expect(new Set([...stateDiff, ...failDiff, ...shapeDiff]).has(id), `${id} differs in state, in its failing checks, or in what its reason says`).toBe(true);
+    const row = /^\| L3 \| (\d+) \| (\d+) \| (\d+) \| (\d+) \| (\d+) \|$/m.exec(section(readme, "## What differs between the three dispatches\n"));
+    expect(row, "L3's row of the differences table").not.toBeNull();
+    expect([row![1], row![2], row![3], row![4]].map(Number), "L3: cases, state, failing-check set, reason beyond ids and numbers").toEqual([runs.L3.cases.length, stateDiff.length, failDiff.length, shapeDiff.length]);
+    // L1 and L2: their dispatches 1 and 2 are not committed, so the state column is the verbatim `judge across` headline, and the other two are 0 by the same prose.
+    const green = text("HARNESS-GREEN.md");
+    let checked = 0;
+    let numberOnly = Number(row![5]);
+    for (const l of ["L1", "L2"] as const) {
+      const head = new RegExp(`^${l}: compared (\\d+) cases across 3 runs; (\\d+) differing; 0 faults$`, "m").exec(green);
+      expect(head, `${l}: the across headline`).not.toBeNull();
+      const r = new RegExp(`^\\| ${l} \\| (\\d+) \\| (\\d+) \\| (\\d+) \\| (\\d+) \\| (\\d+) \\|$`, "m").exec(readme);
+      expect(r, `${l}'s row of the differences table`).not.toBeNull();
+      expect([r![1], r![2]].map(Number), `${l}: cases and state`).toEqual([runs[l].cases.length, Number(head![2])]);
+      numberOnly += Number(r![5]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(readme, "the number-only cases the table sums").toContain(`A further ${numberOnly} cases differ only in a number`);
+    // The groups it names: the 3 state flips, the nine mexicano R4 cells and the two swiss_playoff R4 cells, by their ids.
+    expect(stateDiff).toHaveLength(3);
+    for (const id of stateDiff) expect(readme, id).toContain(`\`${id}\``);
+    const mex = ids.filter((id) => /^mexicano\|[^|]+\|[^|]+\|R4$/.test(id));
+    expect(mex, "the mexicano R4 cells that differ").toHaveLength(9);
+    for (const id of mex) {
+      const [, sport, variant] = id.split("|");
+      expect(readme, id).toContain(`${sport} ${variant}`);
+      expect(failDiff, `${id}: its failing-check set differs, state red in all three`).toContain(id);
+      expect(per.map((m) => m.get(id)!.state), id).toEqual(["red", "red", "red"]);
+    }
+    const sp = ids.filter((id) => id.startsWith("swiss_playoff|"));
+    expect(sp, "the swiss_playoff R4 cells that differ").toHaveLength(2);
+    for (const id of sp) expect(readme, id).toContain(`\`${id}\``);
+    expect(ids.length, "the cut is exactly the three groups").toBe(stateDiff.length + mex.length + sp.length);
   });
 
   it("names every file of its own directory (a file the README does not mention is a file nobody reads), and every layer holds its two", () => {
@@ -263,14 +319,27 @@ function runScript(script: string, tail: readonly string[], env: Record<string, 
 const layerFiles = (): string[] => LAYERS.map((l) => resolve(BASE, l, "results.json"));
 const W1_DRIVING_L3 = resolve(REPO, TRUTH_RUNS, "w1drv-l3", "results.json");
 
-/** `pnpm matrix:triage` over the committed baseline, run once: its output directory. */
+/** The README's Reproduce commands exactly as printed: each `    pnpm matrix:<script> <args…>` line of that section, `$OUT` replaced by `out`
+ *  (T21 review M4: the doc's commands are the ones that run, not a restatement of them). Only the two that write the generated files. */
+function readmeCommands(out: string): { script: string; args: string[] }[] {
+  const body = section(text("README.md"), "## Reproduce\n");
+  const cmds = [...body.matchAll(/^ {4}pnpm (matrix:(?:triage|ledger)) (.+)$/gm)].map((m) => ({ script: m[1]!, args: m[2]!.split(" ").map((a) => a.replaceAll("$OUT", out)) }));
+  expect(cmds.map((c) => c.script), "the README prints the triage command, then the ledger command").toEqual(["matrix:triage", "matrix:ledger"]);
+  return cmds;
+}
+
+/** The README's two commands, run once, as printed: the output directory (TRIAGE.md, REKEY.md, triage.json, AUDIT-LEDGER.md). */
 let triaged: string | null = null;
 function triageOut(): string {
   if (triaged !== null) return triaged;
   const out = join(scratch, "triage");
-  const r = runScript("matrix:triage", ["--runs", ...layerFiles(), "--rekey", W1_DRIVING_L3, "--rekey-map", resolve(CATALOGUE_DIR, "p-map.json"), "--out", out]);
+  mkdirSync(out, { recursive: true });
+  const [triage, ledger] = readmeCommands(out);
+  const r = runScript(triage!.script, triage!.args);
   expect(r.status, `${r.stderr}\n${r.stdout}`).toBe(0);
   expect(r.stdout, "every red triaged").toMatch(/209 reds checked: 209 triaged, 0 untriaged, 0 ambiguous, 0 misrouted, 0 unknown/);
+  const l = runScript(ledger!.script, ledger!.args);
+  expect(l.status, `${l.stderr}\n${l.stdout}`).toBe(0);
   triaged = out;
   return out;
 }
@@ -282,33 +351,31 @@ describe("the generated files are what the CLIs write from the committed baselin
     expect(LAYERS.reduce((n, l) => n + runs[l].cases.length, 0)).toBe(2899);
   });
 
-  it("matrix:triage over L1, L2 and L3 writes TRIAGE.md and REKEY.md byte for byte", () => {
+  it("the README's Reproduce commands, run as printed, write TRIAGE.md, REKEY.md and AUDIT-LEDGER.md byte for byte (T21 review M4)", () => {
     const out = triageOut();
     let checked = 0;
-    for (const f of ["TRIAGE.md", "REKEY.md"]) {
+    for (const f of ["TRIAGE.md", "REKEY.md", "AUDIT-LEDGER.md"]) {
       const made = readFileSync(join(out, f));
       expect(made.length, `${f} is not empty`).toBeGreaterThan(1000);
-      expect(made.equals(readFileSync(resolve(BASE, f))), `${f} differs from what matrix:triage writes (re-run it into the baseline directory)`).toBe(true);
+      expect(made.equals(readFileSync(resolve(BASE, f))), `${f} differs from what the README's command writes (re-run it into the baseline directory)`).toBe(true);
       checked++;
     }
-    expect(checked).toBe(2);
-  }, spawnBudget(2));
+    expect(checked).toBe(3);
+  }, spawnBudget(5));
 
-  it("matrix:ledger over that triage writes AUDIT-LEDGER.md byte for byte", () => {
-    const out = join(scratch, "ledger", "AUDIT-LEDGER.md");
-    const r = runScript("matrix:ledger", ["--audit", AUDIT_DIR, "--triage", join(triageOut(), "triage.json"), "--verdicts", resolve(CATALOGUE_DIR, "audit-verdicts.json"), "--out", out]);
-    expect(r.status, `${r.stderr}\n${r.stdout}`).toBe(0);
-    const made = readFileSync(out);
-    expect(made.length).toBeGreaterThan(10_000);
-    expect(made.equals(readFileSync(resolve(BASE, "AUDIT-LEDGER.md"))), "AUDIT-LEDGER.md differs from what matrix:ledger writes").toBe(true);
-  }, spawnBudget(3));
+  it("the commands the README prints are the real ones: its triage command is the harness's own inputs (the three layers, the rekey run and map) and its ledger command the catalogue's own", () => {
+    const [triage, ledger] = readmeCommands("OUT");
+    const rel = (p: string): string => p.replace(`${REPO}/`, "");
+    expect(triage!.args).toEqual(["--runs", ...layerFiles().map(rel), "--rekey", rel(W1_DRIVING_L3), "--rekey-map", rel(resolve(CATALOGUE_DIR, "p-map.json")), "--out", "OUT"]);
+    expect(ledger!.args).toEqual(["--audit", rel(AUDIT_DIR), "--triage", "OUT/triage.json", "--verdicts", rel(resolve(CATALOGUE_DIR, "audit-verdicts.json")), "--out", "OUT/AUDIT-LEDGER.md"]);
+  });
 });
 
 // --- the dispatch-fed catalogue generators (Task 19 review M4) -----------------------------------------------------------
 
 describe("the generators that read the dispatches run against the committed baseline", () => {
   const SCRIPTS = resolve(CATALOGUE_DIR, "scripts");
-  /** The layout the scripts read: <n>/<layer>/results.json. Dispatch 3 is the committed baseline; dispatches 1 and 2 are the cut's five L3 cases. */
+  /** The layout the scripts read: <n>/<layer>/results.json. Dispatch 3 is the committed baseline; dispatches 1 and 2 are the cut's 14 L3 cases. */
   let staged: string | null = null;
   function stage(): string {
     if (staged !== null) return staged;
@@ -336,11 +403,15 @@ describe("the generators that read the dispatches run against the committed base
     return { status: r.status, stdout: r.stdout, stderr: r.stderr };
   };
 
-  it("the cut is dispatch-cuts.json's: five cases per dispatch, three dispatches, the third equal to the committed L3's own", () => {
+  it("the cut is dispatch-cuts.json's: 14 cases per dispatch (T21 review M3), three dispatches, the third equal to the committed L3's own, the same ids in the same order in each", () => {
     const cuts = JSON.parse(text("dispatch-cuts.json")) as { ids: string[]; dispatches: { n: number; cases: Case[] }[] };
-    expect(cuts.ids).toHaveLength(5);
-    expect(cuts.dispatches.map((d) => d.cases.length)).toEqual([5, 5, 5]);
-    expect(cuts.dispatches[2]!.cases.map((c) => c.caseId).sort()).toEqual([...cuts.ids].sort());
+    expect(cuts.ids).toHaveLength(14);
+    expect(new Set(cuts.ids).size, "no id twice").toBe(14);
+    expect(cuts.dispatches.map((d) => d.cases.length)).toEqual([14, 14, 14]);
+    let checked = 0;
+    for (const d of cuts.dispatches) { expect(d.cases.map((c) => c.caseId), `dispatch ${d.n}`).toEqual(cuts.ids); checked++; }
+    expect(checked).toBe(3);
+    for (const c of cuts.dispatches[2]!.cases) expect(c, c.caseId).toEqual(runs.L3.cases.find((x) => x.caseId === c.caseId));
   });
 
   it("gen-shapes.py rebuilds tools/matrix/__tests__/fixtures/triage-shapes.json byte for byte from the committed baseline and the cut", () => {

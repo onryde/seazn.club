@@ -6,7 +6,7 @@ One real red per committed rule from dispatch 3 (the first it keys, found throug
 layer's own, and the cases owner ruling 70 names. `expect` is the gap and wave classify.py gives (a cross-check, see its header),
 never what the rules say. `pins` (review I1) is what each rule's MECHANISM requires of a red, typed here from the rule's note and
 never read off the rule's own match: the twin test perturbs one pinned segment at a time and requires the twin untriaged.
-Dispatch 3 is the committed baseline (truth-runs/w1d-baseline/L1, L2, L3); dispatches 1 and 2 reach this script only through the five L3 cases
+Dispatch 3 is the committed baseline (truth-runs/w1d-baseline/L1, L2, L3); dispatches 1 and 2 reach this script only through the 14 L3 cases
 of w1d-baseline/dispatch-cuts.json. tools/matrix/__tests__/w1d-baseline-evidence.test.ts stages that layout (W1D_DISPATCH = <n>/<layer>/results.json,
 W1D_TRIAGE_OUT = out3/triage.json from `pnpm matrix:triage` over the committed baseline) and requires the output to equal the committed fixture byte for byte.
 """

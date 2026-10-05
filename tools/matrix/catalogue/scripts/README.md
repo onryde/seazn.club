@@ -22,7 +22,7 @@ A hand edit of a generated file without the same edit in its script fails that t
 
 `gen-shapes.py`, `dump.py` and `classify.py` read `<n>/<layer>/results.json` for the three baseline dispatches (`W1D_DISPATCH=<dir>`)
 and, for `gen-shapes.py` and `classify.py`, the `out<n>/triage.json` each `pnpm matrix:triage` wrote (`W1D_TRIAGE_OUT=<dir>`). Task 21 committed
-dispatch 3 (`truth-runs/w1d-baseline/L1`, `L2`, `L3`) and, for dispatches 1 and 2, the five L3 cases that differ or flip
+dispatch 3 (`truth-runs/w1d-baseline/L1`, `L2`, `L3`) and, for dispatches 1 and 2, the 14 L3 cases that differ or flip
 (`truth-runs/w1d-baseline/dispatch-cuts.json`). `tools/matrix/__tests__/w1d-baseline-evidence.test.ts` stages that layout and runs all three
 (`W1D_RUNS=3` limits `classify.py` to the committed dispatch); `gen-shapes.py` must rebuild the cut fixture byte for byte from it. The full
 three-dispatch comparison (`classify.py` over 628 reds) needs the dispatches' merged artifacts, which GitHub keeps 90 days.
