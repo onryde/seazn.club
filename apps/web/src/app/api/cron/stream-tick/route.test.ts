@@ -8,8 +8,17 @@
 // whose `data.failed` is missing reads "unreadable" there, i.e. degraded: one Sentry event per hour from every
 // relay-disabled deployment. So the disabled answer must carry `failed: 0`.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { JOB_TIMEOUT_MS, failureCountsOver0 } from "../../../../../../cron-worker/src/call";
-import { JOBS } from "../../../../../../cron-worker/src/schedule";
+
+// apps/cron-worker is outside the Fly image's build context (.dockerignore), and ci.yml type-checks apps/web INSIDE that
+// image, where a static import of it is TS2307. The specifiers are computed so tsc never resolves them; vitest, which runs
+// outside the image, still loads the REAL modules, so the seam stays real and only its types are restated here.
+type Job = { id: string; path: string; failureCounts?: readonly string[] };
+const cronSrc = (file: string) => new URL(`../../../../../../cron-worker/src/${file}`, import.meta.url).href;
+const { JOB_TIMEOUT_MS, failureCountsOver0 } = (await import(/* @vite-ignore */ cronSrc("call.ts"))) as {
+  JOB_TIMEOUT_MS: number;
+  failureCountsOver0: (job: Job, bodyText: string | null) => Record<string, number | "unreadable">;
+};
+const { JOBS } = (await import(/* @vite-ignore */ cronSrc("schedule.ts"))) as { JOBS: readonly Job[] };
 
 const hdrs = vi.hoisted(() => ({ store: new Headers() }));
 vi.mock("next/headers", () => ({ headers: async () => hdrs.store }));
@@ -20,7 +29,7 @@ vi.mock("@/server/usecases/stream-sessions", () => ({ defaultDeps: m.deps, tickO
 import { POST } from "./route";
 
 const req = () => new Request("http://internal:3000/api/cron/stream-tick", { method: "POST", headers: { "x-forwarded-host": "app.example" } });
-const ROW = JOBS.find((j) => j.id === "stream-tick");
+const ROW = JOBS.find((j: Job) => j.id === "stream-tick");
 const ZERO = { ticked: 0, ended: 0, failed: 0, deferred: 0 };
 
 afterEach(() => {

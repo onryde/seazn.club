@@ -149,7 +149,7 @@ export function nextMatchStartedText(): NextMatchText {
   // api-v1 http.ts: an HttpError's extra is spread into the envelope's `error`, beside code and message.
   const http = read("apps/web/src/server/api-v1/http.ts");
   const spreads = /\n\s*const body: ErrorBody = \{ ok: false, error: \{ code, message, \.\.\.extra \}, requestId \};/.test(http)
-    && /\n\s*if \(err instanceof HttpError\) \{[\s\S]*?return errorResponse\(\s*requestId,\s*err\.status,\s*err\.code \?\? statusCode\(err\.status\),\s*err\.message,\s*err\.extra,?\s*\);/.test(http);
+    && /\n\s*if \(err instanceof HttpError\) \{[\s\S]*?return errorResponse\(\s*requestId,\s*err\.status,\s*err\.code \?\? statusCode\(err\.status\),\s*err\.message,\s*err\.extra,(?:\s*err\.headers,?)?\s*\);/.test(http);
   if (!spreads) throw new Error("product-text: api-v1 http.ts no longer spreads an HttpError's extra into `error` — re-read it and update the driver's RefusedCall.extra");
   const from = new RegExp(`import \\{[^}]*\\b${thrown[2]}\\b[^}]*\\} from "@/([^"]+)";`).exec(fed);
   if (from === null) throw new Error(`product-text: fed-seats.ts does not import ${thrown[2]} from an @/ module — resolve it`);
