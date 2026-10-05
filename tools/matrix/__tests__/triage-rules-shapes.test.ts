@@ -17,9 +17,10 @@ import { CATALOGUE_DIR, loadCatalogue, triage, triageJson, type TriageResult, ty
 import { LAYERS, type CaseResult, type Layer } from "../lib/results.ts";
 import { kase, mergedRun } from "./summary-fixtures.ts";
 
+type Pin = "row" | "sport" | "scenario" | "layer" | "reason" | "failing";
 interface Shape {
   why: string; run: number; layer: Layer; caseId: string; row: string; sport: string; variant: string; scenario: string;
-  width: number | null; reason: string; failing: string[]; expect: { gap: string; wave: string };
+  width: number | null; reason: string; failing: string[]; pins?: Pin[]; expect: { gap: string; wave: string };
 }
 const FIXTURE = JSON.parse(readFileSync(resolve(import.meta.dirname, "fixtures/triage-shapes.json"), "utf8")) as { shapes: Shape[]; flips: Shape[] };
 const SHAPES = FIXTURE.shapes;
@@ -139,6 +140,73 @@ describe("the committed triage rules over real reds (the seam: real producer out
     expect(draw).toBeGreaterThan(0);
     expect(new Set(flips.filter((f) => f.reason.includes("paired nobody")).map((f) => f.sport))).toEqual(new Set(["boardgame", "generic"]));
     expect(new Set(flips.filter((f) => !f.reason.includes("paired nobody")).map((f) => f.sport))).toEqual(new Set(["boardgame", "generic"]));
+  });
+
+  /** A shape's twin: the SAME red with ONE pinned segment changed to a value no real case holds (so no rule can match it by accident). */
+  const TWIN_VALUE = { row: "twin-row", sport: "twin-sport", scenario: "ZZ9", failing: "twin-extra-check" } as const;
+  const twinOf = (s: Shape, pin: Pin): Shape => {
+    const id = `${s.caseId}~twin-${pin}`;
+    switch (pin) {
+      case "row": return { ...s, caseId: id, row: TWIN_VALUE.row };
+      case "sport": return { ...s, caseId: id, sport: TWIN_VALUE.sport };
+      case "scenario": return { ...s, caseId: id, scenario: TWIN_VALUE.scenario };
+      // The same red in another layer's run (an L2 organiser-path red moved to L3 has no browser width).
+      case "layer": return { ...s, caseId: id, layer: s.layer === "L3" ? "L1" : "L3", width: null };
+      // Another failure of the same cell: the failing checks stay, the text is no rule's.
+      case "reason": return { ...s, caseId: id, reason: `${s.failing[0] ?? "error"}: twin, a different failure of the same cell` };
+      // A second, unrelated failing check beside the keyed ones (review m1).
+      case "failing": return { ...s, caseId: id, failing: [...s.failing, TWIN_VALUE.failing], reason: `${s.reason}; ${TWIN_VALUE.failing}: x` };
+    }
+  };
+
+  it("fails closed on every segment a rule's mechanism pins (review I1): a twin of each real red, one pinned segment changed, is untriaged — never swept into the nearest gap", () => {
+    // The pins are the fixture's own (typed from each rule's mechanism when the fixture was cut), never read off the rules under test:
+    // a rule loosened by deleting a segment loses its own twin only if the pins came from it.
+    const twins: Shape[] = [];
+    const perPin = new Map<Pin, number>();
+    const covered = new Set<string>();
+    for (const s of SHAPES) {
+      expect(s.pins, `${s.caseId} carries its pins`).toBeDefined();
+      expect(s.pins!.length, s.caseId).toBeGreaterThan(0);
+      covered.add(/^rule (\S+)/.exec(s.why)![1]!);
+      for (const pin of s.pins!) { twins.push(twinOf(s, pin)); perPin.set(pin, (perPin.get(pin) ?? 0) + 1); }
+    }
+    // Anti-vacuity: twins were made, every kind of segment has some, and every committed rule is twinned.
+    expect(twins.length).toBe(SHAPES.reduce((n, s) => n + s.pins!.length, 0));
+    expect(twins.length).toBeGreaterThanOrEqual(200);
+    for (const pin of ["row", "sport", "scenario", "layer", "reason", "failing"] as const) expect(perPin.get(pin) ?? 0, `twins of the ${pin}`).toBeGreaterThan(0);
+    expect([...covered].sort()).toEqual(cat.rules.rules.map((r) => r.id).sort());
+    // The positive pair: each twin's base red keys (the sibling test), so "untriaged" below is the segment's doing and nothing else.
+    expect(result.rows).toHaveLength(SHAPES.length);
+    const r = triage(runsOf(twins), cat.rules, cat.routing, ledger, cat.newGaps);
+    expect(r.checked).toBe(twins.length);
+    expect(r.rows, "no twin is keyed").toEqual([]);
+    expect(r.ambiguous).toEqual([]);
+    expect(r.untriaged.slice().sort()).toEqual(twins.map((t) => t.caseId).sort());
+  });
+
+  it("every committed rule carries a closed failing set, and an `also` names a check of it (review m1)", () => {
+    let closed = 0;
+    for (const rule of cat.rules.rules) {
+      expect(rule.match.failing, `${rule.id} closes its failing set`).toBeDefined();
+      closed++;
+      for (const a of rule.also ?? []) expect(rule.match.failing, `${rule.id} also ${a.check}`).toContain(a.check);
+    }
+    expect(closed).toBe(cat.rules.rules.length);
+    expect(closed).toBeGreaterThanOrEqual(40);
+    // The three rules a hidden D7 failure rides in (an L2 case of a cell no builder control builds) say so.
+    expect(cat.rules.rules.filter((x) => x.also !== undefined).map((x) => [x.id, x.also![0]!.gap]).sort()).toEqual([
+      ["group-pool-membership-from-results", "NEW-W1d-5"], ["page-playoff-withdraw-voids", "NEW-W1d-4"], ["stepladder-withdraw-wrong-phase", "NEW-W1d-4"],
+    ]);
+  });
+
+  it("the L2 case a product defect keys also lists under the no-builder gap it fails: NEW-W1d-4 and -5 hold the three cases the first triage hid", () => {
+    const jr = triageJson(result, runsOf(SHAPES), new Map());
+    const co = (gap: string): string[] => (jr.gaps.find((g) => g.gap === gap)?.alsoCaseIds ?? []).slice().sort();
+    // The shapes are one red per rule, so each of the three co-failing L2 rules shows once; the real dispatches show these ids (new-gaps.json).
+    expect(co("NEW-W1d-4").map((c) => c.split("|")[0])).toEqual(["page_playoff_only", "stepladder_only"]);
+    expect(co("NEW-W1d-5").map((c) => c.split("|")[0])).toEqual(["group_group_ko"]);
+    for (const c of [...co("NEW-W1d-4"), ...co("NEW-W1d-5")]) expect(result.rows.find((x) => x.caseId === c)?.layer, c).toBe("L2");
   });
 
   it("the committed verdicts and the committed rules account for every audit id exactly once: a clean ledger over the real reds' triage (150 ids, none missing, none twice, no verdict at a wave the routing does not give)", () => {

@@ -18,6 +18,7 @@ import type * as TS from "typescript";
 import { z } from "zod";
 import { LAYERS } from "./results.ts";
 import { isClean, routeOf, type GapRouting, type TriageJson } from "./triage.ts";
+import { HARNESS_SCENARIO } from "./scenario-catalogue.ts";
 
 // `typescript` through require, not import: vite's transform chokes on the ~9 MB CJS bundle and a test importing this
 // module would fail to collect (single-sport.ts does the same). The type side is erased.
@@ -204,6 +205,9 @@ export type VerdictOutcome = (typeof VERDICT_OUTCOMES)[number];
 const REPO_RELATIVE = z.string().min(1)
   .refine((p) => !p.startsWith("/") && !/^[A-Za-z]:/.test(p) && !p.split("/").includes(".."), "a path relative to the repo, never leaving it");
 
+/** The baseline scenarios a run drives (HARNESS_SCENARIO's own values, never typed here): what a verdict's `drove` may name. */
+export const DRIVEN_SCENARIOS: readonly string[] = [...new Set(Object.values(HARNESS_SCENARIO))].sort();
+
 const VerdictSchema = z.strictObject({
   id: z.string().regex(/^[A-Z]{2}-[A-Z]+\d+$/, "an audit id"),
   outcome: z.enum(VERDICT_OUTCOMES),
@@ -213,6 +217,9 @@ const VerdictSchema = z.strictObject({
   cases: z.array(z.string().min(1)).optional(),
   /** verified-by-failing-test: the `it.fails` that witnesses the gap. */
   test: z.strictObject({ file: REPO_RELATIVE, title: z.string().min(1) }).optional(),
+  /** The baseline scenarios whose run drove the code this verdict reads while no check read the property (review m2). An id a run
+   *  drove is verified-by-read, exercised-not-reproduced or witnessed by a test — never not-exercised, which is for what no run reached. */
+  drove: z.array(z.string().refine((x) => DRIVEN_SCENARIOS.includes(x), `a scenario the baseline drives (${DRIVEN_SCENARIOS.join(", ")})`)).min(1).optional(),
 }).superRefine((v, ctx) => {
   const bad = (path: string, message: string): void => { ctx.addIssue({ code: "custom", path: [path], message: `${v.id}: ${message}` }); };
   if (v.outcome === "exercised-not-reproduced") {
@@ -223,7 +230,18 @@ const VerdictSchema = z.strictObject({
     if (v.test === undefined) bad("test", "verified-by-failing-test names the test file and the it.fails title");
   } else if (v.test !== undefined) bad("test", `a test belongs to verified-by-failing-test, not ${v.outcome}`);
   if (v.outcome === "verified-by-read" && !/[\w./-]+\.\w+:\d+/.test(v.evidence)) bad("evidence", "verified-by-read cites a file:line");
+  if (v.drove !== undefined) {
+    if (v.outcome === "not-exercised") bad("drove", "a verdict that names the scenario that drove it is not not-exercised: read the code (verified-by-read) or cite the case that drove it");
+    if (new Set(v.drove).size !== v.drove.length) bad("drove", "a scenario once");
+  }
 });
+
+/** The evidence of a not-exercised verdict says a run drove the id: the scenario named as the driver ("…: LIFECYCLE builds and plays …",
+ *  "…: F1 (odd field) drives …") or a case id cited ("americano|badminton|LIFECYCLE works"). The honest lines negate a drive ("no script",
+ *  "L2 drives only F1, M1 and R4") and open with neither. A heuristic over text, backed by the structural `drove` field. */
+const DRIVEN_SENTENCE = new RegExp(`:\\s*(?:${DRIVEN_SCENARIOS.join("|")})\\b[^.;]*?\\b(?:drives?|plays?|builds?|completes|reads|passes|passed)\\b`);
+const CASE_ID_CITED = /\b[a-z_]+\|[a-z0-9_*-]+\|/;
+export const claimsDriven = (evidence: string): boolean => DRIVEN_SENTENCE.test(evidence) || CASE_ID_CITED.test(evidence);
 export type Verdict = z.infer<typeof VerdictSchema>;
 const VerdictsSchema = z.strictObject({ verdicts: z.array(VerdictSchema) });
 export const parseVerdicts = (json: unknown): { verdicts: Verdict[] } => VerdictsSchema.parse(json);
@@ -300,7 +318,8 @@ export type Finding =
   | { kind: "wave-mismatch"; id: string; wave: string; routed: string | null }
   | { kind: "case-not-works"; id: string; caseId: string }
   | { kind: "test-not-found"; id: string; file: string; title: string; reason: TestReason }
-  | { kind: "unknown-triage-gap"; id: string };
+  | { kind: "unknown-triage-gap"; id: string }
+  | { kind: "driven-not-exercised"; id: string };
 
 export interface LedgerEntry {
   id: string;
@@ -316,6 +335,8 @@ export interface LedgerEntry {
   cases: string[];
   evidence: string | null;
   test: { file: string; title: string } | null;
+  /** The baseline scenarios that drove it with no check reading it (a verdict's `drove`); empty for any other id. */
+  drove: string[];
 }
 
 export interface Ledger {
@@ -382,9 +403,12 @@ export function buildLedger(input: LedgerInput): Ledger {
 
   const reproduced = new Map<string, { cases: string[]; wave: string }>();
   for (const row of triage.rows) {
-    const at = reproduced.get(row.gap) ?? { cases: [], wave: row.wave };
-    at.cases.push(row.caseId);
-    reproduced.set(row.gap, at);
+    // A case is keyed to one gap and may also fail a check another gap owns (`also`): it reproduces that one too.
+    for (const g of [{ gap: row.gap, wave: row.wave }, ...(row.also ?? [])]) {
+      const at = reproduced.get(g.gap) ?? { cases: [], wave: g.wave };
+      at.cases.push(row.caseId);
+      reproduced.set(g.gap, at);
+    }
   }
   const byId = new Map<string, Verdict[]>();
   for (const v of verdicts) byId.set(v.id, [...(byId.get(v.id) ?? []), v]);
@@ -405,6 +429,7 @@ export function buildLedger(input: LedgerInput): Ledger {
     for (const v of mine) {
       if (v.wave !== routed) findings.push({ kind: "wave-mismatch", id: g.id, wave: v.wave, routed });
       for (const c of v.cases ?? []) if (!works.has(c)) findings.push({ kind: "case-not-works", id: g.id, caseId: c });
+      if (v.outcome === "not-exercised" && claimsDriven(v.evidence)) findings.push({ kind: "driven-not-exercised", id: g.id });
       findings.push(...testFindings(v, readFile));
     }
     const verdict = mine[0];
@@ -415,6 +440,7 @@ export function buildLedger(input: LedgerInput): Ledger {
       cases: rep !== undefined ? rep.cases : (verdict?.cases ?? []),
       evidence: verdict?.evidence ?? null,
       test: verdict?.test ?? null,
+      drove: verdict?.drove ?? [],
     });
   }
   for (const id of byId.keys()) {
@@ -442,6 +468,7 @@ export function findingLine(f: Finding): string {
     case "wave-mismatch": return `${f.id}: the verdict says ${f.wave}, design §8 ${f.routed === null ? "gives it no route" : `says ${f.routed}`}`;
     case "case-not-works": return `${f.id}: the cited case ${f.caseId} is not a works case of the triaged runs`;
     case "unknown-triage-gap": return `${f.id}: the triage keyed a red to an id this audit does not hold`;
+    case "driven-not-exercised": return `${f.id}: not-exercised, but its evidence says a baseline run drove it — a driven id is verified-by-read (naming \`drove\`) or exercised-not-reproduced, never not-exercised`;
     case "test-not-found": {
       const where = `${f.id}: the failing test ${f.file}`;
       switch (f.reason) {
@@ -480,6 +507,11 @@ export function renderLedger(ledger: Ledger, meta: LedgerMeta): string {
     `Each of the ${plural(meta.audit, "audit id")} has exactly one of five outcomes. ${plural(meta.umbrellas, "umbrella row")} (SC's, which explain rows counted elsewhere) ${meta.umbrellas === 1 ? "is" : "are"} no id. The triage read ${plural(meta.checked, "red")}.`, "",
     "| outcome | ids |", "|---|---|", ...OUTCOMES.map((o) => `| ${o} | ${counts[o]} |`), "",
   );
+  // Review m2: an id a baseline scenario drove while no check read it is verified-by-read, and is counted apart so it never reads as unreached.
+  const reads = entries.filter((e) => e.outcome === "verified-by-read");
+  const driven = reads.filter((e) => e.drove.length > 0);
+  const scenarios = [...new Set(driven.flatMap((e) => e.drove))].sort();
+  lines.push(`Of the ${plural(reads.length, "verified-by-read id")}, ${driven.length} were driven by a baseline scenario${scenarios.length === 0 ? "" : ` (${scenarios.join(", ")})`} with no check reading the property: the run reached them, so they are read from the code and not counted as not exercised.`, "");
   lines.push(
     "## Runs", "", "The triage this ledger was built from, one run per layer:", "",
     "| layer | run | plan | cases | reds |", "|---|---|---|---|---|",

@@ -116,6 +116,25 @@ describe("catalogue schemas", () => {
     expect(refused).toBe(bad.length);
   });
 
+  it("`was` is a P-rule, or null with the reason none exists (T19 fix, m6): a null `was` says why, a reason without a null is refused, and neither key reaches a row", () => {
+    const parsed = parseRules({ rules: [rule({ was: null, wasWhy: "no W1-driving case reaches this cell" }), rule({ id: "T-2", was: "P3" }), rule({ id: "T-3" })] });
+    expect(parsed.rules.map((r) => [r.was, r.wasWhy])).toEqual([[null, "no W1-driving case reaches this cell"], ["P3", undefined], [undefined, undefined]]);
+    const bad: [string, Record<string, unknown>][] = [
+      ["a null `was` with no reason", rule({ was: null })],
+      ["a null `was` with an empty reason", rule({ was: null, wasWhy: "" })],
+      ["a reason beside a real `was`", rule({ was: "P1", wasWhy: "because" })],
+      ["a reason with no `was` at all", rule({ wasWhy: "because" })],
+      ["an empty `was`", rule({ was: "" })],
+    ];
+    let refused = 0;
+    for (const [what, r] of bad) { expect(() => parseRules({ rules: [r] }), what).toThrow(); refused++; }
+    expect(refused).toBe(bad.length);
+    const c = red("a|b|c|M1", "x");
+    const r = triage([run([c])], parseRules({ rules: [{ ...rule({ match: { cell: "a|b" }, was: null, wasWhy: "none" }) }] }), ROUTING, LEDGER, NONE);
+    expect(r.rows).toEqual([{ caseId: c.caseId, layer: "L3", gap: "ST-G3", wave: "W5", rule: "T-1" }]);
+    expect(Object.hasOwn(r.rows[0]!, "was")).toBe(false);
+  });
+
   it("refuses two rules with one id: ambiguity is named by rule id, so a repeated id would hide which rule fired", () => {
     expect(() => parseRules({ rules: [rule(), rule()] })).toThrow(/duplicate rule id T-1/);
   });
@@ -352,6 +371,114 @@ describe("triage (ruling 63)", () => {
 });
 
 // --- rekey ---------------------------------------------------------------------------------------------------------
+
+describe("a rule's closed failing set and its co-failures (T19 fix round, review m1)", () => {
+  const R = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ id: "T-1", match: { cell: "a|b", failing: ["k1", "k2"] }, gap: "ST-G3", wave: "W5", ...over });
+  const NEW1: NewGaps = parseNewGaps({ gaps: [{ id: "NEW-W1d-1", wave: "W4", title: "no builder control", evidence: "x" }] });
+
+  it("schema: `failing` is a non-empty list of check ids; `also` names a check the set allows, and the gap it belongs to", () => {
+    expect(parseRules({ rules: [{ note: "n", ...R() }] }).rules[0]!.match.failing).toEqual(["k1", "k2"]);
+    expect(parseRules({ rules: [{ note: "n", ...R({ also: [{ check: "k2", gap: "NEW-W1d-1", wave: "W4" }] }) }] }).rules[0]!.also).toEqual([{ check: "k2", gap: "NEW-W1d-1", wave: "W4" }]);
+    const bad: [string, Record<string, unknown>][] = [
+      ["an empty failing set (it would refuse every red that fails anything, and say nothing)", R({ match: { cell: "a|b", failing: [] } })],
+      ["an empty check id in the set", R({ match: { cell: "a|b", failing: [""] } })],
+      ["a failing set that names a check twice", R({ match: { cell: "a|b", failing: ["k1", "k1"] } })],
+      ["`also` on a rule with no closed set (nothing says which co-failures it expects)", R({ match: { cell: "a|b" }, also: [{ check: "k1", gap: "NEW-W1d-1", wave: "W4" }] })],
+      ["`also` on a check the set does not allow", R({ also: [{ check: "k9", gap: "NEW-W1d-1", wave: "W4" }] })],
+      ["`also` with a gap that is no id", R({ also: [{ check: "k2", gap: "ledger-3", wave: "W4" }] })],
+      ["`also` with a bad wave", R({ also: [{ check: "k2", gap: "NEW-W1d-1", wave: "four" }] })],
+      ["an empty `also` list", R({ also: [] })],
+      ["`also` naming one check twice (a co-failure belongs to one gap)", R({ also: [{ check: "k2", gap: "NEW-W1d-1", wave: "W4" }, { check: "k2", gap: "SC-O1", wave: "W2" }] })],
+      ["an unknown key inside `also`", R({ also: [{ check: "k2", gap: "NEW-W1d-1", wave: "W4", x: 1 }] })],
+    ];
+    let refused = 0;
+    for (const [what, r] of bad) { expect(() => parseRules({ rules: [{ note: "n", ...r }] }), what).toThrow(); refused++; }
+    expect(refused).toBe(bad.length);
+  });
+
+  it("a red failing a check outside the rule's set is untriaged, not absorbed; one inside (or failing nothing) is keyed; a rule with no set stays open", () => {
+    const mk = (caseId: string, reason: string): CaseResult => red(caseId, reason);
+    const inside = mk("a|b|c|M1", "k1: x");
+    const both = mk("a|b|c|M2", "k1: x; k2: y");
+    const none = red("a|b|c|F1", "error: RefusedCall: 422");
+    const extra = mk("a|b|c|R4", "k1: x; k3: z");
+    const onlyExtra = mk("a|b|c|P3", "k3: z");
+    const closed = triage([run([inside, both, none, extra, onlyExtra])], rules([R()]), ROUTING, LEDGER, NONE);
+    expect(closed.rows.map((x) => x.caseId)).toEqual([inside.caseId, both.caseId, none.caseId]);
+    expect(closed.untriaged).toEqual([extra.caseId, onlyExtra.caseId]);
+    expect(closed.checked).toBe(5);
+    const open = triage([run([inside, both, none, extra, onlyExtra])], rules([R({ match: { cell: "a|b" } })]), ROUTING, LEDGER, NONE);
+    expect(open.rows).toHaveLength(5);
+    expect(open.untriaged).toEqual([]);
+  });
+
+  it("the set is ANDed with the other keys, and with `check`: a case failing the required check plus one more is untriaged", () => {
+    const ok2 = red("a|b|c|M1", "k1: x");
+    const ext = red("a|b|c|M2", "k1: x; k3: z");
+    const r = triage([run([ok2, ext])], rules([R({ match: { cell: "a|b", check: "k1", failing: ["k1"] } })]), ROUTING, LEDGER, NONE);
+    expect(r.rows.map((x) => x.caseId)).toEqual([ok2.caseId]);
+    expect(r.untriaged).toEqual([ext.caseId]);
+    // The set does not stand in for `check`: a case that never fails k1 does not match a rule that requires it.
+    const other = red("a|b|c|M3", "k2: y");
+    expect(triage([run([other])], rules([R({ match: { cell: "a|b", check: "k1", failing: ["k1", "k2"] } })]), ROUTING, LEDGER, NONE).untriaged).toEqual([other.caseId]);
+  });
+
+  it("a co-failure the rule declares rides on the row: `also` names the gap and wave of the extra failing check, only on a case that fails it", () => {
+    const withCo = red("a|b|c|M1", "k1: x; k2: y");
+    const without = red("a|b|c|M2", "k1: x");
+    const rs = rules([R({ also: [{ check: "k2", gap: "NEW-W1d-1", wave: "W4" }] })]);
+    const r = triage([run([withCo, without])], rs, ROUTING, LEDGER, NEW1);
+    expect(r.rows).toEqual([
+      { caseId: withCo.caseId, layer: "L3", gap: "ST-G3", wave: "W5", rule: "T-1", also: [{ gap: "NEW-W1d-1", wave: "W4" }] },
+      { caseId: without.caseId, layer: "L3", gap: "ST-G3", wave: "W5", rule: "T-1" },
+    ]);
+    expect(Object.hasOwn(r.rows[1]!, "also")).toBe(false);
+    expect(isClean(r)).toBe(true);
+  });
+
+  it("the `also` gap is judged like the rule's own: unknown if nobody holds it, misrouted if its wave is not §8's (never waved through because it is secondary)", () => {
+    const rs = (gap: string, wave: string): TriageRules => rules([R({ also: [{ check: "k2", gap, wave }] })]);
+    const c = red("a|b|c|M1", "k1: x");
+    const unknown = triage([run([c])], rs("NEW-W1d-9", "W4"), ROUTING, LEDGER, NEW1);
+    expect(unknown.unknownGap).toEqual([{ rule: "T-1", gap: "NEW-W1d-9" }]);
+    const nonAudit = triage([run([c])], rs("SC-X9", "W2"), ROUTING, LEDGER, NEW1);
+    expect(nonAudit.unknownGap).toEqual([{ rule: "T-1", gap: "SC-X9" }]);
+    const wrongNew = triage([run([c])], rs("NEW-W1d-1", "W5"), ROUTING, LEDGER, NEW1);
+    expect(wrongNew.misrouted).toEqual([{ rule: "T-1", gap: "NEW-W1d-1", wave: "W5", routed: "W4" }]);
+    const wrongAudit = triage([run([c])], rs("SC-O1", "W4"), ROUTING, LEDGER, NEW1);
+    expect(wrongAudit.misrouted).toEqual([{ rule: "T-1", gap: "SC-O1", wave: "W4", routed: "W2" }]);
+    const fine = triage([run([c])], rs("SC-O1", "W2"), ROUTING, LEDGER, NEW1);
+    expect([fine.unknownGap, fine.misrouted]).toEqual([[], []]);
+    // Judged whether or not a red failed the check, like every rule.
+    expect(isClean(unknown)).toBe(false);
+  });
+
+  it("triage.json and TRIAGE.md list a co-failing case under the gap it also belongs to, apart from that gap's own cases; the wave table counts own cases only", () => {
+    const co = red("a|b|c|M1", "k1: x; k2: y");
+    const own = red("d|e|f|M1", "y: z");
+    const rs = rules([R({ also: [{ check: "k2", gap: "NEW-W1d-1", wave: "W4" }] }), { id: "T-2", match: { cell: "d|e" }, gap: "NEW-W1d-1", wave: "W4" }]);
+    const r = triage([run([co, own])], rs, ROUTING, LEDGER, NEW1);
+    const titles = new Map([["ST-G3", "unequal pools"], ["NEW-W1d-1", "no builder control"]]);
+    const j = parseTriage(triageJson(r, [run([co, own])], titles));
+    expect(j.gaps).toEqual([
+      { gap: "NEW-W1d-1", wave: "W4", title: "no builder control", layers: ["L3"], caseIds: [own.caseId], alsoCaseIds: [co.caseId] },
+      { gap: "ST-G3", wave: "W5", title: "unequal pools", layers: ["L3"], caseIds: [co.caseId] },
+    ]);
+    expect(j.rows[0]!.also).toEqual([{ gap: "NEW-W1d-1", wave: "W4" }]);
+    const page = renderTriage(r, titles);
+    expect(page).toMatch(/### NEW-W1d-1 — no builder control\n\n1 case; layers L3\n\n- `d\|e\|f\|M1` \(T-2\)\n- also fails here: `a\|b\|c\|M1` \(keyed ST-G3 by T-1\)\n/);
+    // The wave table counts the keyed reds only: 2 reds, one per wave, never 3.
+    expect(page).toMatch(/\| W4 \| 1 \| 1 \|\n\| W5 \| 1 \| 1 \|/);
+  });
+
+  it("a gap that only co-failing cases reach is still listed, with no own cases", () => {
+    const co = red("a|b|c|M1", "k1: x; k2: y");
+    const r = triage([run([co])], rules([R({ also: [{ check: "k2", gap: "NEW-W1d-1", wave: "W4" }] })]), ROUTING, LEDGER, NEW1);
+    const j = parseTriage(triageJson(r, [run([co])], new Map()));
+    expect(j.gaps.find((g) => g.gap === "NEW-W1d-1")).toEqual({ gap: "NEW-W1d-1", wave: "W4", title: "", layers: ["L3"], caseIds: [], alsoCaseIds: [co.caseId] });
+    expect(renderTriage(r, new Map())).toMatch(/### NEW-W1d-1\n\n0 cases; layers L3\n\n- also fails here: `a\|b\|c\|M1` \(keyed ST-G3 by T-1\)/);
+  });
+});
 
 describe("rekey: W1-driving's red cases, each with its P-rule and its new gap", () => {
   const W1DRV = { cases: [{ caseId: "league|boardgame|default|F1", state: "red" as const }, { caseId: "knockout|generic|default|F1", state: "red" as const }, { caseId: "league|generic|default|M1", state: "works" as const }] };
@@ -933,9 +1060,13 @@ describe("the real committed results (TR/w1drv-l3, w1drv-l1, w1c-l2) through the
     const dir = join(fresh(), "defaults");
     const code = main(["--runs", L1, L2, L3, "--out", dir]);
     const j = parseTriage(JSON.parse(readFileSync(join(dir, "triage.json"), "utf8")));
-    // These are the OLD fixtures (937 + 7 + 68), not the committed dispatches, so whether the committed rules key all of them is
-    // not this test's business: the exit code has to agree with the lists it prints, whichever way they fall.
-    expect(code, said()).toBe(j.untriaged.length + j.ambiguous.length + j.misrouted.length + j.unknownGap.length === 0 ? 0 : 1);
+    // These are the OLD fixtures (937 + 7 + 68), not the committed dispatches. They hold reds of pre-fix harness defects
+    // (f1-round-size, for one) that the committed rules correctly refuse, so some stay untriaged and the exit is 1. That is the
+    // negative witness (review m8): an expected exit computed from the lists would pass an always-1 CLI, since the lists are
+    // non-empty on these fixtures, so both are pinned, and so is the positive side (some reds do key).
+    expect(j.untriaged.length, "the real old reds the rules refuse").toBeGreaterThan(0);
+    expect(j.rows.length, "and some they key").toBeGreaterThan(0);
+    expect(code, said()).toBe(1);
     expect(j.scanned).toBe(937 + 7 + 68);
     expect(j.checked).toBe(195);
     // Whatever the committed rules are, every red is exactly one of keyed, untriaged or ambiguous.

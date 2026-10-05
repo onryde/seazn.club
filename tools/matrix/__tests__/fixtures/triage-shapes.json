@@ -201,7 +201,7 @@
    }
   }
  ],
- "note": "Real reds of the third truth-run dispatches (L1, L2, L3), one per committed triage rule, plus the cases owner ruling 70 names and the swiss_playoff cells that flip between two defects across dispatches. `expect` is the gap and wave an independent reading of each case's mechanism gives (W1-driving TRIAGE.md P1-P7 against the audit rows), NOT what the rules say. Synthetic ids only.",
+ "note": "Real reds of the third truth-run dispatches (L1, L2, L3), one per committed triage rule, plus the cases owner ruling 70 names and the swiss_playoff cells that flip between two defects across dispatches. `expect` is the gap and wave an independent reading of each case's mechanism gives (W1-driving TRIAGE.md P1-P7 against the audit rows), NOT what the rules say. `pins` (review I1) names the segments a red must carry for its rule's mechanism to be the cause, typed from the mechanism and never read off the rule: the twin test perturbs one pinned segment at a time and requires each twin untriaged. Synthetic ids only.",
  "shapes": [
   {
    "why": "rule bg-draw-stall-double-elim",
@@ -217,6 +217,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -238,6 +244,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -257,6 +269,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -278,6 +296,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -297,6 +321,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -318,6 +348,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -337,6 +373,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -358,6 +400,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -377,6 +425,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -398,6 +452,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -417,6 +477,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -438,6 +504,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -457,6 +529,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -478,6 +556,13 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing",
+    "scenario"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -498,6 +583,13 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing",
+    "scenario"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -516,6 +608,12 @@
    "reason": "I2-bracket-one-champion-ranks-permutation: 43f1cf39-ed9d-42e4-9f2c-a2aee34353d0: bracket fixture ended draw",
    "failing": [
     "I2-bracket-one-champion-ranks-permutation"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -536,6 +634,12 @@
    "failing": [
     "I2-bracket-one-champion-ranks-permutation"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -555,6 +659,12 @@
    "failing": [
     "I2-bracket-one-champion-ranks-permutation"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -573,6 +683,12 @@
    "reason": "I2-bracket-one-champion-ranks-permutation: no decided fixture carries a terminal final key (sl-g2)",
    "failing": [
     "I2-bracket-one-champion-ranks-permutation"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -594,6 +710,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O2",
     "wave": "W2"
@@ -613,6 +735,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O2",
@@ -634,6 +762,13 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing",
+    "scenario"
+   ],
    "expect": {
     "gap": "SC-O2",
     "wave": "W2"
@@ -652,6 +787,13 @@
    "reason": "I2-bracket-one-champion-ranks-permutation: no decided fixture carries a terminal final key (pp-final)",
    "failing": [
     "I2-bracket-one-champion-ranks-permutation"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing",
+    "scenario"
    ],
    "expect": {
     "gap": "SC-O2",
@@ -672,6 +814,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "FX-G7",
@@ -694,6 +842,12 @@
     "advance-seeded-as-declared",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "FX-G14",
     "wave": "W4"
@@ -713,6 +867,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SW-H1",
@@ -734,6 +894,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SW-H1",
     "wave": "W3"
@@ -752,6 +918,12 @@
    "reason": "life-loop-bounded: play loop exited stalled_rounds",
    "failing": [
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "FX-G11",
@@ -774,6 +946,12 @@
     "I4-nothing-ends-stuck",
     "I8-generate-named",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "NEW-W1d-1",
@@ -800,6 +978,12 @@
     "life-built-as-posted",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "NEW-W1d-1",
     "wave": "W7"
@@ -822,6 +1006,12 @@
     "I8-generate-named",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "NEW-W1d-1",
     "wave": "W7"
@@ -841,6 +1031,12 @@
    "failing": [
     "I10-americano-seats-each-person-once",
     "r4-not-seated-later"
+   ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "NEW-W1d-1",
@@ -862,6 +1058,12 @@
     "r4-not-seated-later",
     "r4-policy-reported"
    ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "NEW-W1d-2",
     "wave": "W7"
@@ -879,6 +1081,12 @@
    "width": null,
    "reason": "error: RefusedCall: POST /api/v1/entrants/5c91a899-34ab-4324-8996-31aa6f1f84a3/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD)",
    "failing": [],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "NEW-W1d-3",
     "wave": "W4"
@@ -903,6 +1111,12 @@
     "life-built-as-posted",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "ST-G5",
     "wave": "W5"
@@ -921,6 +1135,12 @@
    "reason": "organiser-ui-path: no organiser control builds knockout_third_place → W4",
    "failing": [
     "organiser-ui-path"
+   ],
+   "pins": [
+    "row",
+    "layer",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "NEW-W1d-4",
@@ -941,6 +1161,13 @@
    "failing": [
     "organiser-ui-path"
    ],
+   "pins": [
+    "row",
+    "layer",
+    "reason",
+    "failing",
+    "scenario"
+   ],
    "expect": {
     "gap": "NEW-W1d-4",
     "wave": "W4"
@@ -959,6 +1186,13 @@
    "reason": "organiser-ui-path: no organiser control builds stepladder_only → W4",
    "failing": [
     "organiser-ui-path"
+   ],
+   "pins": [
+    "row",
+    "layer",
+    "reason",
+    "failing",
+    "scenario"
    ],
    "expect": {
     "gap": "NEW-W1d-4",
@@ -979,6 +1213,13 @@
    "failing": [
     "organiser-ui-path"
    ],
+   "pins": [
+    "row",
+    "layer",
+    "reason",
+    "failing",
+    "scenario"
+   ],
    "expect": {
     "gap": "NEW-W1d-4",
     "wave": "W4"
@@ -997,6 +1238,12 @@
    "reason": "organiser-ui-path: no organiser control builds group_only → W5",
    "failing": [
     "organiser-ui-path"
+   ],
+   "pins": [
+    "row",
+    "layer",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "NEW-W1d-5",
@@ -1017,6 +1264,13 @@
    "failing": [
     "organiser-ui-path"
    ],
+   "pins": [
+    "row",
+    "layer",
+    "reason",
+    "failing",
+    "scenario"
+   ],
    "expect": {
     "gap": "NEW-W1d-5",
     "wave": "W5"
@@ -1035,6 +1289,13 @@
    "reason": "organiser-ui-path: no organiser control builds group_group_ko → W5",
    "failing": [
     "organiser-ui-path"
+   ],
+   "pins": [
+    "row",
+    "layer",
+    "reason",
+    "failing",
+    "scenario"
    ],
    "expect": {
     "gap": "NEW-W1d-5",
@@ -1056,6 +1317,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -1075,6 +1342,12 @@
    "failing": [
     "I2-bracket-one-champion-ranks-permutation",
     "ui-champion-shown"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -1096,6 +1369,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -1115,6 +1394,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -1136,6 +1421,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O2",
     "wave": "W2"
@@ -1155,6 +1446,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -1176,6 +1473,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O2",
     "wave": "W2"
@@ -1195,6 +1498,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -1216,6 +1525,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -1235,6 +1550,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -1256,6 +1577,12 @@
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "SC-O1",
     "wave": "W2"
@@ -1275,6 +1602,12 @@
    "failing": [
     "I4-nothing-ends-stuck",
     "life-loop-bounded"
+   ],
+   "pins": [
+    "row",
+    "sport",
+    "reason",
+    "failing"
    ],
    "expect": {
     "gap": "SC-O1",
@@ -1298,9 +1631,99 @@
     "I8-generate-named",
     "life-loop-bounded"
    ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
    "expect": {
     "gap": "NEW-W1d-1",
     "wave": "W7"
+   }
+  },
+  {
+   "why": "rule page-playoff-withdraw-voids at L2",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "page_playoff_only|football|11-a-side|R4a@360",
+   "row": "page_playoff_only",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": 360,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: play loop exited refused_generate; organiser-ui-path: no organiser control builds page_playoff_only → W4",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded",
+    "organiser-ui-path"
+   ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
+   "expect": {
+    "gap": "FX-G7",
+    "wave": "W4"
+   }
+  },
+  {
+   "why": "rule stepladder-withdraw-wrong-phase at L2",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "stepladder_only|football|11-a-side|R4a@375",
+   "row": "stepladder_only",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": 375,
+   "reason": "error: RefusedCall: POST /api/v1/entrants/73ae5e4b-3ffc-4cd7-9e6a-40a9e1ceaa57/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD)",
+   "failing": [
+    "organiser-ui-path"
+   ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-3",
+    "wave": "W4"
+   }
+  },
+  {
+   "why": "rule group-pool-membership-from-results at L2",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "group_group_ko|football|11-a-side|F1@320",
+   "row": "group_group_ko",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "F1",
+   "width": 320,
+   "reason": "I1-rr-pair-once-per-leg: 1b090af7-3d15-4b33-aef7-bfeaa72416c8 in no pool; I4-nothing-ends-stuck: stage 2: never asked to complete; life-built-as-posted: 1b090af7-3d15-4b33-aef7-bfeaa72416c8 (seed 1) is seated in no fixture of the stage; f1-everyone-drawn: 1b090af7-3d15-4b33-aef7-bfeaa72416c8 appears in no fixture; life-loop-bounded: play loop exited not_reached; advance-seeded-as-declared: stage 2: no proposal — stage 1's /complete answered 409 STAGE_COMPLETED_SEEDING_FAILED; organiser-ui-path: no organiser control builds group_group_ko → W5; ui-standings-match: page table #6 () matches no API table",
+   "failing": [
+    "I1-rr-pair-once-per-leg",
+    "I4-nothing-ends-stuck",
+    "advance-seeded-as-declared",
+    "f1-everyone-drawn",
+    "life-built-as-posted",
+    "life-loop-bounded",
+    "organiser-ui-path",
+    "ui-standings-match"
+   ],
+   "pins": [
+    "row",
+    "scenario",
+    "reason",
+    "failing"
+   ],
+   "expect": {
+    "gap": "ST-G5",
+    "wave": "W5"
    }
   }
  ]

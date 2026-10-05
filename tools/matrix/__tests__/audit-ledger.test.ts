@@ -14,11 +14,11 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../audit-ledger.ts";
 import {
-  AuditParse, LedgerRefused, OUTCOMES, VERDICT_OUTCOMES, buildLedger, failsTitles, findingLine, parseVerdicts, readAudit, readAuditGaps, renderLedger, testCalls,
+  AuditParse, DRIVEN_SCENARIOS, LedgerRefused, OUTCOMES, VERDICT_OUTCOMES, buildLedger, claimsDriven, failsTitles, findingLine, parseVerdicts, readAudit, readAuditGaps, renderLedger, testCalls,
   type AuditGap, type Verdict,
 } from "../lib/audit-ledger.ts";
 import { LAYERS } from "../lib/results.ts";
-import { parseRouting, parseTriage, type GapRouting, type TriageJson } from "../lib/triage.ts";
+import { CATALOGUE_DIR, parseRouting, parseTriage, type GapRouting, type TriageJson } from "../lib/triage.ts";
 import { main as triageMain } from "../triage.ts";
 import { REPO, TRUTH_RUNS } from "./committed-plans.ts";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
@@ -267,6 +267,27 @@ describe("parseVerdicts (D22)", () => {
     expect(parseVerdicts({ verdicts: [] }).verdicts).toEqual([]);
   });
 
+  it("`drove` names the baseline scenarios that drove an id no check reads (review m2): on a read, a case or a failing test, never on not-exercised, and only a scenario the harness drives", () => {
+    expect(DRIVEN_SCENARIOS).toEqual(["F1", "LIFECYCLE", "M1", "R4"]); // HARNESS_SCENARIO's own values (scenario-catalogue.ts), never typed into the schema
+    const ok = parseVerdicts({ verdicts: [
+      v({ id: "SW-H4", outcome: "verified-by-read", evidence: "packages/engine/src/core/x.ts:10 shows it", drove: ["F1", "LIFECYCLE"] }),
+      v({ id: "SW-H3", outcome: "exercised-not-reproduced", cases: ["swiss|chess|default|M1"], evidence: "it passed", drove: ["M1"] }),
+      v({ id: "SW-M1", outcome: "verified-by-failing-test", test: { file: "packages/engine/test/audit-witnesses.test.ts", title: "SW-M1: x" }, drove: ["R4"] }),
+    ] }).verdicts;
+    expect(ok.map((x) => x.drove)).toEqual([["F1", "LIFECYCLE"], ["M1"], ["R4"]]);
+    expect(parseVerdicts({ verdicts: [v({ id: "SW-H4", outcome: "verified-by-read", evidence: "a.ts:1 shows it" })] }).verdicts[0]!.drove).toBeUndefined();
+    const bad: [string, Record<string, unknown>][] = [
+      ["a not-exercised verdict that says a scenario drove it (a driven id is read, or exercised)", v({ drove: ["F1"] })],
+      ["an empty drove list", v({ outcome: "verified-by-read", evidence: "a.ts:1 shows it", drove: [] })],
+      ["a scenario the baseline does not drive (E1 has no script)", v({ outcome: "verified-by-read", evidence: "a.ts:1 shows it", drove: ["E1"] })],
+      ["the atom name R4a (the harness maps it to R4; a verdict names the script)", v({ outcome: "verified-by-read", evidence: "a.ts:1 shows it", drove: ["R4a"] })],
+      ["a scenario twice", v({ outcome: "verified-by-read", evidence: "a.ts:1 shows it", drove: ["F1", "F1"] })],
+    ];
+    let refused = 0;
+    for (const [what, verdict] of bad) { expect(() => parseVerdicts({ verdicts: [verdict] }), what).toThrow(); refused++; }
+    expect(refused).toBe(bad.length);
+  });
+
   it("refuses each malformed verdict on its own field", () => {
     const bad: [string, Record<string, unknown>][] = [
       ["unknown outcome", v({ outcome: "probably-fine" })],
@@ -359,6 +380,59 @@ describe("buildLedger (D22): each id gets exactly one outcome", () => {
     expect(l.counts).toEqual({ reproduced: 1, "exercised-not-reproduced": 1, "not-exercised": 2, "verified-by-read": 1, "verified-by-failing-test": 1 });
     expect(Object.values(l.counts).reduce((a, b) => a + b, 0)).toBe(GAPS.length);
     expect(l.entries[0]!.cases).toEqual(["swiss|chess|default|M1", "swiss|chess|default|R4"]);
+  });
+
+  it("a case keyed to one gap that also fails a check of another counts for the other too: that id is reproduced by it, and a verdict for it is then a second outcome (T19 fix, m1)", () => {
+    const co = "swiss|chess|default|R4";
+    const tj = triageJson({
+      rows: [
+        { caseId: "swiss|chess|default|M1", layer: "L3", gap: "SW-H1", wave: "W3", rule: "T-1" },
+        { caseId: co, layer: "L3", gap: "SW-H1", wave: "W3", rule: "T-1", also: [{ gap: "SH-G1", wave: "W8" }] },
+      ],
+      gaps: [
+        { gap: "SH-G1", wave: "W8", title: "title of SH-G1", layers: ["L3"], caseIds: [], alsoCaseIds: [co] },
+        { gap: "SW-H1", wave: "W3", title: "title of SW-H1", layers: ["L3"], caseIds: ["swiss|chess|default|M1", co] },
+      ],
+    });
+    const noSh = FULL.filter((x) => x.id !== "SH-G1");
+    const l = buildLedger(input({ triage: tj, verdicts: noSh }));
+    expect(l.findings).toEqual([]);
+    expect(l.entries.find((e) => e.id === "SH-G1")).toMatchObject({ outcome: "reproduced", wave: "W8", cases: [co] });
+    expect(l.counts.reproduced).toBe(2);
+    expect(Object.values(l.counts).reduce((a, b) => a + b, 0)).toBe(GAPS.length);
+    // The own cases of the primary gap are untouched by the co-failure.
+    expect(l.entries.find((e) => e.id === "SW-H1")!.cases).toEqual(["swiss|chess|default|M1", co]);
+    const twice = buildLedger(input({ triage: tj }));
+    expect(twice.findings).toEqual([{ kind: "two-outcomes", id: "SH-G1", outcomes: ["reproduced", "not-exercised"] }]);
+    // Without the co-failure the same id has no outcome of its own: the `also` is what reproduced it.
+    expect(buildLedger(input({ verdicts: noSh })).findings).toEqual([{ kind: "no-outcome", id: "SH-G1" }]);
+  });
+
+  it("a not-exercised verdict whose evidence says the run drove it is a finding: a driven id is read or exercised, never not-exercised (review m2)", () => {
+    const text = (evidence: string): Verdict[] => verdicts([v({ id: "SW-H2", evidence }), ...FULL.filter((x) => x.id !== "SW-H2").map((x) => x as unknown as Record<string, unknown>)]);
+    // The three shapes the 14 mislabelled ids had: the scenario named as the driver, a case id cited, and a green-case claim.
+    const driven = [
+      "Double-elim loser-bracket pairing: LIFECYCLE builds and plays double_elim on all 11 sports, but I2 reads one champion only.",
+      "Odd-field bye label: F1 (odd field) drives league and group on every sport and f1-everyone-drawn reads the draw.",
+      "Partner coverage: the americano rows play on all sports (americano|badminton|LIFECYCLE works), but no check counts partners.",
+    ];
+    let flagged = 0;
+    for (const e of driven) {
+      expect(buildLedger(input({ verdicts: text(e) })).findings, e).toEqual([{ kind: "driven-not-exercised", id: "SW-H2" }]);
+      flagged++;
+    }
+    expect(flagged).toBe(driven.length);
+    // The same sentences on a verified-by-read verdict that names its scenario are the right answer, and say nothing here.
+    const read = verdicts([v({ id: "SW-H2", outcome: "verified-by-read", evidence: `packages/engine/src/x.ts:1 ${driven[0]}`, drove: ["LIFECYCLE"] }), ...FULL.filter((x) => x.id !== "SW-H2").map((x) => x as unknown as Record<string, unknown>)]);
+    expect(buildLedger(input({ verdicts: read })).findings).toEqual([]);
+    // And the honest not-exercised lines, which NEGATE a drive, are not flagged.
+    const honest = [
+      "P3 has no script, so the round max+1 landing is never driven.",
+      "A public board surface no layer reads (L1 and L3 read the HTTP API, L2 drives only F1, M1 and R4 through the organiser UI).",
+      "E4b has no script, and F1 never schedules a swiss shell.",
+    ];
+    for (const e of honest) expect(buildLedger(input({ verdicts: text(e) })).findings, e).toEqual([]);
+    expect(findingLine({ kind: "driven-not-exercised", id: "SW-H2" })).toMatch(/SW-H2.*not-exercised.*drove.*verified-by-read/);
   });
 
   it("an id with no outcome is a finding naming it", () => {
@@ -615,6 +689,16 @@ describe("renderLedger", () => {
     expect(md).not.toContain("## Problems");
   });
 
+  it("the page says how many of the verified-by-read ids the baseline DROVE with no check reading them, and which (review m2)", () => {
+    const driven = verdicts([v({ id: "SW-H2", outcome: "verified-by-read", evidence: "packages/engine/src/x.ts:1 shows it", drove: ["F1"] })]);
+    const none = renderLedger(buildLedger(input()), { audit: GAPS.length, files: 5, umbrellas: 0, checked: 2 });
+    expect(none).toContain("Of the 1 verified-by-read id, 0 were driven by a baseline scenario");
+    const md = renderLedger(buildLedger(input({ verdicts: [...driven, ...FULL.filter((x) => x.id !== "SW-H2")] })), { audit: GAPS.length, files: 5, umbrellas: 0, checked: 2 });
+    expect(md).toContain("Of the 2 verified-by-read ids, 1 were driven by a baseline scenario (F1) with no check reading the property");
+    expect(buildLedger(input({ verdicts: [...driven, ...FULL.filter((x) => x.id !== "SW-H2")] })).entries.find((e) => e.id === "SW-H2")!.drove).toEqual(["F1"]);
+    expect(buildLedger(input()).entries.find((e) => e.id === "SC-O1")!.drove).toEqual([]);
+  });
+
   it("a pipe in a title or evidence is escaped in its table cell, so the row keeps its columns", () => {
     const md = renderLedger(buildLedger(input({ verdicts: FULL.map((x) => (x.id === "SW-H2" ? { ...x, evidence: "a | b" } : x)), gaps: GAPS.map((g) => (g.id === "SW-H2" ? { ...g, title: "t | u" } : g)) })), { audit: GAPS.length, files: 5, umbrellas: 0, checked: 2 });
     expect(md).toContain("| SW-H2 | W3 | Med | t \\| u | a \\| b |");
@@ -864,5 +948,36 @@ describe("the ledger over a triage.json the triage CLI wrote, on real committed 
     expect(main(["--audit", AUDIT_DIR, "--triage", join(tdir, "triage.json"), "--verdicts", verdictFile, "--routing", join(cat, "gap-routing.json"), "--out", ledger])).toBe(2);
     expect(said()).toMatch(/audit-ledger: TriageLayerMissing: .*layers L1, L2/);
     expect(readdirSync(dirname(ledger))).toEqual([]);
+  });
+});
+
+// --- the committed verdicts, against the review's own list ---------------------------------------------------------------
+
+describe("the committed verdicts never call a driven id not-exercised (Task 19 review m2)", () => {
+  // The 14 ids the review found labelled not-exercised that a baseline run DROVE (it named them from the verdict texts, FX-G4 … SW-L5).
+  // Typed here from the review, never read off the verdicts under test.
+  const DRIVEN_IDS = ["FX-G4", "FX-G8", "FX-G9", "FX-G10", "FX-G21", "FX-G24", "SC-S3", "SC-O7", "ST-G17", "ST-G30", "SW-M1", "SW-M6", "SW-M8", "SW-L5"];
+  const committed = (): Verdict[] => parseVerdicts(JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "audit-verdicts.json"), "utf8"))).verdicts;
+
+  it("each of the 14 is a verified-by-read that names the scenario that drove it, and no not-exercised verdict claims a drive or carries one", () => {
+    const by = new Map(committed().map((x) => [x.id, x]));
+    let checked = 0;
+    for (const id of DRIVEN_IDS) {
+      const x = by.get(id);
+      expect(x, `${id} has a verdict`).toBeDefined();
+      expect(x!.outcome, id).toBe("verified-by-read");
+      expect(x!.drove?.length ?? 0, `${id} names its driver`).toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked).toBe(14);
+    const notExercised = committed().filter((x) => x.outcome === "not-exercised");
+    expect(notExercised.length, "the not-exercised ids left").toBeGreaterThan(100);
+    for (const x of notExercised) {
+      expect(claimsDriven(x.evidence), `${x.id}: ${x.evidence.slice(0, 80)}`).toBe(false);
+      expect(x.drove, x.id).toBeUndefined();
+    }
+    // Every `drove` of the file is a verdict that reads or exercises: the 14 and the two rare-shape swiss ids (SW-L3, SW-L4) that the
+    // review also named as played-but-unwitnessable.
+    expect(committed().filter((x) => x.drove !== undefined).map((x) => x.id).sort()).toEqual([...DRIVEN_IDS, "SW-L3", "SW-L4"].sort());
   });
 });

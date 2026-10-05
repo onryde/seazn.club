@@ -48,12 +48,33 @@ const RuleSchema = z.strictObject({
     check: z.string().min(1).optional(),
     // A substring of the case's reason; never empty (the empty string is in every reason).
     reason: z.string().min(1).optional(),
+    // CLOSED set (review m1): every check the case fails is one of these, or the rule does not match it. Without it a second,
+    // unrelated failing check inside a keyed red rides along unseen. A case that fails nothing (an error red) is inside any set.
+    failing: z.array(z.string().min(1)).min(1).refine((a) => new Set(a).size === a.length, "a check once").optional(),
   }).refine((m) => Object.values(m).some((v) => v !== undefined), "a rule matches on at least one of cell, scenario, layer, check, reason — an empty match is every red, and would hide each untriaged one"),
   gap: z.string().regex(GAP_ID, "an audit gap id or a NEW- gap id"),
   wave: WAVE,
   /** The W1-driving triage rule this one re-keys (P1..P7). */
-  was: z.string().min(1).optional(),
+  was: z.string().min(1).nullable().optional(),
+  /** Why no P-rule exists, when `was` is null (the rule keys a defect W1-driving's own map never reached). Only beside a null `was`. */
+  wasWhy: z.string().min(1).optional(),
+  /** A failing check of the closed set that is no part of this rule's own mechanism but another gap's: a case that fails it is
+   *  ALSO that gap's (an L2 case of a cell no builder control builds fails `organiser-ui-path` beside a product defect). */
+  also: z.array(z.strictObject({ check: z.string().min(1), gap: z.string().regex(GAP_ID, "an audit gap id or a NEW- gap id"), wave: WAVE })).min(1).optional(),
   note: z.string().min(1),
+}).superRefine((r, ctx) => {
+  const bad = (message: string): void => { ctx.addIssue({ code: "custom", path: ["also"], message: `${r.id}: ${message}` }); };
+  if (r.was === null && r.wasWhy === undefined) ctx.addIssue({ code: "custom", path: ["wasWhy"], message: `${r.id}: a null \`was\` says why no P-rule exists (wasWhy)` });
+  if (r.wasWhy !== undefined && r.was !== null) ctx.addIssue({ code: "custom", path: ["wasWhy"], message: `${r.id}: wasWhy explains a null \`was\`, and this rule's is ${r.was === undefined ? "absent" : r.was}` });
+  if (r.also === undefined) return;
+  const allowed = r.match.failing;
+  if (allowed === undefined) { bad("`also` needs the closed failing set that names the checks it reads"); return; }
+  const seen = new Set<string>();
+  for (const a of r.also) {
+    if (!allowed.includes(a.check)) bad(`\`also\` reads ${a.check}, which the failing set does not allow`);
+    if (seen.has(a.check)) bad(`${a.check} is a co-failure of one gap`);
+    seen.add(a.check);
+  }
 });
 export type Rule = z.infer<typeof RuleSchema>;
 
@@ -137,7 +158,8 @@ export interface TriageRun {
   readonly cases: readonly CaseResult[];
 }
 
-export interface TriageRow { caseId: string; layer: Layer; gap: string; wave: string; rule: string; was?: string }
+/** `also`: the other gaps the case belongs to, by the co-failing checks its rule declares (a case is one row, never two). */
+export interface TriageRow { caseId: string; layer: Layer; gap: string; wave: string; rule: string; was?: string; also?: { gap: string; wave: string }[] }
 export interface Ambiguous { caseId: string; rules: string[] }
 export interface Misrouted { rule: string; gap: string; wave: string; routed: string | null }
 export interface UnknownGap { rule: string; gap: string }
@@ -173,6 +195,7 @@ function matches(m: Matcher, c: CaseResult, failing: ReadonlySet<string>): boole
     && (match.scenario === undefined || c.scenario === match.scenario)
     && (match.layer === undefined || c.layer === match.layer)
     && (match.check === undefined || failing.has(match.check))
+    && (match.failing === undefined || [...failing].every((id) => match.failing!.includes(id)))
     && (match.reason === undefined || c.reason.includes(match.reason));
 }
 
@@ -205,11 +228,14 @@ export function triage(runs: readonly TriageRun[], rules: TriageRules, routing: 
   const newWave = new Map(newGaps.gaps.map((g) => [g.id, g.wave]));
   const misrouted: Misrouted[] = [];
   const unknownGap: UnknownGap[] = [];
+  // A rule's own gap and each co-failure's gap are judged the same way: a secondary gap is no excuse to skip §8.
   for (const r of rules.rules) {
-    const isNew = NEW_GAP_ID.test(r.gap);
-    if (isNew ? !newWave.has(r.gap) : !known.has(r.gap)) { unknownGap.push({ rule: r.id, gap: r.gap }); continue; }
-    const routed = isNew ? (newWave.get(r.gap) ?? null) : routeOf(routing, r.gap);
-    if (routed !== r.wave) misrouted.push({ rule: r.id, gap: r.gap, wave: r.wave, routed });
+    for (const g of [{ gap: r.gap, wave: r.wave }, ...(r.also ?? [])]) {
+      const isNew = NEW_GAP_ID.test(g.gap);
+      if (isNew ? !newWave.has(g.gap) : !known.has(g.gap)) { unknownGap.push({ rule: r.id, gap: g.gap }); continue; }
+      const routed = isNew ? (newWave.get(g.gap) ?? null) : routeOf(routing, g.gap);
+      if (routed !== g.wave) misrouted.push({ rule: r.id, gap: g.gap, wave: g.wave, routed });
+    }
   }
 
   const matchers: Matcher[] = rules.rules.map((rule) => ({ rule, cell: rule.match.cell === undefined ? null : globToRegExp(rule.match.cell) }));
@@ -229,7 +255,8 @@ export function triage(runs: readonly TriageRun[], rules: TriageRules, routing: 
       else if (hit.length > 1) ambiguous.push({ caseId: c.caseId, rules: hit.map((m) => m.rule.id) });
       else {
         const r = hit[0].rule;
-        rows.push({ caseId: c.caseId, layer: run.layer, gap: r.gap, wave: r.wave, rule: r.id, ...(r.was === undefined ? {} : { was: r.was }) });
+        const also = (r.also ?? []).filter((a) => failing.has(a.check)).map((a) => ({ gap: a.gap, wave: a.wave }));
+        rows.push({ caseId: c.caseId, layer: run.layer, gap: r.gap, wave: r.wave, rule: r.id, ...(typeof r.was === "string" ? { was: r.was } : {}), ...(also.length === 0 ? {} : { also }) });
       }
     }
   }
@@ -248,7 +275,10 @@ const TriageJsonSchema = z.strictObject({
   runs: z.array(z.strictObject({ layer: z.enum(LAYERS), runId: z.string().min(1), plan: z.string().nullable(), cases: z.number().int().nonnegative(), reds: z.number().int().nonnegative() })),
   scanned: z.number().int().nonnegative(),
   checked: z.number().int().nonnegative(),
-  rows: z.array(z.strictObject({ caseId: z.string().min(1), layer: z.enum(LAYERS), gap: z.string().regex(GAP_ID), wave: WAVE, rule: z.string().min(1), was: z.string().min(1).optional() })),
+  rows: z.array(z.strictObject({
+    caseId: z.string().min(1), layer: z.enum(LAYERS), gap: z.string().regex(GAP_ID), wave: WAVE, rule: z.string().min(1), was: z.string().min(1).optional(),
+    also: z.array(z.strictObject({ gap: z.string().regex(GAP_ID), wave: WAVE })).min(1).optional(),
+  })),
   untriaged: z.array(z.string().min(1)),
   ambiguous: z.array(z.strictObject({ caseId: z.string().min(1), rules: z.array(z.string().min(1)).min(2) })),
   misrouted: z.array(z.strictObject({ rule: z.string().min(1), gap: z.string().min(1), wave: WAVE, routed: WAVE.nullable() })),
@@ -256,7 +286,12 @@ const TriageJsonSchema = z.strictObject({
   /** The case ids that passed: the ledger's evidence for "exercised, not reproduced". */
   works: z.array(z.string().min(1)),
   /** The rows grouped by gap (Task 22 writes the per-wave backlog tables from this, never by hand). */
-  gaps: z.array(z.strictObject({ gap: z.string().regex(GAP_ID), wave: WAVE, title: z.string(), layers: z.array(z.enum(LAYERS)).min(1), caseIds: z.array(z.string().min(1)).min(1) })),
+  gaps: z.array(z.strictObject({
+    gap: z.string().regex(GAP_ID), wave: WAVE, title: z.string(), layers: z.array(z.enum(LAYERS)).min(1),
+    // The cases keyed to the gap, and (apart) the cases keyed elsewhere that also fail one of its checks. A gap lists one or the other.
+    caseIds: z.array(z.string().min(1)),
+    alsoCaseIds: z.array(z.string().min(1)).min(1).optional(),
+  }).refine((g) => g.caseIds.length + (g.alsoCaseIds?.length ?? 0) > 0, "a gap with no case")),
 });
 export type TriageJson = z.infer<typeof TriageJsonSchema>;
 export const parseTriage = (json: unknown): TriageJson => TriageJsonSchema.parse(json);
@@ -265,11 +300,20 @@ export const parseTriage = (json: unknown): TriageJson => TriageJsonSchema.parse
 const waveNo = (w: string): number => Number(/^W(\d+)/.exec(w)?.[1] ?? 0);
 
 export function triageJson(r: TriageResult, runs: readonly TriageRun[], titles: ReadonlyMap<string, string>): TriageJson {
-  const byGap = new Map<string, TriageRow[]>();
-  for (const row of r.rows) byGap.set(row.gap, [...(byGap.get(row.gap) ?? []), row]);
-  const gaps = [...byGap].map(([gap, rows]) => ({
-    gap, wave: rows[0].wave, title: titles.get(gap) ?? "",
-    layers: LAYERS.filter((l) => rows.some((x) => x.layer === l)), caseIds: rows.map((x) => x.caseId),
+  const byGap = new Map<string, { wave: string; own: TriageRow[]; also: TriageRow[] }>();
+  const at = (gap: string, wave: string): { wave: string; own: TriageRow[]; also: TriageRow[] } => {
+    const g = byGap.get(gap) ?? { wave, own: [], also: [] };
+    byGap.set(gap, g);
+    return g;
+  };
+  for (const row of r.rows) {
+    at(row.gap, row.wave).own.push(row);
+    for (const a of row.also ?? []) at(a.gap, a.wave).also.push(row);
+  }
+  const gaps = [...byGap].map(([gap, g]) => ({
+    gap, wave: g.wave, title: titles.get(gap) ?? "",
+    layers: LAYERS.filter((l) => g.own.some((x) => x.layer === l) || g.also.some((x) => x.layer === l)), caseIds: g.own.map((x) => x.caseId),
+    ...(g.also.length === 0 ? {} : { alsoCaseIds: g.also.map((x) => x.caseId) }),
   })).sort((a, b) => waveNo(a.wave) - waveNo(b.wave) || (a.gap < b.gap ? -1 : a.gap > b.gap ? 1 : 0));
   return {
     version: 1,
@@ -353,22 +397,32 @@ export function renderTriage(r: TriageResult, titles: ReadonlyMap<string, string
     lines.push(`**NOT CLEAN — ${r.untriaged.length} untriaged, ${r.ambiguous.length} ambiguous, ${r.misrouted.length} misrouted rule(s), ${r.unknownGap.length} rule(s) naming an unknown gap. Fix the rules and re-run: this page is a partial triage.**`, "");
     lines.push("## Problems", "", ...problemLines(r).map((l) => `- ${l}`), "");
   }
-  const waves = [...new Set(r.rows.map((x) => x.wave))].sort((a, b) => waveNo(a) - waveNo(b) || (a < b ? -1 : 1));
+  // A case keyed to one gap may also fail a check that belongs to another (`also`): it is listed under that gap too, apart from
+  // the gap's own cases, and counted in no wave total (a red is one red).
+  const alsoOf = (g: string): TriageRow[] => r.rows.filter((x) => (x.also ?? []).some((a) => a.gap === g));
+  const waveOfGap = new Map<string, string>();
+  for (const x of r.rows) {
+    if (!waveOfGap.has(x.gap)) waveOfGap.set(x.gap, x.wave);
+    for (const a of x.also ?? []) if (!waveOfGap.has(a.gap)) waveOfGap.set(a.gap, a.wave);
+  }
+  const waves = [...new Set(waveOfGap.values())].sort((a, b) => waveNo(a) - waveNo(b) || (a < b ? -1 : 1));
   lines.push("| wave | gaps | reds |", "|---|---|---|");
   for (const w of waves) {
     const rows = r.rows.filter((x) => x.wave === w);
-    lines.push(`| ${w} | ${new Set(rows.map((x) => x.gap)).size} | ${rows.length} |`);
+    lines.push(`| ${w} | ${[...waveOfGap].filter(([, gw]) => gw === w).length} | ${rows.length} |`);
   }
   lines.push("");
   for (const w of waves) {
     const rows = r.rows.filter((x) => x.wave === w);
-    const gaps = [...new Set(rows.map((x) => x.gap))].sort();
+    const gaps = [...waveOfGap].filter(([, gw]) => gw === w).map(([g]) => g).sort();
     lines.push(`## ${w} — ${plural(rows.length, "red")} in ${plural(gaps.length, "gap")}`, "");
     for (const g of gaps) {
       const own = rows.filter((x) => x.gap === g);
+      const co = alsoOf(g);
       const title = titles.get(g);
-      lines.push(`### ${g}${title === undefined || title === "" ? "" : ` — ${title}`}`, "", `${plural(own.length, "case")}; layers ${LAYERS.filter((l) => own.some((x) => x.layer === l)).join(", ")}`, "");
+      lines.push(`### ${g}${title === undefined || title === "" ? "" : ` — ${title}`}`, "", `${plural(own.length, "case")}; layers ${LAYERS.filter((l) => own.some((x) => x.layer === l) || co.some((x) => x.layer === l)).join(", ")}`, "");
       for (const x of own) lines.push(`- \`${x.caseId}\` (${x.rule}${x.was === undefined ? "" : `, was ${x.was}`})`);
+      for (const x of co) lines.push(`- also fails here: \`${x.caseId}\` (keyed ${x.gap} by ${x.rule})`);
       lines.push("");
     }
   }
