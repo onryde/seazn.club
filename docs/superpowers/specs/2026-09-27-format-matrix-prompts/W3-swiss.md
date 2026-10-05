@@ -90,7 +90,7 @@ on every round (R25).
 The fix for SW-H1 removes owner ruling 70's override in the same change: delete the `ruling70` block of
 `tools/matrix/catalogue/baseline.json` and `RULING_70_IDS` in `tools/matrix/lib/pr-sample.ts`, and re-baseline L3
 (`truth-runs/w1d-baseline/README.md`, "Owner ruling 70"). A test fails once the committed baseline shows none of the three
-cells red, and a re-baselined L3 refuses the block, so neither can be forgotten.
+cells red, and a re-baselined L3 refuses the block. Both fire at the re-baseline, not when the fix lands: a W3 fix merged without re-baselining L3 leaves the override live, where it can hide a regression on those three cells only, so re-baseline in the same change.
 
 Update the W3 row, decision log and "False premises found" in `_INDEX.md` as
 they happen (R22). The O7 answer moves to "Owner rulings" only when the owner
