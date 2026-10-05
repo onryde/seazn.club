@@ -25,7 +25,8 @@ type ChainView = Pick<StreamSessionView, "state" | "ingest" | "output">;
 export interface CaptureFacts { phone: StreamPhone["phone"]; countdown: StreamLostCountdown | null }
 
 /**
- * §6.12's phone node over §3.2's row. Only the PHONE node moves; every link, Seazn and the destination stay the table's.
+ * §6.12's phone node over §3.2's row. The PHONE node moves, and link 1 with it under a lost-phone countdown while waiting
+ * (`captureLink1`); link 2, Seazn and the destination stay the table's.
  *  - Ready: Paired (lime) while present, Not answering (amber) while silent, Not connected with no phone;
  *  - waiting: Starting (amber) — unless the server counts down to ask 10 (`warming`, `phone_lost`): then the phone
  *    stopped checking in, and the node says so as the strip under it does — Not answering, with the "!" (B8 re-review
@@ -97,7 +98,21 @@ function destinationHalf(view: ChainView): Pick<Chain, "link2" | "dest"> {
  */
 export function chainFor(view: ChainView | null, opts: { destInUse?: boolean; capture?: CaptureFacts } = {}): Chain | null {
   const row = tableRow(view, opts);
-  return row && opts.capture ? { ...row, phone: capturePhone(view, row, opts.capture) } : row;
+  return row && opts.capture
+    ? { ...row, phone: capturePhone(view, row, opts.capture), link1: captureLink1(view, row, opts.capture) }
+    : row;
+}
+
+/**
+ * Link 1 (phone → Seazn) over §3.2's row — the fourth voice (coordinator ruling, B8 re-review item 6). While the session
+ * WAITS (requested, provisioning, warming) and the server counts down because the phone is lost (ask 10, or W19 in a
+ * warming reconnect), it is drawn as live's W19 draws it: `problem`, the amber dashes — beside the node's "!", the strip
+ * and the fold's dot, all from the same countdown. The warming timeout's countdown keeps waiting's `connecting` (that
+ * phone still checks in). Live already draws `problem` while the phone has no signal, which is when its countdown runs.
+ */
+function captureLink1(view: ChainView | null, row: Chain, capture: CaptureFacts): LinkStyle {
+  if (!view || capture.countdown?.reason !== "phone_lost") return row.link1;
+  return view.state === "requested" || view.state === "provisioning" || view.state === "warming" ? "problem" : row.link1;
 }
 
 function tableRow(view: ChainView | null, opts: { destInUse?: boolean }): Chain | null {

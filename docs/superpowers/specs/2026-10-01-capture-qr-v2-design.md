@@ -1987,6 +1987,13 @@ controller's review. None is the controller's ruling, and none is the seazn.club
   The dot on "Paired · Show the code again" reads the same countdown while the server counts down (`phoneDot`): amber
   exactly when the countdown is about a lost phone (ask 10, W19), lime while the phone still checks in (the warming
   timeout). With no countdown it reads the read model, as Ready's node does: present lime, silent amber, no phone slate.
+- **Link 1 says it too (coordinator ruling, B8 re-review item 6).** While the session waits (requested, provisioning,
+  warming) and the countdown is about a lost phone (ask 10, or W19 in a warming reconnect), link 1 (phone → Seazn) is
+  `problem`, the amber dashes live's W19 draws. The warming timeout keeps waiting's `connecting`. So all four elements
+  (the node, link 1, the strip and the fold's dot) read the one countdown.
+- **A pick that does not save is said (B8 re-review n-5).** The picker's `PUT stream-settings` is what keeps the
+  phone's start in agreement with the picker. On a failure the picker returns to the server's answer, and an alert
+  under it says the pick did not save. A failure for a pick already replaced is moot.
 
 **No spec text changes for these:**
 

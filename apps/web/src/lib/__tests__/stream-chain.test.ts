@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
 import { StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone, type StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { OUTPUT_WARNING_AFTER_MS, phoneStrip } from "@/lib/stream-session-view";
-import { chainFor, phoneDot, type Chain, type ChainNode, type PhoneDot } from "../stream-chain";
+import { chainFor, phoneDot, type Chain, type ChainNode, type LinkStyle, type PhoneDot } from "../stream-chain";
 
 type State = (typeof StreamSessionState.options)[number];
 type IngestWord = (typeof StreamIngest.shape.state.options)[number];
@@ -281,28 +281,37 @@ describe("chainFor — capture v2's phone node (T11)", () => {
     expect(chainFor(v("live", null, "ok"), { capture })).toEqual(chainFor(v("live", null, "ok")));
   });
 
-  it("the whole input space: with capture, ONLY the phone node may differ from §3.2's row — every link, Seazn and the destination are the table's; without it (legacy) the chain is today's", () => {
+  it("the whole input space: with capture, ONLY the phone node and link 1 may differ from §3.2's row — link 1 only to `problem`, only while waiting under a lost-phone countdown; link 2, Seazn and the destination are the table's; without it (legacy) the chain is today's", () => {
     const ingests: (IngestWord | null)[] = [null, ...StreamIngest.shape.state.options];
     const outputs: (OutputWord | null)[] = [null, ...StreamOutput.shape.state.options];
     const captures: CapturePhone[] = [
       { phone: null, countdown: null }, { phone: beating(), countdown: null }, { phone: beating({ notReady: "held" }), countdown: null },
       { phone: beating({ present: false, silent: true }), countdown: LIVE_CD },
     ];
+    // The coordinator's ruling (B8 re-review, item 6): in a WAITING state a countdown about a lost phone draws link 1 as
+    // live's W19 does — `problem` — beside the node's "!", the strip and the dot. Written from the rule, not read back.
+    const WAITING = ["requested", "provisioning", "warming"];
     let checked = 0;
     let phoneMoved = 0;
+    let linkMoved = 0;
     for (const state of StreamSessionState.options) for (const ingest of ingests) for (const output of outputs) for (const ms of [0, W]) {
       const legacy = chainFor(v(state, ingest, output, ms));
       expect(chainFor(v(state, ingest, output, ms), {}), "no capture = today").toEqual(legacy);
       for (const capture of captures) {
         const c = chainFor(v(state, ingest, output, ms), { capture });
         if (legacy === null) { expect(c).toBeNull(); checked++; continue; }
-        expect({ ...c!, phone: null }, `${state} ${ingest} ${output} ${ms}`).toEqual({ ...legacy, phone: null });
+        const where = `${state} ${ingest} ${output} ${ms}`;
+        expect({ ...c!, phone: null, link1: null }, where).toEqual({ ...legacy, phone: null, link1: null });
+        const lostWhileWaiting = WAITING.includes(state) && capture?.countdown?.reason === "phone_lost";
+        expect(c!.link1, `${where}: link 1`).toBe(lostWhileWaiting ? "problem" : legacy.link1);
         if (JSON.stringify(c!.phone) !== JSON.stringify(legacy.phone)) phoneMoved++;
+        if (c!.link1 !== legacy.link1) linkMoved++;
         checked++;
       }
     }
     expect(checked).toBe(StreamSessionState.options.length * ingests.length * outputs.length * 2 * captures.length);
     expect(phoneMoved, "anti-vacuity: the v2 words were reached").toBeGreaterThan(0);
+    expect(linkMoved, "anti-vacuity: link 1 moved somewhere").toBeGreaterThan(0);
   });
 });
 
@@ -319,11 +328,13 @@ describe("chainFor — capture v2's phone node (T11)", () => {
 // The "!" is on the phone exactly when the sentence is about a LOST phone. The read model's own `present` never moves the
 // node here: in ask 10's window the phone is not yet silent (§6.9's threshold IS ask 10's end), so a node keyed on it
 // would read "Starting" beside "The phone stopped checking in" — the defect this table exists for.
+// Link 1 (phone → Seazn) is the FOURTH voice (coordinator ruling, B8 re-review item 6): amber `problem` exactly when the
+// phone is lost, as live's W19 draws it; the warming timeout keeps waiting's `connecting`.
 // The folded "Paired · Show the code again" line's dot is the THIRD voice (coordinator ruling on the B8 re-review's open
 // point): while the server counts down it reads the same countdown — amber exactly when the phone is lost, lime while
 // the phone still checks in (the timeout) — never the read model's `present`, which is still true in ask 10's window.
 // ---------------------------------------------------------------------------------------------------------------------
-describe("W24 — the Phone node, the strip and the fold's dot agree for every countdown the wire declares", () => {
+describe("W24 — the Phone node, link 1, the strip and the fold's dot agree for every countdown the wire declares", () => {
   type Countdown = import("@/server/api-v1/schemas").StreamLostCountdown;
   /** Every (kind, reason) the wire's union declares, read off the schema — a reason added there is swept here. */
   const WIRE: [Countdown["kind"], Countdown["reason"]][] = StreamLostCountdown.options.flatMap((o) => {
@@ -332,10 +343,10 @@ describe("W24 — the Phone node, the strip and the fold's dot agree for every c
     const reasons = "options" in reason ? (reason.options as Countdown["reason"][]) : [reason.value as Countdown["reason"]];
     return reasons.map((r) => [kind, r] as [Countdown["kind"], Countdown["reason"]]);
   });
-  const TABLE: Record<string, { key: string; node: ChainNode; dot: PhoneDot }> = {
-    "warming.no_inbound_timeout": { key: "stream.phone.countdown.warming.no_inbound_timeout", node: n("amber", "starting"), dot: "lime" },
-    "warming.phone_lost": { key: "stream.phone.countdown.warming.phone_lost", node: n("amber", "notAnswering", "bang"), dot: "amber" },
-    "live.phone_lost": { key: "stream.phone.countdown.live.phone_lost", node: n("amber", "reconnecting", "bang"), dot: "amber" },
+  const TABLE: Record<string, { key: string; node: ChainNode; link1: LinkStyle; dot: PhoneDot }> = {
+    "warming.no_inbound_timeout": { key: "stream.phone.countdown.warming.no_inbound_timeout", node: n("amber", "starting"), link1: "connecting", dot: "lime" },
+    "warming.phone_lost": { key: "stream.phone.countdown.warming.phone_lost", node: n("amber", "notAnswering", "bang"), link1: "problem", dot: "amber" },
+    "live.phone_lost": { key: "stream.phone.countdown.live.phone_lost", node: n("amber", "reconnecting", "bang"), link1: "problem", dot: "amber" },
   };
   /** The states each kind is served in: `warming` before any video; `live` in live AND in a warming reconnect. */
   const STATES: Record<Countdown["kind"], readonly ("live" | "warming")[]> = { warming: ["warming"], live: ["live", "warming"] };
@@ -350,7 +361,7 @@ describe("W24 — the Phone node, the strip and the fold's dot agree for every c
     expect(WIRE.length, "anti-vacuity").toBeGreaterThanOrEqual(3);
   });
 
-  it("every countdown: the strip says the table's sentence, the node the table's word and the fold's dot the table's tone — the '!' and the amber dot exactly when the phone is lost — whatever the read model says of the phone's presence", () => {
+  it("every countdown: the strip says the table's sentence, the node the table's word, link 1 the table's style and the fold's dot the table's tone — the '!', link 1's `problem` and the amber dot exactly when the phone is lost — whatever the read model says of the phone's presence", () => {
     let checked = 0;
     let lost = 0;
     for (const [kind, reason] of WIRE) {
@@ -365,6 +376,8 @@ describe("W24 — the Phone node, the strip and the fold's dot agree for every c
         const chain = chainFor(session, { capture: { phone, countdown } })!;
         expect(chain.phone, `${where}: the node`).toEqual(row.node);
         expect(chain.phone.mark === "bang", `${where}: the '!' iff the phone is lost`).toBe(reason === "phone_lost");
+        expect(chain.link1, `${where}: link 1`).toBe(row.link1);
+        expect(chain.link1 === "problem", `${where}: link 1 is a problem iff the node carries the '!'`).toBe(chain.phone.mark === "bang");
         const dot = phoneDot({ phone, countdown });
         expect(dot, `${where}: the fold's dot`).toBe(row.dot);
         expect(dot === "amber", `${where}: the dot is amber iff the node carries the '!'`).toBe(chain.phone.mark === "bang");
@@ -385,6 +398,7 @@ describe("W24 — the Phone node, the strip and the fold's dot agree for every c
       const strip = phoneStrip(readModel(phone), session);
       expect(strip).toEqual({ tone: "slate", icon: "clock", lead: "stream.phone.waitingVideo", body: null });
       expect(chainFor(session, { capture: { phone, countdown: null } })!.phone).toEqual(n("amber", "starting"));
+      expect(chainFor(session, { capture: { phone, countdown: null } })!.link1, "no countdown: waiting's link 1").toBe("connecting");
       // No countdown: the dot reads the read model, as Ready's does (the strip and node say nothing of presence here).
       expect(phoneDot({ phone, countdown: null }), `present ${phone.present}`).toBe(phone.present ? "lime" : "amber");
       checked++;

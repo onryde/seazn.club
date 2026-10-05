@@ -1403,6 +1403,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
   it("B8 re-review ruling (the open point), rendered: the folded 'Paired' line's dot says what the strip and the Phone node say, for EVERY countdown the wire declares — amber with the '!' and the lost sentence, lime with neither — the phone still `present` in the read model throughout", () => {
     const PHONE_BANG = /data-node="phone"[^]*?data-mark="bang"[^]*?data-node="seazn"/;
     const FOLD_DOT = /data-testid="stream-code-disclosure"[^]*?data-tone="(\w+)"/;
+    const LINK1 = /data-link1="(\w+)"/;
     const esc = (t: string) => t.replace(/'/g, "&#x27;");
     type Countdown = StreamLostCountdown;
     const wire: Countdown[] = StreamLostCountdown.options.flatMap((o) => {
@@ -1423,6 +1424,8 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       const isLost = countdown.reason === "phone_lost";
       expect(PHONE_BANG.test(html), `${where}: the '!' on the node`).toBe(isLost);
       expect(html.match(FOLD_DOT)?.[1], `${where}: the fold's dot`).toBe(isLost ? "amber" : "lime");
+      // Item 6 (coordinator ruling): link 1 is the fourth voice — `problem` (amber dashes) exactly when the phone is lost.
+      expect(html.match(LINK1)?.[1], `${where}: link 1`).toBe(isLost ? "problem" : "connecting");
       if (isLost) lost++;
       checked++;
     }
@@ -1432,6 +1435,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     // because of the countdown, not because the fold always paints amber.
     const quiet = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session()} balance={2} phone={readModel({ phone: facts({ state: "publishing" }) })} />);
     expect(quiet.match(FOLD_DOT)?.[1]).toBe("lime");
+    expect(quiet.match(LINK1)?.[1], "no countdown: waiting's link 1").toBe("connecting");
   });
 
   it("O5: live, the input down, the phone still beating with notReady camera → 'Reconnecting…' and 'Phone is on a call — video paused', NO countdown, no '!' and no D3 phone box", () => {
