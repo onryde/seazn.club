@@ -5486,7 +5486,7 @@
   "stream.phone.ended.reason.stopped": "Door jou gestopt",
   "stream.phone.ended.reason.operator_stopped": "Gestopt vanaf de telefoon",
   "stream.phone.ended.reason.auto_stopped": "Automatisch gestopt na de uitslag",
-  "stream.phone.ended.reason.phone_lost": "De telefoon en zijn video waren 15 minuten weg",
+  "stream.phone.ended.reason.phone_lost": "De telefoon en zijn video waren {minutes} min weg",
   "stream.phone.ended.reason.max_duration": "Limiet van 5 uur bereikt",
   "stream.error.no_credits": "Je hebt een tegoed nodig om live te gaan.",
   "stream.error.overlay_required": "Streamen vanaf de telefoon vereist het overlay-niveau.",

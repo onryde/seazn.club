@@ -793,8 +793,9 @@ stopped` and waits on the same code.
   the same stop path as every other end.
 - **The phone**, if it comes back, hears `over S phone_lost` and reads capture's "Stream ended — this phone was
   offline".
-- **The panel** reads "The phone and its video were gone for 15 minutes" (new copy, all four locales), told apart from
-  ask 10's line by `first_ingest_at`.
+- **The panel** reads "The phone and its video were gone for {minutes} min" (new copy, all four locales), told apart from
+  ask 10's line by `first_ingest_at`. `{minutes}` is `PHONE_LOST_LIVE_MINUTES` as the server reads it (through
+  `tunable`, 15 by default), handed to the panel by its context loader — never a number typed into the copy.
 - **When it fires.** At the first tick after the 15 min: at once while an organiser panel is open (its poll ticks),
   otherwise within 5 min, from the `stream-tick` job (W22, §6.11).
 
@@ -808,7 +809,7 @@ exactly one wire value. A test sweeps the DB enums: the count of mapped reasons 
 | end `stopped` (organiser) | `stopped` | as today |
 | end `operator_stopped` | `stopped` (only the phone that stopped it ever names this sid, and it is already Ended) | "Stopped from the phone" |
 | end `auto_stopped` (written by PR-2) | `auto_stopped` | "Stopped automatically after the result" |
-| end `phone_lost` | `phone_lost` | before ingest (ask 10): "The phone stopped answering before the stream started"; after ingest (W19): "The phone and its video were gone for 15 minutes" |
+| end `phone_lost` | `phone_lost` | before ingest (ask 10): "The phone stopped answering before the stream started"; after ingest (W19): "The phone and its video were gone for {minutes} min" (the server's W19 window) |
 | end `max_duration` | `max_duration` | as today |
 | fail `no_inbound_timeout` | `no_inbound_timeout` | as today |
 | fail `target_rejected` | `target_rejected` | as today |

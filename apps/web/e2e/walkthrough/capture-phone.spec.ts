@@ -937,7 +937,11 @@ test("W19/W24 @320: live, then the phone's beats stop and its input disconnects 
   await expectNoHorizontalScroll(page);
   await body.screenshot({ path: join(test.info().outputPath(), "w24-320-countdown.png"), timeout: NAV_MS });
 
-  await expect(body.getByTestId("stream-end-reason")).toHaveText(en("stream.phone.ended.reason.phone_lost"), {
+  // The chip names the TUNED window (class 19: LOST_LIVE_MIN is 1 here, so a "15" in the panel or its loader reds) —
+  // and the copy carries it as a placeholder, or the expected sentence below would read the same whatever the window.
+  expect(en("stream.phone.ended.reason.phone_lost", { minutes: LOST_LIVE_MIN }), "premise: the copy names the window")
+    .not.toBe(en("stream.phone.ended.reason.phone_lost", { minutes: PHONE_LOST_LIVE_MINUTES }));
+  await expect(body.getByTestId("stream-end-reason")).toHaveText(en("stream.phone.ended.reason.phone_lost", { minutes: LOST_LIVE_MIN }), {
     timeout: Math.max(0, silentFrom + W19_MS - Date.now()) + END_LATE_MS + POLL_WAIT_MS,
   });
   const ended = await sessionRow(session.id);

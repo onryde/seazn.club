@@ -232,6 +232,10 @@ export interface StreamPanelContext {
    *  `CAPTURE_QR_V2_ALWAYS=1` — as `server/stream-panel-context.ts` resolved it. False hides the phone-camera option
    *  (the Phone tab) and nothing else: the routes are not gated, and a stream already up keeps its Stop. */
   phoneCapture: boolean;
+  /** W19 (§6.8.5): how long a live phone stream's phone may be gone (no beat AND no video) before the tick ends it
+   *  `phone_lost` — config.ts `PHONE_LOST_LIVE_MINUTES` through `tunable`, as the SERVER reads it, the same expression the
+   *  tick judges with. The ended chip names it; the panel never computes or defaults it. */
+  phoneLostMinutes: number;
 }
 
 /** G5: what the checkout return put on the URL, and nothing else — every other param is kept. (Spec 2026-09-30 §2: the
@@ -691,6 +695,7 @@ export function FixtureStreamPanel({
               streamSplit={stream.streamSplit}
               monthlyAllowance={stream.monthlyAllowance}
               currency={stream.currency}
+              phoneLostMinutes={stream.phoneLostMinutes}
             />
           )}
         </div>
@@ -800,6 +805,7 @@ export function PhoneTab({
   streamSplit,
   monthlyAllowance,
   currency,
+  phoneLostMinutes,
 }: {
   fixtureId: string;
   orgId: string;
@@ -807,6 +813,8 @@ export function PhoneTab({
   streamSplit: StreamCreditSplit | null;
   monthlyAllowance: number;
   currency: Currency;
+  /** W19: the server's phone-lost window (StreamPanelContext.phoneLostMinutes), handed to the body untouched. */
+  phoneLostMinutes: number;
 }) {
   const msg = useMsg();
   // T9b: the page's ONE session (StreamSessionProvider, mounted by the console) — the Stream button's dot reads it too.
@@ -1139,6 +1147,7 @@ export function PhoneTab({
         currency={currency}
         split={streamSplit}
         monthlyAllowance={monthlyAllowance}
+        phoneLostMinutes={phoneLostMinutes}
         // I-1: off the RAW view, not `shown` — Start another / Try again dismiss the card, and the fixture's reuse window
         // is exactly what the next start is asking about. No session ever → nothing consumed → no window (W23).
         restart={view?.restart ?? null}
@@ -1546,6 +1555,9 @@ export interface PhoneTabBodyProps {
   split: StreamCreditSplit | null;
   /** Task 14b (R4): the plan's free match credits per month; the credits card's note names it. None below 1. */
   monthlyAllowance: number;
+  /** W19: the server's phone-lost window in whole minutes (StreamPanelContext.phoneLostMinutes) — the `phone_lost` end
+   *  chip names it. */
+  phoneLostMinutes: number;
   /** The org's destinations (T8): loading, a failed read (Retry), or the list — managed in Directory, picked here. */
   targets: TargetsState;
   busy: boolean;
@@ -2186,7 +2198,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 QR) only restated what the organiser had just done, as a second chip for one fact. */}
             {p.view.endReason && p.view.startedAt !== null && (
               <span data-testid="stream-end-reason" className={CHIP}>
-                {msg(END_REASON_KEYS[p.view.endReason])}
+                {/* W19: `phone_lost` names the window the server ended it by — its own number, never one typed into the
+                    copy. The other reasons carry no placeholder and ignore it. */}
+                {msg(END_REASON_KEYS[p.view.endReason], { minutes: p.phoneLostMinutes })}
               </span>
             )}
           </div>

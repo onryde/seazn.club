@@ -49,6 +49,7 @@ import { hasFeature } from "@/lib/entitlements";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { verifyOverlayKey } from "@/server/overlay/overlay-key";
 import { SUPPORTED_CURRENCIES } from "@/lib/currency";
+import { PHONE_LOST_LIVE_MINUTES } from "@/server/relay/config";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 const AUTH = { orgId: "org-1", userId: "user-1", role: "owner", via: "session", keyId: null } as unknown as AuthCtx;
@@ -438,5 +439,35 @@ describe("capture-qr-v2: the flag is asked once per org per minute, not once per
     expect((await load())?.phoneCapture).toBe(true);
     expect((await load())?.phoneCapture).toBe(true);
     expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+});
+
+// W19 (§6.8.5): the ended chip names the window the tick ends a lost phone by. The loader hands the panel that window as
+// the server reads it — config.ts's declaration through `tunable`, the expression the tick judges with — so an override
+// the tick honours (the e2e's 1 minute) is the number the organiser reads, and one it ignores (prod) is not.
+describe("W19: the panel is handed the phone-lost window the tick judges by", () => {
+  it("the declared default; a ci/local override; never an override on a named deployment — and whether or not the relay runs", async () => {
+    expect(PHONE_LOST_LIVE_MINUTES, "premise: the override below differs from the default").not.toBe(7);
+    expect((await load())?.phoneLostMinutes, "no override: the declaration").toBe(PHONE_LOST_LIVE_MINUTES);
+    let checked = 0;
+    for (const envName of ["ci", "local"]) {
+      vi.stubEnv("ENV_NAME", envName);
+      vi.stubEnv("PHONE_LOST_LIVE_MINUTES", "7");
+      expect((await load())?.phoneLostMinutes, `ENV_NAME=${envName} honours the override`).toBe(7);
+      checked++;
+    }
+    for (const envName of ["stg", "prod"]) {
+      vi.stubEnv("ENV_NAME", envName);
+      expect((await load())?.phoneLostMinutes, `ENV_NAME=${envName} ignores it`).toBe(PHONE_LOST_LIVE_MINUTES);
+      checked++;
+    }
+    // The relay off (a switched-off org): still the window — a stream left over from before can still end phone_lost.
+    vi.stubEnv("ENV_NAME", "ci");
+    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.relay");
+    const off = await load();
+    expect(off?.relayEntitled, "premise: the relay is off").toBe(false);
+    expect(off?.phoneLostMinutes).toBe(7);
+    checked++;
+    expect(checked).toBe(5);
   });
 });

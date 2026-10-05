@@ -184,6 +184,7 @@ const PANEL_MOUNT: FixtureStreamMount = {
     currency: "gbp",
     overlayKeys: {},
     phoneCapture: true,
+    phoneLostMinutes: 15,
   } satisfies StreamPanelContext,
   fixture: { id: "f1", status: "finalized", outcome: null, scheduled_at: null, home_entrant_id: "e-home", away_entrant_id: "e-away" },
   entrantNames: { "e-home": "Riverside FC", "e-away": "Summit Athletic" },

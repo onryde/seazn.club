@@ -5486,7 +5486,7 @@
   "stream.phone.ended.reason.stopped": "Stopped by you",
   "stream.phone.ended.reason.operator_stopped": "Stopped from the phone",
   "stream.phone.ended.reason.auto_stopped": "Stopped automatically after the result",
-  "stream.phone.ended.reason.phone_lost": "The phone and its video were gone for 15 minutes",
+  "stream.phone.ended.reason.phone_lost": "The phone and its video were gone for {minutes} min",
   "stream.phone.ended.reason.max_duration": "Reached the 5-hour limit",
   "stream.error.no_credits": "You need a match credit to go live.",
   "stream.error.overlay_required": "Phone streaming needs the overlay tier.",

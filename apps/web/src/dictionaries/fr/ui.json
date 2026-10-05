@@ -5486,7 +5486,7 @@
   "stream.phone.ended.reason.stopped": "Arrêtée par vous",
   "stream.phone.ended.reason.operator_stopped": "Arrêtée depuis le téléphone",
   "stream.phone.ended.reason.auto_stopped": "Arrêtée automatiquement après le résultat",
-  "stream.phone.ended.reason.phone_lost": "Le téléphone et sa vidéo ont disparu pendant 15 minutes",
+  "stream.phone.ended.reason.phone_lost": "Le téléphone et sa vidéo ont disparu pendant {minutes} min",
   "stream.phone.ended.reason.max_duration": "Limite de 5 heures atteinte",
   "stream.error.no_credits": "Il vous faut un crédit pour passer en direct.",
   "stream.error.overlay_required": "La diffusion depuis le téléphone nécessite le niveau superposition.",

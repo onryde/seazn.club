@@ -196,6 +196,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     currency: "gbp",
     overlayKeys: { [FIXTURE.id]: "KEY_for-f-1_0123456789" },
     phoneCapture: true,
+    phoneLostMinutes: 20,
     ...o,
   };
 }
@@ -716,12 +717,12 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
 
   it("with streaming.relay it mounts the container with THIS row's fixture and the page's org, balance and plan", () => {
     const split = { monthly: 1, pack: 3, total: 4 };
-    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, currency: "inr" }).tree();
+    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, currency: "inr", phoneLostMinutes: 7 }).tree();
     expect(byTestId(tree, "stream-switched-off"), "no refusal once entitled").toBeUndefined();
     const tab = tree.find((el) => el.type === PhoneTab);
     expect(tab, "the Phone tab body is not the container").toBeDefined();
     // Each value differs from ctx()'s default, so a prop wired to the wrong field (or a constant) cannot pass.
-    expect(propsOf(tab!)).toMatchObject({ fixtureId: FIXTURE.id, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, currency: "inr" });
+    expect(propsOf(tab!)).toMatchObject({ fixtureId: FIXTURE.id, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, currency: "inr", phoneLostMinutes: 7 });
   });
 
   it("buying is the EMBEDDED checkout in the repo's Modal, never a navigation (owner ruling 8) — the source half", () => {
@@ -987,6 +988,7 @@ const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, phone: readModel(), code: { status: "loading" }, codeOpen: false, now: NOW, copied: false, showBuy: false,
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null, pickFailed: false,
+  phoneLostMinutes: 20,
   onSelectTarget: () => {}, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
   onShowBuy: () => {}, onTileIntent: () => {},
@@ -1545,6 +1547,33 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(waived, "stream-replay")).toBeUndefined();
   });
 
+  // W19's window is the SERVER's — config.ts PHONE_LOST_LIVE_MINUTES through `tunable`, handed down by the page's
+  // loader (stream-panel-context.ts) — and the chip names it; the panel computes nothing. Class 19: every value but 15 is
+  // one a "15" typed into the copy (or the panel) cannot render, so a hard-coded window reds here.
+  it("phone_lost names the window the server declared — at 1, 7, 15 and 45 minutes, each its own number", () => {
+    const raw = messages["stream.phone.ended.reason.phone_lost"] as string;
+    expect(raw.split("{minutes}").length, "premise: the copy carries ONE {minutes}").toBe(2);
+    const ended = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "phone_lost" as const };
+    let checked = 0;
+    for (const minutes of [1, 7, 15, 45]) {
+      const text = textAt(body({ view: session(ended), balance: 1, phoneLostMinutes: minutes }), "stream-end-reason");
+      expect(text, `${minutes} min`).toBe(raw.replace("{minutes}", String(minutes)));
+      expect(text.match(/\d+/g), `${minutes} min: the only number in the chip is the window`).toEqual([String(minutes)]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // No locale types the window into its copy: each carries the placeholder once, and no digit at all.
+    let locales = 0;
+    for (const l of ["en", "es", "fr", "nl"]) {
+      const dict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Record<string, string>;
+      const copy = dict["stream.phone.ended.reason.phone_lost"] ?? "";
+      expect(copy.split("{minutes}").length, `${l}: one {minutes}`).toBe(2);
+      expect(copy, `${l}: no number typed into the copy`).not.toMatch(/\d/);
+      locales++;
+    }
+    expect(locales).toBe(4);
+  });
+
   // P6 + P7 (fix round 4). Capture pass 3 read "Ended before going live" beside "Stopped by you" on a Cancel from the QR:
   // two chips for one fact, the second restating what the organiser just did. A session that never went live now has ONE
   // chip. Every end reason the view model declares is swept — the reason chip is dropped for all of them, not just "stopped".
@@ -1568,7 +1597,8 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       const paid = body({ view: session({ ...live, creditUsed: true }), balance: 1 });
       expect(endedChips(paid), `${endReason}: paid stop`).toEqual(["stream-ended-duration", "stream-credit-used", "stream-end-reason"]);
       expect(textAt(paid, "stream-ended-duration"), endReason).toBe(m("stream.phone.ended.duration", { duration: "0:15" }));
-      expect(textAt(paid, "stream-end-reason"), endReason).toBe(m(END_REASON_KEYS[endReason]));
+      expect(textAt(paid, "stream-end-reason"), endReason).toBe(m(END_REASON_KEYS[endReason], { minutes: BODY.phoneLostMinutes }));
+      expect(textAt(paid, "stream-end-reason"), `${endReason}: every placeholder is filled`).not.toMatch(/\{\w+\}/);
       const free = body({ view: session({ ...live, creditUsed: false }), balance: 1 });
       expect(endedChips(free), `${endReason}: free restart`).toEqual(["stream-ended-duration", "stream-end-reason"]);
       checked++;
@@ -2320,7 +2350,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     code?: () => unknown;
     reissue?: () => unknown;
   };
-  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const };
+  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20 };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
   const PHONE = "GET /api/v1/fixtures/f-1/stream-phone";
   const ENSURE = "POST /api/v1/fixtures/f-1/stream-code";
@@ -2435,6 +2465,14 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).split).toEqual(split);
     expect(bodyOf(island).monthlyAllowance).toBe(5);
     expect(bodyOf(island).balance, "the chip is still the total").toBe(TAB.streamBalance);
+  });
+
+  it("W19: the container hands the body the page's phone-lost window, untouched — a value the default cannot produce", async () => {
+    serve({ current: null, targets: TARGETS });
+    const island = track(renderIsland(PhoneTab, { ...TAB, phoneLostMinutes: 7 }));
+    await settle();
+    expect(TAB.phoneLostMinutes, "premise: the default differs").not.toBe(7);
+    expect(bodyOf(island).phoneLostMinutes).toBe(7);
   });
 
   it("C1: no session → the SERVER-resolved balance; a session → its projection's fresher number, which Start another keeps", async () => {
