@@ -98,6 +98,10 @@ describe("runQueue", () => {
     expect(comment).toMatch(/\bD11\b/);
     expect(comment).toMatch(/stays 8/);
     expect(comment, "the stale invitation").not.toMatch(/may raise it/);
+    // The decision, in its own words, and no imperative invitation in other words (a mutant that reworded the
+    // invitation to "raise it when the wave needs more" survived the one-phrase check above).
+    expect(comment).toMatch(/raising it is a decision, not a drift/);
+    expect(comment, "an imperative invitation").not.toMatch(/\braise it\b/i);
     expect(MAX_WORKERS).toBe(8);
   });
   it("a second call on the same inputs gives the same answer and opens its own workers again", async () => {
