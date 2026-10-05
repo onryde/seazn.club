@@ -55,6 +55,8 @@ import {
   PHONE_LOST_LIVE_MINUTES,
   PHONE_SILENT_FLOOR_SECONDS,
   PHONE_SILENT_SLACK_SECONDS,
+  POLL_FAR_SECONDS,
+  POLL_NEAR_SECONDS,
   RECONNECT_QUIET_SECONDS,
 } from "../../src/server/relay/config";
 
@@ -138,6 +140,8 @@ const LONGEST_HOLD_MS = (FREE_RESTARTS_PER_WINDOW + 2) * CYCLE_MS;
 const SLOT_WAIT_MS = 2 * LONGEST_HOLD_MS;
 
 let lease: (() => Promise<void>) | null = null;
+/** The pool key this test's lease holds (W22 takes every OTHER key while it ticks). */
+let leaseKey: number | null = null;
 const rigsThisTest: { request: APIRequestContext; orgId: string }[] = [];
 
 async function streamSlot(): Promise<void> {
@@ -158,12 +162,50 @@ async function streamSlot(): Promise<void> {
       const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${SLOT_LOCK_BASE + i}::bigint) as ok`;
       if (row?.ok) {
         lease = () => sql.end();
+        leaseKey = SLOT_LOCK_BASE + i;
         return;
       }
     }
     if (Date.now() > deadline) {
       await sql.end();
       throw new Error(`none of the pool's ${POOL_SLOTS} stream slot(s) free after ${SLOT_WAIT_MS} ms`);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+/**
+ * W22's exclusion (B9 review m-3): the cron tick is GLOBAL — it ticks every open session on the server — and in CI this
+ * file shares a server and a parallel shard with the other stream walkthroughs, whose held-WAITING rows rely on nothing
+ * ticking them. Every session any of them opens is opened under one of the deployment's STREAM_CAPACITY slot keys (the
+ * pool [BASE, BASE + CAPACITY − 1), shared with stream-relay and directory, and stream-credits' BASE + CAPACITY − 1), held
+ * until its teardown has driven the session terminal. Holding EVERY key therefore means no other test has a session
+ * open: the tick can reach this test's own and nothing else. Taken on its own connection, each key kept once won (a
+ * holder only ever waits for one key, so the set fills as they finish), bounded by SLOT_WAIT_MS; the count is returned.
+ */
+async function everyOtherSlot(): Promise<{ taken: number; release: () => Promise<void> }> {
+  if (leaseKey === null) throw new Error("everyOtherSlot: this test holds no pool key — take streamSlot() first");
+  const dbUrl = process.env.DATABASE_URL!;
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(dbUrl, {
+    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
+    prepare: !dbUrl.includes(":6543"),
+    max: 1,
+    idle_timeout: 0,
+  });
+  const want = Array.from({ length: STREAM_CAPACITY }, (_, i) => SLOT_LOCK_BASE + i).filter((k) => k !== leaseKey);
+  const held = new Set<number>();
+  const deadline = Date.now() + SLOT_WAIT_MS;
+  for (;;) {
+    for (const k of want) {
+      if (held.has(k)) continue;
+      const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${k}::bigint) as ok`;
+      if (row?.ok) held.add(k);
+    }
+    if (held.size === want.length) return { taken: held.size, release: () => sql.end() };
+    if (Date.now() > deadline) {
+      await sql.end();
+      throw new Error(`W22's exclusion: ${want.length - held.size} of ${want.length} other slot key(s) still held after ${SLOT_WAIT_MS} ms`);
     }
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -189,6 +231,7 @@ async function teardownStreams(): Promise<void> {
   } finally {
     const release = lease;
     lease = null;
+    leaseKey = null;
     await release?.();
   }
 }
@@ -483,14 +526,34 @@ test("operator start from the phone: 200 {sid}; the panel open at Ready shows it
   const goLive = body.getByTestId("stream-go-live");
   await expect(goLive, "premise: the panel rests at Ready with Go live").toBeEnabled({ timeout: POLL_WAIT_MS });
 
+  // I-2 within ONE poll, counted in answers, not seconds (B9 review I-1): the first read-model answer whose request is
+  // issued after the start resolved goes through; every later one is HELD unanswered. The panel has exactly that one
+  // answer to leave Ready on — a pickup on any later answer never sees one and reds.
+  const READ_MODEL = new RegExp(`/api/v1/fixtures/${f.id}/stream-phone(\\?.*)?$`);
+  let startDone = false;
+  let firstAfterStart = false;
+  const heldReads: (() => Promise<void>)[] = [];
+  await page.route(READ_MODEL, async (route) => {
+    if (!startDone || !firstAfterStart) {
+      if (startDone) firstAfterStart = true;
+      await route.continue();
+      return;
+    }
+    heldReads.push(() => route.continue().catch(() => undefined));
+  });
   await streamSlot();
   const started = await phone.start();
+  startDone = true;
   expect(started.status, `the operator's start: ${JSON.stringify(started.refusal)}`).toBe(200);
   const sid = started.ok!.sid;
-  const startedAt = Date.now();
-  // I-2: within one poll of the read model the panel has left Ready — Go live is gone, so it cannot meet active_session.
-  await expect(goLive, "I-2: no stale Go live once the phone has started").toHaveCount(0, { timeout: POLL_WAIT_MS });
-  expect(Date.now() - startedAt, "picked up within one STREAM_POLL_MS (+ the read's round trip)").toBeLessThanOrEqual(POLL_WAIT_MS);
+  try {
+    await expect(goLive, "I-2: no stale Go live once the phone has started — on the FIRST read-model answer after it").toHaveCount(0, { timeout: POLL_WAIT_MS });
+    expect(firstAfterStart, "premise: a read-model answer issued after the start went through").toBe(true);
+  } finally {
+    test.info().annotations.push({ type: "I-2 hold", description: `${heldReads.length} later read-model poll(s) held unanswered` });
+    await page.unroute(READ_MODEL);
+    for (const release of heldReads.splice(0)) await release();
+  }
   await expect(body.getByTestId("stream-create-error"), "nothing was tapped, nothing was refused").toHaveCount(0);
   await expect(body.getByTestId("stream-state-pill")).toHaveText(
     new RegExp(`^(${["provisioning", "warming", "live"].map((s) => en(`stream.phone.state.${s}`)).join("|")})$`),
@@ -755,7 +818,7 @@ test("A17: a late stop (sid null, stopped X) from the current phone closes X as 
 test("ask 10: the phone dies as Go live is tapped (it never hears go-live, its video never arrives) → the warming countdown names the timeout, then the lost phone; the session ends phone_lost at last beat + max(floor, cadence + slack), spending nothing; Ready then says the phone stopped checking in and refuses Go live", async ({
   page,
 }) => {
-  const cadenceS = 60; // re-read from the phone's own answer below; the budget's worst case is POLL_FAR
+  const cadenceS = POLL_FAR_SECONDS; // the cadence an unscheduled fixture's phone is answered — asserted below
   test.setTimeout(SLOT_WAIT_MS + SEED_MS + NAV_MS + silentAfterMs(cadenceS) + 6 * POLL_WAIT_MS + 30_000);
   await page.setViewportSize({ width: 768, height: 1024 });
   const rig = await seedRig(page);
@@ -779,6 +842,11 @@ test("ask 10: the phone dies as Go live is tapped (it never hears go-live, its v
   expect(pairing!.last_beat_at.getTime(), "premise: the phone's last beat came BEFORE the Go live — it never heard it").toBeLessThan(session.created_at.getTime());
   const cadence = pairing!.answered_poll_seconds;
   expect(cadence, "the stored cadence is the one the phone was answered").toBe(answered);
+  // B9 review m-2: ask 10 arms at a beat age of max(RECONNECT_QUIET, cadence + POLL_NEAR) (phone-lost.ts); only when
+  // that is LATER than the warming countdown's own quiet hold does the strip show the timeout first. The rig's fixture
+  // is unscheduled, so its phone is answered the FAR cadence — the premise this case's order rests on.
+  expect(cadence, "premise: the far cadence, so the warming timeout shows before ask 10 arms").toBe(POLL_FAR_SECONDS);
+  expect(Math.max(RECONNECT_QUIET_SECONDS, cadence + POLL_NEAR_SECONDS), "premise: ask 10 arms after the quiet hold").toBeGreaterThan(RECONNECT_QUIET_SECONDS);
   const deadline = pairing!.last_beat_at.getTime() + silentAfterMs(cadence);
 
   const strip = body.getByTestId("stream-phone-strip");
@@ -786,12 +854,21 @@ test("ask 10: the phone dies as Go live is tapped (it never hears go-live, its v
   await expect(strip, "first the earliest end is the warming timeout").toHaveText(enPattern("stream.phone.countdown.warming.no_inbound_timeout", "stream.phone.waitingVideo"), {
     timeout: QUIET_MS + 2 * POLL_WAIT_MS,
   });
+  // The four voices agree (B8 re-review ruling; stream-chain.ts captureLink1 / phoneDot): the timeout's countdown says
+  // nothing of the phone, which still checks in — the node Starting, link 1 waiting's Connecting, the Paired dot lime.
+  const chain = body.getByTestId("stream-chain");
+  const pairedDot = body.getByTestId("stream-code-disclosure").locator("summary [data-tone]");
+  await expect(chain, "the timeout: the node still Starting").toHaveAttribute("data-phone", "starting");
+  await expect(chain, "the timeout: link 1 still Connecting").toHaveAttribute("data-link1", "connecting");
+  await expect(pairedDot, "the timeout: the Paired dot lime").toHaveAttribute("data-tone", "lime");
   await expect(strip, "then the lost phone, once its owed beat is missing").toHaveText(enPattern("stream.phone.countdown.warming.phone_lost", "stream.phone.waitingVideo"), {
     timeout: Math.max(0, deadline - Date.now()) + POLL_WAIT_MS,
   });
   await expect(strip).toHaveAttribute("data-tone", "amber");
-  await expect(body.getByTestId("stream-chain"), "the phone node says the same").toHaveAttribute("data-phone", "notAnswering");
+  await expect(chain, "the phone node says the same").toHaveAttribute("data-phone", "notAnswering");
   await expect(body.locator('[data-node="phone"] [data-mark="bang"]')).toHaveCount(1);
+  await expect(chain, "ask 10: link 1 the amber dashes").toHaveAttribute("data-link1", "problem");
+  await expect(pairedDot, "ask 10: the Paired dot amber").toHaveAttribute("data-tone", "amber");
   await expectNoHorizontalScroll(page);
   await body.screenshot({ path: join(test.info().outputPath(), "ask10-768-countdown.png"), timeout: NAV_MS });
 
@@ -850,6 +927,13 @@ test("W19/W24 @320: live, then the phone's beats stop and its input disconnects 
     timeout: Math.max(0, silentFrom + QUIET_MS - Date.now()) + 2 * POLL_WAIT_MS,
   });
   expect(Date.now() - silentFrom, "not before the quiet hold").toBeGreaterThanOrEqual(QUIET_MS - STREAM_POLL_MS);
+  // The four voices agree under the countdown: the node Reconnecting… with its "!", link 1 the amber dashes, the
+  // strip amber, the Paired dot amber (stream-chain.ts phoneDot: a phone_lost countdown).
+  await expect(chain, "W24: the node still Reconnecting…").toHaveAttribute("data-phone", "reconnecting");
+  await expect(body.locator('[data-node="phone"] [data-mark="bang"]'), "W24: the node's \"!\"").toHaveCount(1);
+  await expect(chain, "W24: link 1 the amber dashes").toHaveAttribute("data-link1", "problem");
+  await expect(strip, "W24: the strip amber").toHaveAttribute("data-tone", "amber");
+  await expect(body.getByTestId("stream-code-disclosure").locator("summary [data-tone]"), "W24: the Paired dot amber").toHaveAttribute("data-tone", "amber");
   await expectNoHorizontalScroll(page);
   await body.screenshot({ path: join(test.info().outputPath(), "w24-320-countdown.png"), timeout: NAV_MS });
 
@@ -869,7 +953,8 @@ test("W19/W24 @320: live, then the phone's beats stop and its input disconnects 
 test("W22: a live phone lost with nobody watching (the organiser has left the page) stays open past its W19 deadline until the cron tick, which ends it phone_lost", async ({
   page,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + 2 * NAV_MS + CYCLE_MS + W19_MS + 6 * POLL_WAIT_MS + 30_000);
+  // Two slot waits: its own key, then every other one for the global tick (m-3).
+  test.setTimeout(2 * SLOT_WAIT_MS + SEED_MS + 2 * NAV_MS + CYCLE_MS + W19_MS + 6 * POLL_WAIT_MS + 30_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRig(page);
   await addTargetApi(page, rig.orgId, "W22 destination");
@@ -890,12 +975,22 @@ test("W22: a live phone lost with nobody watching (the organiser has left the pa
   await new Promise((r) => setTimeout(r, Math.max(0, deadline + END_LATE_MS - Date.now())));
   expect((await sessionRow(session.id)).state, "nobody watching, nothing ticked: still open past its deadline").toBe("live");
 
-  const tick = await page.request.post("/api/cron/stream-tick", { headers: { "x-cron-secret": process.env.CRON_SECRET! } });
-  expect(tick.status(), "the cron tick runs").toBe(200);
-  const answer = (await tick.json()) as { data?: { ended?: number; failed?: number } };
-  expect(answer.data?.ended, "it ended at least this session").toBeGreaterThanOrEqual(1);
-  const ended = await untilDbState(session.id, ["ending", "completed"], POLL_WAIT_MS, "the cron's end lands");
-  expect(ended.end_reason).toBe("phone_lost");
+  // The tick is global (m-3): it runs only once every other slot key is ours, so no other walkthrough has a session open.
+  const exclusive = await everyOtherSlot();
+  try {
+    expect(exclusive.taken, "every other key of the deployment's stream capacity").toBe(STREAM_CAPACITY - 1);
+    const others = await withDb((sql) => sql<{ id: string }[]>`
+      select id from fixture_stream_sessions where org_id <> ${rig.orgId} and state not in ('completed', 'failed')`);
+    expect(others, "the global tick can reach no other test's session").toEqual([]);
+    const tick = await page.request.post("/api/cron/stream-tick", { headers: { "x-cron-secret": process.env.CRON_SECRET! } });
+    expect(tick.status(), "the cron tick runs").toBe(200);
+    const answer = (await tick.json()) as { data?: { ended?: number; failed?: number } };
+    expect(answer.data?.ended, "it ended at least this session").toBeGreaterThanOrEqual(1);
+    const ended = await untilDbState(session.id, ["ending", "completed"], POLL_WAIT_MS, "the cron's end lands");
+    expect(ended.end_reason).toBe("phone_lost");
+  } finally {
+    await exclusive.release();
+  }
 });
 
 // ===========================================================================
