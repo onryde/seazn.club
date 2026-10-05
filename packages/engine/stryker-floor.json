@@ -1,0 +1,4 @@
+{
+  "note": "Per-group Stryker mutation-score floors (W1d D14; rulings 66, 67). The score is Stryker's TOTAL score: (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage), so an uncovered line counts as a survivor; Ignored, CompileError and RuntimeError are outside the denominator, and the mutants recorded in stryker-equivalent.json are taken out of it. A floor is floor(score, 1 dp), set by `pnpm mutation:floor --set-floor` (PR-B, after the first measured run) and the floor never falls: ci.yml's gates job runs `--check-file-against HEAD^1`. Empty until PR-B (W1d Task 20); mutation.yml's floor check prints `no floor yet` while it is empty, and once any floor exists a group without one is a failure.",
+  "groups": {}
+}

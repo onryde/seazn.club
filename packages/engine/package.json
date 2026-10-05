@@ -38,7 +38,9 @@
     "gen:proto": "node --experimental-strip-types scripts/gen-proto.ts",
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit",
     "lint": "eslint",
-    "sim:matrix": "node --experimental-strip-types scripts/sim-replay.ts --matrix"
+    "sim:matrix": "node --experimental-strip-types scripts/sim-replay.ts --matrix",
+    "mutation": "stryker run stryker.config.mjs",
+    "mutation:floor": "node --experimental-strip-types scripts/stryker-floor.ts"
   },
   "peerDependencies": {
     "zod": "^4.4.3"
@@ -51,6 +53,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9",
+    "@stryker-mutator/core": "10.0.0",
+    "@stryker-mutator/vitest-runner": "10.0.0",
     "@types/node": "^26",
     "eslint": "^9",
     "fast-check": "^3",

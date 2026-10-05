@@ -1,0 +1,14 @@
+{
+  "competition": 222,
+  "core": 93,
+  "modules": 219,
+  "draws": 134,
+  "sports-cricket": 83,
+  "sports-cricket-kernel": 300,
+  "sports-football": 227,
+  "sports-period": 263,
+  "sports-setbased": 194,
+  "sports-nested": 152,
+  "sports-other": 225,
+  "probe": 39
+}
