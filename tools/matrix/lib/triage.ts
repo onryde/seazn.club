@@ -68,10 +68,20 @@ const TriageRulesSchema = z.strictObject({ rules: z.array(RuleSchema) }).superRe
 export type TriageRules = z.infer<typeof TriageRulesSchema>;
 export const parseRules = (json: unknown): TriageRules => TriageRulesSchema.parse(json);
 
+const ROUTE_KEY = z.string().regex(/^[A-Z]{2}-(?:[A-Z]+\d+|\*)$/, "an audit id or <PREFIX>-*");
 const GapRoutingSchema = z.strictObject({
   note: z.string().min(1),
   // An exact audit id, or `<PREFIX>-*`; the value is the wave design §8 gives it.
-  routes: z.record(z.string().regex(/^[A-Z]{2}-(?:[A-Z]+\d+|\*)$/, "an audit id or <PREFIX>-*"), WAVE),
+  routes: z.record(ROUTE_KEY, WAVE),
+  // Where each route comes from, so a reviewer checks it against the design instead of trusting it: `D:<line>` is the design
+  // table row (1-based line of the design file) that LISTS the id; `scope:D:<line>:<word>` is the row whose wave scope owns a
+  // gap §8 does not list, by the word of its format or sport that row names (§8: "gaps not listed go to the wave owning their
+  // format/sport"). Optional here; the committed file's test holds every route to one.
+  basis: z.record(ROUTE_KEY, z.string().regex(/^(?:D:\d+|scope:D:\d+:\S.*)$/, "D:<line> or scope:D:<line>:<word>")).optional(),
+}).superRefine((v, ctx) => {
+  for (const k of Object.keys(v.basis ?? {})) {
+    if (!Object.hasOwn(v.routes, k)) ctx.addIssue({ code: "custom", path: ["basis", k], message: `a basis for ${k}, which has no route` });
+  }
 });
 export type GapRouting = z.infer<typeof GapRoutingSchema>;
 export const parseRouting = (json: unknown): GapRouting => GapRoutingSchema.parse(json);

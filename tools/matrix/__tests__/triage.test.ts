@@ -129,6 +129,23 @@ describe("catalogue schemas", () => {
     expect(() => parseRouting({ note: "", routes: {} })).toThrow();
   });
 
+  it("routing: each route may carry its basis — a design line, or the line whose wave scope owns a gap §8 does not list — and a basis for no route is refused (T19)", () => {
+    const base = { note: "t", routes: { "SW-H1": "W3", "FX-G12": "W7" } };
+    expect(parseRouting({ ...base, basis: { "SW-H1": "D:453", "FX-G12": "scope:D:457:americano" } }).basis).toEqual({ "SW-H1": "D:453", "FX-G12": "scope:D:457:americano" });
+    expect(parseRouting(base).basis).toBeUndefined();
+    const bad: [string, Record<string, string>][] = [
+      ["a basis for a gap with no route", { "SW-H2": "D:453" }],
+      ["a bare line number", { "SW-H1": "453" }],
+      ["a design line with no number", { "SW-H1": "D:" }],
+      ["a scope with no word to find on the line", { "FX-G12": "scope:D:457" }],
+      ["a scope with an empty word", { "FX-G12": "scope:D:457:" }],
+      ["a free-text basis", { "SW-H1": "design says so" }],
+    ];
+    let refused = 0;
+    for (const [what, basis] of bad) { expect(() => parseRouting({ ...base, basis }), what).toThrow(); refused++; }
+    expect(refused).toBe(bad.length);
+  });
+
   it("new gaps: ids NEW-W1d-<n>, unique, each with a wave, a title and its evidence", () => {
     const g = { id: "NEW-W1d-1", wave: "W4", title: "t", evidence: "e" };
     expect(() => parseNewGaps({ gaps: [g, g] })).toThrow(/duplicate/);
