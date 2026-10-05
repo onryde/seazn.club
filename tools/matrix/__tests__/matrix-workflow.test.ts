@@ -15,6 +15,7 @@ import { parseResults } from "../lib/results.ts";
 import { runSlice, type PlanCases } from "../run.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import { deps } from "./run-deps.ts";
+import { ID, baseCases, judgeOut, mergedRun } from "./summary-fixtures.ts";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 import { fillRunId, jobBlock, jobsOf, runIdTemplate, stepHeads, stepOf } from "./workflow-text.ts";
 
@@ -80,10 +81,11 @@ describe("what counts as the weekly run (D1, ruling 60; T8->T9)", () => {
     expect((WF.match(/'smoke'/g) ?? []).length).toBe(1);
   });
 
-  it("the workflow goes RED on a non-green run, so 'the previous successful run' is a harness-green one: the merge script exits non-zero on any merge, judge or summary failure (run below)", () => {
+  it("the workflow goes RED on a run that is not COMPLETE, so 'the previous successful run' is a complete one: the merge script exits non-zero on any merge, judge or summary failure, and its summary step asks for --require-complete (run below)", () => {
     const script = stepOf(JOBS.merge, "Merge each layer and judge its faults").script!;
     expect(script).toMatch(/exit "\$status"\s*$/);
     expect(script).toMatch(/set \+e/);
+    expect(script).toContain("matrix:summary --merged merged \"${judges[@]}\" --previous-run auto --require-complete --out merged/SUMMARY.md");
     expect(JOBS.merge).not.toMatch(/continue-on-error/);
   });
 });
@@ -291,8 +293,8 @@ cmd="$1"; shift
 if [ -n "$FAIL_MATCH" ]; then case "$cmd $*" in *"$FAIL_MATCH"*) echo "stand-in: $cmd failed" >&2; exit "$FAIL_CODE" ;; esac; fi
 case "$cmd" in
 ${realCases}
-  matrix:merge) out=""; prev=""; for a in "$@"; do if [ "$prev" = "--out" ]; then out="$a"; fi; prev="$a"; done; mkdir -p "$out"; echo '{}' > "$out/results.json" ;;
-  matrix:judge) jo=""; prev=""; for a in "$@"; do if [ "$prev" = "--json-out" ]; then jo="$a"; fi; prev="$a"; done; if [ -n "$jo" ]; then echo '{}' > "$jo"; fi; echo "judge stand-in: clean" ;;
+  matrix:merge) out=""; prev=""; for a in "$@"; do if [ "$prev" = "--out" ]; then out="$a"; fi; prev="$a"; done; mkdir -p "$out"; if [ -n "$MERGE_FIXTURES" ]; then cp "$MERGE_FIXTURES/$(basename "$out").json" "$out/results.json"; else echo '{}' > "$out/results.json"; fi ;;
+  matrix:judge) jo=""; prev=""; for a in "$@"; do if [ "$prev" = "--json-out" ]; then jo="$a"; fi; prev="$a"; done; layer="$(basename "$(dirname "$2")")"; if [ -n "$jo" ]; then if [ -n "$JUDGE_FIXTURES" ]; then if [ -f "$JUDGE_FIXTURES/$layer.json" ]; then cp "$JUDGE_FIXTURES/$layer.json" "$jo"; fi; else echo '{}' > "$jo"; fi; fi; echo "judge stand-in: clean" ;;
   matrix:summary) out=""; prev=""; for a in "$@"; do if [ "$prev" = "--out" ]; then out="$a"; fi; prev="$a"; done; mkdir -p "$(dirname "$out")"; echo "# summary stand-in" > "$out" ;;
 esac
 `, { mode: 0o755 });
@@ -431,7 +433,7 @@ describe("the merge job (D5, D20; ruling 65; PF-1; T8->T9 a-c)", () => {
     for (const l of LAYERS) expect(existsSync(join(r.cwd, `merged/${l}/faults.txt`)), `${l} faults.txt`).toBe(true);
     // PF-1 / T8->T9 (b): one --judge per layer, naming the file the judge wrote, in the same order.
     const summary = calls(r, "matrix:summary");
-    expect(summary).toEqual(["matrix:summary --merged merged --judge merged/L1/judge.json --judge merged/L2/judge.json --judge merged/L3/judge.json --previous-run auto --out merged/SUMMARY.md"]);
+    expect(summary).toEqual(["matrix:summary --merged merged --judge merged/L1/judge.json --judge merged/L2/judge.json --judge merged/L3/judge.json --previous-run auto --require-complete --out merged/SUMMARY.md"]);
     expect(r.summary).toContain("# summary stand-in");
   });
 
@@ -519,6 +521,69 @@ describe("the merge job (D5, D20; ruling 65; PF-1; T8->T9 a-c)", () => {
     }
     expect(merged).toBe(3);
   }, spawnBudget(3));
+});
+
+// T9-HG: one workflow run never says "Harness-green yes/no"; its colour follows the page's own per-run verdict. The merge step is
+// run with the REAL matrix:summary (merge and judge are stand-ins that drop prebuilt, valid files: the summary's own tests own
+// what a verdict is), so what is proven here is the seam — the argv the YAML builds, read by the real CLI, deciding the exit.
+describe("the merge job's colour follows the summary's per-run verdict (T9-HG)", () => {
+  const script = stepOf(JOBS.merge!, "Merge each layer and judge its faults").script!;
+  const LAYERS3 = ["L1", "L2", "L3"] as const;
+  const HARNESS_GREEN_LINE = "Harness-green: needs 3 runs — `matrix:judge across` (PR-B Task 17)";
+
+  /** The files download-artifact leaves (two shards per layer), the merged run each layer's merge would write, and the faults
+   *  verdict each layer's judge would write — valid files from the summary's own fixtures. `judgeRuns` names the run a layer's
+   *  verdict is for (default: this run's merged id); `skipJudge` is a layer whose judge writes nothing (as a crashed one does). */
+  const run = (o: { judgeRuns?: Partial<Record<(typeof LAYERS3)[number], string>>; skipJudge?: (typeof LAYERS3)[number] } = {}): StepRun => {
+    const merge = fresh("merge-fx");
+    const judge = fresh("judge-fx");
+    for (const l of LAYERS3) {
+      writeFileSync(join(merge, `${l}.json`), JSON.stringify(mergedRun(l, ID(l), baseCases(l))));
+      if (l !== o.skipJudge) writeFileSync(join(judge, `${l}.json`), JSON.stringify(judgeOut({ mode: "faults", layer: l, runs: [o.judgeRuns?.[l] ?? ID(l)] })));
+    }
+    return runStep(script, {
+      real: ["matrix:summary"],
+      env: { GITHUB_RUN_ID: "9", GITHUB_RUN_ATTEMPT: "1", SCOPE: "full", GH_TOKEN: "stand-in", MERGE_FIXTURES: merge, JUDGE_FIXTURES: judge },
+      setup: (cwd) => {
+        for (const l of LAYERS3) for (let k = 1; k <= 2; k++) {
+          const d = join(cwd, "shards", `shard-${l}-${k}`, `ci-9-1-${l.toLowerCase()}-s${k}`);
+          mkdirSync(d, { recursive: true });
+          writeFileSync(join(d, "results.json"), "{}");
+          writeFileSync(join(d, "exit.txt"), "0\n");
+        }
+      },
+    });
+  };
+  const judgeCalls = (r: StepRun): number => r.record.filter((l) => l.replace(/^--silent /, "").startsWith("matrix:judge ")).length;
+
+  it("the positive: every layer merged and judged clean -> the page says Run complete: yes, the job exits 0, and the page lands in the job summary", () => {
+    const r = run();
+    expect(r.status, `${r.stderr}\n${r.stdout}`).toBe(0);
+    expect(judgeCalls(r)).toBe(3);   // anti-vacuity: the judge step really ran for each layer
+    expect(r.summary).toContain("**Run complete: yes**");
+    expect(r.summary).toContain(HARNESS_GREEN_LINE);
+    expect(r.summary).not.toMatch(/Harness-green: (yes|no|not judged)/i);
+    expect(readFileSync(join(r.cwd, "merged/SUMMARY.md"), "utf8")).toBe(r.summary);
+  }, spawnBudget(2));
+
+  it("a run that is NOT complete is RED even when every step before the summary exited 0: the summary's own exit carries the verdict, and the page says why", () => {
+    let checked = 0;
+    const cases: [string, Parameters<typeof run>[0], RegExp][] = [
+      ["a stale faults verdict for L2 (another run's id)", { judgeRuns: { L2: "ci-1-1-l2" } }, /L2: no `judge faults` verdict is bound to run ci-9-1-l2/],
+      ["a judge that wrote no file for L3 (exit 0, nothing written)", { skipJudge: "L3" }, /judge refused: merged\/L3\/judge\.json/],
+    ];
+    for (const [what, over, why] of cases) {
+      const r = run(over);
+      expect(judgeCalls(r), `${what}: every judge call exited 0, so only the summary can have failed the job`).toBe(3);
+      expect({ what, status: r.status }, `${r.stderr}\n${r.stdout}`).toEqual({ what, status: 1 });
+      expect(r.stdout, what).toContain("summary EXIT=1");
+      expect(r.summary, what).toContain("**Run complete: no**");
+      expect(r.summary, what).toMatch(why);
+      expect(r.summary, what).toContain(HARNESS_GREEN_LINE);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  }, spawnBudget(4));
 });
 
 describe("ci.yml's per-PR sample (R27, D13)", () => {

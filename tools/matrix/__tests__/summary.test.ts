@@ -1,6 +1,8 @@
-// W1d Task 8 (D1a, D5, D20; PF-1, ruling 61): SUMMARY.md. Every expected number below is counted by hand from the fixture
-// (the comment beside it says how), never derived from summary(). The verdict tests all start from ONE all-green fixture
-// and change ONE thing, so each "no" is witnessed against the "yes" it departs from (a negative needs its positive pair).
+// W1d Task 8 (D1a, D5, D20; PF-1, ruling 61) and T9-HG: SUMMARY.md. Every expected number below is counted by hand from the
+// fixture (the comment beside it says how), never derived from summary(). The verdict tests all start from ONE complete
+// fixture (three merged layers, a `judge faults` verdict bound to each) and change ONE thing, so each "Run complete: no" is
+// witnessed against the "yes" it departs from (a negative needs its positive pair). One workflow run never says
+// "Harness-green: yes" or "no": ruling 61's three-run claim is PR-B's `matrix:judge across`, over three workflow runs.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,13 +11,14 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhRunner } from "../ci/gh.ts";
 import { GREEN_RUNS, main, percentile, summary, type JudgeInput, type Previous, type PreviousInput, type SummaryDeps } from "../ci/summary.ts";
-import { parseJudgeOut, type JudgeOut } from "../lib/judge.ts";
+import type { JudgeOut } from "../lib/judge.ts";
 import { findSecrets } from "../lib/redact.ts";
-import { LAYERS, parseResults, type CaseResult, type Layer, type RunResults } from "../lib/results.ts";
+import { LAYERS, type CaseResult, type Layer, type RunResults } from "../lib/results.ts";
 import { main as judgeMain } from "../judge.ts";
 import { runSlice } from "../run.ts";
 import { deps as runDeps, fakeBrowserRun } from "./run-deps.ts";
 import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
+import { ID, baseCases, judgeOut, kase, mergedRun, planned, threeOf } from "./summary-fixtures.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
@@ -26,41 +29,30 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 // --- fixtures --------------------------------------------------------------------------------------------------
 
-type CaseSpec = Partial<Omit<CaseResult, "caseId">> & { caseId: string };
-/** One case. L1 and L2 are browser runs at 1280, L3 is http (D9). */
-const kase = (layer: Layer, o: CaseSpec): CaseResult => ({
-  row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, state: "works", reason: "", checks: [], counts: { calls: 0, fixtures: 0, events: 0 },
-  durationMs: 1000, notes: [], layer, driver: layer === "L3" ? "http" : "browser", width: layer === "L3" ? null : 1280, ...o,
-});
-const planned = (layer: Layer, caseId: string, scenario: string, state: "not_run" | "no_path" = "not_run"): CaseResult =>
-  kase(layer, { caseId, scenario, state, planned: true, durationMs: 0, reason: state === "not_run" ? "no harness script for this atom" : "no path" });
-/** A valid merged v3 run (parseResults vouches for the fixture). */
-const mergedRun = (layer: Layer, runId: string, cases: CaseResult[], extra: Record<string, unknown> = {}): RunResults =>
-  parseResults({ schemaVersion: 3, runId, harnessCommit: "abc1234", startedAt: "2026-10-04T00:00:00Z", finishedAt: "2026-10-04T01:00:00Z", grid: { rows: ["league"], sports: ["generic"] }, layer, driver: layer === "L3" ? "http" : "browser", plan: `--layer ${layer}`, scope: `${layer} (grid)`, shards: 2, cases, ...extra }) as RunResults;
-const judgeOut = (o: Partial<JudgeOut>): JudgeOut => parseJudgeOut({ version: 1, mode: "across", exit: 0, layer: "L1", runs: ["ci-7-1-l1", "ci-8-1-l1", "ci-9-1-l1"], plannedNotRun: "allow", compared: 10, faults: [], differing: [], missing: [], regressed: [], absent: [], ...o });
-const ID = (l: Layer): string => `ci-9-1-${l.toLowerCase()}`;
-const threeOf = (l: Layer): string[] => [`ci-7-1-${l.toLowerCase()}`, `ci-8-1-${l.toLowerCase()}`, ID(l)];
-
-const baseCases = (l: Layer): CaseResult[] => [kase(l, { caseId: `c1-${l}` }), kase(l, { caseId: `c2-${l}`, durationMs: 2000 }), planned(l, `p1-${l}`, "A1")];
 const allRuns = (): Record<Layer, RunResults | null> => ({ L1: mergedRun("L1", ID("L1"), baseCases("L1")), L2: mergedRun("L2", ID("L2"), baseCases("L2")), L3: mergedRun("L3", ID("L3"), baseCases("L3")) });
-const greenJudges = (): JudgeInput[] => LAYERS.map((l) => ({ path: `merged/${l}/across.json`, out: judgeOut({ layer: l, runs: threeOf(l) }) }));
-const VERDICT = /\*\*Harness-green: [^*]+\*\*/;
+/** The per-run claim's inputs: a `judge faults` verdict (exit 0) bound to each layer's merged run, as the merge step writes them. */
+const faultsJudges = (): JudgeInput[] => LAYERS.map((l) => ({ path: `merged/${l}/judge.json`, out: judgeOut({ mode: "faults", layer: l, runs: [ID(l)] }) }));
+/** A `judge across` verdict over exactly three runs, the last of which is this run: PR-B Task 17's input, never a workflow run's own. */
+const acrossJudges = (): JudgeInput[] => LAYERS.map((l) => ({ path: `merged/${l}/across.json`, out: judgeOut({ layer: l, runs: threeOf(l) }) }));
+const VERDICT = /\*\*Run complete: [^*]+\*\*/;
 const verdictOf = (md: string): string => VERDICT.exec(md)?.[0] ?? "(no verdict line)";
+/** T9-HG's fixed line, as the controller's ruling spells it (not read back from summary.ts). */
+const HARNESS_GREEN_LINE = "Harness-green: needs 3 runs — `matrix:judge across` (PR-B Task 17)";
 
 // --- the page --------------------------------------------------------------------------------------------------
 
 describe("summary: the previous run line (D1a) — the empty case first", () => {
-  it("no previous run -> `Previous harness-green run: none yet`, and the diff section says there is nothing to diff", () => {
+  it("no previous run -> `Previous complete run: none yet`, and the diff section says there is nothing to diff", () => {
     const md = summary(allRuns(), [], null, NOW);
-    expect(md).toContain("Previous harness-green run: none yet");
-    expect(md).toContain("No weekly diff: there is no previous harness-green run yet.");
-    expect(md.split("\n")[2]).toBe("Previous harness-green run: none yet"); // it OPENS the page, under the title
+    expect(md).toContain("Previous complete run: none yet");
+    expect(md).toContain("No weekly diff: there is no previous complete run yet.");
+    expect(md.split("\n")[2]).toBe("Previous complete run: none yet"); // it OPENS the page, under the title
   });
 
   it("a previous run is named by date, days ago and id: 2026-09-27 -> 7 days before 2026-10-04 12:00", () => {
     const prev: Previous = { runId: 77, date: "2026-09-27T02:17:00Z", layers: {} };
     const md = summary(allRuns(), [], prev, NOW);
-    expect(md).toContain("Previous harness-green run: 2026-09-27 (7 days ago) — run 77");
+    expect(md).toContain("Previous complete run: 2026-09-27 (7 days ago) — run 77");
     // The day count follows the clock it is given, not a constant.
     expect(summary(allRuns(), [], prev, new Date("2026-10-20T12:00:00Z"))).toContain("(23 days ago)");
   });
@@ -186,12 +178,12 @@ describe("summary: timings — p50/p90/max of the DRIVEN cases only", () => {
 });
 
 describe("summary: a missing layer is a line, never a silent omission", () => {
-  it("a layer with no merged run has its own row of dashes, a line saying why, and the verdict is not green", () => {
+  it("a layer with no merged run has its own row of dashes, a line saying why, and the run is not complete", () => {
     const runs = { ...allRuns(), L2: null };
-    const md = summary(runs, greenJudges(), null, NOW);
+    const md = summary(runs, faultsJudges(), null, NOW);
     expect(md).toContain("| L2 | — | — | — | — | — |");
     expect(md).toContain("- L2: no merged run — its merge was refused, no shard ran");
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
+    expect(verdictOf(md)).toBe("**Run complete: no**");
     expect(md).toContain("L2: no merged run to judge");
     // The other two layers are still reported.
     expect(md).toContain("| L1 | L1 (grid) | ci-9-1-l1 |");
@@ -279,102 +271,138 @@ describe("summary: redaction — the page passes findSecrets with zero hits", ()
   });
 });
 
-describe("summary: the verdict — fails safe (PF-1, ruling 61)", () => {
-  it("the positive: three layers, each with a `judge across` verdict over exactly 3 runs bound to its merged run -> harness-green yes", () => {
+describe("summary: the per-run verdict — fails safe (PF-1, T9-HG)", () => {
+  it("the positive: three merged layers, each with a `judge faults` verdict (exit 0) bound to its run -> Run complete: yes", () => {
     expect(GREEN_RUNS).toBe(3);
-    const md = summary(allRuns(), greenJudges(), null, NOW);
-    expect(verdictOf(md)).toBe("**Harness-green: yes**");
-    expect(md).toContain("identical across exactly 3 runs, with no harness fault (ruling 61)");
-    expect(md).toContain("- `merged/L2/across.json`: L2 across over 3 runs (ci-7-1-l2, ci-8-1-l2, ci-9-1-l2) — exit 0, 10 cases compared, 0 faults, 0 differing, 0 regressed");
+    const md = summary(allRuns(), faultsJudges(), null, NOW);
+    expect(verdictOf(md)).toBe("**Run complete: yes**");
+    expect(md).toContain("a `judge faults` verdict (exit 0) is bound to each layer's merged run");
+    expect(md).toContain("- `merged/L2/judge.json`: L2 faults over 1 run (ci-9-1-l2) — exit 0, 10 cases compared, 0 faults, 0 differing, 0 regressed");
   });
 
-  it("no judge at all is `not judged`, never yes — and it says what would make it green", () => {
+  it("ONE workflow run never says Harness-green yes, no or not judged: the line is the same fixed text whatever the page's verdict (every judge shape, three-run across verdicts included)", () => {
+    const scenarios: [string, Record<Layer, RunResults | null>, JudgeInput[]][] = [
+      ["complete", allRuns(), faultsJudges()],
+      ["no judge at all", allRuns(), []],
+      ["a layer missing", { ...allRuns(), L2: null }, faultsJudges()],
+      ["a refused judge", allRuns(), [...faultsJudges().slice(0, 2), { path: "merged/L3/judge.json", refused: "the file is missing" }]],
+      ["complete AND three clean across verdicts bound to this run", allRuns(), [...faultsJudges(), ...acrossJudges()]],
+      ["three clean across verdicts only", allRuns(), acrossJudges()],
+    ];
+    let checked = 0;
+    for (const [what, runs, judges] of scenarios) {
+      const md = summary(runs, judges, null, NOW);
+      expect(md.split("\n").filter((l) => l.includes("Harness-green")), what).toEqual([HARNESS_GREEN_LINE]);
+      expect(md, what).not.toMatch(/Harness-green: (yes|no|not judged)/i);
+      expect(md, what).toMatch(/\*\*Run complete: (yes|no)\*\*/);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    // The positive and negative pair for "Run complete" among them: the first scenario is yes, the second is no.
+    expect(verdictOf(summary(scenarios[0]![1], scenarios[0]![2], null, NOW))).toBe("**Run complete: yes**");
+    expect(verdictOf(summary(scenarios[1]![1], scenarios[1]![2], null, NOW))).toBe("**Run complete: no**");
+  });
+
+  it("no judge at all is Run complete: no, never yes — and it names the verdict each layer lacks", () => {
     const md = summary(allRuns(), [], null, NOW);
-    expect(verdictOf(md)).toBe("**Harness-green: not judged**");
-    expect(md).toContain("judge across");
+    expect(verdictOf(md)).toBe("**Run complete: no**");
+    for (const l of LAYERS) expect(md).toContain(`${l}: no \`judge faults\` verdict is bound to run ${ID(l)}`);
     expect(md).toContain("No `--judge` file was given.");
   });
 
-  it("a MISSING judge file is `judge refused`, and never green — even with the other layers judged clean", () => {
-    const judges: JudgeInput[] = [...greenJudges().slice(0, 2), { path: "merged/L3/across.json", refused: "the file is missing — a refused judge writes none, so this run has no verdict from it" }];
+  it("a MISSING judge file is `judge refused`, and the run is not complete — even with the other layers judged clean", () => {
+    const judges: JudgeInput[] = [...faultsJudges().slice(0, 2), { path: "merged/L3/judge.json", refused: "the file is missing — a refused judge writes none, so this run has no verdict from it" }];
     const md = summary(allRuns(), judges, null, NOW);
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
-    expect(md).toContain("judge refused: merged/L3/across.json");
-    expect(md).toContain("- `merged/L3/across.json`: judge refused");
+    expect(verdictOf(md)).toBe("**Run complete: no**");
+    expect(md).toContain("judge refused: merged/L3/judge.json");
+    expect(md).toContain("- `merged/L3/judge.json`: judge refused");
     // L3 has no verdict bound either, so there are two reasons, not one.
-    expect(md).toContain("L3: no `judge across` verdict is bound to run ci-9-1-l3");
+    expect(md).toContain("L3: no `judge faults` verdict is bound to run ci-9-1-l3");
   });
 
-  it("a STALE file — a verdict of earlier runs, whose ids do not name this merged run — is not this run's verdict", () => {
-    const judges = greenJudges();
-    judges[0] = { path: "merged/L1/across.json", out: judgeOut({ layer: "L1", runs: ["ci-1-1-l1", "ci-2-1-l1", "ci-3-1-l1"] }) };
+  it("a STALE file — a verdict of another run, whose id does not name this merged run — is not this run's verdict", () => {
+    const judges = faultsJudges();
+    judges[0] = { path: "merged/L1/judge.json", out: judgeOut({ mode: "faults", layer: "L1", runs: ["ci-1-1-l1"] }) };
     const md = summary(allRuns(), judges, null, NOW);
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
+    expect(verdictOf(md)).toBe("**Run complete: no**");
     expect(md).toContain("a stale verdict, ignored");
-    expect(md).toContain("L1: no `judge across` verdict is bound to run ci-9-1-l1 (a judge file for this layer judged other runs)");
+    expect(md).toContain("L1: no `judge faults` verdict is bound to run ci-9-1-l1 (a judge file for this layer judged other runs)");
   });
 
   it("a file for the wrong LAYER does not bind: L1's merged run has no verdict if the only file names L2", () => {
-    const judges = greenJudges();
-    judges[0] = { path: "merged/L1/across.json", out: judgeOut({ layer: "L2", runs: threeOf("L1") }) };
+    const judges = faultsJudges();
+    judges[0] = { path: "merged/L1/judge.json", out: judgeOut({ mode: "faults", layer: "L2", runs: [ID("L1")] }) };
     const md = summary(allRuns(), judges, null, NOW);
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
-    expect(md).toContain("L1: no `judge across` verdict is bound to run ci-9-1-l1");
+    expect(verdictOf(md)).toBe("**Run complete: no**");
+    expect(md).toContain("L1: no `judge faults` verdict is bound to run ci-9-1-l1");
   });
 
-  it("exactly 3 runs: two are not enough, and four are not either (ruling 61 says three)", () => {
-    for (const runs of [2, 4, 5]) {
-      const judges = greenJudges();
-      const ids = Array.from({ length: runs }, (_, i) => (i === runs - 1 ? ID("L2") : `ci-${i}-1-l2`));
-      judges[1] = { path: "merged/L2/across.json", out: judgeOut({ layer: "L2", runs: ids }) };
-      const md = summary(allRuns(), judges, null, NOW);
-      expect(verdictOf(md), `${runs} runs`).toBe("**Harness-green: no**");
-      expect(md, `${runs} runs`).toContain(`L2: judged ${runs} runs; harness-green needs exactly 3 (ruling 61)`);
-    }
-  });
-
-  it("an across verdict with a difference or a fault is not green, and says how many", () => {
-    const judges = greenJudges();
-    judges[2] = { path: "merged/L3/across.json", out: judgeOut({ layer: "L3", runs: threeOf("L3"), exit: 1, differing: [{ caseId: "d1", states: ["works", "red"] }], faults: [{ run: ID("L3"), caseId: "f1", kind: "crash", reason: "error: crashed — x" }, { run: ID("L3"), caseId: "f2", kind: "vacuous", reason: "no checks ran (vacuous)" }] }) };
+  it("a faults verdict that found faults is not complete, and says how many", () => {
+    const judges = faultsJudges();
+    judges[2] = { path: "merged/L3/judge.json", out: judgeOut({ mode: "faults", layer: "L3", runs: [ID("L3")], exit: 1, faults: [{ run: ID("L3"), caseId: "f1", kind: "crash", reason: "error: crashed — x" }, { run: ID("L3"), caseId: "f2", kind: "vacuous", reason: "no checks ran (vacuous)" }] }) };
     const md = summary(allRuns(), judges, null, NOW);
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
-    expect(md).toContain("L3: 1 differing, 2 harness faults across the runs");
+    expect(verdictOf(md)).toBe("**Run complete: no**");
+    expect(md).toContain("L3: 2 harness faults in this run");
   });
 
-  it("a `faults` verdict (one run) or a `regression` verdict is not the ruling-61 claim: all-faults judges leave every layer unjudged", () => {
-    const faultsOnly: JudgeInput[] = LAYERS.map((l) => ({ path: `merged/${l}/faults.json`, out: judgeOut({ mode: "faults", layer: l, runs: [ID(l)] }) }));
-    const md = summary(allRuns(), faultsOnly, null, NOW);
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
-    for (const l of LAYERS) expect(md).toContain(`${l}: no \`judge across\` verdict is bound to run ${ID(l)}`);
-    // …and the clean faults verdicts are still shown as what they are.
-    expect(md).toContain("L1 faults over 1 run (ci-9-1-l1) — exit 0");
+  it("an `across` or a `regression` verdict is not the per-run claim: with only those, every layer lacks its faults verdict and the run is not complete", () => {
+    const md = summary(allRuns(), acrossJudges(), null, NOW);
+    expect(verdictOf(md)).toBe("**Run complete: no**");
+    for (const l of LAYERS) expect(md).toContain(`${l}: no \`judge faults\` verdict is bound to run ${ID(l)}`);
+    // …and the clean across verdicts are still shown as what they are.
+    expect(md).toContain("L1 across over 3 runs (ci-7-1-l1, ci-8-1-l1, ci-9-1-l1) — exit 0");
     const regression: JudgeInput[] = LAYERS.map((l) => ({ path: `r/${l}.json`, out: judgeOut({ mode: "regression", layer: l, runs: [ID(l)], plannedNotRun: null }) }));
-    expect(verdictOf(summary(allRuns(), regression, null, NOW))).toBe("**Harness-green: no**");
+    expect(verdictOf(summary(allRuns(), regression, null, NOW))).toBe("**Run complete: no**");
   });
 
-  it("a faults verdict that found faults blocks green even beside a clean across verdict", () => {
-    const judges = [...greenJudges(), { path: "merged/L1/faults.json", out: judgeOut({ mode: "faults", layer: "L1", runs: [ID("L1")], exit: 1, faults: [{ run: ID("L1"), caseId: "f", kind: "crash", reason: "error: crashed — x" }] }) } as JudgeInput];
+  it("two faults verdicts for one layer, one clean and one not: not complete (every bound faults verdict must hold)", () => {
+    const judges = [...faultsJudges(), { path: "merged/L2/judge-2.json", out: judgeOut({ mode: "faults", layer: "L2", runs: [ID("L2")], exit: 1, faults: [{ run: ID("L2"), caseId: "d", kind: "crash", reason: "error: crashed — x" }] }) } as JudgeInput];
     const md = summary(allRuns(), judges, null, NOW);
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
-    expect(md).toContain("L1: 1 harness fault in this run");
-  });
-
-  it("two across verdicts for one layer, one clean and one not: not green (every bound verdict must hold)", () => {
-    const judges = [...greenJudges(), { path: "merged/L2/across-2.json", out: judgeOut({ layer: "L2", runs: threeOf("L2"), exit: 1, differing: [{ caseId: "d", states: ["works", "red"] }] }) } as JudgeInput];
-    expect(verdictOf(summary(allRuns(), judges, null, NOW))).toBe("**Harness-green: no**");
+    expect(verdictOf(md)).toBe("**Run complete: no**");
+    expect(md).toContain("L2: 1 harness fault in this run");
   });
 
   it("a clean judge cannot paper over faults the merged results themselves hold", () => {
     const runs = { ...allRuns(), L1: mergedRun("L1", ID("L1"), [...baseCases("L1"), kase("L1", { caseId: "boom", state: "red", reason: "error: crashed — x" })]) };
-    const md = summary(runs, greenJudges(), null, NOW);
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
-    expect(md).toContain("L1: this run's merged results hold 1 harness fault that no judge verdict shows");
+    const md = summary(runs, faultsJudges(), null, NOW);
+    expect(verdictOf(md)).toBe("**Run complete: no**");
+    expect(md).toContain("L1: this run's merged results hold 1 harness fault");
+  });
+
+  it("a layer with no merged run is not complete, however clean the other layers are", () => {
+    const md = summary({ ...allRuns(), L3: null }, faultsJudges(), null, NOW);
+    expect(verdictOf(md)).toBe("**Run complete: no**");
+    expect(md).toContain("L3: no merged run to judge");
+  });
+
+  it("the ruling-61 check on an `across` verdict is kept as T8 wrote it, but it is a NOTE: it never moves Run complete either way", () => {
+    // The positive: complete, with a faults verdict per layer. Each variation below adds an across verdict and changes nothing else.
+    expect(verdictOf(summary(allRuns(), faultsJudges(), null, NOW))).toBe("**Run complete: yes**");
+    let checked = 0;
+    for (const runs of [2, 4, 5]) {
+      const judges = faultsJudges();
+      const ids = Array.from({ length: runs }, (_, i) => (i === runs - 1 ? ID("L2") : `ci-${i}-1-l2`));
+      judges.push({ path: "merged/L2/across.json", out: judgeOut({ layer: "L2", runs: ids }) });
+      const md = summary(allRuns(), judges, null, NOW);
+      expect(verdictOf(md), `${runs} runs`).toBe("**Run complete: yes**");
+      expect(md, `${runs} runs`).toContain(`L2: judged ${runs} runs; harness-green needs exactly 3 (ruling 61)`);
+      checked++;
+    }
+    const exactly = faultsJudges();
+    exactly.push({ path: "merged/L2/across.json", out: judgeOut({ layer: "L2", runs: threeOf("L2") }) });
+    expect(summary(allRuns(), exactly, null, NOW)).not.toContain("harness-green needs exactly");
+    const differing = faultsJudges();
+    differing.push({ path: "merged/L3/across.json", out: judgeOut({ layer: "L3", runs: threeOf("L3"), exit: 1, differing: [{ caseId: "d1", states: ["works", "red"] }], faults: [{ run: ID("L3"), caseId: "f1", kind: "crash", reason: "error: crashed — x" }, { run: ID("L3"), caseId: "f2", kind: "vacuous", reason: "no checks ran (vacuous)" }] }) });
+    const md = summary(allRuns(), differing, null, NOW);
+    expect(verdictOf(md)).toBe("**Run complete: yes**");
+    expect(md).toContain("L3: 1 differing, 2 harness faults across the runs");
+    expect(checked).toBe(3);
   });
 
   it("the judge file of a regression of a v2 run names no layer, and binds to nothing", () => {
-    const md = summary(allRuns(), [...greenJudges(), { path: "r/none.json", out: judgeOut({ mode: "regression", layer: null, runs: ["old"], plannedNotRun: null }) }], null, NOW);
+    const md = summary(allRuns(), [...faultsJudges(), { path: "r/none.json", out: judgeOut({ mode: "regression", layer: null, runs: ["old"], plannedNotRun: null }) }], null, NOW);
     expect(md).toContain("`r/none.json`: regression names no layer; it binds to none of this run's layers.");
-    expect(verdictOf(md)).toBe("**Harness-green: yes**"); // it is simply not one of the verdicts
+    expect(verdictOf(md)).toBe("**Run complete: yes**"); // it is simply not one of the verdicts
   });
 });
 
@@ -427,15 +455,15 @@ describe("main (the CLI)", () => {
   const noGh: GhRunner = () => { throw new Error("gh must not be called"); };
   const runs = (): Partial<Record<Layer, RunResults>> => ({ L1: mergedRun("L1", ID("L1"), baseCases("L1")), L2: mergedRun("L2", ID("L2"), baseCases("L2")), L3: mergedRun("L3", ID("L3"), baseCases("L3")) });
 
-  it("reads each layer's results.json and the judge files, writes the page, exit 0 — a green verdict end to end", () => {
+  it("reads each layer's results.json and the judge files, writes the page, exit 0 — a complete run end to end", () => {
     const dir = fresh("m"); writeMerged(dir, runs());
-    const judgeArgs = LAYERS.flatMap((l) => { const f = join(dir, `${l}-across.json`); writeFileSync(f, JSON.stringify(judgeOut({ layer: l, runs: threeOf(l) }))); return ["--judge", f]; });
+    const judgeArgs = LAYERS.flatMap((l) => { const f = join(dir, `${l}-faults.json`); writeFileSync(f, JSON.stringify(judgeOut({ mode: "faults", layer: l, runs: [ID(l)] }))); return ["--judge", f]; });
     const out = join(dir, "SUMMARY.md");
     expect(main(["--merged", dir, ...judgeArgs, "--previous-run", "none", "--out", out], deps(noGh))).toBe(0);
     const md = written(out);
-    expect(verdictOf(md)).toBe("**Harness-green: yes**");
+    expect(verdictOf(md)).toBe("**Run complete: yes**");
     expect(md).toContain("| L1 | L1 (grid) | ci-9-1-l1 | 2 | 3 | 2 |");
-    expect(md).toContain("Previous harness-green run: none yet");
+    expect(md).toContain("Previous complete run: none yet");
     expect(io.out).toBe(`summary: wrote ${out} (3 of 3 layers)\n`);
   });
 
@@ -455,50 +483,53 @@ describe("main (the CLI)", () => {
     expect(md).toContain(`\`${judgeFile}\`: L1 faults over 1 run (ci-9-1-l1) — exit ${code}`);
     expect(md).not.toContain("judge refused");
     expect(md).not.toContain("a stale verdict");
+    // The real producer's file BINDS to the real run: L1 has its faults verdict (the run is incomplete only for the layers not given).
+    expect(md).not.toContain("L1: no `judge faults` verdict is bound");
+    expect(md).toContain("L2: no merged run to judge");
     // The judge's own count of this run's faults is the summary's own (one authority, two readers).
     const judged = JSON.parse(readFileSync(judgeFile, "utf8")) as JudgeOut;
     expect(md).toContain(`Harness faults in this run: ${judged.faults.length === 0 ? "none (1 of 3 layers present)" : `${judged.faults.length} (L1 ${judged.faults.length})`}.`);
   }, 60_000);
 
-  it("through main(): a STALE verdict file (other runs' ids) and a 2-run or 4-run one are each NOT green — and the right three-run files are (the positive pair)", () => {
+  it("through main(): a STALE faults file (another run's id) is NOT complete — and the right files are (the positive pair); an across file of 2 or 4 runs is a note, never a verdict", () => {
     const dir = fresh("m"); writeMerged(dir, runs());
     let n = 0;
-    const file = (l: Layer, runIds: string[]): string => { const f = join(dir, `v${n++}-${l}.json`); writeFileSync(f, JSON.stringify(judgeOut({ layer: l, runs: runIds }))); return f; };
+    const file = (l: Layer, mode: "faults" | "across", runIds: string[]): string => { const f = join(dir, `v${n++}-${l}.json`); writeFileSync(f, JSON.stringify(judgeOut({ mode, layer: l, runs: runIds }))); return f; };
     const pageFor = (judges: string[]): string => {
       const out = join(dir, `S${n++}.md`);
       expect(main(["--merged", dir, ...judges.flatMap((j) => ["--judge", j]), "--out", out], deps(noGh))).toBe(0);
       return written(out);
     };
-    const good = (l: Layer): string => file(l, threeOf(l));
-    // The positive pair: with all three right, the same command line is green.
-    expect(verdictOf(pageFor([good("L1"), good("L2"), good("L3")]))).toBe("**Harness-green: yes**");
+    const good = (l: Layer): string => file(l, "faults", [ID(l)]);
+    // The positive pair: with all three right, the same command line is complete.
+    expect(verdictOf(pageFor([good("L1"), good("L2"), good("L3")]))).toBe("**Run complete: yes**");
 
-    // A stale file: a verdict over three runs of an EARLIER week, none of them this merged run (ci-9-1-l1).
-    const stale = pageFor([file("L1", ["ci-1-1-l1", "ci-2-1-l1", "ci-3-1-l1"]), good("L2"), good("L3")]);
-    expect(verdictOf(stale)).toBe("**Harness-green: no**");
+    // A stale file: a verdict over an EARLIER run, not this merged run (ci-9-1-l1).
+    const stale = pageFor([file("L1", "faults", ["ci-1-1-l1"]), good("L2"), good("L3")]);
+    expect(verdictOf(stale)).toBe("**Run complete: no**");
     expect(stale).toContain("a stale verdict, ignored");
-    expect(stale).toContain("L1: no `judge across` verdict is bound to run ci-9-1-l1");
+    expect(stale).toContain("L1: no `judge faults` verdict is bound to run ci-9-1-l1");
     expect(stale).toContain("(a judge file for this layer judged other runs)");
 
-    // Two runs, one of them this run: bound, but not the three ruling 61 asks for.
-    const two = pageFor([file("L1", threeOf("L1").slice(1)), good("L2"), good("L3")]);
-    expect(verdictOf(two)).toBe("**Harness-green: no**");
+    // An across file over two runs, one of them this run, beside the three right files: a note, and still complete.
+    const two = pageFor([good("L1"), good("L2"), good("L3"), file("L1", "across", threeOf("L1").slice(1))]);
+    expect(verdictOf(two)).toBe("**Run complete: yes**");
     expect(two).toContain("L1: judged 2 runs; harness-green needs exactly 3 (ruling 61)");
     expect(two).not.toContain("a stale verdict");
 
-    // Four: "more than two" is not enough either.
-    const four = pageFor([file("L1", [...threeOf("L1"), "ci-6-1-l1"]), good("L2"), good("L3")]);
-    expect(verdictOf(four)).toBe("**Harness-green: no**");
+    // Four: "more than two" is not three either — and it is still only a note.
+    const four = pageFor([good("L1"), good("L2"), good("L3"), file("L1", "across", [...threeOf("L1"), "ci-6-1-l1"])]);
+    expect(verdictOf(four)).toBe("**Run complete: yes**");
     expect(four).toContain("L1: judged 4 runs; harness-green needs exactly 3 (ruling 61)");
   });
 
-  it("a judge file that does not exist is `judge refused` in the page (exit 0, the page still written) and the verdict is not green", () => {
+  it("a judge file that does not exist is `judge refused` in the page (exit 0, the page still written) and the run is not complete", () => {
     const dir = fresh("m"); writeMerged(dir, runs());
-    const good = LAYERS.slice(0, 2).flatMap((l) => { const f = join(dir, `${l}.json`); writeFileSync(f, JSON.stringify(judgeOut({ layer: l, runs: threeOf(l) }))); return ["--judge", f]; });
+    const good = LAYERS.slice(0, 2).flatMap((l) => { const f = join(dir, `${l}.json`); writeFileSync(f, JSON.stringify(judgeOut({ mode: "faults", layer: l, runs: [ID(l)] }))); return ["--judge", f]; });
     const out = join(dir, "SUMMARY.md");
     expect(main(["--merged", dir, ...good, "--judge", join(dir, "L3-never-written.json"), "--out", out], deps(noGh))).toBe(0);
     const md = written(out);
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
+    expect(verdictOf(md)).toBe("**Run complete: no**");
     expect(md).toContain("judge refused: ");
     expect(md).toContain("L3-never-written.json");
   });
@@ -509,10 +540,10 @@ describe("main (the CLI)", () => {
     const wrongShape = join(dir, "shape.json"); writeFileSync(wrongShape, JSON.stringify({ version: 1 }));
     // exit 0 with a fault listed: edited by hand, or half written.
     const liar = join(dir, "liar.json");
-    writeFileSync(liar, JSON.stringify({ ...judgeOut({ layer: "L1", runs: threeOf("L1") }), faults: [{ run: ID("L1"), caseId: "f", kind: "crash", reason: "error: crashed — x" }] }));
+    writeFileSync(liar, JSON.stringify({ ...judgeOut({ mode: "faults", layer: "L1", runs: [ID("L1")] }), faults: [{ run: ID("L1"), caseId: "f", kind: "crash", reason: "error: crashed — x" }] }));
     // exit 1 with nothing listed: a verdict that says "found something" and names nothing.
     const mute = join(dir, "mute.json");
-    writeFileSync(mute, JSON.stringify({ ...judgeOut({ layer: "L2", runs: threeOf("L2") }), exit: 1 }));
+    writeFileSync(mute, JSON.stringify({ ...judgeOut({ mode: "faults", layer: "L2", runs: [ID("L2")] }), exit: 1 }));
     const out = join(dir, "SUMMARY.md");
     expect(main(["--merged", dir, "--judge", junk, "--judge", wrongShape, "--judge", liar, "--judge", mute, "--out", out], deps(noGh))).toBe(0);
     const md = written(out);
@@ -520,7 +551,7 @@ describe("main (the CLI)", () => {
     expect(md).toContain("the verdict contradicts itself (exit 1 but it lists no finding)");
     expect(md).toContain("is not a judge verdict");
     expect(md).toContain("the verdict contradicts itself (exit 0 but it lists 1 finding(s))");
-    expect(verdictOf(md)).toBe("**Harness-green: no**");
+    expect(verdictOf(md)).toBe("**Run complete: no**");
   });
 
   it("a layer directory that is absent, or holds something that is not that layer's results, is a missing layer (exit 0, a line, a note on stderr)", () => {
@@ -558,7 +589,7 @@ describe("main (the CLI)", () => {
     const out = join(dir, "SUMMARY.md");
     expect(main(["--merged", dir, "--previous-run", "auto", "--out", out], deps(gh))).toBe(0);
     const md = written(out);
-    expect(md).toContain("Previous harness-green run: 2026-09-28 (6 days ago) — run 40");
+    expect(md).toContain("Previous complete run: 2026-09-28 (6 days ago) — run 40");
     expect(md).toContain("1 case changed state since run 40 (3 compared):");
     expect(md).toContain("❌→✅ (1): `c1-L1`");
     // Exactly one run was downloaded: 40 (not 9, which is this run itself).
@@ -584,7 +615,7 @@ describe("main (the CLI)", () => {
     const out = join(dir, "SUMMARY.md");
     expect(main(["--merged", dir, "--previous-run", "auto", "--out", out], deps(gh))).toBe(0);
     const md = written(out);
-    expect(md).toContain("Previous harness-green run: 2026-10-03 (1 days ago) — run 60");
+    expect(md).toContain("Previous complete run: 2026-10-03 (1 days ago) — run 60");
     expect(md).toContain("1 case changed state since run 60 (3 compared):");
     const downloads = calls.filter((c) => c[1] === "download");
     expect(downloads).toHaveLength(1);
@@ -597,7 +628,7 @@ describe("main (the CLI)", () => {
     const dir = fresh("a"); writeMerged(dir, runs());
     const { gh, calls } = fakeGh([wireRun(9, 0), wireRun(8, 1, "pull_request")]);
     expect(main(["--merged", dir, "--previous-run", "auto", "--out", join(dir, "S.md")], deps(gh))).toBe(0);
-    expect(written(join(dir, "S.md"))).toContain("Previous harness-green run: none yet");
+    expect(written(join(dir, "S.md"))).toContain("Previous complete run: none yet");
     expect(calls.filter((c) => c[1] === "download")).toEqual([]);
   });
 
@@ -620,6 +651,56 @@ describe("main (the CLI)", () => {
       expect(findSecrets(md), what).toEqual([]);
     }
     expect(cases).toHaveLength(4);
+  });
+
+  describe("--require-complete (T9-HG): the workflow's colour follows the per-run verdict", () => {
+    const faultsFiles = (dir: string, over: Partial<Record<Layer, string[]>> = {}): string[] => LAYERS.flatMap((l) => {
+      const f = join(dir, `${l}-faults.json`);
+      writeFileSync(f, JSON.stringify(judgeOut({ mode: "faults", layer: l, runs: over[l] ?? [ID(l)] })));
+      return ["--judge", f];
+    });
+    const attempt = (dir: string, judges: string[], extra: string[]): { status: number; page: string } => {
+      const out = join(dir, `S-${Math.random().toString(36).slice(2)}.md`);
+      const status = main(["--merged", dir, ...judges, ...extra, "--out", out], deps(noGh));
+      return { status, page: written(out) };
+    };
+
+    it("a complete run exits 0 with the flag, and the page says so (the positive)", () => {
+      const dir = fresh("rc"); writeMerged(dir, runs());
+      const r = attempt(dir, faultsFiles(dir), ["--require-complete"]);
+      expect(r.status).toBe(0);
+      expect(verdictOf(r.page)).toBe("**Run complete: yes**");
+      expect(io.err).not.toMatch(/not complete/);
+    });
+
+    it("a run that is NOT complete exits 1 with the flag — AFTER the page is written, saying why on the page and on stderr", () => {
+      let checked = 0;
+      const cases: [string, (dir: string) => { judges: string[]; runs?: Partial<Record<Layer, RunResults>> }][] = [
+        ["a stale faults verdict for one layer", (dir) => ({ judges: faultsFiles(dir, { L2: ["ci-1-1-l2"] }) })],
+        ["no judge file at all", () => ({ judges: [] })],
+        ["a missing layer", (dir) => ({ judges: faultsFiles(dir), runs: { L1: runs().L1!, L3: runs().L3! } })],
+        ["a judge file that does not exist", (dir) => ({ judges: [...faultsFiles(dir).slice(0, 4), "--judge", join(dir, "never-written.json")] })],
+      ];
+      for (const [what, make] of cases) {
+        const dir = fresh("rc");
+        const built = make(dir);
+        writeMerged(dir, built.runs ?? runs());
+        io.err = "";
+        const r = attempt(dir, built.judges, ["--require-complete"]);
+        expect({ what, status: r.status }, what).toEqual({ what, status: 1 });
+        expect(verdictOf(r.page), what).toBe("**Run complete: no**");
+        expect(io.err, what).toMatch(/the run is not complete \(exit 1: --require-complete\)/);
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+
+    it("without the flag the same incomplete run is still exit 0 (the page's own contract is unchanged: the steps that judge decide the colour)", () => {
+      const dir = fresh("rc"); writeMerged(dir, runs());
+      const r = attempt(dir, [], []);
+      expect(r.status).toBe(0);
+      expect(verdictOf(r.page)).toBe("**Run complete: no**");
+    });
   });
 
   it("--previous-run none (and the default) never calls gh", () => {
@@ -667,7 +748,7 @@ describe("main (the CLI)", () => {
 });
 
 describe("summary.ts as its package script, a real process", () => {
-  const meter = new SpawnMeter(2);
+  const meter = new SpawnMeter(3);
   beforeEach(() => meter.reset());
   const spawn = (extra: readonly string[]) => {
     meter.tick();
@@ -686,6 +767,16 @@ describe("summary.ts as its package script, a real process", () => {
     expect(md.startsWith("# Matrix truth run summary")).toBe(true);
     expect(md).toContain("- L2: no merged run — ");
     expect(md).toContain("| L1 | L1 (grid) | ci-9-1-l1 |");
+  });
+
+  it("--require-complete through the script: an incomplete run is exit 1 and the page is still written; a missing layer cannot be complete", { timeout: meter.budget }, () => {
+    const dir = fresh("s");
+    writeMerged(dir, { L1: mergedRun("L1", ID("L1"), baseCases("L1")), L3: mergedRun("L3", ID("L3"), baseCases("L3")) });
+    const out = join(dir, "SUMMARY.md");
+    const r = spawn(["--merged", dir, "--require-complete", "--out", out]);
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/the run is not complete \(exit 1: --require-complete\)/);
+    expect(written(out)).toContain("**Run complete: no**");
   });
 
   it("a usage error is exit 2 through the script", { timeout: meter.budget }, () => {

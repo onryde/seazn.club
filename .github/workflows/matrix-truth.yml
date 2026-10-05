@@ -13,9 +13,11 @@ name: Matrix truth run
 #  - workflow_call: ci.yml's per-PR sample (R27, D13), scope pr-sample.
 #  - pull_request on this file and tools/matrix/ci/**: the smoke scope proves
 #    the workflow on its own PR (D3) — dispatch only fires main's copy.
-# A run that is not harness-green is RED: the merge job exits non-zero on any
-# refused merge, harness fault or missing layer, so "the last successful run" is
-# a harness-green one (T8->T9).
+# A run that is not COMPLETE is RED: the merge job exits non-zero on any refused
+# merge, harness fault or missing layer, and its summary step runs with
+# --require-complete, so "the last successful run" is a complete one (T8->T9,
+# T9-HG). Harness-green is not a property of one run: it is three workflow runs
+# judged by `matrix:judge across` (PR-B Task 17), and the page says so.
 # PUBLIC REPO (R14a): synthetic orgs only; nothing here echoes a secret; no
 # Playwright trace is ever uploaded (D16). The matrix drives no solver route
 # (owner ruling 66, tools/matrix/__tests__/no-solver-route.test.ts), so no
@@ -412,11 +414,13 @@ jobs:
         #
         # Every failure below sets status=1 and the loop goes on, so one layer's
         # refusal never hides another's verdict; the job still exits non-zero, which
-        # is what makes "the last successful run" a harness-green one. A layer with
+        # is what makes "the last successful run" a complete one. A layer with
         # NO shard directory is a failure too: every full or smoke scope plans all
         # three layers, so a missing one is an upload that failed or a shard job that
         # never ran, never "nothing to do". The summary names a --judge file per
-        # layer, written or not: an absent file is "judge refused" there, never green.
+        # layer, written or not: an absent file is "judge refused" there, never complete.
+        # --require-complete makes the summary's own verdict ("Run complete: no") exit 1,
+        # so the job's colour follows the page even when every step above exited 0.
         run: |
           set +e
           shopt -s nullglob
@@ -440,7 +444,7 @@ jobs:
             if [ "$code" -ne 0 ]; then status=1; fi
           done
           mkdir -p merged
-          pnpm --silent matrix:summary --merged merged "${judges[@]}" --previous-run auto --out merged/SUMMARY.md
+          pnpm --silent matrix:summary --merged merged "${judges[@]}" --previous-run auto --require-complete --out merged/SUMMARY.md
           code=$?; echo "summary EXIT=$code"
           if [ "$code" -ne 0 ]; then status=1; fi
           if [ -f merged/SUMMARY.md ]; then cat merged/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"; fi

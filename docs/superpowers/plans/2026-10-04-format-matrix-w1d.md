@@ -259,7 +259,7 @@ Product reds are data. → Tasks 6, 17. Narrowed by ruling 65 (D7).
 Each job is one shard on a fresh Postgres with `sync:sports`, about 12 shards, with explicit `timeout-minutes` well under 360. → Tasks 3, 4, 8, 9.
 
 **D1 — The staleness signal (ruling 60's "a missed week must still be visible").** Two halves:
-- **(a)** Every run's `SUMMARY.md` (also the job summary) opens with "Previous harness-green weekly/dispatch run: `<date>` (`<n>` days ago) — run `<id>`". `summary.ts` reads it from `gh api …/actions/workflows/matrix-truth.yml/runs?status=success`.
+- **(a)** Every run's `SUMMARY.md` (also the job summary) opens with "Previous complete weekly/dispatch run: `<date>` (`<n>` days ago) — run `<id>`". `summary.ts` reads it from `gh api …/actions/workflows/matrix-truth.yml/runs?status=success`.
 - **(b)** `ci.yml`'s `matrix-rows` job carries a NON-BLOCKING step. When `vars.MATRIX_WEEKLY_ENABLED == 'true'` and the newest successful `schedule`/`workflow_dispatch` run of `matrix-truth.yml` is older than 8 days (or none exists), it emits `::warning title=Matrix truth run is stale::…` on every PR. It never fails the PR, and an API failure warns rather than fails.
 - Owner value: a skipped or broken week shows on the next PR, at the cost of one API call, with no new service.
 - Rejected:
@@ -441,7 +441,7 @@ Three CLIs change:
 - Weekly runs keep artifacts only (item 27).
 - Owner value: one reviewable baseline instead of three 10 MB copies, with every claim traceable to a run id.
 
-**D20 — The weekly diff (informational).** `summary.ts` downloads the previous harness-green run's merged artifact and lists every case whose state changed, as "✅→❌", "❌→✅" and so on. It never fails the run.
+**D20 — The weekly diff (informational).** `summary.ts` downloads the previous complete run's merged artifact and lists every case whose state changed, as "✅→❌", "❌→✅" and so on. It never fails the run.
 - Owner value: the weekly summary says what changed this week, not only what is red.
 
 **D21 — The three dispatches run one product: a pinned, non-release tag (PR-B).**
@@ -2039,7 +2039,7 @@ describe("shardMatrix (D4; class 20 — derived budgets; review C2)", () => {
 
 `summary.test.ts`:
 - "harness verdict and per-layer histogram rows, with planned ░ counted per atom";
-- "no previous run → 'Previous harness-green run: none yet' (the empty case)";
+- "no previous run → 'Previous complete run: none yet' (the empty case)";
 - "the weekly diff lists ✅→❌ and ❌→✅ moves, and says 'no state changed' when none did";
 - "per-layer timings p50/p90/max computed from durationMs of driven cases only (planned cases have durationMs 0 and are excluded)";
 - "a missing layer (merge refused) is a line saying so, never a silent omission";
