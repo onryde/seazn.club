@@ -784,6 +784,13 @@ jobs:
           # next read after the connect; 3 s is inside a loaded runner's create + first read.
           # The Playwright step below is told the same value: the spec budgets its waits from it.
           FAKE_INGEST_CONNECT_AFTER_MS: "10000"
+          # Capture QR v2 R10: capture-phone.spec.ts runs the dead-phone takeover, a live phone lost (W19)
+          # and the silent floor in seconds, not minutes. Honoured only because ENV_NAME is ci (config.ts
+          # `tunable`); a deployment always runs the defaults (60 s, 15 min, 60 s). The Playwright step
+          # below is told the same values: the spec budgets its waits from them and refuses unshortened ones.
+          DEAD_PHONE_TAKEOVER_SECONDS: "3"
+          PHONE_LOST_LIVE_MINUTES: "1"
+          PHONE_SILENT_FLOOR_SECONDS: "5"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -836,6 +843,10 @@ jobs:
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
           # The same value the server was started with (see "Start server"): the spec's waits derive from it.
           FAKE_INGEST_CONNECT_AFTER_MS: "10000"
+          # Capture QR v2 R10: the server's shortened timings, the same values (see "Start server").
+          DEAD_PHONE_TAKEOVER_SECONDS: "3"
+          PHONE_LOST_LIVE_MINUTES: "1"
+          PHONE_SILENT_FLOOR_SECONDS: "5"
 
       # Distinct from "Connect walkthrough not configured" above: that one
       # keys on STRIPE_CONNECT_TEST_ACCOUNT and covers the REGISTRATION money
