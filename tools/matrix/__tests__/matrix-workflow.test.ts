@@ -4,7 +4,7 @@
 // by stand-ins on the PATH — so what is proven is the YAML's own wiring (the flags it passes, the exit codes it keeps, the files
 // it reads), never a copy of it kept in the test.
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1059,6 +1059,27 @@ describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved her
     expect(MJOBS.mutate).toContain("timeout-minutes: ${{ matrix.timeout }}");
     for (const n of ["Survivors", "Upload mutation results"]) expect(stepOf(MJOBS.mutate!, n).body).toContain("if: always()");
   });
+  it("the mutate job runs at most 12 legs at a time, next to fail-fast: false: the leg fan-out cannot take every hosted slot of the org (T20-FIX1, I1)", () => {
+    // Ruling T20-FIX1: the org is on GitHub's Free plan (about 20 concurrent hosted jobs, account-wide), and a `group=all` dispatch
+    // queues one job per leg (69 of them, 3 hours each). Without a cap it holds every slot for about 11 hours while ci.yml's PR
+    // runs (13-16 jobs) and e2e.yml's push fan-out (11 jobs) wait behind it. The value is the owner's choice (12): a PR run
+    // may partly queue, and a dispatch takes about 17 hours instead of about 25 at 8. A literal integer, never an expression:
+    // the number is the thing this pin names, and an input or a variable would let a dispatch lift it unseen.
+    const strategy = /\n {4}strategy:\n((?: {6}\S.*\n)+)/.exec(`${MJOBS.mutate!}\n`);
+    expect(strategy, "the mutate job has a strategy block").not.toBeNull();
+    const keys = new Map<string, string>();
+    for (const line of strategy![1]!.split("\n")) {
+      const m = /^ {6}([a-z-]+):\s*(.*?)\s*(?:#.*)?$/.exec(line);
+      if (m) keys.set(m[1]!, m[2]!);
+    }
+    expect([...keys.keys()].sort(), "the strategy holds exactly these keys").toEqual(["fail-fast", "matrix", "max-parallel"]);
+    expect(keys.get("fail-fast")).toBe("false");
+    expect(keys.get("max-parallel"), "a literal integer, not an expression").toMatch(/^\d+$/);
+    expect(keys.get("max-parallel"), "the cap, 12").toBe("12");
+    // the cap is on the job that fans out and nowhere else (plan and floors are single jobs: a cap there would mean nothing)
+    for (const n of ["plan", "floors"]) expect(MJOBS[n], `${n} has no matrix to cap`).not.toContain("max-parallel");
+    expect(Object.keys(MJOBS).length, "all three jobs were read").toBe(3);
+  });
   it("the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys, in declaration order (m2)", () => {
     // a trailing `# comment` on an option line is stripped (review 6, m4)
     const opts = /group:[\s\S]*?options:\n((?:\s+- .+\n)+)/.exec(MUT)![1]!.split("\n").map((l) => l.replace(/\s+#.*$/, "").replace(/^\s+- /, "").trim()).filter(Boolean);
@@ -1087,7 +1108,30 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
     expect(MUT).not.toMatch(/^\s{2}push:/m);
     expect(MUT).not.toContain("workflow_call");
     expect(MUT).not.toContain("pull_request_target");
-    expect(MUT).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/mutation\.yml"\s*\n\s*- "packages\/engine\/stryker\*"\s*\n\s*- "packages\/engine\/scripts\/stryker-\*"/);
+    expect(MUT).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/mutation\.yml"\s*\n\s*- "packages\/engine\/stryker\*"\s*\n\s*- "packages\/engine\/vitest\.stryker\.config\.ts"\s*\n\s*- "packages\/engine\/scripts\/stryker-\*"/);
+  });
+
+  it("the probe's pull_request paths cover every Stryker file of the engine, and the vitest config the runner is handed (T20-FIX1, M3)", () => {
+    // `packages/engine/stryker*` does not match `vitest.stryker.config.ts` (it starts with `vitest.`), so a PR that changed the
+    // reporters the Stryker runs use, the fix T20-PRE made, would not have run the probe that proves them. The files are read
+    // from the TREE (every file named for Stryker, in the engine and its scripts) and from the config's own declaration of the
+    // runner's vitest config, never typed here. GitHub's filter: `*` is any run of characters but `/`, `**` is any run at all.
+    const paths = /pull_request:\n\s+paths:\n((?:\s+- ".+"\n)+)/.exec(MUT)![1]!.split("\n").map((l) => /- "(.+)"/.exec(l)?.[1]).filter((x): x is string => x !== undefined);
+    expect(paths.length, "the trigger names paths").toBeGreaterThan(2);
+    const esc = (t: string): string => t.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    const glob = (g: string): RegExp => new RegExp(`^${g.split("**").map((deep) => deep.split("*").map(esc).join("[^/]*")).join(".*")}$`);
+    const covered = (f: string): boolean => paths.some((g) => glob(g).test(f));
+    expect(covered("packages/engine/stryker.config.mjs"), "the filter matches a plain Stryker file (a control: the matcher works)").toBe(true);
+    expect(covered("packages/engine/test/stryker-sizing.test.ts"), "and refuses a file the probe does not depend on (a control: it is not a catch-all)").toBe(false);
+    const engine = join(REPO, "packages/engine");
+    const named = [...readdirSync(engine).map((f) => f), ...readdirSync(join(engine, "scripts")).map((f) => `scripts/${f}`)]
+      .filter((f) => /stryker/.test(f) && statSync(join(engine, f)).isFile())
+      .map((f) => `packages/engine/${f}`);
+    const declared = /configFile:\s*"([^"]+)"/.exec(readFileSync(join(engine, "stryker.config.mjs"), "utf8"))![1]!;
+    const files = [...new Set([...named, `packages/engine/${declared}`])];
+    expect(files.length, "Stryker files read from the tree").toBeGreaterThan(6);
+    expect(files, "the runner's vitest config is among them").toContain("packages/engine/vitest.stryker.config.ts");
+    expect(files.filter((f) => !covered(f)), "Stryker files the probe's trigger does not cover").toEqual([]);
   });
 
   it("the three jobs are plan, mutate and floors; mutate needs plan, floors needs both, and plan and floors have the 15-minute timeout", () => {

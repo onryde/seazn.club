@@ -108,6 +108,7 @@ on:
     paths:
       - ".github/workflows/mutation.yml"
       - "packages/engine/stryker*"
+      - "packages/engine/vitest.stryker.config.ts"
       - "packages/engine/scripts/stryker-*"
 
 permissions:
@@ -183,8 +184,14 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     # One group's timeout or red dry run must never cancel the others (Task 20 expects a timeout and still needs the
     # other groups' wall times).
+    # max-parallel (T20-FIX1, ruling T20-FIX1): the org is on GitHub's Free plan, about 20 concurrent hosted jobs account-wide,
+    # and `group=all` queues one job per leg (69, about 3 hours each). Uncapped, one dispatch holds every slot for about 11 hours
+    # and ci.yml's PR runs (13-16 jobs) and e2e.yml's push fan-out (11 jobs) queue behind it. At 12 a dispatch leaves 8 slots
+    # for CI and takes about 17 hours (about 25 at 8). A literal on purpose: an input or a variable would let a dispatch lift
+    # it unseen (tools/matrix/__tests__/matrix-workflow.test.ts pins the number).
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       GROUP: ${{ matrix.group }}   # job level: every step below reads $GROUP (step env does not carry over)
