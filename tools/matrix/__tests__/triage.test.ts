@@ -847,22 +847,29 @@ describe("the committed catalogue files", () => {
     expect(routeOf(cat.routing, "SH-G7")).toBe("W8");
   });
 
-  it("every committed rule names a gap that exists, every verdict an id that exists at the wave routing gives it (zero of each is allowed until Task 19 fills them; the loops report what they checked)", () => {
+  it("every committed rule names a gap that exists, every verdict an id that exists at the wave routing gives it, and each loop reports a non-zero count (m6: an emptied catalogue is a failure, not a pass)", () => {
     const newIds = new Set(cat.newGaps.gaps.map((g) => g.id));
-    let checked = 0;
+    let rulesChecked = 0;
     for (const r of cat.rules.rules) {
       expect(ids.has(r.gap) || newIds.has(r.gap), `${r.id}: ${r.gap} is no gap`).toBe(true);
-      checked++;
+      rulesChecked++;
     }
-    expect(checked).toBe(cat.rules.rules.length);
+    expect(rulesChecked).toBe(cat.rules.rules.length);
+    // The floors are the filled catalogue's: the W1-driving triage held seven rules (P1-P7), the W1d one splits them by cell, scenario and
+    // reason (m9), and its audit accounts for 150 ids of which the triage reproduces a handful: well over a hundred verdicts.
+    expect(rulesChecked).toBeGreaterThanOrEqual(40);
     const verdicts = parseVerdicts(JSON.parse(readFileSync(join(CATALOGUE_DIR, "audit-verdicts.json"), "utf8"))).verdicts;
     const counted = new Set(audit.gaps.map((g) => g.id));
+    let verdictsChecked = 0;
     for (const x of verdicts) {
       expect(counted.has(x.id), `${x.id} is no counted audit id`).toBe(true);
       expect(x.wave, x.id).toBe(routeOf(cat.routing, x.id));
-      checked++;
+      verdictsChecked++;
     }
-    expect(checked).toBe(cat.rules.rules.length + verdicts.length);
+    expect(verdictsChecked).toBe(verdicts.length);
+    expect(verdictsChecked).toBeGreaterThanOrEqual(100);
+    expect(new Set(verdicts.map((x) => x.id)).size, "an id carries one verdict").toBe(verdicts.length);
+    expect(cat.newGaps.gaps.length).toBeGreaterThanOrEqual(5);
   });
 });
 

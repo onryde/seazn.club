@@ -1,3 +1,862 @@
 {
-  "verdicts": []
+  "verdicts": [
+    {
+      "id": "FX-G1",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/usecases/stages.ts:2438 builds byKey from the existing fixtures' ext_key and :2511 inserts only generated rows whose key is absent; a round-robin key is positional (packages/engine/src/scheduling/roundrobin.ts:140, `rr-r${roundNo}-c${court}`), so after roster growth the new pairings collide with existing keys and are skipped while others are created twice. P3 (Generate after a roster change) has no script in the baseline, so the harness never meets it.",
+      "wave": "W5"
+    },
+    {
+      "id": "FX-G2",
+      "outcome": "verified-by-read",
+      "evidence": "The same reconcile serves every kind: apps/web/src/server/usecases/stages.ts:2438 (byKey) and :2511 (only absent keys are inserted); a bracket key is positional too (packages/engine/src/scheduling/bracket.ts:170 `${prefix}-r0-i${i}`, :197), so a new entrant inside the same bracket size lands on no new key and is never placed. P3 has no script.",
+      "wave": "W4"
+    },
+    {
+      "id": "FX-G3",
+      "outcome": "verified-by-read",
+      "evidence": "Nothing writes the void: outside tests `gf-reset` appears only where it is generated (packages/engine/src/scheduling/bracket.ts:352, `conditional: true`), in a comment at packages/engine/src/scheduling/bracket.ts:350 that says 'the persistence adapter voids it', and in a comment at apps/web/src/server/engine-db/competition.ts:121; apps/web/src/server/usecases/stages.ts:1668 only passes bracketReset to the generator. No code is the adapter the comment names. No template or builder knob sets bracketReset (tools/matrix/lib/scenarios/terminal-finals.ts only reads it from the stage config).",
+      "wave": "W6"
+    },
+    {
+      "id": "FX-G4",
+      "outcome": "not-exercised",
+      "evidence": "Double-elim loser-bracket pairing: LIFECYCLE builds and plays double_elim on all 11 sports, but I2 reads one champion and a rank permutation only; no check reads who meets whom in a loser-bracket round, so an immediate rematch passes.",
+      "wave": "W6"
+    },
+    {
+      "id": "FX-G5",
+      "outcome": "not-exercised",
+      "evidence": "Group to knockout round-1 pairing with 3 or 5 pools: the builder's poolCount knob defaults to 2 (tools/matrix/lib/catalogue.ts:47) and F4 (unequal pools) has no script, so a 3-pool or 5-pool field is never built; no check reads the round-1 pairing against the rank_order fold.",
+      "wave": "W5"
+    },
+    {
+      "id": "FX-G6",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/usecases/stages.ts:5541 initialises ladder_order from the entrants registered at the first challenge and :5551 writes it once; apps/web/src/server/usecases/scoring.ts:776 only reorders the existing list on a result; :5562 refuses `LADDER_ENTRANT_FOREIGN` for anyone not on it. No code path appends a later entrant. R1/R2 (late entry) have no script, so no ladder cell meets it.",
+      "wave": "W7"
+    },
+    {
+      "id": "FX-G8",
+      "outcome": "not-exercised",
+      "evidence": "Americano partner coverage: LIFECYCLE plays the americano rows on all 11 sports (e.g. americano|badminton|LIFECYCLE works), but I10-americano-seats-each-person-once reads that each person is seated once per round; no check counts which partners recur.",
+      "wave": "W7"
+    },
+    {
+      "id": "FX-G9",
+      "outcome": "not-exercised",
+      "evidence": "Americano/mexicano byes and games per person: F1 (odd field) drives both rows, and its checks (f1-everyone-drawn, f1-ladder-sweep, f1-round-size) read the draw, the ladder and the round size; none counts games played per person, so a pivot who never sits out passes.",
+      "wave": "W7"
+    },
+    {
+      "id": "FX-G10",
+      "outcome": "not-exercised",
+      "evidence": "Americano personal points: LIFECYCLE passes on every sport (americano|football|LIFECYCLE works) but no check reads the personal leaderboard, which is a console-only projection (apps/web/src/server/usecases/americano.ts:51-53 reads state.score.home/away); a green case says nothing about it.",
+      "wave": "W7"
+    },
+    {
+      "id": "FX-G12",
+      "outcome": "not-exercised",
+      "evidence": "Americano roster change: P3 (Generate after a roster change), R1 (late entry before Start) and R2 (late entry after Start) have no script, so no americano cell changes its roster after the draw.",
+      "wave": "W7"
+    },
+    {
+      "id": "FX-G13",
+      "outcome": "not-exercised",
+      "evidence": "Rebuild after results exist: P4 has no script; a regeneration that throws also needs F2 (field below the format's minimum) after a rebuild, and F2 has no script either.",
+      "wave": "W3"
+    },
+    {
+      "id": "FX-G15",
+      "outcome": "not-exercised",
+      "evidence": "Add match after roster growth: no scenario adds an ad-hoc match and the scenario catalogue has no atom for it (P3 has no script either), so the round max+1 landing is never driven.",
+      "wave": "W5"
+    },
+    {
+      "id": "FX-G16",
+      "outcome": "not-exercised",
+      "evidence": "Correcting a result in a completed source stage: C6a (late correction after the stage is complete) and Q1 (qualifier decided, then a correction changes it) have no script.",
+      "wave": "W4"
+    },
+    {
+      "id": "FX-G17",
+      "outcome": "not-exercised",
+      "evidence": "Unseeded draw order: F8 (protected seeds) has no script, and no check reads which entrant gets seed 1 or a bye; the catalogue has no random-draw option to drive.",
+      "wave": "W4"
+    },
+    {
+      "id": "FX-G18",
+      "outcome": "not-exercised",
+      "evidence": "Cross-stage feeds: needs M7b (void a decided result after the next stage started) on a feeding stage; M7 has no script.",
+      "wave": "W4"
+    },
+    {
+      "id": "FX-G19",
+      "outcome": "not-exercised",
+      "evidence": "Group board cards read R{n}: a public board surface no layer reads (L1 and L3 read the HTTP API, L2 drives only F1, M1 and R4 through the organiser UI).",
+      "wave": "W5"
+    },
+    {
+      "id": "FX-G20",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/components/v2/board/round-codes.ts:106-107 still says history.ts 'restores neither ext_key nor is_final'; apps/web/src/server/usecases/history.ts:425 inserts both columns (`ext_key, lane, is_final, third_place, conditional`) and :440 writes is_final. The comment is stale; it is code, not behaviour, so no scenario can read it.",
+      "wave": "W10"
+    },
+    {
+      "id": "FX-G21",
+      "outcome": "not-exercised",
+      "evidence": "League/group odd-field bye label: F1 drives league and group on every sport and f1-everyone-drawn reads that everyone is drawn; no check reads that the per-round bye is named on a row or label.",
+      "wave": "W5"
+    },
+    {
+      "id": "FX-G22",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/usecases/stages.ts:1638 `if (count === 1) return roundRobinGen(entrants, legs);` passes no poolId (the helper's poolId argument is optional, :1603-1608), so a one-pool group stage writes pool_id null. The harness's builder never builds one pool (poolCount is clamped to 2..8, tools/matrix/lib/catalogue.ts:55).",
+      "wave": "W5"
+    },
+    {
+      "id": "FX-G23",
+      "outcome": "not-exercised",
+      "evidence": "Per-stage rules on a non-sets sport: P6 (per-stage rule override) has no script, and the finding is a limit by owner ruling (D2a), not a behaviour a scenario can fail.",
+      "wave": "W2"
+    },
+    {
+      "id": "FX-G24",
+      "outcome": "not-exercised",
+      "evidence": "Double-elim no-show recorded as a forfeit: M1 drives a one-match walkover on every double_elim cell (e.g. double_elim|badminton|M1 works) and its checks read that it is recorded and the winner advances; none reads that the absent player drops to the loser bracket.",
+      "wave": "W6"
+    },
+    {
+      "id": "SC-C1",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/engine-db/append-event.ts:337 guards `kind === \"draw\"` only; packages/engine/src/sports/cricket/cricket.ts:945 folds a level finish with no super over to `{ kind: \"tie\" }` and :1179 a no-result to `{ kind: \"no_result\" }`; packages/engine/src/sports/cricket/cricket.ts:3964 supportsDraws is false in a knockout but is asked of a draw only; apps/web/src/server/engine-db/competition.ts:158-163 bracketWinnerLoser returns no winner for either, so the bracket has nothing to advance. M5/M6 have no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P1",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/engine-db/stage-cfg.ts:18 `STAGE_DECIDER_KEYS = [\"shootout\", \"extraTime\"]` and :35-37 overlay them from stage config, but no component under apps/web/src/components writes either key to a stage (the stage builder and stages-panel never mention them), while apps/web/src/lib/match-rules.ts:336 and :343 label the division-wide fields 'Knockout fixtures only.'. The engine's `resolveFullTime` takes no stage input (packages/engine/src/sports/football/football.ts). M6 has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-S1",
+      "outcome": "not-exercised",
+      "evidence": "Impossible tennis tie-break games score: the baseline posts scores the harness builds (life-results-as-posted), never a malformed set summary, and E2 (single-event result over the API) has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-C2",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/lib/match-rules.ts:454-460 offers `superOver` ('Super over on a tie', help 'Knockout fixtures only.') as one division-wide field, and apps/web/src/server/engine-db/stage-cfg.ts:18 lists only shootout and extraTime as stage decider keys, so superOver cannot be set per stage. M6 has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P2",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/engine-db/append-event.ts:337-345 refuses a level result with DRAW_NOT_ALLOWED when `supportsDraws(cfg, stage.kind)` is false, and packages/engine/src/sports/football/football.ts:2666-2668 returns false outside league/group/swiss; the fixture's config is frozen at its first event (apps/web/src/server/engine-db/fixture-cfg.ts:39-45), so a decider switched on afterwards does not reach it. M5/M6 have no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-S2",
+      "outcome": "not-exercised",
+      "evidence": "Tennis Bo1 with a match tie-break decider: needs the match-rules editor choice (E3 Bo1 points editor, X3 round shortened); neither has a script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-C3",
+      "outcome": "not-exercised",
+      "evidence": "Cricket NRR for a DLS or revised-overs result: M4b (abandoned with a result, a DLS decision) has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O3",
+      "outcome": "not-exercised",
+      "evidence": "Generic knockout with allowDraws on: M5 (draw in a stage that cannot end level) has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P3",
+      "outcome": "not-exercised",
+      "evidence": "Ice hockey level overtime with the shoot-out off in a knockout: M6 has no script, and no scenario sets the overtime or shoot-out rules.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-S3",
+      "outcome": "not-exercised",
+      "evidence": "Walkover credits no sets or points: M1 drives a one-match walkover on badminton, tabletennis, volleyball and tennis on every format (e.g. double_elim|tennis|M1 works) and its checks read that it is recorded and the winner advances; no check reads the sets or points credited to the winner, so the cells pass whatever the credit is.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-X3",
+      "outcome": "not-exercised",
+      "evidence": "Abandoned knockout match: M4a (abandoned, no result) has no script, so no knockout cell is abandoned.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-C4",
+      "outcome": "not-exercised",
+      "evidence": "Coarse innings summary with no upper bound: E2 (single-event result over the API) has no script, and the harness posts finished innings it builds itself.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O4",
+      "outcome": "not-exercised",
+      "evidence": "Carrom tieBoard 'draw' in a level knockout: M5/M6 have no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P4",
+      "outcome": "not-exercised",
+      "evidence": "Shoot-out points split editable for football only: a match-rules editor limit; no scenario edits a division's match rules through the editor (D6/D7 change a stage's shape or rules).",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-S4",
+      "outcome": "not-exercised",
+      "evidence": "Retirement mid-match: M3 has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-X4",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/usecases/scoring.ts:819 counts `status <> 'decided' and status <> 'forfeited'` as still open, and apps/web/src/server/engine-db/append-event.ts:146 returns 'abandoned' whenever `core.abandon` is in the stream, even when the fold produced an outcome; so one abandoned league match blocks auto-advance. M4 has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-C5",
+      "outcome": "not-exercised",
+      "evidence": "A claim about unit-test coverage (cricket.test.ts has no DLS NRR operand test): not a behaviour any scenario can reach; the matching behaviours are SC-C1 and SC-C3.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O5",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/engine-db/append-event.ts:337 refuses `kind === \"draw\"` only, and apps/web/src/server/engine-db/competition.ts:158-163 bracketWinnerLoser returns {} for `no_result`, so an abandon or double forfeit that folds to no_result seats nobody. M2/M4 have no script, so no knockout cell is abandoned or double-forfeited.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P5",
+      "outcome": "not-exercised",
+      "evidence": "Shoot-out recorded as won 1 / lost 1: M6 has no script, and no check reads the won/drawn columns of a decider game.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-S5",
+      "outcome": "not-exercised",
+      "evidence": "Tennis match tie-break counted as zero games: M6 (tie after regulation to a decider) has no script, and no check reads games_won/games_lost.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-C6",
+      "outcome": "not-exercised",
+      "evidence": "Coarse boundaries have no pad path: E1 (phone pad) has no script on cricket at coarse fidelity (L2 drives only F1, M1 and R4).",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O6",
+      "outcome": "not-exercised",
+      "evidence": "Carrom has no result-only entry: E2 (single-event result over the API) has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P6",
+      "outcome": "not-exercised",
+      "evidence": "A claim about a unit test (football.test.ts folds a knockout case with no split): not a behaviour any scenario can reach.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-S6",
+      "outcome": "not-exercised",
+      "evidence": "Double forfeit on a set-based or nested sport: M2 (double walkover) has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-C7",
+      "outcome": "not-exercised",
+      "evidence": "Overs per innings editor writes ballsPerInnings = overs x 6: a match-rules editor value; no scenario edits cricket match rules.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O7",
+      "outcome": "not-exercised",
+      "evidence": "Boardgame byeScore inert: F1 (odd field) drives every swiss and league boardgame cell and f1-everyone-drawn reads the draw, but no check reads what a bye is worth in the table, so the pass says nothing about it (the same gap is SW-M8).",
+      "wave": "W3"
+    },
+    {
+      "id": "SC-P7",
+      "outcome": "verified-by-read",
+      "evidence": "packages/engine/src/sports/period/kernel.ts:88 and :194 declare `shootout.suddenDeath`, hockey.ts:142 and icehockey.ts:168 set it true, and nothing in packages/engine/src reads the field (a search of non-test source finds only these declarations and presets). M6 has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-S7",
+      "outcome": "not-exercised",
+      "evidence": "Tennis points_lost under a custom cascade: no scenario sets a tiebreak cascade (division.tiebreakers is API-only and the catalogue has no atom for it).",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-C8",
+      "outcome": "not-exercised",
+      "evidence": "Super over is band 3 only: M6 has no script and E1 (phone pad) drives no cricket knockout.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O8",
+      "outcome": "not-exercised",
+      "evidence": "No per-stage format override outside the four sets sports: P6 has no script, and the finding is a limit by owner ruling (D2a).",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P8",
+      "outcome": "not-exercised",
+      "evidence": "Stage decider overlay keys from API v1 never validated: needs a stage created over the API with a decider key for the wrong sport; no scenario sets stage decider keys.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-S8",
+      "outcome": "not-exercised",
+      "evidence": "A claim about a unit test (setbased.test.ts asserts no award metrics): not a behaviour any scenario can reach; the matching behaviour is SC-S3.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O9",
+      "outcome": "not-exercised",
+      "evidence": "Carrom game adjust has no upper bound: a pad/API event the harness never posts; E1/E2 have no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P9",
+      "outcome": "not-exercised",
+      "evidence": "Abandon under abandonPolicy 'award' with a level score: M4b (abandoned with a result) has no script, and abandonPolicy is not a catalogue knob.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-S9",
+      "outcome": "not-exercised",
+      "evidence": "Volleyball stage override to best of 3 on a FIVB-points division: P6 (per-stage rule override) has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O10",
+      "outcome": "not-exercised",
+      "evidence": "Boardgame result method and winner not cross-checked: needs a malformed event over the API; E2 has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P10",
+      "outcome": "not-exercised",
+      "evidence": "A stage PointsRule over API: no scenario sets a stage PointsRule (the catalogue has no atom for it; C5 points deduction is a different input).",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O11",
+      "outcome": "not-exercised",
+      "evidence": "Generic 500-point cap is pad-only: E1 (phone pad) has no script on generic and E2 has none.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P11",
+      "outcome": "not-exercised",
+      "evidence": "No futsal preset: a feature that does not exist, so no cell can exercise it (tools/matrix/catalogue/variants.json holds no futsal variant).",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-O12",
+      "outcome": "not-exercised",
+      "evidence": "Team chess unsupported: a feature that does not exist (entrant kinds are individual only), so no cell can exercise it.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P12",
+      "outcome": "not-exercised",
+      "evidence": "Result-only (band 0) needs the full event stream: E2 (single-event result over the API) has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SC-P13",
+      "outcome": "not-exercised",
+      "evidence": "A level ladder or stepladder challenge in football refused: M5 (draw in a stage that cannot end level) has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "SH-G1",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/components/v2/print-scorer-sheets.tsx:95 posts `{ date: day }` only, the one mount is the competition schedule page (apps/web/src/app/o/[orgSlug]/c/[compSlug]/schedule/page.tsx:199), and apps/web/src/server/api-v1/key-scopes.ts:394 keeps `POST /competitions/:id/exports/scorer-sheets` session-only, while the route accepts divisionId, dateFrom, dateTo and groupBy (apps/web/src/app/api/v1/competitions/[id]/exports/scorer-sheets/route.ts:30). E4b has no script.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G2",
+      "outcome": "not-exercised",
+      "evidence": "Printed links never re-check the entitlement: E4b (printed scorer-sheet scan) has no script; L3 excludes it (needs times).",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G3",
+      "outcome": "not-exercised",
+      "evidence": "No bulk revoke of a printed day: E4b (printed scorer-sheet scan) has no script; L3 excludes it (needs times).",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G4",
+      "outcome": "not-exercised",
+      "evidence": "Unscheduled fixtures cannot print: E4b has no script, and L3 excludes the cases that need times.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G5",
+      "outcome": "not-exercised",
+      "evidence": "Non-Latin names have no glyphs: E4b has no script; the owner accepted it (plan Q10).",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G6",
+      "outcome": "not-exercised",
+      "evidence": "No paper fallback or format on the card: by design (D5); E4b has no script.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G7",
+      "outcome": "not-exercised",
+      "evidence": "No real sport is exercised from a sheet: E4b has no script, which is the sport-by-format sheet sweep this finding asks for.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G8",
+      "outcome": "not-exercised",
+      "evidence": "Group, double-elim and playoff sheets untested: E4b has no script, which is the format sweep this finding asks for.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G9",
+      "outcome": "not-exercised",
+      "evidence": "A whole-competition print is one long transaction: E4b has no script.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G10",
+      "outcome": "not-exercised",
+      "evidence": "A cut-out card carries no court: E4b has no script; the printed card is a PDF surface no layer reads.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G11",
+      "outcome": "not-exercised",
+      "evidence": "The scan screen names the court differently from the sheet: E4b has no script.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G12",
+      "outcome": "not-exercised",
+      "evidence": "No reprint prompt after a reschedule: E4b has no script, and D5b/X1 (timed schedule changes) have none.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G13",
+      "outcome": "not-exercised",
+      "evidence": "Analytics and filename wrong for range/division prints: E4b has no script; the export's filename and analytics are a surface no layer reads.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G14",
+      "outcome": "not-exercised",
+      "evidence": "dateFrom > dateTo not validated: E4b has no script.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G15",
+      "outcome": "not-exercised",
+      "evidence": "Division sheet order is by name: E4b has no script.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G16",
+      "outcome": "not-exercised",
+      "evidence": "An unpaired swiss bye shell is not excluded from print: E4b has no script, and F1 never schedules a swiss shell.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G17",
+      "outcome": "not-exercised",
+      "evidence": "A grand-final reset prints like any match: E4b has no script, and no scenario sets bracketReset.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G18",
+      "outcome": "not-exercised",
+      "evidence": "Cards for future swiss rounds can die: E4b has no script and no scenario reshapes a paired swiss.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G19",
+      "outcome": "not-exercised",
+      "evidence": "A withdrawn entrant's match still prints: E4b has no script, and R4 does not print.",
+      "wave": "W8"
+    },
+    {
+      "id": "SH-G20",
+      "outcome": "not-exercised",
+      "evidence": "The scan-side lineup catalog reads the division config, not the stage overlay: E4b has no script.",
+      "wave": "W8"
+    },
+    {
+      "id": "ST-G1",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/engine-db/append-event.ts:146 returns 'abandoned' whenever `core.abandon` is in the stream, and apps/web/src/lib/fixture-engine-status.ts:17-18 maps 'abandoned' to 'void', which packages/engine/src/competition/stage.ts:24 keeps out of the standings fold (COUNTS_FOR_STANDINGS is decided and walkover), so a cricket no-result earns nothing and sits in no NR column. M4 has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G2",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/components/public-site/standings-table.tsx:374 prints the structural column with `formatMetric(row[col.key])`, and packages/engine/src/sports/boardgame/boardgame.ts:702 stores `points: pts` in half-points (win = 2), so the Pts cell reads 2 for a win; the engine's half-point text helper (packages/engine/src/competition/tiebreakers.ts:180) is not used by this table. life-public-standings-match compares org and public rows with each other, both raw, so it cannot see it.",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G3",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/lib/format-templates.ts:140 sets `normaliseUnequalPools: true`, and packages/engine/src/competition/progression.ts:550-552 makes normalisedRow a no-op when `PoolTable.results` is absent, which its own comment (:436-438) says is every caller; no production caller builds a PoolTable with results. F4 (unequal pools) has no script.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G4",
+      "outcome": "not-exercised",
+      "evidence": "Cross-pool best-Nth comparison ignores the sport's cascade: F4 (unequal pools) and P2 (group to knockout with a tie unresolved) have no script, and no check reads which runner-up is chosen.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G6",
+      "outcome": "not-exercised",
+      "evidence": "Recap and weekly digest posts omit pooled standings: a generated post surface no layer reads.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G7",
+      "outcome": "not-exercised",
+      "evidence": "Completed bracket writes an all-zero snapshot read by embed, /present and OG: surfaces no layer reads; life-public-standings-match compares the org and public tables, which agree (both zero).",
+      "wave": "W4"
+    },
+    {
+      "id": "ST-G8",
+      "outcome": "not-exercised",
+      "evidence": "A stage PointsRule has no UI: no scenario sets a PointsRule (the catalogue has no atom for it).",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G9",
+      "outcome": "not-exercised",
+      "evidence": "Cricket tie scores 0 under a custom PointsRule: no scenario produces a cricket tie (M6 has no script) or sets a PointsRule.",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G10",
+      "outcome": "not-exercised",
+      "evidence": "Tiebreak cascade is division-level only and validateCascade is never called: no scenario sets a cascade (division.tiebreakers is API-only, no atom).",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G11",
+      "outcome": "not-exercised",
+      "evidence": "UEFA recursive h2h unreachable: F5a/F5b (ties) have no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G12",
+      "outcome": "not-exercised",
+      "evidence": "h2h mini-table from a partial tie group: F5b (three-or-more-way tie) has no script.",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G13",
+      "outcome": "not-exercised",
+      "evidence": "Residual ties ordered by seed then UUID: F7 (tie falling through to lots) has no script, and no check reads an order that ties leave to the cascade's end.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G14",
+      "outcome": "not-exercised",
+      "evidence": "Rank override rejects a duplicate rank across pools: P7 (rank override) has no script.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G15",
+      "outcome": "not-exercised",
+      "evidence": "Expunge skips finalized fixtures: R4c (under half played, some of the entrant's fixtures finalized) has no script (L2 shows R4c not_run on all 21 cells; the baseline's R4 is the none-finalized atom).",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G16",
+      "outcome": "not-exercised",
+      "evidence": "No OT/SO columns: M6 (decider) has no script, and no check reads which column a decider game lands in.",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G17",
+      "outcome": "not-exercised",
+      "evidence": "Qualification markers disappear when the stage completes: LIFECYCLE completes every stage and life-public-standings-match reads the table, but no check reads the cut line or legend.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G18",
+      "outcome": "not-exercised",
+      "evidence": "Same-round knockout losers get distinct ranks: Q3 (third-place match skipped, shared 3rd) has no script; I2 abstains on a declared shared place, so it neither pins nor refuses the distinct ranks.",
+      "wave": "W4"
+    },
+    {
+      "id": "ST-G19",
+      "outcome": "not-exercised",
+      "evidence": "No running public ladder view: no layer reads a running ladder's public page; life-public-standings-match reads the completed stage only.",
+      "wave": "W7"
+    },
+    {
+      "id": "ST-G20",
+      "outcome": "not-exercised",
+      "evidence": "Hub tables have no withdrawn chip: R3/R4 withdraw an entrant and r4-* read the cascade (fixtures, seats), not the hub table; no layer reads the hub.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G21",
+      "outcome": "not-exercised",
+      "evidence": "Slideshow columns and truncation: a surface (/present) no layer reads.",
+      "wave": "W3"
+    },
+    {
+      "id": "ST-G22",
+      "outcome": "not-exercised",
+      "evidence": "Recap/digest names bypass consent masking: a generated post surface no layer reads.",
+      "wave": "W10"
+    },
+    {
+      "id": "ST-G23",
+      "outcome": "not-exercised",
+      "evidence": "Standings endpoints declare no response: an OpenAPI declaration, not a behaviour a scenario drives.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G24",
+      "outcome": "not-exercised",
+      "evidence": "Standings export holds one snapshot: the export surface is not read by any layer.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G25",
+      "outcome": "not-exercised",
+      "evidence": "Developer guide uses a field that does not exist: a docs page no layer reads.",
+      "wave": "W10"
+    },
+    {
+      "id": "ST-G26",
+      "outcome": "not-exercised",
+      "evidence": "OG image picks an unordered row: a surface no layer reads.",
+      "wave": "W4"
+    },
+    {
+      "id": "ST-G27",
+      "outcome": "not-exercised",
+      "evidence": "Email standings block has no caller: a template no layer reads.",
+      "wave": "W10"
+    },
+    {
+      "id": "ST-G28",
+      "outcome": "not-exercised",
+      "evidence": "Private standings GET without pool_id on a pooled stage returns no rows: the harness reads standings per pool by its id (the observed stage's standings carry a poolId), never the pool-less call.",
+      "wave": "W5"
+    },
+    {
+      "id": "ST-G29",
+      "outcome": "not-exercised",
+      "evidence": "Tennis game_ratio has no derived column: a table header no layer reads (L2 drives only F1, M1 and R4 through the organiser UI).",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G30",
+      "outcome": "not-exercised",
+      "evidence": "Americano snapshot goes stale between completions: LIFECYCLE reads the table after life-stage-completed, never between two results.",
+      "wave": "W7"
+    },
+    {
+      "id": "ST-G31",
+      "outcome": "not-exercised",
+      "evidence": "Default cascades diverge from federation rules: a rulebook finding; F5a/F5b (ties) have no script and no check compares a table order against a federation cascade.",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G32",
+      "outcome": "not-exercised",
+      "evidence": "A claim about unit-test coverage (no table-order test for tennis, table tennis or cricket from real deltas): not a behaviour any scenario can reach.",
+      "wave": "W2"
+    },
+    {
+      "id": "ST-G33",
+      "outcome": "not-exercised",
+      "evidence": "A claim about unit-test coverage (double-elim ranks tested with 2 entrants, pooled locks, void with a result): not a behaviour any scenario can reach.",
+      "wave": "W6"
+    },
+    {
+      "id": "SW-L1",
+      "outcome": "not-exercised",
+      "evidence": "Two-sided walkover in Buchholz/SB: M2 has no script.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M1",
+      "outcome": "not-exercised",
+      "evidence": "Buchholz with a bye in a round that is not the last: F1 (odd field) drives swiss on every sport and passes, but no check reads Buchholz, so the pass says nothing about it.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-H2",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/components/v2/division-builder.tsx:290 defaults swissRounds to 5 and :846-856 renders the input min 1 / max 15; apps/web/src/lib/swiss-rounds.ts:40 swissRoundsForFieldSize has no production caller (its callers are apps/web/src/lib/__tests__/swiss-rounds.test.ts and two usecase tests).",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L2",
+      "outcome": "not-exercised",
+      "evidence": "Virtual opponent mis-scaled for non-chess Buchholz: no scenario sets a Buchholz cascade on a non-boardgame sport (division.tiebreakers is API-only).",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M2",
+      "outcome": "not-exercised",
+      "evidence": "Undo of Pair next round: P5b (undo Pair next round) has no script.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-H3",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/usecases/stages.ts:1196 passes `chess: cfg.chess === true`; only apps/web/src/server/api-v1/schemas.ts:1075 accepts the key, and neither apps/web/src/lib/format-templates.ts, apps/web/src/server/templates/catalog/swiss11.json (config is `{ \"rounds\": 11 }`) nor any component under apps/web/src/components/v2 writes it. No scenario sets it (tools/matrix mentions chess in comments only), so chess colour balancing is never on.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L3",
+      "outcome": "not-exercised",
+      "evidence": "Bye chosen before matching, never retried: a probabilistic finding (2 in ~40k rounds); one seeded field per cell cannot witness it (F1 passes on every swiss cell).",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M3",
+      "outcome": "not-exercised",
+      "evidence": "Ad-hoc match gives everyone a phantom bye: no scenario adds an ad-hoc match and the catalogue has no atom for it.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-H4",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/engine-db/competition.ts:392 `return inputs.division.tiebreakers ?? inputs.module.defaultTiebreakers;` is not stage-kind-aware; packages/engine/src/sports/setbased/badminton.ts:56 ends in set_ratio, point_ratio, h2h_points with no Buchholz; no file under apps/web/src/components mentions `tiebreakers`, and the division page only reads it (apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:418).",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L4",
+      "outcome": "not-exercised",
+      "evidence": "Floater choice looks only at the bottom window: needs many score groups; the baseline plays one seeded field per cell and I6/I4 read it, which cannot witness a rare shape.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M4",
+      "outcome": "not-exercised",
+      "evidence": "Ad-hoc fixtures break the shell model: no scenario adds an ad-hoc match and the catalogue has no atom for it.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L5",
+      "outcome": "not-exercised",
+      "evidence": "Non-chess home/away never alternates: LIFECYCLE plays swiss on every sport, but no check reads home/away alternation.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M5",
+      "outcome": "not-exercised",
+      "evidence": "Unpair can clear an ad-hoc fixture: no scenario adds an ad-hoc match and the catalogue has no atom for it; P5b has no script.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L6",
+      "outcome": "not-exercised",
+      "evidence": "Unseeded round 1 folds by registration order: a feature absent (no random-draw option); F8 (protected seeds) has no script.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M6",
+      "outcome": "not-exercised",
+      "evidence": "Bye points come from the forfeit rule: F1 drives swiss byes and passes, but no check reads what a bye is worth in the table.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L7",
+      "outcome": "not-exercised",
+      "evidence": "No late entry after Start: R2 (late entry after Start) has no script.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M7",
+      "outcome": "not-exercised",
+      "evidence": "A bye never freezes config_snapshot: needs a match-rules edit after a bye; no scenario edits match rules (D6/D7 change a stage's shape or rules).",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L8",
+      "outcome": "not-exercised",
+      "evidence": "Surplus boards deleted from the highest seq: needs a field-size reshape after pairing; R3/R4 on swiss do not reshape a paired round and no script drives one.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M8",
+      "outcome": "not-exercised",
+      "evidence": "The bye value setting does nothing: F1 drives swiss byes and passes, but no check reads what a bye is worth (the same gap is SC-O7).",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L9",
+      "outcome": "not-exercised",
+      "evidence": "A claim about a unit test (the no-rematch property passes on an empty round): not a behaviour any scenario can reach; I6-swiss-no-rematch reports its own counts.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M9",
+      "outcome": "not-exercised",
+      "evidence": "Double walkover on a swiss board: M2 has no script.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L10",
+      "outcome": "not-exercised",
+      "evidence": "A claim about the e2e spec inventory (no browser spec drives a swiss to its knockout cut): L2 drives only F1, M1 and R4 and none to a knockout cut; no browser scenario reaches it.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M10",
+      "outcome": "verified-by-read",
+      "evidence": "apps/web/src/server/usecases/stages.ts:513-516 refuses `FORMAT_LOCKED` (409) when any fixture of the division exists, and unpaired swiss shells are fixtures; openapi.ts lists no stage PATCH route (apps/web/src/server/api-v1/openapi.ts:140-144 has generate, unpair, rebuild, complete, standings). life-format-edit-refused-named edits the division's match format, not the stage's round count, so it neither pins nor sees this. D6 (format changed after entries close) has no script.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L11",
+      "outcome": "not-exercised",
+      "evidence": "Public surfaces have no swiss round state: no layer reads a swiss public page for round state.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M11",
+      "outcome": "not-exercised",
+      "evidence": "Pairing groups ignore the table's points: no scenario sets a custom points rule on a swiss stage.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-L12",
+      "outcome": "not-exercised",
+      "evidence": "No pairing preview or manual board swap for rounds 2+: a feature absent; no scenario can drive it.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M12",
+      "outcome": "not-exercised",
+      "evidence": "Rebuild wipes the swiss schedule: P4 (Rebuild after results exist) has no script.",
+      "wave": "W3"
+    },
+    {
+      "id": "SW-M13",
+      "outcome": "not-exercised",
+      "evidence": "A bye shell scheduled onto a court: needs a timed swiss schedule; L3 excludes the cases that need times (D5b, X1), and F1 never schedules.",
+      "wave": "W3"
+    }
+  ]
 }

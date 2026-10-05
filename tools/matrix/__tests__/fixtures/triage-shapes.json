@@ -1,0 +1,1307 @@
+{
+ "flips": [
+  {
+   "why": "swiss_playoff flips between SW-H1 and the draw stall",
+   "run": 1,
+   "layer": "L3",
+   "caseId": "swiss_playoff|boardgame|blitz|R4",
+   "row": "swiss_playoff",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-loop-bounded: play loop exited empty_pair_round",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SW-H1",
+    "wave": "W3"
+   }
+  },
+  {
+   "why": "swiss_playoff flips between SW-H1 and the draw stall",
+   "run": 1,
+   "layer": "L3",
+   "caseId": "swiss_playoff|generic|score|R4",
+   "row": "swiss_playoff",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-loop-bounded: play loop exited empty_pair_round",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SW-H1",
+    "wave": "W3"
+   }
+  },
+  {
+   "why": "ruling 70",
+   "run": 1,
+   "layer": "L3",
+   "caseId": "swiss_knockout|football|11-a-side|R4",
+   "row": "swiss_knockout",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-loop-bounded: play loop exited empty_pair_round",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SW-H1",
+    "wave": "W3"
+   }
+  },
+  {
+   "why": "ruling 70",
+   "run": 1,
+   "layer": "L3",
+   "caseId": "swiss_knockout|carrom|club-29|R4",
+   "row": "swiss_knockout",
+   "sport": "carrom",
+   "variant": "club-29",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-loop-bounded: play loop exited empty_pair_round",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SW-H1",
+    "wave": "W3"
+   }
+  },
+  {
+   "why": "swiss_playoff flips between SW-H1 and the draw stall",
+   "run": 2,
+   "layer": "L3",
+   "caseId": "swiss_playoff|boardgame|blitz|R4",
+   "row": "swiss_playoff",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: 43b7509e-3c76-4580-bd5c-553af3494222 scheduled, d5e7242d-7f94-4a9f-9201-0ca1610365cc scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "swiss_playoff flips between SW-H1 and the draw stall",
+   "run": 2,
+   "layer": "L3",
+   "caseId": "swiss_playoff|generic|score|R4",
+   "row": "swiss_playoff",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: 16b1ff12-7d5a-4336-b15a-e114295dc817 scheduled, 0e39c3d4-968d-4b68-8463-ad78b25c3474 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O2",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "ruling 70",
+   "run": 2,
+   "layer": "L3",
+   "caseId": "swiss_knockout|generic|score|R4",
+   "row": "swiss_knockout",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-loop-bounded: play loop exited empty_pair_round",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SW-H1",
+    "wave": "W3"
+   }
+  },
+  {
+   "why": "swiss_playoff flips between SW-H1 and the draw stall",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "swiss_playoff|boardgame|blitz|R4",
+   "row": "swiss_playoff",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: b16807b2-f5e0-496b-a26b-2a4ad9148817 scheduled, 064156da-f09a-4795-9a4b-8748f51b5ee1 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "swiss_playoff flips between SW-H1 and the draw stall",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "swiss_playoff|generic|score|R4",
+   "row": "swiss_playoff",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: 7ab73fc7-bf6a-4653-99f7-67008bde6355 scheduled, 37649831-eceb-4e73-a239-a2e2733e9a95 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O2",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "ruling 70",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "swiss_knockout|football|11-a-side|R4",
+   "row": "swiss_knockout",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-loop-bounded: play loop exited empty_pair_round",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SW-H1",
+    "wave": "W3"
+   }
+  }
+ ],
+ "note": "Real reds of the third truth-run dispatches (L1, L2, L3), one per committed triage rule, plus the cases owner ruling 70 names and the swiss_playoff cells that flip between two defects across dispatches. `expect` is the gap and wave an independent reading of each case's mechanism gives (W1-driving TRIAGE.md P1-P7 against the audit rows), NOT what the rules say. Synthetic ids only.",
+ "shapes": [
+  {
+   "why": "rule bg-draw-stall-double-elim",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "double_elim|boardgame|blitz|LIFECYCLE",
+   "row": "double_elim",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: 8 fixture(s) left unfinished: 72186cf2-4a02-4686-9a48-c472e4af41fc scheduled, 06fa5071-78f0-40a9-bf08-6e95b232d7ff scheduled, a1e8fd62-7e4c-4f4b-9e76-02fea1f2330e scheduled, 58cf6d75-60b6-49d9-8c31-fe09e3ef281e scheduled, 2b464fe6-263b-48b0-a735-add917ae4d1f scheduled, bbd847eb-4460-40cd-826a-049d10930774 scheduled, b3c408f2-5772-4a3c-ba88-2e22e1cbcb01 scheduled, b4485b7f-d2b9-4ecd-a213-fb735d2f5b70 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-group-group-ko",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "group_group_ko|boardgame|blitz|LIFECYCLE",
+   "row": "group_group_ko",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 3: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: 484de987-7333-4e72-b052-0a754464a8f5 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-group-playoffs",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "group_playoffs|boardgame|blitz|LIFECYCLE",
+   "row": "group_playoffs",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: 02ad3bdc-47a2-4146-ba92-180673d3123d scheduled, 08d25216-7d80-45e9-8ed5-86a3fedd246d scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-group-stepladder",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "group_stepladder|boardgame|blitz|LIFECYCLE",
+   "row": "group_stepladder",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: 0ef685dd-003b-43ac-8d13-97b57e20a366 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-groups-ko",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "groups_ko|boardgame|blitz|R4",
+   "row": "groups_ko",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: 0296ff07-4d9c-43f9-9f69-843e4f947ce9 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-knockout",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "knockout|boardgame|blitz|LIFECYCLE",
+   "row": "knockout",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: cf97fa76-954b-4b54-8247-a4a4cab5dd3f scheduled, 87cd3c63-3502-47ec-9bc3-3c28006f509f scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-knockout-third-place",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "knockout_third_place|boardgame|blitz|LIFECYCLE",
+   "row": "knockout_third_place",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: 3 fixture(s) left unfinished: 2c2ee101-fb4a-4aaf-8c84-64e5d1bbf92b scheduled, e0c48372-fd5c-4d24-95c9-eb958214ae63 scheduled, fe14c1ff-2c39-4a80-bb7c-43c88eb2e588 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-ko-plate",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "ko_plate|boardgame|blitz|LIFECYCLE",
+   "row": "ko_plate",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: play loop exited not_reached",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-league-ko",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "league_ko|boardgame|blitz|LIFECYCLE",
+   "row": "league_ko",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: 512ee325-242c-4bbc-b55c-077f0259cbf9 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-qualifying-main",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "qualifying_main|boardgame|blitz|LIFECYCLE",
+   "row": "qualifying_main",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: play loop exited not_reached",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-stepladder-only",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "stepladder_only|boardgame|blitz|LIFECYCLE",
+   "row": "stepladder_only",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: 4 fixture(s) left unfinished: 2cdca164-f89e-4e40-a590-3e9410d3e997 scheduled, 8376f643-4b87-42a5-af77-f03361710eed scheduled, 42534598-f282-4eea-a4ce-f09be99b4461 scheduled, a967968a-966a-4578-9a11-76cee5acdf9c scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-swiss-knockout",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "swiss_knockout|boardgame|blitz|LIFECYCLE",
+   "row": "swiss_knockout",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: 6d4ccb1a-7a3e-43e8-a75a-8d0ee86f62f0 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-swiss-playoff",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "swiss_playoff|boardgame|blitz|LIFECYCLE",
+   "row": "swiss_playoff",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: b43b089f-504c-4841-8806-e2ff93f831ac scheduled, 5620a6ac-296f-4fad-a5c5-b4cccbf9694e scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-page-playoff-only-lifecycle",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "page_playoff_only|boardgame|blitz|LIFECYCLE",
+   "row": "page_playoff_only",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: 1e340e60-a231-4acd-8e6f-9a01578315b6 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-page-playoff-only-m1",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "page_playoff_only|boardgame|blitz|M1",
+   "row": "page_playoff_only",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "M1",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: c7a34999-2082-4163-9005-688041219ae8 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-final-league-ko",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "league_ko|boardgame|blitz|F1",
+   "row": "league_ko",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "F1",
+   "width": null,
+   "reason": "I2-bracket-one-champion-ranks-permutation: 43f1cf39-ed9d-42e4-9f2c-a2aee34353d0: bracket fixture ended draw",
+   "failing": [
+    "I2-bracket-one-champion-ranks-permutation"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-final-groups-ko",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "groups_ko|boardgame|blitz|LIFECYCLE",
+   "row": "groups_ko",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I2-bracket-one-champion-ranks-permutation: 5e0b20d7-ff5c-41c5-8258-471f790c127e: bracket fixture ended draw",
+   "failing": [
+    "I2-bracket-one-champion-ranks-permutation"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-final-swiss-knockout",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "swiss_knockout|boardgame|blitz|F1",
+   "row": "swiss_knockout",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "F1",
+   "width": null,
+   "reason": "I2-bracket-one-champion-ranks-permutation: 8be6834a-a028-459c-a752-1a2944cdce44: bracket fixture ended draw",
+   "failing": [
+    "I2-bracket-one-champion-ranks-permutation"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-final-group-stepladder",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "group_stepladder|boardgame|blitz|F1",
+   "row": "group_stepladder",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "F1",
+   "width": null,
+   "reason": "I2-bracket-one-champion-ranks-permutation: no decided fixture carries a terminal final key (sl-g2)",
+   "failing": [
+    "I2-bracket-one-champion-ranks-permutation"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule gn-draw-stall-group-playoffs",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "group_playoffs|generic|score|LIFECYCLE",
+   "row": "group_playoffs",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: 8d1d804e-837a-4986-9812-6cf2e295a5e6 scheduled, 9771103a-8929-4306-a956-f476d723a89c scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O2",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule gn-draw-stall-swiss-playoff",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "swiss_playoff|generic|score|LIFECYCLE",
+   "row": "swiss_playoff",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: c11f0aea-1a80-4341-8be0-bac3612246bd scheduled, 2067cccf-693d-40cb-b1bc-f22595b56eb5 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O2",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule gn-draw-stall-page-playoff-only-lifecycle",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "page_playoff_only|generic|score|LIFECYCLE",
+   "row": "page_playoff_only",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: 54ba9051-70d1-4deb-bcac-64c97a88819b scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O2",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule gn-draw-final-page-playoff-only-m1",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "page_playoff_only|generic|score|M1",
+   "row": "page_playoff_only",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "M1",
+   "width": null,
+   "reason": "I2-bracket-one-champion-ranks-permutation: no decided fixture carries a terminal final key (pp-final)",
+   "failing": [
+    "I2-bracket-one-champion-ranks-permutation"
+   ],
+   "expect": {
+    "gap": "SC-O2",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule page-playoff-withdraw-voids",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "page_playoff_only|football|11-a-side|R4",
+   "row": "page_playoff_only",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: play loop exited refused_generate",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "FX-G7",
+    "wave": "W4"
+   }
+  },
+  {
+   "why": "rule ko-plate-seeding-failed",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "ko_plate|football|11-a-side|F1",
+   "row": "ko_plate",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "F1",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 2: never asked to complete; life-loop-bounded: play loop exited not_reached; advance-seeded-as-declared: stage 2: no proposal — stage 1's /complete answered 409 STAGE_COMPLETED_SEEDING_FAILED",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "advance-seeded-as-declared",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "FX-G14",
+    "wave": "W4"
+   }
+  },
+  {
+   "why": "rule swiss-round-paired-nobody-swiss-knockout",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "swiss_knockout|football|11-a-side|R4",
+   "row": "swiss_knockout",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-loop-bounded: play loop exited empty_pair_round",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SW-H1",
+    "wave": "W3"
+   }
+  },
+  {
+   "why": "rule swiss-round-paired-nobody-swiss-playoff",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "swiss_playoff|hockey|fih-outdoor|R4",
+   "row": "swiss_playoff",
+   "sport": "hockey",
+   "variant": "fih-outdoor",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-loop-bounded: play loop exited empty_pair_round",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SW-H1",
+    "wave": "W3"
+   }
+  },
+  {
+   "why": "rule mexicano-stalled-on-forfeit",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "mexicano|football|11-a-side|M1",
+   "row": "mexicano",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "M1",
+   "width": null,
+   "reason": "life-loop-bounded: play loop exited stalled_rounds",
+   "failing": [
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "FX-G11",
+    "wave": "W7"
+   }
+  },
+  {
+   "why": "rule mexicano-pair-entrants-lifecycle",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "mexicano|football|11-a-side|LIFECYCLE",
+   "row": "mexicano",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "LIFECYCLE",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: generate answered 500 INTERNAL — not a named refusal; I8-generate-named: stage 1: generate → 500 INTERNAL; I10-americano-seats-each-person-once: round 2: 58c16354-e0a1-4210-ac3f-8e3f687f8492 seated 2×; life-loop-bounded: play loop exited refused_generate",
+   "failing": [
+    "I10-americano-seats-each-person-once",
+    "I4-nothing-ends-stuck",
+    "I8-generate-named",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-1",
+    "wave": "W7"
+   }
+  },
+  {
+   "why": "rule mexicano-pair-entrants-f1",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "mexicano|football|11-a-side|F1",
+   "row": "mexicano",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "F1",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: generate answered 500 INTERNAL — not a named refusal; I8-generate-named: stage 1: generate → 500 INTERNAL; I10-americano-seats-each-person-once: round 2: 984db362-a78b-485f-aeb8-2353bd5e1f22 seated 2×; life-built-as-posted: 29cde92d-a9df-45d2-99d3-93edee162a35 (seed 5) is seated in no fixture of the stage; f1-everyone-drawn: 29cde92d-a9df-45d2-99d3-93edee162a35 appears in no fixture (its person sits in no seated pair entrant); f1-round-size: round 2: 2 seated, expected 1 (the engine's round over the field); life-loop-bounded: play loop exited refused_generate",
+   "failing": [
+    "I10-americano-seats-each-person-once",
+    "I4-nothing-ends-stuck",
+    "I8-generate-named",
+    "f1-everyone-drawn",
+    "f1-round-size",
+    "life-built-as-posted",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-1",
+    "wave": "W7"
+   }
+  },
+  {
+   "why": "rule mexicano-pair-entrants-r4-self-pair",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "mexicano|cricket|t20|R4",
+   "row": "mexicano",
+   "sport": "cricket",
+   "variant": "t20",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I4-nothing-ends-stuck: stage 1: generate answered 500 INTERNAL — not a named refusal; I8-generate-named: stage 1: generate → 500 INTERNAL; I10-americano-seats-each-person-once: round 2: 347b683a-6102-40ae-aaa3-a1432bdfa47c seated 2×; life-loop-bounded: play loop exited refused_generate",
+   "failing": [
+    "I10-americano-seats-each-person-once",
+    "I4-nothing-ends-stuck",
+    "I8-generate-named",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-1",
+    "wave": "W7"
+   }
+  },
+  {
+   "why": "rule mexicano-pair-entrants-r4-reseated",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "mexicano|football|11-a-side|R4",
+   "row": "mexicano",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": null,
+   "reason": "I10-americano-seats-each-person-once: round 2: 78f29b77-0e69-455f-87a4-726c0cd9dad7 seated 2×; r4-not-seated-later: 58a89570-893d-4df6-9a7d-57558e7b20b5 (round 2, decided) seats withdrawn 7d0e52e2-1a85-477a-91bc-4820e2f61239+ac345e9e-aeb5-424f-b36b-faac6e400230+324461b9-c3aa-489f-a95c-a6008ae3e086+e92ddc67-990c-461f-94d1-9dbd827c0c68+2febc546-159d-40e0-a42f-f836d63d7c47+3c086040-6410-47a4-8118-4ef66d349520+8bcab314-dd0f-4a83-95db-c1d4aabf8ee3+37329719-33e2-48f1-abc0-722d64f2b049+bed6449f-b1dd-4a0d-8fc1-b50b9dc3634c+220373bd-d215-4f1f-b250-9b1b0b2d2f10+cb44e576-bb9d-490f-ae82-5cf6be2cbfc9+d2932ac3-3261-4d7b-8dd1-ecf1602f567b+820fff69-013d-4993-b158-1ad7fabeb95a+2d2244ca-9246-4978-961a-80e4d7b376a6+dd3a641b-5cd2-4dc7-b514-10943c54524e+f6a593fb-0ef6-49e1-8a51-3631253c424a+8304bb76-4d0a-4db6-8058-d6cca647e7e5+a8a5df3a-3afc-4b17-9b2c-08dbd438817a+20453755-d340-4def-8fa8-63b651d72574+2b958618-59b5-4bea-89b8-2ba94482c7b9+7cede418-0b4c-46fe-bee1-2be52e6e13df+3def5508-73b4-4064-a4b7-0f64423aa898+981d1481-bc5a-4e88-bd86-da352610a2f3 through c4fbd645-c251-4a42-a0e5-58c6f3430fba",
+   "failing": [
+    "I10-americano-seats-each-person-once",
+    "r4-not-seated-later"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-1",
+    "wave": "W7"
+   }
+  },
+  {
+   "why": "rule americano-withdrawn-keeps-playing",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "americano|football|11-a-side|R4",
+   "row": "americano",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": null,
+   "reason": "r4-policy-reported: policy none, expected walkover (6 pending game(s) of the withdrawn entrant (23 persons) at withdrawal, through any entrant; withdrawal.ts open-format rule); r4-not-seated-later: 281cf004-bf5b-43a1-8b03-30c88a2686f4 (round 2, decided) seats withdrawn 7696a951-5bbb-4a8b-b274-6b5b2e2037e5+6a126c70-9bee-4c63-a0aa-15bcafcf6029+19c7807a-9a14-48c8-a672-51e6c46c7877+0f57c81d-0408-40f5-947a-e754a6e94c76+5dffd1e4-dd66-4bca-98a1-88468b68f2aa+ffd95e65-c3f7-48b7-a9d3-f47b977c7a02+64fc08c3-244c-4dfd-bb30-96769063ae32+4501c2a2-c913-48a1-8645-f7ce7de9cc37+5857e06b-909e-43db-9ffa-4b905ea1fda5+d3fb7894-d231-4d60-97d5-aaed8ee43639+e7a566c9-d0e3-41ea-9093-db4200c3a157+506d6adf-195a-4241-8d74-c01320832f70+1834cf63-ed05-4c30-84dc-33c59ba3c090+5bf4a08c-cd2f-49d9-906e-183d7732c296+ae6e9169-4882-4c99-a54f-3a4df65f70b4+9e5e06c9-d56b-44b0-9860-4d2298ccdb4f+8c5fa2bf-9025-44dd-9349-67f964255c36+7a84ffc2-e558-46e4-b568-caf66f3423c0+d24506f4-1d75-4b54-b138-0a2d0f38c144+0f6acebd-e047-4e22-8ab2-7d40c0e337d5+76db7574-c3d0-4a59-9f34-77dc01d9ad83+0721ceed-93fa-4b90-b754-799d11796eb6+bae623ed-9d01-4a26-98dc-b44148838426 through 5cb89ff6-73e0-499b-bc89-98b70e3d3df9",
+   "failing": [
+    "r4-not-seated-later",
+    "r4-policy-reported"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-2",
+    "wave": "W7"
+   }
+  },
+  {
+   "why": "rule stepladder-withdraw-wrong-phase",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "stepladder_only|football|11-a-side|R4",
+   "row": "stepladder_only",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": null,
+   "reason": "error: RefusedCall: POST /api/v1/entrants/5c91a899-34ab-4324-8996-31aa6f1f84a3/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD)",
+   "failing": [],
+   "expect": {
+    "gap": "NEW-W1d-3",
+    "wave": "W4"
+   }
+  },
+  {
+   "why": "rule group-pool-membership-from-results",
+   "run": 3,
+   "layer": "L3",
+   "caseId": "group_group_ko|football|11-a-side|F1",
+   "row": "group_group_ko",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "F1",
+   "width": null,
+   "reason": "I1-rr-pair-once-per-leg: b291a094-718d-4ce0-8374-51609983fede in no pool; I4-nothing-ends-stuck: stage 2: never asked to complete; life-built-as-posted: b291a094-718d-4ce0-8374-51609983fede (seed 1) is seated in no fixture of the stage; f1-everyone-drawn: b291a094-718d-4ce0-8374-51609983fede appears in no fixture; life-loop-bounded: play loop exited not_reached; advance-seeded-as-declared: stage 2: no proposal — stage 1's /complete answered 409 STAGE_COMPLETED_SEEDING_FAILED",
+   "failing": [
+    "I1-rr-pair-once-per-leg",
+    "I4-nothing-ends-stuck",
+    "advance-seeded-as-declared",
+    "f1-everyone-drawn",
+    "life-built-as-posted",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "ST-G5",
+    "wave": "W5"
+   }
+  },
+  {
+   "why": "rule no-builder-knockout-third-place",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "knockout_third_place|football|11-a-side|R4a@320",
+   "row": "knockout_third_place",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": 320,
+   "reason": "organiser-ui-path: no organiser control builds knockout_third_place → W4",
+   "failing": [
+    "organiser-ui-path"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-4",
+    "wave": "W4"
+   }
+  },
+  {
+   "why": "rule no-builder-stepladder-only-f1",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "stepladder_only|football|11-a-side|F1@375",
+   "row": "stepladder_only",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "F1",
+   "width": 375,
+   "reason": "organiser-ui-path: no organiser control builds stepladder_only → W4",
+   "failing": [
+    "organiser-ui-path"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-4",
+    "wave": "W4"
+   }
+  },
+  {
+   "why": "rule no-builder-stepladder-only-m1",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "stepladder_only|football|11-a-side|M1@390",
+   "row": "stepladder_only",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "M1",
+   "width": 390,
+   "reason": "organiser-ui-path: no organiser control builds stepladder_only → W4",
+   "failing": [
+    "organiser-ui-path"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-4",
+    "wave": "W4"
+   }
+  },
+  {
+   "why": "rule no-builder-page-playoff-only-m1",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "page_playoff_only|football|11-a-side|M1@375",
+   "row": "page_playoff_only",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "M1",
+   "width": 375,
+   "reason": "organiser-ui-path: no organiser control builds page_playoff_only → W4",
+   "failing": [
+    "organiser-ui-path"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-4",
+    "wave": "W4"
+   }
+  },
+  {
+   "why": "rule no-builder-group-only",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "group_only|football|11-a-side|R4a@768",
+   "row": "group_only",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": 768,
+   "reason": "organiser-ui-path: no organiser control builds group_only → W5",
+   "failing": [
+    "organiser-ui-path"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-5",
+    "wave": "W5"
+   }
+  },
+  {
+   "why": "rule no-builder-group-group-ko-m1",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "group_group_ko|football|11-a-side|M1@320",
+   "row": "group_group_ko",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "M1",
+   "width": 320,
+   "reason": "organiser-ui-path: no organiser control builds group_group_ko → W5",
+   "failing": [
+    "organiser-ui-path"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-5",
+    "wave": "W5"
+   }
+  },
+  {
+   "why": "rule no-builder-group-group-ko-r4",
+   "run": 3,
+   "layer": "L2",
+   "caseId": "group_group_ko|football|11-a-side|R4a@834",
+   "row": "group_group_ko",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "R4",
+   "width": 834,
+   "reason": "organiser-ui-path: no organiser control builds group_group_ko → W5",
+   "failing": [
+    "organiser-ui-path"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-5",
+    "wave": "W5"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-league-ko at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "league_ko|boardgame|blitz|LIFECYCLE@1280",
+   "row": "league_ko",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: e48738ad-3638-4d8f-9bfd-2c66ad72df9d scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-final-groups-ko at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "groups_ko|boardgame|blitz|LIFECYCLE@1280",
+   "row": "groups_ko",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I2-bracket-one-champion-ranks-permutation: d7b782f5-01f3-4d09-9ab8-a800b8e5a7ac: bracket fixture ended draw; ui-champion-shown: the banner names nobody; want Matrix Player 3 — still 78970 ms after the case's last write (window 77000 ms: the page's revalidate 30 s + its data cache's 30 s + a navigation), read 35×",
+   "failing": [
+    "I2-bracket-one-champion-ranks-permutation",
+    "ui-champion-shown"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-group-stepladder at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "group_stepladder|boardgame|blitz|LIFECYCLE@1280",
+   "row": "group_stepladder",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: 04a77cd4-d03e-461b-927e-0862df03f863 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-group-playoffs at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "group_playoffs|boardgame|blitz|LIFECYCLE@1280",
+   "row": "group_playoffs",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: 6e188fab-3476-4443-ab14-182fc9d48b36 scheduled, 5283e1c1-afd1-4831-b015-00d00d359489 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule gn-draw-stall-group-playoffs at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "group_playoffs|generic|score|LIFECYCLE@1280",
+   "row": "group_playoffs",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: c3e7ebc1-da5e-4c7f-b8be-70c0d2e33a99 scheduled, 23293a78-929b-42c2-b5f3-fe1b86a62aca scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O2",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-swiss-playoff at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "swiss_playoff|boardgame|blitz|LIFECYCLE@1280",
+   "row": "swiss_playoff",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: 37b7ad08-3eed-4f4c-b97d-2159b2f52442 scheduled, 6dff3b97-5fff-4c02-b136-e2cb7380f964 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule gn-draw-stall-swiss-playoff at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "swiss_playoff|generic|score|LIFECYCLE@1280",
+   "row": "swiss_playoff",
+   "sport": "generic",
+   "variant": "score",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: 7a39f7ad-bd4f-4928-ad04-92ef66fed868 scheduled, 03d4b8e8-b898-42a5-99a2-bc5764deda40 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O2",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-swiss-knockout at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "swiss_knockout|boardgame|blitz|LIFECYCLE@1280",
+   "row": "swiss_knockout",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 2: did not complete (200 (no code)) and named no reason; life-loop-bounded: 1 fixture(s) left unfinished: 28b355d9-2237-4f9f-b0b5-4b20421483a3 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-knockout at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "knockout|boardgame|blitz|LIFECYCLE@1280",
+   "row": "knockout",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: 2 fixture(s) left unfinished: 0551ec97-a740-4935-8fa1-6f4850ae51de scheduled, 6c2d78cb-4c47-4daa-a9b0-6b638d73320b scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-ko-plate at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "ko_plate|boardgame|blitz|LIFECYCLE@1280",
+   "row": "ko_plate",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: play loop exited not_reached",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-qualifying-main at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "qualifying_main|boardgame|blitz|LIFECYCLE@1280",
+   "row": "qualifying_main",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: play loop exited not_reached",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule bg-draw-stall-double-elim at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "double_elim|boardgame|blitz|LIFECYCLE@1280",
+   "row": "double_elim",
+   "sport": "boardgame",
+   "variant": "blitz",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 1: did not complete (200 (no code)) and named no reason; life-loop-bounded: 8 fixture(s) left unfinished: 2da15838-2d5d-42b7-8cee-fbcd8c96a004 scheduled, 83a0a3a6-2f0f-469b-8fcd-a64b628c3af6 scheduled, 12d6693f-3315-476f-ac22-8ed2a6e2f646 scheduled, b7413570-d54b-4a65-a25f-b1cbe135004d scheduled, 5ea1a2ac-422b-4c6a-b085-ab1b4d76d34c scheduled, 548be158-5173-45c4-995f-c6807ccd09b8 scheduled, 048c4b53-acf0-4a1f-8b81-faf217ef475b scheduled, dfa69e1e-1372-431e-97c5-68446b6369b0 scheduled",
+   "failing": [
+    "I4-nothing-ends-stuck",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "SC-O1",
+    "wave": "W2"
+   }
+  },
+  {
+   "why": "rule mexicano-pair-entrants-lifecycle at L1",
+   "run": 3,
+   "layer": "L1",
+   "caseId": "mexicano|football|11-a-side|LIFECYCLE@1280",
+   "row": "mexicano",
+   "sport": "football",
+   "variant": "11-a-side",
+   "scenario": "LIFECYCLE",
+   "width": 1280,
+   "reason": "I4-nothing-ends-stuck: stage 1: generate answered 500 INTERNAL — not a named refusal; I8-generate-named: stage 1: generate → 500 INTERNAL; I10-americano-seats-each-person-once: round 2: 5a061e79-5fa1-4040-a4f7-6f51549dfe95 seated 2×; life-loop-bounded: play loop exited refused_generate",
+   "failing": [
+    "I10-americano-seats-each-person-once",
+    "I4-nothing-ends-stuck",
+    "I8-generate-named",
+    "life-loop-bounded"
+   ],
+   "expect": {
+    "gap": "NEW-W1d-1",
+    "wave": "W7"
+   }
+  }
+ ]
+}

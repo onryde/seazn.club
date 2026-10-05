@@ -1,3 +1,34 @@
 {
-  "gaps": []
+  "gaps": [
+    {
+      "id": "NEW-W1d-1",
+      "wave": "W7",
+      "title": "mexicano counts the pair entrants it made as players: round 2+ pairs a pair entrant with itself (500) or seats one person twice",
+      "evidence": "mexicano|*|LIFECYCLE and F1 on every sport, and R4 where the 500 or a re-seat fires (it moves between runs): `generate answered 500 INTERNAL` at round 2, `I10 round N: <person> seated 2x` naming the earlier pair entrant the person belongs to, f1-round-size 'round 2: 2 seated, expected 1'. e.g. mexicano|football|11-a-side|LIFECYCLE, mexicano|badminton|bwf|F1. Not an audit row (FX-G9/G10/G11 are bye bias, sport-gated points and the non-decided stall; FX-G10 is the likelier reason the pairing differs per run); W1-driving TRIAGE.md's mexicano-pair-entrants-counted-as-players signature, 32 cases."
+    },
+    {
+      "id": "NEW-W1d-2",
+      "wave": "W7",
+      "title": "americano: R4 withdraws a player and the product does nothing with the pending games, the person is seated again",
+      "evidence": "americano|*|R4 on all 11 sports (e.g. americano|badminton|bwf|R4): r4-policy-reported 'policy none, expected walkover (6 pending game(s) of the withdrawn entrant ... at withdrawal)' and r4-not-seated-later 'seats withdrawn <person>' in rounds after the withdrawal. No audit row names americano withdrawal (FX-G7 is page_playoff only). W1-driving TRIAGE.md signature r4-withdrawn-player-kept-playing."
+    },
+    {
+      "id": "NEW-W1d-3",
+      "wave": "W4",
+      "title": "stepladder: withdrawing an entrant is refused 422 WRONG_PHASE (every game after the first has a TBD side)",
+      "evidence": "stepladder_only|*|R4 on all 11 sports (e.g. stepladder_only|badminton|bwf|R4): POST /api/v1/entrants/<id>/withdraw -> HTTP 422 WRONG_PHASE 'fixture has an unassigned entrant (bye/TBD)' (append-event.ts:189, fold.ts:120); withdrawal.ts:217-220 turns a walkover against a TBD opponent into a void posted as core.abandon, which the event guard refuses. Same family as the committed model regressions MB-002/MB-003 (ko-withdraw-waiting-on-tbd). Not an audit row (FX-G7 is page_playoff). The stepladder R4 policy and cascade checks have never been judged live."
+    },
+    {
+      "id": "NEW-W1d-4",
+      "wave": "W4",
+      "title": "no division-builder control builds knockout_third_place, page_playoff_only or stepladder_only",
+      "evidence": "L2: knockout_third_place|football|11-a-side|{F1,M1,R4}@<width>, stepladder_only|football|11-a-side|{F1,M1}@<width>, page_playoff_only|football|11-a-side|M1@<width>: check organiser-ui-path 'no organiser control builds <row>'. By design (D7, lib/api-only-ui.ts API_ONLY_UI_WAVE): the owning wave owes the control. Design section 8 W4 names 'third-place UI'; no audit row does (audit offered-matrix.md lists the rows as API-only)."
+    },
+    {
+      "id": "NEW-W1d-5",
+      "wave": "W5",
+      "title": "no division-builder control builds group_only or group_group_ko",
+      "evidence": "L2: group_only|football|11-a-side|{F1,M1,R4}@<width>, group_group_ko|football|11-a-side|{M1,R4}@<width>: check organiser-ui-path 'no organiser control builds <row>'. By design (D7, lib/api-only-ui.ts API_ONLY_UI_WAVE): the owning wave owes the control. No audit row names it (offered-matrix.md lists the rows as API-only)."
+    }
+  ]
 }
