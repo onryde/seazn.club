@@ -26,7 +26,8 @@ import {
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { bracketFirstRound } from "../lib/scenarios/f1-odd-field.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
-import { SIDE_SIZE_ROUTE, rosterSize } from "../lib/scenarios/rosters.ts";
+import { SIDE_SIZE_ROUTE, entrantName, rosterSize } from "../lib/scenarios/rosters.ts";
+import { entrantInput } from "../lib/model/state.ts";
 import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
@@ -1312,7 +1313,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     }
     const r = await runOn(new StoresSeven(), "LIFECYCLE", { sport: "football", variant: football });
     expect(r.state.state).toBe("red");
-    expect(r.checks.find((c) => c.id === "life-built-as-posted")!.evidence).toEqual(["7 entrant(s) stored, 8 posted", "add answered 7 entrant(s), 8 posted", "posted seed 8 (Matrix Player 8) stored 0 time(s)"]);
+    expect(r.checks.find((c) => c.id === "life-built-as-posted")!.evidence).toEqual(["7 entrant(s) stored, 8 posted", "add answered 7 entrant(s), 8 posted", "posted seed 8 (Matrix Team 8) stored 0 time(s)"]);
     // An answer that drops an entrant's seed loses nothing the roster read needs.
     class AnswersNoSeed extends FakeLeagueDriver {
       override addEntrants(d: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
@@ -2426,5 +2427,57 @@ describe("D6: a refusal in setUpDivision's setup phase is SetupRefused, by phase
       }
       expect(checked).toBe(3);
     });
+  });
+});
+
+// W1d Task 13, item 23: a team entrant is "Matrix Team N", an individual "Matrix Player N" (the house constraint:
+// the name says what the entrant is). The model already named its teams so; the scenario harness named every
+// entrant a player. One helper now, used by both.
+describe("entrant names follow the entrant kind (W1d item 23)", () => {
+  it("entrantName: a team is Matrix Team N; an individual and a pair stay Matrix Player N", () => {
+    expect(entrantName("team", 3)).toBe("Matrix Team 3");
+    expect(entrantName("individual", 3)).toBe("Matrix Player 3");
+    expect(entrantName("pair", 3)).toBe("Matrix Player 3");
+    expect(entrantName("team", 10)).toBe("Matrix Team 10");
+  });
+
+  it("every sport at its builder default: setUpDivision names each entrant for its division's kind, and the model's entrants carry the same names", async () => {
+    let team = 0;
+    let individual = 0;
+    let names = 0;
+    for (const sport of SPORT_KEYS) {
+      const variant = offlineBuilderDefault(sport);
+      const cfg = resolveSportCfg(sport, variant);
+      // The kind is the engine module's own declaration (entrantKindFor reads sportModule(...).entrantModel), never the helper's.
+      const kind = entrantKindFor(sport, cfg);
+      const driver = new FakeLeagueDriver();
+      const setup = await setUpDivision(ctxFor(driver, "LIFECYCLE", { sport, variant }), new Recorder(), 4);
+      expect(setup.kind, sport).toBe(kind);
+      const want = (n: number) => `Matrix ${kind === "team" ? "Team" : "Player"} ${n}`;
+      expect(setup.entrants.map((e) => e.display_name), sport).toEqual([1, 2, 3, 4].map(want));
+      // The model posts the same name for the same entrant: one naming, not two.
+      expect([1, 2, 3, 4].map((n) => entrantInput({ sport, cfg, kind }, n).displayName), sport).toEqual([1, 2, 3, 4].map(want));
+      if (kind === "team") team++; else individual++;
+      names += setup.entrants.length;
+    }
+    expect(names).toBe(SPORT_KEYS.length * 4);
+    // Neither arm is vacuous: the registry holds team sports and individual ones.
+    expect(team).toBeGreaterThan(0);
+    expect(individual).toBeGreaterThan(0);
+    expect(team + individual).toBe(SPORT_KEYS.length);
+  });
+
+  it("the entrant's roster stays Matrix Player <entrant>.<m>: only the entrant's own name changed (a team's members are people)", async () => {
+    class Recording extends FakeLeagueDriver {
+      sent: EntrantInput[] = [];
+      override addEntrants(d: string, es: readonly EntrantInput[]) { this.sent.push(...es); return super.addEntrants(d, es); }
+    }
+    const driver = new Recording();
+    const football = offlineBuilderDefault("football");
+    const setup = await setUpDivision(ctxFor(driver, "LIFECYCLE", { sport: "football", variant: football }), new Recorder(), 2);
+    expect(setup.entrants.map((e) => e.display_name)).toEqual(["Matrix Team 1", "Matrix Team 2"]);
+    const people = driver.sent.flatMap((e, i) => (e.members ?? []).map((m) => ({ entrant: i + 1, name: m.fullName })));
+    expect(people.length).toBeGreaterThan(2);
+    expect(people.every((p) => new RegExp(`^Matrix Player ${p.entrant}\\.\\d+$`).test(p.name))).toBe(true);
   });
 });

@@ -24,7 +24,7 @@ import type { CheckResult } from "../results.ts";
 import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import { NotAWave, WAVE_ID, type Route } from "../routing.ts";
 import { lineupItems, lineupWarningLine, putOwedLineups, type LineupSink } from "../scenarios/lineup-plan.ts";
-import { rosterMembers, rosterSize } from "../scenarios/rosters.ts";
+import { entrantName, rosterMembers, rosterSize } from "../scenarios/rosters.ts";
 import { entrantKindFor, resolveSportCfg } from "../sport-cfg.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
@@ -342,8 +342,8 @@ export function modelRowRefusal(row: RowKey, bodies: readonly StagePostBody[] = 
  *  (rosters.ts rosterMembers), as the scenario harness's setUpDivision posts it. */
 export function entrantInput(m: { sport: string; cfg: unknown; kind: ModelState["kind"] }, n: number): EntrantInput {
   return m.kind === "team"
-    ? { displayName: `Matrix Team ${n}`, seed: n, kind: m.kind, members: rosterMembers(m.sport, m.cfg, n) }
-    : { displayName: `Matrix Player ${n}`, seed: n, kind: m.kind };
+    ? { displayName: entrantName(m.kind, n), seed: n, kind: m.kind, members: rosterMembers(m.sport, m.cfg, n) }
+    : { displayName: entrantName(m.kind, n), seed: n, kind: m.kind };
 }
 
 /** A team entrant's roster as the product stored it — read back, never the

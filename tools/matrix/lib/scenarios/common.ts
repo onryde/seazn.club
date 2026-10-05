@@ -23,7 +23,7 @@ import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
 import { lineupWarningLine, postedTeamSides, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
-import { rosterMembers, rosterSize } from "./rosters.ts";
+import { entrantName, rosterMembers, rosterSize } from "./rosters.ts";
 import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "./terminal-finals.ts";
 import type { ScenarioContext } from "./types.ts";
 
@@ -240,7 +240,7 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
     division = await inSetup(() => ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant, config }));
     await inSetup(() => ctx.driver.postStages(division.id, bodies));
   }
-  const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1 }));
+  const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: entrantName(kind, i + 1), seed: i + 1 }));
   // Task 4 (fold-in beneath ruling 49): a team entrant carries the catalog's
   // full roster (D2). Task 5: on an americano row an individual carries one
   // linked person, named as the entrant. Any other entrant carries no
