@@ -152,6 +152,10 @@ export const NAME = names({
   templateName: dictionary("comp.wizard.name.label", `${V2}/template-gallery.tsx`),
   templateEndsOn: decorated("comp.wizard.endsOn", `${V2}/template-gallery.tsx`, "`${msg(\"comp.wizard.endsOn\")} *`"),
   championLabel: dictionary("table.champion", PUBLIC_DIVISION_PAGE, "public"),
+  // W1d Task 14 (item 15e): the console's "Void last entry" has no testid; its accessible name is the dictionary's
+  // value (fixture-console.tsx renders msg("score.voidLast") inside the button, which also carries a title naming
+  // the entry it would void, score.voidLastTitle).
+  voidLast: dictionary("score.voidLast", `${V2}/fixture-console.tsx`),
 });
 
 export const DATA = data({

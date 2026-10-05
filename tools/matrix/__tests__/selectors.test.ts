@@ -214,6 +214,14 @@ describe("the template card's composed testid (W1-driving Task 13)", () => {
     for (const key of keys) expect(templateCardTestid(key), key).toBe(`${prefix}${key}`);
     for (const bad of ["", "no-such-template", "box-league\"]", "../box-league"]) expect(() => templateCardTestid(bad), JSON.stringify(bad)).toThrow(UnknownTemplate);
   });
+  it("the console's Void last entry is the button the product renders with score.voidLast (not its title key), named by that dictionary entry (W1d Task 14)", () => {
+    expect(NAME.voidLast).toMatchObject({ dictKey: "score.voidLast", file: "apps/web/src/components/v2/fixture-console.tsx" });
+    expect(NAME.voidLast.text).toBe(enUi()["score.voidLast"]);
+    // The button's visible text is the key; its title is the other one, which names the entry it would void.
+    expect(src(NAME.voidLast.file)).toContain('{msg("score.voidLast")}');
+    expect(src(NAME.voidLast.file)).toContain('title={msg("score.voidLastTitle"');
+    expect(enUi()["score.voidLast"]).not.toBe(enUi()["score.voidLastTitle"]);
+  });
   it("the detail sheet's CTA, its form and its two fields are the product's", () => {
     expect(TESTID.templateDetailSubmit).toMatchObject({ id: "template-detail-submit", file: "apps/web/src/components/v2/template-gallery.tsx" });
     expect(DATA.templateDetailForm).toMatchObject({ selector: 'form[id="template-detail-form"]', file: "apps/web/src/components/v2/template-gallery.tsx" });

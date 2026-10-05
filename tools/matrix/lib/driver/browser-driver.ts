@@ -37,11 +37,11 @@ import { createCompetitionUi, createFromTemplateUi } from "../browser/pages/comp
 import { boundActions, navBudget, shoot, type DivisionWhere, type PageCtx } from "../browser/pages/ctx.ts";
 import { createDivisionUi, type StageOut } from "../browser/pages/division-builder.ts";
 import { addEntrantsUi, withdrawUi } from "../browser/pages/entrants.ts";
-import { finalizeUi, forfeitUi } from "../browser/pages/fixture-console.ts";
+import { finalizeUi, forfeitUi, voidLastUi } from "../browser/pages/fixture-console.ts";
 import { startUi } from "../browser/pages/launch.ts";
 import { readPublicUi } from "../browser/pages/public-division.ts";
-import { openFixtureUi } from "../browser/pages/run-sheet.ts";
-import { completeStageUi, generateUi, type StagePosition } from "../browser/pages/stage-rail.ts";
+import { judgeTodayDefault, openFixtureUi, type DefaultFilterSeen } from "../browser/pages/run-sheet.ts";
+import { completeStageUi, generateUi, judgeFoldBranch, type RailHooks, type StagePosition } from "../browser/pages/stage-rail.ts";
 import { readStandingsUi, type UiTable } from "../browser/pages/standings.ts";
 import { noPadReason } from "../pad-sports.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
@@ -54,10 +54,10 @@ import type { StreamEvent } from "../streams/types.ts";
 import type { HttpDriver } from "./http-driver.ts";
 import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from "./mixed.ts";
 import {
-  DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded,
+  DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, requireVoidTarget,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
 /** sport → pad adapter (pads/index.ts PAD_ADAPTERS). A sport without one is
@@ -80,18 +80,21 @@ export interface BrowserPages {
   readonly openFixtureUi: typeof openFixtureUi;
   readonly forfeitUi: typeof forfeitUi;
   readonly finalizeUi: typeof finalizeUi;
+  readonly voidLastUi: typeof voidLastUi;
   readonly readStandingsUi: typeof readStandingsUi;
   readonly readPublicUi: typeof readPublicUi;
 }
 export const REAL_PAGES: BrowserPages = Object.freeze({
   createCompetitionUi, createFromTemplateUi, createDivisionUi, addEntrantsUi, withdrawUi, startUi, generateUi,
-  completeStageUi, openFixtureUi, forfeitUi, finalizeUi, readStandingsUi, readPublicUi,
+  completeStageUi, openFixtureUi, forfeitUi, finalizeUi, voidLastUi, readStandingsUi, readPublicUi,
 });
 
 /** The HTTP side: every organiser call, plus the ledger read (HttpDriver.ledger),
- *  the roster filler the entrants tab cannot do (HttpDriver.setMembers) and the
- *  read-back of what a template card built (HttpDriver.readBackTemplate). */
-export type HttpSide = OrganiserDriver & Pick<HttpDriver, "ledger" | "setMembers" | "readBackTemplate">;
+ *  the roster filler the entrants tab cannot do (HttpDriver.setMembers), the
+ *  read-back of what a template card built (HttpDriver.readBackTemplate), and
+ *  (W1d Task 14) the date filler a match day needs (HttpDriver.scheduleFixtureNow)
+ *  with the desk's phase read (HttpDriver.divisionPhase). */
+export type HttpSide = OrganiserDriver & Pick<HttpDriver, "ledger" | "setMembers" | "readBackTemplate" | "scheduleFixtureNow" | "divisionPhase">;
 
 export interface Clock { now(): number; sleep(ms: number): Promise<void> }
 const REAL_CLOCK: Clock = { now: () => Date.now(), sleep: (ms) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }) };
@@ -131,6 +134,18 @@ export const OVERRIDE_ROUTE = routeTo("W2", "the rules editor is not driven in t
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */
 const STAGE_COMPLETED = "stage_completed";
+
+/** The console's Void last entry answered, yet the ledger after the tip it was read at does not hold the one
+ *  core.void that names an event the ledger knows. Refused by name: the answer would otherwise be invented from the
+ *  rule instead of read from what the console actually did (W1d Task 14, item 15e). */
+export class ConsoleVoidUnproven extends Error {
+  readonly fixtureId: string;
+  constructor(fixtureId: string, why: string) {
+    super(`browser: the console's Void last entry on fixture ${fixtureId} — ${why}`);
+    this.name = "ConsoleVoidUnproven";
+    this.fixtureId = fixtureId;
+  }
+}
 
 /** Ruling C (amended, fix round 1): how long after the case's last write the
  *  public page may still show an older state. The page's own ISR window, plus
@@ -291,6 +306,12 @@ export class BrowserDriver implements OrganiserDriver {
   /** stage id → the finalRanks its completion answered (null: none). */
   readonly #finalRanks = new Map<string, readonly string[] | null>();
   #uiCalls = 0;
+  /** The first rail visit of the case has told the driver what it saw (W1d Task 14): the fold's branch is judged
+   *  once, and the match-day default filter is read on that visit only — the sheet's own default exists on the
+   *  first load, and every later visit finds it already widened. */
+  #railSeen = false;
+  /** division id → the fixture numbers this driver dated NOW (scheduleFixtureNow): the rows "today" must show. */
+  readonly #dated = new Map<string, Set<number>>();
   /** When the case's last write settled (either path; null before any): the
    *  public page's freshness window runs from here (ruling C, amended). */
   #lastWriteAt: number | null = null;
@@ -611,6 +632,51 @@ export class BrowserDriver implements OrganiserDriver {
   /** The setup filler this driver ran, by name (mixed.ts FILLER). */
   get fillers(): Readonly<Partial<Record<FillerName, number>>> { return this.#ledger.fillers(); }
 
+  /** Filler (W1d Task 14, item 15c): dates a fixture NOW, always HTTP — the date is the precondition of a match
+   *  day, not the act under test. The fixture's number is kept per division: those are the rows the run sheet's
+   *  "today" must show when it first opens. A fixture of no division this driver built is refused before any write. */
+  async scheduleFixtureNow(fixtureId: string): Promise<ScheduledOut> {
+    const { where, no } = await this.#findFixture(fixtureId);
+    this.#ledger.filler("scheduleFixtureNow");
+    const out = await this.#write(() => this.#http.scheduleFixtureNow(fixtureId));
+    let nos = this.#dated.get(where.divisionId);
+    if (nos === undefined) this.#dated.set(where.divisionId, (nos = new Set()));
+    nos.add(no);
+    return out;
+  }
+
+  /** The hooks for the next rail visit: the fold's branch is judged on the case's FIRST visit, and a match-day case
+   *  also reads the run sheet's default filter then — before any page object widens it (D17). A later visit
+   *  reports nothing. */
+  #railHooks(where: DivisionWhere): RailHooks {
+    return {
+      readDefaultFilter: !this.#railSeen && this.#spec.matchDay === true,
+      onRail: async (seen) => {
+        if (this.#railSeen) return;
+        this.#railSeen = true;
+        const fold = judgeFoldBranch(seen.fold);
+        this.#checks.push(assertion("fold-branch", [{ ok: fold.verdict === "pass", note: fold.note }]));
+        if (this.#spec.matchDay === true) this.#checks.push(await this.#judgeTodayDefault(where, seen.defaultFilter));
+      },
+    };
+  }
+
+  /** `runsheet-today-default` for a match-day case: the desk's phase, and the sheet's first load judged against it
+   *  and the fixtures this driver dated. The phase guard comes first: a case that never reached its match day
+   *  proves nothing about the "today" default, however the sheet opened. A case that dated nothing fails, never
+   *  abstains — a match-day case with no dated fixture is a planner fault. */
+  async #judgeTodayDefault(where: DivisionWhere, seen: DefaultFilterSeen | null): Promise<CheckResult> {
+    const competitionId = [...this.#competitions].find(([, slug]) => slug === where.compSlug)?.[0];
+    if (competitionId === undefined) throw new DriverMisuse(`browser: no competition of this driver has slug ${where.compSlug} — the desk's phase cannot be read for division ${where.divisionId}`);
+    const phase = await this.#http.divisionPhase(competitionId, where.divisionId);
+    const dated = [...(this.#dated.get(where.divisionId) ?? [])];
+    const j = judgeTodayDefault({ phase, seen, datedToday: dated });
+    return assertion("runsheet-today-default", [
+      { ok: phase === "match_day", note: `the desk reports phase ${phase}, not match_day: the case never reached its match day, so "today" was not the default in force` },
+      { ok: j.verdict === "pass", note: j.note },
+    ]);
+  }
+
   async start(divisionId: string): Promise<StartOut> {
     if (!this.#wants("start")) {
       this.#ledger.record("start", "http");
@@ -628,7 +694,7 @@ export class BrowserDriver implements OrganiserDriver {
     }
     const where = this.#whereOfStage(stageId);
     this.#ledger.record("generate", "browser");
-    const out = await this.#write(() => this.#ui((p) => p.generateUi(this.#ctx, where, stageId)));
+    const out = await this.#write(() => this.#ui((p) => p.generateUi(this.#ctx, where, stageId, this.#railHooks(where))));
     // O-1: generate keeps the browser's turn until one of its calls here has
     // created fixtures, so generateUi's create branch runs live, not only its no-op.
     this.#ledger.created("generate", out.created);
@@ -727,6 +793,37 @@ export class BrowserDriver implements OrganiserDriver {
     return this.#write(() => this.#ui((p) => p.forfeitUi(this.#ctx, row, byEntrantId, reason)));
   }
 
+  /** The fixture's ledger rows after `sinceSeq`: a read, always HTTP (a scenario that needs to prove a void asks). */
+  ledger(fixtureId: string, sinceSeq = 0): Promise<readonly LedgerRow[]> { return this.#http.ledger(fixtureId, sinceSeq); }
+
+  /** The console's "Void last entry" (W1d Task 14, item 15e). The type's first void is the console's: the ledger is
+   *  read (nothing to void is refused before any click), the console opened by the fixture's number, the control
+   *  tapped. The control chooses its own target, so the answer is read back from the LEDGER — the one core.void the
+   *  console left after the tip, and the event it names — never from the rule that would have picked it; the
+   *  scenario then judges the choice against the last event it posted. Later voids go over http. */
+  async voidLast(fixtureId: string): Promise<VoidedOut> {
+    if (!this.#wants("voidLast")) {
+      this.#ledger.record("voidLast", "http");
+      return this.#write(() => this.#http.voidLast(fixtureId));
+    }
+    const { where, no } = await this.#findFixture(fixtureId);
+    const before = await this.#http.ledger(fixtureId, 0);
+    requireVoidTarget("browser", fixtureId, before);
+    const tip = before[before.length - 1].seq;
+    this.#ledger.record("voidLast", "browser");
+    await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));
+    await this.#write(() => this.#ui((p) => p.voidLastUi(this.#ctx, fixtureId)));
+    const after = await this.#http.ledger(fixtureId, tip);
+    if (after.length > 1) throw new ConsoleVoidUnproven(fixtureId, `${after.length} ledger row(s) after seq ${tip} (${after.map((r) => r.type).join(", ")}), want exactly one ${VOID_EVENT}`);
+    const row = after[0];
+    if (row?.type !== VOID_EVENT) throw new ConsoleVoidUnproven(fixtureId, `left no ${VOID_EVENT} after seq ${tip}${row === undefined ? " (no row at all)" : ` (the row is ${row.type})`}`);
+    const named = (row.payload as { event_id?: unknown } | null)?.event_id;
+    if (typeof named !== "string") throw new ConsoleVoidUnproven(fixtureId, `its ${VOID_EVENT} (seq ${row.seq}) names no event`);
+    const target = before.find((r) => r.id === named);
+    if (target === undefined) throw new ConsoleVoidUnproven(fixtureId, `its ${VOID_EVENT} (seq ${row.seq}) names unknown event ${named} (the ledger up to seq ${tip} holds ${before.map((r) => r.id).join(", ")})`);
+    return { voidedEventId: target.id, voidedType: target.type };
+  }
+
   async withdraw(entrantId: string): Promise<WithdrawOut> {
     if (!this.#wants("withdraw")) {
       this.#ledger.record("withdraw", "http");
@@ -755,7 +852,7 @@ export class BrowserDriver implements OrganiserDriver {
     this.#ledger.record("completeStage", where === null ? "http" : "browser");
     let out: CompleteOut;
     try {
-      out = await this.#write(() => where === null ? this.#http.completeStage(stageId) : this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId, position ?? undefined)));
+      out = await this.#write(() => where === null ? this.#http.completeStage(stageId) : this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId, position ?? undefined, this.#railHooks(where))));
     } catch (e) {
       // As HttpDriver: a named 4xx committed nothing and stays retryable; any
       // other ending may follow a committed completion, so it is never repeated

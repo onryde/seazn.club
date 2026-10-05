@@ -60,7 +60,7 @@ describe("MixedLedger", () => {
       checked++;
     }
     expect(checked).toBe(ACTION_TYPES.length);
-    expect(checked).toBe(11);
+    expect(checked).toBe(12);
     expect(createPath).toBe(KEEPS_TURN_UNTIL_CREATED.length);
   });
 
@@ -211,7 +211,7 @@ describe("MixedLedger", () => {
   });
 
   it("ACTION_TYPES is the plan's list, in its order", () => {
-    expect([...ACTION_TYPES]).toEqual(["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "forfeit", "withdraw", "completeStage", "standingsView", "publicView"]);
+    expect([...ACTION_TYPES]).toEqual(["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "voidLast", "forfeit", "withdraw", "completeStage", "standingsView", "publicView"]);
   });
 });
 
@@ -226,7 +226,7 @@ describe("MixedLedger — setup filler (ruling 47)", () => {
   });
 
   it("FILLER is the plan's list, in its order, and shares no name with an organiser action type", () => {
-    expect([...FILLER]).toEqual(["setMembers", "putLineup", "entrantMembers", "confirmSeedProposal", "recomputeSeedProposal", "challenge", "americanoView"]);
+    expect([...FILLER]).toEqual(["setMembers", "putLineup", "entrantMembers", "confirmSeedProposal", "recomputeSeedProposal", "challenge", "americanoView", "scheduleFixtureNow"]);
     expect(FILLER.filter((f) => (ACTION_TYPES as readonly string[]).includes(f))).toEqual([]);
   });
 

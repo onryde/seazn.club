@@ -5,6 +5,8 @@
 // mixed.ts re-exports both names, so no other importer changes.
 
 /** Ruling 47: setup filler — HTTP by design in every layer, never an organiser
- *  action type (no browser turn is owed), recorded so a report shows it ran. */
-export const FILLER = ["setMembers", "putLineup", "entrantMembers", "confirmSeedProposal", "recomputeSeedProposal", "challenge", "americanoView"] as const;
+ *  action type (no browser turn is owed), recorded so a report shows it ran.
+ *  `scheduleFixtureNow` (W1d Task 14) dates a fixture today: the precondition of a match day, not the act under
+ *  test (the match-day set judges what the run sheet then opens on). */
+export const FILLER = ["setMembers", "putLineup", "entrantMembers", "confirmSeedProposal", "recomputeSeedProposal", "challenge", "americanoView", "scheduleFixtureNow"] as const;
 export type FillerName = (typeof FILLER)[number];

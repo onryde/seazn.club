@@ -18,7 +18,7 @@ import { TESTID } from "../selectors.ts";
 import type { CompleteOut, FixtureRow, GenerateOut } from "../../driver/types.ts";
 import { actBudget, awaitScreen, exactPath, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
-import { RUN_SHEET_FILTER_OPTIONS, fixtureRowSelector, showAllFixtures } from "./run-sheet.ts";
+import { RUN_SHEET_FILTER_OPTIONS, fixtureRowSelector, readThenShowAll, type DefaultFilterSeen } from "./run-sheet.ts";
 
 const SHEET_ID_PREFIX = "stage-rail-sheet-";
 
@@ -50,8 +50,48 @@ export async function openFoldIfFolded(
   return "opened";
 }
 
+/** Tailwind's `md` breakpoint, the width below which the rail folds behind its trigger (`md:hidden`, stage-rail.tsx).
+ *  48rem at the 16px root; run through page-objects.test.ts against Tailwind's own theme text. */
+export const MD_BREAKPOINT_PX = 768;
+
+export type FoldBranch = "opened" | "unfolded";
+/** The branch a rail visit took, and the page's width when it took it (null: the page reported no viewport). */
+export interface RailFold { readonly branch: FoldBranch; readonly width: number | null }
+
+/** The branch the width demands: below md the rail is folded, so the page object opens it; from md up it is not. */
+export function expectedFoldBranch(width: number): FoldBranch {
+  return width < MD_BREAKPOINT_PX ? "opened" : "unfolded";
+}
+
+/** `fold-branch`'s verdict: the branch the page object took against the one the page's width demands. */
+export function judgeFoldBranch(f: RailFold): { verdict: "pass" | "fail"; note: string } {
+  if (f.width === null) return { verdict: "fail", note: `the page reported no viewport width, so the ${f.branch} branch cannot be judged` };
+  const want = expectedFoldBranch(f.width);
+  return f.branch === want
+    ? { verdict: "pass", note: `${f.width}px: the rail's fold took the ${f.branch} branch` }
+    : { verdict: "fail", note: `${f.width}px: the rail's fold took the ${f.branch} branch, the width demands ${want}` };
+}
+
+/** openFoldIfFolded, and the branch it took with the width it took it at. */
+export async function openFold(
+  page: Pick<Page, "viewportSize">,
+  trigger: Pick<Locator, "isVisible" | "click">,
+  body: Pick<Locator, "isVisible" | "waitFor">,
+  budget: number,
+): Promise<RailFold> {
+  const branch = await openFoldIfFolded(page, trigger, body, budget);
+  return { branch, width: page.viewportSize()?.width ?? null };
+}
+
+/** What a rail visit saw: the fold's branch, and (when asked) the sheet's default filter before it was widened. */
+export interface RailSeen { readonly fold: RailFold; readonly defaultFilter: DefaultFilterSeen | null }
+/** The page object's callbacks into its driver: `readDefaultFilter` asks for the sheet's default (run-sheet.ts
+ *  readDefaultFilter) before it is widened; `onRail` is told what the visit saw. Both optional, so a caller that
+ *  wants neither is unchanged. */
+export interface RailHooks { readonly readDefaultFilter?: boolean; readonly onRail?: (seen: RailSeen) => void | Promise<void> }
+
 /** The fixtures tab with `stageId`'s rail open, every run-sheet row showing. */
-async function railFor(c: PageCtx, where: DivisionWhere, stageId: string): Promise<Locator> {
+async function railFor(c: PageCtx, where: DivisionWhere, stageId: string, hooks: RailHooks): Promise<Locator> {
   const { page } = c;
   const sheet = page.locator(railSheetSelector(stageId));
   const trigger = page.locator(railTriggerSelector(stageId));
@@ -60,8 +100,10 @@ async function railFor(c: PageCtx, where: DivisionWhere, stageId: string): Promi
   await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "fixtures"), { control: page.locator(RUN_SHEET_FILTER_OPTIONS).or(trigger).or(sheet.locator("button")), what: `the run sheet's filter and stage ${stageId}'s rail` });
   const t = navBudget(c);
   await awaitScreen(() => sheet.waitFor({ state: "attached", timeout: t }), `the stage rail for stage ${stageId}`, t);
-  await showAllFixtures(c);
-  await openFoldIfFolded(page, trigger, sheet, actBudget(c, 1));
+  // The sheet as it arrived BEFORE it is widened (W1d D17), then widened.
+  const defaultFilter = await readThenShowAll(c, hooks.readDefaultFilter === true);
+  const fold = await openFold(page, trigger, sheet, actBudget(c, 1));
+  await hooks.onRail?.({ fold, defaultFilter });
   return sheet;
 }
 
@@ -89,9 +131,9 @@ export function newestCreatedFixtureNo(out: { readonly created: GenerateOut["cre
 }
 
 /** Generate `stageId`'s fixtures from its rail; the product's GenerateOut. */
-export async function generateUi(c: PageCtx, where: DivisionWhere, stageId: string): Promise<GenerateOut> {
+export async function generateUi(c: PageCtx, where: DivisionWhere, stageId: string, hooks: RailHooks = {}): Promise<GenerateOut> {
   const { page } = c;
-  const sheet = await railFor(c, where, stageId);
+  const sheet = await railFor(c, where, stageId, hooks);
   const before = await shoot(c, "05-generated-before");
   const { data } = await actAndAwait<GenerateOut>(page, { method: "POST", path: exactPath(`/api/v1/stages/${stageId}/generate`) },
     () => sheet.getByTestId(TESTID.stageGenerate.id).click({ timeout: actBudget(c, 1) }), actBudget(c, 1));
@@ -125,10 +167,10 @@ export function completionShots(at: StagePosition): { before: string; after: str
  *  per stage is the DRIVER's rule (HttpDriver's DriverMisuse), not this page's.
  *  `at` is the stage's place in its division (the driver knows it); it names
  *  the pictures and is the division's one stage when omitted. */
-export async function completeStageUi(c: PageCtx, where: DivisionWhere, stageId: string, at: StagePosition = ONLY_STAGE): Promise<CompleteOut> {
+export async function completeStageUi(c: PageCtx, where: DivisionWhere, stageId: string, at: StagePosition = ONLY_STAGE, hooks: RailHooks = {}): Promise<CompleteOut> {
   const { page } = c;
   const shots = completionShots(at);
-  const sheet = await railFor(c, where, stageId);
+  const sheet = await railFor(c, where, stageId, hooks);
   const complete = sheet.getByTestId(TESTID.stageComplete.id);
   const before = await shoot(c, shots.before);
   const { data } = await actAndAwait<CompleteOut>(page, { method: "POST", path: exactPath(`/api/v1/stages/${stageId}/complete`) },

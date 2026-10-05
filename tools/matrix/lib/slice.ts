@@ -16,10 +16,11 @@ import type { CaseSpec, ScenarioKey } from "./scenarios/types.ts";
 export const SLICE_ROWS = ["league", "knockout", "swiss"] as const satisfies readonly TemplateRowKey[];
 export const SLICE_SPORTS = ["generic", "badminton"] as const;
 /** Every registered scenario but DENIED (⛔, Task 9), which runs only on a
- *  gated row whose org carries a deny, and PADPROOF (W1c Task 7), which runs
- *  only in --set pad-proof under --driver browser — typed out so the slice
- *  plan cannot grow either by accident. */
-export type SliceScenarioKey = Exclude<ScenarioKey, "DENIED" | "PADPROOF">;
+ *  gated row whose org carries a deny, PADPROOF (W1c Task 7), which runs
+ *  only in --set pad-proof under --driver browser, and VOIDPROOF (W1d Task 14),
+ *  which runs only in --set void-proof — typed out so the slice plan cannot
+ *  grow any of them by accident. */
+export type SliceScenarioKey = Exclude<ScenarioKey, "DENIED" | "PADPROOF" | "VOIDPROOF">;
 export const SCENARIO_KEYS: readonly SliceScenarioKey[] = ["LIFECYCLE", "M1", "R4", "F1"];
 
 /** Each scenario's canary check, read from the registry: a view of Task 8's

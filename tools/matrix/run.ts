@@ -145,6 +145,8 @@ import {
   API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, LAYER_PLANNERS, NoLayerForWidth, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
   type LayerCase, type LayerScope, type PlannedLayerCase,
 } from "./lib/layers.ts";
+import { CARRY8_1280_SET, carry8Planner } from "./lib/carry-1280-set.ts";
+import { MATCH_DAY_SET, VOID_PROOF_SET, matchDayPlanner, voidProofPlanner } from "./lib/match-day-set.ts";
 import { PAD_INNINGS_SET, padInningsPlanner } from "./lib/pad-innings-set.ts";
 import { PAD_PROOF_SET, PadProofFilter, padProofPlanner, padProofSport } from "./lib/pad-proof-set.ts";
 import type { L2Run } from "./lib/pairs.ts";
@@ -333,6 +335,9 @@ export const SETS: Readonly<Record<string, PlanCases | PlanLayers>> = Object.fre
   [W1_DRIVING_L1_SET]: w1DrivingL1Planner,
   // W1d Task 7 (D13): the per-PR sample — the declared rows' w1-driving cases plus a fixed 33 — over HTTP, at L3.
   [PR_SAMPLE_SET]: prSamplePlanner,
+  // W1d Task 14 (items 15c-15f), all layered and browser-only, none taking a filter: a match day (the run sheet's
+  // default filter, the rail's fold) and a void from the console, each at 1280 and 320; forfeit and withdraw at 1280.
+  [MATCH_DAY_SET]: matchDayPlanner, [VOID_PROOF_SET]: voidProofPlanner, [CARRY8_1280_SET]: carry8Planner,
 });
 
 export class UnknownSet extends Error {

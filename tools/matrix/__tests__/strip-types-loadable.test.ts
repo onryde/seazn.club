@@ -312,6 +312,15 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 14 (items 15c-15f): the two set modules run.ts and the plan reader value-import, and the VOIDPROOF
+  // scenario the registry value-imports.
+  const W1D_T14 = ["lib/match-day-set.ts", "lib/carry-1280-set.ts", "lib/scenarios/void-proof.ts"];
+  it("W1d Task 14's new modules are in the walk", () => {
+    const missing = W1D_T14.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T14.length).toBe(3);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

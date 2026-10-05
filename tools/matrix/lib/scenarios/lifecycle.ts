@@ -4,7 +4,7 @@ import { fieldSizeFor } from "../field-size.ts";
 import type { ConfigEditObs } from "../observed.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, lineupsPut, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted } from "./assertions.ts";
-import { Recorder, configProbe, drawsDeclaredOnReached, playDivision, setUpDivision, snapshot } from "./common.ts";
+import { Recorder, configProbe, dateFirstRound, drawsDeclaredOnReached, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
 /** The scenario's default field. The call site asks fieldSizeFor, which
@@ -18,6 +18,9 @@ export const lifecycle: Scenario = {
   async run(ctx) {
     const rec = new Recorder();
     const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "LIFECYCLE", ctx.spec.template));
+    // W1d Task 14 (item 15c, D17): a match-day case is dated today before anything is played, so the division is
+    // on its match day when the browser's first rail visit loads the run sheet.
+    if (ctx.spec.matchDay === true) await dateFirstRound(ctx, rec, setup);
     // W1-driving T6: the lock probe keeps its place — after stage 1's play,
     // before its /complete (playDivision asks every reached stage to complete,
     // so the hook always runs; a missing probe is a harness bug, named).

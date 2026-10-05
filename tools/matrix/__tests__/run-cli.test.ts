@@ -17,6 +17,8 @@ import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-g
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
 import { API_ONLY_BROWSER_SET, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET } from "../lib/layers.ts";
+import { CARRY8_1280_SET } from "../lib/carry-1280-set.ts";
+import { MATCH_DAY_SET, VOID_PROOF_SET } from "../lib/match-day-set.ts";
 import { PAD_INNINGS_SET } from "../lib/pad-innings-set.ts";
 import { PAD_PROOF_SET } from "../lib/pad-proof-set.ts";
 import { livePlan } from "../lib/expected-plan.ts";
@@ -181,7 +183,7 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", name, "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${PAD_INNINGS_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET}, ${W1_DRIVING_SET}, ${W1_DRIVING_L1_SET}, ${PR_SAMPLE_SET})`);
+    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${PAD_INNINGS_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET}, ${W1_DRIVING_SET}, ${W1_DRIVING_L1_SET}, ${PR_SAMPLE_SET}, ${MATCH_DAY_SET}, ${VOID_PROOF_SET}, ${CARRY8_1280_SET})`);
   });
   // W1d Task 12 fix round 1 (T12-I1): pad-innings plays the pad too, so over HTTP it has nothing to prove either.
   it("--set pad-innings without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {

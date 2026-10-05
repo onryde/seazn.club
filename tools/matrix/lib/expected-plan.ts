@@ -10,6 +10,8 @@
 // one width. Adding a `--set` (or any other recorded plan shape) to run.ts's planOf owes a branch in livePlan.
 import { decideState } from "./results.ts";
 import { API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, w1DrivingL1Planner, widthSweepPlanner, type LayerCase } from "./layers.ts";
+import { CARRY8_1280_SET, carry8Planner } from "./carry-1280-set.ts";
+import { MATCH_DAY_SET, VOID_PROOF_SET, matchDayPlanner, voidProofPlanner } from "./match-day-set.ts";
 import { PAD_INNINGS_SET, padInningsPlanner } from "./pad-innings-set.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "./pad-proof-set.ts";
 import { PROBE_SET, probePlanner } from "./probe-set.ts";
@@ -82,6 +84,10 @@ function orderedPlan(plan: string): Ordered {
     if (set === WIDTH_SWEEP_SET) return fromLayered(plan, widthSweepPlanner({}).layered(anyVariant));
     // W1-driving Task 13 (T13-R1 I-1): the capability cells and the two template cards, at 1280.
     if (set === W1_DRIVING_L1_SET) return fromLayered(plan, w1DrivingL1Planner({}).layered(anyVariant));
+    // W1d Task 14 (items 15c-15f): three layered sets, none taking a filter.
+    if (set === MATCH_DAY_SET) return fromLayered(plan, matchDayPlanner({}).layered(anyVariant));
+    if (set === VOID_PROOF_SET) return fromLayered(plan, voidProofPlanner({}).layered(anyVariant));
+    if (set === CARRY8_1280_SET) return fromLayered(plan, carry8Planner({}).layered(anyVariant));
     // W1-driving Task 12: the one set that takes --only / --scenario (run.ts planOf records them).
     if (set === W1_DRIVING_SET) return fromSpecs(plan, w1DrivingPlanner(filters).plan(anyVariant).map((c) => c.caseId));
     // W1d Task 7 (D13): the per-PR sample takes the rows the PR declared (run.ts planOf records them, sorted). A

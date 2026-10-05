@@ -136,6 +136,15 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     super("org-model");
     this.opts = opts;
   }
+  /** W1d Task 14: the base fake's ledger and void ride `fixtures[].events`, which this driver never fills (its
+   *  own ledger is `ledgers`, with ids it mints). A void or a ledger read inherited from it would answer over an
+   *  empty list as if the product held nothing, so both are refused by name: the model does not drive voidLast. */
+  override voidLast(): Promise<never> {
+    return Promise.reject(new Error("fake: the model fake keeps its ledger in `ledgers`, not fixtures[].events — voidLast is not modelled here"));
+  }
+  override ledger(): Promise<never> {
+    return Promise.reject(new Error("fake: the model fake keeps its ledger in `ledgers`, not fixtures[].events — a ledger read is not modelled here"));
+  }
   /** Task 14: a league stage, or a single swiss stage (FP-T14-1). */
   override acceptsStage(kind: string): boolean { return kind === "league" || kind === "swiss"; }
   override refuseStages(): never { throw new Error("fake: league or swiss only"); }

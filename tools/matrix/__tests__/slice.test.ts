@@ -67,9 +67,10 @@ describe("planSliceCases", () => {
   });
   it("every scenario key is registered, and each pilot names its canary check", () => {
     // Every registered scenario but DENIED (⛔, Task 9: gated rows under a deny
-    // only) and PADPROOF (W1c Task 7: --set pad-proof under --driver browser only).
-    expect([...SCENARIO_KEYS].sort()).toEqual(Object.keys(SCENARIOS).filter((k) => k !== "DENIED" && k !== "PADPROOF").sort());
-    for (const k of ["DENIED", "PADPROOF"]) {
+    // only), PADPROOF (W1c Task 7: --set pad-proof under --driver browser only) and
+    // VOIDPROOF (W1d Task 14: --set void-proof only).
+    expect([...SCENARIO_KEYS].sort()).toEqual(Object.keys(SCENARIOS).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF").sort());
+    for (const k of ["DENIED", "PADPROOF", "VOIDPROOF"]) {
       expect(Object.keys(SCENARIOS)).toContain(k);
       expect(SCENARIO_KEYS as readonly string[]).not.toContain(k);
     }
@@ -82,7 +83,7 @@ describe("planSliceCases", () => {
 
 describe("CANARY_CHECK and planCanaryCase", () => {
   it("CANARY_CHECK is a view of the registry, never a second table", () => {
-    expect(CANARY_CHECK).toEqual(Object.fromEntries(Object.entries(SCENARIOS).filter(([k]) => k !== "DENIED" && k !== "PADPROOF").map(([k, s]) => [k, s.canaryCheck])));
+    expect(CANARY_CHECK).toEqual(Object.fromEntries(Object.entries(SCENARIOS).filter(([k]) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF").map(([k, s]) => [k, s.canaryCheck])));
     expect(CANARY_CHECK.LIFECYCLE).toBeNull();
   });
   it("a canary case is league|generic under generic's builder variant, with an id no slice case can hold", () => {

@@ -16,16 +16,17 @@ import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/co
 import { generateDoubleElim, generatePagePlayoff, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
+import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { entrantKindsFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import { DEPARTED_STATUSES } from "../lib/observed.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
-  DriverMisuse, LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
+  DriverMisuse, LineupUnchecked, RefusedCall, VOID_EVENT, idempotencyKey, inSquadOrder, voidTargetOf,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type AmericanoViewOut, type ChallengeOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { wireCodeFor } from "./product-text.ts";
 
@@ -321,25 +322,73 @@ export class FakeLeagueDriver implements OrganiserDriver {
         const key = idempotencyKey(prefix, f.events.length);
         const replay = seen.get(key);
         if (replay !== undefined) { out.push(replay); continue; }
-        const next = [...f.events, ev];
-        let folded: ReturnType<typeof foldStream>;
-        try {
-          folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
-        } catch (e) {
-          // The product turns ONLY an EngineError into a status (http.ts:157-158);
-          // anything else is a 500 INTERNAL there (http.ts:244-247). Here that is a
-          // harness fault, so it surfaces as itself, never as an engine refusal.
-          if (!EngineError.is(e)) throw e;
-          throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, engineHttpStatus(e.code), e.code, e.message);
-        }
-        f.events = next;
-        f.outcome = folded.outcome;
-        f.status = folded.outcome === null ? "in_play" : f.events.some((e) => e.type === "core.forfeit") ? "forfeited" : "decided";
+        this.#append(f, ev);
         const posted: PostedEvent = { seq: f.events.length, status: f.status, outcome: f.outcome, event_id: `${id}-${f.events.length}` };
         seen.set(key, posted);
         out.push(posted);
       }
       return out;
+    });
+  }
+  /** Appends one event the way the product does: the whole ledger is folded with it (voids resolved), a refusal
+   *  leaves the ledger as it was, and the fixture's outcome and status follow the fold. A fold that reaches no
+   *  outcome is `in_play` — also the fold of a ledger voided back to nothing, which the product would hold at
+   *  `scheduled` until a start is recorded (the fake does not model that corner). */
+  #append(f: FakeFixture, ev: StreamEvent): void {
+    const next = [...f.events, ev];
+    let folded: ReturnType<typeof foldStream>;
+    try {
+      folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
+    } catch (e) {
+      // The product turns ONLY an EngineError into a status (http.ts:157-158);
+      // anything else is a 500 INTERNAL there (http.ts:244-247). Here that is a
+      // harness fault, so it surfaces as itself, never as an engine refusal.
+      if (!EngineError.is(e)) throw e;
+      throw new RefusedCall("POST", `/api/v1/fixtures/${f.id}/events`, engineHttpStatus(e.code), e.code, e.message);
+    }
+    f.events = next;
+    f.outcome = folded.outcome;
+    f.status = folded.outcome === null ? "in_play" : f.events.some((e) => e.type === "core.forfeit") ? "forfeited" : "decided";
+  }
+  /** W1d Task 14: the fixture's ledger as the product serves it — a row per event, seq from 1, the id the seq as a
+   *  string (the id space the harness's own void names, fold.ts envelopes), exclusive of `sinceSeq`. */
+  ledger(id: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
+    return settle(() => {
+      this.log("ledger", id);
+      return this.#f(id).events.map((e, i): LedgerRow => ({ id: String(i + 1), seq: i + 1, type: e.type, payload: e.payload })).filter((r) => r.seq > sinceSeq);
+    });
+  }
+  /** The console's "Void last entry": the newest event that is neither a core.void nor already voided (the shared
+   *  rule, voidTargetOf), voided by appending `core.void {event_id}`. Nothing to void is refused before any write. */
+  voidLast(id: string): Promise<VoidedOut> {
+    return settle(() => {
+      this.log("voidLast", id);
+      const f = this.#f(id);
+      const rows = f.events.map((e, i): LedgerRow => ({ id: String(i + 1), seq: i + 1, type: e.type, payload: e.payload }));
+      const target = voidTargetOf(rows);
+      if (target === null) throw new DriverMisuse(`fake: voidLast on fixture ${id} — nothing to void (${rows.length} ledger row(s), none that is neither a ${VOID_EVENT} nor already voided)`);
+      this.#append(f, { type: VOID_EVENT, payload: { event_id: target.id } });
+      return { voidedEventId: target.id, voidedType: target.type };
+    });
+  }
+  /** W1d Task 14: the phase the fake's desk serves for every division (HttpDriver.divisionPhase). The fake does not
+   *  derive it from its fixtures — that is the product's rule (division-phase.ts), not the fake's to model — so a
+   *  test sets it. */
+  phase = "scheduled";
+  divisionPhase(_competitionId: string, _divisionId: string): Promise<string> {
+    return settle(() => {
+      this.log("divisionPhase");
+      return this.phase;
+    });
+  }
+  /** W1d Task 14: what the fake's clock reads when it dates a fixture "now"; a test sets it. */
+  now: () => Date = () => new Date();
+  scheduleFixtureNow(id: string): Promise<ScheduledOut> {
+    return settle(() => {
+      this.log("scheduleFixtureNow", id);
+      const f = this.#f(id);
+      f.scheduled_at = this.now().toISOString();
+      return { scheduledAt: f.scheduled_at };
     });
   }
   async forfeit(id: string, by: string, reason: "walkover" | "retired hurt", prefix = ""): Promise<PostedEvent[]> {

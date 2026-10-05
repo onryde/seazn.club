@@ -571,7 +571,7 @@ describe("results v3 — what a result records beyond its checks (W1d Task 2)", 
   });
 
   describe("fillers (item 21)", () => {
-    it("every declared FILLER name parses on its own, counted once — a run that ran ONE filler is not refused for the other six (partialRecord, review I2)", () => {
+    it("every declared FILLER name parses on its own, counted once — a run that ran ONE filler is not refused for the others (partialRecord, review I2)", () => {
       let checked = 0;
       for (const name of FILLER) {
         roundTrips({ ...V3_RUN, cases: [{ ...V3_CASE, fillers: { [name]: 1 } }] });

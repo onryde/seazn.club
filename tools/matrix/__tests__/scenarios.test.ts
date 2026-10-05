@@ -68,8 +68,11 @@ const failed = (checks: { id: string; verdict: string }[]) => checks.filter((c) 
 /** The fixture-driving scenarios. DENIED (⛔, Task 9) builds no stage and runs
  *  only on a gated row whose org is denied; denied.test.ts is its suite.
  *  PADPROOF (W1c Task 7) scores on the pad and finalizes from the console,
- *  which the plain league fake does neither of; pad-proof.test.ts is its suite. */
-const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED" && k !== "PADPROOF");
+ *  which the plain league fake does neither of; pad-proof.test.ts is its suite.
+ *  VOIDPROOF (W1d Task 14) voids a first score event that leaves the match open,
+ *  which generic's one-result match does not (refused by name: VoidProofUnfit);
+ *  void-proof.test.ts is its suite. */
+const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF");
 
 describe("assertion helper — empty first (R25)", () => {
   it("zero items is a fail, abstain carries a reason, one bad item fails", () => {
@@ -945,7 +948,7 @@ describe("pilots on the fake league", () => {
     expect(r.checks.find((c) => c.id === "f1-everyone-drawn")).toMatchObject({ verdict: "fail", checked: 7, evidence: [`${driver.entrants.at(-1)!.id} appears in no fixture`] });
   });
   it("every scenario is registered under its own key and the three pilots name their canary check", () => {
-    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4"]);
+    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF"]);
     expect(SCENARIO_KEYS.sort()).toEqual(["F1", "LIFECYCLE", "M1", "R4"]);
     for (const k of Object.keys(SCENARIOS) as ScenarioKey[]) expect(SCENARIOS[k].key).toBe(k);
     expect(SCENARIOS.LIFECYCLE.canaryCheck).toBeNull();

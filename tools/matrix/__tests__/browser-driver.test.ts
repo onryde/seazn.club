@@ -105,6 +105,7 @@ function fakePages(over: Partial<BrowserPages> = {}): FakePages {
     openFixtureUi: async () => undefined,
     forfeitUi: async (_c, f) => [{ seq: 2, status: "forfeited", outcome: null, event_id: `${f.id}-2` }],
     finalizeUi: async (_c, id) => ({ seq: 3, status: "finalized", outcome: null, event_id: `${id}-3` }),
+    voidLastUi: async (_c, id) => ({ seq: 4, status: "in_play", outcome: null, event_id: `${id}-4` }),
     readStandingsUi: async () => [],
     readPublicUi: async () => ({ tables: [], champion: null }),
   };
@@ -120,7 +121,7 @@ function fakePages(over: Partial<BrowserPages> = {}): FakePages {
 /** The league fake plus the ledger read HttpDriver adds (Task 6). */
 class FakeHttp extends FakeLeagueDriver {
   ledgerRows: LedgerRow[] = [];
-  ledger(_fixtureId: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
+  override ledger(_fixtureId: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
     this.log("ledger");
     return Promise.resolve(this.ledgerRows.filter((r) => r.seq > sinceSeq));
   }
@@ -131,6 +132,7 @@ const HTTP_METHODS = [
   "createCompetition", "createDivision", "getDivision", "postStages", "listStages", "addEntrants", "listEntrants", "start", "generate",
   "listFixtures", "fixtureState", "postStream", "forfeit", "withdraw", "completeStage", "rebuild", "standings", "publicStandings",
   "patchDivisionConfig", "replaceStagesProbe", "ledger", "entrantMembers", "putLineup", "setMembers", "createFromTemplate", "readBackTemplate",
+  "voidLast", "scheduleFixtureNow", "divisionPhase",
 ] as const;
 /** An http side that answers only what it was given and refuses the rest by name. */
 function stubHttp(over: Partial<Record<(typeof HTTP_METHODS)[number], (...a: never[]) => Promise<unknown>>>): Stub {
@@ -1865,5 +1867,223 @@ describe("BrowserDriver — completeStage names the stage's place and shoots the
     expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(2);
     expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
     await expect(driver.completeStage("s2")).rejects.toThrow(DriverMisuse);
+  });
+});
+
+
+describe("BrowserDriver — Void last entry, the date filler and the rail's hooks (W1d Task 14, items 15c-15e)", () => {
+  const ROW = (seq: number, type: string, payload: unknown = {}): LedgerRow => ({ id: `r${seq}`, seq, type, payload });
+  const START_ROW = ROW(1, "core.start");
+  const SUMMARY_ROW = ROW(2, "badminton.game.summary", { home: 21, away: 5 });
+  const NOTE_ROW = ROW(3, "core.note", { text: "n" });
+  /** A console http side: the ledger is a mutable list; `voidLastUi` (the fake page) appends what the console would. */
+  function consoleHttp(initial: LedgerRow[]) {
+    const rows = [...initial];
+    const http = stubHttp({
+      listFixtures: async () => [fixture("f1", "s1", null, 4)],
+      ledger: async (...a: never[]) => rows.filter((r) => r.seq > (a[1] as number)),
+      voidLast: async () => ({ voidedEventId: "http", voidedType: "http" }),
+    });
+    return { http, rows };
+  }
+  const voidRow = (rows: LedgerRow[], names: string) => rows.push(ROW(rows.length + 1, "core.void", { event_id: names }));
+
+  it("the browser's first void is the console's: the ledger is read first, the console opened by number, the control tapped — and the answer is what the LEDGER shows the console voided", async () => {
+    const { http, rows } = consoleHttp([START_ROW, SUMMARY_ROW]);
+    const { driver, pageCalls, pageArgs } = make({ http, pages: { voidLastUi: async () => { voidRow(rows, "r2"); return { seq: 3, status: "in_play", outcome: null, event_id: "r3" }; } } });
+    await built(driver, spec("league"));
+    expect(await driver.voidLast("f1")).toEqual({ voidedEventId: "r2", voidedType: "badminton.game.summary" });
+    expect(pageCalls.slice(-2)).toEqual(["openFixtureUi", "voidLastUi"]);
+    expect(pageArgs.openFixtureUi![0]![2]).toBe(4);
+    expect(pageArgs.voidLastUi![0]![1]).toBe("f1");
+    expect(http.calls).not.toContain("voidLast");
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+  });
+
+  it("the answer is the console's CHOICE, not the harness's rule: a console that voided the start answers the start, so the scenario can fail it", async () => {
+    const { http, rows } = consoleHttp([START_ROW, SUMMARY_ROW]);
+    const { driver } = make({ http, pages: { voidLastUi: async () => { voidRow(rows, "r1"); return { seq: 3, status: "in_play", outcome: null, event_id: "r3" }; } } });
+    await built(driver, spec("league"));
+    expect(await driver.voidLast("f1")).toEqual({ voidedEventId: "r1", voidedType: "core.start" });
+  });
+
+  it("only the first void is the browser's: the second, over http, is HttpDriver's (the type keeps its coverage once)", async () => {
+    const { http, rows } = consoleHttp([START_ROW, SUMMARY_ROW]);
+    const { driver, pageCalls } = make({ http, pages: { voidLastUi: async () => { voidRow(rows, "r2"); return { seq: 3, status: "in_play", outcome: null, event_id: "r3" }; } } });
+    await built(driver, spec("league"));
+    await driver.voidLast("f1");
+    expect(await driver.voidLast("f1")).toEqual({ voidedEventId: "http", voidedType: "http" });
+    expect(pageCalls.filter((c) => c === "voidLastUi")).toHaveLength(1);
+    expect(http.calls.filter((c) => c === "voidLast")).toHaveLength(1);
+  });
+
+  it("nothing to void — an empty ledger, or every event already voided — is refused by name before any page is touched", async () => {
+    for (const [name, initial] of [["empty", []], ["voided", [START_ROW, ROW(2, "core.void", { event_id: "r1" })]]] as const) {
+      const { http } = consoleHttp([...initial]);
+      const { driver, pageCalls } = make({ http });
+      await built(driver, spec("league"));
+      const before = pageCalls.length;
+      await expect(driver.voidLast("f1"), name).rejects.toThrow(/nothing to void/);
+      expect(pageCalls.length, name).toBe(before);
+    }
+  });
+
+  it("a console that answered but left no core.void after the tip is refused by name — never read as a void", async () => {
+    const cases: [string, (rows: LedgerRow[]) => void, RegExp][] = [
+      ["no row", () => undefined, /left no core\.void/],
+      ["another row", (rows) => { rows.push(ROW(rows.length + 1, "core.note", { text: "x" })); }, /left no core\.void/],
+      ["two rows", (rows) => { voidRow(rows, "r2"); voidRow(rows, "r1"); }, /2 ledger row/],
+      ["names nothing", (rows) => { rows.push(ROW(rows.length + 1, "core.void", {})); }, /names no event/],
+      ["names a non-string", (rows) => { rows.push(ROW(rows.length + 1, "core.void", { event_id: 2 })); }, /names no event/],
+      ["names an unknown event", (rows) => { voidRow(rows, "zzz"); }, /unknown event zzz/],
+    ];
+    for (const [name, write, want] of cases) {
+      const { http, rows } = consoleHttp([START_ROW, SUMMARY_ROW]);
+      const { driver } = make({ http, pages: { voidLastUi: async () => { write(rows); return { seq: 3, status: "in_play", outcome: null, event_id: "r3" }; } } });
+      await built(driver, spec("league"));
+      await expect(driver.voidLast("f1"), name).rejects.toThrow(want);
+    }
+  });
+
+  it("a fixture in no division this driver built is refused by name, and the ledger read passes straight through to the http side", async () => {
+    const { http } = consoleHttp([START_ROW, SUMMARY_ROW, NOTE_ROW]);
+    const { driver } = make({ http });
+    await expect(driver.voidLast("f1")).rejects.toThrow(/in no division this driver built/);
+    expect((await driver.ledger!("f1", 1)).map((r) => r.seq)).toEqual([2, 3]);
+    expect((await driver.ledger!("f1")).map((r) => r.seq)).toEqual([1, 2, 3]);
+  });
+
+  describe("scheduleFixtureNow is setup filler: http, counted by name, never an organiser action", () => {
+    it("answers the product's own instant, counts the filler, records no action type, and a fixture of no known division is refused before any write", async () => {
+      const http = stubHttp({ listFixtures: async () => [fixture("f1", "s1", null, 4)], scheduleFixtureNow: async () => ({ scheduledAt: "2031-01-02T03:04:05.000Z" }) });
+      const { driver } = make({ http });
+      await expect(driver.scheduleFixtureNow("f1")).rejects.toThrow(/in no division this driver built/);
+      expect(http.calls).not.toContain("scheduleFixtureNow");
+      await built(driver, spec("league"));
+      expect(await driver.scheduleFixtureNow("f1")).toEqual({ scheduledAt: "2031-01-02T03:04:05.000Z" });
+      expect(driver.fillers).toMatchObject({ scheduleFixtureNow: 1 });
+      expect(only(driver, "mixed-driver-coverage").evidence.join("\n")).not.toMatch(/scheduleFixtureNow/);
+    });
+  });
+
+  describe("the rail's hooks: the fold's branch (15d) and the run sheet's default filter (15c, D17)", () => {
+    const seen = (filter: string, rows: number[], branch: "opened" | "unfolded" = "unfolded", width: number | null = 1280) =>
+      ({ fold: { branch, width }, defaultFilter: { filter, rows } });
+    /** A match-day http side: two fixtures, #4 and #7, dated now; the desk answers `phase`. */
+    function dayHttp(phase: string) {
+      const phases: unknown[][] = [];
+      const http = stubHttp({
+        listFixtures: async () => [fixture("f1", "s1", null, 7), fixture("f2", "s1", null, 4), fixture("f3", "s1", null, 9)],
+        scheduleFixtureNow: async () => ({ scheduledAt: "2031-01-02T03:04:05.000Z" }),
+        divisionPhase: async (...a: never[]) => { phases.push(a); return phase; },
+      });
+      return { http, phases };
+    }
+    const railPages = (visit: ReturnType<typeof seen>, got: unknown[] = []): Partial<BrowserPages> => ({
+      generateUi: async (_c, _w, _id, hooks) => { got.push(hooks); await hooks?.onRail?.(visit); return { created: 0, existing: 0, fixtures: [] }; },
+      completeStageUi: async (_c, _w, _id, _at, hooks) => { got.push(hooks); await hooks?.onRail?.(visit); return { completed: true, events: [] }; },
+    });
+    const matchDay = (extra: Partial<CaseSpec> = {}) => spec("league", "badminton", { matchDay: true, ...extra });
+
+    it("fold-branch: the first rail visit is judged against the width — 1280 unfolded passes, 320 opened passes, 1280 opened and 320 unfolded fail — once per case", async () => {
+      for (const [branch, width, verdict] of [["unfolded", 1280, "pass"], ["opened", 320, "pass"], ["opened", 1280, "fail"], ["unfolded", 320, "fail"], ["opened", 767, "pass"], ["unfolded", 768, "pass"]] as const) {
+        const { http } = dayHttp("scheduled");
+        const { driver } = make({ http, pages: railPages(seen("all", [], branch, width)) });
+        await built(driver, spec("league"));
+        await driver.generate("s1");
+        await driver.generate("s1");
+        expect(driver.checks().filter((c) => c.id === "fold-branch"), `${branch}@${width}`).toHaveLength(1);
+        expect(only(driver, "fold-branch"), `${branch}@${width}`).toMatchObject({ verdict, checked: 1 });
+      }
+    });
+
+    it("fold-branch: a page that reported no viewport is a failure of its own, and a driver whose rail was never visited records no fold-branch at all", async () => {
+      const { http } = dayHttp("scheduled");
+      const a = make({ http, pages: railPages(seen("all", [], "unfolded", null)) });
+      await built(a.driver, spec("league"));
+      await a.driver.generate("s1");
+      expect(only(a.driver, "fold-branch")).toMatchObject({ verdict: "fail" });
+      const b = make({ http: dayHttp("scheduled").http });
+      await built(b.driver, spec("league"));
+      expect(b.driver.checks().some((c) => c.id === "fold-branch")).toBe(false);
+    });
+
+    it("a non-match-day case never asks the rail for the default filter, and records no runsheet-today-default (and reads no phase)", async () => {
+      const { http, phases } = dayHttp("scheduled");
+      const got: unknown[] = [];
+      const { driver } = make({ http, pages: railPages(seen("all", [1, 2]), got) });
+      await built(driver, spec("league", "badminton"));
+      await driver.generate("s1");
+      expect((got[0] as { readDefaultFilter?: boolean }).readDefaultFilter).toBe(false);
+      expect(driver.checks().some((c) => c.id === "runsheet-today-default")).toBe(false);
+      expect(phases).toEqual([]);
+    });
+
+    it("a match-day case asks the FIRST rail visit for the default filter and only that one; the phase is read through the desk with the competition and division ids", async () => {
+      const { http, phases } = dayHttp("match_day");
+      const got: unknown[] = [];
+      const { driver } = make({ http, spec: matchDay(), pages: railPages(seen("today", [4, 7]), got) });
+      await built(driver, matchDay());
+      await driver.scheduleFixtureNow("f1");
+      await driver.scheduleFixtureNow("f2");
+      await driver.generate("s1");
+      await driver.generate("s1");
+      expect(got.map((h) => (h as { readDefaultFilter: boolean }).readDefaultFilter)).toEqual([true, false]);
+      expect(phases).toEqual([["c1", "d1"]]);
+      expect(driver.checks().filter((c) => c.id === "runsheet-today-default")).toHaveLength(1);
+    });
+
+    it("match day: 'today' showing exactly the fixtures this driver dated passes (dated 7 then 4); 'all', a missing or an extra row, and no filter at all fail", async () => {
+      const cases: [string, ReturnType<typeof seen> | { fold: { branch: "unfolded"; width: number }; defaultFilter: null }, string][] = [
+        // The sheet's rows arrive sorted (readDefaultFilter); the driver's dated list is sorted by it too (7 was dated before 4).
+        ["pass", seen("today", [4, 7]), "pass"],
+        ["all", seen("all", [4, 7, 9]), "fail"],
+        ["missing", seen("today", [4]), "fail"],
+        ["extra", seen("today", [4, 7, 9]), "fail"],
+        ["no filter", { fold: { branch: "unfolded", width: 1280 }, defaultFilter: null }, "fail"],
+      ];
+      for (const [name, visit, verdict] of cases) {
+        const { http } = dayHttp("match_day");
+        const { driver } = make({ http, spec: matchDay(), pages: railPages(visit as ReturnType<typeof seen>) });
+        await built(driver, matchDay());
+        await driver.scheduleFixtureNow("f1");
+        await driver.scheduleFixtureNow("f2");
+        await driver.generate("s1");
+        expect(only(driver, "runsheet-today-default"), name).toMatchObject({ verdict, checked: expect.any(Number) });
+        if (verdict === "pass") expect(only(driver, "runsheet-today-default").checked, name).toBeGreaterThan(0);
+      }
+    });
+
+    it("the phase guard: a match-day case whose desk phase is not match_day fails even when the sheet opened on 'all' as it should for that phase (the today default was never in force)", async () => {
+      for (const phase of ["setting_up", "scheduled", "finished"]) {
+        const { http } = dayHttp(phase);
+        const { driver } = make({ http, spec: matchDay(), pages: railPages(seen("all", [4, 7, 9])) });
+        await built(driver, matchDay());
+        await driver.scheduleFixtureNow("f1");
+        await driver.generate("s1");
+        const c = only(driver, "runsheet-today-default");
+        expect(c.verdict, phase).toBe("fail");
+        expect(c.evidence.join("\n"), phase).toContain(phase);
+      }
+    });
+
+    it("a match-day case that dated no fixture fails (not an abstain), and the default is judged once whichever visit came first", async () => {
+      const { http } = dayHttp("match_day");
+      const { driver } = make({ http, spec: matchDay(), pages: railPages(seen("today", [])) });
+      await built(driver, matchDay());
+      await driver.generate("s1");
+      expect(only(driver, "runsheet-today-default")).toMatchObject({ verdict: "fail" });
+    });
+
+    it("completeStage takes the same hooks (the first visit may be the completion's), its place and then its hooks", async () => {
+      const { http } = dayHttp("scheduled");
+      const got: unknown[] = [];
+      const { driver, pageArgs } = make({ http, pages: railPages(seen("all", [], "unfolded", 1280), got) });
+      await built(driver, spec("league"));
+      await driver.completeStage("s1");
+      expect(pageArgs.completeStageUi![0]![3]).toEqual({ ordinal: 1, last: true });
+      expect(typeof (got[0] as { onRail: unknown }).onRail).toBe("function");
+      expect(only(driver, "fold-branch")).toMatchObject({ verdict: "pass" });
+    });
   });
 });
