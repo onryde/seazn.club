@@ -43,7 +43,7 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
   },
 }));
 
-import { loadStreamPanelContext } from "../stream-panel-context";
+import { CAPTURE_FLAG_TTL_MS, forgetCaptureFlagCache, loadStreamPanelContext } from "../stream-panel-context";
 import { getDictionary } from "@/lib/i18n";
 import { hasFeature } from "@/lib/entitlements";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
@@ -72,6 +72,7 @@ beforeEach(() => {
   vi.mocked(getDictionary).mockClear();
   flags.isServerFeatureEnabled.mockReset().mockResolvedValue(false);
   vi.stubEnv("CAPTURE_QR_V2_ALWAYS", undefined);
+  forgetCaptureFlagCache();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -312,6 +313,7 @@ describe("capture-qr-v2: the phone-camera option follows the flag, and CAPTURE_Q
     let checked = 0;
     for (const on of [false, true]) {
       flags.isServerFeatureEnabled.mockReset().mockResolvedValue(on);
+      forgetCaptureFlagCache();   // a fresh evaluation per case, never the last case's cached answer (m-2)
       expect((await load())?.phoneCapture, `flag ${on}`).toBe(on);
       expect(flags.isServerFeatureEnabled.mock.calls).toEqual([["capture-qr-v2", "user-1", { orgId: "org-1", fallback: false }]]);
       checked++;
@@ -328,6 +330,7 @@ describe("capture-qr-v2: the phone-camera option follows the flag, and CAPTURE_Q
       vi.stubEnv("CAPTURE_QR_V2_ALWAYS", value);
       for (const on of [false, true]) {
         flags.isServerFeatureEnabled.mockReset().mockResolvedValue(on);
+        forgetCaptureFlagCache();
         expect((await load())?.phoneCapture, `override ${JSON.stringify(value)}, flag ${on}`).toBe(on);
         expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
         checked++;
@@ -364,5 +367,49 @@ describe("capture-qr-v2: the phone-camera option follows the flag, and CAPTURE_Q
     const keyAuth = { ...AUTH, userId: null, via: "api_key" } as unknown as AuthCtx;
     expect((await load(undefined, { auth: keyAuth }))?.phoneCapture).toBe(true);
     expect(flags.isServerFeatureEnabled.mock.calls[0]).toEqual(["capture-qr-v2", "org-1", { orgId: "org-1", fallback: false }]);
+  });
+});
+
+// B8 review m-2: the flag is a remote call on every fixture-page render. One answer per org for CAPTURE_FLAG_TTL_MS.
+describe("capture-qr-v2: the flag is asked once per org per minute, not once per render", () => {
+  it("two loads inside the TTL make ONE call and agree; at the TTL a second call; another org asks for itself", async () => {
+    vi.useFakeTimers();
+    try {
+      flags.isServerFeatureEnabled.mockResolvedValue(true);
+      expect((await load())?.phoneCapture).toBe(true);
+      // PostHog flips the flag off: renders inside the minute keep the kept answer…
+      flags.isServerFeatureEnabled.mockResolvedValue(false);
+      vi.advanceTimersByTime(CAPTURE_FLAG_TTL_MS - 1);
+      expect((await load())?.phoneCapture, "inside the TTL: the kept answer").toBe(true);
+      expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
+      // …and the first render at the TTL asks again.
+      vi.advanceTimersByTime(1);
+      expect((await load())?.phoneCapture, "at the TTL: asked again").toBe(false);
+      expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(2);
+      // Keyed by org: another club inside the same minute is asked for itself.
+      const other = { ...AUTH, orgId: "org-2" } as unknown as AuthCtx;
+      await load(undefined, { auth: other });
+      expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(3);
+      expect(flags.isServerFeatureEnabled.mock.calls[2]![2]).toEqual({ orgId: "org-2", fallback: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("concurrent renders before the first answer share ONE call", async () => {
+    let release!: (v: boolean) => void;
+    flags.isServerFeatureEnabled.mockImplementation(() => new Promise<boolean>((r) => { release = r; }));
+    const both = Promise.all([load(), load()]);
+    await vi.waitFor(() => expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1));
+    release(true);
+    expect((await both).map((c) => c?.phoneCapture)).toEqual([true, true]);
+    expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it("the override still answers without the cache or the flag", async () => {
+    vi.stubEnv("CAPTURE_QR_V2_ALWAYS", "1");
+    expect((await load())?.phoneCapture).toBe(true);
+    expect((await load())?.phoneCapture).toBe(true);
+    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
   });
 });

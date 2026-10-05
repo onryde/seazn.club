@@ -46,9 +46,27 @@ export async function relayOffer(
  *  unconfigured or down hides it. `CAPTURE_QR_V2_ALWAYS=1` forces it on — CI and e2e set it; staging and production leave
  *  it unset. Deliberately not NODE_ENV. */
 export const CAPTURE_QR_V2_FLAG = "capture-qr-v2";
+/** B8 review m-2: the flag is a REMOTE call (no local evaluation), and this loader runs on every fixture-page render —
+ *  each `router.refresh()` after a scoring send included. So one answer per ORG is kept for this long (the flag is
+ *  org-targeted), in-process, and shared by every render inside it — the first render's own call included, so
+ *  concurrent renders ask once. A flip in PostHog shows within a minute; nothing else reads the cache. */
+export const CAPTURE_FLAG_TTL_MS = 60_000;
+const flagByOrg = new Map<string, { until: number; on: Promise<boolean> }>();
+/** Test seam: forget every cached answer (each test starts from a cold process). */
+export function forgetCaptureFlagCache(): void {
+  flagByOrg.clear();
+}
 async function phoneCaptureOffered(auth: AuthCtx): Promise<boolean> {
   if (process.env.CAPTURE_QR_V2_ALWAYS === "1") return true;
-  return isServerFeatureEnabled(CAPTURE_QR_V2_FLAG, auth.userId ?? auth.orgId, { orgId: auth.orgId, fallback: false });
+  const now = Date.now();
+  const hit = flagByOrg.get(auth.orgId);
+  if (hit && now < hit.until) return hit.on;
+  // `isServerFeatureEnabled` never rejects (PostHog down → the `false` fallback), so a cached promise is an answer.
+  const on = isServerFeatureEnabled(CAPTURE_QR_V2_FLAG, auth.userId ?? auth.orgId, { orgId: auth.orgId, fallback: false });
+  // Bounded: an expired answer is dropped whenever the map grows past a thousand orgs.
+  if (flagByOrg.size >= 1000) for (const [org, v] of flagByOrg) if (now >= v.until) flagByOrg.delete(org);
+  flagByOrg.set(auth.orgId, { until: now + CAPTURE_FLAG_TTL_MS, on });
+  return on;
 }
 
 export async function loadStreamPanelContext(args: {

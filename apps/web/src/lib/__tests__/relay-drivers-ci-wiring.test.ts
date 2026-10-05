@@ -20,7 +20,7 @@
 // reads no other value as on). Staging and prod never set it.
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { FAKE_DRIVER_ENV_NAMES } from "@/server/relay/config";
 
 const ROOT = resolve(import.meta.dirname, "../../../../..");
@@ -153,5 +153,65 @@ describe("R5: every production server a streaming suite boots runs the fake rela
       // Capture QR v2: the flag's override, as CI's boots carry it.
       expect(boot).toMatch(/CAPTURE_QR_V2_ALWAYS="\$\{CAPTURE_QR_V2_ALWAYS:-1\}"/);
     }
+  });
+});
+
+// B8 review m-3: "staging and prod never set it" was a comment. It is a sweep now, by behaviour: every file that
+// configures or ships a deployed app — each Fly config (`fly*.toml`, whose `[env]` IS the deployed environment), each
+// Dockerfile, each workflow that drives `flyctl`, and any committed staging/production env file — must not name the
+// override at all (a comment naming it is one edit from live, so the token anywhere fails). The override would show the
+// phone-camera option to every club, bypassing the flag's rollout.
+describe("capture-qr-v2: the CI override never reaches a deployed environment", () => {
+  const OVERRIDE = "CAPTURE_QR_V2_ALWAYS";
+  /** Directories that hold no deploy config of ours (dependencies, builds, tool state). */
+  const SKIP = new Set(["node_modules", ".git", ".next", ".turbo", "dist", "build", "coverage", "test-results", "playwright-report", ".claude", ".superpowers"]);
+  function walk(dir: string, out: string[] = []): string[] {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) { if (!SKIP.has(e.name)) walk(resolve(dir, e.name), out); }
+      else if (e.isFile()) out.push(resolve(dir, e.name));
+    }
+    return out;
+  }
+  const isFly = (f: string) => /^fly[^/]*\.toml$/.test(f.split("/").pop()!);
+  const isDocker = (f: string) => /^Dockerfile/.test(f.split("/").pop()!);
+  /** A committed env file for a deployed environment: `.env.stg`, `.env.staging`, `.env.prod`, `.env.production…`. */
+  const isDeployEnv = (f: string) => /^\.env\.(?:stg|staging|prod|production)\b/i.test(f.split("/").pop()!);
+  /** A workflow that ships to Fly: a non-comment line drives `flyctl` (a comment ABOUT flyctl does not deploy). */
+  const isDeployWorkflow = (text: string) => text.split("\n").some((l) => !/^\s*#/.test(l) && /\bflyctl\b/.test(l));
+  const names = (text: string) => text.includes(OVERRIDE);
+
+  it("no Fly config, Dockerfile, deploy workflow or staging/production env file names CAPTURE_QR_V2_ALWAYS — and each kind was found", () => {
+    const files = walk(ROOT);
+    const fly = files.filter(isFly);
+    const docker = files.filter(isDocker);
+    const envs = files.filter(isDeployEnv);
+    const workflows = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f)).map((f) => resolve(WORKFLOWS, f))
+      .filter((f) => isDeployWorkflow(readFileSync(f, "utf8")));
+    const checked = [...fly, ...docker, ...envs, ...workflows];
+    for (const f of checked) expect(names(readFileSync(f, "utf8")), `${relative(ROOT, f)} names ${OVERRIDE}`).toBe(false);
+    // Anti-vacuity, per kind: today fly.toml + fly.stg.toml + services/placement/fly.toml (and db/flyway.toml), the web
+    // and placement Dockerfiles, and stg / prod / placement-stg / placement-prod. No staging/production env file is
+    // committed (their values live in Fly secrets), so that kind may be empty — the detector below proves it would bite.
+    expect(fly.map((f) => relative(ROOT, f)), "the web app's two Fly configs").toEqual(expect.arrayContaining(["fly.toml", "fly.stg.toml"]));
+    expect(docker.map((f) => relative(ROOT, f)), "the web app's Dockerfile").toContain("Dockerfile");
+    expect(workflows.map((f) => f.split("/").pop()).sort(), "the deploy workflows").toEqual(expect.arrayContaining(["prod.yml", "stg.yml"]));
+    expect(workflows.map((f) => f.split("/").pop()), "e2e boots servers but deploys nothing").not.toContain("e2e.yml");
+    expect(checked.length).toBeGreaterThanOrEqual(2 + 1 + 2);
+  });
+
+  it("the detector is live: the token anywhere in such a file is caught, each kind is recognised, and look-alikes are not", () => {
+    let caught = 0;
+    for (const text of ["[env]\n  CAPTURE_QR_V2_ALWAYS = \"1\"\n", "ENV CAPTURE_QR_V2_ALWAYS=1\n", "# CAPTURE_QR_V2_ALWAYS: \"1\"\n", "          CAPTURE_QR_V2_ALWAYS: '1'\n"]) {
+      expect(names(text), text).toBe(true);
+      caught++;
+    }
+    expect(caught).toBe(4);
+    expect(names("[env]\n  PORT = \"3000\"\n"), "the positive pair: a clean file").toBe(false);
+    expect(["/r/fly.toml", "/r/fly.stg.toml", "/r/services/placement/fly.toml"].every(isFly)).toBe(true);
+    expect(["/r/Dockerfile", "/r/services/placement/Dockerfile", "/r/Dockerfile.stg"].every(isDocker)).toBe(true);
+    expect(["/r/.env.stg", "/r/.env.staging", "/r/.env.prod", "/r/.env.production.local"].every(isDeployEnv)).toBe(true);
+    expect(["/r/.env.example", "/r/.env.local", "/r/apps/web/.env.example"].some(isDeployEnv), "local templates are not deploy env files").toBe(false);
+    expect(isDeployWorkflow("      - run: flyctl deploy -c fly.toml\n")).toBe(true);
+    expect(isDeployWorkflow("# `flyctl deploy` would rebuild\n      - run: node server.js\n"), "a comment about flyctl ships nothing").toBe(false);
   });
 });
