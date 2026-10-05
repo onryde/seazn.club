@@ -544,6 +544,8 @@ fields and its cadence from either shape.
   absent on `live`, and `replaced` and `taken` may carry `device`.)
 - **A beat never answers 410** (ask 8).
 - `401` means the code has ended. `422` and `429` are counted by the phone and change nothing.
+- `503 {code: "unavailable", message}` is transient: the server could not answer this beat. The phone counts it as
+  NoEvidence and keeps its pairing and its broadcast. (Amended, §17.14.)
 
 #### 6.3.4 `POST /api/v1/capture/codes/{code}/start`
 
@@ -1994,6 +1996,22 @@ controller's review. None is the controller's ruling, and none is the seazn.club
 - **A pick that does not save is said (B8 re-review n-5).** The picker's `PUT stream-settings` is what keeps the
   phone's start in agreement with the picker. On a failure the picker returns to the server's answer, and an alert
   under it says the pick did not save. A failure for a pick already replaced is moot.
+
+### 17.14 A beat can answer 503 (B6 review M-5)
+
+Amends §6.3.3. Recorded 2026-10-05 at the lane close (T13). The ruling is the controller's (B6 fix round, M-5), not
+the seazn.club owner's.
+
+- **What changed.** Before M-5, an error that the phone routes did not map left `handler()`'s bare
+  `{ok:false, error}` body on the wire, which echoed internal text. `captureRoute` now maps every such error to
+  `503 {code: "unavailable", message}`, the contract's error shape with a fixed message. The error is still logged and
+  sent to Sentry. The GET (§6.3.1) and `POST start` (§6.3.4) already listed a 503. The beats route lists it now.
+- **What the phone does.** Capture confirmed on 2026-10-04 that a beats 503 is transient NoEvidence: the pairing and
+  the broadcast are kept (capture's `BodiesTest.kt:224`). Only a refusal body (`401 code_ended`,
+  `404 not_a_stream_code`) or a 410 ends a pairing from a beat. A body-less or HTML 4xx is transient. Capture owed no
+  change.
+- **The contracts are unchanged.** `capture-beat.v1.json` keeps its bytes. The OpenAPI document gained the 503 on the
+  beats route when it was regenerated in the B6 fix round.
 
 **No spec text changes for these:**
 
