@@ -2341,7 +2341,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
         // the open session, whoever started it (I-2).
         const row = s.saved ?? { row: false };
         const saved: SavedStreamTarget = row.row
-          ? { row: true, targetId: row.targetId, live: row.targetId !== null && s.targets.some((t) => t.id === row.targetId) }
+          ? { row: true, targetId: row.targetId }
           : { row: false };
         const pick = resolveStreamTarget(saved, s.targets);
         const open = s.current !== null && !["completed", "failed"].includes(s.current.state);

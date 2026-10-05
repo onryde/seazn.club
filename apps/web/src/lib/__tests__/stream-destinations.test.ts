@@ -464,10 +464,10 @@ describe("resolveStreamTarget — §6.7.3 / n1 / T36: what the fixture streams t
     const newest = live[live.length - 1]?.id ?? "id-ghost";
     const saved: SavedStreamTarget =
       r.saved === "none" ? { row: false }
-      : r.saved === "cleared" ? { row: true, targetId: null, live: false }
-      : r.saved === "live" ? { row: true, targetId: newest, live: true }
-      : r.saved === "archived" ? { row: true, targetId: "id-archived", live: false }
-      : { row: true, targetId: "id-other-org", live: false };
+      : r.saved === "cleared" ? { row: true, targetId: null }
+      : r.saved === "live" ? { row: true, targetId: newest }
+      : r.saved === "archived" ? { row: true, targetId: "id-archived" }
+      : { row: true, targetId: "id-other-org" };
     return { saved, live };
   }
 
@@ -484,11 +484,11 @@ describe("resolveStreamTarget — §6.7.3 / n1 / T36: what the fixture streams t
     expect(new Set(STREAM_TARGET_TABLE.map(rowName)).size, "15 DISTINCT rows").toBe(STREAM_TARGET_TABLE_ROWS);
   });
 
-  it("the guard: a saved choice marked live that the live list does not hold is NONE — never the oldest in its place", () => {
+  it("the ONE guard (B8 re-review n-1): a saved choice the live list does not hold is NONE — never the oldest in its place", () => {
     const live = [{ id: ID.A }, { id: ID.B }];
-    expect(resolveStreamTarget({ row: true, targetId: "id-z", live: true }, live)).toBeNull();
+    expect(resolveStreamTarget({ row: true, targetId: "id-z" }, live)).toBeNull();
     // The positive pair: the same row, listed, is the choice.
-    expect(resolveStreamTarget({ row: true, targetId: ID.B, live: true }, live)).toEqual({ id: ID.B, source: "saved" });
+    expect(resolveStreamTarget({ row: true, targetId: ID.B }, live)).toEqual({ id: ID.B, source: "saved" });
   });
 
   it("a second call on the same inputs is the same answer, and the inputs are not touched", () => {

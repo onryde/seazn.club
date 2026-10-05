@@ -42,11 +42,12 @@ export const DESTINATION_LABEL_EMPTY = "DESTINATION_LABEL_EMPTY";
 
 /**
  * The fixture's saved destination row (`fixture_stream_settings`), as the ONE server reader reads it: no row at all, or a
- * row whose target is null (cleared), or names a target — `live` when that target is the org's own and not archived.
+ * row whose target is null (cleared), or names a target. Whether that target is still the org's and live is answered by
+ * ONE guard — its membership in the org's live list (B8 re-review n-1: a second `live` bit duplicated it in every state).
  */
 export type SavedStreamTarget =
   | { readonly row: false }
-  | { readonly row: true; readonly targetId: string | null; readonly live: boolean };
+  | { readonly row: true; readonly targetId: string | null };
 export type StreamTargetSource = "saved" | "default";
 
 /**
@@ -58,9 +59,9 @@ export type StreamTargetSource = "saved" | "default";
  *    `created_at, id`, the order the destination list is served in;
  *  - a saved row whose target is live → that target (`saved`);
  *  - a saved row that was cleared, archived, or is not one of the org's → NONE (n1/T36: a choice that is gone is never
- *    swapped for another destination).
- * A saved target marked live that the list does not hold cannot happen when both come from one statement; it is
- * answered as none too — never the oldest in its place. The answer is the LISTED entry (its label with it) plus why.
+ *    swapped for another destination). Archived and another org's are one case: the target is not in the org's live
+ *    list, which is the only guard (the list is the org's own, archived excluded).
+ * The answer is the LISTED entry (its label with it) plus why.
  */
 export function resolveStreamTarget<T extends { readonly id: string }>(
   saved: SavedStreamTarget, liveOldestFirst: readonly T[],
@@ -69,7 +70,7 @@ export function resolveStreamTarget<T extends { readonly id: string }>(
   if (oldest === undefined) return null;
   if (!saved.row) return { ...oldest, source: "default" };
   const { targetId } = saved;
-  if (targetId === null || !saved.live) return null;
+  if (targetId === null) return null;
   const listed = liveOldestFirst.find((t) => t.id === targetId);
   return listed === undefined ? null : { ...listed, source: "saved" };
 }
