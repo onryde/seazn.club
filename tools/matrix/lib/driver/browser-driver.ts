@@ -278,10 +278,10 @@ export class BrowserDriver implements OrganiserDriver {
   readonly #competitions = new Map<string, string>();
   /** division id → where it lives, in the product's slugs. */
   readonly #wheres = new Map<string, DivisionWhere>();
-  /** stage id → its division id. */
   /** The stages whose completion went through the page, refused or not (W1d item 22). */
   readonly #completeTried = new Set<string>();
-  /** Every stage this driver built, posted or listed: its division and its seq, so its place among them is known. */
+  /** stage id → its division id and its seq (W1d item 22 widened the old stage → division map): every stage this
+   *  driver built, posted or listed, so its place among its division's stages is known. */
   readonly #stages = new Map<string, { readonly divisionId: string; readonly seq: number }>();
   /** The builder's answer, until the harness's one postStages for that division consumes it. */
   #built: { divisionId: string; stages: StageOut[] } | null = null;

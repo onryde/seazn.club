@@ -221,10 +221,10 @@ export function notSeatedLater(i: NotSeatedLaterInput): CheckResult {
   return assertion(id, items);
 }
 
-/** A stage row as it stood immediately before the withdrawal call. */
 /** "1 person" / "2 persons" (W1d item 24): how many people stand behind the withdrawn entrant, for the policy note. */
 const personsLabel = (n: number): string => `${n} ${n === 1 ? "person" : "persons"}`;
 
+/** A stage row as it stood immediately before the withdrawal call. */
 export interface RowAtWithdrawal { readonly id: string; readonly home: string | null; readonly away: string | null; readonly status: string }
 export type AmericanoPolicyExpectation = { readonly want: "walkover" | "none"; readonly pending: number } | { readonly abstain: string };
 
