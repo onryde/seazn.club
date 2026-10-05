@@ -41,7 +41,7 @@ import { finalizeUi, forfeitUi } from "../browser/pages/fixture-console.ts";
 import { startUi } from "../browser/pages/launch.ts";
 import { readPublicUi } from "../browser/pages/public-division.ts";
 import { openFixtureUi } from "../browser/pages/run-sheet.ts";
-import { completeStageUi, generateUi } from "../browser/pages/stage-rail.ts";
+import { completeStageUi, generateUi, type StagePosition } from "../browser/pages/stage-rail.ts";
 import { readStandingsUi, type UiTable } from "../browser/pages/standings.ts";
 import { noPadReason } from "../pad-sports.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
@@ -279,7 +279,10 @@ export class BrowserDriver implements OrganiserDriver {
   /** division id → where it lives, in the product's slugs. */
   readonly #wheres = new Map<string, DivisionWhere>();
   /** stage id → its division id. */
-  readonly #stageDivision = new Map<string, string>();
+  /** The stages whose completion went through the page, refused or not (W1d item 22). */
+  readonly #completeTried = new Set<string>();
+  /** Every stage this driver built, posted or listed: its division and its seq, so its place among them is known. */
+  readonly #stages = new Map<string, { readonly divisionId: string; readonly seq: number }>();
   /** The builder's answer, until the harness's one postStages for that division consumes it. */
   #built: { divisionId: string; stages: StageOut[] } | null = null;
   #uiPathJudged = false;
@@ -348,9 +351,24 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   #whereOfStage(stageId: string): DivisionWhere {
-    const d = this.#stageDivision.get(stageId);
+    const d = this.#stages.get(stageId);
     if (d === undefined) throw new DriverMisuse(`browser: stage ${stageId} belongs to no division this driver built or listed — its rail cannot be found`);
-    return this.#whereOf(d);
+    return this.#whereOf(d.divisionId);
+  }
+
+  /** Remembers `stages` as `divisionId`'s, whichever path built or listed them. */
+  #know(divisionId: string, stages: readonly { readonly id: string; readonly seq: number }[]): void {
+    for (const s of stages) this.#stages.set(s.id, { divisionId, seq: s.seq });
+  }
+
+  /** W1d item 22: a stage's place among the stages of its division this driver knows, by seq; null for a stage it
+   *  does not know (whereOfStage refuses that one by name when the page is wanted). */
+  #positionOf(stageId: string): StagePosition | null {
+    const me = this.#stages.get(stageId);
+    if (me === undefined) return null;
+    const seqs = [...this.#stages.values()].filter((s) => s.divisionId === me.divisionId).map((s) => s.seq).sort((a, b) => a - b);
+    const i = seqs.indexOf(me.seq);
+    return { ordinal: i + 1, last: i === seqs.length - 1 };
   }
 
   #register(divisionId: string, compSlug: string, divSlug: string): void {
@@ -431,7 +449,7 @@ export class BrowserDriver implements OrganiserDriver {
     }
     this.#competitions.set(out.competition.id, out.competition.slug);
     this.#register(out.division.id, out.competition.slug, out.division.slug);
-    for (const s of out.stages) this.#stageDivision.set(s.id, out.division.id);
+    this.#know(out.division.id, out.stages);
     return out;
   }
 
@@ -476,7 +494,7 @@ export class BrowserDriver implements OrganiserDriver {
     const { division, stages } = await this.#write(() => this.#ui((p) => p.createDivisionUi(this.#ctx, compSlug, competitionId,
       { name: input.name, sportKey: input.sportKey, variantKey: input.variantKey, row })));
     this.#register(division.id, compSlug, division.slug);
-    for (const s of stages) this.#stageDivision.set(s.id, division.id);
+    this.#know(division.id, stages);
     this.#built = { divisionId: division.id, stages };
     if (!this.#uiPathJudged) {
       this.#uiPathJudged = true;
@@ -498,13 +516,13 @@ export class BrowserDriver implements OrganiserDriver {
       return b.stages.map(toStageRef);
     }
     const out = await this.#write(() => this.#http.postStages(divisionId, stages));
-    for (const s of out) this.#stageDivision.set(s.id, divisionId);
+    this.#know(divisionId, out);
     return out;
   }
 
   async listStages(divisionId: string): Promise<StageRef[]> {
     const out = await this.#http.listStages(divisionId);
-    for (const s of out) this.#stageDivision.set(s.id, divisionId);
+    this.#know(divisionId, out);
     return out;
   }
 
@@ -727,11 +745,17 @@ export class BrowserDriver implements OrganiserDriver {
     if (this.#completed.has(stageId)) {
       throw new DriverMisuse(`browser: stage ${stageId} already completed, or its complete ended unknown — /complete is never repeated (design §6.4)`);
     }
-    const where = this.#wants("completeStage") ? this.#whereOfStage(stageId) : null;
+    // W1d item 22: the type's first completion is the browser's, as ever, AND so is the LAST stage's: without it a
+    // multi-stage case's knockout completed over http and its picture (08-completed) was never taken.
+    // A last stage the page already had its turn at is not offered it again: a retry after a refused attempt is
+    // http's, as for every type.
+    const position = this.#positionOf(stageId);
+    const where = this.#wants("completeStage") || (position?.last === true && !this.#completeTried.has(stageId)) ? this.#whereOfStage(stageId) : null;
+    if (where !== null) this.#completeTried.add(stageId);
     this.#ledger.record("completeStage", where === null ? "http" : "browser");
     let out: CompleteOut;
     try {
-      out = await this.#write(() => where === null ? this.#http.completeStage(stageId) : this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId)));
+      out = await this.#write(() => where === null ? this.#http.completeStage(stageId) : this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId, position ?? undefined)));
     } catch (e) {
       // As HttpDriver: a named 4xx committed nothing and stays retryable; any
       // other ending may follow a committed completion, so it is never repeated

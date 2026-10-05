@@ -28,7 +28,7 @@ import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/page
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
 import { ALL_FILTER, fixtureLinkSelector, fixtureRowSelector, showAllFixtures } from "../lib/browser/pages/run-sheet.ts";
-import { GeneratedWithoutFixtureNumbers, newestCreatedFixtureNo, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
+import { GeneratedWithoutFixtureNumbers, completeStageUi, completionShots, newestCreatedFixtureNo, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
 import { DATA, NAME, TESTID, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { UnknownTemplate } from "../lib/templates.ts";
@@ -1212,5 +1212,111 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
     }
     expect(refused).toBe(keys.length);
     expect(g.log).toEqual([]);
+  });
+});
+
+// W1d Task 13, item 22: a completion shot is named for the stage's place in its division. A multi-stage case's first
+// completion used to be filed `08-completed`, though the knockout was still pending ("the `groups_ko` case's
+// `08-completed` is the group stage's completion"); now the LAST stage's is `08-completed` and any earlier one is
+// `07-stage-<ordinal>-completed`, each with its `-before` picture. The page below holds the rails of every stage it
+// is given and answers each one's POST /complete.
+describe("completeStageUi: the completion shot names the stage's place in its division (W1d item 22)", () => {
+  const BASE = "http://localhost:3999";
+  interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
+  interface Loc { d: string; [k: string]: unknown }
+  const WHERE = { compSlug: "box-league-1", divSlug: "main", divisionId: "div-1" };
+
+  /** A fixtures tab with one rail per stage id: a click on a stage's Complete answers that stage's /complete. */
+  function railPage(stageIds: readonly string[]) {
+    const log: string[] = [];
+    let screen = 0;
+    let url = "about:blank";
+    type W = { pred: (r: Resp) => boolean; resolve: (r: Resp) => void; timer: ReturnType<typeof setTimeout> };
+    const waiters: W[] = [];
+    const emit = (r: Resp) => { for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); waiters.splice(waiters.indexOf(w), 1); w.resolve(r); } };
+    const resp = (path: string, data: unknown): Resp => ({ request: () => ({ method: () => "POST" }), url: () => `${BASE}${path}`, status: () => 200, json: () => Promise.resolve({ ok: true, data }) });
+    const act = (line: string) => { log.push(line); screen++; };
+    const loc = (d: string): Loc => ({
+      d,
+      or: () => loc(d),
+      first: () => loc(d),
+      locator: (sel: string) => loc(`${d} >> ${sel}`),
+      getByTestId: (id: string) => loc(`${d} >> testid:${id}`),
+      waitFor: async () => undefined,
+      count: async () => 0,
+      isVisible: async () => false,
+      elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
+      click: async () => {
+        act(`click ${d}`);
+        for (const id of stageIds) {
+          if (d === `${railSheetSelector(id)} >> testid:${TESTID.stageComplete.id}`) emit(resp(`/api/v1/stages/${id}/complete`, { completed: true, events: [] }));
+        }
+      },
+    });
+    const page = {
+      goto: async (u: string) => { act(`goto ${new URL(u).pathname}`); url = u; },
+      url: () => url,
+      request: { post: async () => ({ ok: () => true, status: () => 200 }) },
+      getByTestId: (id: string) => loc(`testid:${id}`),
+      locator: (sel: string) => loc(sel),
+      waitForResponse: (pred: (r: Resp) => boolean, t: { timeout: number }): Promise<Resp> => new Promise((resolveW, reject) => {
+        const w: W = { pred, resolve: resolveW, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, t.timeout) };
+        waiters.push(w);
+      }),
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: { els: { d: string }[] }) => ({ jsonValue: async () => fn(arg), dispose: async () => undefined }),
+      evaluate: async () => ({ scrollWidth: 1280, clientWidth: 1280 }),
+      screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { log.push(`shot ${p.split("/").pop()!.replace(/\.png$/, "")}`); files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const evidence = new Evidence("/r", "case-1", fs);
+    const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence };
+    return { log, ctx, evidence, shots: () => log.filter((l) => l.startsWith("shot ")).map((l) => l.slice(5)) };
+  }
+
+  it("a two-stage division: the first stage's completion is 07-stage-1-completed, the last stage's is 08-completed, each preceded by its own -before", async () => {
+    const g = railPage(["st-1", "st-2"]);
+    expect(await completeStageUi(g.ctx, WHERE, "st-1", { ordinal: 1, last: false })).toEqual({ completed: true, events: [] });
+    expect(await completeStageUi(g.ctx, WHERE, "st-2", { ordinal: 2, last: true })).toEqual({ completed: true, events: [] });
+    expect(g.shots()).toEqual(["07-stage-1-completed-before", "07-stage-1-completed", "08-completed-before", "08-completed"]);
+    // Each stage's own rail was the one clicked, in order.
+    expect(g.log.filter((l) => l.startsWith("click ")).map((l) => l.replace(/^click .*stage-rail-sheet-(st-\d).*$/, "$1"))).toEqual(["st-1", "st-2"]);
+    expect(g.evidence.checks().find((c) => c.id === "visual-evidence")).toMatchObject({ verdict: "pass", checked: 4 });
+  });
+
+  it("a three-stage division names the middle stage by its ordinal; a one-stage division (and a caller that passes nothing) still files 08-completed", async () => {
+    const three = railPage(["a", "b", "c"]);
+    await completeStageUi(three.ctx, WHERE, "b", { ordinal: 2, last: false });
+    await completeStageUi(three.ctx, WHERE, "c", { ordinal: 3, last: true });
+    expect(three.shots()).toEqual(["07-stage-2-completed-before", "07-stage-2-completed", "08-completed-before", "08-completed"]);
+    const one = railPage(["only"]);
+    await completeStageUi(one.ctx, WHERE, "only");
+    expect(one.shots()).toEqual(["08-completed-before", "08-completed"]);
+    const stated = railPage(["only"]);
+    await completeStageUi(stated.ctx, WHERE, "only", { ordinal: 1, last: true });
+    expect(stated.shots()).toEqual(one.shots());
+  });
+
+  it("the shot labels are one table: every place gives distinct before/after labels, and a place that is not a place is refused by name", () => {
+    const labels = new Set<string>();
+    let checked = 0;
+    for (const ordinal of [1, 2, 3, 7]) {
+      for (const last of [false, true]) {
+        const { before, after } = completionShots({ ordinal, last });
+        expect(before).toBe(`${after}-before`);
+        expect(after).toBe(last ? "08-completed" : `07-stage-${ordinal}-completed`);
+        labels.add(before); labels.add(after);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+    // The last stage's label does not depend on its ordinal; the others do: 4 ordinals x (not last) + 1 shared last = 5 pairs.
+    expect(labels.size).toBe(10);
+    for (const bad of [0, -1, 1.5, Number.NaN]) expect(() => completionShots({ ordinal: bad, last: false }), String(bad)).toThrow(RangeError);
+    expect(() => completionShots({ ordinal: 0, last: true })).toThrow(/starts at 1/);
   });
 });

@@ -106,13 +106,31 @@ export async function generateUi(c: PageCtx, where: DivisionWhere, stageId: stri
   return data;
 }
 
+/** Where a stage sits among its division's stages (W1d item 22), by seq: its 1-based ordinal and whether it is the last. */
+export interface StagePosition { readonly ordinal: number; readonly last: boolean }
+/** The place a caller that names none means: the division's one stage. */
+const ONLY_STAGE: StagePosition = Object.freeze({ ordinal: 1, last: true });
+
+/** The two pictures a stage's completion is filed under, named for its place: the LAST stage's is `08-completed`
+ *  (the picture of the division's completion), an earlier one's is `07-stage-<ordinal>-completed`. Before W1d
+ *  item 22 every completion was `08-completed`, so a multi-stage case's first browser completion (the group stage,
+ *  with the knockout's proposal still pending) was filed as the division's. */
+export function completionShots(at: StagePosition): { before: string; after: string } {
+  if (!Number.isInteger(at.ordinal) || at.ordinal < 1) throw new RangeError(`browser: a stage's place in its division starts at 1, got ${at.ordinal}`);
+  const after = at.last ? "08-completed" : `07-stage-${at.ordinal}-completed`;
+  return { before: `${after}-before`, after };
+}
+
 /** Complete `stageId` from its rail; the product's CompleteOut. At most once
- *  per stage is the DRIVER's rule (HttpDriver's DriverMisuse), not this page's. */
-export async function completeStageUi(c: PageCtx, where: DivisionWhere, stageId: string): Promise<CompleteOut> {
+ *  per stage is the DRIVER's rule (HttpDriver's DriverMisuse), not this page's.
+ *  `at` is the stage's place in its division (the driver knows it); it names
+ *  the pictures and is the division's one stage when omitted. */
+export async function completeStageUi(c: PageCtx, where: DivisionWhere, stageId: string, at: StagePosition = ONLY_STAGE): Promise<CompleteOut> {
   const { page } = c;
+  const shots = completionShots(at);
   const sheet = await railFor(c, where, stageId);
   const complete = sheet.getByTestId(TESTID.stageComplete.id);
-  const before = await shoot(c, "08-completed-before");
+  const before = await shoot(c, shots.before);
   const { data } = await actAndAwait<CompleteOut>(page, { method: "POST", path: exactPath(`/api/v1/stages/${stageId}/complete`) },
     () => complete.click({ timeout: actBudget(c, 1) }), actBudget(c, 1));
   // A completed stage's rail drops its Generate/Complete block (:476).
@@ -120,6 +138,6 @@ export async function completeStageUi(c: PageCtx, where: DivisionWhere, stageId:
     const t = navBudget(c);
     await awaitScreen(() => complete.waitFor({ state: "detached", timeout: t }), `stage ${stageId}'s rail without Complete`, t);
   }
-  await shoot(c, "08-completed", data.completed ? before : undefined);
+  await shoot(c, shots.after, data.completed ? before : undefined);
   return data;
 }

@@ -1749,3 +1749,121 @@ describe(`BrowserDriver — the case ${PAD_INNINGS_SET} plans, driven (W1d T12 f
     expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
   }, 120_000);
 });
+
+// W1d Task 13, item 22: completeStage tells the page object where the stage sits in its division, and the LAST
+// stage's completion is always the browser's. Without the second half the first half is an inert seam: the mixed
+// ledger spends a type's browser turn on the first completion, so a multi-stage case's LAST stage (the knockout)
+// completed over HTTP and its picture was never taken. The positions below are the division's own (stage seq),
+// learned from whichever path built or listed it.
+describe("BrowserDriver — completeStage names the stage's place and shoots the last stage (W1d Task 13, item 22)", () => {
+  /** A division whose stages the harness posts and lists over HTTP (the league fake holds one stage). */
+  class StagedHttp extends FakeHttp {
+    stages: StageRef[] = [];
+    override postStages(_d: string, bodies: readonly { seq: number; kind: string }[]): Promise<StageRef[]> {
+      this.log("postStages");
+      this.stages = bodies.map((b, i) => ({ id: `h${i + 1}`, seq: b.seq, kind: b.kind, config: {}, status: "pending" }));
+      return Promise.resolve(this.stages.map((s) => ({ ...s })));
+    }
+    override listStages(): Promise<StageRef[]> { this.log("listStages"); return Promise.resolve(this.stages.map((s) => ({ ...s }))); }
+  }
+  const places = (pageArgs: Record<string, unknown[][]>) => (pageArgs.completeStageUi ?? []).map((a) => ({ stage: a[2], at: a[3] }));
+
+  it("a two-stage division built by the builder: the group stage is stage 1 (not last), the knockout is stage 2 (last), and BOTH go through the page", async () => {
+    const { driver, http, pageCalls, pageArgs } = league({ spec: spec("groups_ko") });
+    await built(driver, spec("groups_ko"));
+    expect(stagesForRow("groups_ko").map((b) => b.seq)).toEqual([1, 2]);
+    await driver.completeStage("s1");
+    await driver.completeStage("s2");
+    expect(places(pageArgs)).toEqual([{ stage: "s1", at: { ordinal: 1, last: false } }, { stage: "s2", at: { ordinal: 2, last: true } }]);
+    expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(2);
+    expect(http.calls).not.toContain("completeStage");
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+  });
+
+  it("a one-stage division is stage 1 and last, completed once through the page", async () => {
+    const { driver, http, pageArgs } = league();
+    await built(driver, spec("league"));
+    await driver.completeStage("s1");
+    expect(places(pageArgs)).toEqual([{ stage: "s1", at: { ordinal: 1, last: true } }]);
+    expect(http.calls).not.toContain("completeStage");
+  });
+
+  it("three stages (a template's group, group, knockout): the first and the last are the browser's, the middle one is completed over http", async () => {
+    const http = new FakeHttp(ORG);
+    const s = spec("group_group_ko", "cricket", { variant: "t20", template: "t20-super8", caseId: "group_group_ko|cricket|t20|LIFECYCLE" });
+    // The league fake holds one stage: the card's answer is the three-stage one, read back through a stub of the product's list.
+    const three = [1, 2, 3].map((n) => ({ id: `t${n}`, seq: n, kind: n < 3 ? "group" : "knockout", config: {}, status: "pending" }));
+    const { driver, pageArgs } = make({
+      http: Object.assign(http, {
+        readBackTemplate: () => Promise.resolve({
+          competition: { id: "c1", slug: "t20", orgId: ORG },
+          division: { id: "d1", slug: "main", sportKey: "cricket", variantKey: "t20", config: {} },
+          stages: three,
+        }),
+      }),
+      spec: s,
+      pages: { createFromTemplateUi: async () => ({ competitionId: "c1", slug: "t20", visibility: "public", divisions: [{ id: "d1", stages: three.map((t) => ({ id: t.id, fixtureCount: 0 })) }], templateKey: "t20-super8", templateVersion: 1 }) },
+    });
+    await driver.createFromTemplate("t20-super8", { name: "Matrix", endsOn: TEMPLATE_ENDS_ON });
+    await driver.completeStage("t1");
+    await driver.completeStage("t2");
+    await driver.completeStage("t3");
+    expect(places(pageArgs)).toEqual([{ stage: "t1", at: { ordinal: 1, last: false } }, { stage: "t3", at: { ordinal: 3, last: true } }]);
+    expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
+  });
+
+  it("a division the harness built over http: the places come from the stages it posted, and from the stages it listed", async () => {
+    // An API-only row: its division is the harness's own, over http. Generic's `score` variant is a real one.
+    const gk = spec("group_group_ko", "generic", { variant: "score", caseId: "group_group_ko|generic|score|LIFECYCLE" });
+    const posted = new StagedHttp(ORG);
+    const a = make({ http: posted, spec: gk });
+    const { divId } = await built(a.driver, gk);
+    await a.driver.postStages(divId, stagesForRow("group_group_ko"));
+    await a.driver.completeStage("h1");
+    await a.driver.completeStage("h3");
+    expect(places(a.pageArgs)).toEqual([{ stage: "h1", at: { ordinal: 1, last: false } }, { stage: "h3", at: { ordinal: 3, last: true } }]);
+    // Stages only LISTED: the fake product holds them, the driver learns them from the read.
+    const listed = new StagedHttp(ORG);
+    const b = make({ http: listed, spec: gk });
+    const made = await built(b.driver, gk);
+    // Listed in REVERSE seq order: a place is by seq, never by the order the stages were learned in.
+    listed.stages = stagesForRow("group_group_ko").map((x, i) => ({ id: `l${i + 1}`, seq: x.seq, kind: x.kind, config: {}, status: "pending" })).reverse();
+    expect((await b.driver.listStages(made.divId)).map((x) => x.id)).toEqual(["l3", "l2", "l1"]);
+    await b.driver.completeStage("l3");
+    expect(places(b.pageArgs)).toEqual([{ stage: "l3", at: { ordinal: 3, last: true } }]);
+  });
+
+  it("the stages of ANOTHER division the driver listed never move a stage's place", async () => {
+    const http = new StagedHttp(ORG);
+    const { driver, pageArgs } = make({ http, spec: spec("groups_ko") });
+    await built(driver, spec("groups_ko"));
+    // A later seq in some other division: if places were taken across divisions, s2 would stop being last.
+    http.stages = [{ id: "x1", seq: 5, kind: "league", config: {}, status: "pending" }];
+    await driver.listStages("d-elsewhere");
+    await driver.completeStage("s1");
+    await driver.completeStage("s2");
+    expect(places(pageArgs)).toEqual([{ stage: "s1", at: { ordinal: 1, last: false } }, { stage: "s2", at: { ordinal: 2, last: true } }]);
+  });
+
+  it("a stage no division of this driver holds is still refused by name before any page is touched", async () => {
+    const { driver, pageCalls } = league({ spec: spec("groups_ko") });
+    await built(driver, spec("groups_ko"));
+    await expect(driver.completeStage("no-such-stage")).rejects.toThrow(DriverMisuse);
+    expect(pageCalls.filter((c) => c === "completeStageUi")).toEqual([]);
+  });
+
+  it("a last stage the page already had its turn at is not offered it again: a refused attempt retries over http, as for every type, and a repeat after a completion is still refused", async () => {
+    const refusing = { completeStageUi: async (_c: unknown, _w: unknown, id: unknown): Promise<{ completed: boolean; events: never[] }> => {
+      if (id === "s2") throw new RefusedCall("POST", "/api/v1/stages/s2/complete", 409, "STAGE_NOT_READY", "not ready");
+      return { completed: true, events: [] };
+    } };
+    const { driver, http, pageCalls } = league({ spec: spec("groups_ko"), pages: refusing as Partial<BrowserPages> });
+    await built(driver, spec("groups_ko"));
+    await driver.completeStage("s1");
+    await expect(driver.completeStage("s2")).rejects.toThrow(RefusedCall);
+    expect(await driver.completeStage("s2")).toMatchObject({ completed: true });
+    expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(2);
+    expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
+    await expect(driver.completeStage("s2")).rejects.toThrow(DriverMisuse);
+  });
+});
