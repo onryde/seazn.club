@@ -18,9 +18,9 @@ const MATRIX = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(MATRIX, "..", "..");
 
 /** Every CLI under tools/matrix whose header declares exit codes (item 6). The package scripts' own set is checked against it below. */
-const CLIS = ["run", "render", "parity", "findings-table", "draw-counts", "gen-catalogue", "single-sport", "model", "merge-shards", "judge", "lock-append-only", "ci/pr-rows", "ci/shard-matrix", "ci/summary", "ci/staleness", "ci/run-sample"] as const;
+const CLIS = ["run", "render", "parity", "findings-table", "draw-counts", "gen-catalogue", "single-sport", "model", "merge-shards", "judge", "lock-append-only", "ci/pr-rows", "ci/shard-matrix", "ci/summary", "ci/staleness", "ci/run-sample", "triage", "audit-ledger"] as const;
 /** The CLIs that read a file the caller names: their header must declare unreadable input, under 2. */
-const INPUT_READERS = ["render", "parity", "findings-table", "draw-counts", "merge-shards", "judge", "ci/pr-rows", "ci/shard-matrix"] as const;
+const INPUT_READERS = ["render", "parity", "findings-table", "draw-counts", "merge-shards", "judge", "ci/pr-rows", "ci/shard-matrix", "triage", "audit-ledger"] as const;
 
 interface Entry { readonly code: number; readonly text: string }
 
@@ -61,8 +61,8 @@ describe("EXIT_CODES (D8): one meaning per code", () => {
 });
 
 describe("every CLI header holds to the table (D8)", () => {
-  it("empty case first: the sweep reads 16 CLIs and each declares at least a 0 and a 2 (a header that parsed to nothing is a failure, not a pass)", () => {
-    expect(CLIS).toHaveLength(16);
+  it("empty case first: the sweep reads 18 CLIs and each declares at least a 0 and a 2 (a header that parsed to nothing is a failure, not a pass)", () => {
+    expect(CLIS).toHaveLength(18);
     let read = 0;
     for (const { cli, entries } of ALL) {
       const codes = entries.map((e) => e.code);
@@ -70,7 +70,7 @@ describe("every CLI header holds to the table (D8)", () => {
       expect(codes, `${cli} declares a 2`).toContain(2);
       read++;
     }
-    expect(read).toBe(16);
+    expect(read).toBe(18);
   });
 
   it("the CLIs the package scripts run are all in the sweep (a new matrix:* script owes its row here)", () => {
@@ -109,7 +109,7 @@ describe("every CLI header holds to the table (D8)", () => {
     }
     expect(readers).toBe(INPUT_READERS.length);
     // The bound above is derived from the table, so a row dropped from it still agrees with itself: pin the table.
-    expect(INPUT_READERS, "bump this when a CLI that reads a named file is added").toHaveLength(8);
+    expect(INPUT_READERS, "bump this when a CLI that reads a named file is added").toHaveLength(10);
     expect(INPUT_READERS).toContain("ci/pr-rows");
     expect(INPUT_READERS).toContain("ci/shard-matrix");
   });

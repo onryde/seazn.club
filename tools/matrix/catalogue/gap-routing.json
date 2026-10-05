@@ -1,0 +1,8 @@
+{
+  "note": "design §8 (D:446-460), transcribed; a reviewed change",
+  "routes": {
+    "SC-O1": "W2",
+    "SW-*": "W3",
+    "SH-*": "W8"
+  }
+}
