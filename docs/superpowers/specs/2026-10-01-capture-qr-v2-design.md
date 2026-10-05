@@ -1939,6 +1939,9 @@ controller's review. None is the controller's ruling, and none is the seazn.club
   the Phone tab's own purchase (one `useCreditCheckout`, one chooser markup), with nothing of the phone path: no stream
   code is minted and no read model is read. What flag off cannot restore is the pre-T11 Phone tab's Go live, because the
   v1 QR it handed the phone is removed for every org (W4, §6.13), not behind the flag.
+- **Flag off = the OBS path plus credits (coordinator ruling on the B8 re-review's open point, 2026-10-05; the owner is
+  to be told).** Accepted as the whole of flag off: the OBS overlay, then the balance, Buy more and the embedded
+  checkout. The pre-T11 Go live does not return with the flag, because W4 removes the v1 QR for every org.
 - **The code line follows the phone past Ready (ruling A).** The folded "Show the code again" line, with Revoke &
   reissue inside it, also shows under Waiting and Live for a session with a pairing. It does not show for a legacy
   session. The mockup draws it only at Ready.
@@ -1980,6 +1983,10 @@ controller's review. None is the controller's ruling, and none is the seazn.club
   construction: it arms at max(`RECONNECT_QUIET_SECONDS`, cadence + one near poll) of silence and ends at §6.9's
   max(floor, cadence + slack), so with the defaults it never shows more than 30 s, and inside it the phone is not yet
   silent (§6.9's threshold IS ask 10's end). That is why the node cannot key on `present`.
+- **The folded line's dot says it too (coordinator ruling on the B8 re-review's open point: the same defect class).**
+  The dot on "Paired · Show the code again" reads the same countdown while the server counts down (`phoneDot`): amber
+  exactly when the countdown is about a lost phone (ask 10, W19), lime while the phone still checks in (the warming
+  timeout). With no countdown it reads the read model, as Ready's node does: present lime, silent amber, no phone slate.
 
 **No spec text changes for these:**
 

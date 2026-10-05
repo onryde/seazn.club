@@ -59,6 +59,23 @@ function capturePhone(view: ChainView | null, row: Chain, capture: CaptureFacts)
   }
 }
 
+export type PhoneDot = "lime" | "amber" | "slate";
+
+/**
+ * The folded "Paired · Show the code again" line's dot — the third voice beside the Phone node and the strip (B8
+ * re-review ruling: the same defect class as the node). While the server counts down, it reads THAT fact, as they do:
+ * amber exactly when the countdown is about a lost phone (ask 10, W19), lime while the phone still checks in (the warming
+ * timeout). Never the read model's `present` then — in ask 10's window it is still true (§6.9's threshold IS ask 10's
+ * end). With no countdown it is the read model's, as Ready's node is: present lime, silent amber, no phone slate; and
+ * the timeout with the read model unread says nothing of a phone (slate).
+ */
+export function phoneDot({ phone, countdown }: CaptureFacts): PhoneDot {
+  if (countdown?.reason === "phone_lost") return "amber";
+  if (!phone) return "slate";
+  if (countdown) return "lime";
+  return phone.present ? "lime" : "amber";
+}
+
 /** The destination half while live: ok → flowing + red Live; not ok under 30 s (or not yet read) → animated + amber
  *  Connecting; not ok for 30 s or more (D3) → amber dashes + amber "!" Not receiving. */
 function destinationHalf(view: ChainView): Pick<Chain, "link2" | "dest"> {

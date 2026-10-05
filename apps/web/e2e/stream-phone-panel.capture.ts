@@ -434,6 +434,8 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       await expect(node).toContainText(EN["stream.chain.word.notAnswering"]!);
       await expect(node.locator('[data-mark="bang"]'), "the '!' on the phone node").toHaveCount(1);
       await expect(scope.getByTestId("stream-chain")).not.toContainText(EN["stream.chain.word.starting"]!);
+      // The folded "Paired" line's dot says it too (coordinator ruling): amber, from the same countdown.
+      await expect(scope.getByTestId("stream-code-disclosure").locator("summary [data-tone]")).toHaveAttribute("data-tone", "amber");
       // The server's own numbers, read beside the shot: the evidence that the countdown is real.
       const real = (await (await page.request.get(CURRENT_URL)).json()) as { data: { state: string; countdown: unknown } };
       expect(real.data.state).toBe("warming");

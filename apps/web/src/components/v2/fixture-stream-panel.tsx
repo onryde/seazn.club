@@ -53,7 +53,7 @@ import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { formatMinor, type Currency } from "@/lib/currency";
-import { chainFor } from "@/lib/stream-chain";
+import { chainFor, phoneDot } from "@/lib/stream-chain";
 import { renderSeaznQr, seaznQrModules, type SeaznQr } from "@/lib/seazn-qr";
 import {
   STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
@@ -1847,8 +1847,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   );
   // Ready, paired (or silent): the card folds to one line. Ruling A (carry 3): Reissue is the organiser's remedy for a
   // stranger who scanned the code, so the same line stays while the session waits and while it is live.
+  // The dot is the Phone node's and the strip's statement too (B8 re-review ruling): one fact, `phoneDot`.
   const facts = p.phone?.phone ?? null;
-  const dot = facts?.present ? "lime" : facts ? "amber" : "slate";
+  const dot = phoneDot({ phone: facts, countdown: capture?.countdown ?? null });
   const codeDisclosure = (
     <details
       data-testid="stream-code-disclosure"

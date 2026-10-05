@@ -54,7 +54,7 @@ import {
   TARGET_REMOVED,
   type StreamSessionView,
 } from "@/lib/stream-session-view";
-import { StreamTargetKind, type StreamPhone, type StreamTarget } from "@/server/api-v1/schemas";
+import { StreamLostCountdown, StreamTargetKind, type StreamPhone, type StreamTarget } from "@/server/api-v1/schemas";
 import { resolveStreamTarget, type SavedStreamTarget } from "@/lib/stream-destinations";
 import { STREAM_TARGET_TABLE, STREAM_TARGET_TABLE_ROWS, rowName } from "@/lib/__tests__/_stream-target-table";
 import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
@@ -1398,6 +1398,40 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     const waitHtml = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session({ countdown: timeout })} balance={2} phone={readModel({ phone: facts({ state: "paired" }) })} />);
     expect(waitHtml).toContain(`>${m("stream.chain.word.starting")}<`);
     expect(waitHtml).not.toMatch(PHONE_BANG);
+  });
+
+  it("B8 re-review ruling (the open point), rendered: the folded 'Paired' line's dot says what the strip and the Phone node say, for EVERY countdown the wire declares — amber with the '!' and the lost sentence, lime with neither — the phone still `present` in the read model throughout", () => {
+    const PHONE_BANG = /data-node="phone"[^]*?data-mark="bang"[^]*?data-node="seazn"/;
+    const FOLD_DOT = /data-testid="stream-code-disclosure"[^]*?data-tone="(\w+)"/;
+    const esc = (t: string) => t.replace(/'/g, "&#x27;");
+    type Countdown = StreamLostCountdown;
+    const wire: Countdown[] = StreamLostCountdown.options.flatMap((o) => {
+      const reason = o.shape.reason;
+      const reasons = ("options" in reason ? reason.options : [reason.value]) as Countdown["reason"][];
+      return reasons.map((r) => ({ kind: o.shape.kind.value, reason: r, elapsedMs: 40_000, remainingMs: 20_000 }) as Countdown);
+    });
+    /** Where each kind is served: `warming` before any video; `live` in live AND in a warming reconnect (§5.4). */
+    const states = (c: Countdown): ("warming" | "live")[] => (c.kind === "live" ? ["live", "warming"] : ["warming"]);
+    let checked = 0;
+    let lost = 0;
+    for (const countdown of wire) for (const state of states(countdown)) {
+      const where = `${countdown.kind}.${countdown.reason} in ${state}`;
+      const view = session({ state, countdown, ...(state === "live" ? { startedAt: "2026-09-14T11:50:00Z" } : {}) });
+      const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={view} balance={2} phone={readModel({ phone: facts({ state: "publishing" }) })} />);
+      const sentence = m(`stream.phone.countdown.${countdown.kind}.${countdown.reason}` as MessageKey).split("{")[0]!;
+      expect(html, `${where}: the strip's sentence`).toContain(esc(sentence));
+      const isLost = countdown.reason === "phone_lost";
+      expect(PHONE_BANG.test(html), `${where}: the '!' on the node`).toBe(isLost);
+      expect(html.match(FOLD_DOT)?.[1], `${where}: the fold's dot`).toBe(isLost ? "amber" : "lime");
+      if (isLost) lost++;
+      checked++;
+    }
+    expect(checked, "warming timeout, ask 10, W19 in live and in a warming reconnect").toBe(4);
+    expect(lost).toBe(3);
+    // The positive pair, no countdown: the same present phone's dot is lime (the read model) — the dot moved above
+    // because of the countdown, not because the fold always paints amber.
+    const quiet = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session()} balance={2} phone={readModel({ phone: facts({ state: "publishing" }) })} />);
+    expect(quiet.match(FOLD_DOT)?.[1]).toBe("lime");
   });
 
   it("O5: live, the input down, the phone still beating with notReady camera → 'Reconnecting…' and 'Phone is on a call — video paused', NO countdown, no '!' and no D3 phone box", () => {
