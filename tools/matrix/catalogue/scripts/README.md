@@ -21,8 +21,11 @@ A hand edit of a generated file without the same edit in its script fails that t
     python3 tools/matrix/catalogue/scripts/build-p-map.py
 
 `gen-shapes.py`, `dump.py` and `classify.py` read `<n>/<layer>/results.json` for the three baseline dispatches (`W1D_DISPATCH=<dir>`)
-and, for `gen-shapes.py` and `classify.py`, the `out<n>/triage.json` each `pnpm matrix:triage` wrote (`W1D_TRIAGE_OUT=<dir>`). Those results are not
-in the repo until Task 21 commits them, so no test runs these three; the cut fixture is what the tests read.
+and, for `gen-shapes.py` and `classify.py`, the `out<n>/triage.json` each `pnpm matrix:triage` wrote (`W1D_TRIAGE_OUT=<dir>`). Task 21 committed
+dispatch 3 (`truth-runs/w1d-baseline/L1`, `L2`, `L3`) and, for dispatches 1 and 2, the five L3 cases that differ or flip
+(`truth-runs/w1d-baseline/dispatch-cuts.json`). `tools/matrix/__tests__/w1d-baseline-evidence.test.ts` stages that layout and runs all three
+(`W1D_RUNS=3` limits `classify.py` to the committed dispatch); `gen-shapes.py` must rebuild the cut fixture byte for byte from it. The full
+three-dispatch comparison (`classify.py` over 628 reds) needs the dispatches' merged artifacts, which GitHub keeps 90 days.
 
 `classify.py` is a cross-check, not independent mechanism evidence (review m7): it keys `sport == boardgame` to SC-O1 as the rules
 do, so agreement shows the rules are self-consistent. The mechanism evidence for the SC-O1/O2 L3 reds is W1-driving's

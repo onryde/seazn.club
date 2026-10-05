@@ -4,6 +4,9 @@ rules do, so "no disagreement" shows the rules are self-consistent; the mechanis
 committed truth-runs/w1drv-l3-fr1/draw-counts.json (62 of 62 reds drove at least one drawn bracket fixture).
 
     W1D_DISPATCH=<dir> W1D_TRIAGE_OUT=<dir of out1..out3> python3 classify.py     (compares every red of the three dispatches)
+    W1D_RUNS=3 ...                                                               (only the listed dispatches: the committed baseline is dispatch 3)
+
+Importing it (gen-shapes.py does) only defines `classify`; the comparison runs when it is run directly.
 """
 import json, os, sys, re, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,14 +33,19 @@ def classify(c):
     if layer == "L2" and "no organiser control builds" in r and row in api_only:
         return ("NEW-W1d-4" if api_only[row] == "W4" else "NEW-W1d-5", api_only[row])
     return None
-bad = 0; total = 0
-for n in (1, 2, 3):
-    for layer in ("L1", "L2", "L3"):
-        tri = {r["caseId"]: r for r in json.load(open(f"{OUT}/out{n}/triage.json"))["rows"]}
-        for c in reds(n, layer):
-            total += 1
-            want = classify(c)
-            got = tri.get(c["caseId"])
-            if want is None or got is None or (got["gap"], got["wave"]) != want:
-                bad += 1; print("DISAGREE", n, layer, c["caseId"], want, got and (got["gap"], got["wave"]), c["reason"][:100])
-print("reds compared:", total, "disagreements:", bad)
+def main():
+    runs = [int(x) for x in os.environ.get("W1D_RUNS", "1,2,3").split(",")]
+    bad = 0; total = 0
+    for n in runs:
+        for layer in ("L1", "L2", "L3"):
+            tri = {r["caseId"]: r for r in json.load(open(f"{OUT}/out{n}/triage.json"))["rows"]}
+            for c in reds(n, layer):
+                total += 1
+                want = classify(c)
+                got = tri.get(c["caseId"])
+                if want is None or got is None or (got["gap"], got["wave"]) != want:
+                    bad += 1; print("DISAGREE", n, layer, c["caseId"], want, got and (got["gap"], got["wave"]), c["reason"][:100])
+    print("reds compared:", total, "disagreements:", bad)
+
+if __name__ == "__main__":
+    main()

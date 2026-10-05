@@ -3,7 +3,8 @@
 // tools/matrix/catalogue/scripts/ holds the python that wrote triage-rules.json, audit-verdicts.json and p-map.json. Each is run
 // here into a scratch file and compared byte for byte with the committed one, so (a) the scripts stay runnable and (b) a hand edit
 // of a generated file without the matching edit of its script fails by name. gen-shapes.py, dump.py and classify.py read the
-// three baseline dispatches' results, which are not in the repo until Task 21 commits them; they are listed and documented, not run.
+// three baseline dispatches' results; Task 21 committed the third (truth-runs/w1d-baseline) and a cut of the first two, and
+// w1d-baseline-evidence.test.ts runs those three against that layout. Here they are listed and documented.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -3,8 +3,8 @@ by (row, scenario, failing set, reason shape).
 
     W1D_DISPATCH=<dir> python3 dump.py <dispatch 1|2|3> <layer L1|L2|L3>
 
-<dir> holds the three baseline dispatches as <dir>/<n>/<layer>/results.json (Task 19 read them from its session scratch;
-Task 21 commits them, and this reads the committed copy by the same layout)."""
+<dir> holds the baseline dispatches as <dir>/<n>/<layer>/results.json (Task 19 read them from its session scratch). Task 21 committed dispatch 3 only,
+as truth-runs/w1d-baseline/<layer>/results.json: stage <dir>/3/<layer>/results.json from those files (w1d-baseline-evidence.test.ts does)."""
 import json, os, sys, re, collections
 D = os.environ.get("W1D_DISPATCH")
 if D is None:
