@@ -18,6 +18,7 @@ import { deps } from "./run-deps.ts";
 import { ID, baseCases, judgeOut, mergedRun } from "./summary-fixtures.ts";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 import { fillRunId, jobBlock, jobsOf, runIdTemplate, stepHeads, stepOf } from "./workflow-text.ts";
+import { STRYKER_GROUPS } from "../../../packages/engine/stryker.groups.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WORKFLOWS = join(REPO, ".github/workflows");
@@ -957,4 +958,306 @@ describe("a re-run does not collide with its own artifacts (m3)", () => {
     expect(WF.match(/uses: actions\/upload-artifact@v4/g)).toHaveLength(3);
     expect(WF.match(/^\s+overwrite: true$/gm)).toHaveLength(3);   // a fourth upload without it reds on the first count
   });
+});
+
+// --- mutation.yml (W1d Task 15; rulings 66, 67, 68; D14) ----------------------------------------------------------------
+// Held by text like matrix-truth.yml, and where a step's logic lives in its `run:` the block is RUN for real, with `pnpm`
+// stood in on the PATH: what is proven is the YAML's own wiring (the flags it passes, the exit code it keeps, the files it
+// reads) against the real engine CLIs, never a copy of the command kept in the test. They live here, not in Task 9's block,
+// because they read mutation.yml and stryker.groups.mjs, which Task 15 creates (a read in a `describe` body fails the whole
+// file at collection).
+const MUT = readFileSync(join(WORKFLOWS, "mutation.yml"), "utf8");
+const MJOBS = jobsOf(MUT);
+const ENGINE_DIR = join(REPO, "packages/engine");
+const enginePkg = JSON.parse(readFileSync(join(ENGINE_DIR, "package.json"), "utf8")) as { scripts: Record<string, string> };
+
+describe("both workflows run on the switchable runner (ruling 68, D24)", () => {
+  it("every job of matrix-truth.yml AND mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes", () => {
+    for (const [file, text] of [["matrix-truth.yml", WF], ["mutation.yml", MUT]] as const) {
+      const jobs = Object.entries(jobsOf(text));
+      expect(jobs.length, file).toBeGreaterThan(1);   // anti-vacuity
+      for (const [name, t] of jobs) {
+        expect(t, `${file}:${name} runs-on`).toContain("runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}");
+        expect(t, `${file}:${name} timeout-minutes`).toMatch(/timeout-minutes:/);
+      }
+    }
+  });
+});
+
+describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1)", () => {
+  it("every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed)", () => {
+    const all = [...Object.values(JOBS), ...Object.values(MJOBS)];
+    expect(all.length).toBeGreaterThan(4);   // anti-vacuity: matrix-truth's four plus mutation's
+    for (const t of all) expect(stepOf(t, GUARD).body).toContain("RUNNER_ENV: ${{ runner.environment }}");
+  });
+  it("the mutate job does not cancel its siblings, takes its timeout from the matrix, and saves its evidence even when Stryker exits non-zero (R5-I1)", () => {
+    expect(MJOBS.mutate).toContain("matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}");
+    expect(MJOBS.mutate).toContain("fail-fast: false");
+    expect(MJOBS.mutate).toContain("timeout-minutes: ${{ matrix.timeout }}");
+    for (const n of ["Survivors", "Upload mutation results"]) expect(stepOf(MJOBS.mutate!, n).body).toContain("if: always()");
+  });
+  it("the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys, in declaration order (m2)", () => {
+    // a trailing `# comment` on an option line is stripped (review 6, m4)
+    const opts = /group:[\s\S]*?options:\n((?:\s+- .+\n)+)/.exec(MUT)![1]!.split("\n").map((l) => l.replace(/\s+#.*$/, "").replace(/^\s+- /, "").trim()).filter(Boolean);
+    expect(opts).toEqual(["all", ...Object.keys(STRYKER_GROUPS)]);
+    expect(opts.length).toBeGreaterThan(2);
+  });
+  it("mutation.yml's guard is the first step of every job, with matrix-truth's script (the identical-script claim for the second workflow)", () => {
+    const want = stepOf(JOBS.plan!, GUARD).script;
+    expect(want).not.toBeNull();
+    expect(Object.keys(MJOBS).length).toBeGreaterThan(1);
+    for (const [name, t] of Object.entries(MJOBS)) {
+      expect(stepHeads(t)[0], name).toBe(`      - name: ${GUARD}`);
+      expect(stepOf(t, GUARD).script, name).toBe(want);
+    }
+  });
+});
+
+describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3)", () => {
+  it("schedule + workflow_dispatch + its own pull_request paths, and no push, no workflow_call, no pull_request_target", () => {
+    expect(MUT).toMatch(/schedule:\s*\n\s*- cron: "23 3 \* \* 0"/);
+    for (const t of ["workflow_dispatch:", "pull_request:"]) expect(MUT).toContain(t);
+    expect(MUT).not.toMatch(/^\s{2}push:/m);
+    expect(MUT).not.toContain("workflow_call");
+    expect(MUT).not.toContain("pull_request_target");
+    expect(MUT).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/mutation\.yml"\s*\n\s*- "packages\/engine\/stryker\*"\s*\n\s*- "packages\/engine\/scripts\/stryker-\*"/);
+  });
+
+  it("the two jobs are plan and mutate, mutate needs plan, and plan has the 15-minute timeout", () => {
+    expect(Object.keys(MJOBS)).toEqual(["plan", "mutate"]);
+    expect(MJOBS.mutate).toMatch(/needs:\s*\[plan\]/);
+    expect(MJOBS.plan).toMatch(/timeout-minutes: 15\b/);
+    expect(MJOBS.plan).toContain("outputs:\n      matrix: ${{ steps.matrix.outputs.matrix }}");
+  });
+
+  it("both jobs spell the fork condition in their own `if:`, and plan carries the weekly gate beside it: evaluated over every event (10 evaluations)", () => {
+    let evaluated = 0;
+    const plan = ifOf(MJOBS.plan!);
+    const mutate = ifOf(MJOBS.mutate!);
+    expect(plan).toContain("(github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true')");
+    expect(mutate).toContain("(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)");
+    const cases: { name: string; ctx: Record<string, unknown>; plan: boolean; mutate: boolean }[] = [
+      { name: "workflow_dispatch", ctx: ctxOf({ event: "workflow_dispatch" }), plan: true, mutate: true },
+      { name: "schedule, enabled", ctx: ctxOf({ event: "schedule", weekly: "true" }), plan: true, mutate: true },
+      // the disabled weekly firing: plan is skipped by its own `if:`, and mutate by `needs: [plan]` (a skipped need skips the job)
+      { name: "schedule, disabled", ctx: ctxOf({ event: "schedule", weekly: "" }), plan: false, mutate: true },
+      { name: "PR from the same repository", ctx: ctxOf({ event: "pull_request" }), plan: true, mutate: true },
+      { name: "PR from a fork", ctx: ctxOf({ event: "pull_request", head: "someone-else/seazn.club" }), plan: false, mutate: false },
+      { name: "PR whose head repository was deleted", ctx: ctxOf({ event: "pull_request", head: null }), plan: false, mutate: false },
+    ];
+    for (const c of cases) {
+      expect(evalIf(plan, c.ctx), `plan: ${c.name}`).toBe(c.plan);
+      expect(evalIf(mutate, c.ctx), `mutate: ${c.name}`).toBe(c.mutate);
+      evaluated += 2;
+    }
+    expect(evaluated).toBe(12);
+  });
+
+  it("the exposure surface is read-only and secret-free: ONE workflow-level permissions block, contents read, and no secrets anywhere", () => {
+    const blocks = permissionBlocks(MUT);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.scalar).toBeNull();
+    expect(blocks[0]!.entries).toEqual({ contents: "read" });
+    expect(MUT).toMatch(/^permissions:$/m);   // at column 0: the workflow's, not a job's
+    expect(MUT).not.toMatch(/\$\{\{[^}]*\bsecrets\b/);
+    expect(MUT).not.toMatch(/^\s*secrets:/m);
+  });
+
+  it("the one upload overwrites its own artifact (a re-run must not 409), is named per group, and is rooted at packages/engine/ (PF-5: a download holds reports/mutation/<group>.json)", () => {
+    expect(MUT.match(/uses: actions\/upload-artifact@v4/g)).toHaveLength(1);
+    expect(MUT.match(/^\s+overwrite: true$/gm)).toHaveLength(1);
+    const up = stepOf(MJOBS.mutate!, "Upload mutation results").body;
+    expect(up).toContain("name: mutation-${{ matrix.group }}");
+    const paths = /path: \|\n((?: {12}\S.*\n?)+)/.exec(up)![1]!.split("\n").map((l) => l.trim()).filter(Boolean);
+    expect(paths.length).toBeGreaterThan(1);
+    for (const x of paths) expect(x, x).toMatch(/^packages\/engine\//);
+    expect(paths).toContain("packages/engine/reports/mutation/${{ matrix.group }}.json");
+    expect(paths).toContain("packages/engine/SURVIVORS.md");
+  });
+});
+
+describe("mutation.yml: the incremental cache is keyed so no group can restore another's file", () => {
+  const cache = stepOf(MJOBS.mutate!, "Restore the incremental file").body;
+  const keyOf = (g: string) => /^ {10}key: (.+)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ github.sha }}", "0123abc");
+  const restoreOf = (g: string) => /restore-keys: \|\n {12}(\S.*)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g);
+
+  it("the cached path is the group's own incremental file, the one stryker.config.mjs writes", () => {
+    expect(cache).toContain("path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json");
+    expect(cache).toContain("uses: actions/cache/restore@v4");
+  });
+
+  it("the file is SAVED by its own step, `if: always()`, after Stryker and under the key the restore looks for (a red floor check must not lose it)", () => {
+    const save = stepOf(MJOBS.mutate!, "Save the incremental file").body;
+    expect(save).toContain("uses: actions/cache/save@v4");
+    expect(save).toContain("if: always()");
+    expect(save).toContain("path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json");
+    expect(save).toContain(`key: ${/^ {10}key: (.+)$/m.exec(cache)![1]!}`);
+    const heads = stepHeads(MJOBS.mutate!);
+    const at = (n: string) => heads.indexOf(`      - name: ${n}`);
+    expect(at("Run Stryker")).toBeGreaterThan(at("Restore the incremental file"));
+    expect(at("Save the incremental file")).toBe(at("Run Stryker") + 1);   // before any step that can exit 1 (the Floor check)
+    expect(at("Floor check")).toBeGreaterThan(at("Save the incremental file"));
+    // the plain `actions/cache@v4` would save only on a green job: none may remain
+    expect(MUT).not.toMatch(/uses: actions\/cache@/);
+  });
+
+  it("no group's restore prefix is a prefix of another group's cache key (derived from the real group names)", () => {
+    const names = Object.keys(STRYKER_GROUPS);
+    let compared = 0;
+    for (const g of names) {
+      for (const h of names) {
+        if (g === h) { expect(keyOf(h).startsWith(restoreOf(g)), `${g} restores its own`).toBe(true); continue; }
+        expect(keyOf(h).startsWith(restoreOf(g)), `${g}'s restore prefix "${restoreOf(g)}" reaches ${h}'s key "${keyOf(h)}"`).toBe(false);
+        compared++;
+      }
+    }
+    expect(compared).toBe(names.length * (names.length - 1));
+  });
+
+  it("the premise: a hyphen delimiter WOULD collide on the real names (so the '@' is doing work, not decoration)", () => {
+    const names = Object.keys(STRYKER_GROUPS);
+    const colliding = names.flatMap((g) => names.filter((h) => h !== g && `stryker-${h}-0123abc`.startsWith(`stryker-${g}-`)).map((h) => `${g} -> ${h}`));
+    expect(colliding.length).toBeGreaterThan(0);
+  });
+});
+
+// --- the steps, run for real -----------------------------------------------------------------------------------------
+
+/** A `pnpm` on the PATH for a step that runs in packages/engine: `mutation:floor` runs the REAL engine CLI as the engine's
+ *  package.json spells it (paths made absolute, so the cwd can be a scratch dir); `mutation` is a stand-in that records the
+ *  STRYKER_GROUP it was given and exits with FAIL_CODE (the real Stryker run is the probe's, not a unit test's). */
+function enginePnpm(dir: string): void {
+  const floorCmd = enginePkg.scripts["mutation:floor"];
+  expect(floorCmd, "the engine's mutation:floor script").toBeDefined();
+  writeFileSync(join(dir, "pnpm"), `#!/bin/sh
+echo "$*" >> "$RECORD"
+cmd="$1"; shift
+case "$cmd" in
+  mutation:floor) exec ${floorCmd!.replace(" scripts/", ` ${ENGINE_DIR}/scripts/`)} "$@" ;;
+  mutation) echo "STRYKER_GROUP=$STRYKER_GROUP" >> "$RECORD"; if [ -n "$FAIL_CODE" ]; then echo "stand-in: stryker failed" >&2; exit "$FAIL_CODE"; fi ;;
+  *) echo "stand-in pnpm: unexpected command $cmd" >&2; exit 99 ;;
+esac
+`, { mode: 0o755 });
+  chmodSync(join(dir, "pnpm"), 0o755);
+}
+/** The one-line `run:` of a step (the floor and survivors steps), with the engine-relative script path made absolute. */
+function runLine(jobText: string, name: string): string {
+  const m = /^ {8}run: (\S.*)$/m.exec(stepOf(jobText, name).body);
+  if (m === null) throw new Error(`the "${name}" step has no one-line run:`);
+  return m[1]!.replace(" scripts/stryker-floor.ts", ` ${ENGINE_DIR}/scripts/stryker-floor.ts`);
+}
+function runBlock(script: string, o: { cwd: string; env?: Record<string, string> }): { status: number | null; stdout: string; stderr: string; record: string[] } {
+  const bin = fresh("bin");
+  enginePnpm(bin);
+  const recordFile = join(bin, "record");
+  writeFileSync(recordFile, "");
+  const r = spawnSync("bash", ["-c", script], { cwd: o.cwd, encoding: "utf8", timeout: SPAWN_MS * 3, env: { PATH: `${bin}:${process.env.PATH ?? ""}`, RECORD: recordFile, ...o.env } });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, record: readFileSync(recordFile, "utf8").split("\n").filter(Boolean) };
+}
+/** A scratch packages/engine: the floor file, and a `draws` report (3 killed, 1 survived: 75.0%) at reports/mutation/draws.json. */
+function engineDir(floors: Record<string, number>, over: { omitReport?: boolean } = {}): string {
+  const cwd = fresh("engine");
+  writeFileSync(join(cwd, "stryker-floor.json"), JSON.stringify({ note: "t", groups: floors }));
+  if (over.omitReport !== true) {
+    mkdirSync(join(cwd, "reports/mutation"), { recursive: true });
+    const m = (status: string, line: number) => ({ mutatorName: "ConditionalExpression", replacement: "true", status, location: { start: { line, column: 1 } } });
+    writeFileSync(join(cwd, "reports/mutation/draws.json"), JSON.stringify({ files: { "src/scheduling/bracket.ts": { mutants: [m("Killed", 1), m("Killed", 2), m("Timeout", 3), m("Survived", 4)] } } }));
+  }
+  return cwd;
+}
+
+describe("mutation.yml: the plan step derives the matrix through the real script, per event", () => {
+  const script = stepOf(MJOBS.plan!, "Derive the matrix").script ?? runLine(MJOBS.plan!, "Derive the matrix");
+  const derive = (env: Record<string, string>) => {
+    const out = join(fresh("out"), "github-output");
+    writeFileSync(out, "");
+    // the step's command, as the workflow spells it, run from the repo root (a workflow step's default directory)
+    const r = spawnSync("bash", ["-c", script], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS, env: { PATH: process.env.PATH ?? "", GITHUB_OUTPUT: out, ...env } });
+    return { status: r.status, stderr: r.stderr, lines: readFileSync(out, "utf8").split("\n").filter(Boolean) };
+  };
+  const groupsIn = (lines: string[]) => (JSON.parse(lines[0]!.slice("matrix=".length)) as { include: { group: string; timeout: number }[] }).include.map((e) => e.group);
+
+  it.each([
+    ["pull_request", "", ["probe"]],
+    ["schedule", "", Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe")],
+    ["workflow_dispatch", "all", Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe")],
+    ["workflow_dispatch", "probe", ["probe"]],
+    ["workflow_dispatch", "draws", ["draws"]],
+  ])("EVENT=%s GROUP='%s' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with %j", (event, group, want) => {
+    const r = derive({ EVENT: event, GROUP: group });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0]).toMatch(/^matrix=\{"include":\[/);
+    expect(groupsIn(r.lines)).toEqual(want);
+  }, spawnBudget(1));
+
+  it("a dispatch of an unknown group fails the step and appends nothing (the matrix is never empty-and-green)", () => {
+    const r = derive({ EVENT: "workflow_dispatch", GROUP: "nosuch" });
+    expect(r.status).not.toBe(0);
+    expect(r.lines).toEqual([]);
+  }, spawnBudget(1));
+});
+
+describe("mutation.yml: the Stryker step keeps Stryker's own exit and writes it down (D8: a killed command reads as 0 otherwise)", () => {
+  const body = stepOf(MJOBS.mutate!, "Run Stryker");
+  const script = body.script!;
+  it("it runs `pnpm mutation` in packages/engine with STRYKER_GROUP from the job's GROUP", () => {
+    expect(body.body).toContain("working-directory: packages/engine");
+    const r = runBlock(script, { cwd: fresh("engine"), env: { GROUP: "draws" } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.record).toEqual(["mutation", "STRYKER_GROUP=draws"]);
+  }, spawnBudget(1));
+  it("a failing run: the step exits with Stryker's code, reports/mutation/exit.txt says so (the directory is made even if Stryker died before writing one), and EXIT= is printed", () => {
+    let checked = 0;
+    for (const code of [1, 2, 137]) {
+      const cwd = fresh("engine");
+      const r = runBlock(script, { cwd, env: { GROUP: "core", FAIL_CODE: String(code) } });
+      expect(r.status, `exit ${code}`).toBe(code);
+      expect(readFileSync(join(cwd, "reports/mutation/exit.txt"), "utf8").trim(), `exit ${code}`).toBe(String(code));
+      expect(r.stdout).toContain(`EXIT=${code}`);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  }, spawnBudget(3));
+});
+
+describe("mutation.yml: the floor and survivors steps, run through the real engine CLI", () => {
+  const floorStep = stepOf(MJOBS.mutate!, "Floor check");
+  const floorLine = runLine(MJOBS.mutate!, "Floor check");
+  const survivorsLine = runLine(MJOBS.mutate!, "Survivors");
+
+  it("the floor check is skipped for the probe and runs in packages/engine, never `continue-on-error`", () => {
+    expect(floorStep.body).toContain("if: matrix.group != 'probe'");
+    expect(floorStep.body).toContain("working-directory: packages/engine");
+    expect(floorStep.body).not.toContain("continue-on-error");
+    expect(floorLine).toContain("--skip-if-no-floors");
+    expect(floorLine).toContain('--check "$GROUP" "reports/mutation/$GROUP.json"');
+  });
+
+  it("PR-A's state (the committed floor file is empty): it prints `no floor yet: PR-B sets it` and passes, for the group's real report", () => {
+    const r = runBlock(floorLine, { cwd: engineDir({}), env: { GROUP: "draws" } });
+    expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(r.stdout).toContain("no floor yet: PR-B sets it");
+    expect(r.record).toEqual(['mutation:floor --check draws reports/mutation/draws.json --skip-if-no-floors']);
+  }, spawnBudget(1));
+
+  it("once PR-B commits a floor: a group with no entry is a failure, a met floor passes and a missed one fails", () => {
+    expect(runBlock(floorLine, { cwd: engineDir({ competition: 40 }), env: { GROUP: "draws" } }).status).toBe(2);   // no entry for draws
+    expect(runBlock(floorLine, { cwd: engineDir({ draws: 75 }), env: { GROUP: "draws" } }).status).toBe(0);         // 3 of 4 = 75.0
+    expect(runBlock(floorLine, { cwd: engineDir({ draws: 75.1 }), env: { GROUP: "draws" } }).status).toBe(1);
+  }, spawnBudget(3));
+
+  it("a missing report is a failure even while no floor exists (a group that wrote nothing is never a skip)", () => {
+    const r = runBlock(floorLine, { cwd: engineDir({}, { omitReport: true }), env: { GROUP: "draws" } });
+    expect(r.status).toBe(2);
+  }, spawnBudget(1));
+
+  it("the survivors step writes SURVIVORS.md next to the group's report, listing the one survivor", () => {
+    expect(stepOf(MJOBS.mutate!, "Survivors").body).toContain("working-directory: packages/engine");
+    const cwd = engineDir({});
+    const r = runBlock(survivorsLine, { cwd, env: { GROUP: "draws" } });
+    expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
+    const md = readFileSync(join(cwd, "SURVIVORS.md"), "utf8");
+    expect(md.split("\n").filter((l) => l.startsWith("src/"))).toEqual(["src/scheduling/bracket.ts:4:1 ConditionalExpression → true"]);
+  }, spawnBudget(1));
 });

@@ -1,0 +1,206 @@
+name: Stryker mutation
+
+# W1d (owner rulings 66, 67, 68; D14). Weekly mutation testing of the engine, placement scheduling excepted. One job per
+# STRYKER_GROUPS key (packages/engine/stryker.groups.mjs); a pull request runs the probe only (D3, the PR self-proof).
+# Triggers:
+#  - schedule: weekly, Sun 03:23 UTC — GATED by vars.MATRIX_WEEKLY_ENABLED (the matrix-truth.yml form): while the variable is
+#    not 'true' a firing is a visible run of skipped jobs. A pull request and a dispatch still run while it is off, which is
+#    all of PR-A's state.
+#  - workflow_dispatch: `group` is `all` (every group but the probe) or one STRYKER_GROUPS key, the probe included; the choices
+#    are held equal to the keys by matrix-workflow.test.ts. inject_visibility proves the guard live.
+#  - pull_request on this file and the Stryker files: the probe, so the workflow proves itself on its own PR.
+# The matrix (and each job's timeout, from packages/engine/stryker-timeouts.json, at most 300 minutes) is derived by
+# packages/engine/scripts/stryker-matrix.mjs, whose own test spawns it per event. The floor (stryker-floor.json) gates, not
+# Stryker's `break`; until PR-B sets one the floor step prints "no floor yet" and the groups' scores are only logged.
+# PUBLIC REPO (R14a): nothing here echoes a secret, there are none, and the artifact is the mutation report and its survivors.
+on:
+  schedule:
+    - cron: "23 3 * * 0"        # GATED by vars.MATRIX_WEEKLY_ENABLED (plan's if:)
+  workflow_dispatch:
+    inputs:
+      group:
+        description: "all (every group but the probe) or one Stryker group, the probe included"
+        type: choice
+        default: all
+        options:
+          - all
+          - competition
+          - core
+          - modules
+          - draws
+          - sports-cricket
+          - sports-cricket-kernel
+          - sports-football
+          - sports-period
+          - sports-setbased
+          - sports-nested
+          - sports-other
+          - probe
+      inject_visibility:
+        description: "mutation proof of the visibility guard: none, or a visibility to pretend (the run must then fail)"
+        type: choice
+        default: none
+        options: [none, private, internal]
+  pull_request:
+    paths:
+      - ".github/workflows/mutation.yml"
+      - "packages/engine/stryker*"
+      - "packages/engine/scripts/stryker-*"
+
+permissions:
+  contents: read
+
+# FORK PRs (T9-FORK): both jobs carry the fork condition in their own `if:`. A pull request from a fork must never reach
+# vars.MATRIX_RUNNER, because a self-hosted label would run the fork's code on the owner's machine; a PR whose head repository is
+# gone (null) fails closed. Every upload overwrites its own artifact, or a "re-run failed jobs" would 409 on the name its
+# first attempt already holds.
+jobs:
+  plan:
+    name: Plan the groups
+    if: (github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INJECT: ${{ inputs.inject_visibility || 'none' }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
+          case "$INJECT" in
+            none) ;;
+            private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
+            *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
+          esac
+          if [ "$vis" != "public" ]; then
+            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            exit 1
+          fi
+          echo "repository is public; guard passes"
+      - uses: actions/checkout@v5
+      # No node setup and no install: stryker-matrix.mjs is plain ESM over node: builtins and one sibling file, run with the
+      # runner's own node (>= 22, as Stryker 10 and path.matchesGlob need), so the plan job costs seconds.
+      - name: Derive the matrix
+        id: matrix
+        env:
+          EVENT: ${{ github.event_name }}
+          GROUP: ${{ inputs.group }}
+        run: node packages/engine/scripts/stryker-matrix.mjs --event "$EVENT" --group "$GROUP" >> "$GITHUB_OUTPUT"
+
+  mutate:
+    name: mutate ${{ matrix.group }}
+    needs: [plan]
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
+    timeout-minutes: ${{ matrix.timeout }}
+    # One group's timeout or red dry run must never cancel the others (Task 20 expects a timeout and still needs the
+    # other groups' wall times).
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GROUP: ${{ matrix.group }}   # job level: every step below reads $GROUP (step env does not carry over)
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INJECT: ${{ inputs.inject_visibility || 'none' }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
+          case "$INJECT" in
+            none) ;;
+            private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
+            *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
+          esac
+          if [ "$vis" != "public" ]; then
+            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            exit 1
+          fi
+          echo "repository is public; guard passes"
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The incremental file carries last week's results forward, so an unchanged mutant is not re-run. Restore and save are
+      # separate steps, the save `if: always()`: actions/cache's own post-save runs only when the whole job succeeded, and a
+      # group that missed its floor (the Floor check step below exits 1) would never keep the file it had just earned.
+      # The key ends in '@<sha>' and the restore key in '@', never '-': a group name is lowercase letters and hyphens, so with
+      # a hyphen `stryker-sports-cricket-` would also match `stryker-sports-cricket-kernel-<sha>` and the wrong group's file
+      # could be the one restored (matrix-workflow.test.ts derives that collision from the real group names).
+      - name: Restore the incremental file
+        uses: actions/cache/restore@v4
+        with:
+          path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
+          key: stryker-${{ matrix.group }}@${{ github.sha }}
+          restore-keys: |
+            stryker-${{ matrix.group }}@
+      - name: Run Stryker
+        working-directory: packages/engine
+        run: |
+          set +e
+          mkdir -p reports/mutation
+          STRYKER_GROUP="$GROUP" pnpm mutation
+          code=$?; echo "EXIT=$code"; echo "$code" > reports/mutation/exit.txt; exit "$code"
+      - name: Save the incremental file
+        if: always()   # deliberate, as below; a missing file (Stryker died first) is a warning from the action, not a failure
+        uses: actions/cache/save@v4
+        with:
+          path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
+          key: stryker-${{ matrix.group }}@${{ github.sha }}
+      # PR-A's state is an empty stryker-floor.json: --skip-if-no-floors then prints "no floor yet: PR-B sets it" (and still
+      # refuses a report that measured nothing). Once PR-B commits a floor, a group with no entry is exit 2, a failure
+      # (review 4, R4-m3). The probe has no floor, ever: it is the PR self-proof.
+      - name: Floor check
+        if: matrix.group != 'probe'
+        working-directory: packages/engine
+        run: pnpm mutation:floor --check "$GROUP" "reports/mutation/$GROUP.json" --skip-if-no-floors
+      - name: Survivors
+        if: always()   # deliberate: save evidence after a non-zero Stryker exit (a manual cancel also runs it; accepted)
+        working-directory: packages/engine
+        run: node --experimental-strip-types scripts/stryker-floor.ts --survivors "$GROUP" "reports/mutation/$GROUP.json" --out SURVIVORS.md
+      - name: Upload mutation results
+        if: always()   # deliberate, as above
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-${{ matrix.group }}
+          overwrite: true
+          # rooted at packages/engine/, so a download holds reports/mutation/<group>.json and SURVIVORS.md (PF-5)
+          path: |
+            packages/engine/reports/mutation/${{ matrix.group }}.json
+            packages/engine/reports/mutation/exit.txt
+            packages/engine/SURVIVORS.md
