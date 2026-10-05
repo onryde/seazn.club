@@ -28,6 +28,10 @@ import { TOOLS_IMPORT_MESSAGE, TOOLS_IMPORT_REGEX, TOOLS_PACKAGES } from "../lib
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 /** The trees the guard holds. */
 const ROOTS = ["apps", "packages", "scripts"] as const;
+// FINAL-FIX M1 (AGENTS.md class 20): the two real-tree tests read every tracked source file under ROOTS. Alone that is about 5 s;
+// in a 70-file parallel run at a load average near 100 it took 31.8 s and 39.7 s, over CI's 30 s default. A stated budget, three
+// times the worst measured, so a loaded machine reports a slow test, not a red one.
+const REAL_TREE_MS = 120_000;
 const SOURCE = /\.(?:[cm]?[jt]sx?)$/;
 
 /** A specifier's package name: `@scope/name` or `name`; null for a path or a builtin. */
@@ -603,7 +607,7 @@ describe("tools import guard (ruling 56)", () => {
     expect(s.toolsScripts).toEqual(oracle);
     expect(s.offenders).toEqual([]);
     expect(s.toolsScripts).not.toContain("reference:boundary");
-  });
+  }, REAL_TREE_MS);
 
   it("item 28, the real tree: spawn calls were inspected — non-zero, the child_process names this tree really uses, every file that imports child_process — and none reaches tools/", () => {
     const s = scan(REPO);
@@ -629,7 +633,7 @@ describe("tools import guard (ruling 56)", () => {
     expect(s.spawnExemptCalls, "the exempt files hold spawn calls, so reading them must find some").toBeGreaterThan(0);
     expect(s.spawnExemptHits, "document the exemption or fix the spawn").toEqual(SPAWN_EXEMPT_EXPECTED);
     expect(s.spawnHits).toEqual([]);
-  });
+  }, REAL_TREE_MS);
 
   it("item 28: the child_process import oracle sees every way a file loads the module — and not a lookalike", () => {
     const rows: [line: string, loads: boolean][] = [

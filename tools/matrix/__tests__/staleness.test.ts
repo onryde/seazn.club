@@ -25,8 +25,13 @@ const run = (event: string, daysAgo: number, conclusion = "success") => ({ concl
 // projection into a silent pass. So the skip is by NAME (vitest reports it as pending) and LOUD (a warning that says
 // what was skipped), and it is allowed only off CI: where CI is set, the test runs, and a missing jq reds it as the
 // environment fault it is.
+// FINAL-FIX M4: a runner without jq under CI is a red that NAMES jq (the test's first assertion says so), never a bare spawn
+// failure; and the three-way rule is a function, so it is tested rather than read.
+type JqPlan = "run" | "skip" | "fail";
+const jqPlan = (hasJq: boolean, ci: string | undefined): JqPlan => (hasJq ? "run" : ci === undefined ? "skip" : "fail");
 const HAS_JQ = spawnSync("jq", ["--version"], { encoding: "utf8" }).status === 0;
-const SKIP_JQ = !HAS_JQ && process.env.CI === undefined;
+const JQ_PLAN = jqPlan(HAS_JQ, process.env.CI);
+const SKIP_JQ = JQ_PLAN === "skip";
 if (SKIP_JQ) process.stderr.write("staleness.test: jq is not installed and CI is unset — SKIPPING 1 test (the real-jq RUN_PROJECTION test); CI runs it\n");
 
 describe("staleness (D1b): the newest SUCCESSFUL scheduled/dispatched run against --max-days", () => {
@@ -302,6 +307,7 @@ describe("gh.ts: the thin wrapper", () => {
   });
 
   it.skipIf(SKIP_JQ)("RUN_PROJECTION, run by a real jq over a fat answer, keeps the envelope and exactly the five fields of each run", () => {
+    expect(JQ_PLAN, "jq is not installed and CI is set: this runner must have jq (the RUN_PROJECTION test is the projection's only real witness) — install it, do not skip").toBe("run");
     const nested = { id: 1, node_id: "R_x", full_name: "acme/seazn", owner: { login: "acme", id: 2, url: "https://api.example.test/users/acme" }, html_url: "https://example.test/acme/seazn" };
     const fatRun = (id: number, event: string, attempt: number) => ({
       id, name: "Matrix truth", head_branch: "main", head_sha: "a".repeat(40), event, status: "completed", conclusion: "success", workflow_id: 5, run_number: id,
@@ -394,5 +400,21 @@ describe("staleness.ts as its package script, a real process", () => {
     expect(r.status, r.stderr).toBe(2);
     expect(r.stdout).toBe("");
     expect(r.stderr).toMatch(/usage: staleness\.ts/);
+  });
+});
+
+describe("the jq skip rule (FINAL-FIX M4): skipped only off CI, and a missing jq on CI is a named red", () => {
+  it("jq present runs, jq absent off CI skips, jq absent on CI fails — whatever value CI holds, empty included", () => {
+    const rows: [boolean, string | undefined, JqPlan][] = [
+      [true, undefined, "run"],
+      [true, "true", "run"],
+      [false, undefined, "skip"],
+      [false, "true", "fail"],
+      [false, "", "fail"],
+      [false, "1", "fail"],
+    ];
+    for (const [hasJq, ci, want] of rows) expect(jqPlan(hasJq, ci), `hasJq=${hasJq} CI=${JSON.stringify(ci)}`).toBe(want);
+    expect(rows.length, "rows checked").toBe(6);
+    expect(new Set(rows.map((r) => r[2])), "every plan is reached").toEqual(new Set(["run", "skip", "fail"]));
   });
 });
