@@ -1736,7 +1736,9 @@ jobs:
           gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""' > "$RUNNER_TEMP/body.txt"
           # --no-renames: a file moved OUT of packages/engine/ must still name its old path (T7->T9), or a rename
           # would read as a new path nobody declares rows for.
-          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          # THREE dots (I1, T9-FIX1): the merge-base against the head, i.e. what THIS PR changed. Two dots diffs against
+          # the base TIP, so a PR behind main would list main's own commits as its changes (fetch-depth: 0 has them).
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
           node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
       - name: Truth-run staleness (D1b, non-blocking)
         # always(): a failed rows step (R27 undeclared) must not hide the staleness signal (review m6).
@@ -1749,7 +1751,8 @@ jobs:
   matrix-sample:
     name: Matrix per-PR sample (R27)
     needs: matrix-rows
-    if: needs.matrix-rows.outputs.run == 'true'
+    # T9-FORK: a fork PR never reaches vars.MATRIX_RUNNER (the called workflow's jobs carry the same condition).
+    if: needs.matrix-rows.outputs.run == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       contents: read
       actions: read

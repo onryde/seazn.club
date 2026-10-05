@@ -2115,7 +2115,7 @@ The workflow is written failing-first against `ci-wiring.test.ts`'s deliberate c
   - `--layer … --scope grid` (Task 3);
   - `--shard` (Task 4).
 - Produces:
-  - the workflow's dispatch inputs `scope: full|smoke` (default `full`) and `inject_visibility: none|private|internal` (default `none`);
+  - the workflow's dispatch inputs `scope: [full]` (a one-option choice, default `full`; smoke is reached only by the workflow's own `pull_request` trigger, T8->T9) and `inject_visibility: none|private|internal` (default `none`);
   - `workflow_call` inputs `scope` (string, required) and `rows` (string, default `none`);
   - the artifacts `shard-<layer>-<k>` (per shard) and `merged` (`merged/<layer>/{results.json, MATRIX.md, faults.txt}`, `SUMMARY.md`);
   - `runSample(deps): Promise<number>`, with `deps = { run(args): Promise<number>; judge(args): number; now(): Date }`. It returns the judge's exit (0 / 1 / 2).
@@ -2412,7 +2412,8 @@ name: Matrix truth run
 # own fresh Postgres with sync:sports. Triggers:
 #  - schedule: weekly, Sat 02:17 UTC — GATED by vars.MATRIX_WEEKLY_ENABLED (D2):
 #    while the variable is not 'true' a firing is a visible run of skipped jobs.
-#  - workflow_dispatch: scope full|smoke; inject_visibility proves the guard live.
+#  - workflow_dispatch: scope [full] only (a dispatch is read as a weekly run);
+#    inject_visibility proves the guard live.
 #  - workflow_call: ci.yml's per-PR sample (R27, D13), scope pr-sample.
 #  - pull_request on this file and tools/matrix/ci/**: the smoke scope proves
 #    the workflow on its own PR (D3) — dispatch only fires main's copy.

@@ -65,10 +65,15 @@ concurrency:
 env:
   SCOPE: ${{ inputs.scope || (github.event_name == 'pull_request' && 'smoke') || 'full' }}
 
+# FORK PRs (T9-FORK): every job is gated on the one condition below, spelled in each job's own `if:` — a pull request
+# from a fork must never reach vars.MATRIX_RUNNER, because a self-hosted label would run the fork's code on the
+# owner's machine. A non-PR event (schedule, dispatch) passes; a PR passes only from this repository, and a PR whose
+# head repository is gone (null) fails closed. Re-runs: every upload overwrites its own artifact (m3), or a "re-run
+# failed jobs" would 409 on the name its first attempt already holds.
 jobs:
   plan:
     name: Plan the shards
-    if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'
+    if: (github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
     timeout-minutes: 15
     outputs:
@@ -83,7 +88,14 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
           if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
-          vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Still unreadable after
+          # the third reads as 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            if [ -n "$vis" ]; then break; fi
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
           case "$INJECT" in
             none) ;;
             private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
@@ -114,6 +126,7 @@ jobs:
   build:
     name: Build once
     needs: [plan]
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
     timeout-minutes: 30
     env:
@@ -159,7 +172,14 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
           if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
-          vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Still unreadable after
+          # the third reads as 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            if [ -n "$vis" ]; then break; fi
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
           case "$INJECT" in
             none) ;;
             private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
@@ -195,12 +215,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build
+          overwrite: true
           path: web.tgz
           retention-days: 1
 
   shard:
     name: ${{ matrix.layer }} shard ${{ matrix.k }}/${{ matrix.of }}
     needs: [plan, build]
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
@@ -254,7 +276,14 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
           if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
-          vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Still unreadable after
+          # the third reads as 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            if [ -n "$vis" ]; then break; fi
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
           case "$INJECT" in
             none) ;;
             private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
@@ -356,6 +385,7 @@ jobs:
         if: always()
         with:
           name: shard-${{ matrix.layer }}-${{ matrix.k }}
+          overwrite: true
           path: |
             out/*/results.json
             out/*/MATRIX.md
@@ -367,7 +397,7 @@ jobs:
   merge:
     name: Merge, judge, summarise
     needs: [plan, shard]
-    if: ${{ always() && needs.plan.result == 'success' && inputs.scope != 'pr-sample' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && inputs.scope != 'pr-sample' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
     timeout-minutes: 20
     steps:
@@ -380,7 +410,14 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
           if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
-          vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Still unreadable after
+          # the third reads as 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            if [ -n "$vis" ]; then break; fi
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
           case "$INJECT" in
             none) ;;
             private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
@@ -454,5 +491,6 @@ jobs:
         if: always()
         with:
           name: merged
+          overwrite: true
           path: merged/
           retention-days: 90

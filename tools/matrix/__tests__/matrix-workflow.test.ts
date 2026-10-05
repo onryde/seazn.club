@@ -42,7 +42,7 @@ describe("matrix-truth.yml — triggers and the disabled schedule (rulings 60, 6
 
   it("the plan job is skipped on a schedule unless vars.MATRIX_WEEKLY_ENABLED is 'true', and every other job needs it", () => {
     expect(Object.keys(JOBS)).toEqual(["plan", "build", "shard", "merge"]);
-    expect(JOBS.plan).toContain("if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'");
+    expect(JOBS.plan).toContain("if: (github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true') && (");   // && the fork gate (T9-FORK), tested below
     for (const [name, text] of Object.entries(JOBS)) if (name !== "plan") expect(text, name).toMatch(/needs:\s*\[?[^\n]*\bplan\b/);
   });
 
@@ -101,13 +101,20 @@ describe("the visibility guard (Review Focus 2)", () => {
     expect(new Set(scripts).size).toBe(1);
   });
 
-  const run = (env: Record<string, string>, gh: "public" | "private" | "fail") => {
+  /** The guard's script, run for real with a `gh` stand-in that FAILS its first `fails` calls (HTTP 403, nothing on stdout) and
+   *  then answers `answer`, and a `sleep` stand-in that records its argument instead of waiting (m4: the retry's backoff is
+   *  observed, never slept). `calls` is how many times the guard asked, `sleeps` the backoffs it took between asks. */
+  const runWith = (env: Record<string, string>, gh: { fails: number; answer: string }) => {
     const dir = mkdtempSync(join(tmpdir(), "gh-"));
     try {
-      writeFileSync(join(dir, "gh"), gh === "fail" ? "#!/bin/sh\necho 'HTTP 403' >&2\nexit 1\n" : `#!/bin/sh\necho ${gh}\n`, { mode: 0o755 });
-      return spawnSync("bash", ["-c", stepOf(JOBS.plan, GUARD).script!], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "onryde/seazn.club", ...env }, encoding: "utf8" });
+      writeFileSync(join(dir, "gh"), `#!/bin/sh\nn=$(cat "$GH_STATE/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$GH_STATE/n"\nif [ "$n" -le "$GH_FAILS" ]; then echo 'HTTP 403' >&2; exit 1; fi\necho "$GH_ANSWER"\n`, { mode: 0o755 });
+      writeFileSync(join(dir, "sleep"), `#!/bin/sh\necho "$1" >> "$GH_STATE/sleeps"\n`, { mode: 0o755 });
+      const r = spawnSync("bash", ["-c", stepOf(JOBS.plan, GUARD).script!], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "onryde/seazn.club", GH_STATE: dir, GH_FAILS: String(gh.fails), GH_ANSWER: gh.answer, ...env }, encoding: "utf8" });
+      const lines = (f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8").split("\n").filter(Boolean) : []);
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls: Number(lines("n")[0] ?? 0), sleeps: lines("sleeps") };
     } finally { rmSync(dir, { recursive: true, force: true }); }
   };
+  const run = (env: Record<string, string>, gh: "public" | "private" | "fail") => runWith(env, gh === "fail" ? { fails: 99, answer: "" } : { fails: 0, answer: gh });
   const cases: { name: string; env: Record<string, string>; gh: "public" | "private" | "fail"; want: number }[] = [
     { name: "public, hosted", env: { RUNNER_ENV: "github-hosted", INJECT: "none" }, gh: "public", want: 0 },
     { name: "public, self-hosted (ruling 68)", env: { RUNNER_ENV: "self-hosted", INJECT: "none" }, gh: "public", want: 0 },
@@ -143,6 +150,40 @@ describe("the visibility guard (Review Focus 2)", () => {
 
   it("the guard fails closed: unreadable, 403, private, internal, injected public, unset runner — counted", () => {
     expect(cases.filter((c) => c.want === 1)).toHaveLength(6);
+  });
+
+  // m4 (T9-FIX1): one blip on `gh api` must not refuse a run; but "still unreadable" stays a refusal (fail closed).
+  describe("a flaky read is retried before it reads as unreadable (m4)", () => {
+    const hosted = { RUNNER_ENV: "github-hosted", INJECT: "none" };
+    it("fails twice, then answers public: the guard passes after exactly three asks, with a backoff between them", () => {
+      const r = runWith(hosted, { fails: 2, answer: "public" });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.calls).toBe(3);
+      expect(r.sleeps).toEqual(["1", "2"]);   // a short, growing backoff: 1 s then 2 s
+    });
+    it("fails once, then answers PRIVATE: the retry never turns a real answer into a pass (two asks, still refused)", () => {
+      const r = runWith(hosted, { fails: 1, answer: "private" });
+      expect(r.status).toBe(1);
+      expect(r.calls).toBe(2);
+      expect(r.sleeps).toEqual(["1"]);
+      expect(r.stdout).toContain("visibility is 'private'");
+    });
+    it("fails every time: exactly three asks, two backoffs, then it refuses as 'unreadable' (fails closed)", () => {
+      const r = runWith(hosted, { fails: 99, answer: "public" });
+      expect(r.status).toBe(1);
+      expect(r.calls).toBe(3);
+      expect(r.sleeps).toEqual(["1", "2"]);
+      expect(r.stdout).toContain("visibility is 'unreadable'");
+    });
+    it("a first answer is final: one ask, no backoff slept (a healthy API costs nothing)", () => {
+      const r = runWith(hosted, { fails: 0, answer: "public" });
+      expect(r.status).toBe(0);
+      expect([r.calls, r.sleeps]).toEqual([1, []]);
+    });
+    it("a self-hosted runner never asks at all (no hosted minutes to guard)", () => {
+      const r = runWith({ RUNNER_ENV: "self-hosted", INJECT: "none" }, { fails: 0, answer: "private" });
+      expect([r.status, r.calls, r.sleeps]).toEqual([0, 0, []]);
+    });
   });
 
   it("never prints the token", () => {
@@ -387,7 +428,7 @@ describe("the merge job (D5, D20; ruling 65; PF-1; T8->T9 a-c)", () => {
   const LAYERS = ["L1", "L2", "L3"] as const;
 
   it("runs even when a shard failed, refuses on any short shard, and judges faults per layer under ruling 65", () => {
-    expect(JOBS.merge).toContain("if: ${{ always() && needs.plan.result == 'success' && inputs.scope != 'pr-sample' }}");
+    expect(JOBS.merge).toContain("if: ${{ !cancelled() && needs.plan.result == 'success' && inputs.scope != 'pr-sample' && (");   // !cancelled(), not always() (m2); && the fork gate (T9-FORK)
     expect(script).toMatch(/pnpm --silent matrix:merge --run-id "ci-\$GITHUB_RUN_ID-\$GITHUB_RUN_ATTEMPT-\$lc"[\s\S]*pnpm --silent matrix:judge faults [^\n]*--planned-not-run allow/);
     expect(script, "portable lower-casing: bash 3.2 has no ${var,,}").not.toContain(",,}");
     expect(stepOf(JOBS.merge!, STEP).body).toMatch(/# ruling 65/);
@@ -602,7 +643,10 @@ describe("ci.yml's per-PR sample (R27, D13)", () => {
   });
   it("the changed-file list keeps a rename: `git diff --name-only --no-renames`, so a file moved OUT of packages/engine still names its old path (T7->T9)", () => {
     const step = stepOf(ciJobs["matrix-rows"]!, "Rows the PR declares (R27)");
-    expect(step.script).toContain('git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA"');
+    // THREE dots (I1, T9-FIX1): the merge-base, i.e. what the PR itself changed. Two dots diffs against the base TIP, so a PR
+    // behind main lists main's own commits as its changes. The next describe drives this very step against a real repo.
+    expect(step.script).toContain('git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA"');
+    expect(step.script).not.toContain('"$BASE_SHA" "$HEAD_SHA"');
     expect(ciJobs["matrix-rows"]).toMatch(/fetch-depth: 0/);
   });
   it("the pr-rows call goes through the crash-exit preload, as the package script does (a bare node line reads a load crash as a verdict)", () => {
@@ -625,5 +669,261 @@ describe("ci.yml's per-PR sample (R27, D13)", () => {
     expect(mine).not.toBe(theirs);
     expect(mine!.startsWith("matrix-truth-")).toBe(true);
     expect(mine).toContain("inputs.scope");   // a PR's own-trigger run and the call from ci.yml are two groups
+  });
+});
+
+// --- fix round 1 (T9-FIX1, T9-FORK): the diff base, the fork gate, the exposure surface, re-runs ------------------
+
+const CI = readFileSync(join(WORKFLOWS, "ci.yml"), "utf8");
+const CI_JOBS = jobsOf(CI);
+const ROWS_STEP = "Rows the PR declares (R27)";
+const SAME_REPO = "onryde/seazn.club";
+
+/** The flags single-sport.test.ts and run-cli.test.ts spell inline (the repo has no shared git-identity helper): a fixed author,
+ *  no signing, no hooks — so a scratch commit never depends on, or prompts for, the machine's own git config. */
+function gitIn(cwd: string, ...args: string[]): string {
+  const r = spawnSync("git", ["-c", "user.name=Matrix Test", "-c", "user.email=matrix@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { cwd, encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
+  return r.stdout.trim();
+}
+
+interface Pr { dir: string; base: string; head: string }
+/** A repo shaped like a PR that is BEHIND its base: A (the branch point: README.md and packages/engine/old.ts) → `pr` adds B
+ *  (`change`'s work) while `main` moves on to C (packages/engine/a.ts). `base` is main's TIP (C, what github.event.pull_request.base.sha
+ *  carries), `head` is B. It refuses a repo that cannot witness the defect: the two-dot diff must list main's own a.ts. */
+function prBehindMain(change: (dir: string) => void): Pr {
+  const dir = fresh("repo");
+  gitIn(dir, "init", "-q", "-b", "main");
+  mkdirSync(join(dir, "packages/engine"), { recursive: true });
+  writeFileSync(join(dir, "README.md"), "x\n");
+  writeFileSync(join(dir, "packages/engine/old.ts"), "export const old = 1;\n");
+  gitIn(dir, "add", "-A");
+  gitIn(dir, "commit", "-q", "-m", "A: the branch point");
+  const branchPoint = gitIn(dir, "rev-parse", "HEAD");
+  gitIn(dir, "checkout", "-q", "-b", "pr");
+  change(dir);
+  gitIn(dir, "add", "-A");
+  gitIn(dir, "commit", "-q", "-m", "B: the PR");
+  const head = gitIn(dir, "rev-parse", "HEAD");
+  gitIn(dir, "checkout", "-q", "main");
+  writeFileSync(join(dir, "packages/engine/a.ts"), "export const a = 1;\n");
+  gitIn(dir, "add", "-A");
+  gitIn(dir, "commit", "-q", "-m", "C: main moves on");
+  const base = gitIn(dir, "rev-parse", "HEAD");
+  expect(gitIn(dir, "merge-base", base, head), "the fixture: the PR branched at A").toBe(branchPoint);
+  expect(gitIn(dir, "diff", "--name-only", base, head).split("\n"), "the fixture can witness the defect: two dots list main's own change").toContain("packages/engine/a.ts");
+  return { dir, base, head };
+}
+
+/** ci.yml's "Rows the PR declares (R27)" step, run for real in `pr.dir`: only `gh` is a stand-in (it prints `body`), and the two
+ *  repo-relative paths of its node call are made absolute so the cwd can be the scratch repo. The git diff line runs as written. */
+function runRowsStep(pr: Pr, body: string) {
+  const script0 = stepOf(CI_JOBS["matrix-rows"]!, ROWS_STEP).script!;
+  const script = script0.replace("--import ./scripts/lib/crash-exit.ts tools/matrix/ci/pr-rows.ts", `--import ${REPO}/scripts/lib/crash-exit.ts ${REPO}/tools/matrix/ci/pr-rows.ts`);
+  expect(script, "the node call's paths were made absolute").not.toBe(script0);
+  const bin = fresh("bin");
+  const tmp = fresh("tmp");
+  writeFileSync(join(bin, "gh"), `#!/bin/sh\nprintf '%s' "$GH_BODY"\n`, { mode: 0o755 });
+  const out = join(tmp, "github-output");
+  writeFileSync(out, "");
+  const r = spawnSync("bash", ["-c", script], {
+    cwd: pr.dir, encoding: "utf8", timeout: SPAWN_MS * 3,
+    env: { PATH: `${bin}:${process.env.PATH ?? ""}`, GH_BODY: body, GH_TOKEN: "x", REPO: SAME_REPO, PR_NUMBER: "1", BASE_SHA: pr.base, HEAD_SHA: pr.head, RUNNER_TEMP: tmp, GITHUB_OUTPUT: out },
+  });
+  const changedFile = join(tmp, "changed.txt");
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, changed: existsSync(changedFile) ? readFileSync(changedFile, "utf8").split("\n").filter(Boolean) : null, out: readFileSync(out, "utf8") };
+}
+
+describe("the rows step reads what the PR changed, not what its base moved on to (I1, T9-FIX1)", () => {
+  it("a web-only PR that is behind main: the change list is that one file, and main's engine commit is nobody's change", () => {
+    const pr = prBehindMain((d) => { mkdirSync(join(d, "apps/web"), { recursive: true }); writeFileSync(join(d, "apps/web/page.ts"), "export const p = 1;\n"); });
+    const r = runRowsStep(pr, "no rows needed here");
+    expect(r.changed).toEqual(["apps/web/page.ts"]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.out).toBe("rows=none\n");
+    expect(r.stderr).not.toContain("packages/engine");
+  }, spawnBudget(2));
+
+  it("an engine PR that is behind main: it names ITS file, never main's, and refuses without a declaration (the merge-base diff still sees the PR)", () => {
+    const pr = prBehindMain((d) => writeFileSync(join(d, "packages/engine/b.ts"), "export const b = 1;\n"));
+    const r = runRowsStep(pr, "no rows needed here");
+    expect(r.changed).toEqual(["packages/engine/b.ts"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("packages/engine/b.ts");
+    expect(r.stderr).not.toContain("packages/engine/a.ts");
+    expect(r.out).toBe("");
+    const declared = runRowsStep(pr, "Matrix rows: league");
+    expect([declared.status, declared.out]).toEqual([0, "rows=league\n"]);
+  }, spawnBudget(3));
+
+  it("a file moved OUT of packages/engine in a PR behind main: both the old and the new path are listed (--no-renames survives the three-dot form)", () => {
+    const pr = prBehindMain((d) => {
+      mkdirSync(join(d, "apps/web"), { recursive: true });
+      gitIn(d, "mv", "packages/engine/old.ts", "apps/web/moved.ts");
+    });
+    const r = runRowsStep(pr, "no rows needed here");
+    expect(r.changed?.slice().sort()).toEqual(["apps/web/moved.ts", "packages/engine/old.ts"]);
+    expect(r.status).toBe(1);   // the old engine path is named, so the PR owes a declaration
+    expect(r.stderr).toContain("packages/engine/old.ts");
+    expect(r.stderr).not.toContain("packages/engine/a.ts");
+  }, spawnBudget(2));
+});
+
+/** `if:` expression of a job, from its own text; throws when the job has none (a gate that is not there reds, never reads as open). */
+function ifOf(jobText: string): string {
+  const m = /^ {4}if:\s*(\S.*)$/m.exec(jobText);
+  if (m === null) throw new Error("the job has no `if:`");
+  return m[1]!.trim();
+}
+
+/** A workflow `if:` evaluated against a context. It handles exactly what these workflows spell — context paths, `==`, `!=`, `&&`,
+ *  `||`, `!`, string literals and the status functions — and throws on anything else, so a new construct is a red here rather than a
+ *  silent misreading. A missing context path is null, as in GitHub. */
+function evalIf(raw: string, ctx: Record<string, unknown>, cancelled = false): boolean {
+  const expr = raw.trim().replace(/^\$\{\{\s*/, "").replace(/\s*\}\}$/, "");
+  const js = expr.replace(/\b(github|vars|needs|inputs)((?:\.[A-Za-z_][\w-]*)+)/g, (_m, root: string, path: string) => `ref(${JSON.stringify(root + path)})`);
+  if (!/^[\s\w"'.()!=&|,-]*$/.test(js) || /\b(?!always\b|cancelled\b|success\b|ref\b)\w+\s*\(/.test(js)) throw new Error(`evalIf: unsupported syntax in: ${expr}`);
+  const ref = (path: string): unknown => {
+    let at: unknown = ctx;
+    for (const k of path.split(".")) { if (at === null || typeof at !== "object") return null; at = (at as Record<string, unknown>)[k] ?? null; }
+    return at;
+  };
+  // The expression is this repo's own committed workflow text, restricted to the token whitelist above.
+  return Boolean(new Function("ref", "always", "cancelled", "success", `return (${js});`)(ref, () => true, () => cancelled, () => !cancelled));
+}
+const ctxOf = (o: { event: string; head?: string | null; weekly?: string; planResult?: string; scope?: string }) => ({
+  github: { event_name: o.event, repository: SAME_REPO, event: o.event === "pull_request" ? { pull_request: { head: { repo: o.head === null ? null : { full_name: o.head ?? SAME_REPO } } } } : {} },
+  vars: { MATRIX_WEEKLY_ENABLED: o.weekly ?? "true" },
+  inputs: { scope: o.scope ?? "" },
+  needs: { plan: { result: o.planResult ?? "success" }, "matrix-rows": { outputs: { run: "true" } } },
+});
+
+describe("a fork PR never reaches vars.MATRIX_RUNNER (T9-FORK)", () => {
+  const FORK_SAFE = "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)";
+  const truth = ["plan", "build", "shard", "merge"] as const;
+  const gate = (job: (typeof truth)[number]) => ifOf(JOBS[job]!);
+  const sample = () => ifOf(CI_JOBS["matrix-sample"]!);
+
+  it("every matrix-truth.yml job and ci.yml's matrix-sample spells the fork condition in its own `if:` (five gates, counted)", () => {
+    const gates = [...truth.map((j) => [`matrix-truth.yml ${j}`, gate(j)] as const), ["ci.yml matrix-sample", sample()] as const];
+    expect(gates).toHaveLength(5);
+    expect(Object.keys(JOBS).sort()).toEqual([...truth].sort());   // a fifth matrix-truth job owes this gate and a row here
+    for (const [name, expr] of gates) expect(expr, name).toContain(FORK_SAFE);
+  });
+
+  it("the gates, evaluated: a same-repo PR, a dispatch and a schedule open them; a fork PR and a PR whose head repo is gone close every one (35 evaluations)", () => {
+    let evaluated = 0;
+    // A: matrix-truth.yml's own triggers (inputs.scope empty on a PR / a schedule, `full` on a dispatch).
+    const own: { name: string; ctx: Record<string, unknown>; open: boolean }[] = [
+      { name: "workflow_dispatch", ctx: ctxOf({ event: "workflow_dispatch", scope: "full" }), open: true },
+      { name: "schedule, enabled", ctx: ctxOf({ event: "schedule" }), open: true },
+      { name: "PR from the same repository", ctx: ctxOf({ event: "pull_request" }), open: true },
+      { name: "PR from a fork", ctx: ctxOf({ event: "pull_request", head: "someone-else/seazn.club" }), open: false },
+      { name: "PR whose head repository was deleted", ctx: ctxOf({ event: "pull_request", head: null }), open: false },
+    ];
+    for (const job of truth) for (const c of own) { expect(evalIf(gate(job), c.ctx), `${job}: ${c.name}`).toBe(c.open); evaluated++; }
+    // B: the per-PR sample, as ci.yml calls it (the caller's event is pull_request; scope pr-sample). merge never runs for a sample (its own rule).
+    const called: { name: string; head?: string | null; open: boolean }[] = [
+      { name: "same-repo PR", open: true },
+      { name: "fork PR", head: "someone-else/seazn.club", open: false },
+      { name: "head repository deleted", head: null, open: false },
+    ];
+    for (const c of called) {
+      const ctx = ctxOf({ event: "pull_request", scope: "pr-sample", head: c.head });
+      for (const job of ["plan", "build", "shard"] as const) { expect(evalIf(gate(job), ctx), `called ${job}: ${c.name}`).toBe(c.open); evaluated++; }
+      expect(evalIf(gate("merge"), ctx), `called merge: ${c.name}`).toBe(false); evaluated++;
+      expect(evalIf(sample(), ctx), `matrix-sample: ${c.name}`).toBe(c.open); evaluated++;
+    }
+    expect(evaluated).toBe(35);
+  });
+
+  it("the weekly gate still holds beside the fork gate, and neither swallows the other (operator precedence)", () => {
+    expect(evalIf(gate("plan"), ctxOf({ event: "schedule", weekly: "" }))).toBe(false);
+    expect(evalIf(gate("plan"), ctxOf({ event: "schedule", weekly: "false" }))).toBe(false);
+    expect(evalIf(gate("plan"), ctxOf({ event: "schedule", weekly: "true" }))).toBe(true);
+    expect(evalIf(gate("plan"), ctxOf({ event: "pull_request", weekly: "" }))).toBe(true);        // the weekly switch does not gate a PR's own run
+    expect(evalIf(gate("plan"), ctxOf({ event: "workflow_dispatch", weekly: "", scope: "full" }))).toBe(true);
+    expect(evalIf(gate("plan"), ctxOf({ event: "pull_request", weekly: "true", head: "someone-else/seazn.club" }))).toBe(false);
+  });
+
+  it("the merge job runs after a red shard, but not for a sample, a failed plan, a skipped plan, or a CANCELLED run (m2: !cancelled(), not always())", () => {
+    expect(gate("merge")).toContain("!cancelled()");
+    expect(gate("merge")).not.toContain("always()");
+    expect(evalIf(gate("merge"), ctxOf({ event: "workflow_dispatch", scope: "full" }))).toBe(true);
+    expect(evalIf(gate("merge"), ctxOf({ event: "workflow_dispatch", scope: "full" }), true)).toBe(false);    // cancelled
+    expect(evalIf(gate("merge"), ctxOf({ event: "workflow_dispatch", scope: "full", planResult: "failure" }))).toBe(false);
+    expect(evalIf(gate("merge"), ctxOf({ event: "schedule", planResult: "skipped" }))).toBe(false);   // the disabled weekly firing
+    expect(evalIf(gate("merge"), ctxOf({ event: "pull_request", scope: "pr-sample" }))).toBe(false);
+  });
+
+  it("the evaluator itself can tell the cases apart (a constant-true or constant-false reading would pass one half of the table above)", () => {
+    expect(evalIf("github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository", ctxOf({ event: "pull_request", head: "x/y" }))).toBe(false);
+    expect(evalIf("github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository", ctxOf({ event: "pull_request" }))).toBe(true);
+    expect(() => evalIf("contains(github.ref, 'x')", ctxOf({ event: "push" }))).toThrow(/unsupported/);
+  });
+});
+
+/** Every `permissions:` block of a workflow's text: its line, the scalar form (`permissions: write-all`) or null, and its key→value entries. */
+function permissionBlocks(text: string): { line: number; scalar: string | null; entries: Record<string, string> }[] {
+  const lines = text.split("\n");
+  const out: { line: number; scalar: string | null; entries: Record<string, string> }[] = [];
+  lines.forEach((l, i) => {
+    const m = /^(\s*)permissions:\s*([^#\s].*?)?\s*(?:#.*)?$/.exec(l);
+    if (m === null) return;
+    const entries: Record<string, string> = {};
+    if (m[2] === undefined) {
+      for (const next of lines.slice(i + 1)) {
+        if (next.trim() === "" || next.trim().startsWith("#")) continue;
+        if (next.length - next.trimStart().length <= m[1]!.length) break;
+        const kv = /^\s+([\w-]+):\s*(\S+)/.exec(next);
+        if (kv !== null) entries[kv[1]!] = kv[2]!;
+      }
+    }
+    out.push({ line: i + 1, scalar: m[2] ?? null, entries });
+  });
+  return out;
+}
+
+describe("the exposure surface of the two workflows is read-only, secret-free and never pull_request_target (m1)", () => {
+  it("matrix-truth.yml: ONE permissions block, workflow-level, exactly contents+actions read; no job widens it", () => {
+    const blocks = permissionBlocks(WF);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.scalar).toBeNull();
+    expect(blocks[0]!.entries).toEqual({ contents: "read", actions: "read" });
+    expect(WF).toMatch(/^permissions:$/m);   // at column 0: the workflow's, not a job's
+  });
+  it("ci.yml: the matrix-rows block reads contents, pull-requests and actions; matrix-sample (a called workflow cannot exceed its caller) reads contents and actions", () => {
+    expect(permissionBlocks(CI_JOBS["matrix-rows"]!).map((b) => b.entries)).toEqual([{ contents: "read", "pull-requests": "read", actions: "read" }]);
+    expect(permissionBlocks(CI_JOBS["matrix-sample"]!).map((b) => b.entries)).toEqual([{ contents: "read", actions: "read" }]);
+  });
+  it("no permission in either file is anything but read (or none), and no block is a scalar shorthand — counted", () => {
+    let entries = 0;
+    for (const [name, text] of [["matrix-truth.yml", WF], ["ci.yml", CI]] as const) {
+      for (const b of permissionBlocks(text)) {
+        expect(b.scalar, `${name}:${b.line} scalar permissions`).toBeNull();
+        for (const [k, v] of Object.entries(b.entries)) { expect(["read", "none"], `${name}:${b.line} ${k}: ${v}`).toContain(v); entries++; }
+      }
+    }
+    expect(entries).toBeGreaterThanOrEqual(2 + 3 + 2);   // at least the three blocks pinned above
+  });
+  it("no secret reaches a matrix job: no `secrets` expression and no `secrets:` key in matrix-truth.yml, matrix-rows or matrix-sample", () => {
+    const surfaces: [string, string][] = [["matrix-truth.yml", WF], ["ci.yml matrix-rows", CI_JOBS["matrix-rows"]!], ["ci.yml matrix-sample", CI_JOBS["matrix-sample"]!]];
+    expect(surfaces).toHaveLength(3);
+    for (const [name, text] of surfaces) {
+      expect(text, `${name}: a secrets expression`).not.toMatch(/\$\{\{[^}]*\bsecrets\b/);
+      expect(text, `${name}: a secrets: key (secrets: inherit)`).not.toMatch(/^\s*secrets:/m);
+    }
+  });
+  it("neither file triggers on pull_request_target (it runs a fork's code with the base's secrets)", () => {
+    for (const [name, text] of [["matrix-truth.yml", WF], ["ci.yml", CI]] as const) expect(text, name).not.toContain("pull_request_target");
+  });
+});
+
+describe("a re-run does not collide with its own artifacts (m3)", () => {
+  it("every upload-artifact step of matrix-truth.yml overwrites: the build, each shard, the merged result (3, counted)", () => {
+    const named: [string, string][] = [["build", "Upload the build"], ["shard", "Upload shard results"], ["merge", "Upload merged results"]];
+    for (const [job, step] of named) expect(stepOf(JOBS[job]!, step).body, `${job}: ${step}`).toContain("overwrite: true");
+    expect(WF.match(/uses: actions\/upload-artifact@v4/g)).toHaveLength(3);
+    expect(WF.match(/^\s+overwrite: true$/gm)).toHaveLength(3);   // a fourth upload without it reds on the first count
   });
 });
