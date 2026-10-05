@@ -15,10 +15,14 @@
 //
 // WHAT IS REAL AND WHAT IS STAGED. The phone, the code, the pairing, Go live, warming, live, Stop, Ended and the restart
 // line are the product's own: a real code minted by the panel, claimed by a real beat through the capture route, and a
-// real session on the fake ingest. Five states cannot be reached on a clock a harness can wait for (silence, the
-// server's countdowns, a paused camera, a legacy session with no pairing), so each is STAGED by rewriting the REAL
-// answer of `stream-phone` or `current` in flight: the real response is fetched, and only the named fields change. The
-// state machine behind them is the server suites' and T12's walkthrough's, not this file's.
+// real session on the fake ingest. Some states cannot be reached on a clock a harness can wait for (silence, the
+// server's countdowns, a paused camera, a legacy session with no pairing, a restart allowance spent), so each is STAGED
+// by rewriting the REAL answer of `stream-phone` or `current` in flight: the real response is fetched, and only the named
+// fields change. The state machine behind them is the server suites' and T12's walkthrough's, not this file's.
+//
+// B8 review m-1: the phone-lost (09) and paused (10) states run on a SECOND live session whose destination REALLY does
+// not receive — its stream key carries the fake platform's never-accepting prefix (fakes.ts FAKE_CONNECTING_KEY_PREFIX),
+// so `current`'s output is the server's own `connecting`, past D3's 30 s, and only the phone's half is staged.
 //
 // THE GATE HAS ITS OWN VACUOUS MODE (AGENTS.md class 10): every image is checked to exist and to differ from every
 // other, at least one state per width is required, and the control-set diff (320 vs 1280, membership, order and
@@ -43,6 +47,12 @@ const WIDTHS = [
 const POLL_WAIT_MS = 15_000;
 /** Copy from the dictionary itself, never typed here. */
 const EN = JSON.parse(readFileSync(join(import.meta.dirname, "../src/dictionaries/en/ui.json"), "utf8")) as Record<string, string>;
+/** The fake platform's never-accepting key prefix, read from the fake itself (fakes.ts), never typed here. */
+const CONNECTING_PREFIX = /export const FAKE_CONNECTING_KEY_PREFIX = "([^"]+)";/.exec(
+  readFileSync(join(import.meta.dirname, "../src/server/relay/fakes.ts"), "utf8"),
+)![1]!;
+/** D3's hold (stream-session-view.ts OUTPUT_WARNING_AFTER_MS, 30 s) plus a poll, plus slack. */
+const D3_WAIT_MS = 75_000;
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -228,6 +238,11 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       kind: "youtube", label: "Riverside TV", streamKey: `e2e-${randomBytes(6).toString("hex")}`,
     });
     expect([200, 201]).toContain(target.status);
+    // The second destination never receives (m-1): its key is the fake platform's dialling-forever shape.
+    const silentDest = await apiJson<{ id: string }>(page.request, `/api/v1/orgs/${rig.orgId}/stream-targets`, "POST", {
+      kind: "twitch", label: "Northgate Live", streamKey: `${CONNECTING_PREFIX}${randomBytes(6).toString("hex")}`,
+    });
+    expect([200, 201]).toContain(silentDest.status);
     const PHONE = `**/api/v1/fixtures/${rig.fixtureId}/stream-phone`;
     const CURRENT = `**/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`;
     let phone: { stop: () => Promise<void> } | null = null;
@@ -293,25 +308,6 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       await expect(scope.getByTestId("stream-phone-strip")).toHaveCount(0, { timeout: POLL_WAIT_MS });
       await shoot(page, scope, "08-live");
 
-      // 9. Live, the phone lost (STAGED: the input down, the server's live countdown, the phone silent).
-      const undoCur = await stage(page, CURRENT, (r) => ({
-        ...r, ingest: { state: "disconnected", protocol: null },
-        countdown: { kind: "live", reason: "phone_lost", elapsedMs: 160_000, remainingMs: 740_000 },
-      }));
-      let undoPhone = await stage(page, PHONE, (r) => ({ ...r, phone: { ...(r!.phone as object), present: false, silent: true } }));
-      await expect(scope.getByTestId("stream-phone-strip")).toContainText("12 min", { timeout: POLL_WAIT_MS });
-      await shoot(page, scope, "09-live-phone-lost");
-      await undoPhone();
-
-      // 10. Live, paused (O5, STAGED): the input still down with NO countdown, the phone beating with notReady camera.
-      await undoCur();
-      const undoCur2 = await stage(page, CURRENT, (r) => ({ ...r, ingest: { state: "disconnected", protocol: null }, countdown: null }));
-      undoPhone = await stage(page, PHONE, (r) => ({ ...r, phone: { ...(r!.phone as object), notReady: "camera" } }));
-      await expect(scope.getByTestId("stream-phone-strip")).toHaveAttribute("data-icon", "pause", { timeout: POLL_WAIT_MS });
-      await shoot(page, scope, "10-live-paused");
-      await undoPhone();
-      await undoCur2();
-
       // 11. Live, a LEGACY session (STAGED: null pairing) — today's panel: no strip, no code line.
       undo = await stage(page, PHONE, (r) => ({ ...r, legacy: true, phone: null, code: null }));
       await expect(scope.getByTestId("stream-code-disclosure")).toHaveCount(0, { timeout: POLL_WAIT_MS });
@@ -330,6 +326,60 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       await expect(scope.getByTestId("stream-go-live")).toBeVisible({ timeout: POLL_WAIT_MS });
       await expect(scope.getByTestId("stream-restart")).toBeVisible({ timeout: POLL_WAIT_MS });
       await shoot(page, scope, "13-ready-restarts");
+
+      // 13b. Ready, the window's free restarts SPENT (STAGED: the allowance, as W23 serves it) — the mockup's own amber
+      // "3 of 3 — this one uses 1 credit" (m-1).
+      undo = await stage(page, CURRENT, (r) => ({ ...r, restart: { windowOpen: true, used: 3, limit: 3, free: false } }));
+      // `current` rests at Ready (terminal, dismissed): re-opening the Phone tab reads it again, as opening it always does.
+      await scope.getByTestId("stream-tab-obs").click();
+      await scope.getByTestId("stream-tab-phone").click();
+      await expect(scope.getByTestId("stream-restart")).toContainText(
+        EN["stream.restart.usedCredit"]!.replace("{used}", "3").replace("{limit}", "3"), { timeout: POLL_WAIT_MS },
+      );
+      await shoot(page, scope, "13b-ready-restarts-limit");
+      await undo();
+
+      // The second session: the never-receiving destination, picked (a pick, the organiser's own), then Go live (REAL).
+      await scope.getByTestId("stream-target").selectOption(silentDest.data!.id);
+      await expect(scope.getByTestId("stream-go-live")).toBeEnabled({ timeout: POLL_WAIT_MS });
+      await scope.getByTestId("stream-go-live").click();
+      await expect(scope.getByTestId("stream-waiting")).toBeVisible({ timeout: POLL_WAIT_MS });
+
+      // 7b. Warming, the phone LOST (STAGED: the server's warming countdown with reason phone_lost, the phone silent) —
+      // the T11 sentence the signed-off mockup does not draw (m-1).
+      undo = await stage(page, CURRENT, (r) => ({ ...r, countdown: { kind: "warming", reason: "phone_lost", elapsedMs: 70_000, remainingMs: 530_000 } }));
+      let undoPhone = await stage(page, PHONE, (r) => ({ ...r, phone: { ...(r!.phone as object), present: false, silent: true } }));
+      await expect(scope.getByTestId("stream-phone-strip")).toContainText("8 min", { timeout: POLL_WAIT_MS });
+      await shoot(page, scope, "07b-waiting-phone-lost");
+      await undoPhone();
+      await undo();
+
+      // Live (REAL), and the destination REALLY not receiving: D3's stream-key box once the server's 30 s have run.
+      await expect(scope.getByTestId("stream-stop")).toBeVisible({ timeout: 60_000 });
+      await expect(scope.getByTestId("stream-output-warning")).toHaveAttribute("data-cause", "destination", { timeout: D3_WAIT_MS });
+
+      // 9. Live, the phone lost (STAGED: the input down, the server's live countdown, the phone silent; the output is the
+      // server's own `connecting`, past 30 s) — D3 moves to the phone, and the strip replaces its box.
+      const undoCur = await stage(page, CURRENT, (r) => ({
+        ...r, ingest: { state: "disconnected", protocol: null },
+        countdown: { kind: "live", reason: "phone_lost", elapsedMs: 160_000, remainingMs: 740_000 },
+      }));
+      undoPhone = await stage(page, PHONE, (r) => ({ ...r, phone: { ...(r!.phone as object), present: false, silent: true } }));
+      await expect(scope.getByTestId("stream-phone-strip")).toContainText("12 min", { timeout: POLL_WAIT_MS });
+      await expect(scope.getByTestId("stream-output-warning"), "the strip replaces D3's phone box").toHaveCount(0);
+      await expect(scope.getByTestId("stream-chain")).toContainText(EN["stream.chain.word.notReceiving"]!);
+      await shoot(page, scope, "09-live-phone-lost");
+      await undoPhone();
+
+      // 10. Live, paused (O5, STAGED): the input still down with NO countdown, the phone beating with notReady camera.
+      await undoCur();
+      const undoCur2 = await stage(page, CURRENT, (r) => ({ ...r, ingest: { state: "disconnected", protocol: null }, countdown: null }));
+      undoPhone = await stage(page, PHONE, (r) => ({ ...r, phone: { ...(r!.phone as object), notReady: "camera" } }));
+      await expect(scope.getByTestId("stream-phone-strip")).toHaveAttribute("data-icon", "pause", { timeout: POLL_WAIT_MS });
+      await expect(scope.getByTestId("stream-chain")).toContainText(EN["stream.chain.word.notReceiving"]!);
+      await shoot(page, scope, "10-live-paused");
+      await undoPhone();
+      await undoCur2();
     } finally {
       await phone?.stop();
       const open = await withDb((sql) => sql<{ id: string }[]>`
