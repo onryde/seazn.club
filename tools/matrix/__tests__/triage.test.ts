@@ -18,7 +18,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { parseVerdicts, readAudit } from "../lib/audit-ledger.ts";
 import { CASE_STATES, type CaseResult, type CaseState, type Layer, type RunResults } from "../lib/results.ts";
 import {
-  CATALOGUE_DIR, TriageRefused, isClean, loadCatalogue, parseNewGaps, parseRouting, parseRules, parseTriage, rekey, renderRekey, renderTriage, routeOf, triage, triageJson, unkeyedReds, wasChecked, wasConflicts,
+  CATALOGUE_DIR, MIN_REASON_CHARS, TriageRefused, isClean, loadCatalogue, parseNewGaps, parseRouting, parseRules, parseTriage, rekey, renderRekey, renderTriage, routeOf, triage, triageJson, unkeyedReds, wasChecked, wasConflicts,
   type GapRouting, type NewGaps, type TriageRules,
 } from "../lib/triage.ts";
 import { main } from "../triage.ts";
@@ -48,6 +48,8 @@ const rules = (list: Record<string, unknown>[]): TriageRules => parseRules({ rul
 const ROUTING: GapRouting = parseRouting({ note: "test", routes: { "SC-O1": "W2", "ST-G3": "W5", "SW-*": "W3", "SH-*": "W8", "SC-X1": "W2" } });
 const LEDGER = ["SC-O1", "ST-G3", "SW-H1", "SW-H2", "SH-G1", "SC-X1"].map((id) => ({ id }));
 const NONE: NewGaps = parseNewGaps({ gaps: [] });
+/** A reason text (a rule's matcher, and the red it keys) long enough for the schema's floor (MIN_REASON_CHARS), one per key and never inside another's. */
+const RK = (k: string): string => `reason-key-${k}`;
 
 // --- routeOf ---------------------------------------------------------------------------------------------------------
 
@@ -77,7 +79,7 @@ describe("catalogue schemas", () => {
   const rule = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ id: "T-1", match: { cell: "league|*" }, gap: "ST-G3", wave: "W5", note: "n", ...over });
 
   it("accepts the brief's shapes, every optional key set and absent", () => {
-    const parsed = parseRules({ rules: [rule({ match: { cell: "league|*", scenario: "M1", layer: "L3", check: "standings", reason: "x" }, was: "P1" }), rule({ id: "T-2", gap: "NEW-W1d-2", match: { reason: "x" } })] });
+    const parsed = parseRules({ rules: [rule({ match: { cell: "league|*", scenario: "M1", layer: "L3", check: "standings", reason: RK("x") }, was: "P1" }), rule({ id: "T-2", gap: "NEW-W1d-2", match: { reason: RK("x") } })] });
     expect(parsed.rules).toHaveLength(2);
     expect(parsed.rules[0]!.was).toBe("P1");
     expect(parsed.rules[1]!.was).toBeUndefined();
@@ -88,7 +90,7 @@ describe("catalogue schemas", () => {
   it("an empty match is refused by name of its cause; any one key makes a rule", () => {
     expect(() => parseRules({ rules: [rule({ match: {} })] })).toThrow(/at least one of cell, scenario, layer, check, reason/);
     let accepted = 0;
-    for (const m of [{ cell: "a|b" }, { scenario: "M1" }, { layer: "L1" }, { check: "k" }, { reason: "r" }]) {
+    for (const m of [{ cell: "a|b" }, { scenario: "M1" }, { layer: "L1" }, { check: "k" }, { reason: RK("r") }]) {
       expect(parseRules({ rules: [rule({ match: m })] }).rules, JSON.stringify(m)).toHaveLength(1);
       accepted++;
     }
@@ -174,13 +176,41 @@ describe("catalogue schemas", () => {
   });
 });
 
+// --- a reason matcher is specific (T19 fix round 2, review M2) ---------------------------------------------------------
+
+describe("a rule's reason matcher is specific (review M2)", () => {
+  const raw = JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "triage-rules.json"), "utf8")) as { rules: { id: string; match: { reason?: string } }[] };
+  const withReason = (r: { id: string; match: object }, reason: string): { rules: unknown[] } => ({ rules: [{ ...r, match: { ...r.match, reason } }] });
+
+  it("a 3-character prefix of ANY committed rule's reason is refused by the schema (a short substring keys reds the rule was never written for)", () => {
+    let checked = 0;
+    for (const r of raw.rules) {
+      const reason = r.match.reason;
+      if (reason === undefined) continue;
+      expect(reason.length, `${r.id}: the full reason is no shorter than the floor`).toBeGreaterThanOrEqual(MIN_REASON_CHARS);
+      expect(() => parseRules(withReason(r, reason.slice(0, 3))), `${r.id}: a 3-character prefix ${JSON.stringify(reason.slice(0, 3))}`).toThrow(/reason matcher of at least/);
+      checked++;
+    }
+    // Anti-vacuity: every committed rule was tried, and there are at least 40 of them.
+    expect(checked).toBe(raw.rules.length);
+    expect(checked).toBeGreaterThanOrEqual(40);
+  });
+
+  it("the floor is real: MIN_REASON_CHARS - 1 characters are refused and MIN_REASON_CHARS accepted, and the floor is above a 3-character prefix", () => {
+    expect(MIN_REASON_CHARS).toBeGreaterThan(3);
+    const r = { id: "T-1", gap: "ST-G3", wave: "W5", note: "n", match: { cell: "league|*" } };
+    expect(() => parseRules(withReason(r, "x".repeat(MIN_REASON_CHARS - 1)))).toThrow(/reason matcher of at least/);
+    expect(parseRules(withReason(r, "x".repeat(MIN_REASON_CHARS))).rules).toHaveLength(1);
+  });
+});
+
 // --- triage() --------------------------------------------------------------------------------------------------------
 
 describe("triage (ruling 63)", () => {
   it("every red maps to exactly one rule; a red with none is untriaged, with two is ambiguous", () => {
     const r = triage([run([red("league|generic|default|M1", "standings: x", { sport: "generic" }), red("swiss|chess|default|R4", "round 5 paired nobody (SW-H1)"), red("knockout|generic|default|F1", "nothing matches")])], rules([
       { id: "T-1", match: { cell: "league|*", check: "standings" }, gap: "ST-G3", wave: "W5" },
-      { id: "T-2", match: { reason: "SW-H1" }, gap: "SW-H1", wave: "W3" },
+      { id: "T-2", match: { reason: "paired nobody (SW-H1)" }, gap: "SW-H1", wave: "W3" },
       { id: "T-3", match: { cell: "swiss|*" }, gap: "SW-H1", wave: "W3" },
     ]), ROUTING, LEDGER, NONE);
     expect(r.rows.map((x) => [x.caseId, x.gap])).toEqual([["league|generic|default|M1", "ST-G3"]]);
@@ -324,8 +354,8 @@ describe("triage (ruling 63)", () => {
   });
 
   it("is pure: a second call on the same inputs answers the same, and nothing it was given moves", () => {
-    const runs = [run([red("a|b|c|M1", "x"), red("a|b|c|M2", "y"), ok("a|b|c|M3")])];
-    const rs = rules([{ id: "T-1", match: { reason: "x" }, gap: "ST-G3", wave: "W5" }]);
+    const runs = [run([red("a|b|c|M1", RK("x")), red("a|b|c|M2", RK("y")), ok("a|b|c|M3")])];
+    const rs = rules([{ id: "T-1", match: { reason: RK("x") }, gap: "ST-G3", wave: "W5" }]);
     const before = structuredClone({ runs, rs, ROUTING, LEDGER });
     const first = triage(runs, rs, ROUTING, LEDGER, NONE);
     const second = triage(runs, rs, ROUTING, LEDGER, NONE);
@@ -540,10 +570,10 @@ describe("rekey: W1-driving's red cases, each with its P-rule and its new gap", 
 // --- the files: triage.json, TRIAGE.md, REKEY.md ----------------------------------------------------------------------
 
 describe("triage.json, TRIAGE.md and REKEY.md", () => {
-  const cases = [red("a|b|c|M1", "x"), red("a|b|c|M2", "x"), red("d|e|f|M1", "y"), ok("g|h|i|M1")];
+  const cases = [red("a|b|c|M1", RK("x")), red("a|b|c|M2", RK("x")), red("d|e|f|M1", RK("y")), ok("g|h|i|M1")];
   const rs = rules([
-    { id: "T-1", match: { reason: "x" }, gap: "SC-O1", wave: "W2", was: "P1" },
-    { id: "T-2", match: { reason: "y" }, gap: "ST-G3", wave: "W5", was: "P2" },
+    { id: "T-1", match: { reason: RK("x") }, gap: "SC-O1", wave: "W2", was: "P1" },
+    { id: "T-2", match: { reason: RK("y") }, gap: "ST-G3", wave: "W5", was: "P2" },
   ]);
   const result = triage([run(cases)], rs, ROUTING, LEDGER, NONE);
   const titles = new Map([["SC-O1", "boardgame draws in brackets"], ["ST-G3", "unequal pools"]]);
@@ -560,16 +590,16 @@ describe("triage.json, TRIAGE.md and REKEY.md", () => {
   });
 
   it("triage.json lists the gaps in wave order, numerically (W2 < W10), then by id within a wave", () => {
-    const rr = triage([run([red("a|b|c|M1", "a"), red("a|b|c|M2", "b"), red("a|b|c|M3", "c")])], rules([
-      { id: "T-1", match: { reason: "a" }, gap: "SW-H1", wave: "W10" },
-      { id: "T-2", match: { reason: "b" }, gap: "SC-O1", wave: "W2" },
-      { id: "T-3", match: { reason: "c" }, gap: "SW-H2", wave: "W10" },
+    const rr = triage([run([red("a|b|c|M1", RK("a")), red("a|b|c|M2", RK("b")), red("a|b|c|M3", RK("c"))])], rules([
+      { id: "T-1", match: { reason: RK("a") }, gap: "SW-H1", wave: "W10" },
+      { id: "T-2", match: { reason: RK("b") }, gap: "SC-O1", wave: "W2" },
+      { id: "T-3", match: { reason: RK("c") }, gap: "SW-H2", wave: "W10" },
     ]), parseRouting({ note: "t", routes: { "SC-O1": "W2", "SW-*": "W10" } }), LEDGER, NONE);
     expect(parseTriage(triageJson(rr, [run([])], new Map())).gaps.map((g) => [g.gap, g.wave])).toEqual([["SC-O1", "W2"], ["SW-H1", "W10"], ["SW-H2", "W10"]]);
   });
 
   it("a gap with cases in two layers lists both, in layer order", () => {
-    const l1 = red("a|b|c|M1@1280", "x", {}, "L1");
+    const l1 = red("a|b|c|M1@1280", RK("x"), {}, "L1");
     const rr = triage([run(cases), run([l1], "L1")], rs, ROUTING, LEDGER, NONE);
     const g = parseTriage(triageJson(rr, [run(cases), run([l1], "L1")], titles)).gaps.find((x) => x.gap === "SC-O1");
     expect(g?.layers).toEqual(["L1", "L3"]);
@@ -577,16 +607,16 @@ describe("triage.json, TRIAGE.md and REKEY.md", () => {
   });
 
   it("TRIAGE.md: one section per wave in wave order (W2 < W3 < W10, numerically), one per gap, with the case list and counts", () => {
-    const ordered = triage([run([red("a|b|c|M1", "w10"), red("a|b|c|M2", "w2"), red("a|b|c|M3", "w3")])], rules([
-      { id: "T-1", match: { reason: "w10" }, gap: "SH-G1", wave: "W8" },
-      { id: "T-2", match: { reason: "w2" }, gap: "SC-O1", wave: "W2" },
-      { id: "T-3", match: { reason: "w3" }, gap: "SW-H1", wave: "W3" },
+    const ordered = triage([run([red("a|b|c|M1", RK("w10")), red("a|b|c|M2", RK("w2")), red("a|b|c|M3", RK("w3"))])], rules([
+      { id: "T-1", match: { reason: RK("w10") }, gap: "SH-G1", wave: "W8" },
+      { id: "T-2", match: { reason: RK("w2") }, gap: "SC-O1", wave: "W2" },
+      { id: "T-3", match: { reason: RK("w3") }, gap: "SW-H1", wave: "W3" },
     ]), parseRouting({ note: "t", routes: { "SH-*": "W8", "SC-O1": "W2", "SW-*": "W3" } }), LEDGER, NONE);
     const md = renderTriage(ordered, titles);
     expect(md.indexOf("## W2")).toBeGreaterThan(-1);
     expect(md.indexOf("## W2")).toBeLessThan(md.indexOf("## W3"));
     expect(md.indexOf("## W3")).toBeLessThan(md.indexOf("## W8"));
-    const wide = triage([run([red("a|b|c|M1", "a"), red("a|b|c|M2", "b")])], rules([{ id: "T-1", match: { reason: "a" }, gap: "SC-O1", wave: "W2" }, { id: "T-2", match: { reason: "b" }, gap: "SW-H1", wave: "W10" }]), parseRouting({ note: "t", routes: { "SC-O1": "W2", "SW-*": "W10" } }), LEDGER, NONE);
+    const wide = triage([run([red("a|b|c|M1", RK("a")), red("a|b|c|M2", RK("b"))])], rules([{ id: "T-1", match: { reason: RK("a") }, gap: "SC-O1", wave: "W2" }, { id: "T-2", match: { reason: RK("b") }, gap: "SW-H1", wave: "W10" }]), parseRouting({ note: "t", routes: { "SC-O1": "W2", "SW-*": "W10" } }), LEDGER, NONE);
     const w = renderTriage(wide, titles);
     expect(w.indexOf("## W2")).toBeLessThan(w.indexOf("## W10"));
     const md2 = renderTriage(result, titles);
@@ -598,10 +628,10 @@ describe("triage.json, TRIAGE.md and REKEY.md", () => {
   });
 
   it("TRIAGE.md leads with the problems when there are any: untriaged, ambiguous, misrouted, unknown", () => {
-    const bad = triage([run([red("a|b|c|M1", "x"), red("a|b|c|M2", "y")])], rules([
-      { id: "T-1", match: { reason: "x" }, gap: "SC-O1", wave: "W4" },
-      { id: "T-2", match: { reason: "x" }, gap: "SC-O1", wave: "W2" },
-      { id: "T-3", match: { reason: "zzz" }, gap: "SC-Z9", wave: "W2" },
+    const bad = triage([run([red("a|b|c|M1", RK("x")), red("a|b|c|M2", RK("y"))])], rules([
+      { id: "T-1", match: { reason: RK("x") }, gap: "SC-O1", wave: "W4" },
+      { id: "T-2", match: { reason: RK("x") }, gap: "SC-O1", wave: "W2" },
+      { id: "T-3", match: { reason: RK("zzz") }, gap: "SC-Z9", wave: "W2" },
     ]), ROUTING, LEDGER, NONE);
     const md = renderTriage(bad, titles);
     expect(md).toMatch(/^# Triage[^\n]*\n\n\*\*NOT CLEAN/);
@@ -679,7 +709,7 @@ const argsFor = (o: { runs: string[]; cat?: string; audit?: string; outDir?: str
   return { argv: ["--runs", ...o.runs, "--catalogue", o.cat ?? catalogue(), "--audit", o.audit ?? auditDir(), ...(o.extra ?? []), "--out", outDir], outDir };
 };
 const CASES = [red("a|b|c|M1", "standings: x"), red("a|b|c|M2", "round 5 paired nobody (SW-H1)"), ok("a|b|c|M3")];
-const RULES_OK = { rules: [{ id: "T-1", match: { check: "standings" }, gap: "ST-G3", wave: "W5", note: "n", was: "P2" }, { id: "T-2", match: { reason: "SW-H1" }, gap: "SW-H1", wave: "W3", note: "n", was: "P6" }] };
+const RULES_OK = { rules: [{ id: "T-1", match: { check: "standings" }, gap: "ST-G3", wave: "W5", note: "n", was: "P2" }, { id: "T-2", match: { reason: "paired nobody (SW-H1)" }, gap: "SW-H1", wave: "W3", note: "n", was: "P6" }] };
 
 describe("triage CLI", () => {
   it("exit 0, every red triaged: triage.json, TRIAGE.md written (no REKEY.md unless asked); the counts printed", () => {
@@ -997,6 +1027,24 @@ describe("the committed catalogue files", () => {
     expect(verdictsChecked).toBeGreaterThanOrEqual(100);
     expect(new Set(verdicts.map((x) => x.id)).size, "an id carries one verdict").toBe(verdicts.length);
     expect(cat.newGaps.gaps.length).toBeGreaterThanOrEqual(5);
+  });
+
+  // T19 fix round 2 (re-review F1): the first round answered the screenshot item with "the dispatch artifacts hold no PNGs", read off the
+  // `merged` artifact. The PNGs are in each run's shard-L1-* / shard-L2-* artifacts. A NEW gap with L2 cases cites one real picture of one.
+  it("every NEW gap cites a screenshot of an L2 case (and NEW-W1d-1 of an L1 case) as <artifact> <run dir>/shots/case-N/<file>.png, and none says there are no PNGs", () => {
+    const CITE = /(shard-L([12])-(\d+))`? `?(ci-\d+-\d+-l\2-s\3)\/shots\/case-(\d+)\/([\w-]+\.png)/g;
+    let cited = 0;
+    for (const g of cat.newGaps.gaps) {
+      expect(g.evidence, `${g.id}: the false "no PNGs" sentence`).not.toMatch(/no PNGs|none cited/i);
+      const cites = [...g.evidence.matchAll(CITE)];
+      const layers = new Set(cites.map((m) => m[2]));
+      expect(layers.has("2"), `${g.id}: one L2 screenshot cited (artifact, run dir, case-N, file)`).toBe(true);
+      // NEW-W1d-1 is the gap with L1 cases (mexicano LIFECYCLE@1280 is the L1 grid).
+      if (g.id === "NEW-W1d-1") expect(layers.has("1"), `${g.id}: an L1 screenshot too`).toBe(true);
+      for (const m of cites) expect(Number(m[5]), `${g.id}: case-N is the 1-based position in its shard's results.json, never 0`).toBeGreaterThanOrEqual(1);
+      cited += cites.length;
+    }
+    expect(cited).toBeGreaterThanOrEqual(cat.newGaps.gaps.length + 1);
   });
 });
 

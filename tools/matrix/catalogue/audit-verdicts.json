@@ -15,7 +15,7 @@
     {
       "id": "FX-G3",
       "outcome": "verified-by-read",
-      "evidence": "Nothing writes the void: outside tests `gf-reset` appears only where it is generated (packages/engine/src/scheduling/bracket.ts:356, `conditional: true`), in a comment at packages/engine/src/scheduling/bracket.ts:350 that says 'the persistence adapter voids it', and in a comment at apps/web/src/server/engine-db/competition.ts:121; apps/web/src/server/usecases/stages.ts:1668 only passes bracketReset to the generator. No code is the adapter the comment names. No template or builder knob sets bracketReset (tools/matrix/lib/scenarios/terminal-finals.ts only reads it from the stage config).",
+      "evidence": "Nothing writes the void: outside tests `gf-reset` appears only where it is generated (packages/engine/src/scheduling/bracket.ts:352-358: the `gf-reset` id at :354, `conditional: true` at :358), in a comment at packages/engine/src/scheduling/bracket.ts:350 that says 'the persistence adapter voids it', and in a comment at apps/web/src/server/engine-db/competition.ts:121; apps/web/src/server/usecases/stages.ts:1668 only passes bracketReset to the generator. No code is the adapter the comment names. No template or builder knob sets bracketReset (tools/matrix/lib/scenarios/terminal-finals.ts only reads it from the stage config).",
       "wave": "W6"
     },
     {

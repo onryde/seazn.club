@@ -37,6 +37,10 @@ const WAVE = z.string().regex(/^W\d+[a-z]?$/, "a wave id, W<n>");
 const GAP_ID = /^(?:[A-Z]{2}-[A-Z]+\d+|NEW-W1d-\d+)$/;
 const NEW_GAP_ID = /^NEW-W1d-\d+$/;
 
+/** The shortest `match.reason` a rule may carry (review M2): a substring of three characters is in other reds' text too, and no test twin
+ *  shares it with the real reason, so the matcher could be weakened to it unseen. The shortest committed reason is 10 characters. */
+export const MIN_REASON_CHARS = 10;
+
 const RuleSchema = z.strictObject({
   id: z.string().min(1),
   match: z.strictObject({
@@ -46,8 +50,8 @@ const RuleSchema = z.strictObject({
     layer: z.enum(LAYERS).optional(),
     // A FAILING check's id.
     check: z.string().min(1).optional(),
-    // A substring of the case's reason; never empty (the empty string is in every reason).
-    reason: z.string().min(1).optional(),
+    // A substring of the case's reason, specific: never empty (it is in every reason), and not so short it is in another red's text too.
+    reason: z.string().min(MIN_REASON_CHARS, `a reason matcher of at least ${MIN_REASON_CHARS} characters (a shorter substring keys reds the rule was never written for)`).optional(),
     // CLOSED set (review m1): every check the case fails is one of these, or the rule does not match it. Without it a second,
     // unrelated failing check inside a keyed red rides along unseen. A case that fails nothing (an error red) is inside any set.
     failing: z.array(z.string().min(1)).min(1).refine((a) => new Set(a).size === a.length, "a check once").optional(),
