@@ -1933,6 +1933,12 @@ controller's review. None is the controller's ruling, and none is the seazn.club
   the Stream panel has no Phone/OBS tablist: it opens on OBS, and the live-stream stop probe stays mounted. The flag is
   read only for an entitled panel, keyed `userId ?? orgId` with the org group. `CAPTURE_QR_V2_ALWAYS` is on only at
   exactly `"1"`. The routes are not gated.
+- **Flag off keeps the credit purchase (B8 re-review item 2, ruling: m-8 is a regression).** Before T11 every entitled
+  organiser bought match credits in this panel, so with the flag off the purchase sits under the OBS overlay for an org
+  the relay serves: the balance and Buy more, or at balance 0 the chooser itself, then the same embedded checkout. It is
+  the Phone tab's own purchase (one `useCreditCheckout`, one chooser markup), with nothing of the phone path: no stream
+  code is minted and no read model is read. What flag off cannot restore is the pre-T11 Phone tab's Go live, because the
+  v1 QR it handed the phone is removed for every org (W4, §6.13), not behind the flag.
 - **The code line follows the phone past Ready (ruling A).** The folded "Show the code again" line, with Revoke &
   reissue inside it, also shows under Waiting and Live for a session with a pairing. It does not show for a legacy
   session. The mockup draws it only at Ready.

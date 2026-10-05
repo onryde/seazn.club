@@ -70,6 +70,8 @@ import {
   PhoneStopProbe,
   PhoneTab,
   PhoneTabBody,
+  StreamCredits,
+  StreamCreditsBody,
   CANVAS_H,
   CANVAS_W,
   PREVIEW_MAX_W_PX,
@@ -3794,5 +3796,82 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).targets.status, "a late failure of an older read never replaces the newer list").toBe("ok");
     expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
     void s;
+  });
+
+  // B8 re-review item 2 (ruling: m-8 is a regression). Before T11 every entitled organiser bought match credits in this
+  // panel. With `capture-qr-v2` off the panel is the OBS overlay, and the purchase must still be one tap away — the same
+  // chooser, the same one-Checkout-Session lock, the same embedded sheet, through the SAME container code the Phone tab
+  // uses (`useCreditCheckout`), and nothing of the phone path: no stream code minted, no read model read.
+  describe("capture-qr-v2 OFF keeps the credit purchase (B8 re-review item 2)", () => {
+    const CREDITS = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const };
+    const creditsBody = (island: { tree: () => ReactElement[] }) => {
+      const el = island.tree().find((e) => e.type === StreamCreditsBody);
+      if (!el) throw new Error("no StreamCreditsBody in the container's tree");
+      return { props: propsOf(el) as Record<string, unknown>, tree: walk(expandWithHooks(StreamCreditsBody, propsOf(el) as never)) };
+    };
+
+    it("composition: flag OFF mounts the credits under the OBS overlay with the page's own credit facts; flag ON leaves them to the Phone tab; a switched-off org or a relay-less deployment has none", () => {
+      const facts = { streamBalance: 4, streamSplit: { monthly: 2, pack: 2, total: 4 }, monthlyAllowance: 5, currency: "usd" as const };
+      const off = openPanel({ relayEntitled: true, phoneCapture: false, ...facts }).tree();
+      const credits = off.find((el) => el.type === StreamCredits);
+      expect(credits, "flag off: the purchase is on the panel").toBeDefined();
+      expect(propsOf(credits!)).toEqual({ fixtureId: FIXTURE.id, orgId: "o-1", ...facts });
+      const lead = off.findIndex((el) => attr(el, "data-testid") === "stream-lead");
+      expect(lead, "premise: the OBS overlay is the panel").toBeGreaterThanOrEqual(0);
+      expect(off.indexOf(credits!), "under the OBS overlay").toBeGreaterThan(lead);
+      // The positive pair: flag on — the Phone tab carries the purchase, so no second copy.
+      expect(openPanel({ relayEntitled: true, phoneCapture: true, ...facts }).tree().find((el) => el.type === StreamCredits)).toBeUndefined();
+      let gated = 0;
+      for (const o of [{ relayEntitled: false }, { relayEntitled: true, relayDisabled: true }]) {
+        expect(openPanel({ ...o, phoneCapture: false }).tree().find((el) => el.type === StreamCredits), JSON.stringify(o)).toBeUndefined();
+        gated++;
+      }
+      expect(gated).toBe(2);
+    });
+
+    it("flag OFF → buy credits is REACHABLE: the balance and Buy more; Buy more opens every pack and Close; a tile takes the secret and mounts the embedded sheet; nothing of the phone path is called", async () => {
+      checkout.fetch.mockResolvedValueOnce({ ok: true, clientSecret: "cs_test_flag_off" });
+      const island = track(renderIsland(StreamCredits, CREDITS));
+      await settle();
+      let b = creditsBody(island);
+      expect(textAt(b.tree, "stream-balance")).toBe(m("stream.phone.credits.other", { n: 3 }));
+      const buyMore = byTestId(b.tree, "stream-buy-more");
+      expect(buyMore, "Buy more is on the panel").toBeDefined();
+      expect(attr(buyMore!, "disabled")).toBeFalsy();
+      expect(byTestId(b.tree, "stream-buy-pack-5"), "closed until asked").toBeUndefined();
+      click(buyMore);
+      b = creditsBody(island);
+      let tiles = 0;
+      for (const pack of STREAM_CREDIT_PACKS) {
+        expect(attr(byTestId(b.tree, `stream-buy-pack-${pack.size}`)!, "disabled"), `tile ${pack.size}`).toBeFalsy();
+        tiles++;
+      }
+      expect(tiles, "anti-vacuity: the catalogue declares packs").toBeGreaterThan(0);
+      expect(byTestId(b.tree, "stream-credits-close"), "an opened chooser closes").toBeDefined();
+      click(byTestId(b.tree, "stream-buy-pack-5"));
+      await settle();
+      expect(checkout.fetch).toHaveBeenCalledWith({ orgId: "o-1", fixtureId: "f-1", pack: 5 });
+      const sheet = lazySheet(island.tree());
+      expect(sheet, "the embedded checkout sheet").toBeDefined();
+      expect(propsOf(sheet!).clientSecret).toBe("cs_test_flag_off");
+      expect(creditsBody(island).props.showBuy, "the chooser closes behind the sheet").toBe(false);
+      expect(calls(), "no stream code, no read model, no session read — the phone path is the flag's").toEqual([]);
+    });
+
+    it("flag OFF at balance 0: the chooser IS the section (no Buy more, no Close); a 402 at checkout is the switched-off state, never a priced upgrade", async () => {
+      checkout.fetch.mockResolvedValueOnce({ ok: false, error: "plan_lacks_relay", status: 402 });
+      const island = track(renderIsland(StreamCredits, { ...CREDITS, streamBalance: 0 }));
+      await settle();
+      const b = creditsBody(island);
+      for (const pack of STREAM_CREDIT_PACKS) expect(byTestId(b.tree, `stream-buy-pack-${pack.size}`), `tile ${pack.size}`).toBeDefined();
+      expect(byTestId(b.tree, "stream-buy-more")).toBeUndefined();
+      expect(byTestId(b.tree, "stream-credits-close"), "a forced chooser has nothing behind it").toBeUndefined();
+      click(byTestId(b.tree, `stream-buy-pack-${STREAM_CREDIT_PACKS[0]!.size}`));
+      await settle();
+      const gated = creditsBody(island).tree;
+      expect(byTestId(gated, "stream-switched-off"), "402 → switched off").toBeDefined();
+      expect(byTestId(gated, "stream-buy-pack-5"), "…and no tiles to buy what the plan refused").toBeUndefined();
+      expect(lazySheet(island.tree())).toBeUndefined();
+    });
   });
 });
