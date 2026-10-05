@@ -10,9 +10,14 @@ import { redact } from "../lib/redact.ts";
 
 export type GhRunner = (args: readonly string[]) => { status: number; stdout: string; stderr: string };
 
+/** A backstop, not the plan: spawnSync's default is 1 MiB, and a run list that outgrows it comes back TRUNCATED with ENOBUFS
+ *  (this repo's e2e.yml at per_page=100 is 1.2 MB). The runs call below is projected small server-side by `--jq`; this
+ *  bound only keeps a future call that is not projected from going dark the same way. */
+export const GH_MAX_BUFFER = 64 * 1024 * 1024;
+
 /** One `gh` process. A command that could not start (no gh on the PATH) is status 1 with the reason on stderr, never a throw. */
 export const realGh: GhRunner = (args) => {
-  const r = spawnSync("gh", [...args], { encoding: "utf8", timeout: 120_000 });
+  const r = spawnSync("gh", [...args], { encoding: "utf8", timeout: 120_000, maxBuffer: GH_MAX_BUFFER });
   const spawnFault = r.error === undefined ? "" : r.error.message;
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: redact(`${r.stderr ?? ""}${spawnFault}`) };
 };
@@ -30,11 +35,20 @@ export const WORKFLOW = "matrix-truth.yml";
 /** The events whose success is a WEEKLY/dispatch run. A pull_request run is the smoke scope, not the weekly run (D1). */
 export const WEEKLY_EVENTS: readonly string[] = ["schedule", "workflow_dispatch"];
 
-export interface WorkflowRun { id: number; conclusion: string; event: string; created_at: string }
-// Not strict: GitHub adds fields to a run, and only these four are read.
+/** `run_attempt` rides along (a re-run keeps its first attempt's created_at, so the date alone does not say when it last ran);
+ *  nothing reads it yet. */
+export interface WorkflowRun { id: number; conclusion: string; event: string; created_at: string; run_attempt?: number }
+// Not strict: GitHub adds fields to a run, and only these five are read.
 const RunsSchema = z.object({
-  workflow_runs: z.array(z.object({ id: z.number().int(), conclusion: z.string().nullable(), event: z.string(), created_at: z.string() })),
+  workflow_runs: z.array(z.object({ id: z.number().int(), conclusion: z.string().nullable(), event: z.string(), created_at: z.string(), run_attempt: z.number().int().optional() })),
 });
+
+/** What `gh api --jq` keeps of each run: five fields instead of GitHub's ~12 KB per run (every nested repository and actor).
+ *  The answer keeps the `workflow_runs` envelope, so RunsSchema reads it unchanged. */
+export const RUN_PROJECTION = "{workflow_runs: [.workflow_runs[] | {id, conclusion, event, created_at, run_attempt}]}";
+/** Per event. The runs are asked for by event and by success on the server, newest first, so the first row of each is the
+ *  newest success of that event: ten is slack, not a window the weekly run can fall out of. */
+const PER_PAGE = 10;
 
 /** `owner/name`, and nothing that could steer the API path elsewhere. */
 export const REPO_SHAPE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -44,16 +58,23 @@ const checkedRepo = (repo: string | undefined): string => {
   return repo;
 };
 
-/** The workflow's successful runs, newest first as GitHub lists them. A page of 100, not 20: pull_request smoke runs
- *  share the workflow, so a short page could fill with them and push the weekly run out of sight (a false "never"). */
+/** The workflow's successful scheduled and dispatched runs: one call per weekly event, `event=` and `status=success` filtered
+ *  on the server and projected small by `--jq`. A `pull_request` run is never asked for, so it cannot fill a page and push the
+ *  weekly run out of sight (a false "never"), and the answer stays far inside any buffer however long the workflow's history.
+ *  The two events' rows are concatenated, not ordered: `weeklySuccesses` orders them. */
 export function successfulRuns(gh: GhRunner, repo: string | undefined): WorkflowRun[] {
-  const r = gh(["api", `repos/${checkedRepo(repo)}/actions/workflows/${WORKFLOW}/runs?status=success&per_page=100`]);
-  if (r.status !== 0) throw new GhFailed("gh api (workflow runs)", r.stderr);
-  let json: unknown;
-  try { json = JSON.parse(r.stdout); } catch { throw new GhFailed("gh api (workflow runs)", "the answer is not JSON"); }
-  const p = RunsSchema.safeParse(json);
-  if (!p.success) throw new GhFailed("gh api (workflow runs)", "the answer is not a list of workflow runs");
-  return p.data.workflow_runs.map((w) => ({ id: w.id, conclusion: w.conclusion ?? "", event: w.event, created_at: w.created_at }));
+  const checked = checkedRepo(repo);
+  const runs: WorkflowRun[] = [];
+  for (const event of WEEKLY_EVENTS) {
+    const r = gh(["api", `repos/${checked}/actions/workflows/${WORKFLOW}/runs?event=${event}&status=success&per_page=${PER_PAGE}`, "--jq", RUN_PROJECTION]);
+    if (r.status !== 0) throw new GhFailed(`gh api (${event} runs)`, r.stderr);
+    let json: unknown;
+    try { json = JSON.parse(r.stdout); } catch { throw new GhFailed(`gh api (${event} runs)`, "the answer is not JSON"); }
+    const p = RunsSchema.safeParse(json);
+    if (!p.success) throw new GhFailed(`gh api (${event} runs)`, "the answer is not a list of workflow runs");
+    for (const w of p.data.workflow_runs) runs.push({ id: w.id, conclusion: w.conclusion ?? "", event: w.event, created_at: w.created_at, ...(w.run_attempt === undefined ? {} : { run_attempt: w.run_attempt }) });
+  }
+  return runs;
 }
 
 /** The runs that count as a weekly/dispatch success, newest first (a created_at that is no date counts for nothing). */

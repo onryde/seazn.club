@@ -398,7 +398,11 @@ function fakeGh(list: ReturnType<typeof wireRun>[], artifacts: Record<number, Pa
   const calls: string[][] = [];
   const gh: GhRunner = (args) => {
     calls.push([...args]);
-    if (args[0] === "api") return { status: 0, stdout: JSON.stringify({ workflow_runs: list }), stderr: "" };
+    if (args[0] === "api") {
+      // The runs endpoint filters by `event=` on the server, and the code under test asks for each weekly event separately.
+      const event = new URL(`https://api.example.test/${args[1] ?? ""}`).searchParams.get("event");
+      return { status: 0, stdout: JSON.stringify({ workflow_runs: event === null ? list : list.filter((r) => r.event === event) }), stderr: "" };
+    }
     if (args[0] === "run" && args[1] === "download") {
       const id = Number(args[2]);
       const into = args[args.indexOf("-D") + 1];
@@ -455,6 +459,38 @@ describe("main (the CLI)", () => {
     const judged = JSON.parse(readFileSync(judgeFile, "utf8")) as JudgeOut;
     expect(md).toContain(`Harness faults in this run: ${judged.faults.length === 0 ? "none (1 of 3 layers present)" : `${judged.faults.length} (L1 ${judged.faults.length})`}.`);
   }, 60_000);
+
+  it("through main(): a STALE verdict file (other runs' ids) and a 2-run or 4-run one are each NOT green — and the right three-run files are (the positive pair)", () => {
+    const dir = fresh("m"); writeMerged(dir, runs());
+    let n = 0;
+    const file = (l: Layer, runIds: string[]): string => { const f = join(dir, `v${n++}-${l}.json`); writeFileSync(f, JSON.stringify(judgeOut({ layer: l, runs: runIds }))); return f; };
+    const pageFor = (judges: string[]): string => {
+      const out = join(dir, `S${n++}.md`);
+      expect(main(["--merged", dir, ...judges.flatMap((j) => ["--judge", j]), "--out", out], deps(noGh))).toBe(0);
+      return written(out);
+    };
+    const good = (l: Layer): string => file(l, threeOf(l));
+    // The positive pair: with all three right, the same command line is green.
+    expect(verdictOf(pageFor([good("L1"), good("L2"), good("L3")]))).toBe("**Harness-green: yes**");
+
+    // A stale file: a verdict over three runs of an EARLIER week, none of them this merged run (ci-9-1-l1).
+    const stale = pageFor([file("L1", ["ci-1-1-l1", "ci-2-1-l1", "ci-3-1-l1"]), good("L2"), good("L3")]);
+    expect(verdictOf(stale)).toBe("**Harness-green: no**");
+    expect(stale).toContain("a stale verdict, ignored");
+    expect(stale).toContain("L1: no `judge across` verdict is bound to run ci-9-1-l1");
+    expect(stale).toContain("(a judge file for this layer judged other runs)");
+
+    // Two runs, one of them this run: bound, but not the three ruling 61 asks for.
+    const two = pageFor([file("L1", threeOf("L1").slice(1)), good("L2"), good("L3")]);
+    expect(verdictOf(two)).toBe("**Harness-green: no**");
+    expect(two).toContain("L1: judged 2 runs; harness-green needs exactly 3 (ruling 61)");
+    expect(two).not.toContain("a stale verdict");
+
+    // Four: "more than two" is not enough either.
+    const four = pageFor([file("L1", [...threeOf("L1"), "ci-6-1-l1"]), good("L2"), good("L3")]);
+    expect(verdictOf(four)).toBe("**Harness-green: no**");
+    expect(four).toContain("L1: judged 4 runs; harness-green needs exactly 3 (ruling 61)");
+  });
 
   it("a judge file that does not exist is `judge refused` in the page (exit 0, the page still written) and the verdict is not green", () => {
     const dir = fresh("m"); writeMerged(dir, runs());
