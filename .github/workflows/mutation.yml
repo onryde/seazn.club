@@ -94,8 +94,8 @@ jobs:
           fi
           echo "repository is public; guard passes"
       - uses: actions/checkout@v5
-      # No node setup and no install: stryker-matrix.mjs is plain ESM over node: builtins and one sibling file, run with the
-      # runner's own node (>= 22, as Stryker 10 and path.matchesGlob need), so the plan job costs seconds.
+      # No node setup and no install: stryker-matrix.mjs is plain ESM over node: builtins (util.parseArgs, so node 18.3 or
+      # later) and one sibling file, run with the runner's own node, so the plan job costs seconds.
       - name: Derive the matrix
         id: matrix
         env:
