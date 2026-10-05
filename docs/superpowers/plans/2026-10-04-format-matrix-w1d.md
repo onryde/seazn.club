@@ -3812,6 +3812,8 @@ cd <evidence> && git rev-parse matrix-truth/w1d-baseline
 
 Record the SHA. A tag push runs no workflow (D21), and the executor confirms that in the Actions tab via `gh run list -L 5 --json event,headBranch,createdAt`: there must be no run whose `headBranch` is the tag.
 
+**Dispatch sequentially, never two at a time (final review M5).** `matrix-truth.yml` sets `cancel-in-progress` only for `pull_request`, so for dispatches GitHub keeps ONE pending run per concurrency group and, when a third arrives, cancels the pending one WITHOUT a word: the middle dispatch vanishes and reads like a flaky run. Start each dispatch (the guard proof of Step 1 included) only after the previous run's `status` is `completed`, and count three completed `full` runs, not three `gh workflow run` exits.
+
 - [ ] **Step 1: The guard, live (the mutation PR-A could only unit-test)**
 
 **Precondition (review 5, R5-m4; D24).** The injected-`private` proof only means something on a GitHub-hosted runner, because a self-hosted runner returns from the guard before it reads the input. Check first:
