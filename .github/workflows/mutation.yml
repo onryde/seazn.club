@@ -69,13 +69,15 @@ permissions:
   contents: read
 
 # A new push to a pull request cancels the probe run it supersedes, so a stale run never keeps the runner (a push to the PR is a
-# new proof of the same files). Every other run is its OWN group (run_id) and is never cancelled: a weekly run or a dispatch is
-# hours of measurement that a later push to some branch must not abort.
+# new proof of the same files). The group is the PR's NUMBER, not its branch: a fork PR whose branch is named like a same-repo
+# PR's would otherwise share the group and cancel that PR's run (the group is taken before any job's `if:` skips the fork's run).
+# Every other run is its OWN group (run_id) and is never cancelled: a weekly run or a dispatch is hours of measurement that a
+# later push to some branch must not abort.
 concurrency:
-  group: mutation-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  group: mutation-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# FORK PRs (T9-FORK): plan and mutate carry the fork condition in their own `if:` (floors never runs on a pull request at all). A pull request from a fork must never reach
+# FORK PRs (T9-FORK): plan and mutate carry the fork condition in their own `if:` (floors skips a probe-only plan, which is every pull request). A pull request from a fork must never reach
 # vars.MATRIX_RUNNER, because a self-hosted label would run the fork's code on the owner's machine; a PR whose head repository is
 # gone (null) fails closed. Every upload overwrites its own artifact, or a "re-run failed jobs" would 409 on the name its
 # first attempt already holds.
@@ -228,12 +230,14 @@ jobs:
   # The floor is kept per FAMILY, the sum of its legs (T15-CUT), so no single leg can judge it: this job runs after every leg, even
   # a red or timed-out one (always(): a family whose leg left no report is REFUSED here, exit 2, never skipped), and reads the
   # legs' artifacts. --legs is the legs the plan scheduled: a family is judged only when all its legs were (a dispatch of one leg
-  # prints the family as not judged). A pull request runs the probe, which has no floor, so it skips this job; so does a weekly
-  # firing the plan job skipped (the MATRIX_WEEKLY_ENABLED gate).
+  # prints the family as not judged). The probe has no floor and --check-all refuses it, so a plan that holds ONLY the probe (a
+  # pull request, or a dispatch of group=probe) skips this job: the condition reads the plan's own output, so any future probe-only
+  # path is covered too, and it comes last so a skipped or failed plan (no matrix written) is stopped by the term before it. A
+  # weekly firing the plan job skipped (the MATRIX_WEEKLY_ENABLED gate) is skipped by `needs.plan.result` the same way.
   floors:
     name: Floors
     needs: [plan, mutate]
-    if: always() && needs.plan.result == 'success' && github.event_name != 'pull_request'
+    if: always() && needs.plan.result == 'success' && join(fromJSON(needs.plan.outputs.matrix).include.*.group, ',') != 'probe'
     runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
     timeout-minutes: 15
     env:
