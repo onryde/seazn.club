@@ -144,9 +144,11 @@ describe("parsing: a malformed input is a refusal, and so is a status nobody cou
       ["a mutant with no location", '{"files": {"a.ts": {"mutants": [{"mutatorName": "x", "status": "Killed"}]}}}'],
     ] as const) expect(() => parseReport(text), name).toThrow();
     // Pending: the run did not finish; an unknown status would silently skew the score
-    for (const status of ["Pending", "Frobnicated"]) {
+    // Each says its own reason: a Pending report names the unfinished run, so the unknown-status refusal cannot stand in for it.
+    for (const [status, reason] of [["Pending", "did not finish"], ["Frobnicated", "does not count"]] as const) {
       const text = JSON.stringify({ files: { "a.ts": { mutants: [{ mutatorName: "x", status, location: { start: { line: 1, column: 1 } } }] } } });
       expect(() => parseReport(text), status).toThrow(status);
+      expect(() => parseReport(text), `${status}: ${reason}`).toThrow(reason);
     }
   });
 
@@ -394,6 +396,16 @@ describe("--check-file-against: the empty cases, driven through git (review 7, R
     }
   });
 
+  spawnIt(2)("a ref that looks like an option is refused as a ref, before git sees it (--check-file-against=-x reaches the CLI as the value -x)", () => {
+    const base = againstRef({ atRef: floorFile({ draws: 50 }), working: floorFile({ draws: 50 }) });
+    for (const arg of ["--check-file-against=-x", "--check-file-against=--output=/tmp/x", "--check-file-against="]) {
+      const r = run(join(base.root, "packages/engine"), [arg]);
+      expect({ arg, status: r.status }).toEqual({ arg, status: 2 });
+      expect(r.stderr, arg).toContain("is not a ref");
+      expect(r.stdout, arg).toBe("");
+    }
+  });
+
   spawnIt(10)("malformed JSON at the ref, or in the working file, or a wrong shape: exit 2", () => {
     expect(againstRef({ atRef: "{ not json", working: floorFile({ draws: 50 }) }).status).toBe(2);
     expect(againstRef({ atRef: floorFile({ draws: 50 }), working: "{ not json" }).status).toBe(2);
@@ -458,8 +470,12 @@ describe("the CLI's other modes and its refusals", () => {
     const badEq = workdir({ floors: { draws: 50 }, equivalents: [{ mutant: EQ(1) }], report: report({ killed: 5 }) });
     expect(run(badEq.cwd, ["--check", "draws", badEq.reportPath]).status).toBe(2);
     const ok = workdir({ floors: { draws: 50, probe: 10 }, report: report({ killed: 5 }) });
-    expect(run(ok.cwd, ["--check", "nosuch", ok.reportPath]).status).toBe(2);
-    expect(run(ok.cwd, ["--check", "probe", ok.reportPath]).status).toBe(2);
+    const unknown = run(ok.cwd, ["--check", "nosuch", ok.reportPath]);
+    expect(unknown.status).toBe(2);
+    expect(unknown.stderr).toContain('unknown group "nosuch"');   // not the wrong-report refusal it would fall through to
+    const probe = run(ok.cwd, ["--check", "probe", ok.reportPath]);
+    expect(probe.status).toBe(2);
+    expect(probe.stderr).toContain("the probe has no floor");
     expect(run(ok.cwd, ["--check", "draws"]).status).toBe(2); // the report path is required
   });
 
@@ -538,6 +554,41 @@ describe("the CLI's other modes and its refusals", () => {
     expect(run(w.cwd, ["--survivors", "draws", w.reportPath, "--out", out]).status).toBe(0);
     const listed = readFileSync(out, "utf8").split("\n").filter((l) => /^src\//.test(l));
     expect(listed).toEqual(["src/scheduling/bracket.ts:5:1 ConditionalExpression → true"]);
+  });
+
+  spawnIt(3)("--survivors refuses an unknown group and another group's report, and writes nothing", () => {
+    const w = workdir({ floors: {}, report: report({ killed: 3, survived: 2 }) });
+    const unknown = run(w.cwd, ["--survivors", "nosuch", w.reportPath, "--out", join(w.cwd, "U.md")]);
+    expect(unknown.status).toBe(2);
+    expect(unknown.stderr).toContain('unknown group "nosuch"');
+    expect(existsSync(join(w.cwd, "U.md"))).toBe(false);
+    // draws' report (src/scheduling/bracket.ts) is not core's
+    const wrong = run(w.cwd, ["--survivors", "core", w.reportPath, "--out", join(w.cwd, "W.md")]);
+    expect(wrong.status).toBe(2);
+    expect(wrong.stderr).toContain("is not group \"core\"'s");
+    expect(existsSync(join(w.cwd, "W.md"))).toBe(false);
+    // and the right group's own report is still written (the pair: these are not refusals of everything)
+    expect(run(w.cwd, ["--survivors", "draws", w.reportPath, "--out", join(w.cwd, "R.md")]).status).toBe(0);
+    expect(existsSync(join(w.cwd, "R.md"))).toBe(true);
+  });
+
+  spawnIt(5)("--out belongs to --survivors and --skip-if-no-floors to --check: each given to another mode is exit 2, and the mode does not run", () => {
+    const w = workdir({ floors: { draws: 50 }, report: report({ killed: 50, survived: 50 }) });
+    const before = readFileSync(join(w.cwd, "stryker-floor.json"), "utf8");
+    const out = run(w.cwd, ["--check", "draws", w.reportPath, "--out", join(w.cwd, "X.md")]);
+    expect(out.status).toBe(2);
+    expect(out.stderr).toContain("--out belongs to --survivors");
+    expect(out.stdout).toBe("");
+    const skipSet = run(w.cwd, ["--set-floor", "draws", w.reportPath, "--skip-if-no-floors"]);
+    expect(skipSet.status).toBe(2);
+    expect(skipSet.stderr).toContain("--skip-if-no-floors belongs to --check");
+    expect(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")).toBe(before);
+    const skipSurvivors = run(w.cwd, ["--survivors", "draws", w.reportPath, "--out", join(w.cwd, "S.md"), "--skip-if-no-floors"]);
+    expect(skipSurvivors.status).toBe(2);
+    expect(existsSync(join(w.cwd, "S.md"))).toBe(false);
+    // the pair: each flag with its own mode is accepted
+    expect(run(w.cwd, ["--check", "draws", w.reportPath, "--skip-if-no-floors"]).status).toBe(0);
+    expect(run(w.cwd, ["--survivors", "draws", w.reportPath, "--out", join(w.cwd, "S.md")]).status).toBe(0);
   });
 
   spawnIt(7)("usage: no mode, two modes, an unknown mode or flag, and a missing ref are each exit 2 with a usage line on stderr and nothing on stdout", () => {

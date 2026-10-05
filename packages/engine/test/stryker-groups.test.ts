@@ -193,6 +193,9 @@ describe("strykerConcurrency and the vitest worker bound it copies (review I11b,
     expect(strykerConcurrency({ cores: 16, memBytes: 8 * GB, workersPerSandbox: 1 })).toBe(2);
     // 16 cores, 64 GiB: bound = max(2, min(15, 21)) = 15; ÷ 2 = 7
     expect(strykerConcurrency({ cores: 16, memBytes: 64 * GB, workersPerSandbox: 2 })).toBe(7);
+    // vitest's own floor of 2: 2 cores, 16 GiB: bound = max(2, min(1, 5)) = 2, and one core: max(2, min(0, 5)) = 2
+    expect(strykerConcurrency({ cores: 2, memBytes: 16 * GB, workersPerSandbox: 1 })).toBe(2);
+    expect(strykerConcurrency({ cores: 1, memBytes: 16 * GB, workersPerSandbox: 1 })).toBe(2);
     // never below one sandbox, however many workers each runs: 2 cores, 4 GiB: bound = max(2, min(1, 1)) = 2; ÷ 4 = 0 → 1
     expect(strykerConcurrency({ cores: 2, memBytes: 4 * GB, workersPerSandbox: 4 })).toBe(1);
   });

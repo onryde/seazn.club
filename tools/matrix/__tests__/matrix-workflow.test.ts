@@ -1016,6 +1016,7 @@ describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved her
 describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3)", () => {
   it("schedule + workflow_dispatch + its own pull_request paths, and no push, no workflow_call, no pull_request_target", () => {
     expect(MUT).toMatch(/schedule:\s*\n\s*- cron: "23 3 \* \* 0"/);
+    expect(MUT.match(/^\s*- cron:/gm)).toHaveLength(1);   // one weekly firing: a second cron line would run the whole matrix again
     for (const t of ["workflow_dispatch:", "pull_request:"]) expect(MUT).toContain(t);
     expect(MUT).not.toMatch(/^\s{2}push:/m);
     expect(MUT).not.toContain("workflow_call");

@@ -349,8 +349,8 @@ export function main(argv: string[]): number {
 
     if (mode === "survivors") {
       if (values.out === undefined || values.out === "") throw new Refusal(`--survivors needs --out <file>\n${USAGE}`);
-      const outside = GROUPS[group] === undefined ? [`unknown group "${group}"`] : filesOutsideGroup(group, report);
-      if (GROUPS[group] === undefined) throw new Refusal(outside[0]!);
+      if (GROUPS[group] === undefined) throw new Refusal(`unknown group "${group}": expected one of ${Object.keys(STRYKER_GROUPS).join(", ")}`);
+      const outside = filesOutsideGroup(group, report);
       if (outside.length > 0) throw new Refusal(`the report is not group "${group}"'s: it mutated ${outside.slice(0, 3).join(", ")}, outside the group's files`);
       const equivalents = readEquivalents();
       const md = survivorsMarkdown(group, report, equivalents);

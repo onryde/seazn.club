@@ -79,6 +79,13 @@ describe("stryker-matrix.mjs derives one matrix per event (D14)", () => {
     }
   });
 
+  spawnIt(4)("each refusal says its own reason (an unknown group, a dispatch with no group, an unknown event), so one guard cannot stand in for another", () => {
+    const unknown = real("workflow_dispatch", "nosuch");
+    expect(unknown.stderr).toContain('unknown group "nosuch"');
+    for (const group of ["", null] as const) expect(real("workflow_dispatch", group).stderr, String(group)).toContain("needs --group");
+    expect(real("push", "").stderr).toContain('unsupported event "push"');
+  });
+
   spawnIt(2)("every entry carries the timeout stryker-timeouts.json holds for its group, a whole number of minutes in (0, 300]", () => {
     const all = [...parsed(real("workflow_dispatch", "all")), ...parsed(real("pull_request", ""))];
     expect(all.length).toBe(NON_PROBE.length + 1);
@@ -156,6 +163,17 @@ describe("a broken timeouts file is a refusal, never a matrix", () => {
       expect({ text, status: r.status }).toEqual({ text, status: 2 });
       expect(r.stdout).toBe("");
     }
+  });
+
+  spawnIt(2)("an empty matrix is a refusal, never an empty-and-green job: a groups file whose only group is the probe, run for a schedule", () => {
+    const root = tree(full());
+    writeFileSync(join(root, "stryker.groups.mjs"), 'export const STRYKER_GROUPS = { probe: ["src/scheduling/roundrobin.ts"] };\n');
+    const r = copy(root, "schedule", "");
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("the matrix is empty");
+    // the pair: the same tree answers a pull_request with the probe
+    expect(parsed(copy(root, "pull_request", "")).map((e) => e.group)).toEqual(["probe"]);
   });
 
   spawnIt(1)("the timeout comes from the file, not from the script: changing a value changes the matrix", () => {
