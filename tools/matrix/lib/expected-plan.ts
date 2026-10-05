@@ -71,7 +71,9 @@ function orderedPlan(plan: string): Ordered {
   const filters = { only: flag("--only"), scenario: flag("--scenario") };
   if (words[0] === "--set") {
     const set = words[1];
-    if (set === PAD_PROOF_SET) return fromSpecs(plan, padProofPlanner({}).plan(anyVariant).map((c) => c.caseId));
+    // W1d item 15b: the one-sport pad proof (run.ts planOf records its --only). A planner that ignored the recorded
+    // filter would judge a one-sport run against the whole set's plan: the filter is read here, as w1-driving's is.
+    if (set === PAD_PROOF_SET) return fromSpecs(plan, padProofPlanner({ only: filters.only }).plan(anyVariant).map((c) => c.caseId));
     if (set === PROBE_SET) return fromSpecs(plan, probePlanner({}).plan(anyVariant).map((c) => c.caseId));
     if (set === API_ONLY_BROWSER_SET) return fromLayered(plan, apiOnlyBrowserPlanner({}).layered(anyVariant));
     if (set === WIDTH_SWEEP_SET) return fromLayered(plan, widthSweepPlanner({}).layered(anyVariant));

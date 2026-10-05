@@ -145,7 +145,7 @@ import {
   API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, LAYER_PLANNERS, NoLayerForWidth, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
   type LayerCase, type LayerScope, type PlannedLayerCase,
 } from "./lib/layers.ts";
-import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
+import { PAD_PROOF_SET, PadProofFilter, padProofPlanner, padProofSport } from "./lib/pad-proof-set.ts";
 import type { L2Run } from "./lib/pairs.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
 import { PR_SAMPLE_SET, PrSampleNeedsRows, UnknownRow, formatRows, parseRows, prSamplePlanner } from "./lib/pr-sample.ts";
@@ -507,7 +507,7 @@ export interface CallRefusal { method: string; path: string; status: number; cod
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--scope slice|grid] [--shard k/N] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] [--rows ROWS] (--set ${W1_DRIVING_SET} also takes --only/--scenario; --set ${PR_SAMPLE_SET} takes --rows: <row>[,<row>...] | all | none)
+const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--scope slice|grid] [--shard k/N] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] [--rows ROWS] (--set ${W1_DRIVING_SET} also takes --only/--scenario; --set ${PAD_PROOF_SET} takes --only league|<sport>; --set ${PR_SAMPLE_SET} takes --rows: <row>[,<row>...] | all | none)
   --shard k/N  run only plan items i with i mod N = k-1`;
 
 /** D10 (ruling 52): browser workers are not this wave's — one chromium per
@@ -553,7 +553,7 @@ export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "sce
     if (cli.rows === undefined) throw new PrSampleNeedsRows();
     return `--set ${cli.set} --rows ${formatRows(cli.rows)}`;
   }
-  // Only --set w1-driving takes filters (Task 12); for every other set they are refused, so this is `--set NAME`.
+  // Only --set w1-driving (Task 12) and --set pad-proof (W1d item 15b, --only alone) take filters; every other set refuses them, so this is `--set NAME`.
   if (cli.set !== undefined) return [`--set ${cli.set}`, ...filters].join(" ");
   if (cli.canary !== undefined) return `--canary ${cli.canary}`;
   // W1d Task 3: a grid run says so. A slice run (the default, or --scope slice)
@@ -652,7 +652,13 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   }
   // W1-driving Task 12: the w1-driving set takes --only/--scenario, never --canary.
   if (values.set === W1_DRIVING_SET && values.canary !== undefined) return { usage: `--set ${W1_DRIVING_SET} takes --only and --scenario; it takes no --canary` };
-  if (values.set !== undefined && values.set !== W1_DRIVING_SET && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
+  // W1d item 15b: --set pad-proof takes one sport's --only (league|<sport>, a sport with a pad adapter) and nothing else.
+  if (values.set === PAD_PROOF_SET) {
+    if (values.scenario !== undefined || values.canary !== undefined) return { usage: `--set ${PAD_PROOF_SET} takes --only league|<sport> alone; it takes no --scenario or --canary` };
+    if (values.only !== undefined) {
+      try { padProofSport(values.only); } catch (e) { if (e instanceof PadProofFilter) return { usage: e.message }; throw e; }
+    }
+  } else if (values.set !== undefined && values.set !== W1_DRIVING_SET && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
     return { usage: "--set runs a named set; it takes no --only, --scenario or --canary" };
   }
   if (values.canary !== undefined && (values.only !== undefined || values.scenario !== undefined)) {

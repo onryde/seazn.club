@@ -7,7 +7,9 @@ import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { winnerOf } from "../lib/observed.ts";
 import { PAD_SPORTS, noPadReason } from "../lib/pad-sports.ts";
-import { PAD_PROOF_SET, padProofPlanner } from "../lib/pad-proof-set.ts";
+import { PAD_PROOF_SET, PadProofFilter, padProofPlanner } from "../lib/pad-proof-set.ts";
+import { livePlan } from "../lib/expected-plan.ts";
+import { planOf } from "../run.ts";
 import { SetTakesNoFilter } from "../lib/probe-set.ts";
 import { decideState } from "../lib/results.ts";
 import type { EntrantInput } from "../lib/driver/types.ts";
@@ -215,6 +217,77 @@ describe("the pad-proof set", () => {
     expect(cases.length).toBe(PAD_SPORTS.length);
     expect(asked).toEqual([...PAD_SPORTS]);
     expect(cases).toEqual(PAD_SPORTS.map((sport) => ({ caseId: `league|${sport}|v-${sport}|PADPROOF`, row: "league", sport, variant: `v-${sport}`, scenario: "PADPROOF", canary: false })));
-    for (const cli of [{ only: "league|generic" }, { scenario: "LIFECYCLE" }, { canary: "M1" }]) expect(() => padProofPlanner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
+    // W1d item 15b: it takes no --scenario and no --canary (a scenario is PADPROOF's own); a one-sport --only is below.
+    for (const cli of [{ scenario: "LIFECYCLE" }, { canary: "M1" }]) expect(() => padProofPlanner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
+  });
+});
+
+// W1d Task 12, item 15b: `--set pad-proof --only league|<sport>` — one sport's pad proof, so a pad fault is re-run
+// without the other ten sports' pads. Every other filter stays refused, by name.
+describe("the pad-proof set, scoped to one sport (W1d item 15b)", () => {
+  const variantFor = (sport: string): string => `v-${sport}`;
+  const NO_PLAN_FLAGS = { only: undefined, scenario: undefined, canary: undefined, layer: undefined, scope: undefined, rows: undefined };
+
+  it("`--only league|<sport>` plans exactly that sport's PADPROOF case, for every pad sport (each checked, and none vacuous)", () => {
+    let checked = 0;
+    for (const sport of PAD_SPORTS) {
+      const p = padProofPlanner({ only: `league|${sport}` });
+      expect(p.sports, sport).toEqual([sport]);
+      expect(p.needsBrowser, sport).toBe(true);
+      expect(p.deniesFeatures, sport).toBe(false);
+      expect(p.plan(variantFor), sport).toEqual([{ caseId: `league|${sport}|v-${sport}|PADPROOF`, row: "league", sport, variant: `v-${sport}`, scenario: "PADPROOF", canary: false }]);
+      checked++;
+    }
+    expect(checked).toBe(PAD_SPORTS.length);
+    expect(checked).toBeGreaterThan(1); // one sport cannot tell "only that sport" from "every sport"
+  });
+
+  it("asks the DB's variant order of that sport alone (the sport the run was scoped to), in the one case it plans", () => {
+    const asked: string[] = [];
+    padProofPlanner({ only: "league|badminton" }).plan((s) => { asked.push(s); return "bwf"; });
+    expect(asked).toEqual(["badminton"]);
+  });
+
+  it("any other `--only` is refused by name: a sport with no pad adapter, another row, a malformed cell, an empty value", () => {
+    // chess is no catalogue sport, and nothing in the catalogue lacks a pad adapter (PAD_OWNER is empty), so a real
+    // "catalogue sport the pad does not cover" cannot be built here: the refusal is checked on the shapes that exist.
+    expect(SPORT_KEYS).not.toContain("chess");
+    expect(PAD_SPORTS).toEqual(SPORT_KEYS);
+    const bad = ["league|chess", "", "football", "league|", "|football", "league_ko|football", "groups_ko|badminton", "league|football|x", "League|football", "league|Football", " league|football", "league|football ", "*", "league|football,league|cricket"];
+    let refused = 0;
+    for (const only of bad) {
+      expect(() => padProofPlanner({ only }), JSON.stringify(only)).toThrow(PadProofFilter);
+      expect(() => padProofPlanner({ only }), JSON.stringify(only)).toThrow(/pad-proof: --only .* is not league\|<sport> of a sport with a pad adapter \(allowed: league\|football, league\|cricket,/);
+      refused++;
+    }
+    expect(refused).toBe(bad.length);
+    // The empty value is a value, not "no filter": it is not the whole set.
+    expect(() => padProofPlanner({ only: "" })).toThrow(PadProofFilter);
+    expect(padProofPlanner({}).plan(variantFor)).toHaveLength(PAD_SPORTS.length);
+  });
+
+  it("`--scenario` and `--canary` stay refused, with or without a valid `--only`, and the refusal names what was given — not the --only that was fine", () => {
+    for (const cli of [{ scenario: "M1" }, { canary: "M1" }, { only: "league|football", scenario: "M1" }, { only: "league|football", canary: "M1" }, { scenario: "PADPROOF", only: "league|cricket" }]) {
+      expect(() => padProofPlanner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
+      const flag = "scenario" in cli ? "--scenario" : "--canary";
+      expect(() => padProofPlanner(cli), JSON.stringify(cli)).toThrow(new RegExp(`it takes no ${flag}$`));
+    }
+  });
+
+  it("planOf records `--set pad-proof --only league|<sport>`, and the plan reader parses it back to that one case — every sport, and the whole set when there is no filter", () => {
+    let checked = 0;
+    for (const sport of PAD_SPORTS) {
+      const plan = planOf({ ...NO_PLAN_FLAGS, set: PAD_PROOF_SET, only: `league|${sport}` });
+      expect(plan, sport).toBe(`--set pad-proof --only league|${sport}`);
+      const live = livePlan(plan);
+      expect([...live.driven], sport).toEqual([`league|${sport}|PADPROOF`]);
+      expect(live.planned.size, sport).toBe(0);
+      expect(live.layered, sport).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(PAD_SPORTS.length);
+    // The unfiltered plan is the whole set, as it was before this item (the committed lock's entries still match).
+    expect(planOf({ ...NO_PLAN_FLAGS, set: PAD_PROOF_SET })).toBe("--set pad-proof");
+    expect([...livePlan("--set pad-proof").driven]).toEqual(PAD_SPORTS.map((s) => `league|${s}|PADPROOF`));
   });
 });

@@ -18,6 +18,7 @@ import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
 import { API_ONLY_BROWSER_SET, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET } from "../lib/layers.ts";
 import { PAD_PROOF_SET } from "../lib/pad-proof-set.ts";
+import { livePlan } from "../lib/expected-plan.ts";
 import { PAD_SPORTS } from "../lib/pad-sports.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
 import { HOLD_MS_ENV_VAR, resolveHoldMs } from "../../../apps/web/src/components/v2/scorepad/queue.ts";
@@ -184,7 +185,8 @@ describe("runSlice — refusals first", () => {
   // W1c Task 7: pad-proof scores every fixture on the pad, so over HTTP it has nothing to prove.
   it("--set pad-proof without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {
     let checked = 0;
-    for (const extra of [[], ["--driver", "http"]]) {
+    // W1d item 15b: one sport's pad proof is still a pad proof, so it needs the browser as well.
+    for (const extra of [[], ["--driver", "http"], ["--only", "league|football"], ["--driver", "http", "--only", "league|football"]]) {
       const d = deps();
       const io = capture();
       expect(await runSlice(d, ["--set", PAD_PROOF_SET, ...extra, "--report-dir", dirFor()]), extra.join(" ")).toBe(2);
@@ -193,7 +195,7 @@ describe("runSlice — refusals first", () => {
       vi.restoreAllMocks();
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(4);
   });
   it("--set w1-driving takes --only and --scenario but not --canary: a usage refusal naming what it takes", async () => {
     const io = capture();
@@ -2114,6 +2116,64 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
     const raw = JSON.parse(readFileSync(join(dir, "p1", "results.json"), "utf8")) as RunResults;
     expect(raw.cases.length).toBe(PAD_SPORTS.length);
     expect(raw.plan).toBe(`--set ${PAD_PROOF_SET}`);
+  });
+  // W1d Task 12, item 15b: one sport's pad proof, through the real parseCli, planner and results writer.
+  it("the pad-proof set with --only league|<sport>: exactly that sport's case is driven, results.json names the plan it was made from, and the plan reader reads it back", async () => {
+    let checked = 0;
+    for (const sport of ["badminton", "cricket"]) {
+      capture();
+      const dir = dirFor();
+      const base = deps();
+      const fb = fakeBrowserRun();
+      const d = deps({
+        openBrowserRun: async () => fb.run,
+        openDb: async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] }),
+      });
+      expect(await runSlice(d, ["--set", PAD_PROOF_SET, "--only", `league|${sport}`, "--driver", "browser", "--width", "1280", "--run-id", `p-${sport}`, "--report-dir", dir]), sport).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, `p-${sport}`, "results.json"), "utf8")) as RunResults;
+      expect(raw.cases.map((c) => [c.sport, c.scenario]), sport).toEqual([[sport, "PADPROOF"]]);
+      expect(raw.plan, sport).toBe(`--set ${PAD_PROOF_SET} --only league|${sport}`);
+      expect(fb.opts, sport).toHaveLength(1);
+      expect(fb.opts[0]!.padPolicy, sport).toBe("all");
+      expect([...livePlan(raw.plan as string).driven], sport).toEqual([`league|${sport}|PADPROOF`]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("the pad-proof set refuses every other filter as a usage error (exit 2) before the DB: another sport, row or shape, an empty --only, --scenario, --canary", async () => {
+    const cases: [string[], RegExp][] = [
+      [["--only", "league|chess"], /matrix: pad-proof: --only "league\|chess" is not league\|<sport> of a sport with a pad adapter \(allowed: league\|football, /],
+      [["--only", ""], /matrix: pad-proof: --only "" is not league\|<sport>/],
+      [["--only", "league_ko|football"], /matrix: pad-proof: --only "league_ko\|football" is not league\|<sport>/],
+      [["--only", "football"], /matrix: pad-proof: --only "football" is not league\|<sport>/],
+      [["--scenario", "M1"], /matrix: --set pad-proof takes --only league\|<sport> alone; it takes no --scenario or --canary/],
+      [["--canary", "M1"], /matrix: --set pad-proof takes --only league\|<sport> alone; it takes no --scenario or --canary/],
+      [["--only", "league|football", "--scenario", "M1"], /matrix: --set pad-proof takes --only league\|<sport> alone/],
+    ];
+    let checked = 0;
+    for (const [extra, expected] of cases) {
+      const io = capture();
+      const d = deps();
+      expect(await runSlice(d, ["--set", PAD_PROOF_SET, "--driver", "browser", "--width", "1280", ...extra, "--report-dir", dirFor()]), extra.join(" ")).toBe(2);
+      expect(d.order, extra.join(" ")).toEqual([]);
+      expect(io.err(), extra.join(" ")).toMatch(expected);
+      expect(io.err(), extra.join(" ")).toContain("usage: run.ts"); // parseCli's own refusal, not only the planner's
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+  it("only pad-proof takes a filter: every other named set still refuses --only (the one-sport scope is not a general door)", async () => {
+    let checked = 0;
+    for (const set of [PROBE_SET, WIDTH_SWEEP_SET, API_ONLY_BROWSER_SET]) {
+      const io = capture();
+      const d = deps();
+      expect(await runSlice(d, ["--set", set, "--only", "league|football", "--report-dir", dirFor()]), set).toBe(2);
+      expect(io.err(), set).toMatch(/--set runs a named set; it takes no --only, --scenario or --canary/);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });
 

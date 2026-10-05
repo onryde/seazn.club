@@ -240,10 +240,15 @@ export function padItems(fixtureId: string, total: number, r: ReplayResult): Ite
 /** `pad-ledger-as-generated`: the case's pad rows, all fixtures together.
  *  Zero items fails (R25). A tolerated or fallback row passes, and its note
  *  is kept as evidence after any failure: an observation, never silent. */
+/** How many notes the check keeps (W1d item 8: it used to cut there silently). */
+export const PAD_EVIDENCE_NOTES = 12;
 function padCheck(items: readonly Item[]): CheckResult {
   const c = assertion("pad-ledger-as-generated", items);
-  const seen = items.filter((i) => i.ok && !/: equal$/.test(i.note)).map((i) => i.note);
-  return { ...c, evidence: [...c.evidence, ...seen].slice(0, 12) };
+  // The failing notes first, then the passing ones worth keeping — counted
+  // from the items themselves, since `assertion` has already cut the failures.
+  const all = [...items.filter((i) => !i.ok).map((i) => i.note), ...items.filter((i) => i.ok && !/: equal$/.test(i.note)).map((i) => i.note)];
+  const more = all.length - PAD_EVIDENCE_NOTES;
+  return { ...c, evidence: more > 0 ? [...all.slice(0, PAD_EVIDENCE_NOTES), `+${more} more`] : all };
 }
 
 const toStageRef = (s: StageOut): StageRef => ({ id: s.id, seq: s.seq, kind: s.kind, config: s.config, status: s.status });
@@ -260,6 +265,8 @@ export class BrowserDriver implements OrganiserDriver {
   readonly #pages: BrowserPages;
   readonly #clock: Clock;
   readonly #replay: Replay;
+  /** The clock's reading when the driver was built: the zero of the replay's tap timings. */
+  readonly #startedAt: number;
   readonly #ledger = new MixedLedger();
   readonly #checks: CheckResult[] = [];
   readonly #finalized: Item[] = [];
@@ -295,6 +302,8 @@ export class BrowserDriver implements OrganiserDriver {
     this.#pages = o.pages ?? REAL_PAGES;
     this.#clock = o.clock ?? REAL_CLOCK;
     this.#replay = o.replay ?? replayEvents;
+    // 15a: the tap timings read the case's clock, from the case's own start.
+    this.#startedAt = this.#clock.now();
     // Ruling F: every tap no page object bounds itself is one step's budget.
     boundActions(o.ctx.page, o.ctx);
   }
@@ -621,11 +630,25 @@ export class BrowserDriver implements OrganiserDriver {
     const wanted = events.length > 0 && this.#wants("score");
     const sport = this.#spec.sport;
     const pad = wanted && Object.prototype.hasOwnProperty.call(this.#pads, sport) ? this.#pads[sport] : undefined;
-    if (pad !== undefined) {
+    // W1d item 16: an event the pad has no control for cannot be tapped, and a
+    // stream holding one is not half-tapped either — it goes over http whole,
+    // exempt by the adapter's route to the wave that owes the control, and the
+    // browser's turn is NOT used up (an http score does not use it): the next
+    // fixture whose stream the pad can write still runs on it.
+    const noControl = pad?.noControl;
+    const barred = noControl?.eventTypes.find((t) => events.some((e) => e.type === t));
+    if (pad !== undefined && barred === undefined) {
       this.#ledger.record("score", "browser");
       return this.#write(() => this.#ui(() => this.#padStream(pad, fixtureId, events)));
     }
-    if (wanted && !this.#padRouteJudged) {
+    if (noControl !== undefined && barred !== undefined) {
+      const route = noControl.route;
+      this.#ledger.exempt("score", route);
+      if (!this.#padRouteJudged) {
+        this.#padRouteJudged = true;
+        this.#checks.push(assertion("pad-route", [], `${sport}: ${barred} has no pad control → ${route.wave} (${route.why}); a stream holding it is scored over http`));
+      }
+    } else if (wanted && !this.#padRouteJudged) {
       this.#padRouteJudged = true;
       this.#checks.push(assertion("pad-route", [], noPadReason(sport)));
     }
@@ -650,6 +673,7 @@ export class BrowserDriver implements OrganiserDriver {
       ledger: (since) => this.#http.ledger(fixtureId, since),
       tip: async () => (await this.#http.fixtureState(fixtureId)).last_seq,
       sleep: (ms) => this.#clock.sleep(ms),
+      now: () => this.#clock.now() - this.#startedAt,
       holdMs: this.#ctx.holdMs,
       // The case's one mid-sheet picture: the first number step it ever types.
       onTap: async (_i, step) => {

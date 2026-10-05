@@ -12,6 +12,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { selectorForTapStep } from "../../bench/lib/drivers/scorer.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
@@ -30,10 +31,12 @@ import { builtAsPosted } from "../lib/scenarios/assertions.ts";
 import { Recorder, TEMPLATE_ENDS_ON, setUpDivision } from "../lib/scenarios/common.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { noPadReason } from "../lib/pad-sports.ts";
+import { CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE, CRICKET_NO_CONTROL, CRICKET_SUMMARY, cricketPad } from "../lib/pads/cricket.ts";
 import { genericPad } from "../lib/pads/generic.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
 import type { ReplayDeps, ReplayResult } from "../lib/pads/replay.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
+import { findSecrets } from "../lib/redact.ts";
 import type { CheckResult } from "../lib/results.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
@@ -1057,6 +1060,100 @@ describe("BrowserDriver — the pad path (W1c Task 7)", () => {
     expect(driver.checks().map((c) => c.id)).not.toContain("pad-ledger-as-generated");
   });
 
+  describe("an event the pad has no control for (W1d item 16: cricket's follow-on and time-expiry draw)", () => {
+    const START: StreamEvent = { type: "core.start", payload: {} };
+    const INNINGS: StreamEvent = { type: CRICKET_SUMMARY, payload: { runs: 100, wickets: 10, legalBalls: 120 } };
+    const BARRED = (type: string): StreamEvent[] => [START, INNINGS, { type, payload: {} }];
+    const TAPPABLE: StreamEvent[] = [START, INNINGS];
+    const CRICKET_PADS = { cricket: cricketPad };
+    const cricketMade = (padPolicy: "first" | "all") => {
+      const r = fakeReplay(OK);
+      return { r, ...make({ http: padHttp(), spec: spec("league", "cricket"), pads: CRICKET_PADS, replay: r.fn, padPolicy }) };
+    };
+
+    it("a stream holding either event is scored over http whole, never half-tapped, exempt by the adapter's route; pad-route abstains ONCE naming the event and the wave", async () => {
+      let checked = 0;
+      for (const type of cricketPad.noControl!.eventTypes) {
+        const { r, driver, http, pageCalls } = cricketMade("all");
+        await built(driver, spec("league", "cricket"));
+        await driver.postStream("f1", BARRED(type), "p");
+        await driver.postStream("f1", BARRED(type), "q");
+        expect(r.calls, type).toEqual([]);
+        expect(pageCalls, type).not.toContain("openFixtureUi");
+        expect(http.calls.filter((c) => c === "postStream"), type).toHaveLength(2);
+        const route = only(driver, "pad-route");
+        expect(route, type).toMatchObject({ verdict: "abstain", checked: 0 });
+        expect(route.reason, type).toBe(`cricket: ${type} has no pad control → ${CRICKET_NO_CONTROL.wave} (${CRICKET_NO_CONTROL.why}); a stream holding it is scored over http`);
+        expect(driver.checks().filter((c) => c.id === "pad-route"), type).toHaveLength(1);
+        expect(driver.checks().map((c) => c.id), type).not.toContain("pad-ledger-as-generated");
+        // Coverage: the exemption names the wave, so the case is not a red on a promise.
+        expect(only(driver, "mixed-driver-coverage"), type).toMatchObject({ verdict: "pass" });
+        expect(only(driver, "mixed-driver-coverage").evidence, type).toContain(`score: exempt — → ${CRICKET_NO_CONTROL.wave}: ${CRICKET_NO_CONTROL.why}`);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("the event is found wherever it stands in the stream — the generator's follow-on is in the MIDDLE (start, two innings, follow-on, an innings), the draw's time close LAST — and a stream without one is not barred", async () => {
+      const positions: StreamEvent[][] = [
+        [START, INNINGS, INNINGS, { type: CRICKET_FOLLOW_ON, payload: {} }, INNINGS],
+        [START, INNINGS, INNINGS, INNINGS, INNINGS, { type: CRICKET_MATCH_CLOSE, payload: {} }],
+        [{ type: CRICKET_FOLLOW_ON, payload: {} }, START, INNINGS],
+      ];
+      let checked = 0;
+      for (const events of positions) {
+        const { r, driver, http } = cricketMade("all");
+        await built(driver, spec("league", "cricket"));
+        await driver.postStream("f1", events, "p");
+        expect(r.calls, events.map((e) => e.type).join(",")).toEqual([]);
+        expect(http.calls.filter((c) => c === "postStream")).toHaveLength(1);
+        checked++;
+      }
+      expect(checked).toBe(3);
+      const { r, driver } = cricketMade("all");
+      await built(driver, spec("league", "cricket"));
+      await driver.postStream("f1", [START, INNINGS, INNINGS, INNINGS, INNINGS], "p");
+      expect(r.calls).toHaveLength(1); // the same shape without a barred event is tapped
+    });
+
+    it("the exemption does not use up the pad's turn: under `first`, the next stream the pad CAN write runs on it, and the one after goes over http", async () => {
+      const { r, driver, http } = cricketMade("first");
+      await built(driver, spec("league", "cricket"));
+      await driver.postStream("f1", BARRED(CRICKET_FOLLOW_ON), "p"); // http, exempt
+      expect(r.calls).toHaveLength(0);
+      await driver.postStream("f1", TAPPABLE, "q"); // the pad's turn
+      expect(r.calls).toHaveLength(1);
+      await driver.postStream("f1", TAPPABLE, "r"); // used up
+      expect(r.calls).toHaveLength(1);
+      expect(http.calls.filter((c) => c === "postStream")).toHaveLength(2);
+      expect(only(driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "pass", checked: 2 });
+      expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+    });
+
+    it("under `all` a tappable stream is tapped and a barred one is not, in either order; each pad write still joins the one check", async () => {
+      const { r, driver, http } = cricketMade("all");
+      await built(driver, spec("league", "cricket"));
+      await driver.postStream("f1", TAPPABLE, "p");
+      await driver.postStream("f1", BARRED(CRICKET_MATCH_CLOSE), "q");
+      await driver.postStream("f1", TAPPABLE, "r");
+      expect(r.calls).toHaveLength(2);
+      expect(http.calls.filter((c) => c === "postStream")).toHaveLength(1);
+      expect(only(driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "pass", checked: 4 });
+      expect(only(driver, "pad-route").verdict).toBe("abstain");
+    });
+
+    it("a sport whose adapter declares no noControl is tapped as before, whatever its events are (the guard reads the adapter's declaration, not the event's name)", async () => {
+      const r = fakeReplay(OK);
+      const { driver, http } = make({ http: padHttp(), pads: PADS, replay: r.fn, padPolicy: "all" });
+      await built(driver, spec("league"));
+      expect(genericPad.noControl).toBeUndefined();
+      await driver.postStream("f1", BARRED(CRICKET_FOLLOW_ON), "p");
+      expect(r.calls).toHaveLength(1);
+      expect(http.calls).not.toContain("postStream");
+      expect(driver.checks().map((c) => c.id)).not.toContain("pad-route");
+    });
+  });
+
   it("a sport with no adapter is not tapped: it goes over http, and pad-route abstains ONCE naming the task that owes it; coverage still reds score", async () => {
     const r = fakeReplay(OK);
     // Every catalogue sport has an adapter since W1c Task 11, so the registry here lacks cricket's.
@@ -1069,6 +1166,142 @@ describe("BrowserDriver — the pad path (W1c Task 7)", () => {
     expect(http.calls.filter((c) => c === "postStream")).toHaveLength(2);
     expect(only(driver, "pad-route")).toMatchObject({ verdict: "abstain", checked: 0, reason: noPadReason("cricket") });
     expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "fail", evidence: ["score: invoked 2×, never in the browser"] });
+  });
+
+  // W1d Task 12, item 8: the unseated-fixture guard, and what padCheck keeps.
+  it("item 8: the unseated-fixture guard refuses by name — a fixture with either seat empty is never tapped, and nothing is recorded as the pad's", async () => {
+    let checked = 0;
+    for (const [seat, row] of [["home", { ...PAD_FIXTURE, home_entrant_id: null }], ["away", { ...PAD_FIXTURE, away_entrant_id: null }], ["both", { ...PAD_FIXTURE, home_entrant_id: null, away_entrant_id: null }]] as const) {
+      const r = fakeReplay(OK);
+      const http = stubHttp({
+        listFixtures: async () => [row],
+        getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+        listStages: async () => [stageRef("s1", 1, "league")],
+      });
+      const { driver, pageCalls } = make({ http, pads: PADS, replay: r.fn });
+      await built(driver, spec("league"));
+      const err = await driver.postStream("f1", EVENTS, "p").catch((e: unknown) => e);
+      expect(err, seat).toBeInstanceOf(DriverMisuse);
+      expect((err as Error).message, seat).toBe("browser: fixture f1 does not seat two entrants — the pad scores a seated fixture only");
+      expect((err as Error).message).toContain("does not seat two entrants");
+      expect(r.calls, `${seat}: the replay is never reached`).toEqual([]);
+      expect(pageCalls, `${seat}: the console is never opened`).not.toContain("openFixtureUi");
+      expect(driver.checks().map((c) => c.id), seat).not.toContain("pad-ledger-as-generated");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("item 8: the positive pair — a fixture seating two entrants IS tapped (the guard refuses the unseated one only)", async () => {
+    const r = fakeReplay(OK);
+    const { driver } = make({ http: padHttp(), pads: PADS, replay: r.fn });
+    await built(driver, spec("league"));
+    await driver.postStream("f1", EVENTS, "p");
+    expect(r.calls).toHaveLength(1);
+  });
+
+  /** A replay result of `n` rows that each pass with a note (a fallback: the check keeps its note as evidence) — or fail. */
+  const fallbackRows = (n: number, verdict: "fallback" | "mismatch" = "fallback"): ReplayResult => {
+    const ev = (i: number): StreamEvent => ({ type: "generic.result", payload: { n: i } });
+    return { rows: Array.from({ length: n }, (_x, i) => ({ expected: ev(i), stored: [lrow(i + 2, "generic.result", { n: i })], verdict, note: `why ${i + 1}` })), stored: [], findings: [] };
+  };
+  async function padEvidence(result: ReplayResult): Promise<CheckResult> {
+    const { driver } = make({ http: padHttp(), pads: PADS, replay: fakeReplay(result).fn });
+    await built(driver, spec("league"));
+    await driver.postStream("f1", EVENTS, "p");
+    return only(driver, "pad-ledger-as-generated");
+  }
+
+  it("item 8: padCheck lists 12 notes and then `+N more` — 14 notes → 12 lines + `+2 more`; 13 → `+1 more`; 12 or fewer → no more-line (the boundary, both sides)", async () => {
+    let checked = 0;
+    // The empty case first: nothing replayed is a vacuous fail with no evidence and no more-line.
+    expect(await padEvidence({ rows: [], stored: [], findings: [] })).toMatchObject({ verdict: "fail", checked: 0, evidence: [] });
+    for (const [n, more] of [[1, null], [11, null], [12, null], [13, "+1 more"], [14, "+2 more"], [30, "+18 more"]] as const) {
+      // Passing rows: a fallback row passes and its note is kept, so n rows → n evidence notes.
+      const c = await padEvidence(fallbackRows(n));
+      expect(c.verdict, `${n} passing`).toBe("pass");
+      const lines = c.evidence.filter((l) => !/^\+\d+ more$/.test(l));
+      expect(lines, `${n}: the lines kept`).toHaveLength(Math.min(n, 12));
+      expect(c.evidence.length, `${n}: lines plus the more-line`).toBe(Math.min(n, 12) + (more === null ? 0 : 1));
+      expect(c.evidence.at(-1), `${n}: the last line`).toBe(more ?? lines.at(-1));
+      // The 12 kept are the FIRST 12, in order — the cut never reorders.
+      expect(lines.map((l) => l.replace(/^.*— /, "")), `${n}`).toEqual(Array.from({ length: Math.min(n, 12) }, (_x, i) => `why ${i + 1}`));
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("item 8: the failing notes count toward the cut too — 13 failures and 2 passing notes → 12 failures then `+3 more`, and the verdict still names the first failure", async () => {
+    const bad = fallbackRows(13, "mismatch");
+    const good = fallbackRows(2);
+    const c = await padEvidence({ rows: [...bad.rows, ...good.rows.map((r, i) => ({ ...r, expected: { type: "generic.result", payload: { n: 20 + i } } }))], stored: [], findings: [] });
+    expect(c.verdict).toBe("fail");
+    expect(c.evidence).toHaveLength(13);
+    expect(c.evidence.at(-1)).toBe("+3 more");
+    expect(c.evidence.slice(0, 12).every((l) => /: mismatch — why \d+$/.test(l))).toBe(true);
+    expect(c.reason).toBe("f1 event 1 of 2 (generic.result): mismatch — why 1");
+  });
+
+  // 15a: the tap-wait timeout, through the real replay on a fake page.
+  it("15a: a tap-wait timeout's message carries the last 5 tap timings — clickedAtMs from the CASE's start, waitedMs from the clock — redacted, and the ledger never advanced", async () => {
+    const SECRET = ["postgres", "://", "matrix", ":", "pw0", "@", "db.invalid", "/m"].join("");
+    const clock = fakeClock();
+    clock.t = 5_000; // the driver is built mid-run: its timings are relative to ITS start, not the process's
+    let locators = 0;
+    let committed = 0; // each release of a hold writes the event's one row
+    const page = {
+      locator: (selector: string) => {
+        const n = ++locators;
+        return {
+          click: async () => undefined,
+          fill: async () => undefined,
+          count: async () => { if (selector === selectorForTapStep({ kind: "releaseHold" })) committed++; return 0; },
+          waitFor: async () => {
+            if (n < 8) return;
+            clock.t += FLOOR_MS;
+            const e = new Error(`locator.waitFor: Timeout ${FLOOR_MS}ms exceeded. (DATABASE_URL=${SECRET})\nCall log:\n  - waiting for locator('[data-tile-id="t"]')`);
+            e.name = "TimeoutError";
+            throw e;
+          },
+        };
+      },
+      goto: async () => undefined,
+      setViewportSize: async () => undefined,
+    };
+    // Two steps and a release per event: event 1 = taps 1-3, event 2 = taps 4-6, event 3 = taps 7-8 (its second step never attaches).
+    const threeSteps: PadRegistry = { generic: { sport: "generic", emits: [], fallbacks: [], stepsFor: () => ["a", "b"].map((tileId) => ({ kind: "tile" as const, tileId })) } };
+    // The ledger gains a row (seq 4, 5, ...) as each hold is released — and event 3 never gets to release.
+    const http = stubHttp({
+      listFixtures: async () => [PAD_FIXTURE],
+      getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      fixtureState: async () => DECIDED,
+      ledger: async (...a: never[]) => Array.from({ length: committed }, (_x, i) => lrow(DECIDED.last_seq + 1 + i, "generic.result", {})).filter((r) => r.seq > (a[1] as number)),
+      postStream: async () => [],
+      listStages: async () => [stageRef("s1", 1, "league")],
+    });
+    const { driver } = make({ http, pads: threeSteps, clock, page });
+    await built(driver, spec("league"));
+    await driver.postStream("f1", [{ type: "generic.result", payload: {} }, { type: "generic.result", payload: {} }, { type: "generic.result", payload: {} }], "p");
+    const c = only(driver, "pad-ledger-as-generated");
+    expect(c.verdict).toBe("fail");
+    const line = c.evidence.find((l) => l.startsWith("f1: stopped") && l.includes("TapWaitTimeout"))!;
+    expect(line, `no TapWaitTimeout line in the evidence: ${JSON.stringify(c.evidence)}`).toBeDefined();
+    expect(line, line).toMatch(/^f1: stopped after event 3 of 3: tap 2 of 3 \(tile\) failed: TapWaitTimeout: locator\.waitFor: Timeout 15000ms exceeded\. \(\[redacted\] — last taps: \[/);
+    const timings = JSON.parse(/last taps: (\[.*\])$/.exec(line)![1]!) as Array<{ tap: number; clickedAtMs: number; ledgerSeenAtMs: number | null; waitedMs: number; budgetMs: number }>;
+    // The ring is the last 5 of the 8 taps made; the timed-out tap is the last.
+    expect(timings.map((t) => t.tap)).toEqual([4, 5, 6, 7, 8]);
+    expect(timings.at(-1)).toMatchObject({ waitedMs: FLOOR_MS, budgetMs: FLOOR_MS });
+    expect(timings.slice(0, -1).map((t) => t.waitedMs)).toEqual([0, 0, 0, 0]);
+    // Relative to the driver's own start (the clock already read 5000 when it was built): a tap is paced TAP_PACE_MS
+    // after the one before it, the release is not paced, and the first tap of the case reads 0.
+    const P = TAP_PACE_MS;
+    expect(timings.map((t) => t.clickedAtMs)).toEqual([2 * P, 3 * P, 3 * P, 4 * P, 5 * P]);
+    // Event 2's taps (4-6) saw their row; event 3's (7, 8) never did.
+    expect(timings.map((t) => t.ledgerSeenAtMs !== null)).toEqual([true, true, true, false, false]);
+    // Redacted: the positive control is that the raw error line IS secret-shaped.
+    expect(findSecrets(`locator.waitFor: Timeout ${FLOOR_MS}ms exceeded. (DATABASE_URL=${SECRET})`)).not.toEqual([]);
+    expect(c.evidence.flatMap((l) => findSecrets(l))).toEqual([]);
+    expect(line).not.toContain("db.invalid");
   });
 
   it("the pad write goes through the write stamp (carry N-1): a pad score at the window's end restarts the public page's freshness window", async () => {
