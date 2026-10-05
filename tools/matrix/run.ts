@@ -140,7 +140,6 @@ import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver
 import type { FillerName } from "./lib/fillers.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
-import { routeTo } from "./lib/routing.ts";
 import {
   API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, LAYER_PLANNERS, NoLayerForWidth, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
   type LayerCase, type LayerScope, type PlannedLayerCase,
@@ -513,10 +512,6 @@ export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--scope slice|grid] [--shard k/N] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] [--rows ROWS] (--set ${W1_DRIVING_SET} also takes --only/--scenario; --set ${PAD_PROOF_SET} takes --only league|<sport>; --set ${PR_SAMPLE_SET} takes --rows: <row>[,<row>...] | all | none)
   --shard k/N  run only plan items i with i mod N = k-1`;
 
-/** D10 (ruling 52): browser workers are not this wave's — one chromium per
- *  run, one context per case, one case at a time. */
-const BROWSER_WORKERS = routeTo("W1d", "browser workers inside a shard (D10)");
-
 const say = (s: string): void => { process.stdout.write(`${redact(s)}\n`); };
 const warn = (s: string): void => { process.stderr.write(`${redact(s)}\n`); };
 const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
@@ -625,9 +620,11 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   if ("usage" in how) return how;
   const w = parseWorkers(values.workers);
   if ("usage" in w) return w;
-  // D10: every browser plan (plain or layered) runs one case at a time.
+  // D10 (ruling 52), declined for good by W1d D11: every browser plan (plain or layered) runs one case at a time,
+  // one chromium per run and one context per case. Nothing owes browser workers (no route), so the refusal names what
+  // was given and where parallelism lives: the shard matrix, one job per shard.
   if (how.driver === "browser" && w.workers > 1) {
-    return { usage: `--workers ${w.workers} is HTTP-only in this wave (D10); browser workers are owed by ${BROWSER_WORKERS.wave} — ${BROWSER_WORKERS.why}` };
+    return { usage: `--workers ${w.workers} is refused with --driver browser: one browser case at a time per shard; parallelism is the shard matrix (W1d D11)` };
   }
   // W1c Task 12: --layer chooses the plan, and it is a browser plan.
   let layer: Cli["layer"];

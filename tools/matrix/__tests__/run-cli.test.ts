@@ -2923,12 +2923,18 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
     expect(io.err()).toContain(`1..${MAX_WORKERS}`);
     expect(io.err()).toMatch(/usage: run\.ts .*--workers N/);
   });
-  it("D10: --driver browser --workers 2 is a usage error naming the wave that owes browser workers; --workers 1 in a browser still runs", async () => {
+  // W1d D11 (item 17): browser workers were "owed by W1d"; W1d declined them (parallelism is the shard matrix), so the
+  // refusal no longer routes anywhere: it cites the DECISION ("(W1d D11)", the brief's literal). The Q-A guard reads
+  // every literal for a wave token and exempts exactly that parenthesised citation (scenario-catalogue.test.ts pins
+  // the exemption's edges); "no route names W1d" is pinned below.
+  const BROWSER_WORKERS_REFUSAL = "one browser case at a time per shard; parallelism is the shard matrix (W1d D11)";
+  it("D11: --driver browser --workers 2 is refused with a message that names what was given and the shard matrix, and routes to no wave; --workers 1 in a browser still runs", async () => {
     const io = capture();
     const d = deps({ openBrowserRun: async () => fakeBrowserRun().run });
     expect(await runSlice(d, ["--driver", "browser", "--width", "1280", "--workers", "2", "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toMatch(/--workers 2 is HTTP-only in this wave .*W1d/);
+    expect(io.err()).toContain(`--workers 2 is refused with --driver browser: ${BROWSER_WORKERS_REFUSAL}`);
+    expect(io.err(), "no wave owes browser workers any more").not.toMatch(/owed by|HTTP-only/);
     expect(io.err()).toMatch(/usage: run\.ts/);
     vi.restoreAllMocks();
     capture();
@@ -2936,12 +2942,29 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
     expect(await runSlice(one, ["--driver", "browser", "--width", "1280", "--workers", "1", "--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "wb1", "--report-dir", dirFor()])).toBe(0);
     expect(one.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
   });
-  it("D10 holds for a layered plan too: --layer L1 --workers 2 is refused before anything runs", async () => {
-    const io = capture();
-    const d = deps();
-    expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--workers", "2", "--report-dir", dirFor()])).toBe(2);
-    expect(d.order).toEqual([]);
-    expect(io.err()).toMatch(/W1d/);
+  it("D11 holds for a layered plan too, and for every worker count above one: --layer L1 --workers N is refused before anything runs, naming N", async () => {
+    let checked = 0;
+    for (const n of [2, 3, MAX_WORKERS]) {
+      const io = capture();
+      const d = deps();
+      expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--workers", String(n), "--report-dir", dirFor()]), `--workers ${n}`).toBe(2);
+      expect(d.order).toEqual([]);
+      expect(io.err()).toContain(`--workers ${n} is refused with --driver browser: ${BROWSER_WORKERS_REFUSAL}`);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  it("D11: no shipped or test source routes to W1d (the closed wave a route would name), read as text", () => {
+    // The needle is assembled here so this file never contains it: a grep of tools/matrix finds nothing.
+    const needle = `${"routeTo"}("${"W1d"}"`;
+    const root = resolve(REPO, "tools/matrix");
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === "node_modules" ? [] : walk(join(dir, e.name))) : e.name.endsWith(".ts") ? [join(dir, e.name)] : []));
+    const files = walk(root);
+    expect(files.length, "files read").toBeGreaterThan(100);
+    expect(files.filter((f) => readFileSync(f, "utf8").includes(needle)).map((f) => f.slice(root.length + 1))).toEqual([]);
+    // The positive pair: the reader sees a route to a wave in the shape it searches for.
+    expect(readFileSync(join(root, "lib/api-only-ui.ts"), "utf8")).toContain(`${"routeTo"}("${"W4"}"`);
   });
 });
 

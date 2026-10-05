@@ -632,6 +632,11 @@ const ROUTE_CALL = "routeTo";
  *  purpose: a wave-shaped token that names no programme wave (W11) is refused
  *  too, never read as prose. */
 const WAVE_TOKEN = /\bW\d+[a-z]?\b|W1-driving/;
+/** A decision citation, "(W1d D11)": the wave a ruling was made in and its number, in parentheses and nothing else.
+ *  It names a DECISION, never a route (W1d item 17: browser workers were declined, so the refusal cites D11 rather
+ *  than routing to a wave that is closed). It is cut from a literal's text before WAVE_TOKEN reads it, so a wave
+ *  named anywhere else in the same literal is still a stray. */
+const DECISION_CITATION = /\((?:W\d+[a-z]?|W1-driving) D\d+\)/g;
 interface RouteScan { sites: number; waves: string[]; unread: string[] }
 /** Every route in `src`, read from the TypeScript AST (so a comment is never a
  *  site). Two constructs name a wave: `routeTo(<wave>, …)` and a `new` of a
@@ -695,7 +700,7 @@ function scanRoutes(src: string, file = "synthetic.ts"): RouteScan {
       if (Object.hasOwn(DEFERRALS, n.text)) classify(n, DEFERRALS[n.text]!);
       else if (n.text === ROUTE_CALL) classifyRoute(n);
     } else if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) {
-      if (WAVE_TOKEN.test(n.text)) literals.push(n);
+      if (WAVE_TOKEN.test(n.text.replace(DECISION_CITATION, ""))) literals.push(n);
     }
     ts.forEachChild(n, visit);
   };
@@ -816,6 +821,48 @@ describe("Q-A guard — the route reader", () => {
     expect(scanRoutes(`const w = pick(); routeTo(w, "x");`).sites).toBe(1);
     expect(scanRoutes(`routeTo();`).unread.length).toBeGreaterThan(0);
     expect(scanRoutes(`const r = routeTo; r(pick(), "x");`).unread.length).toBeGreaterThan(0);
+  });
+  // W1d item 17 (D11): a message may CITE the decision that closed a question, "(W1d D11)", without routing to the wave.
+  // The exemption is exactly that parenthesised shape; anything else in the same literal still reads as a stray.
+  it("a parenthesised decision citation is no stray wave literal, in a string, a template and a template span", () => {
+    const cited = {
+      string: `const m = "one browser case at a time per shard; parallelism is the shard matrix (W1d D11)";`,
+      template: "const m = `parallelism is the shard matrix (W1d D11)`;",
+      span: "const m = `--workers ${n} is refused: parallelism is the shard matrix (W1d D11)`;",
+      twoCitations: `const m = "(W1d D11), as ruled in (W1-driving D10)";`,
+      driving: `const m = "the cap (W1-driving D10)";`,
+    };
+    let checked = 0;
+    for (const [shape, src] of Object.entries(cited)) {
+      expect(scanRoutes(src), shape).toEqual({ sites: 0, waves: [], unread: [] });
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+  it("the citation exemption stops at its shape: a bare id, a bare decision, a half citation, or a wave named beside a citation is still a stray", () => {
+    const stray = {
+      bare: `const m = "see W1d D11";`,
+      waveOnly: `const m = "(W1d)";`,
+      noNumber: `const m = "(W1d D)";`,
+      noDecision: `const m = "(W1d 11)";`,
+      lowercase: `const m = "(W1d d11)";`,
+      unclosed: `const m = "(W1d D11";`,
+      suffixed: `const m = "(W1d D11x)";`,
+      // The route a citation might be dressed as: a wave named OUTSIDE the parentheses, in the same literal.
+      beside: `const m = "owed to W2 (W1d D11)";`,
+      besideAfter: `const m = "(W1d D11) is owed to W2";`,
+      // And the exemption never reaches a routeTo's why, where the wave is argument 0's alone.
+      why: `const r = routeTo("W2", "browser workers (W1d D11) and W3");`,
+    };
+    let refused = 0;
+    for (const [shape, src] of Object.entries(stray)) {
+      const scan = scanRoutes(src);
+      expect(scan.unread.some((u) => u.includes("stray wave literal")), `${shape}: ${JSON.stringify(scan)}`).toBe(true);
+      refused++;
+    }
+    expect(refused).toBe(Object.keys(stray).length);
+    // The positive pair: a routeTo whose why carries a citation and no other wave is read as one route, no stray.
+    expect(scanRoutes(`const r = routeTo("W2", "browser workers (W1d D11)");`)).toEqual({ sites: 1, waves: ["W2"], unread: [] });
   });
   it("text that only looks like a wave is not a site: a lowercase set name, a W inside a word, a W with no digit, a comment", () => {
     expect(scanRoutes(`const b = "w1-driving"; const c = "AW2"; const d = "W3C"; const e = "Wave"; // routeTo("W4", "x")`)).toEqual({ sites: 0, waves: [], unread: [] });
