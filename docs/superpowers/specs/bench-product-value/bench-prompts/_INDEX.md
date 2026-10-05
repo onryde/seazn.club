@@ -114,16 +114,23 @@ proves thin — record the pairing here.)
     relative path only: its boundary test refuses a bare `@seazn/bench`
     import, so every import stays on ruling 38's allowlist (controller
     ruling BT-R3).
-  - **The guard's limit.** The guard reads imports, manifests, tsconfigs
-    and root-script names. It does NOT see a `tools/` path passed as a
-    string to `child_process`. Today only a grep holds that line:
-    `git grep -E 'tools/(bench|matrix)' -- apps packages scripts` finds
-    comments, the reference trap fixture, and tests (the guard's, the
-    dockerignore test's and the scans'). Without `-E` the alternation is
-    literal and the grep finds nothing. This gap dates from #913 and
-    covers the matrix too. The design fix is not made here: the owner
-    routed it to W1d (format-matrix `_INDEX.md`, "W1d first tasks" item 28,
-    2026-10-04).
+  - **The guard's limit (closed in part, 2026-10-05).** The guard reads
+    imports, manifests, tsconfigs and root-script names, and since W1d
+    item 28 (format-matrix `_INDEX.md`, "W1d first tasks"; commits
+    `b6de52dba` and `b8700d19e`) it also reads the arguments of
+    `child_process` calls: a `tools/bench` or `tools/matrix` path passed
+    as a string to `exec`, `execFile`, `spawn` or `fork` (or a `Sync`
+    form) under `apps/`, `packages/` or `scripts/` is a hit. The real tree
+    has none (387 calls in 170 files on 2026-10-05). The earlier
+    `git grep -E 'tools/(bench|matrix)' -- apps packages scripts` is no
+    longer the only guard, though it still finds comments, the reference
+    trap fixture and tests, and without `-E` the alternation is literal
+    and finds nothing. **What it does NOT see**, each pinned as a known
+    gap in the guard test: a spawn naming the harness by package
+    (`pnpm --filter @seazn/bench`), a path held in a variable or built
+    from an interpolated name, `execa` and other libraries, and an
+    aliased or promisified spawner. This gap dated from #913 and covered
+    the matrix too.
   - **The scans read all of `tools/` (2026-10-04). This is CONTROLLER
     ruling BT-R2, not an owner ruling.** When #913 moved the matrix,
     `tools/matrix` silently dropped out of `test-email-domain`,

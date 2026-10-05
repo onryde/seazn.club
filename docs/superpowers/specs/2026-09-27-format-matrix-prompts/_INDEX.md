@@ -13,7 +13,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28 (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251). MERGED 2026-09-28 — PR #896, merge `a5f813404`.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes; fix round 1 (`62d91dd48`, `93eb5af0d`), re-review 1 Approved. Final whole-branch review (2026-09-30): Needs fixes, 0 Critical / 2 Important / 19 Minor; the final fix landed (`0532d0cb6`, `e431cbbce`, `80f370e9f`, `d5ce3e871`, `6e857491d`, `975f53b23`). Final re-review: Needs fixes (I-2's own probe still passed); fixed in `f33c1b312` and the docs commit that writes this line. MERGED 2026-09-30 — PR #905, merge `ebf7ec040`.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
-| W1d | CI (weekly + dispatch, visibility guard) + first full truth run | **In progress**: **Plan APPROVED (ruling 69), PR-A executing**; review 8 Approved (0C/0I/3m carried) on `2d3a7801f` (review-1 to review-7 fixes on `ed9801b60`) (2026-10-04): `docs/superpowers/plans/2026-10-04-format-matrix-w1d.md` on `docs/format-matrix-w1d-plan` off `main` `dfe8132da`. Owner rulings 60–68: GitHub weekly + dispatch, harness-green per §6.5, one plan and two PRs (PR-A Tasks 1–16 infra, PR-B Tasks 17–22 evidence), every ❌ keyed by gap ID, full scope L1 231 + L2 1,731 + L3 937. **D7 resolved by ruling 65** (no ░ applies to driven cases only; the merge judges with `--planned-not-run allow`). **Ruling 66:** the matrix proves formats and rules, not scheduling, so the placement container and greedy guard are removed. **Ruling 67:** Stryker covers the whole engine except placement scheduling, in ten groups sized from measured mutant counts and wall time. **Ruling 68:** the repo goes private after W1d, so every matrix and Stryker job takes a switchable runner (`vars.MATRIX_RUNNER`); the Fly runner is a follow-up outside W1d. Sonnet for implementers and task reviewers, Opus for the two whole-branch reviews (owner). No owner question blocks a task. |
+| W1d | CI (weekly + dispatch, visibility guard) + first full truth run | **In progress**: **PR-A open: infra (Tasks 1–16); PR-B after the owner merges.** PR-A is Tasks 1–16 on `feat/format-matrix-w1d-infra` (worktree `format-matrix-w1d-exec`), each task closed on a clean task review (the whole-branch review follows), and the 28 "W1d first tasks" are closed below (each names its task and commit; item 13 is accepted with no code). Task 16's live smoke on a fresh env: the HTTP slice is unchanged (24/24, no difference against `w1drv-http-slice`), and the sharded form (`--shard 1/2`, `2/2`, `matrix:merge`) is state-for-state identical to the unsharded run. Merge gate: the owner merges PR-A (ruling 62); PR-B (Tasks 17–22, the evidence) is cut from `main` after. **Plan APPROVED (ruling 69)**; review 8 Approved (0C/0I/3m carried) on `2d3a7801f` (review-1 to review-7 fixes on `ed9801b60`) (2026-10-04): `docs/superpowers/plans/2026-10-04-format-matrix-w1d.md` on `docs/format-matrix-w1d-plan` off `main` `dfe8132da`. Owner rulings 60–68: GitHub weekly + dispatch, harness-green per §6.5, one plan and two PRs (PR-A Tasks 1–16 infra, PR-B Tasks 17–22 evidence), every ❌ keyed by gap ID, full scope L1 231 + L2 1,731 + L3 937. **D7 resolved by ruling 65** (no ░ applies to driven cases only; the merge judges with `--planned-not-run allow`). **Ruling 66:** the matrix proves formats and rules, not scheduling, so the placement container and greedy guard are removed. **Ruling 67:** Stryker covers the whole engine except placement scheduling, in ten groups sized from measured mutant counts and wall time (Task 15 cut them into 27 legs from the measured 26 runner-seconds per mutant, 2.6× the plan's formula). **Ruling 68:** the repo goes private after W1d, so every matrix and Stryker job takes a switchable runner (`vars.MATRIX_RUNNER`); the Fly runner is a follow-up outside W1d. Sonnet for implementers and task reviewers, Opus for the two whole-branch reviews (owner). No owner question blocks a task. |
 | W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | **Tasks 1–16 done 2026-10-01. Tasks 1–15 each closed on a clean review (Task 15 on re-review 1, Approved, after two fix rounds). Task 16's review: Needs fixes (0 Critical, 1 Important, 7 Minor); fix round 1 landed (T16-R3, T16-R4). Its re-review passed, and the final whole-branch review (the controller's, T15-R1) and its scoped re-review both Approved. MERGED as PR #912, merge commit `c347fedf9` (2026-10-01), and the worktree and branches were removed afterwards. The post-wave cleanup (rulings 55, 56, 58) is PR #913 (`67d6b1a8a`, 2026-10-04): the harness now lives at `tools/matrix`.** Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` (rulings 44–54; the owner's 2026-10-01 decisions are rulings 55–59); prompt `W1-driving.md`. Worktree `format-matrix-w1-driving-exec` and branch `feat/format-matrix-w1-driving` were removed after the merge. **Done-when (ruling 48), on `truth-runs/w1drv-l3/results.json`** (`--set w1-driving --workers 4`, harness `15ed62365`, clean): 937 cases = 743 ✅ + 194 ❌; ⏳ naming W1-driving **0** (⏳ of any wave 0); harness ❌ **0** after triage — the 60 harness reds were three defects, each fixed test first (`9a64ec4cd`, `b1325f721`, `e51bf3699`), and 30 of those cases are ✅ on their re-run. **164 product reds**, each judged on its latest committed run (`truth-runs/w1drv-l3-rerun/`, `truth-runs/w1drv-l3-fr1/`, `truth-runs/w1drv-l3-fr2/`), 0 unfit, 0 unclassified, per wave **W2 62, W4 32, W7 56, W5 11, W3 3** (`truth-runs/w1drv-l3/TRIAGE.md`; before ruling T15-R4 moved the bracket-draw stall to W2: W4 94, W7 56, W5 11, W3 3). HTTP slice on 4 workers: 24/24 ✅, the 378 checks it shares with W1c identical in verdict and count (`truth-runs/w1drv-http-slice/results.json`). **L1 proof at 1280, ×3** (`truth-runs/w1drv-l1/w1drv-l1-t15-r1/results.json`, `-r2`, `-r3`, harness `63bda33e4`): 7 cases each, 6 ✅ and `mexicano\|generic` ❌ (the predicted W7 round-2 self-pair 500); r2 and r3 identical to r1 on every check, and r1 identical to T13's `w1drv-l1-r1` on all 206 checks; per-screen verdicts in `truth-runs/w1drv-l1/README.md`. Model (`truth-runs/w1drv-model/`): swiss\|badminton and swiss\|generic ok at 40 runs, league\|football ok at 20; of the six single-stage rows without model evidence, four ok, and double elim and stepladder each found a NEW product red, committed as MB-007 and MB-008; Task 16's widened-fence run found MB-009 (`w1drv-t16-model-g1`), then both cells ran ok (`w1drv-t16-model-g1c`), and `--regressions` replayed all 8 committed cases as known (`w1drv-t16-model-reg2`). **MB-010 (fix round 1, T16-R3):** with the double-elim generate fence narrowed to the added-entrant branch, the live double-elim cell found Start → Withdraw → Generate 500ing in MB-007's words (`w1drv-t16fr1-model-de`). It is committed as MB-010, and the fence's withdrawn branch now covers double elim on its evidence. Double elim then ran ok 20/20 (`w1drv-t16fr1-model-de2`), and `--regressions` replays all 9 committed cases as known, each under its own id (`w1drv-t16fr1-model-reg`). See "Findings routed (W1-driving)" and "W1d first tasks". The branch was rebased onto `main` twice (2026-10-01): every recorded harness SHA is pre-rebase and stays as recorded; `truth-runs/W1-DRIVING-REBASES.md` maps each to its rebased commit and shows the harness unchanged across both. |
 | W2 | Sport scoring fidelity | not started |
 | W3 | Swiss | not started |
@@ -140,7 +140,7 @@ files equal to the code (`committed-catalogue.test.ts`).
 
 | Layer | Formula (verbatim from `counts.json`) | Value |
 | --- | --- | --- |
-| L1 | cells × 2 widths (1280, 320) | **462** |
+| L1 | cells × 1 width (1280; ruling 39) | **231** (462 at `7c42d0ec2`, before ruling 64 corrected the formula; `counts.json` now says 231) |
 | L2 | runs in l2-pairs.json; pairTargets = owed (row, scenario) + (sport, scenario) pairs (the scenario applies there, or its only drop is the L3 harness gap — that run is marked l3Gap), each covered by one run, so runs ≥ owed (row, scenario) pairs | **1,732** runs; 2,594 pair targets; 1 run marked `l3Gap` |
 | L3 | Σ cells (1 LIFECYCLE + applicable L3 atomic, variant-bound included) + scorable variant cases (Q-B: LIFECYCLE each; unscorable ones are listed under variants, not run) + denied cases (one per gated row, generic) + regression cases | lifecycle 231 + applicable atomic 15,240 (of which 118 variant-bound) + scorable variant cases 1,001 + denied 7 + regressions 5 = **16,484** |
 
@@ -862,10 +862,19 @@ Elsewhere the text is the controller's record.
       the eslint rule from `scripts/lib/tools-import-guard.mjs` is the coarse layer, and
       `scripts/__tests__/tools-import-guard.test.ts` resolves every import exactly. Nor may they reach it at
       runtime: the same test refuses a root `package.json` dependency on a harness, and any string in those trees
-      that names a root script whose command points into `tools/`. **Limit:** the guard reads imports, manifests,
-      tsconfigs and root-script names. It does NOT see a `tools/` path passed as a string to `child_process`.
-      Today only a grep holds that line: `git grep -E 'tools/(bench|matrix)' -- apps packages scripts` finds
-      comments, the reference trap fixture and tests. The design fix is W1d first task 28 (owner, 2026-10-04). Code the gates share with the harness lives in
+      that names a root script whose command points into `tools/`. **Limit, closed in part by W1d item 28
+      (Task 11, `b6de52dba` and `b8700d19e`, 2026-10-05):** the guard also reads the ARGUMENTS of `child_process`
+      calls. A string literal, or adjacent literal pieces such as `"tools"`, `"matrix"`, passed to `exec`,
+      `execFile`, `spawn`, `fork` or a `Sync` form under `apps/`, `packages/` or `scripts/` that resolves into
+      `tools/matrix` or `tools/bench` is a hit; its own two exempt files are READ too, and their hits are pinned to
+      an explicit list (`[]` today). Real tree on 2026-10-05: 387 calls in 170 files, 0 hits (341 of the 387 are
+      `RegExp#exec`, so the floors count the unambiguous names). **What it still does NOT see** (each is a
+      pinned known gap, `SPAWN_KNOWN_GAPS` in the guard test, so closing one means moving its row): a spawn that
+      names the harness by PACKAGE (`pnpm --filter @seazn/matrix`), a path held in a variable or built from an
+      interpolated harness name, `execa` and other libraries, an aliased or promisified spawner, and
+      `tools/Matrix` (only a case-insensitive filesystem resolves it). A REAL file that loads `child_process` and
+      spawns through an alias is still seen: the importers oracle reds on any file that loads it but holds no
+      inspected spawn call. Code the gates share with the harness lives in
       `scripts/lib`: `main-module.ts`, and `crash-exit.ts`, which `reference:boundary` preloads and
       `packages/reference`'s test spawns (the cleanup review's I-1, fixed by lifting it). `.dockerignore` lists
       `tools/` and `docs/superpowers/specs/**/truth-runs/` (`scripts/__tests__/dockerignore.test.ts`).
@@ -1064,6 +1073,38 @@ Elsewhere the text is the controller's record.
     So a Redis target would break the harness before the worker cap mattered.
   - What W1d should do: if a target ever runs Redis, give each shard its own source IP or synthetic owner, and
     invalidate the org cache after seeding. Do not cap the workers.
+
+- **For the owner (W1d Task 16, PR-A close; recommendations, not rulings):**
+  - **D11 (items 17 and 18): decline browser workers; keep one browser case at a time per shard and buy wall clock
+    with the shard matrix.** Free parallelism, no unmeasured contention on pad holds. `MAX_WORKERS` stays 8. Built as
+    recommended: `--driver browser --workers N` is a usage error that says so (`run.ts:633`). If the owner wants
+    browser workers, they become a W1d follow-up task, and nothing else in the plan depends on the answer.
+  - **D2's enable step is the owner's act, after PR-B proves three green dispatches:** `gh variable set
+    MATRIX_WEEKLY_ENABLED --body true`. Until then both schedules (matrix-truth Saturday 02:17 UTC, mutation Sunday
+    03:23 UTC) fire as a visible run of skipped jobs, and the same command with `false` switches them off in seconds,
+    with no PR. The controller records the time and the first scheduled run id here (R22). Do not set
+    `vars.MATRIX_RUNNER` while the repo is public (D24): a self-hosted runner on a public repository runs fork
+    `pull_request` jobs.
+  - **The bench carry (D9).** `tools/bench/**` tests are excluded from `tsconfig.tools-tests.json`, and
+    `tools-tests-typecheck.test.ts` pins the exclusion (57 tracked bench tests, none in the program). A test-inclusive
+    TS7 program over them reported about 90 errors at planning (not re-measured since). No issue is filed. The bench
+    programme owns them: fix and include them, or leave them excluded on purpose.
+  - **Widen R27's declaring paths, or leave it as written (Task 7).** `ci.yml`'s `matrix-sample` runs on 5 path globs
+    (`packages/engine/**`, `apps/web/src/server/**`, `apps/web/src/lib/format-templates.ts`, `tools/matrix/**`,
+    `pnpm-lock.yaml`), but R27 makes only 2 of them DECLARE rows (`packages/engine/**` and
+    `apps/web/src/server/usecases/stages.ts`). A PR touching `apps/web/src/server/**` elsewhere, or
+    `format-templates.ts`, gets the fixed sample with no prompt for rows. Built as R27 is written; widening it is a
+    one-line change to `pr-rows.ts` and its tests, and the cost is more PRs asked to name rows.
+- **Observations for the owner from W1d PR-A that are not W1d defects** (seen, not diagnosed):
+  - `ci.yml`'s other jobs run on `vars.CI_RUNNER` ungated for fork PRs, a pre-existing self-hosted exposure. The jobs
+    W1d adds are fork-gated (T9-FORK).
+  - **Product, from Task 14's browser runs:** the run sheet at 320 cuts names away; "Void last" is still offered after
+    a forfeit (it then targets the start); and `void-320-after.png` shows the pad board stale (Games 1-0) while the
+    header and Activity read 0-0 and the label reads ALL SYNCED. That last one is either a product defect (the pad
+    ignores a console void at 320) or an ambiguous capture, and it is not diagnosed.
+  - **For W2:** the cricket follow-on and `match.close` have no pad control and no More-sheet `data-testid`
+    (`action-form.tsx` renders them as plain buttons), so no pad route can address them. A
+    `data-testid="more-action-<event type>"` on those rows would open them, and the declare route with them.
 
 ## Controller rulings (execution, W1c)
 
@@ -1394,8 +1435,10 @@ a check means or where a finding goes are listed here. SHAs are post-rebase (the
     home_slot_label" (`w1drv-t16fr1-model-de`, harness `22c8aa141`). It is committed with fence
     `ko-generate-after-roster-change`, and that fence's withdrawn branch now covers knockout (MB-004) and double elim
     (MB-010).
-  - MB-007 and MB-010 share cell, check and words, so a replay now offers its own case to the matcher first
-    (`5950801a3`). Otherwise MB-007 would claim MB-010's replay and the replay would read NOT REPRODUCED.
+  - MB-007 and MB-010 share cell, check and words, so a replay first offered its own case to the matcher
+    (`5950801a3`); otherwise MB-007 would claim MB-010's replay and it would read NOT REPRODUCED. **Superseded in
+    W1d Task 13 (`7ecabf2ea`, item 26):** each case now carries a `trigger` (withdrawn, added) and the matcher
+    tells cases apart by it, so a replay no longer ranks its own case first.
   - Then double elim ran ok 20/20 with both branches fenced (`w1drv-t16fr1-model-de2`), and `--regressions` 9/9
     known, each case under its own id (`w1drv-t16fr1-model-reg`, harness `8bad7555e`).
   - There is no MB-006, because `model-cli.test.ts` uses that id for a synthetic case.
@@ -1861,6 +1904,167 @@ false premise 10's correction). After each, what execution saw:
   - Run 514's `l3Gap` is gone since Task 10's regen, so W1d first task 4's premise changed.
   - The brief's seeding-tie routing "W4/W5" predates false premise 9: the swiss-source rows go to W3.
 
+### Found during W1d planning
+
+**Planning** (plan `docs/superpowers/plans/2026-10-04-format-matrix-w1d.md`, "False premises found in planning", with
+file:line evidence there; numbers kept, including review 1's 21–22 and review 3's 23). After each, what execution saw:
+
+1. **Item 4: "every case the layers build carries `run: null`."** Partly false. The four cited lines are the non-L2
+   planners; `planL2` has set `run` on every L2 case since W1c `64ae38f4d` (`layers.ts:149`). The inert half held:
+   `run.ts` never read `c.run`, and the strict schema would refuse `n` and `covers`. Task 2 records both.
+2. **Item 7: "5 pre-existing errors in `scenarios.test.ts` is the whole of it."** The scope moved and widened: a
+   test-inclusive TS7 program reported 124 errors (5 in the matrix's tests, about 90 in `tools/bench/**/__tests__`, 3
+   in `scripts/__tests__`, 18 in apps/web, 4 environment artefacts), and `vitest` was not a root devDependency.
+   Execution measured 8 errors after bench was left out, and **0 in apps/web** (see "Found while executing", 5).
+3. **`counts.json` L1 = 462, "cells × 2 widths".** It contradicts ruling 39 and `widths.ts` (L1 is 1280 only);
+   `committed-catalogue.test.ts:271` had frozen the stale value. Task 3 corrected both to 231 (ruling 64), and the
+   docs were corrected in Task 16.
+4. **"The wave that adds the weekly schedule must invert `ci-wiring.test.ts`."** The test reds on ANY workflow that
+   names `matrix:l3` or `tools/matrix/run`, so a dispatch-only workflow reds it too (`ci-wiring.test.ts:244-252`).
+   Task 9 reworked it.
+5. **"Following `bench.yml`'s precedent (R84): three consecutive green manual dispatches."** `bench.yml` has never been
+   dispatched: 0 `workflow_dispatch` runs, all 15 runs `pull_request` self-path runs (9 green, 6 red; `gh run list`,
+   2026-10-04). The R84 bar was never met, and there is no worked example of the three-dispatch gate. PR-B's Task 17
+   is the first.
+6. **W1d prompt: "the design does not say what 'green' means."** It does: design §6.5 (D:326-331), including "case
+   states are identical across the three runs". Ruling 61 adopts it.
+7. **W1d prompt and item 27: "the trigger must NOT be GitHub `schedule:`."** Superseded by ruling 60 (`schedule:` +
+   `workflow_dispatch` + a staleness signal, D1).
+8. **W1d prompt: every ❌ "carries its gap ID", as if the reds already did.** W1-driving's 164 product reds are keyed
+   by triage rule P1–P7 and coverage-table signatures, not audit IDs (`truth-runs/w1drv-l3/TRIAGE.md`). Ruling 63;
+   PR-B's Task 19.
+9. **`plan-facts-repo.md` §5's paths** (`scripts/bench/…`, `scripts/matrix`) predate the `tools/` move (#913, #914).
+   The facts hold at the new paths.
+10. **"Evidence moves out of `docs/` with the harness."** It stays: ruling 56 was amended on 2026-10-04 (12 MB, read
+    by 12 CI test files). New evidence goes under `truth-runs/`, and new directories must not use the `w1drv-`
+    prefix (`rebase-map.test.ts:81` requires every `w1drv-*` harness commit in the rebase map).
+11. **"Exit 1 means the same thing in every CLI."** It does not: `findings-table.ts` and `draw-counts.ts` used 1 for
+    "refused", `run.ts` for "zero cases", `model.ts` for "a NEW failure", `gen-catalogue.ts` for "drift"; unreadable
+    input was 3 in `parity.ts` and 2 in `render.ts`. Task 6 declared one table (`lib/exit-codes.ts`, D8).
+12. **RULING CONFLICT: ruling 64 × ruling 61 ("L2 = all 1,731 pair-runs" and "no ░").** Only 62 of the 1,731 runs have
+    a harness script; 164 plan 🚫 and **1,505 plan ░ "no scenario script yet"** by construction (`layers.ts:139-160`).
+    Resolved by **ruling 65**: "no ░" applies to driven cases only. Seen live: `L2 grid: 62 driven, 164 no_path, 1505
+    not_run of 1731`.
+13. **"The full L1 grid is 231 driven runs."** 53 of the 231 cells are API-only with no builder control, so they plan
+    🚫 naming W4 or W5 (`api-only-ui.ts`). L1 = **178 driven + 53 🚫**, still 231 cases.
+14. **Item 15: "forfeit and withdraw on league and knockout in the browser are unbuilt."** Half false. The full-grid L2
+    already drives M1 and R4a on `league|football` (M1@430, R4a@390) and `knockout|icehockey` (M1@834, R4a@768): runs
+    408, 64, 417 and 73. Task 3 pinned the four; the 1280 half was Task 14's (`carry8-1280`, 4 cases works).
+15. **"Void is a product path the harness never reached."** No `OrganiserDriver` method voided anything; the product's
+    void (`core.void {event_id}`, the console's per-row Void and "Void last", `fixture-console.tsx:1253,1278-1286`) is
+    reachable in the browser. Task 14 added `voidLast`.
+16. **The cited lines for item 15 drifted** (`run.ts:468-469` → `:561`, `lib/pad-proof-set.ts:16` → `:15`). The
+    meaning held.
+17. **"A scheduled run's payload carries the repository."** Unverified; design §6.5 assumed it. The guard does not
+    depend on it (`gh api repos/$GITHUB_REPOSITORY --jq .visibility`). PR-B's Task 17 records what the first scheduled
+    run's `github.event` held.
+18. **"The Cloudflare cron worker can fire the weekly run."** It can only `POST ${BASE_URL}${path}` with
+    `x-cron-secret` (`apps/cron-worker/src/call.ts:92-94`) and has no GitHub API target. Moot after ruling 60;
+    recorded so the option is not re-offered.
+19. **Design §7.5's "scheduling, competition and tiebreaker modules" are three directories.** They are two:
+    `tiebreakers.ts` lives in `packages/engine/src/competition/`. The Stryker scope (rulings 66 and 67) is the whole
+    engine except the placement files under `src/scheduling/`.
+20. **W2 prompt trap 2** ("declared 3/0 loses to the FIH 2/1 the rulebook adopts", SC-P4) contradicts the SC-P4 false
+    premise (`_INDEX.md`, "Found during W1b") and design §8 ("FIH 2/1 is Pro League only"). Not W1d's to fix; PR-B's
+    Task 22 records it beside the W2 backlog.
+21. **(Review fix round 1.) "The 11 `RefusedCall` reds in `w1drv-l3` are a harness-seeding shape."** They are not: all
+    11 are `POST /api/v1/entrants/<id>/withdraw → 422`, the R4 scenario's withdraw action (P5 → W4). They stay data.
+    The setup-call guard the review proposed was adopted anyway (`SetupRefused`, tagged by phase; D6), because a
+    refused SETUP call would be a harness fault, and none exists today to witness it.
+22. **(Review fix round 1.) "`bench.yml` builds the placement image with a `type=gha` cache."** No workflow at HEAD sets
+    `cache-from:` or `cache-to:`; the comments only say so. What is load-bearing is `docker/setup-buildx-action@v3`.
+    Moot under ruling 66 (no placement image in W1d).
+23. **(Review 3.) "The greedy-fallback guard proves the solver is reachable and used."** It proved nothing: it counted
+    log lines, never solver attempts, so with zero solver calls it printed `placement fallbacks: 0` and passed. The
+    matrix drives no solver route (D23). A disclosure ("the report says plainly whether today's run exercised it")
+    stood in for a check, which TEST-STRATEGY rule 1 does not accept.
+
+**Found while executing PR-A** (Tasks 1–16; from the SDD ledger and the task reports, each a premise the plan or a
+brief stated and the tree did not hold):
+
+1. **The plan quoted a command its own guard refuses (Task 1).** The plan doc, line ~2706, quoted a matrix CLI
+   command with no crash-exit preload; `cli-invocation.test.ts` refuses that spelling in any tracked doc, so
+   PR-A's CI would have reddened on the plan itself. The plan's lines were reworded to the preload form (ruling
+   T1-a).
+2. **`expectedPlanFor` does not exist (Task 3).** The recorded-plan → planner map is `livePlan` (since Task 7
+   `lib/expected-plan.ts`). Also: `pnpm matrix:catalogue` is check-only, and a test that reads `counts.json` cannot
+   kill a `counts.ts` mutant.
+3. **Item 5 has no user-reachable symptom (Task 5).** `NoLayerForWidth` is unreachable through the CLI today
+   (`BROWSER_WIDTHS` = 1280 + `L2_WIDTHS`, and `layerOfWidth` covers exactly those). It is a defensive
+   classification, pinned by a counted guard that every accepted width has a layer.
+4. **"The judge's zero-compared guard is unreachable by construction" (Task 6, a sweep-round claim).** False:
+   `matchPlanIds` drops the variant (and, on a plain plan, the width), so three same-plan runs at `@375/@1280/@375`
+   share no case id: compared 0, and an uncaught ZodError at exit 3 under `--json-out`. Reinstated as `NoneCompared`
+   (exit 2) with `CaseIdsDiffer` (ruling T6-I1). Same task: the plan named a consumer (`summary --judge`) for a
+   `JudgeOut` that no task produced (PF-1).
+5. **The "known data point" of Task 7's apps/web `queue.ts` errors was a nodenext artefact (Tasks 7 and 10).** The 7
+   `TS2835`/`TS7006` errors exist only in a scratch nodenext config. Under `module: preserve` +
+   `moduleResolution: bundler` the 34 apps/web files the tests reach have **0 errors** (Task 10 measured it, as D9
+   predicted). Also drifted: the brief's `scenarios.test.ts` line numbers (734/745/1567/1776/1785 → 740/751/1573/1782/1791),
+   and the plan's "67 matrix tests / 15 scripts tests" (86 / 15 at the time).
+6. **A page of 100 workflow runs is a small answer (Task 8).** It is 1,235,638 bytes against `spawnSync`'s 1 MiB
+   default `maxBuffer`: after about 85 runs the staleness signal and the weekly diff would have gone permanently dark
+   (ENOBUFS, `status: null`). Fixed by a server-side query per event, a `--jq` projection and a 64 MiB backstop
+   (ruling T8-I1), with a real-runner test over a fake `gh` on PATH.
+7. **Ruling 61's "identical across three runs" spans THREE WORKFLOW RUNS, not one (Task 9, ruling T9-HG).** Ruling 62
+   makes PR-B's three dispatches those runs, so ONE workflow run can never print "Harness-green: yes" or "no". The
+   summary prints `Run complete: yes|no` per run and `Harness-green: needs 3 runs` (`matrix:judge across`), and the
+   workflow's colour follows the per-run verdict.
+8. **Assumptions about GitHub and `gh` that the tree or the tool did not hold (Task 9 and its reviews).** A two-dot
+   `git diff $BASE_SHA $HEAD_SHA` against the base TIP lists main's commits as the PR's (a spurious R27 red on any PR
+   behind main; three-dot fixed it, proved by a real-step scratch-repo test). `upload-artifact@v4` names are immutable
+   per run, so a re-run 409s without `overwrite: true`. `vars.*` reach fork PRs (secrets do not), so a self-hosted
+   `vars.MATRIX_RUNNER` needs an explicit fork gate (T9-FORK). `gh api … --jq` on a 404/5xx exits 1 AND prints the raw
+   JSON error body to stdout, so a retry that tested "non-empty output" accepted the error as an answer.
+9. **"The repo is public until after W1d" was stale at execution time (environment, 2026-10-05).** `gh api
+   repos/onryde/seazn.club` said private (unauthenticated 404), so with `MATRIX_RUNNER` unset the visibility guard
+   refuses and PR-A's own smoke would have gone red by design. The owner chose to flip it public again until W1d is
+   done, then private; `MATRIX_RUNNER` stays unset meanwhile.
+10. **The premise that Tasks 7–9 added code spawning `tools/` paths was false (Task 11).** None existed at HEAD (the
+    matrix CLI tables live in `tools/matrix/__tests__`, outside the guarded trees). **Both brief-mandated spawn
+    exemptions were dead at HEAD**: `boundary-gate.test.ts`'s spawn calls take variables, and the guard test's own
+    `tools/` strings are fixture data. They are kept and their hits pinned to `[]`. The brief's "31 real
+    child_process spawns" was 22 (`execFileSync` 17, `spawnSync` 3, `spawn` 1, `execSync` 1): of the 387 calls the
+    scan inspects, 341 are `exec` (almost all `RegExp#exec`), 15 are the protobuf writer's `.fork()`, and 9 are the
+    2048 game's own `spawn()`.
+11. **A pad-proof or two-innings route did not exist where the brief put it (Task 12).** `--set pad-proof` plans each
+    sport's builder default (cricket: `t20`), and all 24 committed cricket `test` cases carry rule overrides, so they
+    are `no_path`: no committed plan reached the two-innings route (an inert seam). Pad proof on `test` is **red by
+    construction**: follow-on and `match.close` are barred in two of three fixtures. Built `--set pad-innings`
+    (ruling T12-I1) and proved it live on a plain `test` case. Also: follow-on and `match.close` have no pad control
+    at all (More-sheet rows with no testid), so they are 🚫 W2, not routes; `league|chess` "not in PAD_SPORTS" cannot
+    be built (chess is no catalogue sport, and `PAD_SPORTS === SPORT_KEYS`); item 15b's plan reader is
+    `lib/expected-plan.ts`, not `committed-plans.ts`.
+12. **The harness-minors premises (Task 13).** Item 10's premise was false at HEAD: `quiet` already lists the check
+    rows, so both conjuncts are pinned and no production code changed. Item 17's literal `(W1d D11)` collided with the
+    stray-wave guard (taught one parenthesised-citation shape, pinned by count, place and Status row). Item 20's
+    cricket `test` cases sit on template cells and carry `overrides`, so they needed an exemption. Item 22 needed
+    more than a label: the mixed ledger spends a type's browser turn on its first completion, so naming alone would
+    have left the LAST stage's completion over HTTP, an inert seam. D16's trace (bullet 3) was not "one small
+    commit": five production files across three layers, provable only against a fake. Dropped, with its reason.
+13. **"Task 15 also appends to `plans.lock.json`" was false (Task 14).** Task 15 never touched it; the "lock" Task 15
+    edited is `pnpm-lock.yaml` (only Task 14's `86af851a1` changed `plans.lock.json`, confirmed by `git log`). Also,
+    the brief's "+5 lock entries" assumed one run per width; one results.json holds both widths, so there are 3
+    (PF-3).
+14. **D14's cost formula was 2.6× optimistic, from the first measurement (Task 15).** The probe measured 26.04
+    runner-seconds per mutant (134 mutants, 740 s at concurrency 5, 42 s dry run), which is 8.67 s of wall at CI's
+    concurrency of 3, against the formula's 3.33 s. At the measured rate 8 of the 12 groups were over the
+    200-minute split line and `cricket.ts` alone (4,248 mutants) was over it three times, so the groups became **27
+    legs plus the probe**, cut at top-level statement boundaries (a line range loses a mutant when one blank line moves; ruling T15-CUT). One
+    sample on a loaded machine: Task 20 re-measures on CI. And adding Stryker (which brings `@babel/core@8`) made pnpm
+    re-resolve the peers of `next` and `@sentry/nextjs` for apps/web: "a devDependency of one workspace moves no other
+    importer" was false until two overrides pinned it (ruling T15-LOCK; a lockfile-reading test guards it).
+15. **"Each task's scoped run covers the guards its change can trip" was false for four tests (Task 16's gate).** A
+    union run over every test file the branch touched, with the repo-wide scan tests beside it, found four reds that
+    no per-task run had reached, all in files a task did not name: `parity.test.ts`'s emitter scan (Task 14's browser
+    check ids `fold-branch` and `runsheet-today-default` were not in `BROWSER_ONLY_PREFIXES`, so a browser run's match-day
+    checks would have read as HTTP differences), `test-email-domain.test.ts` (Task 9's `summary.test.ts` fixture used an
+    `@example.com` address Resend refuses), `z3-retirement-drift.test.ts` (a case id `z3` in `summary.test.ts` and the
+    word in two comments of `tools-import-guard.test.ts` joined the ledger's scan), and `cli-invocation.test.ts` (this
+    section's own first entry quoted a bare CLI command). All four fixed in Task 16 (the first with a production
+    one-liner in `lib/parity.ts`); the repo-wide scans (`scripts/__tests__/*-drift`, `test-email-domain`, `dockerignore`,
+    `cli-invocation`, `parity`'s scan) are the tests to run when a task adds a harness file or a check id.
+
 ## Findings routed (W1b)
 
 Every live ❌ and every confirmed hypothesis from W1b, with its case or leg,
@@ -2120,7 +2324,7 @@ product changes (D4).
   fixed (`80f370e9f`).
 - `crash-exit.test.ts` lists neither `matrix:parity` nor `matrix:browser`. Fixed (`80f370e9f`, final review m-11).
 - T12: the vacuous L2 side of `run-cli.test.ts:1601` is fixed (`80f370e9f`, m-12). The `NoLayerForWidth` exit
-  class → **W1d** (m-3).
+  class (it exited 3, where a refusal exits 2) → **W1d** (m-3). Fixed in W1d Task 5 (`fd096b86d`): it exits 2.
 - Parity on the API-only set exits 1 by construction (`layers.ts:218-229`) → **W1d**, as a per-case planned marker
   (final review m-6).
 - `l3Gap` is never recorded (carry 4) → **W1d**: record it, do not drop it (final review m-7).
@@ -2590,14 +2794,17 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
      tampered evidence stays green: the re-review moved w1c-l2's `M1@390` from driven to planned in both the
      results and the lock, and all 29 tests passed. Such a tamper shows only as a lock diff. Treat a diff that
      edits an existing entry as a stop; a new run only ever adds one.
+   — done in W1d T1 (`d77dd340f`, `5bbf22e70`): `matrix:lock-check --against HEAD^1` runs in `ci.yml`'s gates job; a removed or edited entry exits 1 and names the run.
 2. **Record the scope in `plan`.** `--layer L1` meant "the slice at 1280" in W1c and will mean the grid after W1d.
    Record the scope explicitly, for example `--layer L1 (slice)` (final review §4).
+   — done in W1d T3 (`c8c16717b`; the `scope` field is T2's `4495e9f2d`): `--scope grid`, and `results.json` records `scope`.
 3. **A per-case planned marker** (m-6). `recordPlanned` writes an explicit marker, as an optional v3 field. Parity's
    `notDriven` keys on it, not on the LIFECYCLE mapping (`lib/parity.ts:184-188`), so parity on the API-only set
    stops reading its planned 🚫 rows as "missing". The same marker lets committed-matrix drop I-2's
    `durationMs === 0` heuristic. What it closes: a hand-flip of a driven case to ⏳/🚫 that keeps its duration and
    calls, with its fixtures and events zeroed, cannot be told from a real runtime ⏳/🚫 today. A flip that keeps
    fixtures or events already reds (`f33c1b312`), because the runner never writes that shape.
+   — done in W1d T2 (`4495e9f2d`): `planned: true`. Parity and committed-matrix read one shared predicate (`isPlannedShape`, T4 `0bd5eb408`).
 4. **`LayerCase.run` is an inert seam: record it** (m-7). Every case the layers build carries `run: null`
    (`layers.ts:105`, `:220`, `:255`, `:278`), and `run.ts` writes no `n` or `covers` into a result, so an L2 result
    cannot be mapped back to its committed `l2-pairs.json` run. Record `n` and `covers`.
@@ -2605,43 +2812,55 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
      every `l3Gap` is null (`counts.json` `l2.l3GapRuns` 0). Run 514 is still `groups_ko|cricket|t20|M5@375`, but
      it carries no `l3Gap` now: ruling 44's cricket tie stream removed the M5 harness gap that marked it. If a later
      regen marks a run `l3Gap` again, its result must say that this run is the pair's only coverage.
-5. **`NoLayerForWidth` exits 3, not 2** (m-3; T12). It is thrown inside `execute` and is not in `refused`. It cannot
-   be reached today (`BROWSER_WIDTHS = [1280, ...L2_WIDTHS]`). Add it to `refused`, or resolve `layerOfWidth` in
-   `runSlice`, the first time a width is added.
+   — done in W1d T2 (`4495e9f2d`): `l2 {n, covers, l3Gap}` on every L2 result, written through the real `runSlice`.
+5. **`NoLayerForWidth` must exit 2 (a refusal), not 3** (m-3; T12). It was thrown inside `execute` and was not in
+   `refused`, so it exited 3. It cannot be reached today (`BROWSER_WIDTHS = [1280, ...L2_WIDTHS]`). It is now in
+   `refused` and exits 2; a counted guard test pins that every accepted width has a layer, so the first width
+   added without one reds by name.
+   — done in W1d T5 (`fd096b86d`): a refusal, exit 2. It is unreachable through today's CLI, so this is a defensive classification, not a user-visible symptom.
 6. **One exit convention for unreadable input** (m-2). parity maps a missing file, bad JSON or a schema refusal to
    3; render maps the same class to 2. By the controller's ruling this is not changed in W1c: the W1d CI wrapper
    settles one convention.
+   — done in W1d T6 (`04d552158`, `68952362e`, `3e837e134`): one declared table (`lib/exit-codes.ts`) pinned against every CLI header. parity, findings-table and draw-counts moved to 2 for unreadable input.
 7. **Typecheck `scripts/**/__tests__` in CI, with `vitest` resolvable** (m-4; T6/T8). `tsconfig.scripts.json`
    excludes `*.test.ts`. The three W1c test-file errors are fixed (`80f370e9f`). What remains is 5 errors in
    `scenarios.test.ts` that predate W1c. Test files that import apps/web also drag apps/web's `queue.ts` nodenext
    errors into a test-inclusive program (the "noisy scoped tsc").
+   — done in W1d T10 (`02f67dbbc`): `tsconfig.tools-tests.json` (bundler resolution), `vitest` as a root devDependency, a `typecheck:tools-tests` script, and the 3 + 5 test-file errors fixed. The 18 apps/web errors were nodenext-only artefacts (0 under bundler). Bench's tests stay out: see "Recommendations", the bench carry.
 8. **The pad replay's unwitnessed guards** (T7 minors 5, 6, 7 and 9; m-14):
    - `pad-replay.test.ts` asserts only budget constants for the replay's wait;
    - the fake ledger holds no rows at or below the server tip;
    - no test reaches the unseated-fixture guard in `browser-driver.ts`;
    - `padCheck` caps evidence at 12 lines with no "+N more". Hockey pad proof sits at exactly 12 fallback notes,
      and `_INDEX`'s per-adapter split was read from those lines.
+   — done in W1d T12 (`88c5755a4`): witnesses for the ledger-tip guard and the unseated-fixture guard (both behaviours existed, so they are proved by mutation, not by a red), the replay's wait now exercised through a clock-owned fake page (item 15a's tap timings), and `padCheck` keeps 12 lines and appends `+N more` (the one code change).
 9. **Pad adapter minors** (T9–11; m-15):
    - M-4: cricket's module-level `tapped` state. Document `MatrixPadAdapter.stepsFor` as one-shot per event.
    - M-8: pin the carrom coin bound (`max: 9`).
    - Mn-1: the `period.ts` `Number.isInteger` mutant.
    - Mn-2: `replay.ts:103`.
+   — done in W1d T12 (`88c5755a4`): cricket's `tapped` state is per adapter, the carrom coin bound is pinned, `period.ts` and the judge's no-note refusal have their witnesses.
 10. **Parity's `quiet` rule** (m-16; T13). It misses a browser error red that kept its checks (noise rows only; the
     verdict is unaffected), and its `h.state !== b.state` conjunct is unkilled.
+   — done in W1d T13 (`2302843c0`). The premise was false at HEAD (`quiet` already lists the check rows), so both conjuncts are now pinned, with no production change.
 11. **The playwright scan spellings** (m-17; T4 M-2/M-3). The scans match `spec === "playwright"` only, and the
     `FLAT` scan misses `setDefaultTimeout(<literal>)` and sleeps. No violation exists at HEAD.
+   — done in W1d T13 (`2302843c0`): the playwright scans see every spelling, and the flat-wait scan sees `setDefaultTimeout(<literal>)` and sleeps.
 12. **A run id reused with another `--report-dir` on the same DB** (m-18; C-1). Every case reds on an unnamed
     duplicate-slug error, because `RunIdReused` checks only the report directory.
+   — done in W1d T5 (`fd096b86d`): a run id the DB already holds is refused up front by name (`RunIdUsedInDb`, exit 2).
 13. **Page objects' first-control choice** (T8 m-2). Accepted; revisit only if W1d's full-grid L1 shows a hydration
     red.
+   — accepted (item 13). No code. Revisit only if the full L1 shows a hydration red or a first-control red (PR-B triage rule T-H).
 14. **Per-case `layer`** is written but read by no production code. Pad proof at 320 records `L2` (the width band),
     so do not shard or count "L2" by this field without knowing it includes pad-proof runs (final review §4).
+   — done in W1d T2 (`4495e9f2d`, the field's contract) and T4 (`0bd5eb408`, the merge reads `case.layer` and refuses a shard of another layer).
 15. **Also routed to W1d above:**
-    - F-PP-1 and pad proof's missing single-sport scope;
-    - the match-day run sheet, never driven;
-    - the sweep's fold branch, not recorded;
-    - void, never driven in any browser run;
-    - forfeit and withdraw on league and knockout cells in the browser (carry 8).
+    - F-PP-1 and pad proof's missing single-sport scope: **done in W1d T12 (`88c5755a4`)**. Tap timings ride every wait timeout (15a), and `--set pad-proof --only league|<sport>` is the single-sport scope (15b). The local trace was dropped, with its reason (D16, T13 `7ecabf2ea`: it needed five production files across three layers and could be proved only against a fake);
+    - the match-day run sheet, never driven: **done in W1d T14 (`c2f7cf699`, evidence `86af851a1`)**, the `match-day` set at 1280 and 320 (15c);
+    - the sweep's fold branch, not recorded: **done in W1d T14 (`c2f7cf699`, `86af851a1`)**, the `fold-branch` check at 1280 and 320 (15d);
+    - void, never driven in any browser run: **done in W1d T14 (`c2f7cf699`, `86af851a1`)**, `voidLast` and the `void-proof` set (15e). HTTP `voidLast` and the browser's later-void branch have no production caller yet (PR-B carry);
+    - forfeit and withdraw on league and knockout cells in the browser (carry 8): **done in W1d T14 (`c2f7cf699`, `86af851a1`)** at 1280, the `carry8-1280` set (15f). The phone half was already in the full-grid L2 (runs 408, 64, 417 and 73).
 
 **Added by W1-driving (Task 16, 2026-10-01).** Each item below is routed to W1d by name:
 
@@ -2649,38 +2868,52 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
     `cricket.match.close` and a declared innings. `pads/cricket.ts:66` refuses `inningsPerSide` 2 by name, and
     `pad-adapters.test.ts` sweeps single-innings requests only (Task 10). Until the routes exist, the 24 cricket
     `test` cases are proven over HTTP only.
-17. **Browser workers inside a shard** (D10, ruling 46). `--driver browser --workers 2` is a usage error that names
-    W1d (`run.ts:454`, `BROWSER_WORKERS`).
-18. **`MAX_WORKERS` may rise inside a shard** (Task 11). It is 8, the local-env bound (`lib/workers.ts:25-28`; the
-    prod DB budget note is 60 connections). Provisions take one run-wide turn each, because the staff flag and the
-    sign-in links are per user. A cheaper entitlement bust, or a dedicated synthetic owner per shard, would lift
-    that cap.
+   — done in W1d T12 (`88c5755a4`, `f3f1c405e`): the cricket pad takes one or two innings a side, and `--set pad-innings` is the plan that reaches it (proved live on a plain `test` case, and on a model pad). **Not routes:** follow-on and `match.close` are rows of the generic More sheet with no testid, so they are declared `noControl` and routed to W2. The 24 committed `test` cases stay `no_path` in the browser (their rule overrides).
+17. **Browser workers inside a shard** (D10, ruling 46). `--driver browser --workers 2` was a usage error that
+    named W1d (`BROWSER_WORKERS`). W1d declined them for good (D11): it is still a usage error (`run.ts:633`), and
+    now says "one browser case at a time per shard; parallelism is the shard matrix". No route names W1d any more.
+   — done in W1d T13 (`003a0c6c2`): declined, with the reason in the message (D11). The recommendation to the owner is under "Recommendations".
+18. **`MAX_WORKERS` inside a shard** (Task 11). It is 8, the local-env bound (`lib/workers.ts`; the prod DB
+    budget note is 60 connections), and it STAYS 8 (D11): browser shards run one case at a time and parallelism
+    is the shard matrix. Provisions take one run-wide turn each, because the staff flag and the sign-in links are
+    per user. A cheaper entitlement bust, or a dedicated synthetic owner per shard, would be what lifts that cap;
+    raising it is a decision, not a drift (`workers.test.ts` pins the comment's words).
+   — done in W1d T13 (`003a0c6c2`, `f9fab930a`): `MAX_WORKERS` stays 8 (D11).
 19. **One sign-in budget per shard under Redis.** No `--workers` refusal. See "Recommendations": with `REDIS_URL`
     set, the sixth magic-link sign-in from one IP inside 300 s answers 429.
+   — done in W1d T9 (`ce85ff9cb`, D12): `matrix-truth.yml` declares no `redis` service and sets no `REDIS_URL`, and a test pins both. Each shard is its own runner with its own source IP.
 20. **Templates in the grid.**
     - The W1d grid must pass the template for an ad-hoc `--driver browser --only <template cell>`, which fails by
       name today (Task 13).
     - Template competitions are created **public**: the gallery sends no visibility, and the schema defaults to
       `public`. A shard that reuses an org must allow for its public quota.
+   — done in W1d T13 (`3582cbef6`): a plain browser plan reaches the template cells through their gallery cards (the cricket `test` cases keep their overrides and stay out), one org per case.
 21. **Record the filler counts in `results.json`.** `filler` appears 0 times today, so the live filler proof is
     indirect, and the counts are proven only in unit tests (Task 13; `truth-runs/w1drv-l1/README.md`).
+   — done in W1d T2 (`4495e9f2d`): `fillers` per case, non-zero names only, read before the browser closes so an error-red case keeps what it ran.
 22. **A knockout-completion shot on multi-stage L1** (`truth-runs/w1drv-l1/README.md` (d)). The `groups_ko` case's
     `08-completed` is the group stage's completion, taken with the knockout's proposal pending. No check misreads
     it.
+   — done in W1d T13 (`e2a4bb153`): a completion shot is named for its stage's place, and the LAST stage's completion is taken in the browser (naming alone would have left it over HTTP). The live behaviour is for the PR-B L1 run to show.
 23. **Name team entrants "Matrix Team N", not "Matrix Player N"** (`truth-runs/w1drv-l1/README.md` (e)). This is the
     house constraint, and no check depends on it.
+   — done in W1d T13 (`c4e57479c`): entrants follow the entrant kind from the engine module's declaration.
 24. **Cosmetic: the americano policy note prints a team entrant's whole roster** ("of <id>+<id>+…", Task 15).
+   — done in W1d T13 (`c4e57479c`): the americano policy note counts persons and prints no roster.
 25. **Item 12 again, on the model CLI** (Task 16). A model run id reused against the same DB, after its report
     directory was removed, aborted on `organizations_slug_key` instead of refusing up front by name.
+   — done in W1d T5 (`fd096b86d`): the model CLI refuses a reused run id up front, by name.
 26. **Two committed cases that share cell, check and match make an exploring run's fence rule blind** (Task 16
     re-review 1). MB-007 and MB-010 share all three, so the narrowed-fence run (`w1drv-t16fr1-model-de`) labelled
     the new withdrawn-trigger failure `known: MB-007` and exited 0; MB-010 was found only by reading its commands.
     "A fence guards only what a committed case shows, else the bug reports NEW" does not hold for such pairs: make
     the matcher (or the exploring run's report) distinguish cases by their shown trigger, not only cell/check/match.
+   — done in W1d T13 (`7ecabf2ea`): MB-007 and MB-010 each carry a `trigger` (withdrawn, added), and the matcher and the replay tell them apart by it (the loader refuses an ambiguous pair that lacks one).
 27. **CI truth runs: artifacts weekly, a triaged baseline committed** (ruling 58, clarified 2026-10-04). The matrix
     runs itself, weekly and on dispatch, sharded on fresh databases. A weekly run keeps its results as CI artifacts;
     only a triaged baseline is committed to `truth-runs/`. The trigger must NOT be GitHub `schedule:`, which drops
     and delays runs.
+   — done in part in W1d T8 and T9 (`b1b0d0dca`, `3cd5dfb11`, `ce85ff9cb`, `e5afff3e6`, `998b385bb`, `38c8b55b5`): `matrix-truth.yml` (weekly, dispatch, self-proof), shards, merge, judge, summary and the staleness signal. Weekly runs keep artifacts only. **The triaged baseline is PR-B's** (Tasks 17–22), and the schedule ships disabled (D2).
 28. **Close the `tools/` import guard's spawn-by-path blind spot** (bench-move review M2, PR `chore/bench-to-tools`;
     owner 2026-10-04, asked in the controller's session whether to add it to W1d's list: "ok"). The guard reads imports,
     manifests, tsconfigs and root-script names, but not a `tools/` path passed as a string to `child_process`. Flag
@@ -2688,3 +2921,4 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
     `scripts/` whose path-like tokens resolve into `tools/`. Exempt the reference trap fixture and the guard's own
     tests by name, never by pattern. Needs a positive control and a non-zero scanned count. W1d builds it because W1d
     adds scripts that spawn the matrix.
+   — done in W1d T11 (`b6de52dba`, `b8700d19e`): the guard reads `child_process` call arguments, with a positive control, a non-zero scanned count (387 calls in 170 files), per-name floors and an importers oracle. Zero hits on the real tree. Stated gaps (package-name spawn, a variable-held path, `execa`, aliased and promisified spawners) are pinned as known gaps: see the "Limit" note under ruling 56.
