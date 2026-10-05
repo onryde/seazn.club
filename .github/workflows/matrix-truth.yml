@@ -88,12 +88,15 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
           if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
-          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Still unreadable after
-          # the third reads as 'unreadable' below, which refuses — the guard fails closed.
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
           vis=""
           for attempt in 1 2 3; do
             vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
-            if [ -n "$vis" ]; then break; fi
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
             if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
           done
           case "$INJECT" in
@@ -172,12 +175,15 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
           if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
-          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Still unreadable after
-          # the third reads as 'unreadable' below, which refuses — the guard fails closed.
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
           vis=""
           for attempt in 1 2 3; do
             vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
-            if [ -n "$vis" ]; then break; fi
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
             if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
           done
           case "$INJECT" in
@@ -276,12 +282,15 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
           if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
-          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Still unreadable after
-          # the third reads as 'unreadable' below, which refuses — the guard fails closed.
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
           vis=""
           for attempt in 1 2 3; do
             vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
-            if [ -n "$vis" ]; then break; fi
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
             if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
           done
           case "$INJECT" in
@@ -410,12 +419,15 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
           if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
-          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Still unreadable after
-          # the third reads as 'unreadable' below, which refuses — the guard fails closed.
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
           vis=""
           for attempt in 1 2 3; do
             vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
-            if [ -n "$vis" ]; then break; fi
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
             if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
           done
           case "$INJECT" in

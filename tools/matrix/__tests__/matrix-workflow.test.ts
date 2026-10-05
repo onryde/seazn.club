@@ -101,15 +101,16 @@ describe("the visibility guard (Review Focus 2)", () => {
     expect(new Set(scripts).size).toBe(1);
   });
 
-  /** The guard's script, run for real with a `gh` stand-in that FAILS its first `fails` calls (HTTP 403, nothing on stdout) and
+  /** The guard's script, run for real with a `gh` stand-in that FAILS its first `fails` calls (HTTP 403 on stderr; on stdout the
+   *  raw JSON error body `body` when given, which is what gh 2.95 prints for a 404/401/403/5xx under `--jq`, else nothing) and
    *  then answers `answer`, and a `sleep` stand-in that records its argument instead of waiting (m4: the retry's backoff is
    *  observed, never slept). `calls` is how many times the guard asked, `sleeps` the backoffs it took between asks. */
-  const runWith = (env: Record<string, string>, gh: { fails: number; answer: string }) => {
+  const runWith = (env: Record<string, string>, gh: { fails: number; answer: string; body?: string }) => {
     const dir = mkdtempSync(join(tmpdir(), "gh-"));
     try {
-      writeFileSync(join(dir, "gh"), `#!/bin/sh\nn=$(cat "$GH_STATE/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$GH_STATE/n"\nif [ "$n" -le "$GH_FAILS" ]; then echo 'HTTP 403' >&2; exit 1; fi\necho "$GH_ANSWER"\n`, { mode: 0o755 });
+      writeFileSync(join(dir, "gh"), `#!/bin/sh\nn=$(cat "$GH_STATE/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$GH_STATE/n"\nif [ "$n" -le "$GH_FAILS" ]; then if [ -n "$GH_BODY" ]; then echo "$GH_BODY"; fi; echo 'HTTP 403' >&2; exit 1; fi\necho "$GH_ANSWER"\n`, { mode: 0o755 });
       writeFileSync(join(dir, "sleep"), `#!/bin/sh\necho "$1" >> "$GH_STATE/sleeps"\n`, { mode: 0o755 });
-      const r = spawnSync("bash", ["-c", stepOf(JOBS.plan, GUARD).script!], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "onryde/seazn.club", GH_STATE: dir, GH_FAILS: String(gh.fails), GH_ANSWER: gh.answer, ...env }, encoding: "utf8" });
+      const r = spawnSync("bash", ["-c", stepOf(JOBS.plan, GUARD).script!], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "onryde/seazn.club", GH_STATE: dir, GH_FAILS: String(gh.fails), GH_ANSWER: gh.answer, GH_BODY: gh.body ?? "", ...env }, encoding: "utf8" });
       const lines = (f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8").split("\n").filter(Boolean) : []);
       return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls: Number(lines("n")[0] ?? 0), sleeps: lines("sleeps") };
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -174,6 +175,36 @@ describe("the visibility guard (Review Focus 2)", () => {
       expect(r.calls).toBe(3);
       expect(r.sleeps).toEqual(["1", "2"]);
       expect(r.stdout).toContain("visibility is 'unreadable'");
+    });
+    // Round 2: gh exits 1 on a 404/401/403/5xx but still PRINTS the JSON error body to stdout, so "non-empty" is not "answered".
+    const NOT_FOUND = '{"message":"Not Found","documentation_url":"https://docs.github.com/rest/repos/repos#get-a-repository","status":"404"}';
+    it("an error BODY on stdout is not an answer: it is retried (3 asks, 2 backoffs) and refuses as 'unreadable', never echoing the body", () => {
+      const r = runWith(hosted, { fails: 99, answer: "public", body: NOT_FOUND });
+      expect(r.status).toBe(1);
+      expect(r.calls).toBe(3);
+      expect(r.sleeps).toEqual(["1", "2"]);
+      expect(r.stdout).toContain("visibility is 'unreadable'");
+      expect(r.stdout).not.toContain("Not Found");
+      expect(r.stdout).not.toContain('{"message"');
+    });
+    it("two error bodies, then a real answer: passes on the third ask (a recognised answer after the blips is honoured)", () => {
+      const r = runWith(hosted, { fails: 2, answer: "public", body: NOT_FOUND });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.calls).toBe(3);
+      expect(r.sleeps).toEqual(["1", "2"]);
+    });
+    it("an exit-0 reply that is none of public|private|internal is no answer either: three asks, then 'unreadable'", () => {
+      const r = runWith(hosted, { fails: 0, answer: "Not Found" });
+      expect(r.status).toBe(1);
+      expect(r.calls).toBe(3);
+      expect(r.sleeps).toEqual(["1", "2"]);
+      expect(r.stdout).toContain("visibility is 'unreadable'");
+    });
+    it.each(["private", "internal"])("a %s answer returns on the FIRST ask (it is an answer: no retry, no backoff) and refuses as that visibility", (answer) => {
+      const r = runWith(hosted, { fails: 0, answer });
+      expect(r.status).toBe(1);
+      expect([r.calls, r.sleeps]).toEqual([1, []]);
+      expect(r.stdout).toContain(`visibility is '${answer}'`);
     });
     it("a first answer is final: one ask, no backoff slept (a healthy API costs nothing)", () => {
       const r = runWith(hosted, { fails: 0, answer: "public" });
