@@ -2353,6 +2353,9 @@ describe("D6: a refusal in setUpDivision's setup phase is SetupRefused, by phase
     const nested = await inSetup(() => inSetup(() => Promise.reject(original()))).then(() => null, (e: unknown) => e);
     expect(nested).toBeInstanceOf(SetupRefused);
     expect((nested as SetupRefused).message).toBe(original().message);
+    // The tagged refusal passes through AS IT WAS — the same object, so its stack stays the first throw's.
+    const tagged = SetupRefused.from(original());
+    expect(await inSetup(() => Promise.reject(tagged)).then(() => null, (e: unknown) => e)).toBe(tagged);
     const plain = new TypeError("x is undefined");
     expect(await inSetup(() => Promise.reject(plain)).then(() => null, (e: unknown) => e)).toBe(plain);
   });

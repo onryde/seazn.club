@@ -11,7 +11,7 @@
 //      or the runs in the wrong slots, WrongDriver), or unreadable input (a
 //      missing or unreadable file, bad JSON, results the schema refuses, a case
 //      or check id that repeats, or a case id that does not end in its own
-//      width). Before W1d the unreadable input was 3;
+//      width);
 //   3  a crash while the CLI loads, through the package script's preload
 //      (scripts/lib/crash-exit.ts). Run it only through that script: without the
 //      preload, a load crash exits 1, which reads as a verdict (W1b carry e).

@@ -167,8 +167,10 @@ describe("harnessFaults (D6)", () => {
       ok("o", "no_path", "W4: x", { planned: true, checks: [chk()] }),
       // A ✅ that spent no time and kept no check is still not a planned state.
       ok("p", "works", "", { planned: true, checks: [] }),
+      // The planned SHAPE (░, no check) with time spent: it ran, so the marker is a driven result relabelled.
+      ok("q", "not_run", "x", { planned: true, durationMs: 40 }),
     ]), { plannedNotRun: "allow" });
-    expect(faults.map((x) => [x.caseId, x.kind])).toEqual([["m", "marker-on-driven"], ["o", "marker-on-driven"], ["p", "marker-on-driven"]]);
+    expect(faults.map((x) => [x.caseId, x.kind])).toEqual([["m", "marker-on-driven"], ["o", "marker-on-driven"], ["p", "marker-on-driven"], ["q", "marker-on-driven"]]);
   });
 
   it("the refuse lever (rejected alternative (c)) is what makes a planned ░ a fault — so allow is doing the work", () => {
@@ -499,10 +501,15 @@ describe("judge across <runA> <runB> <runC> (ruling 61)", () => {
       refused++;
     }
     expect(refused).toBe(4);
-    // scope: two runs of one plan that recorded different scopes
+    // scope, 1: one run of the three records no scope (matchPlanIds accepts an absent scope, so only the
+    // agreement check can tell it from its siblings).
     err = [];
-    expect(judgeCli(["across", f({ ...layeredRun("L1"), runId: "s1" }), f({ ...layeredRun("L1"), runId: "s2", scope: "L1 (grid)" })])).toBe(2);
-    expect(said()).toMatch(/RunsDisagree|ScopeMismatch/);
+    expect(judgeCli(["across", f({ ...layeredRun("L1"), runId: "s1" }), f({ ...layeredRun("L1"), runId: "s2", scope: undefined }), f({ ...layeredRun("L1"), runId: "s3" })])).toBe(2);
+    expect(said()).toMatch(/RunsDisagree: .*scope .*\(absent\)/);
+    // scope, 2: two runs of one plan that recorded different scopes (one is not its plan's, too).
+    err = [];
+    expect(judgeCli(["across", f({ ...layeredRun("L1"), runId: "s4" }), f({ ...layeredRun("L1"), runId: "s5", scope: "L1 (grid)" })])).toBe(2);
+    expect(said()).toMatch(/RunsDisagree: .*scope/);
   });
 
   it("refused — a run whose ids are not its plan's (T4-IDS): one run of the three lost a case; nothing is compared", () => {
@@ -610,6 +617,17 @@ describe("--json-out <path> (PF-1): the judge's verdict as JSON, in the shape T8
     expect(readOut(green)).toMatchObject({ exit: 0, faults: [] });
   });
 
+  it("what is written, and printed, is redacted: a synthetic bearer token in a fault's reason reaches neither the file nor stdout", () => {
+    const secret = `Bearer ${"synthetic0".repeat(2)}`;
+    const p = join(dir, `rd-${++n}.json`);
+    expect(judgeCli(["faults", f(planRun([["red", `error: crashed — upstream said ${secret} refused`]], { runId: "rr" })), "--json-out", p])).toBe(1);
+    const body = readFileSync(p, "utf8");
+    expect(body).not.toContain("synthetic0");
+    expect(body).toContain("[redacted]");
+    expect(out.join("")).not.toContain("synthetic0");
+    expect(out.join("")).toContain("[redacted]");
+  });
+
   it("across: the differing cases, the faults of every run, and every run id are in the file", () => {
     const p = join(dir, `ac-${++n}.json`);
     const runs = [0, 1, 2].map((i) => f(planRun(i === 1 ? [["works", ""], ["red", "x"]] : [], { runId: `a${i + 1}` })));
@@ -640,6 +658,23 @@ describe("--json-out <path> (PF-1): the judge's verdict as JSON, in the shape T8
 
   it("--json-out takes a path: without one it is usage", () => {
     expect(judgeCli(["faults", f(planRun()), "--json-out"])).toBe(2);
+  });
+});
+
+// --- the module guard ---------------------------------------------------------------------------------------------
+
+describe("isMainModule: importing the judge runs nothing", () => {
+  it("a fresh import of judge.ts writes nothing and sets no exit code — only the file started as a program runs its main", async () => {
+    vi.resetModules();
+    const before = process.exitCode;
+    try {
+      const fresh = await import("../judge.ts");
+      expect(typeof fresh.main).toBe("function");
+      expect(said()).toBe("");
+      expect(process.exitCode).toBe(before);
+    } finally {
+      process.exitCode = before;
+    }
   });
 });
 
@@ -676,6 +711,17 @@ describe("the seam, end to end: runSlice's own shards, through the real merge, i
     // The producer's own bytes, damaged one way each: a dropped case, and a scope the plan did not choose.
     expect(judgeCli(["faults", f({ ...merged, cases: merged.cases.slice(1) })])).toBe(2);
     expect(judgeCli(["faults", f({ ...merged, scope: "L1 (grid)" })])).toBe(2);
+  }, 120_000);
+
+  it("a PLAIN slice run at one width: the runner suffixes every id @<width>, the plan's ids carry none — the key drops the width (the real producer)", async () => {
+    const reportDir = mkdtempSync(join(tmpdir(), "w1d-judge-width-"));
+    expect(await runSlice(deps({ openBrowserRun: async () => fakeBrowserRun().run }), ["--only", "league|generic", "--driver", "browser", "--width", "375", "--run-id", "seamw", "--report-dir", reportDir])).toBe(0);
+    const r = parseResults(JSON.parse(readFileSync(join(reportDir, "seamw", "results.json"), "utf8"))) as RunResults;
+    expect(r.plan).toBe("slice --only league|generic");
+    expect(r.cases.length).toBeGreaterThan(1);
+    expect(r.cases.every((c) => c.caseId.endsWith("@375"))).toBe(true);
+    expect(matchPlanIds(r).compared).toBe(PLAN_IDS.length);
+    expect(r.cases).toHaveLength(PLAN_IDS.length);
   }, 120_000);
 
   it("L1 --scope grid, unsharded: 231 cases, scope 'L1 (grid)', identity clean against the GRID planner", async () => {

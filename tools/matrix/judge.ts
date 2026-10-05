@@ -170,8 +170,10 @@ function acrossMode(cli: Cli): Verdict {
   // Each run is held to its plan's ids before anything is compared: a run that lost a case would otherwise
   // shrink the comparison to the cases it kept.
   for (const r of runs) matchPlanIds(r);
+  // Zero compared is unreachable from here, by construction rather than by a guard no test can reach: every run
+  // holds exactly its plan's ids (matchPlanIds, which refuses NoCases first), and the runs share one plan (AGREE),
+  // so each id is in every run — `compared` is the plan's id count, at least 1. JudgeOut's `compared` is min(1) too.
   const sa = statesAcross(runs);
-  if (sa.compared === 0) throw new JudgeRefused("NoCases", `the ${runs.length} runs share no case id — nothing compared (vacuous)`);
   const faults = runs.flatMap((r) => faultsOf(r, cli.plannedNotRun));
   const bad = sa.differing.length + sa.missing.length + faults.length;
   const out: JudgeOut = { version: 1, mode: "across", exit: bad > 0 ? 1 : 0, layer: first.layer, runs: runs.map((r) => r.runId), plannedNotRun: cli.plannedNotRun, compared: sa.compared, faults, differing: sa.differing, missing: sa.missing, regressed: [], absent: [] };
