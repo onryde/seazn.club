@@ -32,6 +32,7 @@
     "matrix:sample": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/run-sample.ts",
     "matrix:triage": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/triage.ts",
     "matrix:ledger": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/audit-ledger.ts",
+    "matrix:backlog": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/backlog.ts",
     "dev": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web",
     "start": "npm run start --workspace apps/web",
