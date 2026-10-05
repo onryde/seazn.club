@@ -89,7 +89,7 @@ describe("the sizing rule itself, on numbers from the ruling (so the tests below
     expect(estimateMinutes(MAX_MUTANTS + 1), "one mutant more is over the line").toBe(201);
     // the measured cost against D14's: 26 / 3 against 10 / 3 per mutant, 2.6 times
     expect(RUNNER_SECONDS_PER_MUTANT / 10).toBeCloseTo(2.6, 5);
-    // the probe: 134 mutants is 26 minutes (and its recorded timeout is 1.5 times that)
+    // the probe: 134 mutants is 26 minutes; its recorded timeout is 3 times that (1.5 headroom x 2 hosted allowance, final review I2)
     expect(estimateMinutes(134)).toBe(26);
   });
 });
