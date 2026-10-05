@@ -244,7 +244,8 @@ describe("shards.json (the committed config, D4)", () => {
     expect([cfg.setupMinutes, cfg.slackMinutes, cfg.maxTimeoutMinutes]).toEqual([18, 10, 300]);
     expect(cfg.prSample).toEqual({ args: "--set pr-sample", workers: 4, passes: 2 });
     expect(cfg.maxTimeoutMinutes).toBeLessThan(360);
-    expect(cfg.layers.L1.ceilingFrom).toHaveLength(6);
+    // Task 21 re-derived every ceiling from PR-B's committed baseline: one run per layer, the third dispatch.
+    expect(Object.fromEntries(LAYERS.map((l) => [l, cfg.layers[l].ceilingFrom]))).toEqual({ L1: ["w1d-baseline/L1"], L2: ["w1d-baseline/L2"], L3: ["w1d-baseline/L3"] });
   });
 
   it("every args string is a plan the planners know, in the plan string run.ts records for it (planOfArgs)", () => {
@@ -367,13 +368,14 @@ describe("ceilings: the per-case budget a layer derives from committed evidence 
     expect(ceilingFromRuns(["r1"], root)).toBeGreaterThan(0);
   });
 
-  it("the committed evidence gives the brief's ceilings: L1 210 s (132,684 ms), L2 30 s (17,002 ms), L3 30 s (13,530 ms)", () => {
-    // Recomputed here from the raw files, by the rule's words, and pinned to the brief's literals.
+  it("the committed evidence gives the W1d baseline's ceilings: L1 195 s (128,382 ms), L2 195 s (126,469 ms), L3 30 s (11,162 ms)", () => {
+    // Recomputed here from the raw files, by the rule's words, and pinned to the largest durationMs each committed layer holds (Task 21 moved the
+    // evidence from the W1-driving and W1c runs to the full L1/L2/L3 baseline, so L2 now measures its whole grid: 62 driven cases up to 126 s each).
     const maxMs = (dirs: readonly string[]): number => Math.max(...dirs.flatMap((d) => (parseResults(JSON.parse(readFileSync(join(TR, d, "results.json"), "utf8"))).cases.map((c) => c.durationMs))));
     const by = Object.fromEntries(LAYERS.map((l) => [l, maxMs(cfg.layers[l].ceilingFrom)])) as Record<Layer, number>;
-    expect(by).toEqual({ L1: 132_684, L2: 17_002, L3: 13_530 });
-    expect(Object.fromEntries(LAYERS.map((l) => [l, Math.ceil(by[l] / 1000 / 10) * 10 * 1.5]))).toEqual({ L1: 210, L2: 30, L3: 30 });
-    expect(ceilingsOf(cfg)).toEqual({ L1: 210, L2: 30, L3: 30 });
+    expect(by).toEqual({ L1: 128_382, L2: 126_469, L3: 11_162 });
+    expect(Object.fromEntries(LAYERS.map((l) => [l, Math.ceil(by[l] / 1000 / 10) * 10 * 1.5]))).toEqual({ L1: 195, L2: 195, L3: 30 });
+    expect(ceilingsOf(cfg)).toEqual({ L1: 195, L2: 195, L3: 30 });
   });
 });
 

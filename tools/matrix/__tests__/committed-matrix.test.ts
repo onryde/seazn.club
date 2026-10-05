@@ -74,6 +74,8 @@ const EVIDENCE_DIRS = [
   "w1c-walkthrough-a", "w1c-http-slice", "w1c-l1", "w1c-l2", "w1c-api-only", "w1c-sweep-ko", "w1c-padproof",
   // W1d Task 14 (PF-2): the top-level directory only; the three set runs live beneath it.
   "w1d-carry",
+  // W1d Task 21 (PF-2): the baseline's top-level directory; its L1, L2 and L3 runs live beneath it.
+  "w1d-baseline",
 ];
 /** The files at W1c Task 14's close: a sweep that reads fewer lost some (review R-m7 — `checked === files.length` alone is a tautology). */
 const EVIDENCE_FLOOR = 100;
@@ -235,8 +237,9 @@ describe("every committed results.json is what decideState makes of its checks (
 // where a state-only skip and a `skipped >=` floor both waved it through.
 
 /** The results.json files committed at W1c Task 14's close (fix round 1), plus the three W1d Task 14 set runs
- *  (w1d-carry/match-day, void-proof, carry8-1280): a sweep that judges fewer lost some. */
-const RESULTS_FLOOR = 36;
+ *  (w1d-carry/match-day, void-proof, carry8-1280) and the three W1d Task 21 baseline layers (w1d-baseline/L1, L2,
+ *  L3): a sweep that judges fewer lost some. */
+const RESULTS_FLOOR = 39;
 
 describe("each committed run, judged against its own plan (W1c Task 14 fix round 1, review I-1)", () => {
   it("a run is judged against the plan it recorded or is named with — never both, never neither", () => {
