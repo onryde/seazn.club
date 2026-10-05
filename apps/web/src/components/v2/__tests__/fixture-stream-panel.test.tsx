@@ -2710,7 +2710,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   // B8 review I-2 (ruling: fix it). `current` rests at Ready and on an Ended card (terminal: no poll), and T8 made the
   // paired PHONE a starter — so the read model names the open session, and the tab reads `current` for one it does not
   // show. Without it the organiser watched "Paired · Go live" while the phone was warming, and Go live met active_session.
-  it("I-2: a session the PHONE starts while the tab sits at Ready — or on an Ended card — is shown within one poll: warming, no stale Go live, `current` read ONCE for it", async () => {
+  it("I-2: a session the PHONE starts while the tab sits at Ready — or on an Ended card — is shown within one poll: warming, then live, no stale Go live, `current` read ONCE for it", async () => {
     const CREATE = "POST /api/v1/fixtures/f-1/stream-sessions";
     let checked = 0;
     for (const [name, start] of [
@@ -2744,6 +2744,15 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(byTestId(after, "stream-go-live"), `${name}: no stale Go live`).toBeUndefined();
       expect(byTestId(after, "stream-again"), `${name}: no stale Ended card`).toBeUndefined();
       expect(calls().filter((c) => c === CREATE), `${name}: nothing tapped, nothing refused`).toEqual([]);
+      // …and it goes LIVE on the panel too: the in-flight session is polled like the organiser's own.
+      s.current = session({ id: "s-phone", state: "live", startCause: "operator", startedAt: "2026-09-14T11:58:00Z" });
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(bodyOf(island).view?.state, `${name}: live`).toBe("live");
+      const live = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+      expect(byTestId(live, "stream-stop"), `${name}: Stop, the live control`).toBeDefined();
+      expect(byTestId(live, "stream-go-live"), `${name}: still no stale Go live`).toBeUndefined();
+      expect(calls().filter((c) => c === CREATE), `${name}: still nothing refused`).toEqual([]);
       island.unmount();
       checked++;
     }
