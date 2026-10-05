@@ -2055,7 +2055,7 @@ describe("shardMatrix (D4; class 20 — derived budgets; review C2)", () => {
 - [ ] **Step 2: Run, see them fail. Step 3: Implement.**
 
 Write each module to the interfaces above. `summary.ts` CLI: `summary.ts --merged <dir> [--judge <json>] [--previous-run auto|none] --out <file>`.
-- `auto` calls `gh.ts` → `gh api repos/$GITHUB_REPOSITORY/actions/workflows/matrix-truth.yml/runs?status=success&per_page=20`, keeps runs whose `event` is `schedule` or `workflow_dispatch` and whose `id` ≠ `GITHUB_RUN_ID`, and downloads the newest one's `merged` artifact via `gh run download <id> -n merged -D <tmp>`.
+- `auto` calls `gh.ts` → once per event in `WEEKLY_EVENTS` (`schedule`, `workflow_dispatch`): `gh api repos/$GITHUB_REPOSITORY/actions/workflows/matrix-truth.yml/runs?event=<event>&status=success&per_page=10` (a server-side `event` filter, so a PR's own runs never crowd the page; projected small by `--jq`), merges the two lists newest first, drops this run (`id` = `GITHUB_RUN_ID`), and downloads the newest one's `merged` artifact via `gh run download <id> -n merged -D <tmp>`.
 - Any `gh` failure becomes the line "previous run unavailable: <redacted reason>". It never fails the summary, since D20 is informational.
 
 `staleness.ts` CLI: `staleness.ts --max-days 8`.
@@ -3820,7 +3820,7 @@ cd <evidence> && gh variable list --json name,value --jq '.[] | select(.name == 
 This lists REPO-level variables only; `vars.MATRIX_RUNNER` also resolves organisation and environment variables, so this check is the quick one and the LOG check after the dispatch is the authority. List the other two scopes as well (`gh variable list --org <org>`, `gh variable list --env <env>`), or rely on the log check. The repo-level list must print nothing. If it prints a value, STOP with the reason "`MATRIX_RUNNER` is set, so this dispatch would run self-hosted and the injection proof is void" (not a red): unset it, or record that the proof was run with it unset. After the dispatch, the plan job's log must also not contain `self-hosted runner:`.
 
 ```bash
-cd <evidence> && gh workflow run matrix-truth.yml --ref matrix-truth/w1d-baseline -f scope=smoke -f inject_visibility=private; echo EXIT=$?
+cd <evidence> && gh workflow run matrix-truth.yml --ref matrix-truth/w1d-baseline -f scope=full -f inject_visibility=private; echo EXIT=$?   # scope is a one-option choice (full): a smoke dispatch would count as the weekly run (T9); the run dies at the guard before any shard starts
 cd <evidence> && gh run list --workflow matrix-truth.yml --event workflow_dispatch -L 1 --json databaseId,headSha,status,conclusion
 cd <evidence> && gh run view <id> --json jobs --jq '.jobs[] | {name, conclusion, steps: [.steps[] | {name, conclusion}]}'
 ```

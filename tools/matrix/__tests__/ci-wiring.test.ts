@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
+import { indentOf, jobBlock, stepOf } from "./workflow-text.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WORKFLOWS = resolve(REPO, ".github/workflows");
@@ -14,42 +15,7 @@ const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as {
 const STEP_NAME = "Matrix harness unit tests (DB-free)";
 const STEP_HEAD = `      - name: ${STEP_NAME}`;
 
-const indentOf = (line: string) => line.length - line.trimStart().length;
-
-// A named step as GitHub sees it: its own keys, and its `run: |` block
-// dedented. Hand-parsed (no YAML dependency at the repo root); the parse is
-// strict about the one shape it accepts, so a reshaped step reds here rather
-// than parsing into something vacuous.
-function stepOf(text: string, name: string): { keys: string[]; body: string; script: string | null } {
-  const head = `      - name: ${name}`;
-  const lines = text.split("\n");
-  const heads = lines.flatMap((l, i) => (l === head ? [i] : []));
-  if (heads.length !== 1) throw new Error(`expected exactly one "${head.trim()}" line, found ${heads.length}`);
-  const start = heads[0]!;
-  let end = start + 1;
-  while (end < lines.length && (lines[end]!.trim() === "" || indentOf(lines[end]!) >= 8)) end++;
-  const body = lines.slice(start + 1, end);
-  const keys = ["name", ...body.flatMap((l) => /^ {8}([a-z][\w-]*):/.exec(l)?.slice(1) ?? [])];
-  const runAt = body.indexOf("        run: |");
-  if (runAt === -1) return { keys, body: body.join("\n"), script: null };
-  const script: string[] = [];
-  for (const l of body.slice(runAt + 1)) {
-    if (l.trim() !== "" && indentOf(l) < 10) break;
-    script.push(l.slice(10));
-  }
-  return { keys, body: body.join("\n"), script: script.join("\n").trimEnd() + "\n" };
-}
 const matrixStep = (t: string) => stepOf(t, STEP_NAME);
-
-/** A job-level (4-space) block of a job's YAML: its key line and every deeper
- *  line after it, or "" when the job has no such key. */
-function jobBlock(lines: string[], key: string): string {
-  const at = lines.indexOf(`    ${key}:`);
-  if (at === -1) return "";
-  let end = at + 1;
-  while (end < lines.length && (lines[end]!.trim() === "" || indentOf(lines[end]!) > 4)) end++;
-  return lines.slice(at, end).join("\n");
-}
 
 /** What in a job's YAML (comments dropped) could hand the matrix step a
  *  database (Task 10 review Minor 1): any `services:` block, a job-level `env:`
@@ -241,14 +207,12 @@ describe("matrix CI wiring", () => {
     });
   });
 
-  it("no scheduled matrix workflow exists in W1a", () => {
-    expect(ci).not.toMatch(/matrix:l3/);
-    const files = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f));
-    expect(files).toContain("ci.yml");
-    expect(files).toContain("e2e.yml");
-    for (const f of files) {
-      expect({ f, hit: /matrix:l3|tools\/matrix\/run\b/.test(readFileSync(join(WORKFLOWS, f), "utf8")) }).toEqual({ f, hit: false });
-    }
+  it("the matrix runs only in matrix-truth.yml, and ci.yml reaches it only by calling that workflow (W1d; was W1a's 'no workflow')", () => {
+    const files = readdirSync(WORKFLOWS).filter((f) => f.endsWith(".yml"));
+    const runners = files.filter((f) => /matrix:l3|matrix:browser|tools\/matrix\/run\b/.test(readFileSync(join(WORKFLOWS, f), "utf8")));
+    expect(runners).toEqual(["matrix-truth.yml"]);
+    expect(ci).toMatch(/uses:\s*\.\/\.github\/workflows\/matrix-truth\.yml/);
+    expect(files.length).toBeGreaterThan(5);   // anti-vacuity: the directory was read
   });
 
   it("package scripts run the CLIs under strip-types", () => {

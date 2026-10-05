@@ -20,6 +20,15 @@ const DAY = 86_400_000;
 const ago = (days: number): string => new Date(NOW.getTime() - days * DAY).toISOString();
 const run = (event: string, daysAgo: number, conclusion = "success") => ({ conclusion, event, created_at: ago(daysAgo) });
 
+// W1d T8->T9 (f): the RUN_PROJECTION test runs a real `jq`, which is on every GitHub-hosted runner and not on every desk. A
+// missing jq must not red a developer's local run for an environment reason — and must never turn the ONLY witness of the
+// projection into a silent pass. So the skip is by NAME (vitest reports it as pending) and LOUD (a warning that says
+// what was skipped), and it is allowed only off CI: where CI is set, the test runs, and a missing jq reds it as the
+// environment fault it is.
+const HAS_JQ = spawnSync("jq", ["--version"], { encoding: "utf8" }).status === 0;
+const SKIP_JQ = !HAS_JQ && process.env.CI === undefined;
+if (SKIP_JQ) process.stderr.write("staleness.test: jq is not installed and CI is unset — SKIPPING 1 test (the real-jq RUN_PROJECTION test); CI runs it\n");
+
 describe("staleness (D1b): the newest SUCCESSFUL scheduled/dispatched run against --max-days", () => {
   it("empty case first: no run at all is stale, and says `never`", () => {
     const s = staleness([], NOW, 8);
@@ -292,7 +301,7 @@ describe("gh.ts: the thin wrapper", () => {
     ]);
   });
 
-  it("RUN_PROJECTION, run by a real jq over a fat answer, keeps the envelope and exactly the five fields of each run", () => {
+  it.skipIf(SKIP_JQ)("RUN_PROJECTION, run by a real jq over a fat answer, keeps the envelope and exactly the five fields of each run", () => {
     const nested = { id: 1, node_id: "R_x", full_name: "acme/seazn", owner: { login: "acme", id: 2, url: "https://api.example.test/users/acme" }, html_url: "https://example.test/acme/seazn" };
     const fatRun = (id: number, event: string, attempt: number) => ({
       id, name: "Matrix truth", head_branch: "main", head_sha: "a".repeat(40), event, status: "completed", conclusion: "success", workflow_id: 5, run_number: id,

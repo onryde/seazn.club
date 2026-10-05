@@ -296,6 +296,14 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 9: the per-PR sample's driver, which imports run-id, pr-sample, redact and variants and is spawned by its package script.
+  const W1D_T9 = ["ci/run-sample.ts"];
+  it("W1d Task 9's module is in the walk", () => {
+    const missing = W1D_T9.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T9.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

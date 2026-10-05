@@ -1682,3 +1682,78 @@ jobs:
         run: |
           docker logs placement-smoke || true
           docker rm -f placement-smoke >/dev/null 2>&1 || true
+
+  # -------------------------------------------------------------------------
+  # R27 (W1d D13): a PR touching the engine or stages.ts declares its matrix
+  # rows; the sample runs them + a fixed 33 against the committed baseline.
+  # The sample itself is matrix-truth.yml's `pr-sample` scope (a called
+  # workflow, so the visibility guard and the shard recipe live in ONE file).
+  # -------------------------------------------------------------------------
+  matrix-rows:
+    name: Matrix rows (R27) + truth-run staleness
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      run: ${{ steps.filter.outputs.matrix }}
+      rows: ${{ steps.rows.outputs.rows }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            matrix:
+              - 'packages/engine/**'
+              - 'apps/web/src/server/**'
+              - 'apps/web/src/lib/format-templates.ts'
+              - 'tools/matrix/**'
+              - 'pnpm-lock.yaml'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Rows the PR declares (R27)
+        id: rows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # LIVE read (review 3, R3-m1): editing the body fires no run, and a re-run replays the original event
+          # payload. `// ""` turns a null body into an empty string, which pr-rows refuses as undeclared.
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""' > "$RUNNER_TEMP/body.txt"
+          # --no-renames: a file moved OUT of packages/engine/ must still name its old path (T7->T9), or a rename
+          # would read as a new path nobody declares rows for.
+          git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+      - name: Truth-run staleness (D1b, non-blocking)
+        # always(): a failed rows step (R27 undeclared) must not hide the staleness signal (review m6).
+        if: ${{ always() && vars.MATRIX_WEEKLY_ENABLED == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm --silent matrix:staleness --max-days 8
+
+  matrix-sample:
+    name: Matrix per-PR sample (R27)
+    needs: matrix-rows
+    if: needs.matrix-rows.outputs.run == 'true'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/matrix-truth.yml
+    with:
+      scope: pr-sample
+      rows: ${{ needs.matrix-rows.outputs.rows }}

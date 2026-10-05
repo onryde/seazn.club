@@ -561,11 +561,36 @@ describe("main (the CLI)", () => {
     expect(md).toContain("Previous harness-green run: 2026-09-28 (6 days ago) — run 40");
     expect(md).toContain("1 case changed state since run 40 (3 compared):");
     expect(md).toContain("❌→✅ (1): `c1-L1`");
-    // Exactly one run was downloaded: 40 (not 9 — itself — and not the PR's 50).
+    // Exactly one run was downloaded: 40 (not 9, which is this run itself).
     const downloads = calls.filter((c) => c[1] === "download");
     expect(downloads).toHaveLength(1);
     expect(downloads[0].slice(0, 5)).toEqual(["run", "download", "40", "-n", "merged"]);
     expect(downloads[0]).toContain("--repo");
+    // The PR's run 50 was never a candidate, and not because of anything this CLI sorts out afterwards: the fake answers
+    // by the URL's `event=` exactly as GitHub does, so a pull_request run is only ever seen if it is ASKED for. (W1d T8->T9 (e):
+    // the old comment here claimed "not the PR's 50" as if the sort excluded it; the list never held it.)
+    const asked = calls.filter((c) => c[0] === "api").map((c) => new URL(`https://api.example.test/${c[1] ?? ""}`).searchParams.get("event"));
+    expect(asked).toEqual(["schedule", "workflow_dispatch"]);
+    expect(asked).not.toContain("pull_request");
+  });
+
+  it("--previous-run auto: the newest success is a workflow_dispatch with older schedules behind it — the sort picks the dispatch, whatever order the two event lists are read in (W1d T8->T9 (e))", () => {
+    const dir = fresh("a"); writeMerged(dir, runs());
+    const onDispatch = { L1: mergedRun("L1", "ci-60-1-l1", [kase("L1", { caseId: "c1-L1", state: "red", reason: "was red on the dispatch" }), kase("L1", { caseId: "c2-L1", durationMs: 2000 }), planned("L1", "p1-L1", "A1")]) };
+    const onSchedule = { L1: mergedRun("L1", "ci-40-1-l1", [kase("L1", { caseId: "c1-L1" }), kase("L1", { caseId: "c2-L1", durationMs: 2000 }), planned("L1", "p1-L1", "A1")]) };
+    // successfulRuns reads the schedule list FIRST, then the dispatch list, so without the sort the first non-self row is the
+    // schedule 40 (6 days old) and the dispatch 60 (1 day old) is never chosen. The schedules behind it are 6 and 13 days old.
+    const { gh, calls } = fakeGh([wireRun(9, 0), wireRun(60, 1, "workflow_dispatch"), wireRun(40, 6), wireRun(30, 13)], { 60: onDispatch, 40: onSchedule });
+    const out = join(dir, "SUMMARY.md");
+    expect(main(["--merged", dir, "--previous-run", "auto", "--out", out], deps(gh))).toBe(0);
+    const md = written(out);
+    expect(md).toContain("Previous harness-green run: 2026-10-03 (1 days ago) — run 60");
+    expect(md).toContain("1 case changed state since run 60 (3 compared):");
+    const downloads = calls.filter((c) => c[1] === "download");
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0].slice(0, 5)).toEqual(["run", "download", "60", "-n", "merged"]);
+    // Anti-vacuity: the dispatch run really was the SECOND list read (so a missing sort would have chosen 40).
+    expect(calls.filter((c) => c[0] === "api").map((c) => c[1]?.includes("event=workflow_dispatch"))).toEqual([false, true]);
   });
 
   it("--previous-run auto with only this run on record is `none yet` (and nothing is downloaded)", () => {

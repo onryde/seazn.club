@@ -29,6 +29,7 @@
     "matrix:shards": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/shard-matrix.ts",
     "matrix:summary": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/summary.ts",
     "matrix:staleness": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/staleness.ts",
+    "matrix:sample": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/run-sample.ts",
     "dev": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web",
     "start": "npm run start --workspace apps/web",
