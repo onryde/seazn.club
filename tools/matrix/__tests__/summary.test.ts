@@ -108,7 +108,7 @@ describe("summary: the layer table — the histogram, counted by hand", () => {
   it("the atoms are ordered by their COUNT, then by name — a count order and an alphabetical order that disagree", () => {
     // Z x3, M x2, B x2, A x1: alphabetical would read A, B, M, Z; by count it is Z, then the tied B and M by name, then A.
     const cases = [
-      planned("L1", "z1", "Z"), planned("L1", "z2", "Z"), planned("L1", "z3", "Z"),
+      planned("L1", "z1", "Z"), planned("L1", "z2", "Z"), planned("L1", "z4", "Z"),
       planned("L1", "m1", "M"), planned("L1", "m2", "M"), planned("L1", "b1", "B"), planned("L1", "b2", "B"), planned("L1", "a1", "A"),
     ];
     const md2 = summary({ ...allRuns(), L1: mergedRun("L1", ID("L1"), cases) }, [], null, NOW);
@@ -261,7 +261,7 @@ describe("summary: harness faults of THIS run, by the judge's own authority", ()
 describe("summary: redaction — the page passes findSecrets with zero hits", () => {
   it("a fault reason that carries a secret and an email: the secret is gone, the line stays, findSecrets is empty", () => {
     const secret = `${"sk"}_live_${"ABCDEFGH12345678"}`;
-    const reason = `error: crashed — api_key=${secret} while mailing ops@example.com`;
+    const reason = `error: crashed — api_key=${secret} while mailing ops@mailbox.invalid`;
     const md = summary({ ...allRuns(), L1: mergedRun("L1", ID("L1"), [kase("L1", { caseId: "leak", state: "red", reason })]) }, [], { unavailable: `gh api: token=${secret}` }, NOW);
     expect(findSecrets(md)).toEqual([]);
     expect(md).not.toContain(secret);

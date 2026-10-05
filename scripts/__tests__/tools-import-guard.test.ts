@@ -128,7 +128,7 @@ const HARNESS_START = /^\/*(?:matrix|bench)\b/;
 /** The spawn calls in one source file, and the `tools/` paths among their ARGUMENTS (item 28).
  *  A call's arguments are every string literal and template piece beneath it — an array's items,
  *  a nested `join(...)`, an options object's `cwd` — except a function passed
- *  directly as an argument (a callback is not part of the command). Not the file at large: the dockerignore and z3 scans spell `tools/…` in files
+ *  directly as an argument (a callback is not part of the command). Not the file at large: the dockerignore and retirement-drift scans spell `tools/…` in files
  *  that spawn `git`, and those spell it far from the call.
  *
  *  Limits, stated: a path held in a variable or built from non-literal pieces is not seen, nor is
@@ -311,7 +311,7 @@ function fixture(files: Record<string, string>): string {
 /** One source file, untracked, in a throwaway repo. */
 const fixtureWith = (path: string, text: string): string => fixture({ [path]: text });
 
-/** The spawn scan's fixture (item 28): a hit, the dockerignore/z3 decoy shape (a tools literal in a
+/** The spawn scan's fixture (item 28): a hit, the dockerignore/retirement-drift decoy shape (a tools literal in a
  *  file whose spawn call runs something else), and an exempt file. */
 const spawnFixture = (): string => fixture({
   "scripts/spawns.ts": `execFileSync("node", ["--experimental-strip-types", "tools/matrix/run.ts"]);\n`,
@@ -364,7 +364,7 @@ const SPAWN_HITS: { label: string; source: string; callee: string; arg: string; 
 ];
 /** Rows that are NOT hits: `calls` is how many spawn calls the scan must still have inspected. */
 const SPAWN_DECOYS: { label: string; source: string; calls: number }[] = [
-  { label: "a tools/ literal outside the call (the dockerignore/z3 decoy shape)", source: `const p = "tools/matrix/run.ts"; spawnSync("git", ["ls-files"]);`, calls: 1 },
+  { label: "a tools/ literal outside the call (the dockerignore/retirement-drift decoy shape)", source: `const p = "tools/matrix/run.ts"; spawnSync("git", ["ls-files"]);`, calls: 1 },
   { label: "`tools` alone as a git pathspec", source: `execFileSync("git", ["ls-files", "--", "tools"]);`, calls: 1 },
   { label: "a directory that merely contains the name", source: `spawn("node", ["mytools/matrix/a.ts", "toolsx/bench/b.ts", "tools/matrixx/c.ts", "tools/benchmark/d.ts"]);`, calls: 1 },
   { label: "a callback's body is not the call's arguments", source: `exec("ls", () => { log("tools/matrix/run.ts"); });`, calls: 1 },

@@ -42,7 +42,7 @@ import { isPlannedShape, type AnyRunResults, type CaseResult, type CaseResultV2,
  *  mixed.ts, lib/browser/evidence.ts, the PADPROOF scenario). A prefix, or a
  *  whole id. parity.test.ts proves each one covers an id the driver emits, and
  *  that every browser-only id the committed browser runs record is covered. */
-export const BROWSER_ONLY_PREFIXES = ["ui-", "visual-", "no-horizontal-scroll", "mixed-", "builder-", "organiser-ui-path", "pad-", "finalize-ledger-row"] as const;
+export const BROWSER_ONLY_PREFIXES = ["ui-", "visual-", "no-horizontal-scroll", "mixed-", "builder-", "organiser-ui-path", "pad-", "finalize-ledger-row", "fold-branch", "runsheet-today-default"] as const;
 export const isBrowserOnly = (id: string): boolean => BROWSER_ONLY_PREFIXES.some((p) => id.startsWith(p));
 
 /** `vacuous` (review I-1): a pair with no common check whose state OR reason
