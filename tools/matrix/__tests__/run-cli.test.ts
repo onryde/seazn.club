@@ -30,7 +30,9 @@ import { main as renderMain } from "../render.ts";
 import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
 import { MAX_WORKERS, TurnDeadlineExceeded, TurnsClosed, sharedTurns } from "../lib/workers.ts";
 import { deferred, handClock } from "./hand-clock.ts";
-import { W1_DRIVING_SET } from "../lib/w1-driving-set.ts";
+import { W1_DRIVING_SET, planW1Driving } from "../lib/w1-driving-set.ts";
+import { PR_SAMPLE_SET, PrSampleNeedsRows } from "../lib/pr-sample.ts";
+import { matchPlanIds } from "../lib/judge.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "../lib/scenarios/types.ts";
@@ -38,7 +40,7 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { EXIT, NOTES_CAP, PlanStageCapTooLow, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, planOf, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
+import { EXIT, NOTES_CAP, PlanStageCapTooLow, SETS, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, planOf, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type DbFactories, type PlanCases, type PlanLayers, type RunDeps } from "../run.ts";
 import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
@@ -177,7 +179,7 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", name, "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET}, ${W1_DRIVING_SET}, ${W1_DRIVING_L1_SET})`);
+    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET}, ${W1_DRIVING_SET}, ${W1_DRIVING_L1_SET}, ${PR_SAMPLE_SET})`);
   });
   // W1c Task 7: pad-proof scores every fixture on the pad, so over HTTP it has nothing to prove.
   it("--set pad-proof without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {
@@ -2952,3 +2954,118 @@ async function provisionLoopback(
   };
   return { base: `http://127.0.0.1:${port}`, f, answered, hung, switched, hungArrived, close };
 }
+
+// W1d Task 7 (R27, D13): `--set pr-sample --rows <rows>` through the REAL runner. The expected ids are built here
+// from the slice constants, the sport registry and the committed w1-driving set — never read back from
+// planPrSample. The fake DB answers every sport's variant order with the catalogue's own (offlineVariantOrder),
+// so the run's variantFor is the offline default the committed baseline's ids carry.
+describe("runSlice — --set pr-sample and --rows (W1d T7)", () => {
+  const OTHER: readonly string[] = SPORT_KEYS.filter((s) => !(SLICE_SPORTS as readonly string[]).includes(s));
+  const fixedIds = (): string[] => [
+    ...SLICE_ROWS.flatMap((row) => SLICE_SPORTS.flatMap((sport) => SCENARIO_KEYS.map((sc) => `${row}|${sport}|${offlineBuilderDefault(sport)}|${sc}`))),
+    ...OTHER.map((s) => `league|${s}|${offlineBuilderDefault(s)}|LIFECYCLE`),
+  ];
+  const w1Ids = (rows: readonly string[]): string[] => planW1Driving(offlineBuilderDefault, {}).filter((c) => rows.includes(c.row)).map((c) => c.caseId);
+  const withOrder = (d: Deps, reads: string[] = []): Deps => {
+    const base = d.openDb.bind(d);
+    d.openDb = async () => ({ ...(await base()), variantKeysInBuilderOrder: async (s: string) => { reads.push(s); return [...offlineVariantOrder(s)]; } });
+    return d;
+  };
+
+  it("--set pr-sample --rows none runs the fixed sample (33): the slice's 24, then league LIFECYCLE on the nine other sports, reading all eleven sports' variant order", async () => {
+    capture();
+    const dir = dirFor();
+    const reads: string[] = [];
+    expect(await runSlice(withOrder(deps(), reads), ["--set", PR_SAMPLE_SET, "--rows", "none", "--run-id", "ps1", "--report-dir", dir])).toBe(0);
+    const run = runIn(dir, "ps1");
+    expect(run.cases.map((c) => c.caseId)).toEqual(fixedIds());
+    expect(run.cases).toHaveLength(33);
+    expect(run.plan).toBe("--set pr-sample --rows none");
+    expect(run.layer).toBe("L3");
+    expect(new Set(reads)).toEqual(new Set(SPORT_KEYS));
+  });
+
+  it("a declared row adds that row's w1-driving cases ahead of the fixed sample; the plan records the rows SORTED, however they were typed", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(withOrder(deps()), ["--set", PR_SAMPLE_SET, "--rows", "swiss,league", "--run-id", "ps2", "--report-dir", dir])).toBe(0);
+    const run = runIn(dir, "ps2");
+    const want = [...new Set([...w1Ids(["league", "swiss"]), ...fixedIds()])];
+    expect(run.cases.map((c) => c.caseId)).toEqual(want);
+    expect(want.length).toBeGreaterThan(33);
+    expect(run.plan).toBe("--set pr-sample --rows league,swiss");
+  });
+
+  it("the run's own output, folded through the judge's plan check (class 1): its recorded plan names exactly the cases it ran", async () => {
+    capture();
+    const dir = dirFor();
+    let checked = 0;
+    for (const rows of ["none", "all", "knockout"]) {
+      const id = `ps3-${rows}`;
+      expect(await runSlice(withOrder(deps()), ["--set", PR_SAMPLE_SET, "--rows", rows, "--run-id", id, "--report-dir", dir])).toBe(0);
+      const run = runIn(dir, id);
+      expect(matchPlanIds(run).compared, rows).toBe(run.cases.length);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("--shard stripes the sample like any plain plan (the L3 smoke shards it): the stripe's items, the whole plan's size, one plan string", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(withOrder(deps()), ["--set", PR_SAMPLE_SET, "--rows", "none", "--shard", "2/3", "--run-id", "ps4", "--report-dir", dir])).toBe(0);
+    const run = runIn(dir, "ps4");
+    expect(run.cases.map((c) => c.caseId)).toEqual(fixedIds().filter((_, i) => i % 3 === 1));
+    expect(run.shard).toEqual({ index: 2, of: 3, planSize: 33 });
+    expect(run.plan).toBe("--set pr-sample --rows none");
+  });
+
+  it.each<[string, string[], RegExp]>([
+    ["no --rows", ["--set", PR_SAMPLE_SET], /--set pr-sample needs --rows/],
+    ["--rows beside no --set", ["--rows", "none"], /--rows is --set pr-sample's declaration; it takes --set pr-sample/],
+    ["--rows beside another set", ["--set", W1_DRIVING_SET, "--rows", "swiss"], /--rows is --set pr-sample's declaration/],
+    ["--rows beside a probe set", ["--set", PROBE_SET, "--rows", "all"], /--rows is --set pr-sample's declaration/],
+    ["--rows beside --layer", ["--driver", "browser", "--layer", "L1", "--rows", "none"], /--rows is --set pr-sample's declaration/],
+    ["--rows beside --canary", ["--canary", "M1", "--rows", "none"], /--rows is --set pr-sample's declaration/],
+    ["an unknown row", ["--set", PR_SAMPLE_SET, "--rows", "leage"], /UnknownRow: .*'leage'.*league/s],
+    ["an empty --rows", ["--set", PR_SAMPLE_SET, "--rows", ""], /UnknownRow/],
+    ["a trailing comma", ["--set", PR_SAMPLE_SET, "--rows", "league,"], /UnknownRow/],
+    ["all beside a row", ["--set", PR_SAMPLE_SET, "--rows", "all,league"], /UnknownRow/],
+    ["--only beside the set", ["--set", PR_SAMPLE_SET, "--rows", "none", "--only", "league|generic"], /--set runs a named set; it takes no --only, --scenario or --canary/],
+    ["--scenario beside the set", ["--set", PR_SAMPLE_SET, "--rows", "none", "--scenario", "M1"], /--set runs a named set; it takes no --only, --scenario or --canary/],
+    ["--canary beside the set", ["--set", PR_SAMPLE_SET, "--rows", "none", "--canary", "M1"], /--set runs a named set; it takes no --only, --scenario or --canary/],
+  ])("%s is a usage refusal: exit 2, usage on stderr, before the DB", async (_what, argv, why) => {
+    const io = capture();
+    const d = deps();
+    expect(await runSlice(d, [...argv, "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toMatch(why);
+    expect(io.err()).toMatch(/usage: run\.ts/);
+  });
+
+  it("the usage line names --rows, and says which set takes it", async () => {
+    const io = capture();
+    expect(await runSlice(deps(), ["--bogus"])).toBe(2);
+    expect(io.err()).toMatch(/\[--rows ROWS\]/);
+    expect(io.err()).toContain(`--set ${PR_SAMPLE_SET} takes --rows`);
+  });
+
+  it("the SETS entry itself refuses by name when called with no rows (the seam under parseCli: a plan nobody declared rows for is no sample)", () => {
+    expect(Object.keys(SETS)).toContain(PR_SAMPLE_SET);
+    expect(() => (SETS[PR_SAMPLE_SET] as PlanCases)({})).toThrow(PrSampleNeedsRows);
+    expect(() => (SETS[PR_SAMPLE_SET] as PlanCases)({ set: PR_SAMPLE_SET })).toThrow(PrSampleNeedsRows);
+    expect((SETS[PR_SAMPLE_SET] as PlanCases)({ rows: [] }).plan(offlineBuilderDefault)).toHaveLength(33);
+  });
+
+  it("planOf records the declaration: rows sorted, none and all spelled out, and a pr-sample plan with no rows is refused", () => {
+    const base = { canary: undefined, layer: undefined, only: undefined, scenario: undefined, scope: undefined };
+    expect(planOf({ ...base, set: PR_SAMPLE_SET, rows: [] })).toBe("--set pr-sample --rows none");
+    expect(planOf({ ...base, set: PR_SAMPLE_SET, rows: "all" })).toBe("--set pr-sample --rows all");
+    expect(planOf({ ...base, set: PR_SAMPLE_SET, rows: ["swiss", "league"] })).toBe("--set pr-sample --rows league,swiss");
+    expect(() => planOf({ ...base, set: PR_SAMPLE_SET })).toThrow(PrSampleNeedsRows);
+    // Every other plan keeps the string it always had: rows are no part of it.
+    expect(planOf({ ...base, set: W1_DRIVING_SET })).toBe("--set w1-driving");
+    expect(planOf({ ...base, set: W1_DRIVING_SET, rows: ["swiss"] })).toBe("--set w1-driving");
+    expect(planOf({ ...base, set: undefined })).toBe("slice");
+  });
+});

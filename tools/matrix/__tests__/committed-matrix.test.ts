@@ -17,6 +17,7 @@ import { renderMatrix } from "../lib/render-matrix.ts";
 import { decideState, parseResults, stringsIn, type CaseResultV2 } from "../lib/results.ts";
 import { L2_WIDTHS } from "../lib/widths.ts";
 import { layerCaseId } from "../lib/layers.ts";
+import { PR_SAMPLE_SET, PrSampleNeedsRows, formatRows, prSamplePlanner } from "../lib/pr-sample.ts";
 import { W1_DRIVING_SET, w1DrivingPlanner } from "../lib/w1-driving-set.ts";
 import { SETS } from "../run.ts";
 import { LOCK_PATH, PLAN_BEFORE_CARRY_6, REPO, TRUTH_RUNS, committedRuns, freeze, judgeRun, livePlan, noVariant, planFor, readLock, reDecide, sweepCommitted, thawed, trackedUnder } from "./committed-plans.ts";
@@ -276,9 +277,10 @@ describe("each committed run, judged against its own plan (W1c Task 14 fix round
   it("livePlan reads every --set the runner registers (run.ts SETS), each as that set's own planner plans it — so a new set's run can be frozen (T13-R1 I-1)", () => {
     let checked = 0;
     for (const [name, planner] of Object.entries(SETS)) {
-      const out = planner({});
+      // --set pr-sample takes the rows its run declares (D13); the others take none.
+      const out = planner(name === PR_SAMPLE_SET ? { rows: [] } : {});
       const ids = "layered" in out ? out.layered((s) => s).map(layerCaseId) : out.plan((s) => s).map((c) => c.caseId);
-      const p = livePlan(`--set ${name}`);
+      const p = livePlan(name === PR_SAMPLE_SET ? `--set ${name} --rows none` : `--set ${name}`);
       expect(p.layered, name).toBe("layered" in out);
       expect([...p.driven, ...p.planned.keys()].sort(), name).toEqual(ids.map(noVariant).sort());
       checked++;
@@ -289,6 +291,26 @@ describe("each committed run, judged against its own plan (W1c Task 14 fix round
     const one = livePlan(`--set ${W1_DRIVING_SET} --only league|football --scenario LIFECYCLE`);
     expect([...one.driven]).toEqual(w1DrivingPlanner({ only: "league|football", scenario: "LIFECYCLE" }).plan((s) => s).map((c) => noVariant(c.caseId)));
     expect([...one.driven]).toEqual(["league|football|LIFECYCLE"]);
+  });
+  it("livePlan reads --set pr-sample --rows <rows> (W1d D13): each declaration as the sample plans it, with no committed run of it expected yet", () => {
+    const keys = (rows: readonly string[] | "all") => prSamplePlanner({ rows }).plan((s) => s).map((c) => noVariant(c.caseId)).sort();
+    let checked = 0;
+    for (const rows of [[], ["swiss"], ["league", "swiss"], "all"] as const) {
+      const p = livePlan(`--set ${PR_SAMPLE_SET} --rows ${formatRows(rows)}`);
+      expect(p.layered).toBe(false);
+      expect([...p.driven].sort(), formatRows(rows)).toEqual([...new Set(keys(rows))].sort());
+      expect(p.planned.size).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // The rows are the plan: swiss adds cases the fixed sample lacks, and none is exactly the fixed sample.
+    expect(livePlan(`--set ${PR_SAMPLE_SET} --rows swiss`).driven.size).toBeGreaterThan(livePlan(`--set ${PR_SAMPLE_SET} --rows none`).driven.size);
+    expect(livePlan(`--set ${PR_SAMPLE_SET} --rows none`).driven.size).toBe(33);
+    // No lock entry exists for it, and none is owed: a plan that carries no committed run is read, never frozen by the sweep.
+    expect(Object.values(readLock().runs).some((e) => e.plan.startsWith(`--set ${PR_SAMPLE_SET}`))).toBe(false);
+    // A pr-sample plan that records no rows, or rows the catalogue lacks, is no plan: refused by name, never "the fixed sample".
+    expect(() => livePlan(`--set ${PR_SAMPLE_SET}`)).toThrow(PrSampleNeedsRows);
+    expect(() => livePlan(`--set ${PR_SAMPLE_SET} --rows leage`)).toThrow(/leage/);
   });
   it("every committed results.json is exactly its FROZEN plan: each driven case re-decided, each planned row the plan's own", () => {
     const files = trackedUnder(TRUTH_RUNS).filter((f) => f.endsWith("/results.json"));

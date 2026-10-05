@@ -87,6 +87,11 @@ function closure(roots: readonly string[]): Set<string> {
 
 const MODULES = shipped(MATRIX).sort();
 
+/** W1d Task 7 (ruling T6-LIVEPLAN): production code never depends on a test module. lib/judge.ts imported
+ *  `__tests__/committed-plans.ts` for `livePlan`, so `matrix:judge` loaded a test fixture's module graph.
+ *  A spec reaches one when any of its path segments is the test directory. */
+const reachesTests = (spec: string): boolean => spec.startsWith(".") && spec.split("/").includes("__tests__");
+
 describe("tools/matrix import boundary", () => {
   it("discovery guard: the walker finds the shipped modules (an empty set would pass vacuously)", () => {
     expect(MODULES.length).toBeGreaterThan(0);
@@ -97,11 +102,34 @@ describe("tools/matrix import boundary", () => {
     for (const { spec } of importsOf(file)) {
       expect(FORBIDDEN.some((bad) => spec.includes(bad)), `${spec}`).toBe(false);
       expect(BENCH_PACKAGE.test(spec), `${spec}: reach the bench by relative path, never by package name`).toBe(false);
+      expect(reachesTests(spec), `${spec}: a shipped module imports a test module (ruling T6-LIVEPLAN) — hoist what it needs into lib/`).toBe(false);
       if (!spec.startsWith(".")) continue;
       const target = relative(REPO, resolve(dirname(file), spec));
       if (target.startsWith("tools/bench/")) expect(ALLOWED_BENCH.has(target), target).toBe(true);
       if (target.startsWith("apps/web/")) expect(ALLOWED_WEB.has(target), target).toBe(true);
     }
+  });
+
+  it("the test-module check sees every import shape it is held to, and no shipped module reaches __tests__ (anti-vacuity: the scan reads every module)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "matrix-boundary-tests-"));
+    try {
+      const probe = join(dir, "probe.ts");
+      writeFileSync(probe, 'import { a } from "../__tests__/committed-plans.ts";\nexport { b } from "../../__tests__/x.ts";\nimport "./__tests__/y.ts";\nconst c = await import("../__tests__/z.ts");\nimport { ok } from "../lib/ok.ts";\nimport { node } from "node:fs";\nimport { m } from "../__tests__x/no.ts";\n');
+      const specs = importsOf(probe).map((i) => i.spec);
+      expect(specs.filter(reachesTests)).toEqual(["../__tests__/committed-plans.ts", "../../__tests__/x.ts", "./__tests__/y.ts", "../__tests__/z.ts"]);
+      expect(specs.filter((s) => !reachesTests(s))).toEqual(["../lib/ok.ts", "node:fs", "../__tests__x/no.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    let scanned = 0;
+    const offenders: string[] = [];
+    for (const file of MODULES) {
+      for (const { spec } of importsOf(file)) if (reachesTests(spec)) offenders.push(`${relative(MATRIX, file)}: ${spec}`);
+      scanned++;
+    }
+    expect(offenders).toEqual([]);
+    expect(scanned).toBe(MODULES.length);
+    expect(scanned).toBeGreaterThan(50);
   });
 
   it("the bench is reached by relative path only: a bare @seazn/bench specifier is refused, by the per-module check and by closure()", () => {

@@ -10,11 +10,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { decideState, isPlannedShape, parseResults, type CaseResultV2 } from "../lib/results.ts";
-import { API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, w1DrivingL1Planner, widthSweepPlanner, type LayerCase } from "../lib/layers.ts";
-import { PAD_PROOF_SET, padProofPlanner } from "../lib/pad-proof-set.ts";
-import { PROBE_SET, probePlanner } from "../lib/probe-set.ts";
-import { planCanaryCase, planSliceCases } from "../lib/slice.ts";
-import { W1_DRIVING_SET, w1DrivingPlanner } from "../lib/w1-driving-set.ts";
+import { livePlan, noVariant, noWidth, type ExpectedPlan } from "../lib/expected-plan.ts";
+import { PROBE_SET } from "../lib/probe-set.ts";
 
 export const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 export const TRUTH_RUNS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs";
@@ -60,62 +57,12 @@ export function reDecide(cases: readonly CaseResultV2[]): { checked: number; ski
   };
 }
 
-/** A plan's cases, keyed without the variant (the DB's builder default, which
- *  the planner reads live) and, for a plain run, without the run's one width. */
 /** A case as judgeRun reads it: a v2 case, plus on a v3 run recordPlanned's marker (W1d item 3). */
 export type JudgedCase = CaseResultV2 & { readonly planned?: true };
 
-export interface ExpectedPlan {
-  readonly plan: string;
-  readonly layered: boolean;
-  readonly driven: ReadonlySet<string>;
-  readonly planned: ReadonlyMap<string, { readonly state: "no_path" | "not_run"; readonly reason: string }>;
-}
-export const noVariant = (caseId: string): string => caseId.split("|").filter((_, i) => i !== 2).join("|");
-export const noWidth = (caseId: string): string => caseId.replace(/@\d+$/, "");
-/** Variant-free keys: every planner is handed the sport as its own variant, and the key drops it. */
-const anyVariant = (sport: string): string => sport;
-
-function fromLayered(plan: string, cases: readonly LayerCase[]): ExpectedPlan {
-  const driven = new Set<string>();
-  const planned = new Map<string, { state: "no_path" | "not_run"; reason: string }>();
-  for (const c of cases) {
-    const key = noVariant(layerCaseId(c));
-    if (c.spec !== null) { driven.add(key); continue; }
-    // The stored reason is what decideState makes of the planner's own 🚫/░ (run.ts recordPlanned).
-    const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
-    planned.set(key, { state: d.state as "no_path" | "not_run", reason: d.reason });
-  }
-  return { plan, layered: true, driven, planned };
-}
-const fromSpecs = (plan: string, ids: readonly string[]): ExpectedPlan =>
-  ({ plan, layered: false, driven: new Set(ids.map(noVariant)), planned: new Map() });
-
-/** The plan a recorded `plan` string names, built by TODAY's planners. */
-export function livePlan(plan: string): ExpectedPlan {
-  const words = plan.split(" ");
-  const flag = (name: string): string | undefined => { const i = words.indexOf(name); return i < 0 ? undefined : words[i + 1]; };
-  const filters = { only: flag("--only"), scenario: flag("--scenario") };
-  if (words[0] === "--set") {
-    const set = words[1];
-    if (set === PAD_PROOF_SET) return fromSpecs(plan, padProofPlanner({}).plan(anyVariant).map((c) => c.caseId));
-    if (set === PROBE_SET) return fromSpecs(plan, probePlanner({}).plan(anyVariant).map((c) => c.caseId));
-    if (set === API_ONLY_BROWSER_SET) return fromLayered(plan, apiOnlyBrowserPlanner({}).layered(anyVariant));
-    if (set === WIDTH_SWEEP_SET) return fromLayered(plan, widthSweepPlanner({}).layered(anyVariant));
-    // W1-driving Task 13 (T13-R1 I-1): the capability cells and the two template cards, at 1280.
-    if (set === W1_DRIVING_L1_SET) return fromLayered(plan, w1DrivingL1Planner({}).layered(anyVariant));
-    // W1-driving Task 12: the one set that takes --only / --scenario (run.ts planOf records them).
-    if (set === W1_DRIVING_SET) return fromSpecs(plan, w1DrivingPlanner(filters).plan(anyVariant).map((c) => c.caseId));
-  }
-  if (words[0] === "--canary" && words[1] !== undefined) return fromSpecs(plan, [planCanaryCase(anyVariant, words[1]).caseId]);
-  // W1d Task 3: `--scope grid` is the full grid; a bare `--layer L1` stays the slice, so every
-  // committed entry is judged exactly as before. The grid takes no filter.
-  const grid = flag("--scope") === "grid";
-  if (words[0] === "--layer" && words[1] === "L1") return fromLayered(plan, (grid ? LAYER_GRID_PLANNERS.L1({}) : l1Planner(filters)).layered(anyVariant));
-  if (words[0] === "--layer" && words[1] === "L2") return fromLayered(plan, (grid ? LAYER_GRID_PLANNERS.L2({}) : l2Planner(filters)).layered(anyVariant));
-  if (words[0] === "slice") return fromSpecs(plan, planSliceCases(anyVariant, filters).map((c) => c.caseId));
-  throw new Error(`committed-plans: no planner for the recorded plan "${plan}"`);
-}
+// W1d Task 7 (ruling T6-LIVEPLAN): the recorded-plan reader moved to lib/expected-plan.ts, so the judge CLI no
+// longer imports a test module. Re-exported here, so the tests that import it from this module are unchanged.
+export { livePlan, noVariant, noWidth, type ExpectedPlan };
 
 /** One run judged against its plan, case by case: a case the plan PLANS is
  *  stored as exactly the plan's 🚫/░ (state and reason) with no check; a case

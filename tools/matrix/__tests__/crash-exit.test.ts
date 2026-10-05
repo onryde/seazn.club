@@ -26,7 +26,7 @@ const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8"))
 /** [package script, its CLI, an argv its main refuses as usage, that exit,
  *  the arguments the script itself passes after its CLI]. W1c added
  *  matrix:browser and matrix:parity (final review m-11); W1d Task 1 added
- *  matrix:lock-check (ruling T1-b), Task 4 matrix:merge and Task 6 matrix:judge (ruling CLI-TABLES). */
+ *  matrix:lock-check (ruling T1-b), Task 4 matrix:merge, Task 6 matrix:judge and Task 7 matrix:pr-rows (ruling CLI-TABLES). */
 const CLIS: readonly (readonly [string, string, readonly string[], number, readonly string[]])[] = [
   ["matrix:l3", "tools/matrix/run.ts", ["--bogus"], 2, []],
   ["matrix:browser", "tools/matrix/run.ts", ["--bogus"], 2, ["--driver", "browser"]],
@@ -38,6 +38,7 @@ const CLIS: readonly (readonly [string, string, readonly string[], number, reado
   ["matrix:lock-check", "tools/matrix/lock-append-only.ts", ["--bogus"], 2, []],
   ["matrix:merge", "tools/matrix/merge-shards.ts", [], 2, []],
   ["matrix:judge", "tools/matrix/judge.ts", ["--bogus"], 2, []],
+  ["matrix:pr-rows", "tools/matrix/ci/pr-rows.ts", ["--bogus"], 2, []],
 ];
 
 /** The package script's own argv (after `node`), with its CLI swapped for
@@ -80,7 +81,7 @@ describe("an import-time crash exits 3 in every W1b, W1c and W1d CLI (final batc
       expect(scripts[key], key).toBe([`node --experimental-strip-types --import ${PRELOAD} ${cli}`, ...tail].join(" "));
       checked++;
     }
-    expect(checked).toBe(10);
+    expect(checked).toBe(11);
   });
 
   it.each(CLIS)("%s's flags: each load failure exits 3, naming the crash; a clean load exits 0; a verdict stays 1", (key, cli, _usage, _code, tail) => {

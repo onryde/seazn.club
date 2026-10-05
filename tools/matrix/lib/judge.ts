@@ -13,7 +13,7 @@
 //   scopeOfPlan    "<layer> (<scope>)" derived from a plan string (ruling T6-SCOPE);
 //   JudgeOut       the verdict as JSON, which `summary --judge` (Task 8) reads.
 import { z } from "zod";
-import { livePlan, noVariant, noWidth, type ExpectedPlan } from "../__tests__/committed-plans.ts";
+import { livePlan, noVariant, noWidth, type ExpectedPlan } from "./expected-plan.ts";
 import { CASE_STATES, LAYERS, VACUOUS_REASONS, isPlannedShape, type CaseResultV2, type CaseState, type RunResults } from "./results.ts";
 
 // ---------------------------------------------------------------------------------------------------------------

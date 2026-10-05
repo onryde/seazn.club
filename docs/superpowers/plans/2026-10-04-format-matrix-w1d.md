@@ -2765,7 +2765,7 @@ Add these CLI tests to `run-sample.test.ts`. They spawn the REAL `run-sample.ts`
           # payload. `// ""` turns a null body into an empty string, which pr-rows refuses as undeclared.
           gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""' > "$RUNNER_TEMP/body.txt"
           git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
-          node --experimental-strip-types tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+          node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
       - name: Truth-run staleness (D1b, non-blocking)
         # always(): a failed rows step (R27 undeclared) must not hide the staleness signal (review m6).
         if: ${{ always() && vars.MATRIX_WEEKLY_ENABLED == 'true' }}

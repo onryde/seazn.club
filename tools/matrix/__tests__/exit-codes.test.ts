@@ -18,9 +18,9 @@ const MATRIX = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(MATRIX, "..", "..");
 
 /** Every CLI under tools/matrix whose header declares exit codes (item 6). The package scripts' own set is checked against it below. */
-const CLIS = ["run", "render", "parity", "findings-table", "draw-counts", "gen-catalogue", "single-sport", "model", "merge-shards", "judge", "lock-append-only"] as const;
+const CLIS = ["run", "render", "parity", "findings-table", "draw-counts", "gen-catalogue", "single-sport", "model", "merge-shards", "judge", "lock-append-only", "ci/pr-rows"] as const;
 /** The CLIs that read a file the caller names: their header must declare unreadable input, under 2. */
-const INPUT_READERS = ["render", "parity", "findings-table", "draw-counts", "merge-shards", "judge"] as const;
+const INPUT_READERS = ["render", "parity", "findings-table", "draw-counts", "merge-shards", "judge", "ci/pr-rows"] as const;
 
 interface Entry { readonly code: number; readonly text: string }
 
@@ -61,8 +61,8 @@ describe("EXIT_CODES (D8): one meaning per code", () => {
 });
 
 describe("every CLI header holds to the table (D8)", () => {
-  it("empty case first: the sweep reads 11 CLIs and each declares at least a 0 and a 2 (a header that parsed to nothing is a failure, not a pass)", () => {
-    expect(CLIS).toHaveLength(11);
+  it("empty case first: the sweep reads 12 CLIs and each declares at least a 0 and a 2 (a header that parsed to nothing is a failure, not a pass)", () => {
+    expect(CLIS).toHaveLength(12);
     let read = 0;
     for (const { cli, entries } of ALL) {
       const codes = entries.map((e) => e.code);
@@ -70,20 +70,21 @@ describe("every CLI header holds to the table (D8)", () => {
       expect(codes, `${cli} declares a 2`).toContain(2);
       read++;
     }
-    expect(read).toBe(11);
+    expect(read).toBe(12);
   });
 
   it("the CLIs the package scripts run are all in the sweep (a new matrix:* script owes its row here)", () => {
     const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
-    const targets = Object.entries(scripts).filter(([k]) => k.startsWith("matrix:")).map(([k, v]) => ({ k, file: /tools\/matrix\/([\w-]+)\.ts/.exec(v)?.[1] }));
+    const targets = Object.entries(scripts).filter(([k]) => k.startsWith("matrix:")).map(([k, v]) => ({ k, file: /tools\/matrix\/([\w/-]+)\.ts/.exec(v)?.[1] }));
     let checked = 0;
     for (const { k, file } of targets) {
       expect(file, `${k} runs a tools/matrix/<cli>.ts`).toBeDefined();
       expect(CLIS as readonly string[], `${k}: ${file}.ts is in exit-codes.test.ts's CLIS`).toContain(file);
       checked++;
     }
-    expect(checked).toBeGreaterThanOrEqual(10);
+    expect(checked).toBeGreaterThanOrEqual(11);
     expect(targets.map((t) => t.k)).toContain("matrix:judge");
+    expect(targets.map((t) => t.k)).toContain("matrix:pr-rows");
   });
 
   it("every code a header declares is in EXIT_CODES", () => {
@@ -107,6 +108,9 @@ describe("every CLI header holds to the table (D8)", () => {
       }
     }
     expect(readers).toBe(INPUT_READERS.length);
+    // The bound above is derived from the table, so a row dropped from it still agrees with itself: pin the table.
+    expect(INPUT_READERS, "bump this when a CLI that reads a named file is added").toHaveLength(7);
+    expect(INPUT_READERS).toContain("ci/pr-rows");
   });
 
   it("no header declares a refusal under 1: 1 is the verdict code (a difference, drift, zero cases, a regression, a harness fault)", () => {

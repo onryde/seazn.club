@@ -30,12 +30,17 @@
 //
 //   pnpm run matrix:l3 --
 //     [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--shard k/N]
-//     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME]
+//     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME] [--rows ROWS]
 //
 // `--only` takes any catalogue cell (W1-driving Task 12): a slice cell plans
 // as the slice always has; any other cell is planned by the w1-driving set
 // (lib/w1-driving-set.ts). `--set w1-driving` is the one named set that also
 // takes `--only` and `--scenario`.
+// `--set pr-sample --rows <row>[,<row>...]|all|none` (W1d Task 7, D13, R27) is the per-PR
+// sample over HTTP at L3: the w1-driving cases on the rows a PR declares, then a fixed 33
+// (the slice's 24, and league LIFECYCLE on the other nine sports; lib/pr-sample.ts).
+// `--rows` is that set's declaration and the set cannot run without one (no declaration is
+// not `none`); planOf records it sorted, so `--rows swiss,league` is `--rows league,swiss`.
 //   pnpm run matrix:browser -- --width W   (the same flags; W one of BROWSER_WIDTHS)
 //   pnpm run matrix:browser -- --layer L1|L2 [--scope slice|grid] [--only row|sport] [--scenario KEY (L1)]
 //     (--scope grid takes no --only/--scenario: the grid is the whole grid)
@@ -58,7 +63,9 @@
 //      cannot see the deliberate break (R17).
 //   2  refused, reason on stderr, nothing written: a usage error (unknown
 //      flag, a positional, --canary with --only/--scenario, --set with any
-//      filter but --set w1-driving with --only/--scenario, a run id that is empty or too long once slugged; a --workers
+//      filter but --set w1-driving with --only/--scenario, --rows beside anything but --set pr-sample,
+//      --set pr-sample without --rows, a row the catalogue lacks (UnknownRow),
+//      a run id that is empty or too long once slugged; a --workers
 //      that is not an integer in 1..MAX_WORKERS, or above 1 on a browser run
 //      (D10); an unknown
 //      --driver, --driver browser without --width, a --width outside
@@ -141,6 +148,7 @@ import {
 import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
 import type { L2Run } from "./lib/pairs.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
+import { PR_SAMPLE_SET, PrSampleNeedsRows, UnknownRow, formatRows, parseRows, prSamplePlanner } from "./lib/pr-sample.ts";
 import { BaseNotUrl, baseScrubber, redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
 import { decideState, writeResults, type CaseResult, type CheckResult, type L2Record, type Layer, type RunAbort, type RunResults, type ShardHeader } from "./lib/results.ts";
@@ -245,8 +253,9 @@ export class BrowserCaseAborted extends Error {
   }
 }
 
-/** What a planner may read from the command line. */
-export interface PlannerCli { only?: string; scenario?: string; canary?: string; set?: string }
+/** What a planner may read from the command line. `rows` (W1d Task 7) is the rows a PR declared, for `--set pr-sample`
+ *  only — parseCli refuses it beside any other plan. */
+export interface PlannerCli { only?: string; scenario?: string; canary?: string; set?: string; rows?: readonly string[] | "all" }
 
 /** A case list and the sports whose builder variant order it needs from the DB
  *  (read once each, before planning). W1a carry 4: tests inject one instead of
@@ -319,6 +328,8 @@ export const SETS: Readonly<Record<string, PlanCases | PlanLayers>> = Object.fre
   // W1-driving Task 13 (ruling 47): one L1 cell per capability, plus the two
   // template-only cells through their gallery cards — layered, at 1280.
   [W1_DRIVING_L1_SET]: w1DrivingL1Planner,
+  // W1d Task 7 (D13): the per-PR sample — the declared rows' w1-driving cases plus a fixed 33 — over HTTP, at L3.
+  [PR_SAMPLE_SET]: prSamplePlanner,
 });
 
 export class UnknownSet extends Error {
@@ -496,7 +507,7 @@ export interface CallRefusal { method: string; path: string; status: number; cod
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--scope slice|grid] [--shard k/N] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] (--set ${W1_DRIVING_SET} also takes --only/--scenario)
+const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--scope slice|grid] [--shard k/N] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] [--rows ROWS] (--set ${W1_DRIVING_SET} also takes --only/--scenario; --set ${PR_SAMPLE_SET} takes --rows: <row>[,<row>...] | all | none)
   --shard k/N  run only plan items i with i mod N = k-1`;
 
 /** D10 (ruling 52): browser workers are not this wave's — one chromium per
@@ -513,7 +524,7 @@ const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.me
  *  kept as typed until the plan is chosen: a plain browser run needs one
  *  (resolved by plainBrowserWidth), a layered plan sets its own and refuses
  *  any other (layeredWidthRefusal). */
-interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; scope?: LayerScope; shard?: Shard; widthArg: string | undefined; workers: number }
+interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; rows?: readonly string[] | "all"; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; scope?: LayerScope; shard?: Shard; widthArg: string | undefined; workers: number }
 
 /** `--workers` (W1-driving T11): digits only, then 1..MAX_WORKERS — the same
  *  bound runQueue refuses by name (WorkersOutOfRange), checked here first so
@@ -533,8 +544,15 @@ function parseWorkers(v: string | undefined): { workers: number } | { usage: str
  *  the set from its case ids. parseCli has already refused every combination
  *  this does not name (--set or --canary beside a filter or a layer). The
  *  driver and width are recorded apart (D9). */
-export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario" | "scope">): string {
+export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario" | "scope" | "rows">): string {
   const filters = [...(cli.only === undefined ? [] : [`--only ${cli.only}`]), ...(cli.scenario === undefined ? [] : [`--scenario ${cli.scenario}`])];
+  // W1d Task 7 (D13): --set pr-sample is the one set that takes --rows, recorded in its one canonical spelling (sorted,
+  // none and all written out), so a judge reads back the plan the run was made from. A pr-sample plan with no
+  // rows is no plan.
+  if (cli.set === PR_SAMPLE_SET) {
+    if (cli.rows === undefined) throw new PrSampleNeedsRows();
+    return `--set ${cli.set} --rows ${formatRows(cli.rows)}`;
+  }
   // Only --set w1-driving takes filters (Task 12); for every other set they are refused, so this is `--set NAME`.
   if (cli.set !== undefined) return [`--set ${cli.set}`, ...filters].join(" ");
   if (cli.canary !== undefined) return `--canary ${cli.canary}`;
@@ -590,11 +608,11 @@ export function withoutBareDashes(argv: readonly string[]): string[] {
 }
 
 function parseCli(argv: string[]): Cli | { usage: string } {
-  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string; layer?: string; scope?: string; shard?: string; workers?: string };
+  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; rows?: string; driver?: string; width?: string; layer?: string; scope?: string; shard?: string; workers?: string };
   try {
     ({ values } = parseArgs({ args: withoutBareDashes(argv), options: {
       base: { type: "string" }, "run-id": { type: "string" }, "report-dir": { type: "string" },
-      only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" },
+      only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" }, rows: { type: "string" },
       driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" }, scope: { type: "string" }, shard: { type: "string" }, workers: { type: "string" },
     } }));
   } catch (e) {
@@ -640,9 +658,18 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   if (values.canary !== undefined && (values.only !== undefined || values.scenario !== undefined)) {
     return { usage: "--canary runs league|generic alone; it takes no --only or --scenario" };
   }
+  // W1d Task 7 (D13): --rows is the pr-sample set's declaration, and that set cannot run without one (no declaration is
+  // not "none": the workflow always passes it, so its absence is a wiring fault).
+  let rows: Cli["rows"];
+  if (values.rows !== undefined) {
+    if (values.set !== PR_SAMPLE_SET) return { usage: `--rows is --set ${PR_SAMPLE_SET}'s declaration; it takes --set ${PR_SAMPLE_SET}` };
+    try { rows = parseRows(values.rows); } catch (e) { if (e instanceof UnknownRow) return { usage: `${e.name}: ${e.message}` }; throw e; }
+  } else if (values.set === PR_SAMPLE_SET) {
+    return { usage: `--set ${PR_SAMPLE_SET} needs --rows <row>[,<row>...] | all | none (the rows a PR declares)` };
+  }
   const runId = slugRunId(values["run-id"] ?? `w1a-${Date.now().toString(36)}`);
   if (runId === null) return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
-  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, layer, ...(scope === undefined ? {} : { scope }), ...(shard === undefined ? {} : { shard }), widthArg: values.width, workers: w.workers };
+  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, ...(rows === undefined ? {} : { rows }), driver: how.driver, layer, ...(scope === undefined ? {} : { scope }), ...(shard === undefined ? {} : { shard }), widthArg: values.width, workers: w.workers };
 }
 
 /** PF4: `vacuous` is every case that is neither an error red nor deferred and
@@ -1145,7 +1172,7 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
     // W1c Task 12: --layer chooses a layered plan (parseCli refused it beside --set).
     // W1d Task 3: --scope grid picks the full-grid planner of that layer; the slice is the default.
     const choose = deps.planCases ?? (cli.layer !== undefined ? (cli.scope === "grid" ? LAYER_GRID_PLANNERS : LAYER_PLANNERS)[cli.layer] : cli.set === undefined ? slicePlanner : SETS[cli.set]);
-    planner = choose({ only: cli.only, scenario: cli.scenario, canary: cli.canary, set: cli.set });
+    planner = choose({ only: cli.only, scenario: cli.scenario, canary: cli.canary, set: cli.set, rows: cli.rows });
   } catch (e) {
     warn(`matrix: ${errText(e)}`);
     return EXIT.REFUSED;
