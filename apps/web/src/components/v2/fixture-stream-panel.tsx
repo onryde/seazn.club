@@ -850,6 +850,8 @@ export function PhoneTab({
   // archived is none). Every answer settles against the state as it is THEN (the refs), not as it was when it was asked.
   const selectedRef = useRef<string | null>(null);
   const pickedHere = useRef(false);
+  // B8 re-review n-5: the last pick's save failed — the picker went back to the server's answer, and says so.
+  const [pickFailed, setPickFailed] = useState(false);
   const serverPick = useRef<string | null>(null);
   const listShown = useRef<StreamTarget[] | null>(null);
   const settleSelection = useCallback((): string | null => {
@@ -1134,6 +1136,7 @@ export function PhoneTab({
         // I-1: off the RAW view, not `shown` — Start another / Try again dismiss the card, and the fixture's reuse window
         // is exactly what the next start is asking about. No session ever → nothing consumed → no window (W23).
         restart={view?.restart ?? null}
+        pickFailed={pickFailed}
         // n1: a pick is the organiser's own answer — the refusal that was about the previous choice (removed, or held by
         // another match) goes with it. Any other refusal stays until the next attempt. (The hold needs no reset: a picked
         // selection only empties again through another removal, which holds it again.)
@@ -1142,10 +1145,18 @@ export function PhoneTab({
           selectedRef.current = id;
           setSelectedTargetId(id);
           setCreateError((e) => (e && (e.code === TARGET_REMOVED || e.code === "target_in_use") ? null : e));
-          // §6.7.3: the picker writes the fixture's pre-pick on change — what the phone's own start streams to. Best
-          // effort: Go live saves it again on success, so the two cannot stay apart past the next start. A PICK is the
-          // only write: opening the panel, or following the server's answer, saves nothing (I-1).
-          void apiV1(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { targetId: id } }).catch(() => {});
+          setPickFailed(false);
+          // §6.7.3: the picker writes the fixture's pre-pick on change — what the phone's own start streams to. A PICK is
+          // the only write: opening the panel, or following the server's answer, saves nothing (I-1).
+          // B8 re-review n-5: the save is what keeps the phone's start in agreement with the picker (§17.13), so a failure
+          // is not swallowed. If this pick is still the selection, the picker goes back to the server's answer — what the
+          // phone streams to — and says the pick did not save. A failure for a pick already replaced is moot.
+          void apiV1(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { targetId: id } }).catch(() => {
+            if (!pickedHere.current || selectedRef.current !== id) return;
+            pickedHere.current = false;
+            settleSelection();
+            setPickFailed(true);
+          });
         }}
         onRetryTargets={() => setTargetsTry((n) => n + 1)}
         onGoLive={() => void onGoLive()}
@@ -1557,6 +1568,8 @@ export interface PhoneTabBodyProps {
    *  waive the credit for; at balance 0 it is what keeps Go live reachable instead of the forced chooser. */
   restart: StreamSessionCurrent["restart"];
   onSelectTarget: (id: string) => void;
+  /** B8 re-review n-5: the last pick did not save — the picker shows the server's answer again, and a line says why. */
+  pickFailed: boolean;
   /** Re-read the destination list after a failed read. */
   onRetryTargets: () => void;
   onGoLive: () => void;
@@ -2009,6 +2022,11 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 />
               </div>
             ) : null}
+            {p.pickFailed && (
+              <p data-testid="stream-pick-error" role="alert" className="mt-1 text-sm text-red-700">
+                {msg("stream.dest.pickFailed")}
+              </p>
+            )}
             {inUseBox && p.createError && (
               // §3.3 / mockup state 5: the refusal sits under the picker it is about, with the holder's page beside it.
               <div id={inUseId} role="alert" className="mt-2 flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">

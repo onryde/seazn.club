@@ -5511,6 +5511,7 @@
   "stream.dest.label": "Destination",
   "stream.dest.manage": "Gérer les destinations",
   "stream.dest.pick": "Choisissez une destination",
+  "stream.dest.pickFailed": "Impossible d'enregistrer cette destination. Choisissez-la à nouveau.",
   "stream.dest.empty": "Aucune destination pour l’instant. Ajoutez-en une dans le Répertoire.",
   "stream.dest.loadError": "Impossible de charger vos destinations.",
   "stream.dest.retry": "Réessayer",

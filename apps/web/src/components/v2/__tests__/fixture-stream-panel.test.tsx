@@ -986,7 +986,7 @@ const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, phone: readModel(), code: { status: "loading" }, codeOpen: false, now: NOW, copied: false, showBuy: false,
-  planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null,
+  planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null, pickFailed: false,
   onSelectTarget: () => {}, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
   onShowBuy: () => {}, onTileIntent: () => {},
@@ -2310,6 +2310,8 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     /** The read model's `session` — unset: the server's own, from `current`. Set, it names an open session that
      *  `current` does not (yet, or any longer) answer: the lag the I-2 once-per-id guard exists for. */
     openSession?: string | null;
+    /** Called with a pick's target before it is saved; a throw is the PUT's failure (a network error, a refusal). */
+    failSettings?: (targetId: string | null) => void;
     /** The stream-code ensure (T5). Unset: the active code, as the route re-shows it. */
     code?: () => unknown;
     reissue?: () => unknown;
@@ -2355,6 +2357,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       if (key === REISSUE) return s.reissue!();
       if (key === SETTINGS) {
         const targetId = (options?.json as { targetId: string | null }).targetId;
+        s.failSettings?.(targetId);
         s.saved = { row: true, targetId };
         return { targetId };
       }
@@ -2692,6 +2695,60 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const shown = walk(expandWithHooks(PhoneTabBody, bodyOf(gone)));
     expect(attr(byTestId(shown, "stream-target")!, "value"), "the placeholder").toBe("");
     expect(propsOf(byTestId(shown, "stream-go-live")!).disabled, "Go live held").toBe(true);
+  });
+
+  // B8 re-review n-5: the pick's PUT is what makes the phone's start agree with the picker (§17.13). A save that fails
+  // must not leave the picker showing a choice the server never took: it goes back to the server's answer — what the
+  // phone streams to — and says so. A later pick that saves clears it; a failure for a pick already replaced is moot.
+  it("n-5: a pick whose save FAILS is not kept as if saved — the picker returns to the server's answer and says so (alert); a later pick that saves clears it", async () => {
+    let checked = 0;
+    for (const [name, fail] of [
+      ["a network failure", () => { throw new TypeError("Failed to fetch"); }],
+      ["a server refusal", () => { throw new ApiV1Error("boom", 500, "internal"); }],
+    ] as const) {
+      const s = serve({ current: null, targets: TARGETS, saved: { row: true, targetId: "t2" } });
+      const island = track(await mount(s));
+      expect(bodyOf(island).selectedTargetId, `${name}: PREMISE — the saved pre-pick`).toBe("t2");
+      expect(bodyOf(island).pickFailed, `${name}: no error before a pick`).toBe(false);
+      s.failSettings = fail;
+      bodyOf(island).onSelectTarget("t1");
+      await settle();
+      expect(calls().filter((c) => c === SETTINGS).length, `${name}: PREMISE — the save was attempted`).toBeGreaterThanOrEqual(1);
+      expect(s.saved, `${name}: the server still holds t2`).toEqual({ row: true, targetId: "t2" });
+      expect(bodyOf(island).selectedTargetId, `${name}: back to what the phone streams to`).toBe("t2");
+      expect(bodyOf(island).pickFailed, name).toBe(true);
+      let shown = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+      expect(textAt(shown, "stream-pick-error"), `${name}: said, visibly`).toBe(m("stream.dest.pickFailed"));
+      expect(attr(byTestId(shown, "stream-pick-error")!, "role")).toBe("alert");
+      // The next poll keeps the server's answer — the failed pick does not come back.
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(bodyOf(island).selectedTargetId, `${name}: after a poll`).toBe("t2");
+      // The positive pair: the save works again — the pick stands, the server holds it, and the line goes.
+      s.failSettings = undefined;
+      bodyOf(island).onSelectTarget("t1");
+      await settle();
+      expect(s.saved).toEqual({ row: true, targetId: "t1" });
+      expect(bodyOf(island).selectedTargetId, `${name}: the saved pick`).toBe("t1");
+      expect(bodyOf(island).pickFailed, `${name}: cleared`).toBe(false);
+      shown = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+      expect(byTestId(shown, "stream-pick-error"), `${name}: the line is gone`).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("n-5, the sequence: a failure that lands after the organiser already picked again is moot — the newer pick stands, saved, with no error", async () => {
+    const s = serve({ current: null, targets: TARGETS, saved: { row: true, targetId: "t2" } });
+    s.failSettings = (id) => { if (id === "t1") throw new TypeError("Failed to fetch"); };
+    const island = track(await mount(s));
+    bodyOf(island).onSelectTarget("t1");   // will fail
+    bodyOf(island).onSelectTarget("t2");   // picked again before the failure lands; this one saves
+    await settle();
+    expect(calls().filter((c) => c === SETTINGS).length, "PREMISE — both saves were attempted").toBe(2);
+    expect(s.saved).toEqual({ row: true, targetId: "t2" });
+    expect(bodyOf(island).selectedTargetId).toBe("t2");
+    expect(bodyOf(island).pickFailed, "the failure was about a pick already replaced").toBe(false);
   });
 
   // B8 review I-1 (controller ruling, §17.13): what the organiser sees is what streams. For EVERY row of THE table the

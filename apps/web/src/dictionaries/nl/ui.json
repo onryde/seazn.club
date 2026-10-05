@@ -5511,6 +5511,7 @@
   "stream.dest.label": "Bestemming",
   "stream.dest.manage": "Bestemmingen beheren",
   "stream.dest.pick": "Kies een bestemming",
+  "stream.dest.pickFailed": "Die bestemming kon niet worden opgeslagen. Kies hem opnieuw.",
   "stream.dest.empty": "Nog geen bestemmingen. Voeg er een toe in Directory.",
   "stream.dest.loadError": "Je bestemmingen konden niet worden geladen.",
   "stream.dest.retry": "Opnieuw proberen",

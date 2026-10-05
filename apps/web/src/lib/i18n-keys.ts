@@ -6242,6 +6242,7 @@ export type DictionaryKey =
   | "stream.dest.loadError"
   | "stream.dest.manage"
   | "stream.dest.pick"
+  | "stream.dest.pickFailed"
   | "stream.dest.retry"
   | "stream.details"
   | "stream.error.active_session"

@@ -5511,6 +5511,7 @@
   "stream.dest.label": "Destination",
   "stream.dest.manage": "Manage destinations",
   "stream.dest.pick": "Pick a destination",
+  "stream.dest.pickFailed": "Couldn't save that destination. Pick it again.",
   "stream.dest.empty": "No destinations yet. Add one in Directory.",
   "stream.dest.loadError": "Couldn't load your destinations.",
   "stream.dest.retry": "Retry",
