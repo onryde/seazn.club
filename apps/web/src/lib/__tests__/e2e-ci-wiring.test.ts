@@ -464,6 +464,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // checkout return to an untimed fixture), the Event Pass grant, a checkout sheet that
   // cannot load.
   "stream-credits.spec.ts",
+  // Capture QR v2 (T12) — Seazn Capture's phone routes driven by a fake phone that reads the panel's own paste code:
+  // W5's pairing gate, the operator start and its refusals, the dead-phone takeover, the operator stop, the late stop,
+  // ask 10 and W19 (on R10's shortened tunables), the cron end, the free restarts, Revoke & reissue, a finished
+  // fixture's code, and the panel's states at three widths.
+  "capture-phone.spec.ts",
 ];
 
 afterEach(() => {
