@@ -11,7 +11,9 @@ name: Stryker mutation
 #  - pull_request on this file and the Stryker files: the probe, so the workflow proves itself on its own PR.
 # The matrix (and each job's timeout, from packages/engine/stryker-timeouts.json, at most 300 minutes) is derived by
 # packages/engine/scripts/stryker-matrix.mjs, whose own test spawns it per event. The floor (stryker-floor.json) gates, not
-# Stryker's `break`; until PR-B sets one the floor step prints "no floor yet" and the groups' scores are only logged.
+# Stryker's `break`, and is kept per FAMILY (ruling 66's ten groups, the sum of their legs: a file cut again never removes a
+# floor), so the `floors` job, not a leg, judges it: it runs after every leg and reads the legs' artifacts. Until PR-B sets a floor
+# it prints "no floor yet" and the families' scores are only logged.
 # PUBLIC REPO (R14a): nothing here echoes a secret, there are none, and the artifact is the mutation report and its survivors.
 on:
   schedule:
@@ -66,7 +68,14 @@ on:
 permissions:
   contents: read
 
-# FORK PRs (T9-FORK): both jobs carry the fork condition in their own `if:`. A pull request from a fork must never reach
+# A new push to a pull request cancels the probe run it supersedes, so a stale run never keeps the runner (a push to the PR is a
+# new proof of the same files). Every other run is its OWN group (run_id) and is never cancelled: a weekly run or a dispatch is
+# hours of measurement that a later push to some branch must not abort.
+concurrency:
+  group: mutation-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# FORK PRs (T9-FORK): plan and mutate carry the fork condition in their own `if:` (floors never runs on a pull request at all). A pull request from a fork must never reach
 # vars.MATRIX_RUNNER, because a self-hosted label would run the fork's code on the owner's machine; a PR whose head repository is
 # gone (null) fails closed. Every upload overwrites its own artifact, or a "re-run failed jobs" would 409 on the name its
 # first attempt already holds.
@@ -171,10 +180,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      # Only the engine and what it needs (Stryker, vitest and the parser are its devDependencies): the apps' trees are never run here.
+      - run: pnpm install --frozen-lockfile --filter @seazn/engine...
       # The incremental file carries last week's results forward, so an unchanged mutant is not re-run. Restore and save are
       # separate steps, the save `if: always()`: actions/cache's own post-save runs only when the whole job succeeded, and a
-      # group that missed its floor (the Floor check step below exits 1) would never keep the file it had just earned.
+      # group whose Stryker run exited non-zero (the step above) would never keep the file it had just earned.
       # The key ends in '@<sha>' and the restore key in '@', never '-': a group name is lowercase letters and hyphens, so with
       # a hyphen `stryker-sports-cricket-` would also match `stryker-sports-cricket-kernel-1@<sha>` and the wrong group's file
       # could be the one restored (matrix-workflow.test.ts derives that collision from the real group names).
@@ -198,13 +208,7 @@ jobs:
         with:
           path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
           key: stryker-${{ matrix.group }}@${{ github.sha }}
-      # PR-A's state is an empty stryker-floor.json: --skip-if-no-floors then prints "no floor yet: PR-B sets it" (and still
-      # refuses a report that measured nothing). Once PR-B commits a floor, a group with no entry is exit 2, a failure
-      # (review 4, R4-m3). The probe has no floor, ever: it is the PR self-proof.
-      - name: Floor check
-        if: matrix.group != 'probe'
-        working-directory: packages/engine
-        run: pnpm mutation:floor --check "$GROUP" "reports/mutation/$GROUP.json" --skip-if-no-floors
+      # One leg's evidence; the floor is judged per family, by the `floors` job once every leg has reported.
       - name: Survivors
         if: always()   # deliberate: save evidence after a non-zero Stryker exit (a manual cancel also runs it; accepted)
         working-directory: packages/engine
@@ -220,3 +224,68 @@ jobs:
             packages/engine/reports/mutation/${{ matrix.group }}.json
             packages/engine/reports/mutation/exit.txt
             packages/engine/SURVIVORS.md
+
+  # The floor is kept per FAMILY, the sum of its legs (T15-CUT), so no single leg can judge it: this job runs after every leg, even
+  # a red or timed-out one (always(): a family whose leg left no report is REFUSED here, exit 2, never skipped), and reads the
+  # legs' artifacts. --legs is the legs the plan scheduled: a family is judged only when all its legs were (a dispatch of one leg
+  # prints the family as not judged). A pull request runs the probe, which has no floor, so it skips this job; so does a weekly
+  # firing the plan job skipped (the MATRIX_WEEKLY_ENABLED gate).
+  floors:
+    name: Floors
+    needs: [plan, mutate]
+    if: always() && needs.plan.result == 'success' && github.event_name != 'pull_request'
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
+    timeout-minutes: 15
+    env:
+      LEGS: ${{ join(fromJSON(needs.plan.outputs.matrix).include.*.group, ',') }}   # the legs the plan scheduled, comma-separated
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INJECT: ${{ inputs.inject_visibility || 'none' }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
+          case "$INJECT" in
+            none) ;;
+            private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
+            *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
+          esac
+          if [ "$vis" != "public" ]; then
+            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            exit 1
+          fi
+          echo "repository is public; guard passes"
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter @seazn/engine...
+      # Each leg's artifact (mutation-<leg>, rooted at packages/engine/) unpacks to floors-in/mutation-<leg>/reports/mutation/<leg>.json.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mutation-*
+          path: floors-in
+      # PR-A's state is an empty stryker-floor.json: --skip-if-no-floors then prints "no floor yet: PR-B sets it" for each family
+      # (and still refuses a family whose leg wrote nothing). Once PR-B commits a floor, a family with no entry is exit 2, a
+      # failure (review 4, R4-m3).
+      - name: Floor check
+        working-directory: packages/engine
+        run: pnpm mutation:floor --check-all ../../floors-in --legs "$LEGS" --skip-if-no-floors

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveGroup } from "../scripts/stryker-cuts.mjs";
 import { STRYKER_GROUPS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
 import { groupMutants, mutantCount, mutantsOf, parseEntry, selected, type Selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
@@ -41,7 +42,9 @@ const MAX_MUTANTS = Math.floor(((SPLIT_LINE_MINUTES * 60 - DRY_RUN_FLOOR_SECONDS
  *  is several times slower, so the budget is stated, not left at vitest's 5 s. */
 const INSTRUMENT_BUDGET_MS = 120_000;
 
-const legs = Object.entries(STRYKER_GROUPS);
+/** Each leg with its `mutate` list as Stryker reads it: the parts of a split file (`file#N`) resolved to `file:a-b`. */
+const legs: [string, string[]][] = Object.keys(STRYKER_GROUPS).map((g) => [g, resolveGroup(g)]);
+const RECUT = "pnpm --filter @seazn/engine mutation:recut <file> <parts> [--extra <mutants of the leg's other files>]";
 const counts = async () => {
   const out: Record<string, number> = {};
   for (const [g, globs] of legs) out[g] = await groupMutants(ENGINE, globs);
@@ -69,8 +72,8 @@ describe("every leg is under the 200-minute split line, from Stryker's own mutan
     const table = rows.map((r) => `${r.leg}: ${r.mutants} mutants, ${r.minutes} min`).join("\n");
     expect(rows.length, "legs counted").toBe(legs.length);
     expect(rows.length).toBeGreaterThan(10);
-    expect(rows.filter((r) => r.mutants === 0).map((r) => r.leg), `legs with zero mutants\n${table}`).toEqual([]);
-    expect(rows.filter((r) => r.minutes > SPLIT_LINE_MINUTES).map((r) => `${r.leg} (${r.mutants} mutants, ${r.minutes} min)`), `legs over ${SPLIT_LINE_MINUTES} min, split them again\n${table}`).toEqual([]);
+    expect(rows.filter((r) => r.mutants === 0).map((r) => r.leg), `legs with zero mutants: cut the file again with ${RECUT}, or fix the leg's globs\n${table}`).toEqual([]);
+    expect(rows.filter((r) => r.minutes > SPLIT_LINE_MINUTES).map((r) => `${r.leg} (${r.mutants} mutants, ${r.minutes} min)`), `legs over ${SPLIT_LINE_MINUTES} min: cut the file again with ${RECUT}, paste the STRYKER_SPLITS line into stryker.groups.mjs, add or drop the legs' \`file#N\` entries, re-derive stryker-timeouts.json from this table\n${table}`).toEqual([]);
     // the line is not vacuous: before the split a single file was over it (cricket.ts, 4,248 mutants at the time)
     const whole = await mutantCount(ENGINE, "src/sports/cricket/cricket.ts", "all");
     expect(estimateMinutes(whole), "cricket.ts alone, unsplit, is over the line").toBeGreaterThan(SPLIT_LINE_MINUTES);
@@ -94,7 +97,7 @@ describe("every leg is under the 200-minute split line, from Stryker's own mutan
           ranges++;
         }
       }
-      expect(sum, `${f}: ${whole - sum} mutant(s) lost to a boundary that falls inside a statement (cut between top-level statements)`).toBe(whole);
+      expect(sum, `${f}: ${whole - sum} mutant(s) lost to a boundary that falls inside a statement; the cuts are anchored to statements by scripts/stryker-cuts.mjs, so a loss means the resolver or a hand-written \`file:a-b\` is wrong (re-cut with ${RECUT})`).toBe(whole);
     }
     expect(split, "files split by range").toBeGreaterThanOrEqual(5);
     expect(ranges, "ranges summed").toBeGreaterThan(split);
@@ -203,10 +206,10 @@ describe("test/stryker-coverage.ts reads a group's mutate list as Stryker does (
   const probed = ["sports-cricket-kernel-3", "competition", "sports-football-3", "sports-setbased-2", "sports-nested-2", "sports-period-3"];
 
   it(`${probed.length} legs: the files and mutants a real Stryker dry run reports are the files and mutants this reading finds`, async () => {
-    const tail = STRYKER_GROUPS["sports-nested-2"];
+    const tail = resolveGroup("sports-nested-2");
     let checked = 0;
     for (const g of probed) {
-      const globs = STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS];
+      const globs = resolveGroup(g);
       const real = await dryRun(g);
       const expected = { files: selected(ENGINE, globs).size, mutants: await groupMutants(ENGINE, globs) };
       expect(real, g).toEqual(expected);
@@ -217,6 +220,6 @@ describe("test/stryker-coverage.ts reads a group's mutate list as Stryker does (
     // the ranges are honoured by Stryker itself: the tail of nested/kernel.ts holds fewer mutants than the whole file
     const kernel = "src/sports/nested/kernel.ts";
     expect(tail.some((e) => parseEntry(e).lines !== null), "sports-nested-2 carries a range").toBe(true);
-    expect(await groupMutants(ENGINE, STRYKER_GROUPS["sports-nested-2"]), "the tail leg, not the whole kernel").toBeLessThan(await mutantCount(ENGINE, kernel, "all"));
+    expect(await groupMutants(ENGINE, tail), "the tail leg, not the whole kernel").toBeLessThan(await mutantCount(ENGINE, kernel, "all"));
   }, spawnBudget(probed.length) + INSTRUMENT_BUDGET_MS);
 });

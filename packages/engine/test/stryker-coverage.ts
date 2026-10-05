@@ -4,8 +4,10 @@
 // instrumenter finds in them (the instrumenter is what Stryker itself runs, resolved from @stryker-mutator/core).
 import { globSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, matchesGlob } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, matchesGlob, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** An inclusive 1-based line range, as `file:a-b` writes it. */
 export type Lines = readonly [number, number];
@@ -65,17 +67,23 @@ export interface Place { start: { line: number; column: number }; end: { line: n
 
 const found = new Map<string, Place[]>();
 
-/** The mutants Stryker's instrumenter finds in `file` (or in just its `lines`, 1-based and inclusive as `file:a-b` writes
- *  them), with the default mutator settings the engine's stryker.config.mjs runs. */
+/** The mutants Stryker's instrumenter finds in `content` (named `name`, so it is read as TypeScript), or in just its `lines`
+ *  (1-based and inclusive, as `file:a-b` writes them), with the default mutator settings the engine's stryker.config.mjs
+ *  runs. Not cached: a scratch edit of a file is a different text under the same name. */
+export async function mutantsOfText(name: string, content: string, lines: Selected): Promise<Place[]> {
+  // Stryker's ranges are 0-based lines; an end column of MAX_SAFE_INTEGER is a range of whole lines.
+  const mutate = lines === "all" ? true : lines.map(([a, b]) => ({ start: { line: a - 1, column: 0 }, end: { line: b - 1, column: Number.MAX_SAFE_INTEGER } }));
+  const inst = await loadInstrumenter(ENGINE);
+  const r = await inst.instrument([{ name, mutate, content }], { ignorers: [], plugins: null, excludedMutations: [] });
+  return (r.mutants as { location: Place }[]).map((m) => m.location);
+}
+
+/** The mutants Stryker's instrumenter finds in `file` of the working tree (or in just its `lines`). */
 export async function mutantsOf(cwd: string, file: string, lines: Selected): Promise<Place[]> {
   const key = `${file}|${lines === "all" ? "all" : lines.map((l) => l.join("-")).join(",")}`;
   const hit = found.get(key);
   if (hit !== undefined) return hit;
-  // Stryker's ranges are 0-based lines; an end column of MAX_SAFE_INTEGER is a range of whole lines.
-  const mutate = lines === "all" ? true : lines.map(([a, b]) => ({ start: { line: a - 1, column: 0 }, end: { line: b - 1, column: Number.MAX_SAFE_INTEGER } }));
-  const inst = await loadInstrumenter(cwd);
-  const r = await inst.instrument([{ name: file, mutate, content: readFileSync(join(cwd, file), "utf8") }], { ignorers: [], plugins: null, excludedMutations: [] });
-  const places = (r.mutants as { location: Place }[]).map((m) => m.location);
+  const places = await mutantsOfText(file, readFileSync(join(cwd, file), "utf8"), lines);
   found.set(key, places);
   return places;
 }

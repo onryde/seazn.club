@@ -18,7 +18,7 @@ import { deps } from "./run-deps.ts";
 import { ID, baseCases, judgeOut, mergedRun } from "./summary-fixtures.ts";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 import { fillRunId, jobBlock, jobsOf, runIdTemplate, stepHeads, stepOf } from "./workflow-text.ts";
-import { STRYKER_GROUPS } from "../../../packages/engine/stryker.groups.mjs";
+import { STRYKER_FAMILIES, STRYKER_GROUPS } from "../../../packages/engine/stryker.groups.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WORKFLOWS = join(REPO, ".github/workflows");
@@ -812,6 +812,11 @@ function ifOf(jobText: string): string {
  *  `||`, `!`, string literals and the status functions — and throws on anything else, so a new construct is a red here rather than a
  *  silent misreading. A missing context path is null, as in GitHub. */
 function evalIf(raw: string, ctx: Record<string, unknown>, cancelled = false): boolean {
+  return Boolean(evalExpr(raw, ctx, cancelled));
+}
+/** The VALUE of one expression, by the same rules (`&&` and `||` return an operand, as in GitHub's expressions, which is what makes
+ *  `cond && a || b` a ternary). */
+function evalExpr(raw: string, ctx: Record<string, unknown>, cancelled = false): unknown {
   const expr = raw.trim().replace(/^\$\{\{\s*/, "").replace(/\s*\}\}$/, "");
   const js = expr.replace(/\b(github|vars|needs|inputs)((?:\.[A-Za-z_][\w-]*)+)/g, (_m, root: string, path: string) => `ref(${JSON.stringify(root + path)})`);
   if (!/^[\s\w"'.()!=&|,-]*$/.test(js) || /\b(?!always\b|cancelled\b|success\b|ref\b)\w+\s*\(/.test(js)) throw new Error(`evalIf: unsupported syntax in: ${expr}`);
@@ -821,10 +826,10 @@ function evalIf(raw: string, ctx: Record<string, unknown>, cancelled = false): b
     return at;
   };
   // The expression is this repo's own committed workflow text, restricted to the token whitelist above.
-  return Boolean(new Function("ref", "always", "cancelled", "success", `return (${js});`)(ref, () => true, () => cancelled, () => !cancelled));
+  return new Function("ref", "always", "cancelled", "success", `return (${js});`)(ref, () => true, () => cancelled, () => !cancelled);
 }
-const ctxOf = (o: { event: string; head?: string | null; weekly?: string; planResult?: string; scope?: string }) => ({
-  github: { event_name: o.event, repository: SAME_REPO, event: o.event === "pull_request" ? { pull_request: { head: { repo: o.head === null ? null : { full_name: o.head ?? SAME_REPO } } } } : {} },
+const ctxOf = (o: { event: string; head?: string | null; weekly?: string; planResult?: string; scope?: string; headRef?: string; runId?: string }) => ({
+  github: { event_name: o.event, repository: SAME_REPO, head_ref: o.headRef ?? "", run_id: o.runId ?? "1", event: o.event === "pull_request" ? { pull_request: { head: { repo: o.head === null ? null : { full_name: o.head ?? SAME_REPO } } } } : {} },
   vars: { MATRIX_WEEKLY_ENABLED: o.weekly ?? "true" },
   inputs: { scope: o.scope ?? "" },
   needs: { plan: { result: o.planResult ?? "success" }, "matrix-rows": { outputs: { run: "true" } } },
@@ -1024,34 +1029,74 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
     expect(MUT).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/mutation\.yml"\s*\n\s*- "packages\/engine\/stryker\*"\s*\n\s*- "packages\/engine\/scripts\/stryker-\*"/);
   });
 
-  it("the two jobs are plan and mutate, mutate needs plan, and plan has the 15-minute timeout", () => {
-    expect(Object.keys(MJOBS)).toEqual(["plan", "mutate"]);
+  it("the three jobs are plan, mutate and floors; mutate needs plan, floors needs both, and plan and floors have the 15-minute timeout", () => {
+    expect(Object.keys(MJOBS)).toEqual(["plan", "mutate", "floors"]);
     expect(MJOBS.mutate).toMatch(/needs:\s*\[plan\]/);
+    expect(MJOBS.floors).toMatch(/needs:\s*\[plan, mutate\]/);
     expect(MJOBS.plan).toMatch(/timeout-minutes: 15\b/);
+    expect(MJOBS.floors).toMatch(/timeout-minutes: 15\b/);
     expect(MJOBS.plan).toContain("outputs:\n      matrix: ${{ steps.matrix.outputs.matrix }}");
   });
 
-  it("both jobs spell the fork condition in their own `if:`, and plan carries the weekly gate beside it: evaluated over every event (10 evaluations)", () => {
+  it("plan and mutate spell the fork condition in their own `if:` (plan the weekly gate beside it), and floors never runs on a pull request: each evaluated over every event (7 cases x 3 jobs = 21 evaluations)", () => {
     let evaluated = 0;
     const plan = ifOf(MJOBS.plan!);
     const mutate = ifOf(MJOBS.mutate!);
+    const floors = ifOf(MJOBS.floors!);
     expect(plan).toContain("(github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true')");
     expect(mutate).toContain("(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)");
-    const cases: { name: string; ctx: Record<string, unknown>; plan: boolean; mutate: boolean }[] = [
-      { name: "workflow_dispatch", ctx: ctxOf({ event: "workflow_dispatch" }), plan: true, mutate: true },
-      { name: "schedule, enabled", ctx: ctxOf({ event: "schedule", weekly: "true" }), plan: true, mutate: true },
-      // the disabled weekly firing: plan is skipped by its own `if:`, and mutate by `needs: [plan]` (a skipped need skips the job)
-      { name: "schedule, disabled", ctx: ctxOf({ event: "schedule", weekly: "" }), plan: false, mutate: true },
-      { name: "PR from the same repository", ctx: ctxOf({ event: "pull_request" }), plan: true, mutate: true },
-      { name: "PR from a fork", ctx: ctxOf({ event: "pull_request", head: "someone-else/seazn.club" }), plan: false, mutate: false },
-      { name: "PR whose head repository was deleted", ctx: ctxOf({ event: "pull_request", head: null }), plan: false, mutate: false },
+    // floors: after every leg even a red one (always()), only when plan ran, never for the probe's pull request
+    expect(floors).toBe("always() && needs.plan.result == 'success' && github.event_name != 'pull_request'");
+    const cases: { name: string; ctx: Record<string, unknown>; plan: boolean; mutate: boolean; floors: boolean }[] = [
+      { name: "workflow_dispatch", ctx: ctxOf({ event: "workflow_dispatch" }), plan: true, mutate: true, floors: true },
+      { name: "schedule, enabled", ctx: ctxOf({ event: "schedule", weekly: "true" }), plan: true, mutate: true, floors: true },
+      // the disabled weekly firing: plan is skipped by its own `if:`, and mutate by `needs: [plan]` (a skipped need skips the job);
+      // floors has always(), so only its own `needs.plan.result == 'success'` keeps it from running with no matrix
+      { name: "schedule, disabled", ctx: ctxOf({ event: "schedule", weekly: "", planResult: "skipped" }), plan: false, mutate: true, floors: false },
+      // a pull request runs the probe, which has no floor
+      { name: "PR from the same repository", ctx: ctxOf({ event: "pull_request" }), plan: true, mutate: true, floors: false },
+      { name: "PR from a fork", ctx: ctxOf({ event: "pull_request", head: "someone-else/seazn.club", planResult: "skipped" }), plan: false, mutate: false, floors: false },
+      { name: "PR whose head repository was deleted", ctx: ctxOf({ event: "pull_request", head: null, planResult: "skipped" }), plan: false, mutate: false, floors: false },
+      // plan itself failed: there is no matrix, so nothing for floors to judge
+      { name: "workflow_dispatch whose plan failed", ctx: ctxOf({ event: "workflow_dispatch", planResult: "failure" }), plan: true, mutate: true, floors: false },
     ];
     for (const c of cases) {
       expect(evalIf(plan, c.ctx), `plan: ${c.name}`).toBe(c.plan);
       expect(evalIf(mutate, c.ctx), `mutate: ${c.name}`).toBe(c.mutate);
-      evaluated += 2;
+      expect(evalIf(floors, c.ctx), `floors: ${c.name}`).toBe(c.floors);
+      evaluated += 3;
     }
-    expect(evaluated).toBe(12);
+    expect(evaluated).toBe(21);
+  });
+
+  it("a push to a pull request cancels the run it supersedes and nothing else is ever cancelled: one top-level `concurrency:` whose group is the branch for a PR and the run's own id otherwise", () => {
+    const blocks = MUT.match(/^concurrency:\n(?: {2}.*\n)+/gm);
+    expect(blocks, "ONE concurrency block at column 0").toHaveLength(1);
+    const group = /^ {2}group: (.+)$/m.exec(blocks![0]!)![1]!;
+    const cancel = /^ {2}cancel-in-progress: (.+)$/m.exec(blocks![0]!)![1]!;
+    expect(group).toBe("mutation-${{ github.event_name == 'pull_request' && github.head_ref || github.run_id }}");
+    expect(cancel).toBe("${{ github.event_name == 'pull_request' }}");
+    const groupOf = (ctx: Record<string, unknown>) => `mutation-${String(evalExpr(/\$\{\{\s*(.+?)\s*\}\}/.exec(group)![1]!, ctx))}`;
+    const cancels = (ctx: Record<string, unknown>) => evalIf(cancel, ctx);
+    // a PR: the same branch is the same group (so a new push cancels the old run), another branch is another group
+    const pr = (headRef: string, runId: string) => ctxOf({ event: "pull_request", headRef, runId });
+    expect(groupOf(pr("feat/a", "10"))).toBe("mutation-feat/a");
+    expect(groupOf(pr("feat/a", "11")), "a new push to the same PR").toBe(groupOf(pr("feat/a", "10")));
+    expect(groupOf(pr("feat/b", "12")), "another PR").not.toBe(groupOf(pr("feat/a", "10")));
+    expect(cancels(pr("feat/a", "10"))).toBe(true);
+    // every other event: its own group per run, and never cancelling, so a weekly run or a dispatch is never aborted by a later push
+    let others = 0;
+    for (const event of ["schedule", "workflow_dispatch"]) {
+      const a = ctxOf({ event, headRef: "", runId: "100" });
+      const b = ctxOf({ event, headRef: "", runId: "101" });
+      expect(groupOf(a), event).toBe("mutation-100");
+      expect(groupOf(a), `${event}: two runs`).not.toBe(groupOf(b));
+      expect(cancels(a), event).toBe(false);
+      others++;
+    }
+    expect(others).toBe(2);
+    // and a dispatch from a branch whose name equals a PR's head ref does not share its group (head_ref is empty outside a PR)
+    expect(groupOf(ctxOf({ event: "workflow_dispatch", headRef: "feat/a", runId: "7" }))).toBe("mutation-7");
   });
 
   it("the exposure surface is read-only and secret-free: ONE workflow-level permissions block, contents read, and no secrets anywhere", () => {
@@ -1087,7 +1132,7 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
     expect(cache).toContain("uses: actions/cache/restore@v4");
   });
 
-  it("the file is SAVED by its own step, `if: always()`, after Stryker and under the key the restore looks for (a red floor check must not lose it)", () => {
+  it("the file is SAVED by its own step, `if: always()`, after Stryker and under the key the restore looks for (a red Stryker run must not lose it)", () => {
     const save = stepOf(MJOBS.mutate!, "Save the incremental file").body;
     expect(save).toContain("uses: actions/cache/save@v4");
     expect(save).toContain("if: always()");
@@ -1096,8 +1141,9 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
     const heads = stepHeads(MJOBS.mutate!);
     const at = (n: string) => heads.indexOf(`      - name: ${n}`);
     expect(at("Run Stryker")).toBeGreaterThan(at("Restore the incremental file"));
-    expect(at("Save the incremental file")).toBe(at("Run Stryker") + 1);   // before any step that can exit 1 (the Floor check)
-    expect(at("Floor check")).toBeGreaterThan(at("Save the incremental file"));
+    expect(at("Save the incremental file")).toBe(at("Run Stryker") + 1);   // before any later step that can exit non-zero
+    expect(at("Survivors")).toBeGreaterThan(at("Save the incremental file"));
+    expect(heads.filter((h) => h.includes("Floor check")), "the floor is judged per family by the floors job, never by a leg").toEqual([]);
     // the plain `actions/cache@v4` would save only on a green job: none may remain
     expect(MUT).not.toMatch(/uses: actions\/cache@/);
   });
@@ -1155,16 +1201,32 @@ function runBlock(script: string, o: { cwd: string; env?: Record<string, string>
   const r = spawnSync("bash", ["-c", script], { cwd: o.cwd, encoding: "utf8", timeout: SPAWN_MS * 3, env: { PATH: `${bin}:${process.env.PATH ?? ""}`, RECORD: recordFile, ...o.env } });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, record: readFileSync(recordFile, "utf8").split("\n").filter(Boolean) };
 }
-/** A scratch packages/engine: the floor file, and a `draws-bracket` report (3 killed, 1 survived: 75.0%) at reports/mutation/draws-bracket.json. */
+/** A scratch packages/engine: the floor file, and a `draws-bracket` report (3 killed, 1 survived: 75.0%) at reports/mutation/draws-bracket.json
+ *  (the Survivors step's own layout: one leg's report in the leg's own job). */
 function engineDir(floors: Record<string, number>, over: { omitReport?: boolean } = {}): string {
   const cwd = fresh("engine");
-  writeFileSync(join(cwd, "stryker-floor.json"), JSON.stringify({ note: "t", groups: floors }));
+  writeFileSync(join(cwd, "stryker-floor.json"), JSON.stringify({ note: "t", families: floors }));
   if (over.omitReport !== true) {
     mkdirSync(join(cwd, "reports/mutation"), { recursive: true });
-    const m = (status: string, line: number) => ({ mutatorName: "ConditionalExpression", replacement: "true", status, location: { start: { line, column: 1 } } });
-    writeFileSync(join(cwd, "reports/mutation/draws-bracket.json"), JSON.stringify({ files: { "src/scheduling/bracket.ts": { mutants: [m("Killed", 1), m("Killed", 2), m("Timeout", 3), m("Survived", 4)] } } }));
+    writeFileSync(join(cwd, "reports/mutation/draws-bracket.json"), JSON.stringify({ files: { "src/scheduling/bracket.ts": { mutants: mutantsOf([["Killed", 1], ["Killed", 2], ["Timeout", 3], ["Survived", 4]]) } } }));
   }
   return cwd;
+}
+const mutantsOf = (rows: [string, number][]) => rows.map(([status, line]) => ({ mutatorName: "ConditionalExpression", replacement: "true", status, location: { start: { line, column: 1 } } }));
+/** A scratch checkout for the `floors` job: packages/engine holds the floor file (the step's working directory), and floors-in/
+ *  holds what download-artifact unpacks, each leg's artifact at mutation-<leg>/reports/mutation/<leg>.json. Returns the engine
+ *  directory. `reports` maps a leg to the file it mutated and its (status, line) mutants; a leg left out left no artifact. */
+function floorsRepo(floors: Record<string, number>, reports: Record<string, { file: string; mutants: [string, number][] }>): string {
+  const root = fresh("checkout");
+  const engine = join(root, "packages/engine");
+  mkdirSync(engine, { recursive: true });
+  writeFileSync(join(engine, "stryker-floor.json"), JSON.stringify({ note: "t", families: floors }));
+  for (const [leg, r] of Object.entries(reports)) {
+    const dir = join(root, "floors-in", `mutation-${leg}`, "reports/mutation");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${leg}.json`), JSON.stringify({ files: { [r.file]: { mutants: mutantsOf(r.mutants) } } }));
+  }
+  return engine;
 }
 
 describe("mutation.yml: the plan step derives the matrix through the real script, per event", () => {
@@ -1222,35 +1284,73 @@ describe("mutation.yml: the Stryker step keeps Stryker's own exit and writes it 
   }, spawnBudget(3));
 });
 
-describe("mutation.yml: the floor and survivors steps, run through the real engine CLI", () => {
-  const floorStep = stepOf(MJOBS.mutate!, "Floor check");
-  const floorLine = runLine(MJOBS.mutate!, "Floor check");
+describe("mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI", () => {
+  const floorStep = stepOf(MJOBS.floors!, "Floor check");
+  const floorLine = runLine(MJOBS.floors!, "Floor check");
   const survivorsLine = runLine(MJOBS.mutate!, "Survivors");
+  // two families, three legs: `core` is one leg (3 killed, 1 survived: 75.0%); `draws` is two, 3 of 4 and 1 of 1, which SUM to 4 of 5 =
+  // 80.0% (the mean of the legs' scores is 87.5 and the weaker leg 75.0, so a floor of 80 tells the sum from both)
+  const THREE = "core,draws-bracket,draws-pairing";
+  const ALL = {
+    core: { file: "src/core/clock.ts", mutants: [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] as [string, number][] },
+    "draws-bracket": { file: "src/scheduling/bracket.ts", mutants: [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] as [string, number][] },
+    "draws-pairing": { file: "src/scheduling/swiss.ts", mutants: [["Killed", 1]] as [string, number][] },
+  };
 
-  it("the floor check is skipped for the probe and runs in packages/engine, never `continue-on-error`", () => {
-    expect(floorStep.body).toContain("if: matrix.group != 'probe'");
+  it("the floors job reads the legs' artifacts from floors-in, judges them with --check-all over the legs the plan scheduled, and the step can be neither conditional nor advisory", () => {
+    expect(MJOBS.floors).toContain("LEGS: ${{ join(fromJSON(needs.plan.outputs.matrix).include.*.group, ',') }}");
+    const dl = MJOBS.floors!.slice(MJOBS.floors!.indexOf("uses: actions/download-artifact@v4"));
+    expect(dl).toMatch(/^uses: actions\/download-artifact@v4\n {8}with:\n {10}pattern: mutation-\*\n {10}path: floors-in\n/);
+    expect(MJOBS.floors!.match(/uses: actions\/download-artifact@/g), "one download").toHaveLength(1);
+    // each leg's upload is named mutation-<leg> (the pattern above reads exactly those)
+    expect(stepOf(MJOBS.mutate!, "Upload mutation results").body).toContain("name: mutation-${{ matrix.group }}");
     expect(floorStep.body).toContain("working-directory: packages/engine");
     expect(floorStep.body).not.toContain("continue-on-error");
-    expect(floorLine).toContain("--skip-if-no-floors");
-    expect(floorLine).toContain('--check "$GROUP" "reports/mutation/$GROUP.json"');
+    expect(floorStep.body, "no step-level `if:` that could skip it").not.toMatch(/^ {8}if:/m);
+    expect(floorLine).toBe('pnpm mutation:floor --check-all ../../floors-in --legs "$LEGS" --skip-if-no-floors');
+    // the install the jobs share is the engine's own (Stryker, vitest and the TypeScript parser are its devDependencies)
+    for (const job of ["mutate", "floors"] as const) expect(MJOBS[job], job).toContain("run: pnpm install --frozen-lockfile --filter @seazn/engine...");
+    expect(MUT).not.toMatch(/run: pnpm install --frozen-lockfile\s*$/m);
+    // the artifacts the job unpacks are those of the families it judges: every non-probe leg is in a family
+    expect(Object.values(STRYKER_FAMILIES).flat().sort()).toEqual(Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe").sort());
   });
 
-  it("PR-A's state (the committed floor file is empty): it prints `no floor yet: PR-B sets it` and passes, for the group's real report", () => {
-    const r = runBlock(floorLine, { cwd: engineDir({}), env: { GROUP: "draws-bracket" } });
+  it("PR-A's state (the committed floor file is empty): it prints `no floor yet: PR-B sets it` for each family and passes, for the legs' real reports", () => {
+    const r = runBlock(floorLine, { cwd: floorsRepo({}, ALL), env: { LEGS: THREE } });
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(r.stdout).toContain("no floor yet: PR-B sets it");
-    expect(r.record).toEqual(['mutation:floor --check draws-bracket reports/mutation/draws-bracket.json --skip-if-no-floors']);
+    expect(r.stdout.match(/no floor yet: PR-B sets it/g)).toHaveLength(2);
+    expect(r.stdout).toContain("core: score 75.0%");
+    expect(r.stdout).toContain("draws: score 80.0% (4 of 5 detected");   // the SUM of the two legs
+    expect(r.record).toEqual([`mutation:floor --check-all ../../floors-in --legs ${THREE} --skip-if-no-floors`]);
   }, spawnBudget(1));
 
-  it("once PR-B commits a floor: a group with no entry is a failure, a met floor passes and a missed one fails", () => {
-    expect(runBlock(floorLine, { cwd: engineDir({ competition: 40 }), env: { GROUP: "draws-bracket" } }).status).toBe(2);   // no entry for draws-bracket
-    expect(runBlock(floorLine, { cwd: engineDir({ "draws-bracket": 75 }), env: { GROUP: "draws-bracket" } }).status).toBe(0);         // 3 of 4 = 75.0
-    expect(runBlock(floorLine, { cwd: engineDir({ "draws-bracket": 75.1 }), env: { GROUP: "draws-bracket" } }).status).toBe(1);
-  }, spawnBudget(3));
+  it("once PR-B commits floors: a family with no entry is a failure, met floors pass and a missed one fails", () => {
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75 }, ALL), env: { LEGS: THREE } }).status, "no entry for draws").toBe(2);
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 80 }, ALL), env: { LEGS: THREE } }).status).toBe(0);                  // 3 of 4 = 75.0, 4 of 5 = 80.0
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 80.1 }, ALL), env: { LEGS: THREE } }).status).toBe(1);                // one tenth over the sum
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75.1, draws: 80 }, ALL), env: { LEGS: THREE } }).status).toBe(1);
+  }, spawnBudget(4));
 
-  it("a missing report is a failure even while no floor exists (a group that wrote nothing is never a skip)", () => {
-    const r = runBlock(floorLine, { cwd: engineDir({}, { omitReport: true }), env: { GROUP: "draws-bracket" } });
+  it("a planned leg that left no report is a failure even while no floor exists (a leg that died is never a skip), and the other families are still judged", () => {
+    const withoutPairing = { core: ALL.core, "draws-bracket": ALL["draws-bracket"] };   // draws-pairing's job died before it wrote a report
+    const r = runBlock(floorLine, { cwd: floorsRepo({}, withoutPairing), env: { LEGS: THREE } });
     expect(r.status).toBe(2);
+    expect(r.stderr).toContain('draws: no report for leg "draws-pairing"');
+    expect(r.stdout).toContain("core: score 75.0%");
+  }, spawnBudget(1));
+
+  it("a dispatch of ONE leg of a two-leg family does not judge the family (it is not the sum of its legs) and still passes; a leg of a one-leg family is judged", () => {
+    const partial = runBlock(floorLine, { cwd: floorsRepo({ draws: 99 }, { "draws-bracket": ALL["draws-bracket"] }), env: { LEGS: "draws-bracket" } });
+    expect({ status: partial.status, stderr: partial.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(partial.stdout).toContain("draws: not judged, only 1 of its 2 legs were planned");
+    const whole = runBlock(floorLine, { cwd: floorsRepo({ core: 99 }, { core: ALL.core }), env: { LEGS: "core" } });
+    expect(whole.status, "core is judged on its one leg, and 75.0 is under 99").toBe(1);
+  }, spawnBudget(2));
+
+  it("an empty LEGS (the expression evaluating to nothing) is a refusal, never a pass over zero families", () => {
+    const r = runBlock(floorLine, { cwd: floorsRepo({}, ALL), env: { LEGS: "" } });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("--check-all needs --legs");
   }, spawnBudget(1));
 
   it("the survivors step writes SURVIVORS.md next to the group's report, listing the one survivor", () => {

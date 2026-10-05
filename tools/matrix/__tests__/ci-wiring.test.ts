@@ -507,6 +507,6 @@ describe("Stryker floor CI wiring (W1d Task 15, D14)", () => {
     const r = spawnSync("bash", ["-c", cmd.replace(" --check-file-against HEAD^1", " --check-file-against HEAD")], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS });
     expect(r.status, r.stderr).toBe(0);
     // only a CLI that read the flag through `pnpm --filter` prints this: the flag reached it, in the engine's directory
-    expect(r.stdout).toMatch(/^stryker-floor: (no floors at HEAD: nothing to compare|compared \d+ group\(s\) against HEAD: 0 lowered or removed)$/m);
+    expect(r.stdout).toMatch(/^stryker-floor: (no floors at HEAD: nothing to compare|compared \d+ floor\(s\) against HEAD: 0 lowered or removed)$/m);
   }, spawnBudget(1));
 });

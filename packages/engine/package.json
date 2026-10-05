@@ -40,7 +40,8 @@
     "lint": "eslint",
     "sim:matrix": "node --experimental-strip-types scripts/sim-replay.ts --matrix",
     "mutation": "stryker run stryker.config.mjs",
-    "mutation:floor": "node --experimental-strip-types scripts/stryker-floor.ts"
+    "mutation:floor": "node --experimental-strip-types scripts/stryker-floor.ts",
+    "mutation:recut": "node scripts/stryker-recut.mjs"
   },
   "peerDependencies": {
     "zod": "^4.4.3"

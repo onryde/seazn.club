@@ -11,10 +11,13 @@ import { describe, expect, it } from "vitest";
 import * as groupsModule from "../stryker.groups.mjs";
 import { lineCount, parseEntry, selected, type Selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
-import { STRYKER_EXCLUDED, STRYKER_GROUPS, STRYKER_PLACEMENT_OUT_OF_SCOPE, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
+import { resolveGroup } from "../scripts/stryker-cuts.mjs";
+import { STRYKER_EXCLUDED, STRYKER_FAMILIES, STRYKER_GROUPS, STRYKER_PLACEMENT_OUT_OF_SCOPE, STRYKER_SPLITS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const GB = 1024 ** 3; // as vitest.config.ts
+/** What stryker.config.mjs's `dryRunTimeoutMinutes` must come to: D14's 344 s floor x CI's 8x slowdown, in whole minutes. */
+const DRY_RUN_TIMEOUT_MINUTES = 46;
 /** A test that spawns `n` processes. */
 const spawnIt = (n: number) => (name: string, fn: () => void) => it(name, fn, spawnBudget(n));
 
@@ -26,6 +29,8 @@ const inMap = (map: Record<string, string>, f: string) => Object.keys(map).some(
 // for its family, or `<family>-<suffix>`. The ten are the ruling's own list, typed here and never derived from the groups.
 const FAMILIES = ["competition", "core", "modules", "draws", "sports-cricket", "sports-football", "sports-period", "sports-setbased", "sports-nested", "sports-other"] as const;
 const familyOf = (leg: string) => FAMILIES.find((f) => leg === f || leg.startsWith(`${f}-`));
+/** Every leg's `mutate` list with its `file#N` parts resolved to the `file:a-b` ranges Stryker reads (scripts/stryker-cuts.mjs). */
+const RESOLVED: Record<string, string[]> = Object.fromEntries(Object.keys(STRYKER_GROUPS).map((g) => [g, resolveGroup(g)]));
 
 /** How the groups home one file: the legs that select it, and whether they home it exactly once: one leg selecting the whole
  *  file, or legs that select ranges which tile it (the first starts at line 1, each next one at the line after the one
@@ -53,7 +58,7 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
   it("every non-test .ts under src/ is homed once: whole in one group, or tiled by the ranges of several; or named in an exclusion or the ruling-67 placement exclusion. unclassified = 0", () => {
     const files = universe();
     const owners = new Map<string, { group: string; sel: Selected }[]>();
-    for (const [g, globs] of Object.entries(STRYKER_GROUPS)) {
+    for (const [g, globs] of Object.entries(RESOLVED)) {
       if (g === "probe") continue;
       for (const [f, sel] of selected(ENGINE, globs)) owners.set(f, [...(owners.get(f) ?? []), { group: g, sel }]);
     }
@@ -180,7 +185,7 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
   it("no group's mutate list reaches a test file, and every directory group says so itself (review I11a)", () => {
     let checked = 0;
     let positives = 0;
-    for (const [g, globs] of Object.entries(STRYKER_GROUPS)) {
+    for (const [g, globs] of Object.entries(RESOLVED)) {
       const pos = globs.filter((x) => !x.startsWith("!"));
       const files = [...selected(ENGINE, globs).keys()];
       // EACH positive entry must match a file, not just the group's total (review 4, R4-m5); a range entry matches its file
@@ -199,7 +204,7 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
 
   it("the negations are what keep test files out: without them the same positives DO reach test files (the guard has something to guard)", () => {
     let reached = 0;
-    for (const globs of Object.values(STRYKER_GROUPS)) {
+    for (const globs of Object.values(RESOLVED)) {
       const pos = globs.filter((x) => !x.startsWith("!")).map((x) => parseEntry(x).glob);
       reached += globSync(pos, { cwd: ENGINE }).filter((f) => /\.test\.ts$|__tests__/.test(f)).length;
     }
@@ -220,15 +225,36 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
     expect(legs.length, "more legs than families, or nothing was split").toBeGreaterThan(FAMILIES.length);
   });
 
-  it("cricket.ts is split into ranges; the other cricket files, and any new one, stay together in sports-cricket", () => {
-    const kernel = "src/sports/cricket/cricket.ts";
-    const kernelLegs = Object.entries(STRYKER_GROUPS).filter(([g]) => g.startsWith("sports-cricket-kernel-"));
-    expect(kernelLegs.length).toBeGreaterThan(1);
-    for (const [g, entries] of kernelLegs) {
-      expect(entries, g).toHaveLength(1);
-      expect(parseEntry(entries[0] as string).glob, g).toBe(kernel);
-      expect(parseEntry(entries[0] as string).lines, `${g} is a range`).not.toBeNull();
+  it("STRYKER_FAMILIES is ruling 66's ten families, each with exactly the legs named for it, every leg in one family and the probe in none (floors are kept per family)", () => {
+    expect(Object.keys(STRYKER_FAMILIES)).toEqual([...FAMILIES]);
+    const legs = Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe");
+    const listed = Object.values(STRYKER_FAMILIES).flat();
+    expect(listed.slice().sort(), "every leg once, the probe never").toEqual(legs.slice().sort());
+    let checked = 0;
+    for (const [family, members] of Object.entries(STRYKER_FAMILIES)) {
+      expect(members.length, `legs of ${family}`).toBeGreaterThan(0);
+      // the leg's family by its NAME (this file's own reading of the naming rule), against the table's
+      for (const leg of members) {
+        expect(familyOf(leg), `${leg} is listed under ${family}`).toBe(family);
+        checked++;
+      }
+      // and in the order the legs are declared
+      expect(members, `${family}'s legs in declaration order`).toEqual(legs.filter((g) => familyOf(g) === family));
     }
+    expect(checked).toBe(legs.length);
+  });
+
+  it("cricket.ts is split into parts, one leg each; the other cricket files, and any new one, stay together in sports-cricket", () => {
+    const kernel = "src/sports/cricket/cricket.ts";
+    const kernelLegs = Object.keys(STRYKER_GROUPS).filter((g) => g.startsWith("sports-cricket-kernel-"));
+    expect(kernelLegs.length).toBeGreaterThan(1);
+    kernelLegs.forEach((g, i) => {
+      // declared as a part of the file, and resolved to one range of it
+      expect(STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS], g).toEqual([`${kernel}#${i + 1}`]);
+      expect(RESOLVED[g], g).toHaveLength(1);
+      expect(parseEntry(RESOLVED[g]![0] as string).glob, g).toBe(kernel);
+      expect(parseEntry(RESOLVED[g]![0] as string).lines, `${g} is a range`).not.toBeNull();
+    });
     const rest = [...selected(ENGINE, STRYKER_GROUPS["sports-cricket"]).keys()];
     expect(rest).not.toContain(kernel);
     // the rest is what is in the directory besides it and the tests
@@ -237,10 +263,31 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
     expect(rest.slice().sort()).toEqual(all.filter((f) => f !== kernel).sort());
   });
 
+  it("every part of every split file is taken by exactly one leg, and every `file#N` names a part that exists (STRYKER_SPLITS)", () => {
+    const taken = new Map<string, number[]>();
+    for (const [g, entries] of Object.entries(STRYKER_GROUPS)) {
+      for (const e of entries) {
+        const m = /^(.*)#(\d+)$/.exec(e);
+        if (m === null) continue;
+        expect(Object.keys(STRYKER_SPLITS), `${g}: ${e} takes a part of a file with no split`).toContain(m[1]);
+        taken.set(m[1]!, [...(taken.get(m[1]!) ?? []), Number(m[2])]);
+      }
+    }
+    expect([...taken.keys()].sort(), "every split file is taken by some leg").toEqual(Object.keys(STRYKER_SPLITS).sort());
+    let parts = 0;
+    for (const [file, anchors] of Object.entries(STRYKER_SPLITS)) {
+      expect(existsSync(join(ENGINE, file)), `${file} exists`).toBe(true);
+      expect(anchors.length, `${file} has at least one cut`).toBeGreaterThan(0);
+      expect(taken.get(file)!.slice().sort((a, b) => a - b), `${file}: the parts the legs take`).toEqual(Array.from({ length: anchors.length + 1 }, (_, i) => i + 1));
+      parts += anchors.length + 1;
+    }
+    expect(parts, "parts checked").toBeGreaterThan(Object.keys(STRYKER_SPLITS).length);
+  });
+
   it("the sports legs split src/sports/ by family: every sport directory is in exactly one family, and the top-level files are in sports-other", () => {
     const dirs = new Set(readdirSync(join(ENGINE, "src/sports"), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name));
     expect(dirs.size).toBeGreaterThan(5);
-    const sports = Object.entries(STRYKER_GROUPS).filter(([g]) => g.startsWith("sports-"));
+    const sports = Object.entries(RESOLVED).filter(([g]) => g.startsWith("sports-"));
     expect(sports.length).toBeGreaterThan(6);
     for (const d of dirs) {
       const families = new Set(sports.filter(([, globs]) => globs.some((x) => !x.startsWith("!") && parseEntry(x).glob.startsWith(`src/sports/${d}/`))).map(([g]) => familyOf(g)));
@@ -289,9 +336,9 @@ describe("strykerConcurrency and the vitest worker bound it copies (review I11b,
 
 describe("stryker.groups.d.mts declares exactly what stryker.groups.mjs exports (review I11d)", () => {
   const dts = readFileSync(join(ENGINE, "stryker.groups.d.mts"), "utf8");
-  it("the five exports, no more and no fewer", () => {
+  it("the exports, no more and no fewer", () => {
     const declared = [...dts.matchAll(/^export (?:declare )?(?:const|function) (\w+)/gm)].map((m) => m[1]).sort();
-    expect(declared).toEqual(["STRYKER_EXCLUDED", "STRYKER_GROUPS", "STRYKER_PLACEMENT_OUT_OF_SCOPE", "STRYKER_VITEST_WORKERS", "strykerConcurrency"]);
+    expect(declared).toEqual(["STRYKER_EXCLUDED", "STRYKER_FAMILIES", "STRYKER_GROUPS", "STRYKER_PLACEMENT_OUT_OF_SCOPE", "STRYKER_SPLITS", "STRYKER_VITEST_WORKERS", "strykerConcurrency"]);
     expect(Object.keys(groupsModule).sort()).toEqual(declared);
   });
   it("the group-name union in the declaration is STRYKER_GROUPS's keys, in order", () => {
@@ -322,9 +369,17 @@ describe("stryker.config.mjs reads its group from STRYKER_GROUP, through the rea
     expect(r.status, r.stderr).toBe(0);
     const configs = JSON.parse(r.stdout) as Record<string, Record<string, unknown>>;
     expect(Object.keys(configs)).toEqual(names);
+    let parts = 0;
     for (const g of names) {
       const c = configs[g]!;
-      expect(c.mutate, g).toEqual(STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS]);
+      // a leg's parts of a split file arrive as the ranges Stryker reads, never as `file#N` (the ranges themselves are held by
+      // test/stryker-cuts.test.ts, against Stryker's own instrumenter): one `file:a-b` for each `file#N` the leg declares
+      const mutate = c.mutate as string[];
+      expect(mutate.filter((e) => e.includes("#")), `${g}: a part left unresolved`).toEqual([]);
+      const declared = STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS].filter((e) => /#\d+$/.test(e));
+      expect(mutate.filter((e) => /:\d+-\d+$/.test(e)), `${g}: one range for each part it declares`).toHaveLength(declared.length);
+      parts += declared.length;
+      expect(mutate, g).toEqual(RESOLVED[g]);
       expect(c.incrementalFile, g).toBe(`reports/mutation/${g}.incremental.json`);
       expect(c.jsonReporter, g).toEqual({ fileName: `reports/mutation/${g}.json` });
       expect(c.incremental, g).toBe(true);
@@ -334,7 +389,11 @@ describe("stryker.config.mjs reads its group from STRYKER_GROUP, through the rea
       // the floor file gates (D14), never Stryker's own break
       expect(c.thresholds, g).toMatchObject({ break: null });
       expect(c.concurrency, g).toBeGreaterThanOrEqual(1);
+      // the dry run is given D14's 344 s floor times the CI slowdown, and the runner's `related` is stated (both pinned below)
+      expect(c.dryRunTimeoutMinutes, g).toBe(DRY_RUN_TIMEOUT_MINUTES);
+      expect(c.vitest, g).toEqual({ related: true });
     }
+    expect(parts, "the parts of split files the configs resolved").toBeGreaterThan(Object.keys(STRYKER_SPLITS).length);
     // two groups really do differ (a config that ignored the env would give every group the same list)
     expect(new Set(names.map((g) => JSON.stringify(configs[g]!.mutate))).size).toBe(names.length);
   });
@@ -346,5 +405,39 @@ describe("stryker.config.mjs reads its group from STRYKER_GROUP, through the rea
       expect(r.stderr).toContain("STRYKER_GROUP must be one of");
       expect(r.stderr).toContain("competition");
     }
+  });
+});
+
+describe("the dry run's timeout and the runner's `related` mode, pinned (fix round 1, I3 and a minor)", () => {
+  // The rulebook, typed here: D14 takes a leg's first, whole test run to be at least 344 s on CI, and the review put CI at about
+  // 8 times slower than a local run. 344 x 8 = 2,752 s = 45.9 minutes, whole minutes up: 46.
+  const D14_DRY_RUN_FLOOR_SECONDS = 344;
+  const CI_SLOWDOWN = 8;
+  const req = createRequire(import.meta.url);
+
+  it("the config allows 46 minutes, and that is above Stryker's default of 5 (which is below D14's own floor, so every CI dry run would be abandoned)", () => {
+    expect(DRY_RUN_TIMEOUT_MINUTES).toBe(Math.ceil((D14_DRY_RUN_FLOOR_SECONDS * CI_SLOWDOWN) / 60));
+    expect(DRY_RUN_TIMEOUT_MINUTES).toBe(46);
+    // the premise, from Stryker's own schema: its default is 5 minutes, 300 s, and D14's floor is longer than that
+    const core = req.resolve("@stryker-mutator/core/package.json");
+    const apiCore = createRequire(core).resolve("@stryker-mutator/api/core"); // .../api/dist/src/core/index.js
+    const schema = JSON.parse(readFileSync(join(dirname(apiCore), "../../schema/stryker-core.json"), "utf8")) as { properties: { dryRunTimeoutMinutes: { default: number } } };
+    const stryker = schema.properties.dryRunTimeoutMinutes.default;
+    expect(stryker, "Stryker's default for the initial test run, in minutes").toBe(5);
+    expect(D14_DRY_RUN_FLOOR_SECONDS, "D14's floor is longer than Stryker's default allows").toBeGreaterThan(stryker * 60);
+    expect(DRY_RUN_TIMEOUT_MINUTES * 60, "the config allows at least D14's floor with the slowdown").toBeGreaterThanOrEqual(D14_DRY_RUN_FLOOR_SECONDS * CI_SLOWDOWN);
+  });
+
+  it("`vitest.related` is stated true, it is the runner's own default, and the runner narrows the dry run to the files related to the mutated ones with it", () => {
+    const runnerDir = dirname(req.resolve("@stryker-mutator/vitest-runner"));
+    const schema = JSON.parse(readFileSync(join(runnerDir, "../schema/vitest-runner-options.json"), "utf8")) as { properties: { vitest: { properties: { related: { default: boolean } } } } };
+    expect(schema.properties.vitest.properties.related.default, "the runner's default").toBe(true);
+    const runner = readFileSync(join(runnerDir, "vitest-test-runner.js"), "utf8");
+    // what `related` does: the vitest run is narrowed to the mutated files' related tests; off, it is undefined (every test)
+    expect(runner).toMatch(/this\.ctx\.config\.related =\s*this\.options\.vitest\.related && relatedFiles\s*\?\s*relatedFiles\.map\(normalizeFileName\)\s*:\s*undefined;/);
+    // and the warning a leg whose files no test imports would print, which the config comment names
+    expect(runner).toContain("Vitest failed to find test files related to mutated files");
+    const config = readFileSync(join(ENGINE, "stryker.config.mjs"), "utf8");
+    expect(config).toMatch(/vitest: \{ related: true \},/);
   });
 });
