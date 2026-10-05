@@ -15,9 +15,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveGroup } from "../scripts/stryker-cuts.mjs";
-import { STRYKER_GROUPS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
-import { groupMutants, mutantCount, mutantsOf, parseEntry, selected, type Selected } from "./stryker-coverage.ts";
+import { resolveGroup, resolveSplit } from "../scripts/stryker-cuts.mjs";
+import { STRYKER_GROUPS, STRYKER_SPLITS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
+import { groupMutants, mutantCount, mutantsOf, mutantsOfText, parseEntry, selected, type Found, type Selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -56,11 +56,29 @@ const PROBE_MUTANTS = HOSTED_PROBE_MUTANTS;
  *  declaration (a member cut, scripts/stryker-cuts.mjs) the container's own mutants (its object literal, its function body) are
  *  in no range, and Stryker keeps a mutant only if its WHOLE node is inside one. They CAN be mutated: the instrumenter
  *  makes them (`BlockStatement` to `{}`, `ObjectLiteral` to `{}`), and an emptied body or module object can be killed by any test
- *  or can survive; but no leg runs them, so no report ever scores them. The list names each one, file:line:mutator, so a reader
- *  of MUTATION.md can see what the floors never judge, and the count pins below are DERIVED from it: one list, no second count. */
-interface Unscored { file: string; line: number; mutator: string; replacement: string; what: string }
+ *  or can survive; but no leg runs them, so no report ever scores them. The list names each one so a reader of MUTATION.md can
+ *  see what the floors never judge, and the count pins below are DERIVED from it: one list, no second count.
+ *
+ *  KEYED ON WHAT THE SOURCE SAYS, never on where it is (T20-FIX2, I1'): an entry is its file, its mutator, its replacement and
+ *  the TRIMMED TEXT of the source line the mutant starts on. `line` is information only (the line when the list was written; it
+ *  lags the file as soon as anything above it changes, and nothing compares it), because a line-keyed list reds the engine job
+ *  of an unrelated PR that adds one comment line to cricket.ts, football.ts, the period or setbased kernels, or import/plan.ts.
+ *  An edit to the TEXT of a listed line (a renamed parameter of `padSpec`) still reds, and the failure prints the list to paste. */
+interface Unscored { file: string; mutator: string; replacement: string; text: string; line: number }
 const UNSCORED = JSON.parse(readFileSync(join(ENGINE, "stryker-unscored.json"), "utf8")) as Unscored[];
-const unscoredKey = (u: { file: string; line: number; mutator: string }): string => `${u.file}:${u.line}:${u.mutator}`;
+const unscoredKey = (u: Unscored): string => [u.file, u.mutator, u.replacement, u.text].join(" | ");
+const entryOf = (file: string, sourceLines: readonly string[], m: Found): Unscored => ({ file, mutator: m.mutator, replacement: m.replacement, text: (sourceLines[m.start.line] as string).trim(), line: m.start.line + 1 });
+/** The mutants of `whole` (the instrumenter's, over `text`) that no part holds: those whose node runs across the last line of a
+ *  part. Never from the cuts: Stryker keeps a mutant only when its whole node lies inside one range (`start` and `end` are
+ *  0-based lines; a range is 1-based and inclusive). */
+function lostBy(file: string, text: string, whole: readonly Found[], parts: readonly (readonly [number, number])[]): Unscored[] {
+  const boundaries = parts.slice(0, -1).map(([, to]) => to);
+  const lines = text.split("\n");
+  return whole.filter((m) => boundaries.some((b) => m.start.line + 1 <= b && m.end.line + 1 > b)).map((m) => entryOf(file, lines, m));
+}
+/** What a failing list pin tells its author: the file to write, whole, from this run (the timeouts test does the same). */
+const unscoredHint = (found: readonly Unscored[]): string =>
+  `regenerate: write this to packages/engine/stryker-unscored.json (the mutants no leg holds, keyed on file, mutator, replacement and the trimmed text of the line; \`line\` is information only; from this run):\n${JSON.stringify([...found].sort((x, y) => x.file.localeCompare(y.file) || x.line - y.line), null, 2)}`;
 /** The list's count per file (a statement cut loses none, and every file not named is cut only by statements). */
 const MEMBER_CUT_LOSS: Record<string, number> = {};
 for (const u of UNSCORED) MEMBER_CUT_LOSS[u.file] = (MEMBER_CUT_LOSS[u.file] ?? 0) + 1;
@@ -158,7 +176,7 @@ describe("every leg is under the 200-minute split line, from Stryker's own mutan
     let ranges = 0;
     let lost = 0;
     const lossByFile: Record<string, number> = {};
-    const unscored: string[] = [];
+    const unscored: Unscored[] = [];
     for (const [f, sels] of files) {
       if (sels.length === 1 && sels[0] === "all") continue;
       split++;
@@ -174,15 +192,12 @@ describe("every leg is under the 200-minute split line, from Stryker's own mutan
         sum += await mutantCount(ENGINE, f, [range]);
         ranges++;
       }
-      // the expected loss, from the INSTRUMENTER's own locations of the whole file (never from the cuts): a mutant is kept only
-      // when its whole node lies inside one range, so it is lost exactly when its node runs across the last line of a part
-      // (`start` and `end` are 0-based lines; a range is 1-based and inclusive)
-      const boundaries = parts.slice(0, -1).map(([, to]) => to);
-      const spanning = whole.filter((m) => boundaries.some((b) => m.start.line + 1 <= b && m.end.line + 1 > b));
+      // the expected loss, from the INSTRUMENTER's own locations of the whole file (never from the cuts), see lostBy
+      const spanning = lostBy(f, readFileSync(join(ENGINE, f), "utf8"), whole, parts);
       expect(whole.length - sum, `${f}: the mutants lost are the ones whose node spans a cut`).toBe(spanning.length);
       if (spanning.length > 0) lossByFile[f] = spanning.length;
       lost += spanning.length;
-      for (const m of spanning) unscored.push(unscoredKey({ file: f, line: m.start.line + 1, mutator: m.mutator }));
+      unscored.push(...spanning);
     }
     expect(split, "files split by range").toBeGreaterThanOrEqual(5);
     expect(ranges, "ranges summed").toBeGreaterThan(split);
@@ -190,13 +205,44 @@ describe("every leg is under the 200-minute split line, from Stryker's own mutan
     // cut between the members of one big declaration loses the container's own mutants, the object literal or the function body
     // that holds the cut (a whole range cannot hold them: Stryker keeps a mutant only if its whole node is inside). Measured
     // 2026-10-05 on the cuts committed with this task; a file that starts losing, or loses more, must be argued here.
-    expect(lossByFile).toEqual(MEMBER_CUT_LOSS);
-    // and by NAME: the committed list is exactly the instrumenter's mutants that no range holds, file:line:mutator (line 1-based)
-    expect(unscored.sort(), "stryker-unscored.json names exactly the mutants no leg holds").toEqual(UNSCORED.map(unscoredKey).sort());
+    // and by NAME, first (its failure carries the list to paste): the committed list is exactly the instrumenter's mutants that no
+    // range holds, by file, mutator, replacement and the text of the line they start on
+    expect(unscored.map(unscoredKey).sort(), `stryker-unscored.json names exactly the mutants no leg holds\n${unscoredHint(unscored)}`).toEqual(UNSCORED.map(unscoredKey).sort());
+    expect(lossByFile, unscoredHint(unscored)).toEqual(MEMBER_CUT_LOSS);
+    // the hint is usable: what it prints, pasted, is a list this very pin accepts (a hint that dropped an entry, or a field the key
+    // reads, would send the author round the loop twice)
+    const pasted = JSON.parse(unscoredHint(unscored).split("from this run):\n")[1] as string) as Unscored[];
+    expect(pasted.length, "the hint prints every mutant no leg holds").toBe(unscored.length);
+    expect(pasted.map(unscoredKey).sort(), "and a list that satisfies the pin it is for").toEqual(UNSCORED.map(unscoredKey).sort());
     expect(UNSCORED.length, "the list is not empty: member cuts exist, and each one costs its container's mutants").toBeGreaterThan(0);
-    expect(new Set(UNSCORED.map(unscoredKey)).size, "no mutant is listed twice").toBe(UNSCORED.length);
+    expect(new Set(UNSCORED.map((u) => JSON.stringify(u))).size, "no entry is listed twice").toBe(UNSCORED.length);
     expect(lost, "mutants no leg holds: as many as the list names").toBe(UNSCORED.length);
   }, INSTRUMENT_BUDGET_MS);
+
+  it("an edit that moves the lines (a comment line at the top, one above the first listed mutant) leaves the list matching: it is keyed on what the source says, not where it is (T20-FIX2, I1')", async () => {
+    const byFile = new Map<string, Unscored[]>();
+    for (const u of UNSCORED) byFile.set(u.file, [...(byFile.get(u.file) ?? []), u]);
+    expect(byFile.size, "the listed files").toBeGreaterThan(1);
+    const COMMENT = "// a comment line added by the test";
+    let edits = 0;
+    for (const [file, listed] of byFile) {
+      const anchors = STRYKER_SPLITS[file];
+      expect(anchors, `${file} is a split file`).toBeDefined();
+      const text = readFileSync(join(ENGINE, file), "utf8");
+      const lines = text.split("\n");
+      const first = Math.min(...listed.map((u) => u.line));   // 1-based, as of the listing; the comment goes in just above it
+      const above = [...lines.slice(0, first - 1), COMMENT, ...lines.slice(first - 1)].join("\n");
+      for (const [name, edited] of [["at the top", `${COMMENT}\n${text}`], ["above the first listed mutant", above]] as const) {
+        const ranges = resolveSplit(edited, anchors as string[], file);   // the same anchors, resolved on the edited copy
+        const lost = lostBy(file, edited, await mutantsOfText(file, edited, "all"), ranges);
+        expect(lost.map(unscoredKey).sort(), `${file}, ${name}: the same mutants are lost\n${unscoredHint(lost)}`).toEqual(listed.map(unscoredKey).sort());
+        // the premise: the lines DID move, so a list keyed on them would have gone red here (the test can see what it exists for)
+        expect(lost.map((u) => u.line).sort((x, y) => x - y), `${file}, ${name}: the edit moved the listed lines`).not.toEqual(listed.map((u) => u.line).sort((x, y) => x - y));
+        edits++;
+      }
+    }
+    expect(edits, "edits checked: two for each listed file").toBe(byFile.size * 2);
+  }, INSTRUMENT_BUDGET_MS * 3);
 
   it("the legs together hold every mutant of every file they select, none twice, and none lost but the member cuts' enumerated few", async () => {
     const byLeg = await counts();

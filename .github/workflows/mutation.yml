@@ -108,6 +108,7 @@ on:
     paths:
       - ".github/workflows/mutation.yml"
       - "packages/engine/stryker*"
+      - "packages/engine/vitest.config.ts"
       - "packages/engine/vitest.stryker.config.ts"
       - "packages/engine/scripts/stryker-*"
 

@@ -1108,7 +1108,7 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
     expect(MUT).not.toMatch(/^\s{2}push:/m);
     expect(MUT).not.toContain("workflow_call");
     expect(MUT).not.toContain("pull_request_target");
-    expect(MUT).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/mutation\.yml"\s*\n\s*- "packages\/engine\/stryker\*"\s*\n\s*- "packages\/engine\/vitest\.stryker\.config\.ts"\s*\n\s*- "packages\/engine\/scripts\/stryker-\*"/);
+    expect(MUT).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/mutation\.yml"\s*\n\s*- "packages\/engine\/stryker\*"\s*\n\s*- "packages\/engine\/vitest\.config\.ts"\s*\n\s*- "packages\/engine\/vitest\.stryker\.config\.ts"\s*\n\s*- "packages\/engine\/scripts\/stryker-\*"/);
   });
 
   it("the probe's pull_request paths cover every Stryker file of the engine, and the vitest config the runner is handed (T20-FIX1, M3)", () => {
@@ -1128,9 +1128,14 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
       .filter((f) => /stryker/.test(f) && statSync(join(engine, f)).isFile())
       .map((f) => `packages/engine/${f}`);
     const declared = /configFile:\s*"([^"]+)"/.exec(readFileSync(join(engine, "stryker.config.mjs"), "utf8"))![1]!;
-    const files = [...new Set([...named, `packages/engine/${declared}`])];
+    // and what that config MERGES (T20-FIX2, m3): vitest.stryker.config.ts is `mergeConfig(base, ...)`, so a change to the base it
+    // imports (`./vitest.config.ts`) alters every Stryker run, and the probe must run on it
+    const imported = [...readFileSync(join(engine, declared), "utf8").matchAll(/from "\.\/([^"]+)"/g)].map((m) => m[1]!);
+    expect(imported, "the runner's vitest config imports the engine's own vitest config").toContain("vitest.config.ts");
+    const files = [...new Set([...named, `packages/engine/${declared}`, ...imported.map((f) => `packages/engine/${f}`)])];
     expect(files.length, "Stryker files read from the tree").toBeGreaterThan(6);
     expect(files, "the runner's vitest config is among them").toContain("packages/engine/vitest.stryker.config.ts");
+    expect(files, "and the base it merges").toContain("packages/engine/vitest.config.ts");
     expect(files.filter((f) => !covered(f)), "Stryker files the probe's trigger does not cover").toEqual([]);
   });
 
