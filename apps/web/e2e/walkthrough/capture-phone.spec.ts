@@ -101,6 +101,10 @@ const CYCLE_MS = LIVE_WAIT_MS + 3 * POLL_WAIT_MS;
 /** How late a server-timed end may land after its deadline: it is made by the next tick, and the panel's poll IS the
  *  tick — one poll, plus the read's own round trip. */
 const END_LATE_MS = STREAM_POLL_MS + 3_000;
+/** I-2's window (re-review n-1): the first poll after the start is issued within one STREAM_POLL_MS; an answer slower than
+ *  a poll lets the NEXT poll through, one STREAM_POLL_MS later, and the newest of them lands — then the `current` read.
+ *  The count of answers is what the test holds to one; this only bounds the clock around it. */
+const I2_WINDOW_MS = 2 * STREAM_POLL_MS + 2 * POLL_WAIT_MS;
 /** §6.9: how long after its last beat a phone answered `cadence` is silent — max(floor, cadence + slack), with the
  *  config's slack (not tunable) and the server's tuned floor. The rule's own arithmetic, not `silentAfterMs`. */
 const silentAfterMs = (cadenceS: number): number => Math.max(SILENT_FLOOR_S, cadenceS + PHONE_SILENT_SLACK_SECONDS) * 1_000;
@@ -140,8 +144,6 @@ const LONGEST_HOLD_MS = (FREE_RESTARTS_PER_WINDOW + 2) * CYCLE_MS;
 const SLOT_WAIT_MS = 2 * LONGEST_HOLD_MS;
 
 let lease: (() => Promise<void>) | null = null;
-/** The pool key this test's lease holds (W22 takes every OTHER key while it ticks). */
-let leaseKey: number | null = null;
 const rigsThisTest: { request: APIRequestContext; orgId: string }[] = [];
 
 async function streamSlot(): Promise<void> {
@@ -162,7 +164,6 @@ async function streamSlot(): Promise<void> {
       const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${SLOT_LOCK_BASE + i}::bigint) as ok`;
       if (row?.ok) {
         lease = () => sql.end();
-        leaseKey = SLOT_LOCK_BASE + i;
         return;
       }
     }
@@ -174,18 +175,40 @@ async function streamSlot(): Promise<void> {
   }
 }
 
+/** stream-credits.spec.ts budgets waiting out one other holder of ITS key at that holder's go-live and teardown
+ *  (`LIVE_MS + NAV_MS` there; restated, a spec cannot import another spec). W22 waits no longer than one go-live → stop
+ *  cycle for it, which covers that hold. */
+const CREDITS_KEY_WAIT_MS = CYCLE_MS;
+/** How often W22 asks for the whole pool. Each ask takes nothing it cannot keep, so it can ask often; a sibling polls a
+ *  free key every 500 ms, and the whole pool is only ever free between two of their asks. */
+const WHOLE_POOL_POLL_MS = 100;
+
 /**
- * W22's exclusion (B9 review m-3): the cron tick is GLOBAL — it ticks every open session on the server — and in CI this
- * file shares a server and a parallel shard with the other stream walkthroughs, whose held-WAITING rows rely on nothing
- * ticking them. Every session any of them opens is opened under one of the deployment's STREAM_CAPACITY slot keys (the
- * pool [BASE, BASE + CAPACITY − 1), shared with stream-relay and directory, and stream-credits' BASE + CAPACITY − 1), held
- * until its teardown has driven the session terminal. Holding EVERY key therefore means no other test has a session
- * open: the tick can reach this test's own and nothing else. Taken on its own connection, each key kept once won (a
- * holder only ever waits for one key, so the set fills as they finish), bounded by SLOT_WAIT_MS; the count is returned.
+ * W22's exclusion (B9 review m-3; re-review n-2). The cron tick is GLOBAL — it ticks every open session on the server —
+ * and in CI this file shares a server and a parallel shard with the other stream walkthroughs, whose held-WAITING rows
+ * rely on nothing ticking them. Every session any of them opens is opened under one of the deployment's STREAM_CAPACITY
+ * slot keys (the pool [BASE, BASE + CAPACITY − 1), shared with stream-relay and directory, and stream-credits'
+ * BASE + CAPACITY − 1), held until its teardown has driven the session terminal. Holding EVERY key therefore means no
+ * other test has a session open: the tick can reach this test's own and nothing else.
+ *
+ * Taken so that WAITING for it holds nothing (n-2: W22 used to wait for the other keys while holding its own and the
+ * credits key, which stretched every sibling's wait by the whole of W22's):
+ *  - the pool, BEFORE W22's go-live, all or nothing: each round asks for every pool key in key order and, short of the
+ *    whole set, gives back what it got, so a sibling waiting on the pool never waits on W22's wait — only on its run;
+ *  - stream-credits' key, only at the tick (`credits()`), once W22 holds the pool, and released right after it: credits
+ *    waits for it at most the few seconds of a tick, never W22's run. Held at the start it would be W22's whole run, past
+ *    credits' own budget.
+ * The bound a sibling can wait on W22 is therefore W22's run from its go-live to its teardown: the go-live, the W19
+ * window and the late tick, credits' key (instant unless stream-credits shares the shard and is mid-hold, then at most
+ * CREDITS_KEY_WAIT_MS), and the end landing — measured at 79 s (b9-report.md, the "W22 pool" annotation), inside the
+ * 3 × CYCLE_MS that stream-relay and directory budget a pool wait at. Only with stream-credits in the same shard and
+ * mid-hold at the tick can it run past that, by at most CREDITS_KEY_WAIT_MS.
+ * W22 holds both pool keys only while nobody else holds either, so it never overlaps W23's hold.
  */
-async function everyOtherSlot(): Promise<{ taken: number; release: () => Promise<void> }> {
-  if (leaseKey === null) throw new Error("everyOtherSlot: this test holds no pool key — take streamSlot() first");
-  const dbUrl = process.env.DATABASE_URL!;
+async function wholePool(): Promise<{ pool: number; waitedMs: number; credits: () => Promise<{ release: () => Promise<void> }> }> {
+  if (lease) throw new Error("wholePool: this test already holds a key — take the pool BEFORE any streamSlot()");
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
   const { default: postgres } = await import("postgres");
   const sql = postgres(dbUrl, {
     ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
@@ -193,22 +216,43 @@ async function everyOtherSlot(): Promise<{ taken: number; release: () => Promise
     max: 1,
     idle_timeout: 0,
   });
-  const want = Array.from({ length: STREAM_CAPACITY }, (_, i) => SLOT_LOCK_BASE + i).filter((k) => k !== leaseKey);
-  const held = new Set<number>();
-  const deadline = Date.now() + SLOT_WAIT_MS;
+  const pool = Array.from({ length: POOL_SLOTS }, (_, i) => SLOT_LOCK_BASE + i);
+  const creditsKey = SLOT_LOCK_BASE + POOL_SLOTS;
+  const from = Date.now();
   for (;;) {
-    for (const k of want) {
-      if (held.has(k)) continue;
+    const got: number[] = [];
+    for (const k of pool) {
       const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${k}::bigint) as ok`;
-      if (row?.ok) held.add(k);
+      if (!row?.ok) break;
+      got.push(k);
     }
-    if (held.size === want.length) return { taken: held.size, release: () => sql.end() };
-    if (Date.now() > deadline) {
+    if (got.length === pool.length) break;
+    for (const k of got) await sql`select pg_advisory_unlock(${k}::bigint)`;
+    if (Date.now() - from > SLOT_WAIT_MS) {
       await sql.end();
-      throw new Error(`W22's exclusion: ${want.length - held.size} of ${want.length} other slot key(s) still held after ${SLOT_WAIT_MS} ms`);
+      throw new Error(`W22's exclusion: the ${pool.length} pool key(s) were never free together in ${SLOT_WAIT_MS} ms`);
     }
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, WHOLE_POOL_POLL_MS));
   }
+  // The lease: every key on this connection goes with it, at teardown, once the session is terminal.
+  lease = () => sql.end();
+  const waitedMs = Date.now() - from;
+  const credits = async (): Promise<{ release: () => Promise<void> }> => {
+    const deadline = Date.now() + CREDITS_KEY_WAIT_MS;
+    for (;;) {
+      const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${creditsKey}::bigint) as ok`;
+      if (row?.ok) {
+        return {
+          release: async () => {
+            await sql`select pg_advisory_unlock(${creditsKey}::bigint)`;
+          },
+        };
+      }
+      if (Date.now() > deadline) throw new Error(`W22's exclusion: stream-credits' key still held after ${CREDITS_KEY_WAIT_MS} ms`);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  };
+  return { pool: pool.length, waitedMs, credits };
 }
 
 async function teardownStreams(): Promise<void> {
@@ -231,7 +275,6 @@ async function teardownStreams(): Promise<void> {
   } finally {
     const release = lease;
     lease = null;
-    leaseKey = null;
     await release?.();
   }
 }
@@ -515,7 +558,7 @@ test("W5: no phone → Go live disabled, the strip says pair first, and the API 
 test("operator start from the phone: 200 {sid}; the panel open at Ready shows it starting within ONE poll (no stale Go live, no active_session) and live after the connect; the phone hears go-live (operator), its GET carries cred and a second phone's does not; already_live and replaced refuse a second start; one consume", async ({
   page,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + NAV_MS + CYCLE_MS + 4 * POLL_WAIT_MS + 30_000);
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + NAV_MS + CYCLE_MS + I2_WINDOW_MS + 3 * POLL_WAIT_MS + 30_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRig(page);
   await addTargetApi(page, rig.orgId, "Operator destination");
@@ -526,20 +569,38 @@ test("operator start from the phone: 200 {sid}; the panel open at Ready shows it
   const goLive = body.getByTestId("stream-go-live");
   await expect(goLive, "premise: the panel rests at Ready with Go live").toBeEnabled({ timeout: POLL_WAIT_MS });
 
-  // I-2 within ONE poll, counted in answers, not seconds (B9 review I-1): the first read-model answer whose request is
-  // issued after the start resolved goes through; every later one is HELD unanswered. The panel has exactly that one
-  // answer to leave Ready on — a pickup on any later answer never sees one and reds.
+  // I-2 within ONE poll, counted in answers, not seconds (B9 review I-1): read-model requests issued after the start
+  // resolved go through until one of their answers has been DELIVERED; from then on a request is HELD unanswered —
+  // unless an earlier one is still in flight, because the panel keeps only the NEWEST read's answer
+  // (fixture-stream-panel.tsx `phoneSeq`): holding the request that supersedes an in-flight answer would discard that
+  // answer and leave the panel nothing to land (re-review n-1: a first answer slower than one poll was a false red).
+  // So the panel can land exactly ONE answer after the start — the newest of the batch that went through — and a pickup
+  // on any later answer never sees one and reds, however long it waits. Seconds are not the measure here, answers are:
+  // I2_WINDOW_MS only bounds a server slower than a poll on the first answer, whose batch then lands on the next poll's.
   const READ_MODEL = new RegExp(`/api/v1/fixtures/${f.id}/stream-phone(\\?.*)?$`);
   let startDone = false;
-  let firstAfterStart = false;
+  let delivered = 0;
+  let inFlight = 0;
   const heldReads: (() => Promise<void>)[] = [];
   await page.route(READ_MODEL, async (route) => {
-    if (!startDone || !firstAfterStart) {
-      if (startDone) firstAfterStart = true;
+    if (!startDone) {
       await route.continue();
       return;
     }
-    heldReads.push(() => route.continue().catch(() => undefined));
+    if (delivered > 0 && inFlight === 0) {
+      heldReads.push(() => route.continue().catch(() => undefined));
+      return;
+    }
+    inFlight++;
+    try {
+      const response = await route.fetch();
+      await route.fulfill({ response });
+      delivered++;
+    } catch {
+      await route.abort().catch(() => undefined); // the page went away mid-answer — nothing was delivered
+    } finally {
+      inFlight--;
+    }
   });
   await streamSlot();
   const started = await phone.start();
@@ -547,10 +608,13 @@ test("operator start from the phone: 200 {sid}; the panel open at Ready shows it
   expect(started.status, `the operator's start: ${JSON.stringify(started.refusal)}`).toBe(200);
   const sid = started.ok!.sid;
   try {
-    await expect(goLive, "I-2: no stale Go live once the phone has started — on the FIRST read-model answer after it").toHaveCount(0, { timeout: POLL_WAIT_MS });
-    expect(firstAfterStart, "premise: a read-model answer issued after the start went through").toBe(true);
+    await expect(goLive, "I-2: no stale Go live once the phone has started — on the FIRST read-model answer after it").toHaveCount(0, { timeout: I2_WINDOW_MS });
+    expect(delivered, "premise: a read-model answer issued after the start was delivered").toBeGreaterThanOrEqual(1);
   } finally {
-    test.info().annotations.push({ type: "I-2 hold", description: `${heldReads.length} later read-model poll(s) held unanswered` });
+    test.info().annotations.push({
+      type: "I-2 hold",
+      description: `${delivered} answer(s) delivered after the start (one batch: only its newest can land); ${heldReads.length} later read-model poll(s) held unanswered`,
+    });
     await page.unroute(READ_MODEL);
     for (const release of heldReads.splice(0)) await release();
   }
@@ -957,14 +1021,19 @@ test("W19/W24 @320: live, then the phone's beats stop and its input disconnects 
 test("W22: a live phone lost with nobody watching (the organiser has left the page) stays open past its W19 deadline until the cron tick, which ends it phone_lost", async ({
   page,
 }) => {
-  // Two slot waits: its own key, then every other one for the global tick (m-3).
-  test.setTimeout(2 * SLOT_WAIT_MS + SEED_MS + 2 * NAV_MS + CYCLE_MS + W19_MS + 6 * POLL_WAIT_MS + 30_000);
+  // Two waits: the whole pool before its go-live, and stream-credits' key at the tick (m-3, n-2).
+  test.setTimeout(SLOT_WAIT_MS + CREDITS_KEY_WAIT_MS + SEED_MS + 2 * NAV_MS + CYCLE_MS + W19_MS + 6 * POLL_WAIT_MS + 30_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRig(page);
   await addTargetApi(page, rig.orgId, "W22 destination");
   const f = rig.fixtures[0]!;
   const body = await openPhoneTab(page, rig, f);
   const phone = await pairedPhone(page, { mode: "publishing" });
+  // The global tick (m-3) needs every key; the pool is taken now, whole, before the session opens (n-2: no key is held
+  // while waiting for it). `tapGoLive`'s own slot call then finds the lease and takes nothing more.
+  const exclusive = await wholePool();
+  const poolFrom = Date.now();
+  expect(exclusive.pool, "the pool: every key of the deployment's stream capacity but stream-credits'").toBe(STREAM_CAPACITY - 1);
   const session = await tapGoLive(page, body, rig, f);
   await untilLive(body);
   await expect.poll(async () => (await sessionRow(session.id)).phone_beat_at, { timeout: 2 * POLL_WAIT_MS }).not.toBeNull();
@@ -979,21 +1048,27 @@ test("W22: a live phone lost with nobody watching (the organiser has left the pa
   await new Promise((r) => setTimeout(r, Math.max(0, deadline + END_LATE_MS - Date.now())));
   expect((await sessionRow(session.id)).state, "nobody watching, nothing ticked: still open past its deadline").toBe("live");
 
-  // The tick is global (m-3): it runs only once every other slot key is ours, so no other walkthrough has a session open.
-  const exclusive = await everyOtherSlot();
+  // The tick is global (m-3): it runs only once every key is ours — the pool since before the go-live, stream-credits'
+  // now — so no other walkthrough has a session open.
+  const creditsKey = await exclusive.credits();
   try {
-    expect(exclusive.taken, "every other key of the deployment's stream capacity").toBe(STREAM_CAPACITY - 1);
     const others = await withDb((sql) => sql<{ id: string }[]>`
       select id from fixture_stream_sessions where org_id <> ${rig.orgId} and state not in ('completed', 'failed')`);
     expect(others, "the global tick can reach no other test's session").toEqual([]);
     const tick = await page.request.post("/api/cron/stream-tick", { headers: { "x-cron-secret": process.env.CRON_SECRET! } });
     expect(tick.status(), "the cron tick runs").toBe(200);
-    const answer = (await tick.json()) as { data?: { ended?: number; failed?: number } };
-    expect(answer.data?.ended, "it ended at least this session").toBeGreaterThanOrEqual(1);
+    const answer = (await tick.json()) as { data?: { ticked?: number; ended?: number; failed?: number } };
+    // Exclusive (n-3): the tick reached THIS session alone, ended it once, and failed nothing — a tick that ended it
+    // twice, or reached another test's session, reds here.
+    expect(answer.data, "the tick ticked and ended exactly this session, and failed none").toMatchObject({ ticked: 1, ended: 1, failed: 0 });
     const ended = await untilDbState(session.id, ["ending", "completed"], POLL_WAIT_MS, "the cron's end lands");
     expect(ended.end_reason).toBe("phone_lost");
   } finally {
-    await exclusive.release();
+    await creditsKey.release();
+    test.info().annotations.push({
+      type: "W22 pool",
+      description: `waited ${exclusive.waitedMs} ms for the whole pool holding nothing; held it ${Date.now() - poolFrom} ms to the end landing (teardown releases it)`,
+    });
   }
 });
 
