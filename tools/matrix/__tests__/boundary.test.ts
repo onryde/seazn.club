@@ -229,6 +229,10 @@ describe("ruling 38: what the matrix may take from the bench", () => {
   // nothing outside the browser layer has a reason to name a Page. The two
   // closure tests below carry the transitive half.
   const BROWSER_LAYER = (rel: string) => rel.startsWith("lib/browser/") || rel.startsWith("lib/pads/") || rel === "lib/driver/browser-driver.ts";
+  /** W1d item 11: every spelling that loads (or names) playwright: the library, its subpaths and the test runner. */
+  const namesPlaywright = (spec: string): boolean => spec === "playwright" || spec.startsWith("playwright/") || spec === "@playwright/test";
+  /** The file's own imports name playwright, type-only ones included (nothing outside the browser layer has a reason to name a Page). */
+  const namesPlaywrightIn = (f: string): boolean => importsOf(f).some((i) => namesPlaywright(i.spec));
   function everyTs(dir: string, out: string[] = []): string[] {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, e.name);
@@ -240,10 +244,46 @@ describe("ruling 38: what the matrix may take from the bench", () => {
   it("no file under tools/matrix outside lib/browser, lib/pads and lib/driver/browser-driver.ts imports playwright", () => {
     const files = everyTs(MATRIX);
     expect(files.length).toBeGreaterThan(MODULES.length);
-    const bad = files.filter((f) => !BROWSER_LAYER(relative(MATRIX, f)) && importsOf(f).some((i) => i.spec === "playwright")).map((f) => relative(MATRIX, f));
+    const bad = files.filter((f) => !BROWSER_LAYER(relative(MATRIX, f)) && namesPlaywrightIn(f)).map((f) => relative(MATRIX, f));
     expect(bad).toEqual([]);
     // Positive pair: the scan does see the browser layer's own import.
-    expect(importsOf(join(MATRIX, "lib/browser/session.ts")).some((i) => i.spec === "playwright")).toBe(true);
+    expect(namesPlaywrightIn(join(MATRIX, "lib/browser/session.ts"))).toBe(true);
+  });
+  // W1d item 11 (Task 13): the scan above matched `spec === "playwright"` alone, so `playwright/test` and the test
+  // runner's `@playwright/test` (which loads the same library) passed it. Each spelling has a fixture the scan must
+  // catch, and each lookalike a fixture it must not; the real-tree scan then reports zero hits over a non-zero count.
+  it("the playwright scans catch every spelling that loads it and pass every lookalike, in each import shape", () => {
+    const positives = ["playwright", "playwright/test", "playwright/lib/x", "@playwright/test"];
+    // `@playwright/other` is a lookalike BY DESIGN: the scan names the test runner and nothing else under that scope
+    // (no import of one exists in the tree); a second scoped package that loads playwright is a decision to add.
+    const negatives = ["./playwright.ts", "../lib/playwright", "playwrightx", "playwright-extra-thing", "my-playwright/test", "@playwrightx/test", "@playwright", "@playwright/other"];
+    const shapes: readonly (readonly [string, (spec: string) => string])[] = [
+      ["value import", (s) => `import { chromium } from "${s}";\n`],
+      ["type import", (s) => `import type { Page } from "${s}";\n`],
+      ["export from", (s) => `export { test } from "${s}";\n`],
+      ["side-effect import", (s) => `import "${s}";\n`],
+      ["dynamic import", (s) => `const m = await import("${s}");\n`],
+    ];
+    const dir = mkdtempSync(join(tmpdir(), "matrix-boundary-pw-"));
+    try {
+      let caught = 0;
+      let passed = 0;
+      for (const [shape, text] of shapes) {
+        for (const [i, spec] of [...positives, ...negatives].entries()) {
+          const file = join(dir, `${shape.replace(/\W/g, "-")}-${i}.ts`);
+          writeFileSync(file, text(spec));
+          const want = positives.includes(spec);
+          expect(namesPlaywrightIn(file), `${shape}: ${spec}`).toBe(want);
+          // The closure walk's loader scan: a value or dynamic import loads it, a type import is erased.
+          expect(playwrightLoaders([file]).length > 0, `${shape}: ${spec} (loader scan)`).toBe(want && shape !== "type import");
+          if (want) caught++; else passed++;
+        }
+      }
+      expect(caught).toBe(shapes.length * positives.length);
+      expect(passed).toBe(shapes.length * negatives.length);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
   // The scan above reads each file's OWN imports. A module that loads
   // playwright two hops away passes it, so the L3 guarantee is proven over each
@@ -251,7 +291,7 @@ describe("ruling 38: what the matrix may take from the bench", () => {
   const OUTSIDE = MODULES.filter((f) => !BROWSER_LAYER(relative(MATRIX, f)));
   const SESSION = join(MATRIX, "lib/browser/session.ts");
   /** The files in `files` that VALUE-import playwright (a type import is erased and loads nothing). */
-  const playwrightLoaders = (files: Iterable<string>) => [...files].filter((f) => importsOf(f).some((i) => i.spec === "playwright" && !i.typeOnly));
+  const playwrightLoaders = (files: Iterable<string>) => [...files].filter((f) => importsOf(f).some((i) => namesPlaywright(i.spec) && !i.typeOnly));
   /** The shortest value-import chain from `root` to `target`, over the same edges closure() walks. */
   function chain(root: string, target: string): string {
     const parent = new Map<string, string | null>([[root, null]]);

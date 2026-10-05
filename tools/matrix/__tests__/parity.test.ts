@@ -20,7 +20,7 @@ import {
   BROWSER_ONLY_PREFIXES, DuplicateId, WidthSuffixMismatch, WrongDriver,
   compareRuns, headerLine, httpKeyOf, isBrowserOnly, parityVerdict, renderParity, type ParityReport,
 } from "../lib/parity.ts";
-import { CASE_STATES, parseResults, type AnyRunResults, type CaseResult, type CheckResult, type DriverKind, type Verdict } from "../lib/results.ts";
+import { CASE_STATES, decideState, parseResults, type AnyRunResults, type CaseResult, type CheckResult, type DriverKind, type Verdict } from "../lib/results.ts";
 import { SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
 import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
 
@@ -306,6 +306,52 @@ describe("compareRuns", () => {
     // Both sides with checks keep their per-check rows (the quiet rule is only for a checkless side).
     const withChecks = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280, { state: "red", checks: [chk("I1-rr-pair-once-per-leg", "pass", 28), ...BROWSER_EXTRA()] })]));
     expect(withChecks.diffs.map((d) => d.kind)).toEqual(["state", "check", "check"]);
+  });
+
+  // W1d item 10 (Task 13). `quiet` is the rule that a state row already says what a checkless side cannot: it holds only
+  // when ONE side ran no check AND the two states differ. The two tests below are its two edges.
+  describe("compareChecks' quiet rule (W1d item 10)", () => {
+    const errorRed = (checks: CheckResult[]): Partial<CaseResult> => {
+      const { state, reason } = decideState({ checks, deferred: null, error: "TimeoutError: locator.waitFor: Timeout 15000ms exceeded.", mandated: null, noPath: null });
+      return { state, reason, checks };
+    };
+
+    it("a browser error red that KEPT its checks, against an HTTP works case, lists the state row and each check row (the http checks it never reached are absent rows)", () => {
+      // The browser threw after two checks: it kept the common one and its own browser-only one.
+      const kept = [chk("I1-rr-pair-once-per-leg", "pass", 28), chk("organiser-ui-path", "pass", 1)];
+      const over = errorRed(kept);
+      expect(over.state, "the premise: the shape is an error red").toBe("red");
+      expect(over.reason).toMatch(/^error: TimeoutError/);
+      const r = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280, over)]));
+      // The http works case ran I1 (pass/28, matched), life-fold-parity (pass/28) and life-draw-path-exercised (abstain/0).
+      expect(r.diffs).toEqual([
+        { caseId: `${A}@1280`, kind: "state", id: null, http: "works", browser: "red" },
+        { caseId: `${A}@1280`, kind: "check", id: "life-fold-parity", http: "pass/28", browser: "absent" },
+        { caseId: `${A}@1280`, kind: "check", id: "life-draw-path-exercised", http: "abstain/0", browser: "absent" },
+      ]);
+      // The one matched check is counted, and the browser-only one is neither a row nor common.
+      expect(r.checks).toBe(1);
+    });
+
+    it("equal states with one side check-less is NOT quiet: nothing else says the missing checks are missing", () => {
+      // Both red, so there is no state row; the checkless side's absent rows are the only difference there is.
+      const both = errorRed([chk("I1-rr-pair-once-per-leg", "pass", 28), chk("life-fold-parity", "pass", 28)]);
+      const none = errorRed([]);
+      expect(none.state).toBe(both.state);
+      const httpEmpty = compareRuns(runOf("http", [httpCase(A, none)]), runOf("browser", [browserCase(A, 1280, { ...both, checks: [...both.checks!, chk("organiser-ui-path", "pass", 1)] })]));
+      expect(httpEmpty.diffs).toEqual([
+        { caseId: `${A}@1280`, kind: "check", id: "I1-rr-pair-once-per-leg", http: "absent", browser: "pass/28" },
+        { caseId: `${A}@1280`, kind: "check", id: "life-fold-parity", http: "absent", browser: "pass/28" },
+      ]);
+      const browserEmpty = compareRuns(runOf("http", [httpCase(A, both)]), runOf("browser", [browserCase(A, 1280, none)]));
+      expect(browserEmpty.diffs).toEqual([
+        { caseId: `${A}@1280`, kind: "check", id: "I1-rr-pair-once-per-leg", http: "pass/28", browser: "absent" },
+        { caseId: `${A}@1280`, kind: "check", id: "life-fold-parity", http: "pass/28", browser: "absent" },
+      ]);
+      // The control pair: the same two sides in DIFFERENT states are quiet — one state row, no check rows.
+      const differ = compareRuns(runOf("http", [httpCase(A, { state: "works", reason: "2 checks, 56 items", checks: both.checks })]), runOf("browser", [browserCase(A, 1280, none)]));
+      expect(differ.diffs).toEqual([{ caseId: `${A}@1280`, kind: "state", id: null, http: "works", browser: "red" }]);
+    });
   });
 
   it("an all-🚫/░ browser run is 'compared 0' and never parity", () => {
