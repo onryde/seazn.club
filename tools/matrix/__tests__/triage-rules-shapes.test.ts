@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { AUDIT_DIR, OUTCOMES, buildLedger, parseVerdicts, readAudit } from "../lib/audit-ledger.ts";
-import { CATALOGUE_DIR, loadCatalogue, triage, triageJson, type TriageResult, type TriageRun } from "../lib/triage.ts";
+import { CATALOGUE_DIR, MIN_REASON_CHARS, loadCatalogue, triage, triageJson, type TriageResult, type TriageRun } from "../lib/triage.ts";
 import { LAYERS, type CaseResult, type Layer } from "../lib/results.ts";
 import { kase, mergedRun } from "./summary-fixtures.ts";
 
@@ -181,6 +181,34 @@ describe("the committed triage rules over real reds (the seam: real producer out
     const r = triage(runsOf(twins), cat.rules, cat.routing, ledger, cat.newGaps);
     expect(r.checked).toBe(twins.length);
     expect(r.rows, "no twin is keyed").toEqual([]);
+    expect(r.ambiguous).toEqual([]);
+    expect(r.untriaged.slice().sort()).toEqual(twins.map((t) => t.caseId).sort());
+  });
+
+  /** The rules whose reason matcher IS the floor's length, typed from the committed rules: nothing shorter can be cut from them, so they have no prefix twin. */
+  const AT_FLOOR = ["bg-draw-final-groups-ko", "bg-draw-final-league-ko", "bg-draw-final-swiss-knockout", "group-pool-membership-from-results"];
+
+  it("fails closed on a reason cut to its floor (Task 19 carry): a real red whose text keeps only the first MIN_REASON_CHARS characters of its rule's matcher is untriaged, so a matcher loosened to the floor is seen", () => {
+    const ruleOf = new Map(cat.rules.rules.map((r) => [r.id, r]));
+    const twins: Shape[] = [];
+    const twinned = new Set<string>();
+    for (const s of SHAPES) {
+      const id = /^rule (\S+)/.exec(s.why)![1]!;
+      const m = ruleOf.get(id)!.match.reason;
+      if (m === undefined) continue;
+      if (AT_FLOOR.includes(id)) { expect(m.length, `${id} is at the floor, as the typed list says`).toBe(MIN_REASON_CHARS); continue; }
+      const at = s.reason.indexOf(m);
+      expect(at, `${s.caseId}: the real red carries its rule's matcher (the positive pair)`).toBeGreaterThanOrEqual(0);
+      twins.push({ ...s, caseId: `${s.caseId}~twin-prefix`, reason: s.reason.slice(0, at + MIN_REASON_CHARS) });
+      twinned.add(id);
+    }
+    // Anti-vacuity: every rule with a reason matcher outside the typed floor list was twinned, and there are many of them.
+    const withReason = cat.rules.rules.filter((r) => r.match.reason !== undefined).map((r) => r.id);
+    expect([...twinned].sort()).toEqual(withReason.filter((id) => !AT_FLOOR.includes(id)).sort());
+    expect(twins.length).toBeGreaterThanOrEqual(30);
+    const r = triage(runsOf(twins), cat.rules, cat.routing, ledger, cat.newGaps);
+    expect(r.checked).toBe(twins.length);
+    expect(r.rows, "no cut reason is keyed").toEqual([]);
     expect(r.ambiguous).toEqual([]);
     expect(r.untriaged.slice().sort()).toEqual(twins.map((t) => t.caseId).sort());
   });
