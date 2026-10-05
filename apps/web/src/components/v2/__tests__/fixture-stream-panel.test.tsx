@@ -323,6 +323,31 @@ describe("the style strip is built from the registry", () => {
     expect(byTestId(tree, "stream-tab-phone"), "the Phone tab").toBeDefined();
   });
 
+  it("capture-qr-v2 OFF (owner 2026-10-04): no Phone/OBS switch at all — the OBS overlay shows directly, the Phone tab's container never mounts, and the stop probe keeps a leftover stream stoppable", () => {
+    const off = openPanel({ relayEntitled: true, phoneCapture: false }).tree();
+    let absent = 0;
+    for (const id of ["stream-tab-phone", "stream-tab-obs", "stream-qr-text", "stream-code-card", "stream-go-live"]) {
+      expect(byTestId(off, id), id).toBeUndefined();
+      absent++;
+    }
+    expect(absent).toBe(5);
+    expect(off.filter((el) => attr(el, "aria-label") === m("stream.tabs.label")), "the Phone/OBS tablist").toHaveLength(0);
+    expect(off.find((el) => el.type === PhoneTab), "the phone container").toBeUndefined();
+    // The OBS tab's own content, without a tap.
+    expect(textAt(off, "stream-lead")).toBe(m("stream.line"));
+    expect(styleTabs(off).length, "the OBS style strip").toBeGreaterThan(0);
+    // The routes are not gated: a stream a phone already started keeps its way out.
+    const probe = off.find((el) => el.type === PhoneStopProbe);
+    expect(propsOf(probe!).fixtureId).toBe(FIXTURE.id);
+    // The positive pair: flag on — the switch, Phone first (§3.1), the container mounted, no probe beside it.
+    const on = openPanel({ relayEntitled: true, phoneCapture: true }).tree();
+    expect(byTestId(on, "stream-tab-phone")).toBeDefined();
+    expect(attr(byTestId(on, "stream-tab-phone")!, "aria-selected")).toBe(true);
+    expect(on.find((el) => el.type === PhoneTab)).toBeDefined();
+    expect(on.find((el) => el.type === PhoneStopProbe)).toBeUndefined();
+    expect(byTestId(on, "stream-lead"), "the OBS lead is the OBS tab's").toBeUndefined();
+  });
+
   it("every style tab is a real tab (role + aria-selected), exactly one selected", () => {
     const tabs = styleTabs(open().tree());
     for (const tab of tabs) expect(attr(tab, "role")).toBe("tab");
