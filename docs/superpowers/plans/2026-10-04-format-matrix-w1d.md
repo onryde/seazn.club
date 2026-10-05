@@ -3068,10 +3068,12 @@ Item 9:
 Use the local env recipe and a fresh run id:
 
 ```bash
-cd <exec> && pnpm matrix:browser --set pad-proof --only "league|cricket" --run-id w1d-t12-pp-cricket --report-dir "$TMPDIR/w1d-runs"; echo EXIT=$?
+cd <exec> && NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000 pnpm matrix:browser --set pad-proof --only "league|cricket" --width 1280 --run-id w1d-t12-pp-cricket --report-dir "$TMPDIR/w1d-runs"; echo EXIT=$?
 ```
 
-Expected: EXIT 0, and only cricket cases in `results.json`. The two-innings routes are exercised only if the pad-proof set plans a `test` variant. If it does not, ALSO run `--driver browser --set w1-driving --only "league|cricket" --scenario LIFECYCLE` at 1280 on the `test` variant (D13 of W1-driving: the variant's own case) and record what the pad did. Report the browser-driven count of cricket `test` cases. **Not committed** (this is a task proof, not evidence); paste the `jq` histogram into the task report.
+`--width 1280` is required: a `--driver browser` set run refuses a missing `--width` (exit 2). The served build must be BAKED with `NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000` (`seazn-env rebuild`, not a reused standalone build) and the shell must export the same value, or the run aborts on `ServedHoldUnreadable`.
+
+Expected: EXIT 0, and only cricket cases in `results.json`. The two-innings routes are NOT exercised by pad-proof (its cricket case is the builder default, t20) and NOT by `--set w1-driving` (every committed `test` case carries a rule override, which the browser has no path for: `no_path`, W2). They are exercised by `--set pad-innings` (controller ruling T12-I1: one case, `league|cricket|test|LIFECYCLE`, no override, `--width 1280`, the same HOLD_MS), whose live run is Task 17's, in PR-B. Do not run `--set pad-proof` on `test`: it is red by construction (win/home always holds `cricket.followon`, draw always holds `cricket.match.close`, so two of the three PADPROOF fixtures go over http and `pad-stream-stored` fails). **Not committed** (this is a task proof, not evidence); paste the `jq` histogram into the task report.
 
 - [ ] **Step 5: Mutate**
 

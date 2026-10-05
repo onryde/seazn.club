@@ -28,18 +28,22 @@ import {
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { builtAsPosted } from "../lib/scenarios/assertions.ts";
-import { Recorder, TEMPLATE_ENDS_ON, setUpDivision } from "../lib/scenarios/common.ts";
+import { Recorder, TEMPLATE_ENDS_ON, playStage, setUpDivision } from "../lib/scenarios/common.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { noPadReason } from "../lib/pad-sports.ts";
 import { CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE, CRICKET_NO_CONTROL, CRICKET_SUMMARY, cricketPad } from "../lib/pads/cricket.ts";
 import { genericPad } from "../lib/pads/generic.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
-import type { ReplayDeps, ReplayResult } from "../lib/pads/replay.ts";
+import { replayEvents, type ReplayDeps, type ReplayResult } from "../lib/pads/replay.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { findSecrets } from "../lib/redact.ts";
 import type { CheckResult } from "../lib/results.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
-import { FakeLeagueDriver } from "./fake-driver.ts";
+import { PAD_INNINGS_SET, padInningsPlanner } from "../lib/pad-innings-set.ts";
+import { SCENARIOS } from "../lib/scenarios/index.ts";
+import { offlineBuilderDefault } from "../lib/variants.ts";
+import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
+import { modelPage, twoInningsModel } from "./pad-model.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const src = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
@@ -1636,4 +1640,112 @@ describe("BrowserDriver — the template card path (W1-driving Task 13)", () => 
     expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
     expect(coverage).toMatchObject({ verdict: "pass", checked: 3, evidence: [] });
   });
+});
+
+// W1d Task 12, fix round 1 (ruling T12-I1): the two-innings route shipped inert
+// because no committed plan reached it. A seam is proven only by driving it
+// through its REAL producer and consumer, so this plays what `--set pad-innings`
+// PLANS — its own output, not a hand-built case — through the real scenario's
+// own loop (setUpDivision, then playStage's decideFixture for every fixture),
+// the real BrowserDriver, the real cricket adapter and the real replay, on a
+// pad modelled on what Step 0 saw each cricket route write. The product behind
+// them is the league fake, which folds every row the pad writes through the
+// engine as the product does. Expected values: which streams the pad cannot
+// write is the ADAPTER's declaration (noControl); how many innings a side bats
+// is the ENGINE's cfg; the pad's turn is the SCENARIO's own padPolicy.
+describe(`BrowserDriver — the case ${PAD_INNINGS_SET} plans, driven (W1d T12 fix round 1)`, () => {
+  /** The fake product: the league fake, whose ledger is its fixtures' own events. */
+  class PadProduct extends FakeHttp {
+    override ledger(fixtureId: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
+      this.log("ledger");
+      return Promise.resolve(this.rowsOf(fixtureId).filter((r) => r.seq > sinceSeq));
+    }
+    rowsOf(fixtureId: string): LedgerRow[] {
+      const f = this.fixtures.find((x) => x.id === fixtureId);
+      if (f === undefined) throw new Error(`fake product: no fixture ${fixtureId}`);
+      return f.events.map((e, i) => ({ id: `${fixtureId}-${i + 1}`, seq: i + 1, type: e.type, payload: e.payload }));
+    }
+  }
+
+  it("the planned case is played to its end: the pad writes the first stream it CAN, every stream it cannot goes over http to W2, and the stream it wrote is four innings — the two-innings route", async () => {
+    // The planner's own output, the way run.ts asks for it: the builder default is the variant it is handed.
+    const planned = padInningsPlanner({}).plan(() => offlineBuilderDefault("cricket"));
+    expect(planned).toHaveLength(1);
+    const s = planned[0]!;
+    expect(s.overrides).toBeUndefined(); // an override would be refused at createDivision (OVERRIDE_ROUTE, W2): no path, no pad
+    const policy = SCENARIOS[s.scenario].padPolicy ?? "first";
+    expect(policy).toBe("first"); // LIFECYCLE's: one pad stream a case, the rest http
+    const cfg = resolveSportCfg(s.sport, s.variant) as { inningsPerSide: number };
+    expect(cfg.inningsPerSide).toBe(2);
+
+    const http = new PadProduct(ORG);
+    let open: FakeFixture | null = null;
+    const page = modelPage(async (taps) => {
+      const f = open;
+      if (f === null) throw new Error("the pad released a hold with no console opened");
+      const rows = twoInningsModel({ cfg: http.cfg, entrants: { home: f.home_entrant_id!, away: f.away_entrant_id! } })(taps, http.rowsOf(f.id));
+      if (rows.length > 0) await http.postStream(f.id, rows.map((r) => ({ type: r.type, payload: r.payload })), "pad");
+    });
+    const pages: Partial<BrowserPages> = {
+      createDivisionUi: async (_c, _slug, compId, input) => {
+        const ref = await http.createDivision(compId, { name: input.name, slug: PRODUCT_DIV_SLUG, sportKey: input.sportKey, variantKey: input.variantKey, config: {} });
+        await http.postStages(ref.id, stagesForRow(input.row));
+        return { division: { id: ref.id, competition_id: compId, name: input.name, slug: PRODUCT_DIV_SLUG, sport_key: input.sportKey, variant_key: input.variantKey, config: ref.config, status: "draft" }, stages: builtFrom(input.row, ref.id) };
+      },
+      // The UI's add lands in the same fake product the http side reads, one row per input, as typed (entrants.ts addEntrantsUi).
+      addEntrantsUi: async (_c, w, es) => (await http.addEntrants(w.divisionId, es.map((e, i) => ({ displayName: e.displayName, seed: e.seed ?? i + 1, kind: e.kind })))).map((r, i) => ({ ...r, kind: es[i]!.kind })),
+      startUi: async () => http.start(),
+      generateUi: async () => http.generate(),
+      openFixtureUi: async (_c, _w, no) => { open = http.fixtures.find((f) => f.fixture_no === no) ?? null; },
+    };
+    // The REAL replay, recording what the driver hands it: the stream the scenario generated (the ledger holds the pad's rows, not that).
+    const handed: (readonly StreamEvent[])[] = [];
+    const replay: Replay = (pg, adapter, events, ...rest) => { handed.push(events); return replayEvents(pg, adapter, events, ...rest); };
+    const { driver, pageArgs } = make({ http, spec: s, pages, page, padPolicy: policy, pads: PAD_ADAPTERS, replay });
+    const ctx = { driver, spec: s, orgSlug: ORG_SLUG, cfg: resolveSportCfg(s.sport, s.variant), tag: "t12", denied: [] };
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(s.row, s.scenario));
+    await playStage(ctx, rec, setup);
+
+    // What the scenario decided, in the order it decided it: a stream is one the pad cannot write when it holds an event the adapter has no control for.
+    const barred = new Set(cricketPad.noControl!.eventTypes);
+    const streams = [...rec.streams.entries()].map(([id, events]) => ({ id, events, tappable: !events.some((e) => barred.has(e.type)) }));
+    const tappable = streams.filter((x) => x.tappable);
+    const cannot = streams.filter((x) => !x.tappable);
+    console.info(`pad-innings: ${streams.length} fixture(s) decided, ${tappable.length} tappable, ${cannot.length} barred`);
+    expect(streams.length).toBeGreaterThan(0);
+    expect(streams.length).toBe(http.fixtures.length); // every fixture was decided, none skipped
+    expect(cannot.length).toBeGreaterThan(0); // the test preset's win/home (follow-on) and draw (time close) streams are barred: the route to W2 ran
+    expect(tappable.length).toBeGreaterThan(0); // …and the route this set exists for was reachable by the scenario's own outcomes
+
+    // Under `first` the pad took exactly the first tappable stream, and nothing the pad cannot write was tapped.
+    const padFixtureNos = (pageArgs.openFixtureUi ?? []).map((a) => a[2] as number);
+    expect(padFixtureNos).toEqual([http.fixtures.find((f) => f.id === tappable[0]!.id)!.fixture_no]);
+    expect([...rec.storedFixtures]).toEqual([tappable[0]!.id]);
+    // Every other stream went over the events route, whole: the product holds the stream the scenario generated, event for event.
+    let overHttp = 0;
+    for (const x of streams.filter((y) => y.id !== tappable[0]!.id)) {
+      expect(http.trace, x.id).toContain(`postStream ${x.id}`);
+      expect(http.fixtures.find((f) => f.id === x.id)!.events.map((e) => e.type), x.id).toEqual(x.events.map((e) => e.type));
+      overHttp++;
+    }
+    expect(overHttp).toBe(streams.length - 1);
+    expect(overHttp).toBeGreaterThan(0);
+
+    // The stream the driver handed the pad is the two-innings route: two innings a side, four summaries — by the engine's cfg, not by the adapter.
+    expect(handed).toHaveLength(1);
+    const wrote = handed[0]!;
+    expect(wrote.some((e) => barred.has(e.type))).toBe(false);
+    expect(wrote.filter((e) => e.type === CRICKET_SUMMARY)).toHaveLength(2 * cfg.inningsPerSide);
+    // …and the product's own ledger holds what the pad tapped, over sheets, to the same result (judged below as generated).
+    const padFixture = http.fixtures.find((f) => f.id === tappable[0]!.id)!;
+    expect(padFixture.events.length).toBeGreaterThan(wrote.length); // an innings is many over sheets, however few summaries the stream has
+    expect(padFixture.status).toBe("decided");
+
+    // The case's checks: the pad stream is judged as generated (every event of it), the barred ones abstain naming W2, and coverage holds.
+    expect(only(driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "pass", checked: wrote.length });
+    expect(only(driver, "pad-route")).toMatchObject({ verdict: "abstain", checked: 0 });
+    expect(only(driver, "pad-route").reason).toContain(`→ ${CRICKET_NO_CONTROL.wave}`);
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+  }, 120_000);
 });

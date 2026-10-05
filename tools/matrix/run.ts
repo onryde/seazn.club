@@ -145,6 +145,7 @@ import {
   API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, LAYER_PLANNERS, NoLayerForWidth, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
   type LayerCase, type LayerScope, type PlannedLayerCase,
 } from "./lib/layers.ts";
+import { PAD_INNINGS_SET, padInningsPlanner } from "./lib/pad-innings-set.ts";
 import { PAD_PROOF_SET, PadProofFilter, padProofPlanner, padProofSport } from "./lib/pad-proof-set.ts";
 import type { L2Run } from "./lib/pairs.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
@@ -320,6 +321,8 @@ export const slicePlanner: PlanCases = (cli) => {
 /** The named sets `--set` chooses from. */
 export const SETS: Readonly<Record<string, PlanCases | PlanLayers>> = Object.freeze({
   [PROBE_SET]: probePlanner, [PAD_PROOF_SET]: padProofPlanner,
+  // W1d Task 12 fix round 1 (T12-I1): the one case that reaches cricket's two-innings pad route, under LIFECYCLE — it takes no filter.
+  [PAD_INNINGS_SET]: padInningsPlanner,
   // W1c Task 12 (ruling 39 / D7): layered — each places its own widths.
   [WIDTH_SWEEP_SET]: widthSweepPlanner, [API_ONLY_BROWSER_SET]: apiOnlyBrowserPlanner,
   // W1-driving Task 12 (ruling 48): every catalogue cell × the four scripts,

@@ -625,7 +625,16 @@ export class BrowserDriver implements OrganiserDriver {
    *  sport with no adapter is scored over HTTP, its case says which task owes
    *  the adapter (pad-route), and it is never exempt, so coverage reds score
    *  by name rather than a case going green on a promise. An empty stream has
-   *  no act to drive, so it takes the HTTP path, as it always did. */
+   *  no act to drive, so it takes the HTTP path, as it always did.
+   *
+   *  The one exemption (W1d item 16): an adapter that declares `noControl`
+   *  names event types its pad has no addressable control for (cricket's
+   *  follow-on and time-expiry draw). A stream holding ANY of them is scored
+   *  over HTTP whole — never half-tapped — and `score` is exempt through the
+   *  adapter's own route to the wave that owes the control, with one pad-route
+   *  abstain naming the event and that wave. An http score does not use the
+   *  browser's turn, so under `first` the next stream the pad CAN write still
+   *  runs on it. A sport with an adapter and no such stream is never exempt. */
   async postStream(fixtureId: string, events: readonly StreamEvent[], idempotencyPrefix: string): Promise<PostedEvent[]> {
     const wanted = events.length > 0 && this.#wants("score");
     const sport = this.#spec.sport;

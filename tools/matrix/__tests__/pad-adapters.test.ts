@@ -782,6 +782,9 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
     expect(judge(first, [row({ to: toOf(first), at: { ...at, extra: 1 } })]).ok).toBe(false);
     expect(judge(first, [row({ to: toOf(first), at: { period: "", elapsed: 0 } })]).ok).toBe(false);
     expect(judge(first, [row({ to: toOf(first), at: { period: "P", elapsed: -1 } })]).ok).toBe(false);
+    // "a whole number": a fraction is neither a stamp the advance tile writes nor a number of seconds the clock counts (W1d T12 review m-1).
+    expect(judge(first, [row({ to: toOf(first), at: { period: "P", elapsed: 1.5 } })]).ok).toBe(false);
+    expect(judge(first, [row({ to: toOf(first), at: { period: "P", elapsed: 30 } })]).ok).toBe(true); // its positive pair: a whole number of seconds is stamped
   });
 
   it("the cursor walks the ENGINE's advance order in every variant, per fixture, and refuses a wrong-order, early or extra advance naming both labels", () => {

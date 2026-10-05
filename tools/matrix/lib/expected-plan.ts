@@ -10,6 +10,7 @@
 // one width. Adding a `--set` (or any other recorded plan shape) to run.ts's planOf owes a branch in livePlan.
 import { decideState } from "./results.ts";
 import { API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, w1DrivingL1Planner, widthSweepPlanner, type LayerCase } from "./layers.ts";
+import { PAD_INNINGS_SET, padInningsPlanner } from "./pad-innings-set.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "./pad-proof-set.ts";
 import { PROBE_SET, probePlanner } from "./probe-set.ts";
 import { PR_SAMPLE_SET, PrSampleNeedsRows, parseRows, prSamplePlanner } from "./pr-sample.ts";
@@ -74,6 +75,8 @@ function orderedPlan(plan: string): Ordered {
     // W1d item 15b: the one-sport pad proof (run.ts planOf records its --only). A planner that ignored the recorded
     // filter would judge a one-sport run against the whole set's plan: the filter is read here, as w1-driving's is.
     if (set === PAD_PROOF_SET) return fromSpecs(plan, padProofPlanner({ only: filters.only }).plan(anyVariant).map((c) => c.caseId));
+    // W1d Task 12 fix round 1 (T12-I1): the one case that reaches the two-innings route; it takes no filter.
+    if (set === PAD_INNINGS_SET) return fromSpecs(plan, padInningsPlanner({}).plan(anyVariant).map((c) => c.caseId));
     if (set === PROBE_SET) return fromSpecs(plan, probePlanner({}).plan(anyVariant).map((c) => c.caseId));
     if (set === API_ONLY_BROWSER_SET) return fromLayered(plan, apiOnlyBrowserPlanner({}).layered(anyVariant));
     if (set === WIDTH_SWEEP_SET) return fromLayered(plan, widthSweepPlanner({}).layered(anyVariant));

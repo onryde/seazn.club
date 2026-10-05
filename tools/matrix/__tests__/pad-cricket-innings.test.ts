@@ -19,7 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { beforeAll, describe, expect, it } from "vitest";
-import { START_MATCH_TESTID, selectorForTapStep, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { WAVE_ID } from "../lib/routing.ts";
 import { foldStream } from "../lib/fold.ts";
@@ -29,7 +29,7 @@ import {
 import { drawsAllowed, resolveSportCfg } from "../lib/sport-cfg.ts";
 import { generateStream, matchesRequest } from "../lib/streams/index.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
-import { replayOnModel, type RowIn } from "./pad-model.ts";
+import { asEvents, inningsOfState, replayOnModel, twoInningsModel, type InningsLike } from "./pad-model.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const PROMPTS = join(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts");
@@ -47,47 +47,6 @@ const TIE: RequestedOutcome = { kind: "tie" };
 const stream = (cfg: unknown, o: RequestedOutcome): StreamEvent[] => generateStream(req(cfg, o));
 const summaries = (evs: readonly StreamEvent[]) => evs.filter((e) => e.type === CRICKET_SUMMARY);
 const sum = (runs: number, wickets: number, legalBalls: number, extra: Record<string, unknown> = {}): StreamEvent => ({ type: CRICKET_SUMMARY, payload: { runs, wickets, legalBalls, ...extra } });
-
-const TILE = (tileId: string) => selectorForTapStep({ kind: "tile", tileId });
-const START_SEL = selectorForTapStep({ kind: "testid", testid: START_MATCH_TESTID });
-const NUM_SEL = selectorForTapStep({ kind: "number", value: 0 });
-const CONFIRM_SEL = selectorForTapStep({ kind: "confirm" });
-const numberOf = (tap: string): number | null => (tap.startsWith(`${NUM_SEL}=`) ? Number(tap.slice(NUM_SEL.length + 1)) : null);
-const asEvents = (rows: readonly (LedgerRow | RowIn)[]): StreamEvent[] => rows.map((r) => ({ type: r.type, payload: r.payload }));
-interface InningsLike { runs: number; wickets: number; legalBalls: number; closed: boolean; declared?: boolean }
-const inningsOfState = (state: unknown): InningsLike[] => (state as { innings?: InningsLike[] }).innings ?? [];
-
-/** cricket as Step 0 saw it (2026-09-30, 320): an over sheet is the overSummary
- *  tile, then runs, wickets and balls, each a number and a confirm, and writes
- *  ONE row — this over added onto the fold's open innings (0/0/0 when none is
- *  open), `partial: true`. Once the engine has an outcome the tile is gone. Two
- *  innings a side add the `declare` tile (cricket.tsx:1506-1511, an `{event}`
- *  tile that HOLDS until the replay's release): it sends the engine's
- *  declaration while an innings is open, and nothing otherwise (closedTile). */
-function twoInningsModel(ctx: TapAdapterContext) {
-  return (taps: readonly string[], ledger: readonly LedgerRow[]): RowIn[] => {
-    if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
-    const out: RowIn[] = [];
-    for (let i = 0; i < taps.length;) {
-      const folded = foldStream(cricket, ctx.cfg, ctx.entrants.home, ctx.entrants.away, asEvents([...ledger, ...out]));
-      const open = inningsOfState(folded.state).find((x) => !x.closed);
-      if (taps[i] === TILE(CRICKET_DECLARE_TILE)) {
-        if (folded.outcome !== null || open === undefined) return out;
-        out.push({ type: CRICKET_DECLARE, payload: {} });
-        i++;
-        continue;
-      }
-      const c = taps.slice(i, i + 7);
-      const [r, typedW, b] = [numberOf(c[1] ?? ""), numberOf(c[3] ?? ""), numberOf(c[5] ?? "")];
-      if (c[0] !== TILE(CRICKET_OVER_TILE) || c[2] !== CONFIRM_SEL || c[4] !== CONFIRM_SEL || c[6] !== CONFIRM_SEL || r === null || typedW === null || b === null) return out;
-      if (folded.outcome !== null) return out;
-      const base = open ?? { runs: 0, wickets: 0, legalBalls: 0 };
-      out.push({ type: CRICKET_SUMMARY, payload: { runs: base.runs + r, wickets: base.wickets + typedW, legalBalls: base.legalBalls + b, partial: true } });
-      i += 7;
-    }
-    return out;
-  };
-}
 
 /** The runs the last innings needs, found by asking the ENGINE: the smallest
  *  total at which a 4th innings of one ball closes itself, given the first
