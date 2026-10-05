@@ -14,7 +14,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { STRYKER_GROUPS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
-import { groupMutants, mutantCount, parseEntry, selected, type Selected } from "./stryker-coverage.ts";
+import { groupMutants, mutantCount, mutantsOf, parseEntry, selected, type Selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -135,6 +135,26 @@ describe("stryker-timeouts.json covers each leg's estimate (T15-SIZE, D14)", () 
   it("the probe keeps its timeout from its own measured run: 134 mutants, 26 minutes, 39 with the factor", () => {
     expect(timeouts.probe).toBe(Math.ceil(estimateMinutes(134) * TIMEOUT_FACTOR));
   });
+});
+
+describe("a `file:a-b` range is 1-based and inclusive of both lines (the boundary legs are cut with it)", () => {
+  it("a range of one line holds exactly the mutants that sit wholly on that line, one line either side included", async () => {
+    // the file's own mutants, from the whole-file run: a single-line mutant gives a line that certainly has one
+    const file = "src/scheduling/roundrobin.ts";
+    const whole = await mutantsOf(ENGINE, file, "all");
+    const own = whole.find((m) => m.start.line === m.end.line);
+    expect(own, "roundrobin.ts has a mutant that sits on one line").toBeDefined();
+    const zeroBased = own!.start.line;
+    const wholly = (zero: number) => whole.filter((m) => m.start.line === zero && m.end.line === zero).length;
+    let withMutants = 0;
+    for (const line of [zeroBased, zeroBased + 1, zeroBased + 2]) {
+      // 1-based line `line` is 0-based line `line - 1`
+      expect(await mutantCount(ENGINE, file, [[line, line]]), `the range ${line}-${line}`).toBe(wholly(line - 1));
+      if (wholly(line - 1) > 0) withMutants++;
+    }
+    expect(withMutants, "the lines checked include one that holds a mutant (the mutant's own line)").toBeGreaterThan(0);
+    expect(wholly(zeroBased), "the mutant's own line is the middle one").toBeGreaterThan(0);
+  }, INSTRUMENT_BUDGET_MS);
 });
 
 describe("test/stryker-coverage.ts reads a group's mutate list as Stryker does (checked against a real dry run)", () => {

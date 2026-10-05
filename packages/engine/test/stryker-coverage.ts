@@ -60,20 +60,29 @@ function loadInstrumenter(cwd: string): Promise<Instrumenter> {
   return instrumenter;
 }
 
-const counted = new Map<string, number>();
+/** A mutant's place in its file, as Stryker reports it: LINES COUNT FROM 0 here (the JSON report counts from 1). */
+export interface Place { start: { line: number; column: number }; end: { line: number; column: number } }
 
-/** How many mutants Stryker's instrumenter finds in `file` (or in just its `lines`), with the default mutator settings the
- *  engine's stryker.config.mjs runs. */
-export async function mutantCount(cwd: string, file: string, lines: Selected): Promise<number> {
+const found = new Map<string, Place[]>();
+
+/** The mutants Stryker's instrumenter finds in `file` (or in just its `lines`, 1-based and inclusive as `file:a-b` writes
+ *  them), with the default mutator settings the engine's stryker.config.mjs runs. */
+export async function mutantsOf(cwd: string, file: string, lines: Selected): Promise<Place[]> {
   const key = `${file}|${lines === "all" ? "all" : lines.map((l) => l.join("-")).join(",")}`;
-  const hit = counted.get(key);
+  const hit = found.get(key);
   if (hit !== undefined) return hit;
   // Stryker's ranges are 0-based lines; an end column of MAX_SAFE_INTEGER is a range of whole lines.
   const mutate = lines === "all" ? true : lines.map(([a, b]) => ({ start: { line: a - 1, column: 0 }, end: { line: b - 1, column: Number.MAX_SAFE_INTEGER } }));
   const inst = await loadInstrumenter(cwd);
   const r = await inst.instrument([{ name: file, mutate, content: readFileSync(join(cwd, file), "utf8") }], { ignorers: [], plugins: null, excludedMutations: [] });
-  counted.set(key, r.mutants.length);
-  return r.mutants.length;
+  const places = (r.mutants as { location: Place }[]).map((m) => m.location);
+  found.set(key, places);
+  return places;
+}
+
+/** How many mutants Stryker's instrumenter finds in `file` (or in just its `lines`). */
+export async function mutantCount(cwd: string, file: string, lines: Selected): Promise<number> {
+  return (await mutantsOf(cwd, file, lines)).length;
 }
 
 /** Mutants Stryker finds in everything `globs` selects. */
