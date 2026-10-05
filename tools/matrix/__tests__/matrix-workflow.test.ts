@@ -1365,8 +1365,6 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
     const keys = Object.keys(STRYKER_GROUPS);
     const plans = [...keys.map((group) => ({ event: "workflow_dispatch", group })), { event: "workflow_dispatch", group: "all" }, { event: "schedule", group: "" }, { event: "pull_request", group: "" }];
     let ran = 0;
-    let skipped = 0;
-    const skippedPlans: string[] = [];
     for (const p of plans) {
       const matrix = planMatrix(p.event, p.group);
       const ctx = ctxOf({ event: p.event, matrix });
@@ -1379,16 +1377,12 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
         expect(legs, `${p.event} ${p.group}: LEGS`).toBe(scheduled.join(","));
         expect(legs.split(","), `${p.event} ${p.group}: --check-all refuses the probe`).not.toContain("probe");
         ran++;
-      } else {
-        skipped++;
-        skippedPlans.push(`${p.event}:${p.group}`);
       }
     }
-    // the probe is the one key with no floor: skipped when dispatched alone and on a pull request, and nothing else is
+    // anti-vacuity: every plan was looked at, and the jobs that ran are every leg dispatched alone, group=all and the weekly
+    // (the probe dispatched alone and the pull request, the two probe-only plans, are the rest, each checked above)
     expect(plans.length).toBe(keys.length + 3);
-    expect(skippedPlans.sort()).toEqual(["pull_request:", "workflow_dispatch:probe"]);
-    expect(skipped).toBe(2);
-    expect(ran, "every leg dispatched alone, group=all and the weekly").toBe(keys.length - 1 + 2);
+    expect(ran).toBe(keys.length - 1 + 2);
   }, spawnBudget(31));
 
   it("what the skip prevents: a probe-only dispatch's LEGS is `probe`, and the real CLI refuses it (exit 2, names the probe), so a floors job that ran would go red on a documented option", () => {
