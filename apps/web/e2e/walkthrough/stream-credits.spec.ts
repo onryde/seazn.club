@@ -371,9 +371,11 @@ async function expectSplit(page: Page, split: { monthly: number; pack: number })
 }
 
 /** A control a thumb can actually hit: its centre is ITS OWN (elementFromPoint, not the painted box — AGENTS.md
- *  class 2), and below `md` it is at least 44 px each way. */
+ *  class 2), and below `md` it is at least 44 px each way. It is probed in the viewport's middle, where a thumb meets
+ *  it once scrolled to: a nearest-edge scroll parks a control above the fold UNDER the sticky site header, and the
+ *  probe then measures the header, not the control (controller ruling 2026-10-05, the A14 reasoning). */
 async function expectTappable(page: Page, loc: Locator, label: string): Promise<void> {
-  await loc.scrollIntoViewIfNeeded();
+  await loc.evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
   const probe = await loc.evaluate((el) => {
     const r = el.getBoundingClientRect();
     const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
