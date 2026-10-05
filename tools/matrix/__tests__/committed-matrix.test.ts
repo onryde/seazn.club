@@ -167,7 +167,8 @@ describe("committed evidence and catalogue, every file (FB-1, F-3)", () => {
       const text = readFileSync(resolve(REPO, f), "utf8");
       // Raw values, never the JSON body: escaping erases the \b a secret
       // pattern needs (redact.ts header, review I1).
-      const items = f.endsWith(".json") ? stringsIn(JSON.parse(text)) : f.endsWith(".md") ? text.split("\n") : null;
+      // A catalogue generator (.py, W1d Task 19) is text too: read by line, never "a file this sweep cannot read".
+      const items = f.endsWith(".json") ? stringsIn(JSON.parse(text)) : f.endsWith(".md") || f.endsWith(".py") ? text.split("\n") : null;
       expect(items, `${f}: a committed file this sweep cannot read`).not.toBeNull();
       for (const s of items ?? []) for (const h of findSecrets(s)) hits.push(`${f}: ${h.slice(0, 12)}…`);
       strings += items?.length ?? 0;
