@@ -287,6 +287,15 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 8: the CI helpers — the job matrix and its derived timeouts, the run summary, the staleness signal, and the
+  // thin gh wrapper they share. All four load as the package scripts run them, under strip-only mode.
+  const W1D_T8 = ["ci/shard-matrix.ts", "ci/summary.ts", "ci/staleness.ts", "ci/gh.ts"];
+  it("W1d Task 8's modules are all in the walk", () => {
+    const missing = W1D_T8.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T8.length).toBe(4);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

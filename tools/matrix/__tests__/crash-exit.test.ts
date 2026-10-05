@@ -26,7 +26,7 @@ const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8"))
 /** [package script, its CLI, an argv its main refuses as usage, that exit,
  *  the arguments the script itself passes after its CLI]. W1c added
  *  matrix:browser and matrix:parity (final review m-11); W1d Task 1 added
- *  matrix:lock-check (ruling T1-b), Task 4 matrix:merge, Task 6 matrix:judge and Task 7 matrix:pr-rows (ruling CLI-TABLES). */
+ *  matrix:lock-check (ruling T1-b), Task 4 matrix:merge, Task 6 matrix:judge, Task 7 matrix:pr-rows and Task 8 matrix:shards, matrix:summary and matrix:staleness (ruling CLI-TABLES). */
 const CLIS: readonly (readonly [string, string, readonly string[], number, readonly string[]])[] = [
   ["matrix:l3", "tools/matrix/run.ts", ["--bogus"], 2, []],
   ["matrix:browser", "tools/matrix/run.ts", ["--bogus"], 2, ["--driver", "browser"]],
@@ -39,6 +39,9 @@ const CLIS: readonly (readonly [string, string, readonly string[], number, reado
   ["matrix:merge", "tools/matrix/merge-shards.ts", [], 2, []],
   ["matrix:judge", "tools/matrix/judge.ts", ["--bogus"], 2, []],
   ["matrix:pr-rows", "tools/matrix/ci/pr-rows.ts", ["--bogus"], 2, []],
+  ["matrix:shards", "tools/matrix/ci/shard-matrix.ts", ["--bogus"], 2, []],
+  ["matrix:summary", "tools/matrix/ci/summary.ts", [], 2, []],
+  ["matrix:staleness", "tools/matrix/ci/staleness.ts", [], 2, []],
 ];
 
 /** The package script's own argv (after `node`), with its CLI swapped for
@@ -110,7 +113,15 @@ describe("an import-time crash exits 3 in every W1b, W1c and W1d CLI (final batc
       expect(scripts[key], key).toBe([`node --experimental-strip-types --import ${PRELOAD} ${cli}`, ...tail].join(" "));
       checked++;
     }
-    expect(checked).toBe(11);
+    expect(checked).toBe(14);
+  });
+
+  it("every matrix:* script that preloads crash-exit.ts has a row in the table (a script added without one reds here, not in a spawn that never ran)", () => {
+    const preloading = Object.entries(scripts).filter(([k, v]) => k.startsWith("matrix:") && v.includes(`--import ${PRELOAD}`)).map(([k]) => k);
+    expect(preloading.length).toBeGreaterThanOrEqual(14);
+    for (const k of preloading) expect(CLIS.map((c) => c[0]), `${k} owes a row in CLIS`).toContain(k);
+    // The table's own size is pinned beside the derived bound, so a dropped row cannot shrink both together.
+    expect(CLIS).toHaveLength(14);
   });
 
   it.each(CLIS)("%s's flags: each load failure exits 3, naming the crash; a clean load exits 0; a verdict stays 1", (key, cli, _usage, _code, tail) => {

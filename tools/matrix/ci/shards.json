@@ -1,0 +1,24 @@
+{
+  "note": "W1d D4. Shard counts per layer per scope, and the committed runs each layer's per-case ceiling derives from. A ceiling is the max measured durationMs across the named runs, rounded up to 10 s, then ×1.5 for a CI runner. Budgets count DRIVEN cases per stripe (planned cases cost 0 s). Re-derive from PR-B's baseline (Task 21).",
+  "setupMinutes": 18,
+  "slackMinutes": 10,
+  "maxTimeoutMinutes": 300,
+  "layers": {
+    "L1": {
+      "full": { "args": "--driver browser --layer L1 --scope grid", "shards": 8, "workers": 1 },
+      "smoke": { "args": "--driver browser --layer L1 --scope slice", "shards": 2, "workers": 1 },
+      "ceilingFrom": ["w1drv-l1/w1drv-l1-r1", "w1drv-l1/w1drv-l1-r2", "w1drv-l1/w1drv-l1-r3", "w1drv-l1/w1drv-l1-t15-r1", "w1drv-l1/w1drv-l1-t15-r2", "w1drv-l1/w1drv-l1-t15-r3"]
+    },
+    "L2": {
+      "full": { "args": "--driver browser --layer L2 --scope grid", "shards": 2, "workers": 1 },
+      "smoke": { "args": "--driver browser --layer L2 --scope slice", "shards": 2, "workers": 1 },
+      "ceilingFrom": ["w1c-l2"]
+    },
+    "L3": {
+      "full": { "args": "--set w1-driving", "shards": 2, "workers": 4 },
+      "smoke": { "args": "--set pr-sample --rows none", "shards": 2, "workers": 4 },
+      "ceilingFrom": ["w1drv-l3"]
+    }
+  },
+  "prSample": { "args": "--set pr-sample", "workers": 4, "passes": 2 }
+}

@@ -27,23 +27,45 @@ export const noWidth = (caseId: string): string => caseId.replace(/@\d+$/, "");
 /** Variant-free keys: every planner is handed the sport as its own variant, and the key drops it. */
 const anyVariant = (sport: string): string => sport;
 
-function fromLayered(plan: string, cases: readonly LayerCase[]): ExpectedPlan {
-  const driven = new Set<string>();
-  const planned = new Map<string, { state: "no_path" | "not_run"; reason: string }>();
-  for (const c of cases) {
+/** One plan item in the order the planner lists it: its variant-free key, and null when it is DRIVEN or the planner's own
+ *  🚫/░ when it is only planned. run.ts stripes the plan in exactly this order (`runItems`), so a consumer that must know
+ *  which stripe holds which item (the CI shard matrix, D4) reads the order from here, never from a Set. */
+type OrderedItem = { readonly key: string; readonly planned: { readonly state: "no_path" | "not_run"; readonly reason: string } | null };
+interface Ordered { readonly plan: string; readonly layered: boolean; readonly items: readonly OrderedItem[] }
+
+function fromLayered(plan: string, cases: readonly LayerCase[]): Ordered {
+  const items = cases.map((c): OrderedItem => {
     const key = noVariant(layerCaseId(c));
-    if (c.spec !== null) { driven.add(key); continue; }
+    if (c.spec !== null) return { key, planned: null };
     // The stored reason is what decideState makes of the planner's own 🚫/░ (run.ts recordPlanned).
     const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
-    planned.set(key, { state: d.state as "no_path" | "not_run", reason: d.reason });
-  }
-  return { plan, layered: true, driven, planned };
+    return { key, planned: { state: d.state as "no_path" | "not_run", reason: d.reason } };
+  });
+  return { plan, layered: true, items };
 }
-const fromSpecs = (plan: string, ids: readonly string[]): ExpectedPlan =>
-  ({ plan, layered: false, driven: new Set(ids.map(noVariant)), planned: new Map() });
+const fromSpecs = (plan: string, ids: readonly string[]): Ordered =>
+  ({ plan, layered: false, items: ids.map((id) => ({ key: noVariant(id), planned: null })) });
 
 /** The plan a recorded `plan` string names, built by TODAY's planners. */
 export function livePlan(plan: string): ExpectedPlan {
+  const o = orderedPlan(plan);
+  const driven = new Set<string>();
+  const planned = new Map<string, { state: "no_path" | "not_run"; reason: string }>();
+  for (const it of o.items) {
+    if (it.planned === null) driven.add(it.key);
+    else planned.set(it.key, { ...it.planned });
+  }
+  return { plan: o.plan, layered: o.layered, driven, planned };
+}
+
+/** W1d Task 8 (D4): for each item of the plan, in the order `--shard k/N` stripes it, whether the run DRIVES it (true) or
+ *  only records it planned (false: a 🚫/░ costs no time). The CI shard matrix budgets each job's timeout from the driven
+ *  items of that job's own stripe, so it needs the order — `ExpectedPlan` keeps sets and loses it. */
+export function drivenInPlanOrder(plan: string): boolean[] {
+  return orderedPlan(plan).items.map((it) => it.planned === null);
+}
+
+function orderedPlan(plan: string): Ordered {
   const words = plan.split(" ");
   const flag = (name: string): string | undefined => { const i = words.indexOf(name); return i < 0 ? undefined : words[i + 1]; };
   const filters = { only: flag("--only"), scenario: flag("--scenario") };
