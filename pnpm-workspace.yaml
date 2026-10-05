@@ -69,6 +69,11 @@ overrides:
   # @babel/core 7.29.7 that web has always used is named exactly (an exact range is the one form pnpm honours), and
   # posthog-node's optional rxjs peer is dropped (web never installed one). Both change peer METADATA in the lock's
   # `packages:` section only; no importer and no `snapshots:` entry of a production package moves.
-  # Drop both when apps/web leaves @babel/core 7, or when packages/engine stops depending on Stryker.
-  "@babel/helper-module-transforms@7.29.7>@babel/core": "7.29.7"
+  # The first selector names a RANGE of the helper (`@<8`: every 7.x), never its exact version and never no version. An exact
+  # `@7.29.7` stopped matching the moment the helper moved (measured in a scratch copy with the helper forced to 7.28.6: apps/web
+  # re-linked to @babel/core 8.0.6 under it, and did not under `@<8`), and a selector with no version also pins Stryker's own
+  # @babel/helper-module-transforms 8 to @babel/core 7.29.7. tools/matrix/__tests__/lock-isolation.test.ts reads the lock and
+  # reds when either override stops holding. Drop both (and that test) when apps/web leaves @babel/core 7, or when
+  # packages/engine stops depending on Stryker.
+  "@babel/helper-module-transforms@<8>@babel/core": "7.29.7"
   "posthog-node>rxjs": "-"

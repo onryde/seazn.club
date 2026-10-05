@@ -15,7 +15,7 @@ overrides:
   baseline-browser-mapping@<2.11.0: ^2.11.26
   fflate@>=0.4.5 <0.4.9: ^0.4.9
   '@ai-sdk/provider-utils@>=4.0.0-beta.10 <4.0.33': ^4.0.54
-  '@babel/helper-module-transforms@7.29.7>@babel/core': 7.29.7
+  '@babel/helper-module-transforms@<8>@babel/core': 7.29.7
   posthog-node>rxjs: '-'
 
 importers:
