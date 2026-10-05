@@ -392,6 +392,7 @@ export function renderRekey(rows: readonly RekeyRow[], result: Pick<TriageResult
     "# Re-keying the P-rule reds (ruling 63)", "",
     `${plural(rows.length, "mapped case")} keyed by a P-rule: ${keyed} now carry a gap, ${rows.length - keyed} do not.`,
     `The \`was\` of each rule that keyed a case was checked against the map on ${plural(wasChecked(rows), "case")}: ${wasConflicts(rows).length} disagree.`, "",
+    ...(wasChecked(rows) > 0 ? [] : ["**VACUOUS — no rule that keyed a mapped case names a P-rule, so nothing was compared: this re-key proves nothing.**", ""]),
     ...(wasConflicts(rows).length === 0 ? [] : [
       "## Rules whose `was` disagrees with the map", "",
       ...wasConflicts(rows).map((x) => `- \`${x.caseId}\`: the map says ${x.was}, rule ${x.rule} says ${x.ruleWas}`), "",

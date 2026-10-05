@@ -9,12 +9,13 @@
 //   0  every red is triaged: the files are written (zero reds is a verdict too, and is said);
 //   1  a negative signal, the files still written so a reviewer reads them: a red no rule matches, a red two rules
 //      match, a rule that routes a gap away from design §8, a rule naming a gap the audit and new-gaps.json do not
-//      hold, or (with --rekey) a rule whose `was` names a different P-rule than the map gives the case it keyed —
-//      each listed on stdout;
+//      hold, or (with --rekey) a rule whose `was` names a different P-rule than the map gives the case it keyed, or
+//      a re-key that compared no `was` at all (vacuous) — each listed on stdout;
 //   2  usage or input error, with a message on stderr and nothing written: a missing --runs or --out, an unknown
 //      flag, a run file that is unreadable, not JSON, not a results.json or not a v3 run, two runs of one layer, runs
-//      with no case at all, a layer whose run holds none (its neighbours' cases would hide it), a catalogue file (a rule with an empty match among them) or audit directory that is
-//      unreadable, or a P-rule map that is unreadable or names a case the --rekey results do not hold;
+//      with no case at all, a layer whose run holds none (its neighbours' cases would hide it), a catalogue file (a
+//      rule with an empty match among them) or audit directory that is unreadable, or a P-rule map that is
+//      unreadable or names a case the --rekey results do not hold;
 //   3  a crash while it loads, through `pnpm run matrix:triage` (its preload, scripts/lib/crash-exit.ts). Run it only
 //      through that script: without the preload a load crash exits 1.
 // An uncaught throw would exit 1 without the preload, so every input failure is caught here. Every line printed and
@@ -153,7 +154,10 @@ export function main(argv: string[]): number {
       say(`rekey: ${plural(rekeyed.rows.length, "mapped case")}, ${re} re-keyed, ${rekeyed.rows.length - re} with no gap in the triage; ${rekeyed.unkeyed.length} reds the map does not key; was checked on ${plural(wasChecked(rekeyed.rows), "mapped case")}, ${conflicts.length} disagree`);
     }
     for (const l of capped(conflicts.map((x) => `was conflict ${x.caseId}: the map says ${x.was}, rule ${x.rule} says ${x.ruleWas}`))) say(l);
-    const code = isClean(result) && conflicts.length === 0 ? 0 : 1;
+    // N3: a re-key that compared no `was` with the map proves nothing, and "0 disagree" over zero comparisons read as a pass.
+    const vacuous = rekeyed !== null && wasChecked(rekeyed.rows) === 0;
+    if (vacuous) say("rekey checked no `was`: no rule that keyed a mapped case names a P-rule, so a re-key that compared nothing proves nothing (vacuous)");
+    const code = isClean(result) && conflicts.length === 0 && !vacuous ? 0 : 1;
     say(`exit ${code}: ${EXIT_CODES[code]}`);
     return code;
   } catch (e) {

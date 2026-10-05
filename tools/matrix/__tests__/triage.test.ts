@@ -716,6 +716,39 @@ describe("triage CLI", () => {
     expect(readFileSync(join(bad.outDir, "REKEY.md"), "utf8")).toContain("the map says P4, rule T-2 says P6");
   });
 
+  // N3 (T18 re-review): "was checked on 0 mapped cases, 0 disagree" is the printed line of a re-key that compared nothing — every
+  // rule without a `was`, or every mapped case not red — and it exited 0, so a re-key could pass having proved nothing.
+  it("a re-key whose rules check no `was` is exit 1, not a clean 0: it says so on stdout and in REKEY.md, and writes both files (N3)", () => {
+    const w1drv = runFile(run([red("a|b|c|M1", "standings: x"), red("a|b|c|M2", "round 5 paired nobody (SW-H1)"), ok("a|b|c|M3")]));
+    const baseline = runFile(run(CASES));
+    const map = put("map.json", { "a|b|c|M1": "P2", "a|b|c|M2": "P6", "a|b|c|M3": "P9" });
+    const noWas = { rules: RULES_OK.rules.map(({ was: _was, ...r }) => r) };
+    let vacuousRuns = 0;
+    // (a) no rule carries a `was`: 3 mapped cases, 2 keyed, nothing to compare.
+    const a = argsFor({ runs: [baseline], cat: catalogue({ rules: noWas }), extra: ["--rekey", w1drv, "--rekey-map", map] });
+    expect(main(a.argv), said()).toBe(1);
+    expect(said()).toContain("was checked on 0 mapped cases, 0 disagree");
+    expect(said()).toMatch(/rekey checked no `was`: .* a re-key that compared nothing proves nothing/);
+    expect(said()).toContain("exit 1:");
+    expect(readFileSync(join(a.outDir, "REKEY.md"), "utf8")).toContain("VACUOUS");
+    vacuousRuns++;
+    // (b) the rules carry a `was` but the mapped cases the rules would check are not red in this run: the same vacuity by another road.
+    out = []; err = [];
+    const b = argsFor({ runs: [runFile(run([ok("a|b|c|M1"), ok("a|b|c|M2"), ok("a|b|c|M3")]))], cat: catalogue({ rules: RULES_OK }), extra: ["--rekey", w1drv, "--rekey-map", map] });
+    expect(main(b.argv), said()).toBe(1);
+    expect(said()).toContain("was checked on 0 mapped cases, 0 disagree");
+    expect(said()).toContain("rekey checked no `was`");
+    vacuousRuns++;
+    expect(vacuousRuns).toBe(2);
+    // …and one comparison is enough: the printed N is the number the guard reads, and a clean re-key does not carry the warning.
+    out = []; err = [];
+    const c = argsFor({ runs: [baseline], cat: catalogue({ rules: RULES_OK }), extra: ["--rekey", w1drv, "--rekey-map", map] });
+    expect(main(c.argv), said()).toBe(0);
+    expect(said()).toContain("was checked on 2 mapped cases, 0 disagree");
+    expect(said()).not.toContain("rekey checked no `was`");
+    expect(readFileSync(join(c.outDir, "REKEY.md"), "utf8")).not.toContain("VACUOUS");
+  });
+
   it("the documented form `pnpm run matrix:triage -- <flags>` works: pnpm hands the script a literal `--` first (m1)", () => {
     const cat = catalogue({ rules: RULES_OK });
     const a = argsFor({ runs: [runFile(run(CASES))], cat });
@@ -746,7 +779,7 @@ describe("triage CLI", () => {
     writeFileSync(join(d, "ST-standings.md"), `## Gaps\n\n| ID | Gap | Evidence | Sev |\n|---|---|---|---|\n| G3 | **title with ${secret} in it** | f.ts:1 | Med |\n`);
     const w1 = runFile(run([red("a|b|c|M1", "standings: x")]));
     // The P-rule map is a person's file too: a token in one of its values reaches REKEY.md unless that is redacted.
-    const { argv, outDir } = argsFor({ runs: [runFile(run([red("a|b|c|M1", "standings: x")]))], audit: d, cat: catalogue({ rules: { rules: [{ id: "T-1", match: { check: "standings" }, gap: "ST-G3", wave: "W5", note: "n" }] } }), extra: ["--rekey", w1, "--rekey-map", put("m.json", { "a|b|c|M1": `P1 ${secret}` })] });
+    const { argv, outDir } = argsFor({ runs: [runFile(run([red("a|b|c|M1", "standings: x")]))], audit: d, cat: catalogue({ rules: { rules: [{ id: "T-1", match: { check: "standings" }, gap: "ST-G3", wave: "W5", note: "n", was: `P1 ${secret}` }] } }), extra: ["--rekey", w1, "--rekey-map", put("m.json", { "a|b|c|M1": `P1 ${secret}` })] });
     expect(main(argv), said()).toBe(0);
     const files = readdirSync(outDir).sort();
     expect(files).toEqual(["REKEY.md", "TRIAGE.md", "triage.json"]);
@@ -891,8 +924,11 @@ describe("the real committed results (TR/w1drv-l3, w1drv-l1, w1c-l2) through the
 
   it("with no --catalogue and no --audit the committed files are read: the real reds are counted and none is lost", () => {
     const dir = join(fresh(), "defaults");
-    expect(main(["--runs", L1, L2, L3, "--out", dir]), said()).toBe(1);
+    const code = main(["--runs", L1, L2, L3, "--out", dir]);
     const j = parseTriage(JSON.parse(readFileSync(join(dir, "triage.json"), "utf8")));
+    // These are the OLD fixtures (937 + 7 + 68), not the committed dispatches, so whether the committed rules key all of them is
+    // not this test's business: the exit code has to agree with the lists it prints, whichever way they fall.
+    expect(code, said()).toBe(j.untriaged.length + j.ambiguous.length + j.misrouted.length + j.unknownGap.length === 0 ? 0 : 1);
     expect(j.scanned).toBe(937 + 7 + 68);
     expect(j.checked).toBe(195);
     // Whatever the committed rules are, every red is exactly one of keyed, untriaged or ambiguous.
@@ -905,7 +941,7 @@ describe("the real committed results (TR/w1drv-l3, w1drv-l1, w1c-l2) through the
     const all = reds(R3);
     const sample = all.slice(0, 5).map((c) => c.caseId);
     const map = put("p-map.json", Object.fromEntries([...sample.map((id) => [id, "P1"]), [R3.cases.find((c) => c.state === "works")!.caseId, "P9"]]));
-    const catAll = catalogue_({ rules: [{ id: "T-ALL", match: { cell: "*|*" }, gap: "SW-H1", wave: "W3", note: "seam test only: every red" }] });
+    const catAll = catalogue_({ rules: [{ id: "T-ALL", match: { cell: "*|*" }, gap: "SW-H1", wave: "W3", was: "P1", note: "seam test only: every red" }] });
     const a = argsFor({ runs: [L1, L2, L3], cat: catAll, audit: AUDIT_DIR, extra: ["--rekey", L3, "--rekey-map", map] });
     expect(main(a.argv), said()).toBe(0);
     const j = parseTriage(JSON.parse(readFileSync(join(a.outDir, "triage.json"), "utf8")));
@@ -918,6 +954,8 @@ describe("the real committed results (TR/w1drv-l3, w1drv-l1, w1c-l2) through the
     // A case id holds pipes: in a table cell each is escaped.
     for (const id of sample) expect(md, id).toContain(`\`${id.replaceAll("|", "\\|")}\``);
     expect(md).toContain("| P1 | SW-H1 | W3 | 5 |");
+    // N3: the five keyed cases are five comparisons (the rule's `was` against the map), and none disagrees.
+    expect(md).toContain("was checked against the map on 5 cases: 0 disagree");
     // The one mapped case that WORKS in the real results is "not red in the baseline", said so.
     expect(md).toContain("| P9 | not red in the baseline | — | 1 |");
     // 194 reds in the W1-driving file, 5 keyed: the rest are listed as unkeyed.
