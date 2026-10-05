@@ -221,6 +221,9 @@ export function notSeatedLater(i: NotSeatedLaterInput): CheckResult {
   return assertion(id, items);
 }
 
+/** "1 person" / "2 persons" (W1d item 24): how many people stand behind the withdrawn entrant, for the policy note. */
+const personsLabel = (n: number): string => `${n} ${n === 1 ? "person" : "persons"}`;
+
 /** A stage row as it stood immediately before the withdrawal call. */
 export interface RowAtWithdrawal { readonly id: string; readonly home: string | null; readonly away: string | null; readonly status: string }
 export type AmericanoPolicyExpectation = { readonly want: "walkover" | "none"; readonly pending: number } | { readonly abstain: string };
@@ -363,7 +366,8 @@ export const r4Withdrawal: Scenario = {
       : walkoverModelFor(kind) === "abandon"
         ? withCanary(
           [{ ok: w.policy === derived.want, note: kind === "americano"
-            ? `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending game(s) of ${(setup.persons.get(w.entrantId) ?? []).join("+")} at withdrawal, through any entrant; withdrawal.ts open-format rule)`
+            // W1d item 24: the persons' COUNT, never their ids (a team's roster is its persons, every one of them).
+            ? `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending game(s) of the withdrawn entrant (${personsLabel((setup.persons.get(w.entrantId) ?? []).length)}) at withdrawal, through any entrant; withdrawal.ts open-format rule)`
             : `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending at withdrawal; withdrawal.ts open-format rule)` }],
           [{ ok: w.policy === (derived.want === "none" ? "walkover" : "none"), note: `policy ${w.policy}, expected ${derived.want === "none" ? "walkover" : "none"}` }],
           ctx.spec.canary,

@@ -13,10 +13,10 @@ import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
-  DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
+  DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, idempotencyKey, inSquadOrder, requireVoidTarget, retryKey,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
 export interface Transport {
@@ -292,6 +292,42 @@ export class HttpDriver implements OrganiserDriver {
     // The route 400s anything but a non-negative integer; refuse it here, by name, before a call.
     if (!(Number.isInteger(sinceSeq) && sinceSeq >= 0)) throw new DriverMisuse(`driver: ledger since_seq must be a non-negative integer seq, got ${sinceSeq}`);
     return fetchFixtureLedger(this.#base, this.#session, fixtureId, sinceSeq, { raw: (_base, _s, path, method) => this.#send(path, method ?? "GET") });
+  }
+
+  /** W1d Task 14 (item 15e): the console's "Void last entry", over the route. Reads the whole ledger, picks the
+   *  newest event that is neither a core.void nor already voided (voidTargetOf — the console's `lastVoidable`),
+   *  and appends `core.void {event_id}` at the ledger's own tip. Nothing to void is refused before any write. A
+   *  refusal — SEQ_CONFLICT included — is the product's RefusedCall and is NOT retried: the target was chosen
+   *  under a ledger that has since moved, and a retry would void whatever is newest now. The key names one
+   *  (fixture, tip), so a void at another tip can never replay this one's answer. */
+  async voidLast(fixtureId: string): Promise<VoidedOut> {
+    const rows = await this.ledger(fixtureId, 0);
+    const target = requireVoidTarget("driver", fixtureId, rows);
+    const tip = rows[rows.length - 1].seq;
+    const path = `/api/v1/fixtures/${fixtureId}/events`;
+    await this.#call<PostedEvent>(path, "POST", { expected_seq: tip, type: VOID_EVENT, payload: { event_id: target.id }, idempotency_key: idempotencyKey(`void:${fixtureId}`, tip) });
+    return { voidedEventId: target.id, voidedType: target.type };
+  }
+
+  /** W1d Task 14 (item 15c): dates the fixture at this instant — which is today in every venue time zone, so the
+   *  division reaches its match day whatever zone it resolves to (division override → org → UTC). The PATCH's
+   *  own answer is what is returned; one that carries no `scheduled_at` is a date that did not stick. */
+  async scheduleFixtureNow(fixtureId: string): Promise<ScheduledOut> {
+    const sent = new Date().toISOString();
+    const out = await this.#call<{ scheduled_at?: string | null }>(`/api/v1/fixtures/${fixtureId}`, "PATCH", { scheduled_at: sent });
+    if (typeof out.scheduled_at !== "string") throw new DriverMisuse(`driver: scheduleFixtureNow on fixture ${fixtureId} — the product answered no scheduled_at after the PATCH, so the date did not stick`);
+    return { scheduledAt: out.scheduled_at };
+  }
+
+  /** W1d Task 14 (item 15c): the division's phase as the desk serves it (GET /competitions/:id/desk — the
+   *  producer the competition page's pill reads). A division the desk does not list, or a phase outside the
+   *  product's four, is refused by name: never read as a phase. */
+  async divisionPhase(competitionId: string, divisionId: string): Promise<string> {
+    const desk = await this.#call<{ divisions?: Record<string, { phase?: unknown } | undefined> }>(`/api/v1/competitions/${competitionId}/desk`);
+    const d = desk.divisions?.[divisionId];
+    if (d === undefined) throw new DriverMisuse(`driver: the desk of competition ${competitionId} does not list division ${divisionId} (lists: ${Object.keys(desk.divisions ?? {}).join(", ") || "none"})`);
+    if (typeof d.phase !== "string" || !DESK_PHASES.includes(d.phase)) throw new DriverMisuse(`driver: the desk serves phase ${JSON.stringify(d.phase)} for division ${divisionId}, not one of ${DESK_PHASES.join(", ")}`);
+    return d.phase;
   }
 
   async withdraw(entrantId: string): Promise<WithdrawOut> {

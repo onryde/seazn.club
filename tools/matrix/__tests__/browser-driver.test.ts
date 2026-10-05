@@ -12,6 +12,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { selectorForTapStep } from "../../bench/lib/drivers/scorer.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
@@ -27,16 +28,22 @@ import {
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { builtAsPosted } from "../lib/scenarios/assertions.ts";
-import { Recorder, TEMPLATE_ENDS_ON, setUpDivision } from "../lib/scenarios/common.ts";
+import { Recorder, TEMPLATE_ENDS_ON, playStage, setUpDivision } from "../lib/scenarios/common.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { noPadReason } from "../lib/pad-sports.ts";
+import { CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE, CRICKET_NO_CONTROL, CRICKET_SUMMARY, cricketPad } from "../lib/pads/cricket.ts";
 import { genericPad } from "../lib/pads/generic.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
-import type { ReplayDeps, ReplayResult } from "../lib/pads/replay.ts";
+import { replayEvents, type ReplayDeps, type ReplayResult } from "../lib/pads/replay.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
+import { findSecrets } from "../lib/redact.ts";
 import type { CheckResult } from "../lib/results.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
-import { FakeLeagueDriver } from "./fake-driver.ts";
+import { PAD_INNINGS_SET, padInningsPlanner } from "../lib/pad-innings-set.ts";
+import { SCENARIOS } from "../lib/scenarios/index.ts";
+import { offlineBuilderDefault } from "../lib/variants.ts";
+import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
+import { modelPage, twoInningsModel } from "./pad-model.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const src = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
@@ -98,6 +105,7 @@ function fakePages(over: Partial<BrowserPages> = {}): FakePages {
     openFixtureUi: async () => undefined,
     forfeitUi: async (_c, f) => [{ seq: 2, status: "forfeited", outcome: null, event_id: `${f.id}-2` }],
     finalizeUi: async (_c, id) => ({ seq: 3, status: "finalized", outcome: null, event_id: `${id}-3` }),
+    voidLastUi: async (_c, id) => ({ seq: 4, status: "in_play", outcome: null, event_id: `${id}-4` }),
     readStandingsUi: async () => [],
     readPublicUi: async () => ({ tables: [], champion: null }),
   };
@@ -113,7 +121,7 @@ function fakePages(over: Partial<BrowserPages> = {}): FakePages {
 /** The league fake plus the ledger read HttpDriver adds (Task 6). */
 class FakeHttp extends FakeLeagueDriver {
   ledgerRows: LedgerRow[] = [];
-  ledger(_fixtureId: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
+  override ledger(_fixtureId: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
     this.log("ledger");
     return Promise.resolve(this.ledgerRows.filter((r) => r.seq > sinceSeq));
   }
@@ -124,6 +132,7 @@ const HTTP_METHODS = [
   "createCompetition", "createDivision", "getDivision", "postStages", "listStages", "addEntrants", "listEntrants", "start", "generate",
   "listFixtures", "fixtureState", "postStream", "forfeit", "withdraw", "completeStage", "rebuild", "standings", "publicStandings",
   "patchDivisionConfig", "replaceStagesProbe", "ledger", "entrantMembers", "putLineup", "setMembers", "createFromTemplate", "readBackTemplate",
+  "voidLast", "scheduleFixtureNow", "divisionPhase",
 ] as const;
 /** An http side that answers only what it was given and refuses the rest by name. */
 function stubHttp(over: Partial<Record<(typeof HTTP_METHODS)[number], (...a: never[]) => Promise<unknown>>>): Stub {
@@ -1057,6 +1066,100 @@ describe("BrowserDriver — the pad path (W1c Task 7)", () => {
     expect(driver.checks().map((c) => c.id)).not.toContain("pad-ledger-as-generated");
   });
 
+  describe("an event the pad has no control for (W1d item 16: cricket's follow-on and time-expiry draw)", () => {
+    const START: StreamEvent = { type: "core.start", payload: {} };
+    const INNINGS: StreamEvent = { type: CRICKET_SUMMARY, payload: { runs: 100, wickets: 10, legalBalls: 120 } };
+    const BARRED = (type: string): StreamEvent[] => [START, INNINGS, { type, payload: {} }];
+    const TAPPABLE: StreamEvent[] = [START, INNINGS];
+    const CRICKET_PADS = { cricket: cricketPad };
+    const cricketMade = (padPolicy: "first" | "all") => {
+      const r = fakeReplay(OK);
+      return { r, ...make({ http: padHttp(), spec: spec("league", "cricket"), pads: CRICKET_PADS, replay: r.fn, padPolicy }) };
+    };
+
+    it("a stream holding either event is scored over http whole, never half-tapped, exempt by the adapter's route; pad-route abstains ONCE naming the event and the wave", async () => {
+      let checked = 0;
+      for (const type of cricketPad.noControl!.eventTypes) {
+        const { r, driver, http, pageCalls } = cricketMade("all");
+        await built(driver, spec("league", "cricket"));
+        await driver.postStream("f1", BARRED(type), "p");
+        await driver.postStream("f1", BARRED(type), "q");
+        expect(r.calls, type).toEqual([]);
+        expect(pageCalls, type).not.toContain("openFixtureUi");
+        expect(http.calls.filter((c) => c === "postStream"), type).toHaveLength(2);
+        const route = only(driver, "pad-route");
+        expect(route, type).toMatchObject({ verdict: "abstain", checked: 0 });
+        expect(route.reason, type).toBe(`cricket: ${type} has no pad control → ${CRICKET_NO_CONTROL.wave} (${CRICKET_NO_CONTROL.why}); a stream holding it is scored over http`);
+        expect(driver.checks().filter((c) => c.id === "pad-route"), type).toHaveLength(1);
+        expect(driver.checks().map((c) => c.id), type).not.toContain("pad-ledger-as-generated");
+        // Coverage: the exemption names the wave, so the case is not a red on a promise.
+        expect(only(driver, "mixed-driver-coverage"), type).toMatchObject({ verdict: "pass" });
+        expect(only(driver, "mixed-driver-coverage").evidence, type).toContain(`score: exempt — → ${CRICKET_NO_CONTROL.wave}: ${CRICKET_NO_CONTROL.why}`);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("the event is found wherever it stands in the stream — the generator's follow-on is in the MIDDLE (start, two innings, follow-on, an innings), the draw's time close LAST — and a stream without one is not barred", async () => {
+      const positions: StreamEvent[][] = [
+        [START, INNINGS, INNINGS, { type: CRICKET_FOLLOW_ON, payload: {} }, INNINGS],
+        [START, INNINGS, INNINGS, INNINGS, INNINGS, { type: CRICKET_MATCH_CLOSE, payload: {} }],
+        [{ type: CRICKET_FOLLOW_ON, payload: {} }, START, INNINGS],
+      ];
+      let checked = 0;
+      for (const events of positions) {
+        const { r, driver, http } = cricketMade("all");
+        await built(driver, spec("league", "cricket"));
+        await driver.postStream("f1", events, "p");
+        expect(r.calls, events.map((e) => e.type).join(",")).toEqual([]);
+        expect(http.calls.filter((c) => c === "postStream")).toHaveLength(1);
+        checked++;
+      }
+      expect(checked).toBe(3);
+      const { r, driver } = cricketMade("all");
+      await built(driver, spec("league", "cricket"));
+      await driver.postStream("f1", [START, INNINGS, INNINGS, INNINGS, INNINGS], "p");
+      expect(r.calls).toHaveLength(1); // the same shape without a barred event is tapped
+    });
+
+    it("the exemption does not use up the pad's turn: under `first`, the next stream the pad CAN write runs on it, and the one after goes over http", async () => {
+      const { r, driver, http } = cricketMade("first");
+      await built(driver, spec("league", "cricket"));
+      await driver.postStream("f1", BARRED(CRICKET_FOLLOW_ON), "p"); // http, exempt
+      expect(r.calls).toHaveLength(0);
+      await driver.postStream("f1", TAPPABLE, "q"); // the pad's turn
+      expect(r.calls).toHaveLength(1);
+      await driver.postStream("f1", TAPPABLE, "r"); // used up
+      expect(r.calls).toHaveLength(1);
+      expect(http.calls.filter((c) => c === "postStream")).toHaveLength(2);
+      expect(only(driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "pass", checked: 2 });
+      expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+    });
+
+    it("under `all` a tappable stream is tapped and a barred one is not, in either order; each pad write still joins the one check", async () => {
+      const { r, driver, http } = cricketMade("all");
+      await built(driver, spec("league", "cricket"));
+      await driver.postStream("f1", TAPPABLE, "p");
+      await driver.postStream("f1", BARRED(CRICKET_MATCH_CLOSE), "q");
+      await driver.postStream("f1", TAPPABLE, "r");
+      expect(r.calls).toHaveLength(2);
+      expect(http.calls.filter((c) => c === "postStream")).toHaveLength(1);
+      expect(only(driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "pass", checked: 4 });
+      expect(only(driver, "pad-route").verdict).toBe("abstain");
+    });
+
+    it("a sport whose adapter declares no noControl is tapped as before, whatever its events are (the guard reads the adapter's declaration, not the event's name)", async () => {
+      const r = fakeReplay(OK);
+      const { driver, http } = make({ http: padHttp(), pads: PADS, replay: r.fn, padPolicy: "all" });
+      await built(driver, spec("league"));
+      expect(genericPad.noControl).toBeUndefined();
+      await driver.postStream("f1", BARRED(CRICKET_FOLLOW_ON), "p");
+      expect(r.calls).toHaveLength(1);
+      expect(http.calls).not.toContain("postStream");
+      expect(driver.checks().map((c) => c.id)).not.toContain("pad-route");
+    });
+  });
+
   it("a sport with no adapter is not tapped: it goes over http, and pad-route abstains ONCE naming the task that owes it; coverage still reds score", async () => {
     const r = fakeReplay(OK);
     // Every catalogue sport has an adapter since W1c Task 11, so the registry here lacks cricket's.
@@ -1069,6 +1172,142 @@ describe("BrowserDriver — the pad path (W1c Task 7)", () => {
     expect(http.calls.filter((c) => c === "postStream")).toHaveLength(2);
     expect(only(driver, "pad-route")).toMatchObject({ verdict: "abstain", checked: 0, reason: noPadReason("cricket") });
     expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "fail", evidence: ["score: invoked 2×, never in the browser"] });
+  });
+
+  // W1d Task 12, item 8: the unseated-fixture guard, and what padCheck keeps.
+  it("item 8: the unseated-fixture guard refuses by name — a fixture with either seat empty is never tapped, and nothing is recorded as the pad's", async () => {
+    let checked = 0;
+    for (const [seat, row] of [["home", { ...PAD_FIXTURE, home_entrant_id: null }], ["away", { ...PAD_FIXTURE, away_entrant_id: null }], ["both", { ...PAD_FIXTURE, home_entrant_id: null, away_entrant_id: null }]] as const) {
+      const r = fakeReplay(OK);
+      const http = stubHttp({
+        listFixtures: async () => [row],
+        getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+        listStages: async () => [stageRef("s1", 1, "league")],
+      });
+      const { driver, pageCalls } = make({ http, pads: PADS, replay: r.fn });
+      await built(driver, spec("league"));
+      const err = await driver.postStream("f1", EVENTS, "p").catch((e: unknown) => e);
+      expect(err, seat).toBeInstanceOf(DriverMisuse);
+      expect((err as Error).message, seat).toBe("browser: fixture f1 does not seat two entrants — the pad scores a seated fixture only");
+      expect((err as Error).message).toContain("does not seat two entrants");
+      expect(r.calls, `${seat}: the replay is never reached`).toEqual([]);
+      expect(pageCalls, `${seat}: the console is never opened`).not.toContain("openFixtureUi");
+      expect(driver.checks().map((c) => c.id), seat).not.toContain("pad-ledger-as-generated");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("item 8: the positive pair — a fixture seating two entrants IS tapped (the guard refuses the unseated one only)", async () => {
+    const r = fakeReplay(OK);
+    const { driver } = make({ http: padHttp(), pads: PADS, replay: r.fn });
+    await built(driver, spec("league"));
+    await driver.postStream("f1", EVENTS, "p");
+    expect(r.calls).toHaveLength(1);
+  });
+
+  /** A replay result of `n` rows that each pass with a note (a fallback: the check keeps its note as evidence) — or fail. */
+  const fallbackRows = (n: number, verdict: "fallback" | "mismatch" = "fallback"): ReplayResult => {
+    const ev = (i: number): StreamEvent => ({ type: "generic.result", payload: { n: i } });
+    return { rows: Array.from({ length: n }, (_x, i) => ({ expected: ev(i), stored: [lrow(i + 2, "generic.result", { n: i })], verdict, note: `why ${i + 1}` })), stored: [], findings: [] };
+  };
+  async function padEvidence(result: ReplayResult): Promise<CheckResult> {
+    const { driver } = make({ http: padHttp(), pads: PADS, replay: fakeReplay(result).fn });
+    await built(driver, spec("league"));
+    await driver.postStream("f1", EVENTS, "p");
+    return only(driver, "pad-ledger-as-generated");
+  }
+
+  it("item 8: padCheck lists 12 notes and then `+N more` — 14 notes → 12 lines + `+2 more`; 13 → `+1 more`; 12 or fewer → no more-line (the boundary, both sides)", async () => {
+    let checked = 0;
+    // The empty case first: nothing replayed is a vacuous fail with no evidence and no more-line.
+    expect(await padEvidence({ rows: [], stored: [], findings: [] })).toMatchObject({ verdict: "fail", checked: 0, evidence: [] });
+    for (const [n, more] of [[1, null], [11, null], [12, null], [13, "+1 more"], [14, "+2 more"], [30, "+18 more"]] as const) {
+      // Passing rows: a fallback row passes and its note is kept, so n rows → n evidence notes.
+      const c = await padEvidence(fallbackRows(n));
+      expect(c.verdict, `${n} passing`).toBe("pass");
+      const lines = c.evidence.filter((l) => !/^\+\d+ more$/.test(l));
+      expect(lines, `${n}: the lines kept`).toHaveLength(Math.min(n, 12));
+      expect(c.evidence.length, `${n}: lines plus the more-line`).toBe(Math.min(n, 12) + (more === null ? 0 : 1));
+      expect(c.evidence.at(-1), `${n}: the last line`).toBe(more ?? lines.at(-1));
+      // The 12 kept are the FIRST 12, in order — the cut never reorders.
+      expect(lines.map((l) => l.replace(/^.*— /, "")), `${n}`).toEqual(Array.from({ length: Math.min(n, 12) }, (_x, i) => `why ${i + 1}`));
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("item 8: the failing notes count toward the cut too — 13 failures and 2 passing notes → 12 failures then `+3 more`, and the verdict still names the first failure", async () => {
+    const bad = fallbackRows(13, "mismatch");
+    const good = fallbackRows(2);
+    const c = await padEvidence({ rows: [...bad.rows, ...good.rows.map((r, i) => ({ ...r, expected: { type: "generic.result", payload: { n: 20 + i } } }))], stored: [], findings: [] });
+    expect(c.verdict).toBe("fail");
+    expect(c.evidence).toHaveLength(13);
+    expect(c.evidence.at(-1)).toBe("+3 more");
+    expect(c.evidence.slice(0, 12).every((l) => /: mismatch — why \d+$/.test(l))).toBe(true);
+    expect(c.reason).toBe("f1 event 1 of 2 (generic.result): mismatch — why 1");
+  });
+
+  // 15a: the tap-wait timeout, through the real replay on a fake page.
+  it("15a: a tap-wait timeout's message carries the last 5 tap timings — clickedAtMs from the CASE's start, waitedMs from the clock — redacted, and the ledger never advanced", async () => {
+    const SECRET = ["postgres", "://", "matrix", ":", "pw0", "@", "db.invalid", "/m"].join("");
+    const clock = fakeClock();
+    clock.t = 5_000; // the driver is built mid-run: its timings are relative to ITS start, not the process's
+    let locators = 0;
+    let committed = 0; // each release of a hold writes the event's one row
+    const page = {
+      locator: (selector: string) => {
+        const n = ++locators;
+        return {
+          click: async () => undefined,
+          fill: async () => undefined,
+          count: async () => { if (selector === selectorForTapStep({ kind: "releaseHold" })) committed++; return 0; },
+          waitFor: async () => {
+            if (n < 8) return;
+            clock.t += FLOOR_MS;
+            const e = new Error(`locator.waitFor: Timeout ${FLOOR_MS}ms exceeded. (DATABASE_URL=${SECRET})\nCall log:\n  - waiting for locator('[data-tile-id="t"]')`);
+            e.name = "TimeoutError";
+            throw e;
+          },
+        };
+      },
+      goto: async () => undefined,
+      setViewportSize: async () => undefined,
+    };
+    // Two steps and a release per event: event 1 = taps 1-3, event 2 = taps 4-6, event 3 = taps 7-8 (its second step never attaches).
+    const threeSteps: PadRegistry = { generic: { sport: "generic", emits: [], fallbacks: [], stepsFor: () => ["a", "b"].map((tileId) => ({ kind: "tile" as const, tileId })) } };
+    // The ledger gains a row (seq 4, 5, ...) as each hold is released — and event 3 never gets to release.
+    const http = stubHttp({
+      listFixtures: async () => [PAD_FIXTURE],
+      getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      fixtureState: async () => DECIDED,
+      ledger: async (...a: never[]) => Array.from({ length: committed }, (_x, i) => lrow(DECIDED.last_seq + 1 + i, "generic.result", {})).filter((r) => r.seq > (a[1] as number)),
+      postStream: async () => [],
+      listStages: async () => [stageRef("s1", 1, "league")],
+    });
+    const { driver } = make({ http, pads: threeSteps, clock, page });
+    await built(driver, spec("league"));
+    await driver.postStream("f1", [{ type: "generic.result", payload: {} }, { type: "generic.result", payload: {} }, { type: "generic.result", payload: {} }], "p");
+    const c = only(driver, "pad-ledger-as-generated");
+    expect(c.verdict).toBe("fail");
+    const line = c.evidence.find((l) => l.startsWith("f1: stopped") && l.includes("TapWaitTimeout"))!;
+    expect(line, `no TapWaitTimeout line in the evidence: ${JSON.stringify(c.evidence)}`).toBeDefined();
+    expect(line, line).toMatch(/^f1: stopped after event 3 of 3: tap 2 of 3 \(tile\) failed: TapWaitTimeout: locator\.waitFor: Timeout 15000ms exceeded\. \(\[redacted\] — last taps: \[/);
+    const timings = JSON.parse(/last taps: (\[.*\])$/.exec(line)![1]!) as Array<{ tap: number; clickedAtMs: number; ledgerSeenAtMs: number | null; waitedMs: number; budgetMs: number }>;
+    // The ring is the last 5 of the 8 taps made; the timed-out tap is the last.
+    expect(timings.map((t) => t.tap)).toEqual([4, 5, 6, 7, 8]);
+    expect(timings.at(-1)).toMatchObject({ waitedMs: FLOOR_MS, budgetMs: FLOOR_MS });
+    expect(timings.slice(0, -1).map((t) => t.waitedMs)).toEqual([0, 0, 0, 0]);
+    // Relative to the driver's own start (the clock already read 5000 when it was built): a tap is paced TAP_PACE_MS
+    // after the one before it, the release is not paced, and the first tap of the case reads 0.
+    const P = TAP_PACE_MS;
+    expect(timings.map((t) => t.clickedAtMs)).toEqual([2 * P, 3 * P, 3 * P, 4 * P, 5 * P]);
+    // Event 2's taps (4-6) saw their row; event 3's (7, 8) never did.
+    expect(timings.map((t) => t.ledgerSeenAtMs !== null)).toEqual([true, true, true, false, false]);
+    // Redacted: the positive control is that the raw error line IS secret-shaped.
+    expect(findSecrets(`locator.waitFor: Timeout ${FLOOR_MS}ms exceeded. (DATABASE_URL=${SECRET})`)).not.toEqual([]);
+    expect(c.evidence.flatMap((l) => findSecrets(l))).toEqual([]);
+    expect(line).not.toContain("db.invalid");
   });
 
   it("the pad write goes through the write stamp (carry N-1): a pad score at the window's end restarts the public page's freshness window", async () => {
@@ -1402,5 +1641,449 @@ describe("BrowserDriver — the template card path (W1-driving Task 13)", () => 
     expect(pageCalls.length).toBe(pages);
     expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
     expect(coverage).toMatchObject({ verdict: "pass", checked: 3, evidence: [] });
+  });
+});
+
+// W1d Task 12, fix round 1 (ruling T12-I1): the two-innings route shipped inert
+// because no committed plan reached it. A seam is proven only by driving it
+// through its REAL producer and consumer, so this plays what `--set pad-innings`
+// PLANS — its own output, not a hand-built case — through the real scenario's
+// own loop (setUpDivision, then playStage's decideFixture for every fixture),
+// the real BrowserDriver, the real cricket adapter and the real replay, on a
+// pad modelled on what Step 0 saw each cricket route write. The product behind
+// them is the league fake, which folds every row the pad writes through the
+// engine as the product does. Expected values: which streams the pad cannot
+// write is the ADAPTER's declaration (noControl); how many innings a side bats
+// is the ENGINE's cfg; the pad's turn is the SCENARIO's own padPolicy.
+describe(`BrowserDriver — the case ${PAD_INNINGS_SET} plans, driven (W1d T12 fix round 1)`, () => {
+  /** The fake product: the league fake, whose ledger is its fixtures' own events. */
+  class PadProduct extends FakeHttp {
+    override ledger(fixtureId: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
+      this.log("ledger");
+      return Promise.resolve(this.rowsOf(fixtureId).filter((r) => r.seq > sinceSeq));
+    }
+    rowsOf(fixtureId: string): LedgerRow[] {
+      const f = this.fixtures.find((x) => x.id === fixtureId);
+      if (f === undefined) throw new Error(`fake product: no fixture ${fixtureId}`);
+      return f.events.map((e, i) => ({ id: `${fixtureId}-${i + 1}`, seq: i + 1, type: e.type, payload: e.payload }));
+    }
+  }
+
+  it("the planned case is played to its end: the pad writes the first stream it CAN, every stream it cannot goes over http to W2, and the stream it wrote is four innings — the two-innings route", async () => {
+    // The planner's own output, the way run.ts asks for it: the builder default is the variant it is handed.
+    const planned = padInningsPlanner({}).plan(() => offlineBuilderDefault("cricket"));
+    expect(planned).toHaveLength(1);
+    const s = planned[0]!;
+    expect(s.overrides).toBeUndefined(); // an override would be refused at createDivision (OVERRIDE_ROUTE, W2): no path, no pad
+    const policy = SCENARIOS[s.scenario].padPolicy ?? "first";
+    expect(policy).toBe("first"); // LIFECYCLE's: one pad stream a case, the rest http
+    const cfg = resolveSportCfg(s.sport, s.variant) as { inningsPerSide: number };
+    expect(cfg.inningsPerSide).toBe(2);
+
+    const http = new PadProduct(ORG);
+    let open: FakeFixture | null = null;
+    const page = modelPage(async (taps) => {
+      const f = open;
+      if (f === null) throw new Error("the pad released a hold with no console opened");
+      const rows = twoInningsModel({ cfg: http.cfg, entrants: { home: f.home_entrant_id!, away: f.away_entrant_id! } })(taps, http.rowsOf(f.id));
+      if (rows.length > 0) await http.postStream(f.id, rows.map((r) => ({ type: r.type, payload: r.payload })), "pad");
+    });
+    const pages: Partial<BrowserPages> = {
+      createDivisionUi: async (_c, _slug, compId, input) => {
+        const ref = await http.createDivision(compId, { name: input.name, slug: PRODUCT_DIV_SLUG, sportKey: input.sportKey, variantKey: input.variantKey, config: {} });
+        await http.postStages(ref.id, stagesForRow(input.row));
+        return { division: { id: ref.id, competition_id: compId, name: input.name, slug: PRODUCT_DIV_SLUG, sport_key: input.sportKey, variant_key: input.variantKey, config: ref.config, status: "draft" }, stages: builtFrom(input.row, ref.id) };
+      },
+      // The UI's add lands in the same fake product the http side reads, one row per input, as typed (entrants.ts addEntrantsUi).
+      addEntrantsUi: async (_c, w, es) => (await http.addEntrants(w.divisionId, es.map((e, i) => ({ displayName: e.displayName, seed: e.seed ?? i + 1, kind: e.kind })))).map((r, i) => ({ ...r, kind: es[i]!.kind })),
+      startUi: async () => http.start(),
+      generateUi: async () => http.generate(),
+      openFixtureUi: async (_c, _w, no) => { open = http.fixtures.find((f) => f.fixture_no === no) ?? null; },
+    };
+    // The REAL replay, recording what the driver hands it: the stream the scenario generated (the ledger holds the pad's rows, not that).
+    const handed: (readonly StreamEvent[])[] = [];
+    const replay: Replay = (pg, adapter, events, ...rest) => { handed.push(events); return replayEvents(pg, adapter, events, ...rest); };
+    const { driver, pageArgs } = make({ http, spec: s, pages, page, padPolicy: policy, pads: PAD_ADAPTERS, replay });
+    const ctx = { driver, spec: s, orgSlug: ORG_SLUG, cfg: resolveSportCfg(s.sport, s.variant), tag: "t12", denied: [] };
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(s.row, s.scenario));
+    await playStage(ctx, rec, setup);
+
+    // What the scenario decided, in the order it decided it: a stream is one the pad cannot write when it holds an event the adapter has no control for.
+    const barred = new Set(cricketPad.noControl!.eventTypes);
+    const streams = [...rec.streams.entries()].map(([id, events]) => ({ id, events, tappable: !events.some((e) => barred.has(e.type)) }));
+    const tappable = streams.filter((x) => x.tappable);
+    const cannot = streams.filter((x) => !x.tappable);
+    console.info(`pad-innings: ${streams.length} fixture(s) decided, ${tappable.length} tappable, ${cannot.length} barred`);
+    expect(streams.length).toBeGreaterThan(0);
+    expect(streams.length).toBe(http.fixtures.length); // every fixture was decided, none skipped
+    expect(cannot.length).toBeGreaterThan(0); // the test preset's win/home (follow-on) and draw (time close) streams are barred: the route to W2 ran
+    expect(tappable.length).toBeGreaterThan(0); // …and the route this set exists for was reachable by the scenario's own outcomes
+
+    // Under `first` the pad took exactly the first tappable stream, and nothing the pad cannot write was tapped.
+    const padFixtureNos = (pageArgs.openFixtureUi ?? []).map((a) => a[2] as number);
+    expect(padFixtureNos).toEqual([http.fixtures.find((f) => f.id === tappable[0]!.id)!.fixture_no]);
+    expect([...rec.storedFixtures]).toEqual([tappable[0]!.id]);
+    // Every other stream went over the events route, whole: the product holds the stream the scenario generated, event for event.
+    let overHttp = 0;
+    for (const x of streams.filter((y) => y.id !== tappable[0]!.id)) {
+      expect(http.trace, x.id).toContain(`postStream ${x.id}`);
+      expect(http.fixtures.find((f) => f.id === x.id)!.events.map((e) => e.type), x.id).toEqual(x.events.map((e) => e.type));
+      overHttp++;
+    }
+    expect(overHttp).toBe(streams.length - 1);
+    expect(overHttp).toBeGreaterThan(0);
+
+    // The stream the driver handed the pad is the two-innings route: two innings a side, four summaries — by the engine's cfg, not by the adapter.
+    expect(handed).toHaveLength(1);
+    const wrote = handed[0]!;
+    expect(wrote.some((e) => barred.has(e.type))).toBe(false);
+    expect(wrote.filter((e) => e.type === CRICKET_SUMMARY)).toHaveLength(2 * cfg.inningsPerSide);
+    // …and the product's own ledger holds what the pad tapped, over sheets, to the same result (judged below as generated).
+    const padFixture = http.fixtures.find((f) => f.id === tappable[0]!.id)!;
+    expect(padFixture.events.length).toBeGreaterThan(wrote.length); // an innings is many over sheets, however few summaries the stream has
+    expect(padFixture.status).toBe("decided");
+
+    // The case's checks: the pad stream is judged as generated (every event of it), the barred ones abstain naming W2, and coverage holds.
+    expect(only(driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "pass", checked: wrote.length });
+    expect(only(driver, "pad-route")).toMatchObject({ verdict: "abstain", checked: 0 });
+    expect(only(driver, "pad-route").reason).toContain(`→ ${CRICKET_NO_CONTROL.wave}`);
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+  }, 120_000);
+});
+
+// W1d Task 13, item 22: completeStage tells the page object where the stage sits in its division, and the LAST
+// stage's completion is always the browser's. Without the second half the first half is an inert seam: the mixed
+// ledger spends a type's browser turn on the first completion, so a multi-stage case's LAST stage (the knockout)
+// completed over HTTP and its picture was never taken. The positions below are the division's own (stage seq),
+// learned from whichever path built or listed it.
+describe("BrowserDriver — completeStage names the stage's place and shoots the last stage (W1d Task 13, item 22)", () => {
+  /** A division whose stages the harness posts and lists over HTTP (the league fake holds one stage). */
+  class StagedHttp extends FakeHttp {
+    stages: StageRef[] = [];
+    override postStages(_d: string, bodies: readonly { seq: number; kind: string }[]): Promise<StageRef[]> {
+      this.log("postStages");
+      this.stages = bodies.map((b, i) => ({ id: `h${i + 1}`, seq: b.seq, kind: b.kind, config: {}, status: "pending" }));
+      return Promise.resolve(this.stages.map((s) => ({ ...s })));
+    }
+    override listStages(): Promise<StageRef[]> { this.log("listStages"); return Promise.resolve(this.stages.map((s) => ({ ...s }))); }
+  }
+  const places = (pageArgs: Record<string, unknown[][]>) => (pageArgs.completeStageUi ?? []).map((a) => ({ stage: a[2], at: a[3] }));
+
+  it("a two-stage division built by the builder: the group stage is stage 1 (not last), the knockout is stage 2 (last), and BOTH go through the page", async () => {
+    const { driver, http, pageCalls, pageArgs } = league({ spec: spec("groups_ko") });
+    await built(driver, spec("groups_ko"));
+    expect(stagesForRow("groups_ko").map((b) => b.seq)).toEqual([1, 2]);
+    await driver.completeStage("s1");
+    await driver.completeStage("s2");
+    expect(places(pageArgs)).toEqual([{ stage: "s1", at: { ordinal: 1, last: false } }, { stage: "s2", at: { ordinal: 2, last: true } }]);
+    expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(2);
+    expect(http.calls).not.toContain("completeStage");
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+  });
+
+  it("a one-stage division is stage 1 and last, completed once through the page", async () => {
+    const { driver, http, pageArgs } = league();
+    await built(driver, spec("league"));
+    await driver.completeStage("s1");
+    expect(places(pageArgs)).toEqual([{ stage: "s1", at: { ordinal: 1, last: true } }]);
+    expect(http.calls).not.toContain("completeStage");
+  });
+
+  it("three stages (a template's group, group, knockout): the first and the last are the browser's, the middle one is completed over http", async () => {
+    const http = new FakeHttp(ORG);
+    const s = spec("group_group_ko", "cricket", { variant: "t20", template: "t20-super8", caseId: "group_group_ko|cricket|t20|LIFECYCLE" });
+    // The league fake holds one stage: the card's answer is the three-stage one, read back through a stub of the product's list.
+    const three = [1, 2, 3].map((n) => ({ id: `t${n}`, seq: n, kind: n < 3 ? "group" : "knockout", config: {}, status: "pending" }));
+    const { driver, pageArgs } = make({
+      http: Object.assign(http, {
+        readBackTemplate: () => Promise.resolve({
+          competition: { id: "c1", slug: "t20", orgId: ORG },
+          division: { id: "d1", slug: "main", sportKey: "cricket", variantKey: "t20", config: {} },
+          stages: three,
+        }),
+      }),
+      spec: s,
+      pages: { createFromTemplateUi: async () => ({ competitionId: "c1", slug: "t20", visibility: "public", divisions: [{ id: "d1", stages: three.map((t) => ({ id: t.id, fixtureCount: 0 })) }], templateKey: "t20-super8", templateVersion: 1 }) },
+    });
+    await driver.createFromTemplate("t20-super8", { name: "Matrix", endsOn: TEMPLATE_ENDS_ON });
+    await driver.completeStage("t1");
+    await driver.completeStage("t2");
+    await driver.completeStage("t3");
+    expect(places(pageArgs)).toEqual([{ stage: "t1", at: { ordinal: 1, last: false } }, { stage: "t3", at: { ordinal: 3, last: true } }]);
+    expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
+  });
+
+  it("a division the harness built over http: the places come from the stages it posted, and from the stages it listed", async () => {
+    // An API-only row: its division is the harness's own, over http. Generic's `score` variant is a real one.
+    const gk = spec("group_group_ko", "generic", { variant: "score", caseId: "group_group_ko|generic|score|LIFECYCLE" });
+    const posted = new StagedHttp(ORG);
+    const a = make({ http: posted, spec: gk });
+    const { divId } = await built(a.driver, gk);
+    await a.driver.postStages(divId, stagesForRow("group_group_ko"));
+    await a.driver.completeStage("h1");
+    await a.driver.completeStage("h3");
+    expect(places(a.pageArgs)).toEqual([{ stage: "h1", at: { ordinal: 1, last: false } }, { stage: "h3", at: { ordinal: 3, last: true } }]);
+    // Stages only LISTED: the fake product holds them, the driver learns them from the read.
+    const listed = new StagedHttp(ORG);
+    const b = make({ http: listed, spec: gk });
+    const made = await built(b.driver, gk);
+    // Listed in REVERSE seq order: a place is by seq, never by the order the stages were learned in.
+    listed.stages = stagesForRow("group_group_ko").map((x, i) => ({ id: `l${i + 1}`, seq: x.seq, kind: x.kind, config: {}, status: "pending" })).reverse();
+    expect((await b.driver.listStages(made.divId)).map((x) => x.id)).toEqual(["l3", "l2", "l1"]);
+    await b.driver.completeStage("l3");
+    expect(places(b.pageArgs)).toEqual([{ stage: "l3", at: { ordinal: 3, last: true } }]);
+  });
+
+  it("the stages of ANOTHER division the driver listed never move a stage's place", async () => {
+    const http = new StagedHttp(ORG);
+    const { driver, pageArgs } = make({ http, spec: spec("groups_ko") });
+    await built(driver, spec("groups_ko"));
+    // A later seq in some other division: if places were taken across divisions, s2 would stop being last.
+    http.stages = [{ id: "x1", seq: 5, kind: "league", config: {}, status: "pending" }];
+    await driver.listStages("d-elsewhere");
+    await driver.completeStage("s1");
+    await driver.completeStage("s2");
+    expect(places(pageArgs)).toEqual([{ stage: "s1", at: { ordinal: 1, last: false } }, { stage: "s2", at: { ordinal: 2, last: true } }]);
+  });
+
+  it("a stage no division of this driver holds is still refused by name before any page is touched", async () => {
+    const { driver, pageCalls } = league({ spec: spec("groups_ko") });
+    await built(driver, spec("groups_ko"));
+    await expect(driver.completeStage("no-such-stage")).rejects.toThrow(DriverMisuse);
+    expect(pageCalls.filter((c) => c === "completeStageUi")).toEqual([]);
+  });
+
+  it("a last stage the page already had its turn at is not offered it again: a refused attempt retries over http, as for every type, and a repeat after a completion is still refused", async () => {
+    const refusing = { completeStageUi: async (_c: unknown, _w: unknown, id: unknown): Promise<{ completed: boolean; events: never[] }> => {
+      if (id === "s2") throw new RefusedCall("POST", "/api/v1/stages/s2/complete", 409, "STAGE_NOT_READY", "not ready");
+      return { completed: true, events: [] };
+    } };
+    const { driver, http, pageCalls } = league({ spec: spec("groups_ko"), pages: refusing as Partial<BrowserPages> });
+    await built(driver, spec("groups_ko"));
+    await driver.completeStage("s1");
+    await expect(driver.completeStage("s2")).rejects.toThrow(RefusedCall);
+    expect(await driver.completeStage("s2")).toMatchObject({ completed: true });
+    expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(2);
+    expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
+    await expect(driver.completeStage("s2")).rejects.toThrow(DriverMisuse);
+  });
+});
+
+
+describe("BrowserDriver — Void last entry, the date filler and the rail's hooks (W1d Task 14, items 15c-15e)", () => {
+  const ROW = (seq: number, type: string, payload: unknown = {}): LedgerRow => ({ id: `r${seq}`, seq, type, payload });
+  const START_ROW = ROW(1, "core.start");
+  const SUMMARY_ROW = ROW(2, "badminton.game.summary", { home: 21, away: 5 });
+  const NOTE_ROW = ROW(3, "core.note", { text: "n" });
+  /** A console http side: the ledger is a mutable list; `voidLastUi` (the fake page) appends what the console would. */
+  function consoleHttp(initial: LedgerRow[]) {
+    const rows = [...initial];
+    const http = stubHttp({
+      listFixtures: async () => [fixture("f1", "s1", null, 4)],
+      ledger: async (...a: never[]) => rows.filter((r) => r.seq > (a[1] as number)),
+      voidLast: async () => ({ voidedEventId: "http", voidedType: "http" }),
+    });
+    return { http, rows };
+  }
+  const voidRow = (rows: LedgerRow[], names: string) => rows.push(ROW(rows.length + 1, "core.void", { event_id: names }));
+
+  it("the browser's first void is the console's: the ledger is read first, the console opened by number, the control tapped — and the answer is what the LEDGER shows the console voided", async () => {
+    const { http, rows } = consoleHttp([START_ROW, SUMMARY_ROW]);
+    const { driver, pageCalls, pageArgs } = make({ http, pages: { voidLastUi: async () => { voidRow(rows, "r2"); return { seq: 3, status: "in_play", outcome: null, event_id: "r3" }; } } });
+    await built(driver, spec("league"));
+    expect(await driver.voidLast("f1")).toEqual({ voidedEventId: "r2", voidedType: "badminton.game.summary" });
+    expect(pageCalls.slice(-2)).toEqual(["openFixtureUi", "voidLastUi"]);
+    expect(pageArgs.openFixtureUi![0]![2]).toBe(4);
+    expect(pageArgs.voidLastUi![0]![1]).toBe("f1");
+    expect(http.calls).not.toContain("voidLast");
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+  });
+
+  it("the answer is the console's CHOICE, not the harness's rule: a console that voided the start answers the start, so the scenario can fail it", async () => {
+    const { http, rows } = consoleHttp([START_ROW, SUMMARY_ROW]);
+    const { driver } = make({ http, pages: { voidLastUi: async () => { voidRow(rows, "r1"); return { seq: 3, status: "in_play", outcome: null, event_id: "r3" }; } } });
+    await built(driver, spec("league"));
+    expect(await driver.voidLast("f1")).toEqual({ voidedEventId: "r1", voidedType: "core.start" });
+  });
+
+  it("only the first void is the browser's: the second, over http, is HttpDriver's (the type keeps its coverage once)", async () => {
+    const { http, rows } = consoleHttp([START_ROW, SUMMARY_ROW]);
+    const { driver, pageCalls } = make({ http, pages: { voidLastUi: async () => { voidRow(rows, "r2"); return { seq: 3, status: "in_play", outcome: null, event_id: "r3" }; } } });
+    await built(driver, spec("league"));
+    await driver.voidLast("f1");
+    expect(await driver.voidLast("f1")).toEqual({ voidedEventId: "http", voidedType: "http" });
+    expect(pageCalls.filter((c) => c === "voidLastUi")).toHaveLength(1);
+    expect(http.calls.filter((c) => c === "voidLast")).toHaveLength(1);
+  });
+
+  it("nothing to void — an empty ledger, or every event already voided — is refused by name before any page is touched", async () => {
+    for (const [name, initial] of [["empty", []], ["voided", [START_ROW, ROW(2, "core.void", { event_id: "r1" })]]] as const) {
+      const { http } = consoleHttp([...initial]);
+      const { driver, pageCalls } = make({ http });
+      await built(driver, spec("league"));
+      const before = pageCalls.length;
+      await expect(driver.voidLast("f1"), name).rejects.toThrow(/nothing to void/);
+      expect(pageCalls.length, name).toBe(before);
+    }
+  });
+
+  it("a console that answered but left no core.void after the tip is refused by name — never read as a void", async () => {
+    const cases: [string, (rows: LedgerRow[]) => void, RegExp][] = [
+      ["no row", () => undefined, /left no core\.void/],
+      ["another row", (rows) => { rows.push(ROW(rows.length + 1, "core.note", { text: "x" })); }, /left no core\.void/],
+      ["two rows", (rows) => { voidRow(rows, "r2"); voidRow(rows, "r1"); }, /2 ledger row/],
+      ["names nothing", (rows) => { rows.push(ROW(rows.length + 1, "core.void", {})); }, /names no event/],
+      ["names a non-string", (rows) => { rows.push(ROW(rows.length + 1, "core.void", { event_id: 2 })); }, /names no event/],
+      ["names an unknown event", (rows) => { voidRow(rows, "zzz"); }, /unknown event zzz/],
+    ];
+    for (const [name, write, want] of cases) {
+      const { http, rows } = consoleHttp([START_ROW, SUMMARY_ROW]);
+      const { driver } = make({ http, pages: { voidLastUi: async () => { write(rows); return { seq: 3, status: "in_play", outcome: null, event_id: "r3" }; } } });
+      await built(driver, spec("league"));
+      await expect(driver.voidLast("f1"), name).rejects.toThrow(want);
+    }
+  });
+
+  it("a fixture in no division this driver built is refused by name, and the ledger read passes straight through to the http side", async () => {
+    const { http } = consoleHttp([START_ROW, SUMMARY_ROW, NOTE_ROW]);
+    const { driver } = make({ http });
+    await expect(driver.voidLast("f1")).rejects.toThrow(/in no division this driver built/);
+    expect((await driver.ledger!("f1", 1)).map((r) => r.seq)).toEqual([2, 3]);
+    expect((await driver.ledger!("f1")).map((r) => r.seq)).toEqual([1, 2, 3]);
+  });
+
+  describe("scheduleFixtureNow is setup filler: http, counted by name, never an organiser action", () => {
+    it("answers the product's own instant, counts the filler, records no action type, and a fixture of no known division is refused before any write", async () => {
+      const http = stubHttp({ listFixtures: async () => [fixture("f1", "s1", null, 4)], scheduleFixtureNow: async () => ({ scheduledAt: "2031-01-02T03:04:05.000Z" }) });
+      const { driver } = make({ http });
+      await expect(driver.scheduleFixtureNow("f1")).rejects.toThrow(/in no division this driver built/);
+      expect(http.calls).not.toContain("scheduleFixtureNow");
+      await built(driver, spec("league"));
+      expect(await driver.scheduleFixtureNow("f1")).toEqual({ scheduledAt: "2031-01-02T03:04:05.000Z" });
+      expect(driver.fillers).toMatchObject({ scheduleFixtureNow: 1 });
+      expect(only(driver, "mixed-driver-coverage").evidence.join("\n")).not.toMatch(/scheduleFixtureNow/);
+    });
+  });
+
+  describe("the rail's hooks: the fold's branch (15d) and the run sheet's default filter (15c, D17)", () => {
+    const seen = (filter: string, rows: number[], branch: "opened" | "unfolded" = "unfolded", width: number | null = 1280) =>
+      ({ fold: { branch, width }, defaultFilter: { filter, rows } });
+    /** A match-day http side: two fixtures, #4 and #7, dated now; the desk answers `phase`. */
+    function dayHttp(phase: string) {
+      const phases: unknown[][] = [];
+      const http = stubHttp({
+        listFixtures: async () => [fixture("f1", "s1", null, 7), fixture("f2", "s1", null, 4), fixture("f3", "s1", null, 9)],
+        scheduleFixtureNow: async () => ({ scheduledAt: "2031-01-02T03:04:05.000Z" }),
+        divisionPhase: async (...a: never[]) => { phases.push(a); return phase; },
+      });
+      return { http, phases };
+    }
+    const railPages = (visit: ReturnType<typeof seen>, got: unknown[] = []): Partial<BrowserPages> => ({
+      generateUi: async (_c, _w, _id, hooks) => { got.push(hooks); await hooks?.onRail?.(visit); return { created: 0, existing: 0, fixtures: [] }; },
+      completeStageUi: async (_c, _w, _id, _at, hooks) => { got.push(hooks); await hooks?.onRail?.(visit); return { completed: true, events: [] }; },
+    });
+    const matchDay = (extra: Partial<CaseSpec> = {}) => spec("league", "badminton", { matchDay: true, ...extra });
+
+    it("fold-branch: the first rail visit is judged against the width — 1280 unfolded passes, 320 opened passes, 1280 opened and 320 unfolded fail — once per case", async () => {
+      for (const [branch, width, verdict] of [["unfolded", 1280, "pass"], ["opened", 320, "pass"], ["opened", 1280, "fail"], ["unfolded", 320, "fail"], ["opened", 767, "pass"], ["unfolded", 768, "pass"]] as const) {
+        const { http } = dayHttp("scheduled");
+        const { driver } = make({ http, pages: railPages(seen("all", [], branch, width)) });
+        await built(driver, spec("league"));
+        await driver.generate("s1");
+        await driver.generate("s1");
+        expect(driver.checks().filter((c) => c.id === "fold-branch"), `${branch}@${width}`).toHaveLength(1);
+        expect(only(driver, "fold-branch"), `${branch}@${width}`).toMatchObject({ verdict, checked: 1 });
+      }
+    });
+
+    it("fold-branch: a page that reported no viewport is a failure of its own, and a driver whose rail was never visited records no fold-branch at all", async () => {
+      const { http } = dayHttp("scheduled");
+      const a = make({ http, pages: railPages(seen("all", [], "unfolded", null)) });
+      await built(a.driver, spec("league"));
+      await a.driver.generate("s1");
+      expect(only(a.driver, "fold-branch")).toMatchObject({ verdict: "fail" });
+      const b = make({ http: dayHttp("scheduled").http });
+      await built(b.driver, spec("league"));
+      expect(b.driver.checks().some((c) => c.id === "fold-branch")).toBe(false);
+    });
+
+    it("a non-match-day case never asks the rail for the default filter, and records no runsheet-today-default (and reads no phase)", async () => {
+      const { http, phases } = dayHttp("scheduled");
+      const got: unknown[] = [];
+      const { driver } = make({ http, pages: railPages(seen("all", [1, 2]), got) });
+      await built(driver, spec("league", "badminton"));
+      await driver.generate("s1");
+      expect((got[0] as { readDefaultFilter?: boolean }).readDefaultFilter).toBe(false);
+      expect(driver.checks().some((c) => c.id === "runsheet-today-default")).toBe(false);
+      expect(phases).toEqual([]);
+    });
+
+    it("a match-day case asks the FIRST rail visit for the default filter and only that one; the phase is read through the desk with the competition and division ids", async () => {
+      const { http, phases } = dayHttp("match_day");
+      const got: unknown[] = [];
+      const { driver } = make({ http, spec: matchDay(), pages: railPages(seen("today", [4, 7]), got) });
+      await built(driver, matchDay());
+      await driver.scheduleFixtureNow("f1");
+      await driver.scheduleFixtureNow("f2");
+      await driver.generate("s1");
+      await driver.generate("s1");
+      expect(got.map((h) => (h as { readDefaultFilter: boolean }).readDefaultFilter)).toEqual([true, false]);
+      expect(phases).toEqual([["c1", "d1"]]);
+      expect(driver.checks().filter((c) => c.id === "runsheet-today-default")).toHaveLength(1);
+    });
+
+    it("match day: 'today' showing exactly the fixtures this driver dated passes (dated 7 then 4); 'all', a missing or an extra row, and no filter at all fail", async () => {
+      const cases: [string, ReturnType<typeof seen> | { fold: { branch: "unfolded"; width: number }; defaultFilter: null }, string][] = [
+        // The sheet's rows arrive sorted (readDefaultFilter); the driver's dated list is sorted by it too (7 was dated before 4).
+        ["pass", seen("today", [4, 7]), "pass"],
+        ["all", seen("all", [4, 7, 9]), "fail"],
+        ["missing", seen("today", [4]), "fail"],
+        ["extra", seen("today", [4, 7, 9]), "fail"],
+        ["no filter", { fold: { branch: "unfolded", width: 1280 }, defaultFilter: null }, "fail"],
+      ];
+      for (const [name, visit, verdict] of cases) {
+        const { http } = dayHttp("match_day");
+        const { driver } = make({ http, spec: matchDay(), pages: railPages(visit as ReturnType<typeof seen>) });
+        await built(driver, matchDay());
+        await driver.scheduleFixtureNow("f1");
+        await driver.scheduleFixtureNow("f2");
+        await driver.generate("s1");
+        expect(only(driver, "runsheet-today-default"), name).toMatchObject({ verdict, checked: expect.any(Number) });
+        if (verdict === "pass") expect(only(driver, "runsheet-today-default").checked, name).toBeGreaterThan(0);
+      }
+    });
+
+    it("the phase guard: a match-day case whose desk phase is not match_day fails even when the sheet opened on 'all' as it should for that phase (the today default was never in force)", async () => {
+      for (const phase of ["setting_up", "scheduled", "finished"]) {
+        const { http } = dayHttp(phase);
+        const { driver } = make({ http, spec: matchDay(), pages: railPages(seen("all", [4, 7, 9])) });
+        await built(driver, matchDay());
+        await driver.scheduleFixtureNow("f1");
+        await driver.generate("s1");
+        const c = only(driver, "runsheet-today-default");
+        expect(c.verdict, phase).toBe("fail");
+        expect(c.evidence.join("\n"), phase).toContain(phase);
+      }
+    });
+
+    it("a match-day case that dated no fixture fails (not an abstain), and the default is judged once whichever visit came first", async () => {
+      const { http } = dayHttp("match_day");
+      const { driver } = make({ http, spec: matchDay(), pages: railPages(seen("today", [])) });
+      await built(driver, matchDay());
+      await driver.generate("s1");
+      expect(only(driver, "runsheet-today-default")).toMatchObject({ verdict: "fail" });
+    });
+
+    it("completeStage takes the same hooks (the first visit may be the completion's), its place and then its hooks", async () => {
+      const { http } = dayHttp("scheduled");
+      const got: unknown[] = [];
+      const { driver, pageArgs } = make({ http, pages: railPages(seen("all", [], "unfolded", 1280), got) });
+      await built(driver, spec("league"));
+      await driver.completeStage("s1");
+      expect(pageArgs.completeStageUi![0]![3]).toEqual({ ordinal: 1, last: true });
+      expect(typeof (got[0] as { onRail: unknown }).onRail).toBe("function");
+      expect(only(driver, "fold-branch")).toMatchObject({ verdict: "pass" });
+    });
   });
 });

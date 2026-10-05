@@ -83,6 +83,13 @@ export function rosterSize(sport: string, cfg: unknown, catalogOf: CatalogOf = e
   return n;
 }
 
+/** The synthetic name of the `n`-th entrant of a division of `kind` (W1d item 23): a team is "Matrix Team N", any
+ *  other kind (an individual, a pair) "Matrix Player N". One authority for the scenario harness and the model, so the
+ *  name says what the entrant is. A team's MEMBERS stay "Matrix Player <n>.<m>" (rosterMembers): they are people. */
+export function entrantName(kind: "individual" | "pair" | "team", n: number): string {
+  return kind === "team" ? `Matrix Team ${n}` : `Matrix Player ${n}`;
+}
+
 /** Entrant `entrantNo`'s roster: "Matrix Player <entrantNo>.<m>", squad m, m = 1 the captain. */
 export function rosterMembers(sport: string, cfg: unknown, entrantNo: number, catalogOf: CatalogOf = engineCatalog): MemberInput[] {
   if (!(Number.isInteger(entrantNo) && entrantNo > 0)) throw new Error(`rosters: an entrant number is a positive whole number (a seed), got ${entrantNo}`);

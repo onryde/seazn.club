@@ -43,6 +43,7 @@ import { RefusedCall, RequestTimedOut, productMessageOf, type OrganiserDriver } 
 import { STEP_INVARIANTS } from "../invariants.ts";
 import { MATCH_REQUIRED_CHECKS, type RegressionCase } from "../scenario-catalogue.ts";
 import { COMMAND_KINDS, ModelViolation, SWISS_BIAS, modelCommands } from "./commands.ts";
+import { triggersOf, type RosterTrigger } from "./fences.ts";
 import { LINEUPS_CHECK, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, modelRowRefusal, type CommandCounts, type CommandKind, type ModelState, type UnknownLedger } from "./state.ts";
 
 /** Generator weights per command kind (modelCommands). */
@@ -90,6 +91,9 @@ export interface CellFailure {
    *  or an escaped RefusedCall's message); null when the harness judged it alone. */
   said: string | null;
   known: string | null;
+  /** The open cases that MAY name this failure when none can be told to (W1d item 26): never `known`, which stays
+   *  null — a NEW-or-ambiguous failure — and empty whenever the failure is known or plainly NEW. */
+  ambiguous: string[];
 }
 
 type UnknownCause = UnknownLedger["cause"];
@@ -154,15 +158,35 @@ export function shrinkTarget(current: FailureKey | null, thrown: FailureKey): Fa
  *    that bypassed the loader with a null match names nothing.
  *  - Any other check, which the harness judges alone: only a null-match case.
  *    The loader refuses a match there, and a stray `said` is never read. */
-export function regressionFor(regressions: readonly RegressionCase[], cell: string, check: string, said: string | null): string | null {
+export function regressionFor(regressions: readonly RegressionCase[], cell: string, check: string, said: string | null, triggers: readonly RosterTrigger[] = []): Naming {
   const open = regressions.filter((r) => r.status === "open" && r.cell === cell && r.check === check);
-  if (!(MATCH_REQUIRED_CHECKS as readonly string[]).includes(check)) return open.find((r) => r.match === null)?.id ?? null;
+  if (!(MATCH_REQUIRED_CHECKS as readonly string[]).includes(check)) return nameAmong(open.filter((r) => r.match === null), triggers);
   const words = said === null ? null : productMessageOf(said);
   if (words === null) return null;
-  return open.find((r) => {
+  return nameAmong(open.filter((r) => {
     const m: unknown = r.match;
     return typeof m === "string" && words.includes(m);
-  })?.id ?? null;
+  }), triggers);
+}
+
+/** What names a failure: an open case's id, none (NEW), or several cases that may and cannot be told apart. */
+export type Naming = string | null | { readonly ambiguous: readonly string[] };
+
+/** Of the open cases whose cell, check and match name a failure (W1d item 26), the one its trigger picks.
+ *  `triggers` are the roster changes the failing run made first (triggersOf). A case that names a trigger is
+ *  DECISIVE only when the failure followed exactly that change; a case that names none (every case whose cell,
+ *  check and match are its own) is neutral and names the failure whatever came first. One decisive case wins
+ *  over any neutral one. When the run made both changes a trigger case may or may not be the one, and when two
+ *  or more cases stay in play none is named: ambiguous, listing them — never known, which would be a guess. */
+function nameAmong(named: readonly RegressionCase[], triggers: readonly RosterTrigger[]): Naming {
+  const decisive = named.filter((r) => r.trigger !== undefined && triggers.length === 1 && triggers[0] === r.trigger);
+  const [theOne] = decisive;
+  if (decisive.length === 1 && theOne !== undefined) return theOne.id;
+  const inPlay = decisive.length > 1 ? decisive : named.filter((r) => r.trigger === undefined || triggers.includes(r.trigger));
+  const [only] = inPlay;
+  if (only === undefined) return null;
+  if (inPlay.length === 1 && only.trigger === undefined) return only.id;
+  return { ambiguous: inPlay.map((r) => r.id) };
 }
 
 /** The fast-check failure a run reports when fast-check gave up on skips. */
@@ -235,7 +259,11 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   const findings: Record<string, { count: number; evidence: string[] }> = {};
   const masked: Record<string, number> = {};
   const maskedNew: Record<string, string[]> = {};
-  const knownFor = (check: string, said: string | null): string | null => regressionFor(input.regressions, input.cell, check, said);
+  /** The open case that names a failure, or the ones that may (W1d item 26) — its trigger read from the commands the run made. */
+  const naming = (check: string, said: string | null, commands: readonly string[]): { known: string | null; ambiguous: string[] } => {
+    const named = regressionFor(input.regressions, input.cell, check, said, triggersOf(commands));
+    return typeof named === "object" && named !== null ? { known: null, ambiguous: [...named.ambiguous] } : { known: named, ambiguous: [] };
+  };
   const seen = { stageKind: null as string | null, entrantKind: null as string | null, foldParity: 0, informative: 0, executions: 0, timeBoxed: false, timeout: null as string | null };
   const absorb = (m: ModelState): void => {
     for (const k of COMMAND_KINDS) {
@@ -289,7 +317,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
         fc.pre(false);
       }
       const check = checkOf(e);
-      const thrown: FailureKey = { check, known: knownFor(check, saidOf(e)) };
+      const thrown: FailureKey = { check, known: naming(check, saidOf(e), model?.history ?? []).known };
       const next = shrinkTarget(target, thrown);
       if (next === null) {
         masked[check] = (masked[check] ?? 0) + 1;
@@ -318,19 +346,20 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   // A timeout skips runs the same way, and is reported as itself (RR-2).
   if (details.failed && shrunk === undefined && !seen.timeBoxed && seen.timeout === null) {
     const evidence = [`fast-check gave up after ${details.numSkips} skipped run(s) (${details.numRuns} ran) — only the time box may skip a run`];
-    failure = { check: MODEL_ERROR, seed: details.seed, path: "", replayPath: null, commands: [], evidence, said: null, known: knownFor(MODEL_ERROR, null) };
+    failure = { check: MODEL_ERROR, seed: details.seed, path: "", replayPath: null, commands: [], evidence, said: null, ...naming(MODEL_ERROR, null, []) };
   }
   if (details.failed && shrunk !== undefined) {
     const err: unknown = details.errorInstance;
     const check = checkOf(err);
     const evidence = evidenceOf(err);
     const said = saidOf(err);
+    // Only the commands that ran: the shrunk iterable also holds generated
+    // commands the failing run never reached (R-PF9).
+    const commands = shrunk.commands.filter((c) => c.hasRan).map((c) => c.toString());
     failure = {
       check, seed: details.seed, path: details.counterexamplePath ?? "", replayPath: replayPathOf(shrunk),
-      // Only the commands that ran: the shrunk iterable also holds generated
-      // commands the failing run never reached (R-PF9).
-      commands: shrunk.commands.filter((c) => c.hasRan).map((c) => c.toString()),
-      evidence, said, known: knownFor(check, said),
+      commands,
+      evidence, said, ...naming(check, said, commands),
     };
   }
   // Backstop (T14 amendment): an unexpected refusal is a NEW failure, not a
@@ -347,7 +376,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
     // The backstop's evidence is the harness's own sentence (and whatever it
     // displaced): no product answer, so no committed case can name it — a
     // bypassed lock is a harness defect, reported NEW (T15 fix round 3, M-3/M-5).
-    failure = { check: UNEXPECTED_REFUSAL, seed: input.seed, path: "", replayPath: null, commands: [], evidence, said: null, known: knownFor(UNEXPECTED_REFUSAL, null) };
+    failure = { check: UNEXPECTED_REFUSAL, seed: input.seed, path: "", replayPath: null, commands: [], evidence, said: null, ...naming(UNEXPECTED_REFUSAL, null, []) };
   }
 
   // Final batch F-1(a): a KNOWN failure never excuses a vacuous cell — fast-

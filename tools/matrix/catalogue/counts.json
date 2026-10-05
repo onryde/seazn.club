@@ -12,8 +12,8 @@
     "atomicL2": 93
   },
   "l1": {
-    "formula": "cells × 2 widths (1280, 320)",
-    "value": 462
+    "formula": "cells × 1 width (1280; ruling 39)",
+    "value": 231
   },
   "l2": {
     "formula": "runs in l2-pairs.json; pairTargets = owed (row, scenario) + (sport, scenario) pairs (the scenario applies there, or its only drop is the L3 harness gap — that run is marked l3Gap), each covered by one run, so runs ≥ owed (row, scenario) pairs",

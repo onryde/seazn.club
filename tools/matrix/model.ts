@@ -41,7 +41,9 @@
 //      its sport's (carry G-2); a live builder default that is not the offline
 //      one (BuilderDefaultDrift, Review Focus 5); a case-org plan that allows
 //      no division per competition (PlanAllowsNoDivision, final batch F-6 —
-//      read before any case org).
+//      read before any case org); a run id whose case orgs this DATABASE
+//      already holds (RunIdUsedInDb, W1d items 12, 25 — asked once, after the
+//      DB opens and before the sign-in; run.ts seeds the same slugs).
 //   3  aborted after the start gates: git, the DB, sign-in, a case org, or a
 //      report that cannot be written or still holds a secret after redaction;
 //      or, report written, some cell's request did not answer (RequestTimedOut:
@@ -66,12 +68,13 @@ import { runCell, type CellReport } from "./lib/model/run-cell.ts";
 import { modelRowRefusal } from "./lib/model/state.ts";
 import { BaseNotUrl, baseScrubber, findSecrets, mapStrings, redact } from "./lib/redact.ts";
 import { SecretInResults, stringsIn } from "./lib/results.ts";
+import { RUN_ID_MAX, slugRunId } from "./lib/run-id.ts";
 import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, loadRegressions, replayFences, type RegressionCase } from "./lib/scenario-catalogue.ts";
-import { DataDirMismatch, DataDirUnset, caseOrgSlug, ownerEmail, requireOwnDataDir } from "./lib/seed-org.ts";
+import { DataDirMismatch, DataDirUnset, RunIdUsedInDb, caseOrgSlug, ownerEmail, requireOwnDataDir } from "./lib/seed-org.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "./lib/slice.ts";
 import { variantKeys } from "./lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
-import { BuilderDefaultDrift, EXIT, RUN_ID_MAX, realDeps, type RunDeps } from "./run.ts";
+import { BuilderDefaultDrift, EXIT, realDeps, type RunDeps } from "./run.ts";
 
 export type ModelDeps = Pick<RunDeps, "env" | "harnessCommit" | "preflight" | "openDb" | "signIn" | "prepareCaseOrg" | "driverFor"> & {
   /** The committed regressions (default: regressions.json under --root, or this checkout). A seam for the unit suite. */
@@ -198,9 +201,9 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   // so a constant default made a second run abort on a duplicate slug, or
   // re-walk the same seeds on a fresh DB.
   if (v["run-id"] === undefined) return { usage: "--run-id is required: the case orgs' slugs and every cell's seed derive from it, so each run needs its own" };
-  const slugged = v["run-id"].toLowerCase().replace(/[^a-z0-9-]+/g, "-");
-  const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
-  if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
+  // lib/run-id.ts owns the slug (W1d Task 4); this was a verbatim copy of it until Task 5.
+  const runId = slugRunId(v["run-id"]);
+  if (runId === null) return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
   return {
     runId, reportDir: v["report-dir"] ?? "matrix-report", cells, cellsGiven: v.cell !== undefined, runs, maxCommands, timeLimitMs,
     seed, path: v.path, replayPath: v["replay-path"], fences: v["no-fences"] !== true, regressions: v.regressions === true, base: v.base, root: v.root,
@@ -268,7 +271,9 @@ const redactAll = <T>(v: T): T => mapStrings(v, redact);
 function printCell(c: ModelCell): void {
   const f = c.failure;
   if (f !== null) {
-    say(`  FAILURE ${f.check} ${f.known === null ? "(NEW)" : `(known ${f.known})`}: ${f.commands.length === 0 ? "(no command list)" : f.commands.join(" → ")}`);
+    // W1d item 26: a failure two open cases both fit, with no trigger to choose between them, is NEW — and says which cases may be its.
+    const naming = f.known !== null ? `(known ${f.known})` : f.ambiguous.length > 0 ? `(NEW, or ambiguous between ${f.ambiguous.join(" and ")}: the run made more than one roster change, so no trigger names it)` : "(NEW)";
+    say(`  FAILURE ${f.check} ${naming}: ${f.commands.length === 0 ? "(no command list)" : f.commands.join(" → ")}`);
     say(`    seed=${f.seed} path=${f.path === "" ? "(none)" : f.path} replayPath=${f.replayPath ?? "(none)"}${c.interrupted ? ", TIME BOX HIT (unshrunk)" : ""}`);
     for (const e of f.evidence.slice(0, 3)) say(`    evidence: ${e}`);
     for (const [check, cmds] of Object.entries(c.maskedNew)) {
@@ -393,6 +398,11 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
     harnessCommit = await deps.harnessCommit();
     const db = await deps.openDb();
     try {
+      // W1d items 12, 25: the case orgs' slugs (`m-<run id>-<n>`) are unique, so a run id this DATABASE already
+      // holds (from run.ts as much as from an earlier model run) would abort the first cell on a raw duplicate
+      // slug. Asked once, after the DB (and its own-DB proof) is open and BEFORE the sign-in and any case org.
+      const taken = await db.runIdTaken(cli.runId);
+      if (taken > 0) throw new RunIdUsedInDb(cli.runId, taken);
       const owner = ownerEmail(cli.runId);
       const session = await deps.signIn(base, owner);
       const userId = await db.userIdForEmail(owner);
@@ -417,17 +427,13 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
         const real = deps.driverFor(base, session, org.orgId);
         const competitionFor = await competitionSlots(real, cap, (k) => ({ name: `Matrix model ${job.cell}`, slug: `mm-${cli.runId}-${i + 1}${k === 1 ? "" : `-${k}`}` }));
         say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`}${job.replayPath === undefined ? "" : ` replayPath=${job.replayPath}`} maxCommands=${job.maxCommands} fences=${job.fences ? "on" : "off"}${job.replay === null ? "" : ` — replay of ${job.replay.id}`}`);
-        // T16 fix round 1: a replay offers its own case to the matcher first.
-        // Two open cases may share cell, check and match — one bug reached by
-        // two triggers (MB-007, MB-010) — and the first in the file would
-        // otherwise claim the other's replay, which verdictOf then calls NOT
-        // REPRODUCED although it failed as itself. Every other case stays, so
-        // a failure as ANOTHER case is still named as that case.
-        const replay = job.replay;
-        const ranked = replay === null ? regressions : [replay, ...regressions.filter((r) => r.id !== replay.id)];
+        // Two open cases may share cell, check and match — one bug reached by two triggers (MB-007, MB-010) — and
+        // the matcher tells them apart by their `trigger`, read from the failing run's own commands (W1d item 26):
+        // a replay is named by what it did, never by where its case sits in the file. Every case stays offered, so a
+        // failure as ANOTHER case is still named as that case.
         const rep = await runCell({
           cell: job.cell, row: job.row, sport: job.sport, variant, runs: job.runs, maxCommands: job.maxCommands, seed: job.seed, fences: job.fences,
-          timeLimitMs: cli.timeLimitMs, regressions: ranked,
+          timeLimitMs: cli.timeLimitMs, regressions,
           ...(deps.now === undefined ? {} : { now: deps.now }),
           ...(job.path === undefined ? {} : { path: job.path }),
           ...(job.replayPath === undefined ? {} : { replayPath: job.replayPath }),
@@ -441,7 +447,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
       try { await db.dispose(); } catch (e) { warn(`model: db dispose failed — ${errText(e)}`); }
     }
   } catch (e) {
-    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanAllowsNoDivision;
+    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanAllowsNoDivision || e instanceof RunIdUsedInDb;
     warn(`model: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }

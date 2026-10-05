@@ -214,6 +214,72 @@ describe("renderMatrix — the header names the layer, driver and plan (W1c Task
   });
 });
 
+// W1d Task 8 (ruling T4-RENDER): a shard's results.json holds one stripe of its plan, so its MATRIX.md is mostly ░ — and
+// that reads as a gap in the product when it is only the other shards' cases. The header says which stripe this is, and
+// what the run covered (`scope`: an L1 slice and an L1 grid are different plans under one `--layer L1`). The merged run
+// has no extra line: D5 says each layer's MATRIX.md is what a one-machine run would have written.
+describe("renderMatrix — the header names the scope and, for a shard, which stripe it is (W1d Task 8, T4-RENDER)", () => {
+  const small = { rows: ["league"], sports: ["generic"] };
+  const v3 = (p: Partial<RunResults>): RunResults => ({ schemaVersion: 3, runId: "r3", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", grid: small, layer: "L1", driver: "browser", cases: [], ...p });
+  const k = { ...kase({}), layer: "L1" as const, driver: "browser" as const, width: 1280 };
+  const scopeLine = (md: string) => lineStarting(md, "> Scope ");
+  const shardLine = (md: string) => lineStarting(md, "> Shard ");
+
+  it("empty case first: a run that records neither has neither line — and renders exactly as before, with or without cases", () => {
+    for (const cases of [[], [k]]) {
+      const md = renderMatrix(v3({ plan: "--layer L1", cases }));
+      expect(scopeLine(md)).toBeUndefined();
+      expect(shardLine(md)).toBeUndefined();
+    }
+  });
+
+  it("a run that records a scope names it, right under the layer line and above the grid", () => {
+    const md = renderMatrix(v3({ plan: "--layer L1 --scope grid", scope: "L1 (grid)", cases: [k] }));
+    expect(scopeLine(md)).toBe("> Scope **L1 (grid)**.");
+    expect(md.indexOf("> Layer ")).toBeLessThan(md.indexOf("> Scope "));
+    expect(md.indexOf("> Scope ")).toBeLessThan(md.indexOf("| row"));
+    // The slice and the grid are different words: the line is the run's own, never a constant.
+    expect(scopeLine(renderMatrix(v3({ plan: "--layer L1", scope: "L1 (slice)", cases: [k] })))).toBe("> Scope **L1 (slice)**.");
+  });
+
+  it("a shard says \"shard k of N\", how much of the plan it holds, and why most of its cells are ░ — above the grid, and above the empty banner too", () => {
+    const md = renderMatrix(v3({ plan: "--layer L1 --scope grid", scope: "L1 (grid)", shard: { index: 3, of: 8, planSize: 231 }, cases: [k] }));
+    const line = shardLine(md)!;
+    expect(line).toContain("Shard **3 of 8**");
+    expect(line).toContain("231");
+    expect(line).toContain("░");
+    expect(line).toContain("matrix:merge");
+    expect(md.indexOf("> Scope ")).toBeLessThan(md.indexOf("> Shard "));
+    expect(md.indexOf("> Shard ")).toBeLessThan(md.indexOf("| row"));
+    const empty = renderMatrix(v3({ plan: "--layer L1", shard: { index: 1, of: 2, planSize: 6 } }));
+    expect(shardLine(empty)).toContain("Shard **1 of 2**");
+    expect(empty.indexOf("> Shard ")).toBeLessThan(empty.indexOf("**No cases run.**"));
+  });
+
+  it("each shard names ITS OWN stripe: k and N come from the header, never a constant", () => {
+    const seen = new Set<string>();
+    for (const [index, of, planSize] of [[1, 2, 6], [2, 2, 6], [8, 8, 231], [5, 64, 64]] as const) {
+      const line = shardLine(renderMatrix(v3({ shard: { index, of, planSize }, cases: [k] })))!;
+      expect(line).toContain(`Shard **${index} of ${of}**`);
+      expect(line).toContain(String(planSize));
+      seen.add(line);
+    }
+    expect(seen.size).toBe(4);
+  });
+
+  it("a MERGED run (shards: N) carries no shard line and no extra line of its own: it renders as the one-machine run would (D5)", () => {
+    const one = renderMatrix(v3({ plan: "--layer L1 --scope grid", scope: "L1 (grid)", cases: [k] }));
+    const merged = renderMatrix(v3({ plan: "--layer L1 --scope grid", scope: "L1 (grid)", shards: 8, cases: [k] }));
+    expect(shardLine(merged)).toBeUndefined();
+    expect(merged).toBe(one);
+  });
+
+  it("v2 evidence has neither line (it records neither field)", () => {
+    expect(scopeLine(renderMatrix(run([kase({})])))).toBeUndefined();
+    expect(shardLine(renderMatrix(run([kase({})])))).toBeUndefined();
+  });
+});
+
 // W1-driving fix round 2 (ruling T12-R3): an aborted run's grid holds only the
 // cases that finished, so MATRIX.md must not read as a complete run. The
 // banner names the turn and its case (or worker), from results.json alone.

@@ -1,0 +1,168 @@
+// --set pr-sample (W1d Task 7, R27, D13): the per-PR sample.
+//
+// A PR that touches the engine or stages.ts declares the matrix rows it touches (`Matrix rows:` in its body,
+// read by ci/pr-rows.ts). The sample is the L3 cases on those rows (the w1-driving set's cases there) plus a
+// FIXED sample of 33: the slice's 24 cases, and league|<sport>|<variant>|LIFECYCLE on the 9 sports the slice
+// lacks, so every registered sport has at least one case in every PR's sample. It is judged against the
+// committed baseline (catalogue/baseline.json names it), restricted to the EXACT ids it plans.
+//
+// `variantFor` is the only variant authority (review m10): the run's own builder-default reader, never a
+// constant here. The rows are validated against the catalogue wherever they enter (parseRows at the CLI and the
+// body, planPrSample and the planner for a caller that skips it), and a refusal names the row and lists the
+// catalogue, so a typo is never read as "the fixed sample only".
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { z } from "zod";
+import { ROW_KEYS, SPORT_KEYS } from "./catalogue.ts";
+import type { CaseSpec } from "./scenarios/types.ts";
+import { SLICE_SPORTS, planSliceCases } from "./slice.ts";
+import { planW1Driving } from "./w1-driving-set.ts";
+// Type-only: run.ts value-imports this module, and an erased import cannot cycle.
+import type { PlanCases } from "../run.ts";
+
+export const PR_SAMPLE_SET = "pr-sample";
+
+const MATRIX = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const REPO = resolve(MATRIX, "..", "..");
+
+// --- the rows a PR declares ---------------------------------------------------------------------------------------
+
+/** A row the declaration names that the catalogue lacks. Named, with the whole catalogue, so the author sees the typo. */
+export class UnknownRow extends Error {
+  constructor(row: string) {
+    super(`matrix rows: unknown row '${row}' (rows: ${ROW_KEYS.join(", ")}; or all, or none)`);
+    this.name = "UnknownRow";
+  }
+}
+
+/** --set pr-sample was asked to plan with no rows declared. A sample nobody declared rows for is not "none": the
+ *  workflow always passes the declaration, so its absence is a wiring fault, never a default. */
+export class PrSampleNeedsRows extends Error {
+  constructor() {
+    super(`--set ${PR_SAMPLE_SET} needs the rows a PR declares: --rows <row>[,<row>...] | all | none`);
+    this.name = "PrSampleNeedsRows";
+  }
+}
+
+/** The fixed sample planned nothing. It is the sample's floor — every PR runs it whatever rows it declares — so a plan
+ *  built over none is no sample, and a run of nothing must never read as one. */
+export class EmptyPrSample extends Error {
+  constructor() {
+    super(`${PR_SAMPLE_SET}: the fixed sample plans no case, so there is no sample to run (it is the floor of every PR's plan, whatever rows it declares)`);
+    this.name = "EmptyPrSample";
+  }
+}
+
+const ROW_SET: ReadonlySet<string> = new Set(ROW_KEYS);
+
+/** `none`, optionally with a reason after a dash: `none — copy only`. The dash needs a space before it. */
+const NONE = /^none(?:\s+[—–-]\s*.*)?$/;
+
+/** What follows `Matrix rows:`: `all`; `none` (with an optional reason); or catalogue rows, comma-separated. The result
+ *  is sorted and deduplicated, so one declaration has one canonical form. Matched exactly, never case-folded, so what
+ *  is planned is what was typed. */
+export function parseRows(text: string): readonly string[] | "all" {
+  const t = text.trim();
+  if (t === "all") return "all";
+  if (NONE.test(t)) return [];
+  const rows = t.split(",").map((r) => r.trim());
+  for (const r of rows) if (!ROW_SET.has(r)) throw new UnknownRow(r);
+  return [...new Set(rows)].sort();
+}
+
+/** The one spelling of a declaration — what planOf records and the workflow passes back: `none`, `all`, or the sorted rows. */
+export function formatRows(rows: readonly string[] | "all"): string {
+  if (rows === "all") return "all";
+  return rows.length === 0 ? "none" : [...new Set(rows)].sort().join(",");
+}
+
+// --- the plan ------------------------------------------------------------------------------------------------------
+
+/** The fixed sample: the slice's 24 cases, then league|<sport>|<variant>|LIFECYCLE for each registered sport the slice
+ *  lacks (9 at HEAD). Every sport the registry holds appears, so a PR on any row still exercises each sport once. */
+export function fixedSample(variantFor: (sport: string) => string): CaseSpec[] {
+  const out = planSliceCases(variantFor);
+  for (const sport of SPORT_KEYS) {
+    if ((SLICE_SPORTS as readonly string[]).includes(sport)) continue;
+    const variant = variantFor(sport);
+    out.push({ caseId: `league|${sport}|${variant}|LIFECYCLE`, row: "league", sport, variant, scenario: "LIFECYCLE", canary: false });
+  }
+  return out;
+}
+
+/** Seams for the tests that must reach what no committed plan can: a fixed sample that plans nothing, and proof
+ *  that a plan declaring no rows never consults the w1-driving set. */
+export interface PrSampleDeps {
+  /** The fixed sample (default: fixedSample). */
+  fixed?: (variantFor: (sport: string) => string) => CaseSpec[];
+  /** The whole w1-driving set (default: planW1Driving with an explicit empty filter). */
+  w1?: (variantFor: (sport: string) => string) => CaseSpec[];
+}
+
+/** The declared rows, refused by name when the catalogue lacks one (a caller that skipped parseRows). */
+function checkRows(rows: readonly string[] | "all"): readonly string[] | "all" {
+  if (rows === "all") return rows;
+  for (const r of rows) if (!ROW_SET.has(r)) throw new UnknownRow(r);
+  return rows;
+}
+
+/** The sample for `rows`: the w1-driving cases on those rows (the full set, its filter argument explicit), then the
+ *  fixed sample, each case once — a row's own cases lead, in w1-driving order, and the fixed sample's remaining cases
+ *  follow in its order. */
+export function planPrSample(rows: readonly string[] | "all", variantFor: (sport: string) => string, deps: PrSampleDeps = {}): CaseSpec[] {
+  const declared = checkRows(rows);
+  const fixed = (deps.fixed ?? fixedSample)(variantFor);
+  // The assumption "the fixed sample is non-empty" is asserted here, so the plan below is never empty.
+  if (fixed.length === 0) throw new EmptyPrSample();
+  // No rows declared: the w1-driving set is not consulted, so the fixed sample runs whatever state its files are in.
+  const w1 = deps.w1 ?? ((v: (sport: string) => string) => planW1Driving(v, {}));
+  const onRows = declared !== "all" && declared.length === 0
+    ? []
+    : w1(variantFor).filter((c) => declared === "all" || declared.includes(c.row));
+  const seen = new Set<string>();
+  const out: CaseSpec[] = [];
+  for (const c of [...onRows, ...fixed]) {
+    if (seen.has(c.caseId)) continue;
+    seen.add(c.caseId);
+    out.push(c);
+  }
+  return out;
+}
+
+/** run.ts's SETS['pr-sample']: the plan for the rows the command line declared. It declares every registered sport
+ *  (the fixed sample spans them all), so the runner reads each one's variant order before planning. */
+export const prSamplePlanner: PlanCases = (cli) => {
+  if (cli.rows === undefined) throw new PrSampleNeedsRows();
+  const rows = checkRows(cli.rows);
+  return { sports: SPORT_KEYS, deniesFeatures: false, plan: (variantFor) => planPrSample(rows, variantFor) };
+};
+
+// --- the committed baseline ----------------------------------------------------------------------------------------
+
+/** catalogue/baseline.json is missing, not what it should be, or names a file that is not there: a sample judged
+ *  against nothing would pass every PR. */
+export class BaselineUnreadable extends Error {
+  constructor(file: string, why: string) {
+    super(`pr-sample: the baseline file ${file} cannot be used — ${why}`);
+    this.name = "BaselineUnreadable";
+  }
+}
+
+const BaselineFile = z.object({ L3: z.string() });
+
+/** The committed L3 baseline's results.json, resolved against the repo root: catalogue/baseline.json names it
+ *  (`{ "L3": "<repo-relative path>" }`; PR-B moves the name to its own evidence). Refused when the file is missing, is
+ *  not that shape, or names a file that is not there. */
+export function baselineL3Path(dirs: { catalogue?: string; repo?: string } = {}): string {
+  const file = resolve(dirs.catalogue ?? resolve(MATRIX, "catalogue"), "baseline.json");
+  let text: string;
+  try { text = readFileSync(file, "utf8"); } catch { throw new BaselineUnreadable(file, "it cannot be read"); }
+  let json: unknown;
+  try { json = JSON.parse(text); } catch { throw new BaselineUnreadable(file, "it is not JSON"); }
+  const parsed = BaselineFile.safeParse(json);
+  if (!parsed.success) throw new BaselineUnreadable(file, `it is not { "L3": "<path>" } — ${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}`);
+  const path = resolve(dirs.repo ?? REPO, parsed.data.L3);
+  if (!existsSync(path) || !statSync(path).isFile()) throw new BaselineUnreadable(file, `its L3 names ${parsed.data.L3}, which is not a file there`);
+  return path;
+}

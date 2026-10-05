@@ -10,6 +10,15 @@
 //    (HARNESS_SCENARIO) is driven; one whose atom has a known path gap
 //    (knownNoPath, else l2NoPath) is 🚫 naming that wave; every other run is
 //    ░ "no scenario script yet" (D5 — W1c writes no new scenario script).
+//  - `--scope grid` (W1d Task 3, owner ruling 64): the FULL grid of each layer.
+//    L1 (planL1Grid, `--layer L1 --scope grid`) is one LIFECYCLE case per
+//    catalogue cell at 1280 — 231: a builder row and every API-only cell a
+//    catalog template reaches are driven, the rest are 🚫 naming their wave.
+//    L2 (`--layer L2 --scope grid`) is planL2 over every cell, i.e. every run of
+//    l2-pairs.json (1,731), each driven, 🚫 or ░ exactly as the slice's are.
+//    `--scope slice` (the default, so a bare `--layer L1` is unchanged) is the
+//    two planners above; the grid planners sit in their own table
+//    (LAYER_GRID_PLANNERS) and take no filter.
 //  - `--set width-sweep`: knockout|badminton LIFECYCLE at every L2 width, in
 //    order (ruling 39: the stage-rail fold at 320 and at the md breakpoint;
 //    owner ruling 43(a) moved it off ruling 39's league cell, because
@@ -32,9 +41,9 @@
 // run.ts value-imports this module, so its static closure must stay clear of
 // lib/browser and lib/pads (boundary.test.ts): the D7 wave table comes from
 // the leaf api-only-ui.ts, never from browser-driver.ts.
-import { API_ONLY_ROWS, cellId, type RowKey } from "./catalogue.ts";
+import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, type ApiOnlyRowKey, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
-import { templateField, templateRow } from "./templates.ts";
+import { onTemplate, templateField, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
 import { SetTakesNoFilter } from "./probe-set.ts";
 import { ATOMIC, HARNESS_SCENARIO, type AtomicScenario } from "./scenario-catalogue.ts";
@@ -195,6 +204,70 @@ export const l2Planner: PlanLayers = (cli: PlannerCli) => {
 };
 
 export const LAYER_PLANNERS: Readonly<Record<"L1" | "L2", PlanLayers>> = Object.freeze({ L1: l1Planner, L2: l2Planner });
+
+/** What `--layer` covers: the slice (W1c's six cells and their committed runs,
+ *  the default) or the whole grid (W1d, ruling 64). `--scope` chooses it. */
+export type LayerScope = "slice" | "grid";
+
+/** Every catalogue cell (ruling 64's full grid), in ROW_KEYS × SPORT_KEYS order. */
+export const ALL_CELLS: ReadonlySet<string> = new Set(ROW_KEYS.flatMap((r) => SPORT_KEYS.map((s) => cellId(r, s))));
+const isApiOnly = (row: RowKey): row is ApiOnlyRowKey => (API_ONLY_ROWS as readonly string[]).includes(row);
+
+/** A full-grid planner was handed a filter: the grid is the whole grid, so a
+ *  filter would be silently ignored. Named for the planner, not for `--set`
+ *  (SetTakesNoFilter's words), because the user typed `--layer … --scope grid`. */
+export class GridTakesNoFilter extends Error {
+  readonly label: string;
+  constructor(label: string, cli: PlannerCli) {
+    const given = (["only", "scenario", "canary"] as const).filter((k) => cli[k] !== undefined).map((k) => `--${k}`);
+    super(`layers: ${label} runs the whole grid; it takes no ${given.join(", ")}`);
+    this.name = "GridTakesNoFilter";
+    this.label = label;
+  }
+}
+const refuseGridFilters = (label: string, cli: PlannerCli): void => {
+  if (cli.only !== undefined || cli.scenario !== undefined || cli.canary !== undefined) throw new GridTakesNoFilter(label, cli);
+};
+
+/** Ruling 64: the full L1 grid — one LIFECYCLE case per cell at 1280, in ROW_KEYS
+ *  × SPORT_KEYS order. A builder row drives with variantFor's variant; an API-only
+ *  cell a catalog template reaches drives through that template (its own sport and
+ *  variant, D11, as planW1DrivingL1 does); every other API-only cell is 🚫 naming
+ *  the wave that owes its organiser control (api-only-ui.ts). */
+export function planL1Grid(variantFor: (sport: string) => string): LayerCase[] {
+  const at = (spec: CaseSpec): DrivenLayerCase => ({ spec, layer: "L1", width: L1_WIDTH, noPath: null, notRun: null, run: null });
+  return ROW_KEYS.flatMap((row) => SPORT_KEYS.map((sport): LayerCase => {
+    if (!isApiOnly(row)) {
+      const variant = variantFor(sport);
+      return at({ caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE, canary: false });
+    }
+    const p = apiOnlyUiPath(row, sport);
+    if (p.reachable) return at(onTemplate({ row, sport, scenario: LIFECYCLE, canary: false }, p.template));
+    const variant = variantFor(sport);
+    return {
+      spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
+      layer: "L1", width: L1_WIDTH, noPath: { wave: p.wave, reason: p.reason }, notRun: null, run: null,
+    };
+  }));
+}
+
+/** `--layer L1 --scope grid`: every cell at 1280, every sport's variant order read once. */
+export const l1GridPlanner: PlanLayers = (cli: PlannerCli) => {
+  refuseGridFilters("--layer L1 --scope grid", cli);
+  return { sports: SPORT_KEYS, deniesFeatures: false, layer: "L1", label: "--layer L1 --scope grid", acceptsWidth: L1_WIDTH, layered: planL1Grid };
+};
+
+/** `--layer L2 --scope grid`: planL2 over every cell — every committed run, each
+ *  exactly as committed. Read and planned HERE, at construction, as l2Planner
+ *  does, so a file that does not parse refuses the run before the DB. */
+export const l2GridPlanner: PlanLayers = (cli: PlannerCli) => {
+  refuseGridFilters("--layer L2 --scope grid", cli);
+  const cases = planL2(loadL2Pairs(), ALL_CELLS);
+  const sports = [...new Set(cases.flatMap((c) => (c.spec === null ? [] : [c.spec.sport])))];
+  return { sports, deniesFeatures: false, layer: "L2", label: "--layer L2 --scope grid", acceptsWidth: null, layered: () => cases };
+};
+
+export const LAYER_GRID_PLANNERS: Readonly<Record<"L1" | "L2", PlanLayers>> = Object.freeze({ L1: l1GridPlanner, L2: l2GridPlanner });
 
 export const WIDTH_SWEEP_SET = "width-sweep";
 export const API_ONLY_BROWSER_SET = "api-only-browser";

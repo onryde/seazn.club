@@ -245,6 +245,82 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 1 (item 1, D10): the lock append-only gate, which CI runs as a
+  // bare `node --experimental-strip-types` through its package script.
+  const W1D_T1 = ["lib/lock-diff.ts", "lock-append-only.ts"];
+  it("W1d Task 1's modules are all in the walk", () => {
+    const missing = W1D_T1.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T1.length).toBe(2);
+    expect(missing).toEqual([]);
+  });
+
+  // W1d Task 2: the filler-name leaf results.ts and driver/mixed.ts both read.
+  const W1D_T2 = ["lib/fillers.ts"];
+  it("W1d Task 2's modules are all in the walk", () => {
+    const missing = W1D_T2.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T2.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1d Task 4: the stripe, the shard merge and its CLI, and the run-id slug they share.
+  const W1D_T4 = ["lib/shard.ts", "lib/merge.ts", "lib/run-id.ts", "merge-shards.ts"];
+  it("W1d Task 4's modules are all in the walk", () => {
+    const missing = W1D_T4.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T4.length).toBe(4);
+    expect(missing).toEqual([]);
+  });
+
+  // W1d Task 6: the judge, its CLI, and the one exit-code table every CLI header is held to.
+  const W1D_T6 = ["lib/judge.ts", "judge.ts", "lib/exit-codes.ts"];
+  it("W1d Task 6's modules are all in the walk", () => {
+    const missing = W1D_T6.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T6.length).toBe(3);
+    expect(missing).toEqual([]);
+  });
+
+  // W1d Task 7 (named here by Task 8, ruling T7->T8 a): the per-PR sample's planner, the plan-string map the judge and
+  // the sample both read (hoisted out of __tests__ so shipped code never reaches a test module), and the R27 reader CLI.
+  const W1D_T7 = ["lib/pr-sample.ts", "lib/expected-plan.ts", "ci/pr-rows.ts"];
+  it("W1d Task 7's modules are all in the walk", () => {
+    const missing = W1D_T7.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T7.length).toBe(3);
+    expect(missing).toEqual([]);
+  });
+
+  // W1d Task 8: the CI helpers — the job matrix and its derived timeouts, the run summary, the staleness signal, and the
+  // thin gh wrapper they share. All four load as the package scripts run them, under strip-only mode.
+  const W1D_T8 = ["ci/shard-matrix.ts", "ci/summary.ts", "ci/staleness.ts", "ci/gh.ts"];
+  it("W1d Task 8's modules are all in the walk", () => {
+    const missing = W1D_T8.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T8.length).toBe(4);
+    expect(missing).toEqual([]);
+  });
+
+  // W1d Task 9: the per-PR sample's driver, which imports run-id, pr-sample, redact and variants and is spawned by its package script.
+  const W1D_T9 = ["ci/run-sample.ts"];
+  it("W1d Task 9's module is in the walk", () => {
+    const missing = W1D_T9.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T9.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1d Task 12 fix round 1 (T12-I1): the pad-innings set run.ts and the plan reader value-import.
+  const W1D_T12 = ["lib/pad-innings-set.ts"];
+  it("W1d Task 12's new module is in the walk", () => {
+    const missing = W1D_T12.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T12.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1d Task 14 (items 15c-15f): the two set modules run.ts and the plan reader value-import, and the VOIDPROOF
+  // scenario the registry value-imports.
+  const W1D_T14 = ["lib/match-day-set.ts", "lib/carry-1280-set.ts", "lib/scenarios/void-proof.ts"];
+  it("W1d Task 14's new modules are in the walk", () => {
+    const missing = W1D_T14.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T14.length).toBe(3);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

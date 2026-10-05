@@ -19,6 +19,11 @@
 //    "walkover") → send("core.forfeit", {by, reason}). Those steps are the
 //    bench's own organiserStepsFor (scorer.ts:322-355, ruling 38), run through
 //    the copied executeStep (lib/pads/execute.ts).
+//  - "Void last entry" (:1277-1286, W1d Task 14) has no testid: it is the button whose accessible name is the
+//    dictionary's score.voidLast, and its title (score.voidLastTitle) names the entry it would void. It voids the
+//    newest event that is neither a core.void nor already voided (:880 lastVoidable) — an entry the console
+//    chooses itself, so the page object reports the answer and the caller judges the choice. It renders only while
+//    the match is scoring (not decided-locked), so it is offered on an in-play fixture.
 //  - The console polls only every 15 s (scorepad/use-fixture-stream.ts:21),
 //    and a console loaded before the fixture's last event is answered
 //    SEQ_CONFLICT — so both acts reload first, as the bench's
@@ -28,6 +33,7 @@ import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID, organiserStepsFor,
 import { executeSteps } from "../../pads/execute.ts";
 import { BadBudget, budgetMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
+import { NAME } from "../selectors.ts";
 import type { FixtureRow, PostedEvent } from "../../driver/types.ts";
 import { actBudget, awaitScreen, exactPath, navBudget, reload, shoot, stepBudget, type PageCtx } from "./ctx.ts";
 
@@ -120,5 +126,23 @@ export async function finalizeUi(c: PageCtx, fixtureId: string): Promise<PostedE
   const { data } = await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixtureId) }, () => finalize.click({ timeout: t }), t);
   await awaitScreen(() => finalize.waitFor({ state: "detached", timeout: nav }), "the console, finalized", nav);
   await shoot(c, "09-finalized", before);
+  return data;
+}
+
+/** The entry the console's Void last entry button offers to void is named by its title (score.voidLastTitle:
+ *  "Void {type} (seq {seq}) — …"). After the void the console offers the next entry or nothing, so the screen
+ *  proves the void once no element carries that title any more. */
+export async function voidLastUi(c: PageCtx, fixtureId: string): Promise<PostedEvent> {
+  const { page } = c;
+  const t = actBudget(c, 1);
+  const nav = navBudget(c);
+  const voidLast = page.getByRole("button", { name: NAME.voidLast.text });
+  await reload(c, { control: voidLast, what: "the console's Void last entry" });
+  await awaitScreen(() => voidLast.waitFor({ state: "visible", timeout: nav }), "the console's Void last entry, offered for a match in play", nav);
+  const offered = await voidLast.getAttribute("title", { timeout: t });
+  const before = await shoot(c, "10-void-before");
+  const { data } = await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixtureId) }, () => voidLast.click({ timeout: t }), t);
+  if (offered !== null) await awaitScreen(() => page.getByTitle(offered, { exact: true }).waitFor({ state: "detached", timeout: nav }), "the console, no longer offering the entry just voided", nav);
+  await shoot(c, "10-void", before);
   return data;
 }

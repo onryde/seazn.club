@@ -30,6 +30,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { DIVISION_CAP_KEY, MODEL_DEFAULTS, MODEL_USAGE, fnv1a32, runModel, seedFor, type ModelDeps } from "../model.ts";
 import { REQUEST_TIMEOUT_MS } from "../lib/driver/http-driver.ts";
 import { LOCAL_BASE } from "../lib/redact.ts";
+import { RUN_ID_MAX, slugRunId } from "../lib/run-id.ts";
 import { RefusedCall, RequestTimedOut, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
 import { MODEL_ERROR } from "../lib/model/run-cell.ts";
 import { REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
@@ -38,7 +39,7 @@ import { DataDirMismatch } from "../lib/seed-org.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
 import { offlineVariantOrder } from "../lib/variants.ts";
-import { ModelFakeDriver } from "./model-fake-driver.ts";
+import { ModelFakeDriver, StaleBracketDriver } from "./model-fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const MODEL = resolve(REPO, "tools/matrix/model.ts");
@@ -116,6 +117,7 @@ const deps = (over: Over = {}): ModelDeps => {
       chooseTopPublicPlan: async () => "pro",
       planGrants: async () => [],
       planLimit: async () => null,
+      runIdTaken: async () => 0,
       dispose: async () => {},
     }),
     signIn: async () => ({ cookies: {} }),
@@ -738,28 +740,51 @@ describe("model.ts", () => {
       expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [own] }), ["--run-id", "mmo", "--report-dir", reportDir(), "--regressions"])).toBe(0);
     });
 
-    // T16 fix round 1 (T16-R3): one bug reached by two triggers on one cell —
-    // MB-007 (added entrant) and MB-010 (withdrawal), both double elim, both
-    // the product's same words — is two cases with the same cell, check and
-    // match. Each replay fails AS ITSELF (its check and its match), so each is
-    // known by its own id, in either file order; the first match in the file
-    // must not claim the other's replay.
-    it("T16 fix round 1: two open cases sharing cell, check and match (one bug, two triggers) — each replay is known as itself, in either file order (exit 0)", async () => {
+    // W1d item 26's products: a bracket that 500s a Generate once the roster changed, and the cases found on it.
+    const WORDS = "test: the bracket is stale after a roster change";
+    const FIND = ["--cell", CELL, "--runs", "300", "--max-commands", "20"];
+    // Two finding runs, one product per trigger: a Generate refused after an added entrant, then after a withdrawal.
+    const found = async (tag: string, refuses: (d: StaleBracketDriver) => boolean, id: string, trigger?: "added" | "withdrawn"): Promise<RegressionCase> => {
       const io = capture();
-      expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "tw", "--report-dir", reportDir(), ...ONE])).toBe(1);
-      const a = completedStub(io.out(), { id: "MB-002", issue: null, fence: null, match: "refuses every result" });
-      const b = completedStub(io.out(), { id: "MB-003", issue: null, fence: null, match: "refuses every result" });
+      expect(await runModel(deps({ driverFor: () => new StaleBracketDriver(refuses, WORDS) }), ["--run-id", tag, "--report-dir", reportDir(), ...FIND, "--no-fences"]), tag).toBe(1);
+      return completedStub(io.out(), { id, issue: null, fence: null, match: "bracket is stale", ...(trigger === undefined ? {} : { trigger }) });
+    };
+
+    // T16 fix round 1 (T16-R3), reworked by W1d item 26: one bug reached by two triggers on one cell — MB-007 (an
+    // added entrant) and MB-010 (a withdrawal), both double elim, both the product's same words — is two cases with
+    // the same cell, check and match. They are told apart by their `trigger`, the roster change their own failing
+    // commands show, not by which the file lists first (model.ts used to rank the replayed case first; now it
+    // does not, so the order is the test's to vary). Each replay is known as itself, in either file order.
+    it("W1d item 26: two open cases sharing cell, check and match (one bug, two triggers) — each replay is known as itself by its trigger, in either file order (exit 0)", async () => {
+      const a = await found("tw-a", (d) => d.added && !d.withdrew, "MB-002", "added");
+      const b = await found("tw-b", (d) => d.withdrew && !d.added, "MB-003", "withdrawn");
       expect([a.cell, a.check, a.match]).toEqual([b.cell, b.check, b.match]);
+      expect([a.trigger, b.trigger]).toEqual(["added", "withdrawn"]);
+      expect(() => parseRegressions({ schemaVersion: 1, regressions: [a, b] })).not.toThrow();
       let checked = 0;
       for (const [tag, regs] of [["twab", [a, b]], ["twba", [b, a]]] as const) {
         capture();
         const dir = reportDir();
-        expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [...regs] }), ["--run-id", tag, "--report-dir", dir, "--regressions"]), tag).toBe(0);
-        const rep = JSON.parse(readFileSync(join(dir, tag, "model-report.json"), "utf8")) as { cells: { replayOf: string | null; verdict: string; failure: { known: string | null } | null }[] };
-        expect(rep.cells.map((c) => [c.replayOf, c.verdict, c.failure?.known ?? null]), tag).toEqual(regs.map((r) => [r.id, "known-failure", r.id]));
+        // The replayed product refuses after EITHER change: each case's own commands decide which case it is.
+        expect(await runModel(deps({ driverFor: () => new StaleBracketDriver((d) => d.added || d.withdrew, WORDS), regs: [...regs] }), ["--run-id", tag, "--report-dir", dir, "--regressions"]), tag).toBe(0);
+        const rep = JSON.parse(readFileSync(join(dir, tag, "model-report.json"), "utf8")) as { cells: { replayOf: string | null; verdict: string; failure: { known: string | null; ambiguous: string[] } | null }[] };
+        expect(rep.cells.map((c) => [c.replayOf, c.verdict, c.failure?.known ?? null, c.failure?.ambiguous ?? null]), tag).toEqual(regs.map((r) => [r.id, "known-failure", r.id, []]));
         checked += rep.cells.length;
       }
       expect(checked).toBe(4);
+    });
+
+    it("W1d item 26: a failure the run reached after BOTH roster changes is NEW-or-ambiguous — exit 1, the line names both cases, never known (the cases sit in the file, both open)", async () => {
+      const a = await found("am-a", (d) => d.added && !d.withdrew, "MB-002", "added");
+      const b = await found("am-b", (d) => d.withdrew && !d.added, "MB-003", "withdrawn");
+      const io = capture();
+      const dir = reportDir();
+      // A product that refuses only once the roster changed BOTH ways: no single trigger names it.
+      expect(await runModel(deps({ driverFor: () => new StaleBracketDriver((d) => d.added && d.withdrew, WORDS), regs: [a, b] }), ["--run-id", "am", "--report-dir", dir, ...FIND, "--no-fences"])).toBe(1);
+      expect(failureLine(io.out())).toContain(`(NEW, or ambiguous between ${a.id} and ${b.id}:`);
+      expect(failureLine(io.out())).not.toMatch(/\(known /);
+      const rep = JSON.parse(readFileSync(join(dir, "am", "model-report.json"), "utf8")) as { cells: { verdict: string; failure: { known: string | null; ambiguous: string[] } | null }[] };
+      expect(rep.cells.map((c) => [c.verdict, c.failure?.known ?? null, c.failure?.ambiguous ?? null])).toEqual([["new-failure", null, [a.id, b.id]]]);
     });
 
     it("a FIXED regression that comes back is a NEW failure (exit 1); one that stays fixed is ok (exit 0)", async () => {
@@ -786,7 +811,7 @@ describe("model.ts", () => {
     const io = capture();
     let orgs = 0;
     const d = deps({
-      openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async () => ["win_loss"], chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, dispose: async () => {} }),
+      openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async () => ["win_loss"], chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, runIdTaken: async () => 0, dispose: async () => {} }),
       prepareCaseOrg: async (_c, i) => { orgs++; return { orgId: "o", orgSlug: i.slug, denied: [] }; },
     });
     expect(await runModel(d, ["--run-id", "bd", "--report-dir", reportDir(), ...ONE])).toBe(2);
@@ -952,7 +977,7 @@ describe("model.ts --cell (W1-driving Task 14)", () => {
   /** The live builder's variant order for any sport — the offline catalogue's, so no drift. */
   const gridDeps = (driver: () => ModelFakeDriver): ModelDeps => deps({
     driverFor: driver,
-    openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async (s: string) => offlineVariantOrder(s), chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, dispose: async () => {} }),
+    openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async (s: string) => offlineVariantOrder(s), chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, runIdTaken: async () => 0, dispose: async () => {} }),
   });
   it("empty case first: a cell off the grid is a usage refusal naming it, exit 2, before any DB work", async () => {
     const io = capture();
@@ -1057,5 +1082,79 @@ describe("model.ts --regressions: which cells it replays (W1-driving Task 14 fix
     expect(touched).toEqual([]);
     expect(io.err()).toContain("model: refused ladder|generic — ModelUnsupported:");
     expect(io.err()).toContain("→ W7");
+  });
+});
+
+// W1d Task 5 (items 12, 25): the model CLI seeds case orgs under the SAME slug space as run.ts (`m-<id>-<n>`,
+// organizations.slug is unique), so a run id this database already holds aborted its first cell on a raw duplicate-slug
+// error. It is refused up front instead — after the DB opens, before the sign-in and the first case org.
+describe("model.ts: a run id the database already holds (W1d items 12, 25)", () => {
+  const probing = (answer: (id: string) => number | Promise<number>) => {
+    const order: string[] = [];
+    const taken: string[] = [];
+    const base = deps();
+    const d = deps({
+      openDb: async () => ({ ...(await base.openDb()), runIdTaken: async (id: string) => { order.push(`runIdTaken ${id}`); taken.push(id); return answer(id); } }),
+      signIn: async () => { order.push("signIn"); return { cookies: {} }; },
+      prepareCaseOrg: async (_c, i) => { order.push(`org ${i.slug}`); return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] }; },
+    });
+    return { d, order, taken };
+  };
+
+  it("a taken run id: exit 2, named with the count — no sign-in, no case org, no report", async () => {
+    const io = capture();
+    const dir = reportDir();
+    const { d, order } = probing(async () => 3);
+    expect(await runModel(d, ["--run-id", "model-dup", "--report-dir", dir, ...ONE])).toBe(2);
+    expect(io.err()).toContain("RunIdUsedInDb: run id model-dup already seeded 3 org(s) in this database — pick a fresh --run-id (item 12)");
+    expect(io.err()).toMatch(/model: refused — RunIdUsedInDb/);
+    expect(io.err()).not.toContain("aborted");
+    expect(order).toEqual(["runIdTaken model-dup"]);
+    expect(existsSync(join(dir, "model-dup", "model-report.json"))).toBe(false);
+  });
+
+  it("the empty case: a fresh run id (zero orgs) proceeds — probed once, BEFORE the sign-in, then the first case org", async () => {
+    capture();
+    const { d, order, taken } = probing(async () => 0);
+    expect(await runModel(d, ["--run-id", "model-fresh", "--report-dir", reportDir(), ...ONE])).toBe(0);
+    expect(taken).toEqual(["model-fresh"]);
+    expect(order).toEqual(["runIdTaken model-fresh", "signIn", "org m-model-fresh-1"]);
+  });
+
+  it("asked ONCE per run, not once per cell: two cells, one probe, two case orgs", async () => {
+    capture();
+    const { d, order, taken } = probing(async () => 0);
+    expect(await runModel(d, ["--run-id", "two", "--report-dir", reportDir(), "--cell", CELL, "--cell", "league|badminton", "--runs", "40"])).toBe(0);
+    expect(taken).toEqual(["two"]);
+    expect(order.filter((o) => o.startsWith("org "))).toEqual(["org m-two-1", "org m-two-2"]);
+  });
+
+  it("the probe is asked about the SLUGGED run id (lib/run-id.ts slugRunId — the one the case org slugs carry), not the raw argument", async () => {
+    capture();
+    const { d, taken } = probing(async () => 0);
+    expect(await runModel(d, ["--run-id", "Model Raw_Id", "--report-dir", reportDir(), ...ONE])).toBe(0);
+    expect(taken).toEqual([slugRunId("Model Raw_Id")]);
+    expect(taken).toEqual(["model-raw-id"]);
+  });
+
+  it("the run id's slug rule is the leaf's: every id slugRunId refuses is refused here too, and the bound is its RUN_ID_MAX (the verbatim copy is gone)", async () => {
+    const io = capture();
+    const refusedByLeaf = ["!!!", "   ", "a".repeat(RUN_ID_MAX + 1), `${"a".repeat(RUN_ID_MAX)}-`, "---"];
+    const accepted = ["a", "a".repeat(RUN_ID_MAX), "Mixed Case"];
+    let checked = 0;
+    for (const id of refusedByLeaf) { expect(slugRunId(id), id).toBeNull(); expect(await runModel(deps({ openDb: noDb() }), ["--run-id", id, ...ONE]), id).toBe(2); checked++; }
+    expect(io.err()).toContain(`--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]`);
+    for (const id of accepted) { expect(slugRunId(id), id).not.toBeNull(); checked++; }
+    expect(checked).toBe(refusedByLeaf.length + accepted.length);
+    // The source no longer carries its own copy of the slug.
+    expect(readFileSync(MODEL, "utf8")).not.toMatch(/\.replace\(\/\[\^a-z0-9-\]\+\/g/);
+  });
+
+  it("a probe that cannot read the DB: a data-dir mismatch is a refusal (exit 2), anything else an abort (exit 3)", async () => {
+    const io = capture();
+    expect(await runModel(probing(() => { throw new DataDirMismatch("/tmp/pg", "/elsewhere"); }).d, ["--run-id", "mm1", "--report-dir", reportDir(), ...ONE])).toBe(2);
+    expect(io.err()).toMatch(/refused — DataDirMismatch/);
+    expect(await runModel(probing(() => { throw new Error("connection refused"); }).d, ["--run-id", "mm2", "--report-dir", reportDir(), ...ONE])).toBe(3);
+    expect(io.err()).toMatch(/aborted — Error: connection refused/);
   });
 });

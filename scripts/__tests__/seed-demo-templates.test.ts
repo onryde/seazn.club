@@ -35,7 +35,7 @@ describe("seed-demo stage templates track the shipped builder templates", () => 
     // 5 qualifiers over 2 pools: top 2 from each + one best-3rd. The case the
     // old `picks` interleave got wrong in shape as well as in pool coverage.
     const [, demoKo] = TEMPLATES.groups_ko!(5);
-    const shipped = buildTemplateStages("groups_ko", { qualified: 5, poolCount: 2 });
+    const shipped = buildTemplateStages("groups_ko", { qualified: 5, swissRounds: 5, poolCount: 2, legs: 1 });
     const shippedKo = shipped.find((s) => s.kind === "knockout");
     const takeOf = (stage: unknown) =>
       (stage as { progression: { sources: { take: unknown[] }[] } }).progression.sources[0]!.take;

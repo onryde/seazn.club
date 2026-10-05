@@ -15,16 +15,31 @@ import type { StreamEvent } from "./streams/types.ts";
 export const FOLD_OPTIONS = { strictFromSeq: 1 } as const;
 export const OFFLINE_RECORDED_AT = "2030-01-01T00:00:00.000Z";
 
+/** The target a harness core.void names: its payload's `event_id`, a string (the seq of the event it voids, as
+ *  this module numbers them — the product's own void names a uuid), or undefined. */
+const voidTarget = (ev: StreamEvent): string | undefined => {
+  const id = (ev.payload as { event_id?: unknown } | null)?.event_id;
+  return typeof id === "string" ? id : undefined;
+};
+
+/** A harness stream as envelopes, seq and id from 1. A `core.void` (W1d Task 14) is lifted the way the product
+ *  lifts one (usecases/scoring.ts: `payload.event_id` → the envelope's `voids`), and carries no payload — the
+ *  kernel validates ACTIVE events only, so a void's is never read (model/ledger-fold.ts says the same). One that
+ *  names nothing gets no `voids`, which the engine's resolveVoids refuses by name. */
 export function envelopes(fixtureId: string, events: readonly StreamEvent[]): EventEnvelope[] {
-  return events.map((ev, i) => ({
-    id: String(i + 1),
-    fixtureId,
-    seq: i + 1,
-    type: ev.type,
-    payload: ev.payload,
-    recordedAt: OFFLINE_RECORDED_AT,
-    recordedBy: null,
-  }));
+  return events.map((ev, i) => {
+    const voids = ev.type === "core.void" ? voidTarget(ev) : undefined;
+    return {
+      id: String(i + 1),
+      fixtureId,
+      seq: i + 1,
+      type: ev.type,
+      payload: ev.type === "core.void" ? {} : ev.payload,
+      recordedAt: OFFLINE_RECORDED_AT,
+      recordedBy: null,
+      ...(voids === undefined ? {} : { voids }),
+    };
+  });
 }
 
 export function lineupsFor(home: string, away: string): LineupPair {

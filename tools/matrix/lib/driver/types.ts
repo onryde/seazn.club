@@ -6,6 +6,7 @@
 // (apps/web/src/server/api-v1/schemas.ts: Stage, Entrant, Fixture,
 // FixtureState, AppendEventResponse, CompleteResult; usecases/withdrawal.ts
 // WithdrawCascadeOut; usecases/public.ts publicStandings).
+import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
 import { mapStrings, redact } from "../redact.ts";
 import type { StreamEvent } from "../streams/types.ts";
@@ -61,8 +62,10 @@ export interface EntrantRow { id: string; display_name: string; seed: number | n
  *  and older rows omit it, which reads as "not a third-place match".
  *  `ext_key` / `is_final` (W1-driving Task 6): kept as the product serves them
  *  (fixtures.ts listDivisionFixtures selects both) — a later stage's TBD row
- *  is identified by its ext_key; absent from the fakes' single-stage rows. */
-export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown; third_place?: boolean; ext_key?: string | null; is_final?: boolean }
+ *  is identified by its ext_key; absent from the fakes' single-stage rows.
+ *  `scheduled_at` (W1d Task 14): the instant the product dated it at, as served
+ *  (null: undated); absent from the fakes' rows, which read as undated. */
+export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown; third_place?: boolean; ext_key?: string | null; is_final?: boolean; scheduled_at?: string | null }
 export interface GenerateOut { created: number; existing: number; fixtures: FixtureRow[] }
 export interface StartOut { division_id: string; status: string; started: boolean; generated: number }
 /** The next stage's DRAFT seed proposal a /complete minted
@@ -128,6 +131,46 @@ export function idempotencyKey(prefix: string, expectedSeq: number): string {
 export function retryKey(key: string): string {
   return `${key}:retry`;
 }
+/** The ledger row type a core.void is (events.ts CORE_EVENT_SCHEMAS; the console posts it from "Void last entry"). */
+export const VOID_EVENT = "core.void";
+/** W1d Task 14 (item 15e): what voidLast voided. `voidedEventId` is the ledger row's own id (the product mints a
+ *  uuid; the fakes use the seq), `voidedType` that row's type — read from the LEDGER, never from what the caller
+ *  meant to void, so a scenario judges the choice the console or the route actually made. */
+export interface VoidedOut { readonly voidedEventId: string; readonly voidedType: string }
+/** The instant scheduleFixtureNow's PATCH made the product store (its own answer, not the one sent). */
+export interface ScheduledOut { readonly scheduledAt: string }
+
+/** The newest ledger row that is neither a core.void nor already voided, or null when there is none — the console's
+ *  own rule for what "Void last entry" offers (fixture-console.tsx `lastVoidable`, text-pinned by
+ *  void-proof.test.ts). Rows are in seq order. A row is voided when some core.void names its id in
+ *  `payload.event_id` (the product lifts that into `voids_event_id`); a void whose payload names nothing voids
+ *  nothing here, as in the product, where a void with no resolvable target is refused (UNDO_NOOP). */
+export function voidTargetOf(rows: readonly LedgerRow[]): LedgerRow | null {
+  const voided = new Set<string>();
+  for (const r of rows) {
+    if (r.type !== VOID_EVENT) continue;
+    const id = (r.payload as { event_id?: unknown } | null)?.event_id;
+    if (typeof id === "string") voided.add(id);
+  }
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (r.type !== VOID_EVENT && !voided.has(r.id)) return r;
+  }
+  return null;
+}
+
+/** voidTargetOf, refused by name when there is nothing to void (an empty ledger, or every event already voided or a
+ *  void) or when the target carries no id for a core.void to name. Shared by the two drivers that read the ledger
+ *  before voiding (HttpDriver, BrowserDriver), so the refusal has one text. `who` is the driver's own prefix. */
+export function requireVoidTarget(who: "driver" | "browser", fixtureId: string, rows: readonly LedgerRow[]): LedgerRow {
+  const target = voidTargetOf(rows);
+  if (target === null) throw new DriverMisuse(`${who}: voidLast on fixture ${fixtureId} — nothing to void (the ledger holds ${rows.length} row(s), none that is neither a ${VOID_EVENT} nor already voided)`);
+  if (target.id === "") throw new DriverMisuse(`${who}: voidLast on fixture ${fixtureId} — the newest voidable ledger row (seq ${target.seq}, ${target.type}) carries no id, so no ${VOID_EVENT} can name it`);
+  return target;
+}
+
+/** The phases the product's desk serves (division-phase.ts DIVISION_PHASES; text-pinned by http-driver.test.ts). */
+export const DESK_PHASES: readonly string[] = Object.freeze(["setting_up", "scheduled", "match_day", "finished"]);
 export interface ProbeOutcome { status: number; code: string | null }
 /** A stage write's answer as a probe reads it. `featureKey` is api-v1's 402
  *  `feature_key` (server/api-v1/http.ts): PAYMENT_REQUIRED is a generic code
@@ -204,6 +247,21 @@ export interface OrganiserDriver {
    *  core.finalize ledger row, and parity compares that row, never the route
    *  (controller ruling D). */
   finalize?(fixtureId: string): Promise<FixtureStateOut>;
+  /** W1d Task 14 (item 15e): voids the fixture's newest live event — the newest
+   *  that is neither a core.void nor already voided (voidTargetOf), the rule the
+   *  console's "Void last entry" applies — and answers which one it was, read from
+   *  the ledger. HttpDriver reads the ledger and appends `core.void {event_id}` at
+   *  its tip; BrowserDriver taps the console's control, which chooses its own
+   *  target. Nothing to void is refused before any write (DriverMisuse). */
+  voidLast(fixtureId: string): Promise<VoidedOut>;
+  /** The fixture's ledger rows AFTER `sinceSeq` (exclusive), seq-sorted (HttpDriver.ledger).
+   *  Optional: a driver without it cannot claim a void proof (VOIDPROOF names the gap). */
+  ledger?(fixtureId: string, sinceSeq?: number): Promise<readonly LedgerRow[]>;
+  /** W1d Task 14 (item 15c): dates the fixture NOW — today in every venue time zone —
+   *  through PATCH /fixtures/:id, and answers the instant the product stored. This is
+   *  how a division reaches its match day (division-phase.ts rule 3: a scheduled
+   *  fixture dated today). Optional: a driver without it cannot plan a match day. */
+  scheduleFixtureNow?(fixtureId: string): Promise<ScheduledOut>;
   readonly callCount: number;
 }
 
@@ -249,6 +307,33 @@ export class RefusedCall extends Error {
     this.code = code;
     this.featureKey = featureKey;
     this.extra = extra === null ? null : mapStrings(extra, redact);
+  }
+}
+
+/** W1d Task 6 (D6): a RefusedCall raised in a scenario's SETUP PHASE — the driver calls
+ *  `setUpDivision` makes before `start` (scenarios/common.ts `inSetup`), and DENIED's own
+ *  four. The harness asked the product to build something it will not build, so it is
+ *  the harness's fault, never a finding: the judge reads it as `setup-refused`. A refusal
+ *  anywhere else (`start`, the action under test) is the product answering, and stays a
+ *  plain RefusedCall — so the tag is by PHASE, never by route.
+ *
+ *  A subclass, so every `instanceof RefusedCall` catch behaves as before; run.ts `errText`
+ *  writes `name` into the reason (`error: SetupRefused: …`). `name` is assigned in the
+ *  constructor body, as every Error subclass here does (strip-types, house rule). */
+export class SetupRefused extends RefusedCall {
+  constructor(method: string, path: string, status: number, code: string | null, message: string | null, featureKey: string | null = null, extra: Readonly<Record<string, unknown>> | null = null) {
+    super(method, path, status, code, message, featureKey, extra);
+    this.name = "SetupRefused";
+  }
+
+  /** The tagged copy of `e`, keeping its message WHOLE. RefusedCall's constructor composes
+   *  `<method> <path> → HTTP <status> <code>: <message>` and keeps no raw message, so
+   *  rebuilding from `e.message` would double the request line (review 3, R3-m2): the
+   *  fields go in with a null message and the finished, already-redacted text is put back. */
+  static from(e: RefusedCall): SetupRefused {
+    const tagged = new SetupRefused(e.method, e.path, e.status, e.code, null, e.featureKey, e.extra);
+    tagged.message = e.message;
+    return tagged;
   }
 }
 

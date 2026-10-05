@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,19 +17,26 @@ import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-g
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
 import { API_ONLY_BROWSER_SET, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET } from "../lib/layers.ts";
+import { CARRY8_1280_SET } from "../lib/carry-1280-set.ts";
+import { MATCH_DAY_SET, VOID_PROOF_SET } from "../lib/match-day-set.ts";
+import { PAD_INNINGS_SET } from "../lib/pad-innings-set.ts";
 import { PAD_PROOF_SET } from "../lib/pad-proof-set.ts";
+import { livePlan } from "../lib/expected-plan.ts";
 import { PAD_SPORTS } from "../lib/pad-sports.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
 import { HOLD_MS_ENV_VAR, resolveHoldMs } from "../../../apps/web/src/components/v2/scorepad/queue.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { LOCAL_BASE } from "../lib/redact.ts";
+import { slugRunId } from "../lib/run-id.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { main as renderMain } from "../render.ts";
 import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
 import { MAX_WORKERS, TurnDeadlineExceeded, TurnsClosed, sharedTurns } from "../lib/workers.ts";
 import { deferred, handClock } from "./hand-clock.ts";
-import { W1_DRIVING_SET } from "../lib/w1-driving-set.ts";
+import { W1_DRIVING_SET, planW1Driving } from "../lib/w1-driving-set.ts";
+import { PR_SAMPLE_SET, PrSampleNeedsRows } from "../lib/pr-sample.ts";
+import { matchPlanIds } from "../lib/judge.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "../lib/scenarios/types.ts";
@@ -37,62 +44,17 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { EXIT, NOTES_CAP, PlanStageCapTooLow, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
+import { EXIT, NOTES_CAP, PlanStageCapTooLow, SETS, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, planOf, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type DbFactories, type PlanCases, type PlanLayers, type RunDeps } from "../run.ts";
 import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
+import { ALL_GATES, deps, fakeBrowserRun, type Deps } from "./run-deps.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const RUN = join(REPO, "tools/matrix/run.ts");
 /** Every case of the COMMITTED variant set (Task 8), read as a file. */
 const committedVariants = (): VariantCase[] =>
   (JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { cases: VariantCase[] }[] }).sports.flatMap((s) => s.cases);
-
-type PrepareCtx = Parameters<RunDeps["prepareCaseOrg"]>[0];
-interface DriverCall { base: string; session: Session; orgId: string; driver: FakeLeagueDriver }
-type PrepareInput = Parameters<RunDeps["prepareCaseOrg"]>[1];
-type Deps = RunDeps & { order: string[]; orgs: PrepareInput[]; ctxs: PrepareCtx[]; emails: string[]; drivers: DriverCall[]; session: Session; planReads: string[] };
-/** Every format gate the product declares, derived from the catalogue through the
- *  text-pinned gate map: the fake plan grants all of them unless a test says otherwise. */
-const ALL_GATES: readonly string[] = [...new Set(ROW_KEYS.flatMap((r) => { const g = expectedGate(stagesForRow(r)); return g === null ? [] : [g]; }))];
-
-/** Every case gets its OWN org id (`org-<slug>`), and driverFor records what it
- *  was handed — so a stale, constant or empty org id cannot pass unseen. */
-function deps(over: Partial<RunDeps> = {}): Deps {
-  const order: string[] = [];
-  const orgs: PrepareInput[] = [];
-  const ctxs: PrepareCtx[] = [];
-  const emails: string[] = [];
-  const drivers: DriverCall[] = [];
-  const session: Session = { cookies: {} };
-  const planReads: string[] = [];
-  const d: Deps = {
-    order,
-    orgs,
-    ctxs,
-    emails,
-    drivers,
-    session,
-    planReads,
-    env: { BENCH_EXPECTED_DATA_DIR: "/tmp/pg", SMOKE_BASE: "http://localhost:3999" },
-    harnessCommit: async () => "abc1234",
-    preflight: async () => { order.push("preflight"); return { ok: true, refusals: [] }; },
-    openDb: async () => { order.push("openDb"); return {
-      userIdForEmail: async (e: string) => { emails.push(`db ${e}`); return "u1"; },
-      variantKeysInBuilderOrder: async (s: string) => (s === "generic" ? ["score", "win_loss"] : ["bwf", "short"]),
-      chooseTopPublicPlan: async () => "pro",
-      planGrants: async (k: string) => { planReads.push(k); return [...ALL_GATES]; },
-      planLimit: async () => null,
-      dispose: async () => { order.push("dispose"); },
-    }; },
-    signIn: async (_b, e) => { order.push("signIn"); emails.push(`signIn ${e}`); return session; },
-    prepareCaseOrg: async (ctx, i) => { orgs.push(i); ctxs.push(ctx); return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [...(i.deny ?? [])] }; },
-    driverFor: (base, s, orgId) => { const driver = new FakeLeagueDriver(orgId); drivers.push({ base, session: s, orgId, driver }); return driver; },
-    render: renderMatrix,
-    ...over,
-  };
-  return d;
-}
 
 /** Records every sport whose builder variant order the run reads from the DB,
  *  in call order; `deps(over)` builds a Deps whose openDb reports into it. */
@@ -221,12 +183,63 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", name, "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET}, ${W1_DRIVING_SET}, ${W1_DRIVING_L1_SET})`);
+    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${PAD_INNINGS_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET}, ${W1_DRIVING_SET}, ${W1_DRIVING_L1_SET}, ${PR_SAMPLE_SET}, ${MATCH_DAY_SET}, ${VOID_PROOF_SET}, ${CARRY8_1280_SET})`);
+  });
+  // W1d Task 12 fix round 1 (T12-I1): pad-innings plays the pad too, so over HTTP it has nothing to prove either.
+  it("--set pad-innings without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {
+    let checked = 0;
+    for (const extra of [[], ["--driver", "http"]]) {
+      const d = deps();
+      const io = capture();
+      expect(await runSlice(d, ["--set", PAD_INNINGS_SET, ...extra, "--report-dir", dirFor()]), extra.join(" ")).toBe(2);
+      expect(d.order, extra.join(" ")).toEqual([]);
+      expect(io.err()).toContain(`matrix: --set ${PAD_INNINGS_SET} scores every fixture on the pad; it runs with --driver browser only`);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  // W1d Task 12 fix round 1 (T12-I1): the set through the real parseCli, planner, runner and results writer.
+  it("the pad-innings set: ONE case is driven — league|cricket, variant test, no override, under LIFECYCLE's pad policy (first) — and results.json names the plan it was made from", async () => {
+    capture();
+    const dir = dirFor();
+    const base = deps();
+    const fb = fakeBrowserRun();
+    const d = deps({
+      openBrowserRun: async () => fb.run,
+      // The runner reads cricket's variant order and judges the builder default against the offline one (BuilderDefaultDrift).
+      openDb: async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] }),
+    });
+    expect(await runSlice(d, ["--set", PAD_INNINGS_SET, "--driver", "browser", "--width", "1280", "--run-id", "pi1", "--report-dir", dir])).toBe(0);
+    const raw = resultsIn(dir, "pi1") as { cases: CaseResult[]; plan?: string };
+    expect(raw.cases.map((c) => [c.sport, c.scenario, c.variant])).toEqual([["cricket", "LIFECYCLE", "test"]]);
+    expect(raw.plan).toBe(`--set ${PAD_INNINGS_SET}`);
+    // The case driver got the PLANNED spec as planned (the runner substituted no builder-default variant and no override) and LIFECYCLE's policy.
+    expect(fb.opts).toHaveLength(1);
+    expect(fb.opts[0]!.padPolicy).toBe("first");
+    expect(fb.opts[0]!.spec).toMatchObject({ caseId: "league|cricket|test|LIFECYCLE", row: "league", sport: "cricket", variant: "test", scenario: "LIFECYCLE", canary: false });
+    expect(fb.opts[0]!.spec.overrides).toBeUndefined();
+    expect([...livePlan(raw.plan as string).driven]).toEqual(["league|cricket|LIFECYCLE"]);
+  });
+  it("the pad-innings set refuses every filter as a usage error (exit 2) before the DB: --only, --scenario, --canary", async () => {
+    let checked = 0;
+    for (const extra of [["--only", "league|cricket"], ["--scenario", "LIFECYCLE"], ["--canary", "M1"]]) {
+      const io = capture();
+      const d = deps();
+      expect(await runSlice(d, ["--set", PAD_INNINGS_SET, "--driver", "browser", "--width", "1280", ...extra, "--report-dir", dirFor()]), extra.join(" ")).toBe(2);
+      expect(d.order, extra.join(" ")).toEqual([]);
+      expect(io.err(), extra.join(" ")).toContain("matrix: --set runs a named set; it takes no --only, --scenario or --canary");
+      expect(io.err(), extra.join(" ")).toContain("usage: run.ts");
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
   // W1c Task 7: pad-proof scores every fixture on the pad, so over HTTP it has nothing to prove.
   it("--set pad-proof without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {
     let checked = 0;
-    for (const extra of [[], ["--driver", "http"]]) {
+    // W1d item 15b: one sport's pad proof is still a pad proof, so it needs the browser as well.
+    for (const extra of [[], ["--driver", "http"], ["--only", "league|football"], ["--driver", "http", "--only", "league|football"]]) {
       const d = deps();
       const io = capture();
       expect(await runSlice(d, ["--set", PAD_PROOF_SET, ...extra, "--report-dir", dirFor()]), extra.join(" ")).toBe(2);
@@ -235,7 +248,7 @@ describe("runSlice — refusals first", () => {
       vi.restoreAllMocks();
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(4);
   });
   it("--set w1-driving takes --only and --scenario but not --canary: a usage refusal naming what it takes", async () => {
     const io = capture();
@@ -324,6 +337,25 @@ describe("runSlice — a run", () => {
     expect(io.out()).toMatch(/^\[1\/1\] league\|generic\|score\|LIFECYCLE → works \d+ checks, \d+ items$/m);
     expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: none");
+  });
+  // W1d Task 4 (review C1): run.ts writes <report-dir>/<slugRunId(--run-id)>/, so a caller that later reads
+  // that directory must pass an id that is already its own slug. This pins the behaviour C1 tripped on:
+  // an upper-case id lands in its LOWER-case directory, and the results.json names the slug — so no
+  // caller can assume otherwise again (merge-shards refuses an id that is not its own slug).
+  it("C1: an upper-case run id is written to its lower-case directory, and the results.json names the slug", async () => {
+    capture();
+    const dir = dirFor();
+    const raw = "CI-123-1-L3-S1";
+    const d = deps();
+    expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", raw, "--report-dir", dir])).toBe(0);
+    // A listing, not existsSync: a case-insensitive filesystem answers existsSync for either spelling.
+    expect(readdirSync(dir)).toEqual(["ci-123-1-l3-s1"]);
+    expect(slugRunId(raw)).toBe("ci-123-1-l3-s1");
+    expect(slugRunId(slugRunId(raw) as string)).toBe("ci-123-1-l3-s1");
+    expect(runIn(dir, "ci-123-1-l3-s1").runId).toBe("ci-123-1-l3-s1");
+    // The case org and the owner derive from the slug too, never from what was typed.
+    expect(d.orgs[0]?.name).toBe("Matrix ci-123-1-l3-s1 1");
+    expect(d.emails.join(" ")).not.toContain("CI-123");
   });
   // W1c Task 8 review E-2 (fix round 1): writeResults and MATRIX.md overwrite
   // <report-dir>/<run-id>/ unconditionally, and every case org's slug derives
@@ -673,17 +705,31 @@ describe("runSlice — a run", () => {
     expect(io.out()).not.toContain("abcdefghijklmnop");
   });
 
-  it("PF4: a product refusal is listed as an error red with its code, method and path — and is not vacuous", async () => {
+  it("PF4: a refusal is listed as an error red with its code, method and path — and is not vacuous. W1d D6: one raised in SETUP (the stages POST before start) reads `SetupRefused`", async () => {
     const io = capture();
     const driverFor = () => new (class extends FakeLeagueDriver {
       override async postStages(): Promise<never> { throw new RefusedCall("POST", "/api/v1/divisions/d1/stages", 400, "VALIDATION", "bad stage body"); }
     })("org-fake");
     const dir = dirFor();
     expect(await runSlice(deps({ driverFor }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t7", "--report-dir", dir])).toBe(0);
-    expect(resultsIn(dir, "t7").cases[0]!.reason).toMatch(/^error: RefusedCall: POST \/api\/v1\/divisions\/d1\/stages → HTTP 400 VALIDATION/);
+    // D6: the stages POST is a setUpDivision call, so the harness's own setup was refused — tagged by phase.
+    expect(resultsIn(dir, "t7").cases[0]!.reason).toMatch(/^error: SetupRefused: POST \/api\/v1\/divisions\/d1\/stages → HTTP 400 VALIDATION/);
     expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: 1");
     expect(io.out()).toContain("error-red league|generic|score|LIFECYCLE: POST /api/v1/divisions/d1/stages → 400 VALIDATION");
+  });
+
+  it("D6: the SAME refusal raised by `start` — the action under test — stays a plain `RefusedCall`: the product answering is data, not a harness fault", async () => {
+    const io = capture();
+    const driverFor = () => new (class extends FakeLeagueDriver {
+      override async start(): Promise<never> { throw new RefusedCall("POST", "/api/v1/divisions/d1/start", 400, "VALIDATION", "bad start"); }
+    })("org-fake");
+    const dir = dirFor();
+    expect(await runSlice(deps({ driverFor }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t7s", "--report-dir", dir])).toBe(0);
+    const reason = resultsIn(dir, "t7s").cases[0]!.reason;
+    expect(reason).toMatch(/^error: RefusedCall: POST \/api\/v1\/divisions\/d1\/start → HTTP 400 VALIDATION/);
+    expect(reason).not.toMatch(/SetupRefused/);
+    expect(io.out()).toContain("error reds: 1");
   });
 
   it("zero cases: results.json and the 'No cases run' banner are written, exit 1 (planner seam, no shared-state edit)", async () => {
@@ -923,6 +969,7 @@ describe("runSlice — aborts after the start gates", () => {
     chooseTopPublicPlan: async () => "pro",
     planGrants: async () => [...ALL_GATES],
     planLimit: async () => null,
+    runIdTaken: async () => 0,
     dispose: async () => {},
   }) });
   it("Review Focus 5: a live builder default that differs from the offline one refuses (exit 2) naming both keys, before any case", async () => {
@@ -1191,6 +1238,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
       denyFeature: async () => { log.push("m.denyFeature"); },
       planGrants: async () => { log.push("m.planGrants"); return ["formats.double_elim"]; },
       planLimit: async () => null,
+      runIdTaken: async () => 0,
     };
     const f: DbFactories = {
       matrixSql: () => { log.push("m.open"); return { sql, dispose: async () => { log.push("m.dispose"); if (opts.mThrows) throw new Error("m end timed out"); } }; },
@@ -1251,6 +1299,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
         denyFeature: async (i) => { log.push(`m.deny ${i.orgId} ${i.featureKey}`); },
         planGrants: async () => [],
         planLimit: async () => null,
+        runIdTaken: async () => 0,
       };
       const p = {
         getOrgSubscriptionId: async (o: string) => { log.push(`p.subscription? ${o}`); return "sub1"; },
@@ -1370,6 +1419,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
         denyFeature: async () => {},
         planGrants: async () => [],
         planLimit: async () => null,
+        runIdTaken: async () => 0,
       };
       // ONE owner behind both orgs: setOwnerStaff flips the same user, as the real SQL does.
       const p = {
@@ -1469,30 +1519,6 @@ describe("describeCommit (final review m-6) — evidence never names a commit th
 // refusals, one case driver per case closed in a finally, the driver's checks
 // in the case, the D9 fields following the CLI, and one browser per run
 // closed exactly once.
-interface FakeBrowserRun { run: BrowserRun; log: string[]; opts: CaseDriverOptions[] }
-/** A browser run whose case drivers are league fakes carrying one check of their own.
- *  `checksThrow`: reading the driver's checks throws (fix round 1, M-2). */
-function fakeBrowserRun(o: { failCaseAt?: number; checksThrow?: boolean } = {}): FakeBrowserRun {
-  const log: string[] = [];
-  const opts: CaseDriverOptions[] = [];
-  const run: BrowserRun = {
-    caseDriver: async (co) => {
-      opts.push(co);
-      if (o.failCaseAt === opts.length) throw new Error("browser: newContext refused");
-      log.push(`open ${co.evidenceId}`);
-      const driver = Object.assign(new FakeLeagueDriver(co.orgId), {
-        checks: (): CheckResult[] => {
-          if (o.checksThrow) throw new Error("checks unreadable");
-          return [{ id: "browser-probe", kind: "assertion", verdict: "pass", checked: 1, reason: `driver of ${co.evidenceId}`, evidence: [] }];
-        },
-      });
-      return { driver, close: async () => { log.push(`close ${co.evidenceId}`); } };
-    },
-    close: async () => { log.push("run closed"); },
-  };
-  return { run, log, opts };
-}
-
 describe("runSlice — --driver browser --width (W1c Task 6)", () => {
   it("usage: browser without a width, a width outside BROWSER_WIDTHS, a width on an http run, and an unknown driver are each refused (exit 2) before anything runs", async () => {
     const io = capture();
@@ -2144,6 +2170,214 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
     expect(raw.cases.length).toBe(PAD_SPORTS.length);
     expect(raw.plan).toBe(`--set ${PAD_PROOF_SET}`);
   });
+  // W1d Task 12, item 15b: one sport's pad proof, through the real parseCli, planner and results writer.
+  it("the pad-proof set with --only league|<sport>: exactly that sport's case is driven, results.json names the plan it was made from, and the plan reader reads it back", async () => {
+    let checked = 0;
+    for (const sport of ["badminton", "cricket"]) {
+      capture();
+      const dir = dirFor();
+      const base = deps();
+      const fb = fakeBrowserRun();
+      const d = deps({
+        openBrowserRun: async () => fb.run,
+        openDb: async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] }),
+      });
+      expect(await runSlice(d, ["--set", PAD_PROOF_SET, "--only", `league|${sport}`, "--driver", "browser", "--width", "1280", "--run-id", `p-${sport}`, "--report-dir", dir]), sport).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, `p-${sport}`, "results.json"), "utf8")) as RunResults;
+      expect(raw.cases.map((c) => [c.sport, c.scenario]), sport).toEqual([[sport, "PADPROOF"]]);
+      expect(raw.plan, sport).toBe(`--set ${PAD_PROOF_SET} --only league|${sport}`);
+      expect(fb.opts, sport).toHaveLength(1);
+      expect(fb.opts[0]!.padPolicy, sport).toBe("all");
+      expect([...livePlan(raw.plan as string).driven], sport).toEqual([`league|${sport}|PADPROOF`]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("the pad-proof set refuses every other filter as a usage error (exit 2) before the DB: another sport, row or shape, an empty --only, --scenario, --canary", async () => {
+    const cases: [string[], RegExp][] = [
+      [["--only", "league|chess"], /matrix: pad-proof: --only "league\|chess" is not league\|<sport> of a sport with a pad adapter \(allowed: league\|football, /],
+      [["--only", ""], /matrix: pad-proof: --only "" is not league\|<sport>/],
+      [["--only", "league_ko|football"], /matrix: pad-proof: --only "league_ko\|football" is not league\|<sport>/],
+      [["--only", "football"], /matrix: pad-proof: --only "football" is not league\|<sport>/],
+      [["--scenario", "M1"], /matrix: --set pad-proof takes --only league\|<sport> alone; it takes no --scenario or --canary/],
+      [["--canary", "M1"], /matrix: --set pad-proof takes --only league\|<sport> alone; it takes no --scenario or --canary/],
+      [["--only", "league|football", "--scenario", "M1"], /matrix: --set pad-proof takes --only league\|<sport> alone/],
+    ];
+    let checked = 0;
+    for (const [extra, expected] of cases) {
+      const io = capture();
+      const d = deps();
+      expect(await runSlice(d, ["--set", PAD_PROOF_SET, "--driver", "browser", "--width", "1280", ...extra, "--report-dir", dirFor()]), extra.join(" ")).toBe(2);
+      expect(d.order, extra.join(" ")).toEqual([]);
+      expect(io.err(), extra.join(" ")).toMatch(expected);
+      expect(io.err(), extra.join(" ")).toContain("usage: run.ts"); // parseCli's own refusal, not only the planner's
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+  it("only pad-proof takes a filter: every other named set still refuses --only (the one-sport scope is not a general door)", async () => {
+    let checked = 0;
+    for (const set of [PROBE_SET, WIDTH_SWEEP_SET, API_ONLY_BROWSER_SET]) {
+      const io = capture();
+      const d = deps();
+      expect(await runSlice(d, ["--set", set, "--only", "league|football", "--report-dir", dirFor()]), set).toBe(2);
+      expect(io.err(), set).toMatch(/--set runs a named set; it takes no --only, --scenario or --canary/);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+// W1d Task 3 (ruling 64, item 2): `--scope`. `--layer L1` meant "the slice at
+// 1280" in W1c and still does by default; `--scope grid` is the full grid. The
+// planner is chosen by the flag, `plan` keeps today's string for a slice run (so
+// every frozen lock entry still matches) and names the grid otherwise, and the
+// run's results.json records the scope in its own header field — through the
+// REAL runSlice, parseCli and planners (the field's only writer), read back
+// through the schema, never from a fixture on both ends (T2-SEAM, class 1).
+describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () => {
+  /** The fake DB answering the OFFLINE builder order for every sport: a grid run reads all eleven, and deps()'
+   *  own fake knows generic and badminton only. `reads` is the sports whose order the run asked for. */
+  function gridDeps(): { d: Deps; reads: string[]; opened: () => number } {
+    const base = deps();
+    const reads: string[] = [];
+    let opened = 0;
+    const d = deps({
+      openBrowserRun: async () => { opened++; return fakeBrowserRun().run; },
+      openDb: async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => { reads.push(s); return [...offlineVariantOrder(s)]; } }),
+    });
+    return { d, reads, opened: () => opened };
+  }
+  const CELLS = ROW_KEYS.length * SPORT_KEYS.length;
+  const RAW_RUNS = (JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/l2-pairs.json"), "utf8")) as { runs: { row: string; sport: string }[] }).runs;
+  const SLICE_CELLS = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}`)));
+  const SLICE_RUNS = RAW_RUNS.filter((r) => SLICE_CELLS.has(`${r.row}|${r.sport}`));
+
+  it("usage: --scope needs --layer (and so refuses --set and --canary), takes slice or grid only, and the grid takes no filter and no other width — each refused (exit 2) before anything runs", async () => {
+    const cases: [string[], RegExp, boolean][] = [
+      [["--driver", "browser", "--scope", "grid"], /--scope picks a --layer's scope; it takes --layer/, true],
+      [["--scope", "grid"], /--scope picks a --layer's scope; it takes --layer/, true],
+      [["--driver", "browser", "--set", "width-sweep", "--scope", "grid"], /--scope picks a --layer's scope; it takes --layer/, true],
+      [["--driver", "browser", "--canary", "M1", "--scope", "slice"], /--scope picks a --layer's scope; it takes --layer/, true],
+      [["--driver", "browser", "--layer", "L1", "--scope", "banana"], /--scope must be slice or grid, got banana/, true],
+      [["--driver", "browser", "--layer", "L2", "--scope", "Grid"], /--scope must be slice or grid, got Grid/, true],
+      [["--driver", "browser", "--layer", "L1", "--scope", ""], /--scope must be slice or grid, got \n/, true],
+      [["--driver", "browser", "--layer", "L1", "--scope", "grid", "--only", "league|generic"], /--layer L1 --scope grid runs the whole grid; it takes no --only/, false],
+      [["--driver", "browser", "--layer", "L1", "--scope", "grid", "--scenario", "M1"], /--layer L1 --scope grid runs the whole grid; it takes no --scenario/, false],
+      [["--driver", "browser", "--layer", "L2", "--scope", "grid", "--only", "swiss|badminton"], /--layer L2 --scope grid runs the whole grid; it takes no --only/, false],
+      [["--driver", "browser", "--layer", "L2", "--scope", "grid", "--scenario", "M1"], /--layer L2 plans the committed l2-pairs\.json runs; it takes no --scenario/, true],
+      [["--driver", "browser", "--layer", "L1", "--scope", "grid", "--width", "320"], /--layer L1 --scope grid runs at 1280 only \(ruling 39\); got --width 320/, true],
+      [["--driver", "browser", "--layer", "L2", "--scope", "grid", "--width", "390"], /--layer L2 --scope grid takes no --width \(the plan sets each case's width\); got --width 390/, true],
+      [["--layer", "L1", "--scope", "grid"], /--layer runs a browser layer; it takes --driver browser/, true],
+    ];
+    let checked = 0;
+    for (const [argv, want, usage] of cases) {
+      const io = capture();
+      const { d, opened } = gridDeps();
+      expect(await runSlice(d, [...argv, "--run-id", "sc1", "--report-dir", dirFor()]), argv.join(" ")).toBe(2);
+      expect(d.order, argv.join(" ")).toEqual([]);
+      expect(opened(), argv.join(" ")).toBe(0);
+      expect(io.err(), argv.join(" ")).toMatch(want);
+      if (usage) expect(io.err(), argv.join(" ")).toMatch(/usage: run\.ts/);
+      else expect(io.err(), argv.join(" ")).not.toMatch(/usage: run\.ts/);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("the usage line names the flag", async () => {
+    const io = capture();
+    expect(await runSlice(gridDeps().d, ["--driver", "browser", "--scope", "grid", "--run-id", "sc2", "--report-dir", dirFor()])).toBe(2);
+    expect(io.err()).toMatch(/usage: run\.ts .*\[--layer L1\|L2\] \[--scope slice\|grid\]/);
+  });
+
+  it("planOf: a grid run says so; a slice run, with or without --scope slice, keeps today's string (every frozen lock entry still matches)", () => {
+    const base = { set: undefined, canary: undefined, only: undefined, scenario: undefined };
+    expect(planOf({ ...base, layer: "L1", scope: "grid" })).toBe("--layer L1 --scope grid");
+    expect(planOf({ ...base, layer: "L2", scope: "grid" })).toBe("--layer L2 --scope grid");
+    // The second call: the default is unchanged.
+    expect(planOf({ ...base, layer: "L1" })).toBe("--layer L1");
+    expect(planOf({ ...base, layer: "L1", scope: "slice" })).toBe("--layer L1");
+    expect(planOf({ ...base, layer: "L2", scope: "slice" })).toBe("--layer L2");
+    expect(planOf({ ...base, layer: "L1", only: "swiss|generic" })).toBe("--layer L1 --only swiss|generic");
+    expect(planOf({ ...base, layer: undefined })).toBe("slice");
+    expect(planOf({ ...base, layer: undefined, set: "width-sweep" })).toBe("--set width-sweep");
+  });
+
+  it("the scope is written through the real run: results.json says WHICH plan --layer meant (L1/L2 × slice/grid), the run's plan keeps its string, and a run with no --layer records none", async () => {
+    const rows: { argv: string[]; plan: string; scope: string | undefined; layer: "L1" | "L2" | "L3"; cases: number }[] = [
+      { argv: ["--driver", "browser", "--layer", "L1"], plan: "--layer L1", scope: "L1 (slice)", layer: "L1", cases: SLICE_ROWS.length * SLICE_SPORTS.length },
+      { argv: ["--driver", "browser", "--layer", "L1", "--scope", "slice"], plan: "--layer L1", scope: "L1 (slice)", layer: "L1", cases: SLICE_ROWS.length * SLICE_SPORTS.length },
+      { argv: ["--driver", "browser", "--layer", "L2"], plan: "--layer L2", scope: "L2 (slice)", layer: "L2", cases: SLICE_RUNS.length },
+      { argv: ["--driver", "browser", "--layer", "L2", "--scope", "slice"], plan: "--layer L2", scope: "L2 (slice)", layer: "L2", cases: SLICE_RUNS.length },
+      { argv: ["--driver", "browser", "--layer", "L1", "--scope", "grid"], plan: "--layer L1 --scope grid", scope: "L1 (grid)", layer: "L1", cases: CELLS },
+      { argv: ["--driver", "browser", "--layer", "L2", "--scope", "grid"], plan: "--layer L2 --scope grid", scope: "L2 (grid)", layer: "L2", cases: RAW_RUNS.length },
+      // No --layer: the plan string alone names the plan, and no scope is written.
+      { argv: ["--only", "league|generic", "--scenario", "LIFECYCLE"], plan: "slice --only league|generic --scenario LIFECYCLE", scope: undefined, layer: "L3", cases: 1 },
+      { argv: ["--driver", "browser", "--set", WIDTH_SWEEP_SET], plan: `--set ${WIDTH_SWEEP_SET}`, scope: undefined, layer: "L2", cases: L2_WIDTHS.length },
+    ];
+    let checked = 0;
+    for (const row of rows) {
+      capture();
+      const dir = dirFor();
+      const { d } = gridDeps();
+      expect(await runSlice(d, [...row.argv, "--run-id", "sc3", "--report-dir", dir]), row.argv.join(" ")).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, "sc3", "results.json"), "utf8")) as Record<string, unknown> & { cases: unknown[] };
+      // What the file holds, key by key, then what the schema reads back from it.
+      expect(raw.plan, row.argv.join(" ")).toBe(row.plan);
+      expect("scope" in raw, row.argv.join(" ")).toBe(row.scope !== undefined);
+      expect(raw.scope, row.argv.join(" ")).toBe(row.scope);
+      const parsed = runIn(dir, "sc3");
+      expect(parsed.scope, row.argv.join(" ")).toBe(row.scope);
+      expect(parsed.plan, row.argv.join(" ")).toBe(row.plan);
+      expect(parsed.layer, row.argv.join(" ")).toBe(row.layer);
+      expect(parsed.cases, row.argv.join(" ")).toHaveLength(row.cases);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("--layer L1 --scope grid, through the real planner and runner: 231 cells at 1280, the 53 with no organiser path recorded 🚫 and never driven, every sport's variant order read once", async () => {
+    capture();
+    const dir = dirFor();
+    const { d, reads, opened } = gridDeps();
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--scope", "grid", "--run-id", "g1", "--report-dir", dir])).toBe(0);
+    const r = runIn(dir, "g1");
+    expect(r.cases).toHaveLength(CELLS);
+    expect(CELLS).toBe(231);
+    expect(r.cases.every((c) => c.layer === "L1" && c.width === 1280 && c.caseId.endsWith("@1280"))).toBe(true);
+    expect(new Set(r.cases.map((c) => c.caseId)).size).toBe(CELLS);
+    expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(ROW_KEYS.flatMap((row) => SPORT_KEYS.map((s) => `${row}|${s}`)));
+    const planned = r.cases.filter((c) => c.planned === true);
+    expect(planned).toHaveLength(53);
+    expect(planned.every((c) => c.state === "no_path" && (API_ONLY_ROWS as readonly string[]).includes(c.row))).toBe(true);
+    // Every other case was handed to a driver: it is not marked planned, and its state is the scenario's.
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(CELLS - 53);
+    expect(r.cases.filter((c) => c.planned === undefined).every((c) => c.state !== "no_path" && c.state !== "not_run")).toBe(true);
+    expect([...reads].sort()).toEqual([...SPORT_KEYS].sort());
+    expect(reads).toHaveLength(SPORT_KEYS.length);
+    expect(opened()).toBe(1);
+  }, 120_000);
+
+  it("--layer L2 --scope grid, through the real planner and runner: 1,731 runs at their own widths — 62 driven, 164 🚫, 1,505 ░ — each recording the pair-run it is", async () => {
+    capture();
+    const dir = dirFor();
+    const { d, reads } = gridDeps();
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L2", "--scope", "grid", "--run-id", "g2", "--report-dir", dir])).toBe(0);
+    const r = runIn(dir, "g2");
+    expect(r.cases).toHaveLength(RAW_RUNS.length);
+    expect(r.cases.every((c) => c.layer === "L2" && c.l2 !== undefined)).toBe(true);
+    expect(new Set(r.cases.map((c) => c.l2!.n)).size).toBe(RAW_RUNS.length);
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(62);
+    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(164);
+    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1505);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(164 + 1505);
+    // Only the driven runs' sports were asked for: a planned run posts nothing.
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.length).toBeLessThan(SPORT_KEYS.length + 1);
+  }, 120_000);
 });
 
 // W1-driving Task 11 (ruling 46, D10): --workers N. Review Focus 4 — each
@@ -2691,12 +2925,18 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
     expect(io.err()).toContain(`1..${MAX_WORKERS}`);
     expect(io.err()).toMatch(/usage: run\.ts .*--workers N/);
   });
-  it("D10: --driver browser --workers 2 is a usage error naming the wave that owes browser workers; --workers 1 in a browser still runs", async () => {
+  // W1d D11 (item 17): browser workers were "owed by W1d"; W1d declined them (parallelism is the shard matrix), so the
+  // refusal no longer routes anywhere: it cites the DECISION ("(W1d D11)", the brief's literal). The Q-A guard reads
+  // every literal for a wave token and exempts exactly that parenthesised citation (scenario-catalogue.test.ts pins
+  // the exemption's edges); "no route names W1d" is pinned below.
+  const BROWSER_WORKERS_REFUSAL = "one browser case at a time per shard; parallelism is the shard matrix (W1d D11)";
+  it("D11: --driver browser --workers 2 is refused with a message that names what was given and the shard matrix, and routes to no wave; --workers 1 in a browser still runs", async () => {
     const io = capture();
     const d = deps({ openBrowserRun: async () => fakeBrowserRun().run });
     expect(await runSlice(d, ["--driver", "browser", "--width", "1280", "--workers", "2", "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toMatch(/--workers 2 is HTTP-only in this wave .*W1d/);
+    expect(io.err()).toContain(`--workers 2 is refused with --driver browser: ${BROWSER_WORKERS_REFUSAL}`);
+    expect(io.err(), "no wave owes browser workers any more").not.toMatch(/owed by|HTTP-only/);
     expect(io.err()).toMatch(/usage: run\.ts/);
     vi.restoreAllMocks();
     capture();
@@ -2704,12 +2944,29 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
     expect(await runSlice(one, ["--driver", "browser", "--width", "1280", "--workers", "1", "--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "wb1", "--report-dir", dirFor()])).toBe(0);
     expect(one.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
   });
-  it("D10 holds for a layered plan too: --layer L1 --workers 2 is refused before anything runs", async () => {
-    const io = capture();
-    const d = deps();
-    expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--workers", "2", "--report-dir", dirFor()])).toBe(2);
-    expect(d.order).toEqual([]);
-    expect(io.err()).toMatch(/W1d/);
+  it("D11 holds for a layered plan too, and for every worker count above one: --layer L1 --workers N is refused before anything runs, naming N", async () => {
+    let checked = 0;
+    for (const n of [2, 3, MAX_WORKERS]) {
+      const io = capture();
+      const d = deps();
+      expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--workers", String(n), "--report-dir", dirFor()]), `--workers ${n}`).toBe(2);
+      expect(d.order).toEqual([]);
+      expect(io.err()).toContain(`--workers ${n} is refused with --driver browser: ${BROWSER_WORKERS_REFUSAL}`);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  it("D11: no shipped or test source routes to W1d (the closed wave a route would name), read as text", () => {
+    // The needle is assembled here so this file never contains it: a grep of tools/matrix finds nothing.
+    const needle = `${"routeTo"}("${"W1d"}"`;
+    const root = resolve(REPO, "tools/matrix");
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? (e.name === "node_modules" ? [] : walk(join(dir, e.name))) : e.name.endsWith(".ts") ? [join(dir, e.name)] : []));
+    const files = walk(root);
+    expect(files.length, "files read").toBeGreaterThan(100);
+    expect(files.filter((f) => readFileSync(f, "utf8").includes(needle)).map((f) => f.slice(root.length + 1))).toEqual([]);
+    // The positive pair: the reader sees a route to a wave in the shape it searches for.
+    expect(readFileSync(join(root, "lib/api-only-ui.ts"), "utf8")).toContain(`${"routeTo"}("${"W4"}"`);
   });
 });
 
@@ -2817,6 +3074,7 @@ async function provisionLoopback(
     denyFeature: async () => {},
     planGrants: async () => [],
     planLimit: async () => null,
+    runIdTaken: async () => 0,
   };
   const p = {
     getOrgSubscriptionId: async () => "sub",
@@ -2832,3 +3090,195 @@ async function provisionLoopback(
   };
   return { base: `http://127.0.0.1:${port}`, f, answered, hung, switched, hungArrived, close };
 }
+
+// W1d Task 7 (R27, D13): `--set pr-sample --rows <rows>` through the REAL runner. The expected ids are built here
+// from the slice constants, the sport registry and the committed w1-driving set — never read back from
+// planPrSample. The fake DB answers every sport's variant order with the catalogue's own (offlineVariantOrder),
+// so the run's variantFor is the offline default the committed baseline's ids carry.
+describe("runSlice — --set pr-sample and --rows (W1d T7)", () => {
+  const OTHER: readonly string[] = SPORT_KEYS.filter((s) => !(SLICE_SPORTS as readonly string[]).includes(s));
+  const fixedIds = (): string[] => [
+    ...SLICE_ROWS.flatMap((row) => SLICE_SPORTS.flatMap((sport) => SCENARIO_KEYS.map((sc) => `${row}|${sport}|${offlineBuilderDefault(sport)}|${sc}`))),
+    ...OTHER.map((s) => `league|${s}|${offlineBuilderDefault(s)}|LIFECYCLE`),
+  ];
+  const w1Ids = (rows: readonly string[]): string[] => planW1Driving(offlineBuilderDefault, {}).filter((c) => rows.includes(c.row)).map((c) => c.caseId);
+  const withOrder = (d: Deps, reads: string[] = []): Deps => {
+    const base = d.openDb.bind(d);
+    d.openDb = async () => ({ ...(await base()), variantKeysInBuilderOrder: async (s: string) => { reads.push(s); return [...offlineVariantOrder(s)]; } });
+    return d;
+  };
+
+  it("--set pr-sample --rows none runs the fixed sample (33): the slice's 24, then league LIFECYCLE on the nine other sports, reading all eleven sports' variant order", async () => {
+    capture();
+    const dir = dirFor();
+    const reads: string[] = [];
+    expect(await runSlice(withOrder(deps(), reads), ["--set", PR_SAMPLE_SET, "--rows", "none", "--run-id", "ps1", "--report-dir", dir])).toBe(0);
+    const run = runIn(dir, "ps1");
+    expect(run.cases.map((c) => c.caseId)).toEqual(fixedIds());
+    expect(run.cases).toHaveLength(33);
+    expect(run.plan).toBe("--set pr-sample --rows none");
+    expect(run.layer).toBe("L3");
+    expect(new Set(reads)).toEqual(new Set(SPORT_KEYS));
+  });
+
+  it("a declared row adds that row's w1-driving cases ahead of the fixed sample; the plan records the rows SORTED, however they were typed", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(withOrder(deps()), ["--set", PR_SAMPLE_SET, "--rows", "swiss,league", "--run-id", "ps2", "--report-dir", dir])).toBe(0);
+    const run = runIn(dir, "ps2");
+    const want = [...new Set([...w1Ids(["league", "swiss"]), ...fixedIds()])];
+    expect(run.cases.map((c) => c.caseId)).toEqual(want);
+    expect(want.length).toBeGreaterThan(33);
+    expect(run.plan).toBe("--set pr-sample --rows league,swiss");
+  });
+
+  it("the run's own output, folded through the judge's plan check (class 1): its recorded plan names exactly the cases it ran", async () => {
+    capture();
+    const dir = dirFor();
+    let checked = 0;
+    for (const rows of ["none", "all", "knockout"]) {
+      const id = `ps3-${rows}`;
+      expect(await runSlice(withOrder(deps()), ["--set", PR_SAMPLE_SET, "--rows", rows, "--run-id", id, "--report-dir", dir])).toBe(0);
+      const run = runIn(dir, id);
+      expect(matchPlanIds(run).compared, rows).toBe(run.cases.length);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("--shard stripes the sample like any plain plan (the L3 smoke shards it): the stripe's items, the whole plan's size, one plan string", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(withOrder(deps()), ["--set", PR_SAMPLE_SET, "--rows", "none", "--shard", "2/3", "--run-id", "ps4", "--report-dir", dir])).toBe(0);
+    const run = runIn(dir, "ps4");
+    expect(run.cases.map((c) => c.caseId)).toEqual(fixedIds().filter((_, i) => i % 3 === 1));
+    expect(run.shard).toEqual({ index: 2, of: 3, planSize: 33 });
+    expect(run.plan).toBe("--set pr-sample --rows none");
+  });
+
+  it.each<[string, string[], RegExp]>([
+    ["no --rows", ["--set", PR_SAMPLE_SET], /--set pr-sample needs --rows/],
+    ["--rows beside no --set", ["--rows", "none"], /--rows is --set pr-sample's declaration; it takes --set pr-sample/],
+    ["--rows beside another set", ["--set", W1_DRIVING_SET, "--rows", "swiss"], /--rows is --set pr-sample's declaration/],
+    ["--rows beside a probe set", ["--set", PROBE_SET, "--rows", "all"], /--rows is --set pr-sample's declaration/],
+    ["--rows beside --layer", ["--driver", "browser", "--layer", "L1", "--rows", "none"], /--rows is --set pr-sample's declaration/],
+    ["--rows beside --canary", ["--canary", "M1", "--rows", "none"], /--rows is --set pr-sample's declaration/],
+    ["an unknown row", ["--set", PR_SAMPLE_SET, "--rows", "leage"], /UnknownRow: .*'leage'.*league/s],
+    ["an empty --rows", ["--set", PR_SAMPLE_SET, "--rows", ""], /UnknownRow/],
+    ["a trailing comma", ["--set", PR_SAMPLE_SET, "--rows", "league,"], /UnknownRow/],
+    ["all beside a row", ["--set", PR_SAMPLE_SET, "--rows", "all,league"], /UnknownRow/],
+    ["--only beside the set", ["--set", PR_SAMPLE_SET, "--rows", "none", "--only", "league|generic"], /--set runs a named set; it takes no --only, --scenario or --canary/],
+    ["--scenario beside the set", ["--set", PR_SAMPLE_SET, "--rows", "none", "--scenario", "M1"], /--set runs a named set; it takes no --only, --scenario or --canary/],
+    ["--canary beside the set", ["--set", PR_SAMPLE_SET, "--rows", "none", "--canary", "M1"], /--set runs a named set; it takes no --only, --scenario or --canary/],
+  ])("%s is a usage refusal: exit 2, usage on stderr, before the DB", async (_what, argv, why) => {
+    const io = capture();
+    const d = deps();
+    expect(await runSlice(d, [...argv, "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toMatch(why);
+    expect(io.err()).toMatch(/usage: run\.ts/);
+  });
+
+  it("the usage line names --rows, and says which set takes it", async () => {
+    const io = capture();
+    expect(await runSlice(deps(), ["--bogus"])).toBe(2);
+    expect(io.err()).toMatch(/\[--rows ROWS\]/);
+    expect(io.err()).toContain(`--set ${PR_SAMPLE_SET} takes --rows`);
+  });
+
+  it("the SETS entry itself refuses by name when called with no rows (the seam under parseCli: a plan nobody declared rows for is no sample)", () => {
+    expect(Object.keys(SETS)).toContain(PR_SAMPLE_SET);
+    expect(() => (SETS[PR_SAMPLE_SET] as PlanCases)({})).toThrow(PrSampleNeedsRows);
+    expect(() => (SETS[PR_SAMPLE_SET] as PlanCases)({ set: PR_SAMPLE_SET })).toThrow(PrSampleNeedsRows);
+    expect((SETS[PR_SAMPLE_SET] as PlanCases)({ rows: [] }).plan(offlineBuilderDefault)).toHaveLength(33);
+  });
+
+  it("planOf records the declaration: rows sorted, none and all spelled out, and a pr-sample plan with no rows is refused", () => {
+    const base = { canary: undefined, layer: undefined, only: undefined, scenario: undefined, scope: undefined };
+    expect(planOf({ ...base, set: PR_SAMPLE_SET, rows: [] })).toBe("--set pr-sample --rows none");
+    expect(planOf({ ...base, set: PR_SAMPLE_SET, rows: "all" })).toBe("--set pr-sample --rows all");
+    expect(planOf({ ...base, set: PR_SAMPLE_SET, rows: ["swiss", "league"] })).toBe("--set pr-sample --rows league,swiss");
+    expect(() => planOf({ ...base, set: PR_SAMPLE_SET })).toThrow(PrSampleNeedsRows);
+    // Every other plan keeps the string it always had: rows are no part of it.
+    expect(planOf({ ...base, set: W1_DRIVING_SET })).toBe("--set w1-driving");
+    expect(planOf({ ...base, set: W1_DRIVING_SET, rows: ["swiss"] })).toBe("--set w1-driving");
+    expect(planOf({ ...base, set: undefined })).toBe("slice");
+  });
+});
+
+// W1d Task 13, item 20: a plain browser plan (the slice's fall-through to the w1-driving cells, or any set's specs)
+// reaches the two template cells through their gallery cards, as the grid's L1 case does. It used to throw
+// DriverMisuse naming the template on every script of the cell. Expected values: the catalog JSON read here as
+// text (its sport and variant), and the unrouted plan of the same filter (planW1Driving), which is the baseline.
+describe("runSlice — a plain browser plan reaches the template cells (W1d Task 13, item 20)", () => {
+  const catalog = (key: string) => (JSON.parse(readFileSync(join(REPO, "apps/web/src/server/templates/catalog", `${key}.json`), "utf8")) as { divisions: { sportKey: string; variantKey: string }[] }).divisions[0]!;
+  const onDefaults = (): Deps => {
+    const base = deps();
+    const prior = base.openDb.bind(base);
+    return Object.assign(base, { openDb: async () => ({ ...(await prior()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] }) });
+  };
+  const baseline = (only: string) => planW1Driving((s) => offlineBuilderDefault(s), { only });
+  const idsOf = (dir: string, runId: string) => resultsIn(dir, runId).cases.map((c) => c.caseId);
+
+  it("--driver browser --only group_only|badminton plans every script through the box-league card: its own variant, template set, each case on its own org", async () => {
+    const io = capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = onDefaults();
+    d.openBrowserRun = async () => fb.run;
+    const code = await runSlice(d, ["--only", "group_only|badminton", "--driver", "browser", "--width", "1280", "--run-id", "t20a", "--report-dir", dir]);
+    expect(code, `a refusal or abort would plan nothing: ${io.err()}`).toBeLessThan(EXIT.REFUSED);
+    const plain = baseline("group_only|badminton");
+    expect(plain.length, "the baseline plans the cell").toBeGreaterThan(0);
+    const card = catalog("box-league");
+    expect([card.sportKey, card.variantKey]).toEqual(["badminton", "short"]);
+    // The case has teeth only if the template's variant is not what the builder would have picked.
+    expect(offlineBuilderDefault("badminton")).not.toBe(card.variantKey);
+    expect(fb.opts.map((o) => o.spec)).toEqual(plain.map((s) => ({ ...s, caseId: `group_only|badminton|${card.variantKey}|${s.scenario}`, variant: card.variantKey, template: "box-league" })));
+    expect(idsOf(dir, "t20a")).toEqual(plain.map((s) => `group_only|badminton|${card.variantKey}|${s.scenario}@1280`));
+    // Each case is provisioned its own org, so the public-dashboard quota a template create spends is that org's and
+    // never accumulates across cases (the gallery sends no visibility: page-objects.test.ts pins that text).
+    expect(d.orgs).toHaveLength(plain.length);
+    expect(new Set(d.orgs.map((o) => o.slug)).size).toBe(plain.length);
+    expect(new Set(fb.opts.map((o) => o.orgId)).size).toBe(plain.length);
+  });
+
+  it("--only group_group_ko|cricket: the scripts go through the t20-super8 card, and the committed cricket test cases (they carry overrides) stay unrouted", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = onDefaults();
+    d.openBrowserRun = async () => fb.run;
+    expect(await runSlice(d, ["--only", "group_group_ko|cricket", "--driver", "browser", "--width", "1280", "--run-id", "t20b", "--report-dir", dir])).toBeLessThan(EXIT.REFUSED);
+    const plain = baseline("group_group_ko|cricket");
+    const card = catalog("t20-super8");
+    expect([card.sportKey, card.variantKey]).toEqual(["cricket", "t20"]);
+    const withOverrides = plain.filter((s) => s.overrides !== undefined);
+    expect(withOverrides.length, "the committed variants hold a cricket test case on this cell").toBeGreaterThan(0);
+    expect(plain.length - withOverrides.length, "and the scripts").toBeGreaterThan(0);
+    expect(fb.opts.map((o) => o.spec)).toEqual(plain.map((s) => (s.overrides !== undefined ? s : { ...s, caseId: `group_group_ko|cricket|${card.variantKey}|${s.scenario}`, variant: card.variantKey, template: "t20-super8" })));
+    expect(fb.opts.filter((o) => o.spec.template !== undefined)).toHaveLength(plain.length - withOverrides.length);
+  });
+
+  it("a builder cell and a cell no template reaches are planned exactly as before, in a browser; and over HTTP the template cell keeps its builder variant (the committed w1-driving plan is frozen)", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = onDefaults();
+    d.openBrowserRun = async () => fb.run;
+    let checked = 0;
+    for (const only of ["americano|badminton", "knockout_third_place|badminton", "group_only|generic"]) {
+      fb.opts.length = 0;
+      expect(await runSlice(d, ["--only", only, "--driver", "browser", "--width", "1280", "--run-id", `t20c${checked}`, "--report-dir", dir]), only).toBeLessThan(EXIT.REFUSED);
+      expect(fb.opts.map((o) => o.spec), only).toEqual(baseline(only));
+      expect(fb.opts.length, only).toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // Over HTTP the same filter plans no template: ids carry the builder's variant.
+    const http = onDefaults();
+    expect(await runSlice(http, ["--only", "group_only|badminton", "--run-id", "t20h", "--report-dir", dir])).toBeLessThan(EXIT.REFUSED);
+    expect(idsOf(dir, "t20h")).toEqual(baseline("group_only|badminton").map((s) => s.caseId));
+    expect(idsOf(dir, "t20h").every((id) => !id.includes("|short|"))).toBe(true);
+  });
+});

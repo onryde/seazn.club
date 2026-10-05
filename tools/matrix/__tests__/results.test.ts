@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { FILLER } from "../lib/driver/mixed.ts";
 import { L2_WIDTHS } from "../lib/pairs.ts";
 import { BaseNotUrl, LOCAL_BASE, baseScrubber, findSecrets, redact } from "../lib/redact.ts";
-import { BROWSER_WIDTHS, CASE_STATES, GLYPH, SecretInResults, decideState, parseResults, writeResults, type CaseResult, type CaseResultV2, type CheckResult, type RunResults, type RunResultsV2 } from "../lib/results.ts";
+import { BROWSER_WIDTHS, CASE_STATES, GLYPH, MAX_SHARDS, SecretInResults, decideState, parseResults, writeResults, type CaseResult, type CaseResultV2, type CheckResult, type RunResults, type RunResultsV2 } from "../lib/results.ts";
 import { baseLiteralsIn, loopbackLiteralsIn } from "./loopback-literals.ts";
 import { MAX_WORKERS } from "../lib/workers.ts";
 
@@ -502,6 +503,175 @@ describe("results v3 — an aborted run says why (W1-driving fix round 2, T12-R3
   });
 });
 
+// W1d Task 2 (items 3, 4, 14, 21, the run's scope, and the shard header Task 4
+// writes): every addition is OPTIONAL on the strict v3 schemas, so every
+// committed run still parses (committed-matrix.test.ts is the regression for
+// that), and each one is refused when malformed. v2 evidence knows none.
+describe("results v3 — what a result records beyond its checks (W1d Task 2)", () => {
+  const caseWith = (over: Record<string, unknown>) => ({ ...V3_RUN, cases: [{ ...V3_CASE, ...over }] });
+  const runWith = (over: Record<string, unknown>) => ({ ...V3_RUN, ...over });
+  /** Refused ON the field: an issue whose path is the field itself or something inside it (`cases.0.l2.n`). */
+  const refusedOn = (json: unknown, path: string): boolean => issuesOf(json).some((i) => i.startsWith(`${path}: `) || i.startsWith(`${path}.`));
+  /** A value written through writeResults and read back from the file is the value put in. */
+  function roundTrips(run: RunResults): void {
+    expect(parseResults(run)).toEqual(run);
+    const { path, written } = writeResults(mkdtempSync(join(tmpdir(), "fm-")), run, RUN_BASE);
+    expect(written).toEqual(run);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(run);
+  }
+
+  it("empty case first: a v3 run with none of the new fields parses, and the parse invents none of them", () => {
+    const r = parseResults(V3_RUN);
+    expect(r.schemaVersion).toBe(3);
+    for (const k of ["shard", "shards", "scope"]) expect(k in r, `run.${k}`).toBe(false);
+    for (const k of ["planned", "l2", "fillers"]) expect(k in r.cases[0]!, `case.${k}`).toBe(false);
+    // The shared fixture must not already carry what this block tests, or every "absent" above is vacuous.
+    for (const k of ["planned", "l2", "fillers"]) expect(k in V3_CASE, `V3_CASE.${k}`).toBe(false);
+  });
+
+  describe("planned (item 3)", () => {
+    it("is only ever the literal true: true parses and round-trips; false, 'true', 1 and null are refused on the field", () => {
+      roundTrips({ ...V3_RUN, cases: [{ ...V3_CASE, planned: true }] });
+      let checked = 0;
+      for (const bad of [false, "true", 1, null]) {
+        expect(refusedOn(caseWith({ planned: bad }), "cases.0.planned"), String(bad)).toBe(true);
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+  });
+
+  describe("l2 (item 4)", () => {
+    const GOOD = { n: 408, covers: ["row", "sport"], l3Gap: null };
+    it("n, the covered atoms and the L3 gap round-trip, a gap reason included", () => {
+      let checked = 0;
+      for (const l2 of [GOOD, { n: 1, covers: ["row"], l3Gap: null }, { n: 514, covers: ["sport"], l3Gap: "cricket tie stream has no harness script" }]) {
+        roundTrips({ ...V3_RUN, cases: [{ ...V3_CASE, l2 }] });
+        expect(parseResults(caseWith({ l2 }) as unknown as RunResults).cases[0]).toMatchObject({ l2 });
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+    it("n ≥ 1 (an integer), at least one non-empty covered atom, a null-or-non-empty gap and no extra key; every part is required", () => {
+      const bad: Record<string, unknown>[] = [
+        { ...GOOD, n: 0 }, { ...GOOD, n: 1.5 }, { ...GOOD, n: "3" },
+        { ...GOOD, covers: [] }, { ...GOOD, covers: [""] }, { ...GOOD, covers: "row" },
+        { ...GOOD, l3Gap: "" }, { ...GOOD, l3Gap: 0 },
+        { ...GOOD, why: "extra key" },
+        (({ n: _n, ...rest }) => rest)(GOOD), (({ covers: _c, ...rest }) => rest)(GOOD), (({ l3Gap: _g, ...rest }) => rest)(GOOD),
+      ];
+      let checked = 0;
+      for (const l2 of bad) {
+        expect(refusedOn(caseWith({ l2 }), "cases.0.l2"), JSON.stringify(l2)).toBe(true);
+        checked++;
+      }
+      expect(refusedOn(caseWith({ l2: null }), "cases.0.l2")).toBe(true);
+      expect(checked).toBe(bad.length);
+    });
+  });
+
+  describe("fillers (item 21)", () => {
+    it("every declared FILLER name parses on its own, counted once — a run that ran ONE filler is not refused for the others (partialRecord, review I2)", () => {
+      let checked = 0;
+      for (const name of FILLER) {
+        roundTrips({ ...V3_RUN, cases: [{ ...V3_CASE, fillers: { [name]: 1 } }] });
+        checked++;
+      }
+      expect(checked).toBe(FILLER.length);
+      expect(FILLER.length).toBeGreaterThan(1);
+      roundTrips({ ...V3_RUN, cases: [{ ...V3_CASE, fillers: Object.fromEntries(FILLER.map((f, i) => [f, i + 1])) }] });
+    });
+    it("a name outside FILLER (an organiser action type included) and a count below one, or not an integer, are refused on the field", () => {
+      const bad: Record<string, unknown>[] = [
+        { start: 1 }, { score: 1 }, { addEntrants: 1 }, { "": 1 },
+        { setMembers: 0 }, { setMembers: -1 }, { setMembers: 1.5 }, { setMembers: "2" },
+        { setMembers: 2, start: 1 },
+      ];
+      let checked = 0;
+      for (const fillers of bad) {
+        expect(refusedOn(caseWith({ fillers }), "cases.0.fillers"), JSON.stringify(fillers)).toBe(true);
+        checked++;
+      }
+      expect(checked).toBe(bad.length);
+    });
+    it("results.ts names the fillers the driver's ledger declares — one authority, never a second list", async () => {
+      const fillers = await import("../lib/fillers.ts");
+      expect(fillers.FILLER).toBe(FILLER);
+    });
+  });
+
+  describe("shard and shards (the header Task 4's stripe and merge write)", () => {
+    it("MAX_SHARDS is 64, and a shard header or a merged header at its bounds parses and round-trips", () => {
+      expect(MAX_SHARDS).toBe(64);
+      let checked = 0;
+      for (const over of [
+        { shard: { index: 1, of: 2, planSize: 1 } }, { shard: { index: 2, of: 2, planSize: 10 } }, { shard: { index: MAX_SHARDS, of: MAX_SHARDS, planSize: 231 } },
+        { shards: 2 }, { shards: MAX_SHARDS },
+      ]) {
+        roundTrips(runWith(over) as unknown as RunResults);
+        checked++;
+      }
+      expect(checked).toBe(5);
+    });
+    it("a shard is refused when index > of, index < 1, of outside 2..MAX_SHARDS, planSize < 1, a non-integer, or an extra key", () => {
+      const bad: Record<string, unknown>[] = [
+        { index: 3, of: 2, planSize: 10 }, { index: 0, of: 2, planSize: 10 }, { index: 1, of: 1, planSize: 10 }, { index: 1, of: MAX_SHARDS + 1, planSize: 10 },
+        { index: 1, of: 2, planSize: 0 }, { index: 1.5, of: 2, planSize: 10 }, { index: 1, of: 2, planSize: "10" },
+        { index: 1, of: 2 }, { index: 1, of: 2, planSize: 10, why: "extra key" },
+      ];
+      let checked = 0;
+      for (const shard of bad) {
+        expect(issuesOf(runWith({ shard })).length, JSON.stringify(shard)).toBeGreaterThan(0);
+        checked++;
+      }
+      expect(checked).toBe(bad.length);
+    });
+    it("a merged header (shards) is 2..MAX_SHARDS", () => {
+      let checked = 0;
+      for (const shards of [0, 1, MAX_SHARDS + 1, 2.5, "3"]) {
+        expect(refusedOn(runWith({ shards }), "shards"), String(shards)).toBe(true);
+        checked++;
+      }
+      expect(checked).toBe(5);
+    });
+    it("a shard header and a merged header are exclusive, whichever is written first — a run is a shard or a merge, never both", () => {
+      const both = { shard: { index: 2, of: 2, planSize: 10 }, shards: 2 };
+      expect(issuesOf(runWith(both)).join("\n")).toContain("a run is a shard or a merge, never both");
+      // Each alone is fine: the refusal is the pair, not either field.
+      expect(() => parseResults(runWith({ shard: both.shard }))).not.toThrow();
+      expect(() => parseResults(runWith({ shards: 2 }))).not.toThrow();
+    });
+  });
+
+  describe("scope (item 2's schema field, PF-8)", () => {
+    it("a non-empty scope parses and round-trips; an empty or non-string one is refused on the field", () => {
+      let checked = 0;
+      for (const scope of ["L1 (slice)", "L1 (grid)", "L2 (grid)"]) {
+        roundTrips(runWith({ scope }) as unknown as RunResults);
+        checked++;
+      }
+      expect(checked).toBe(3);
+      for (const bad of ["", 3, null]) expect(refusedOn(runWith({ scope: bad }), "scope"), String(bad)).toBe(true);
+    });
+  });
+
+  it("v2 evidence knows none of them: the strict v2 schema refuses each", () => {
+    const v2: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+    expect(() => parseResults(v2)).not.toThrow();
+    let checked = 0;
+    for (const over of [{ shard: { index: 1, of: 2, planSize: 4 } }, { shards: 2 }, { scope: "L1 (slice)" }]) {
+      expect(() => parseResults({ ...v2, ...over }), JSON.stringify(over)).toThrow();
+      checked++;
+    }
+    const v2Case = { caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, state: "works", reason: "", checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [] };
+    for (const over of [{ planned: true }, { l2: { n: 1, covers: ["row"], l3Gap: null } }, { fillers: { setMembers: 1 } }]) {
+      expect(() => parseResults({ ...v2, cases: [{ ...v2Case, ...over }] }), JSON.stringify(over)).toThrow();
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+});
+
 describe("redaction (R14a)", () => {
   it("scrubs tokens, JWTs, device-link secrets, DB URLs, stripe keys", () => {
     const dirty = 'token=abc123def cookie: sb-access=xyz eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJl dl_ABCDEFGH12345 postgres://u:p@h/db sk_test_ABCDEFGHIJ';
@@ -532,6 +702,14 @@ describe("redaction (R14a)", () => {
 // written as-is (negatives). A negative needs its positive pair.
 const TOKEN43 = "Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFu_Ab-9xYzQwE"; // synthetic; 43 base64url chars, the shape of randomBytes(32)
 const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1LTEiLCJhdWQiOiJzZWF6biJ9.c2lnbmF0dXJlLXNpZ25hdHVyZQ";
+
+// GitHub token shapes (a failed `gh` call echoes one; the workflow's GITHUB_TOKEN is a ghs_). Assembled at RUN time from
+// parts, because the repo is public and a contiguous token-shaped literal in source is what secret scanners look for.
+const GH_BODY = "Zm9vYmFyYmF6cXV4Q2hvb3NlQWJDZDEyMzQ1"; // synthetic; 36 base62 characters, the shape of a token's body
+const GH_KINDS = ["p", "o", "u", "s", "r"] as const; // classic PAT, OAuth, user-to-server, server-to-server, refresh
+const ghToken = (kind: (typeof GH_KINDS)[number], body: string = GH_BODY): string => `${"g"}${"h"}${kind}_${body}`;
+const FINE_BODY = `${"11ABCDEFG0Zm9vYmFyYmF6cX"}_${"Q2hvb3NlQWJDZDEyMzQ1NjdhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5eg"}`; // 24 + _ + 58: the fine-grained shape
+const finePat = (body: string = FINE_BODY): string => `${"github"}_${"pat"}_${body}`;
 
 /** [label, text, the secret payload that must not survive redact()] */
 const SECRETS: readonly [string, string, string][] = [
@@ -564,6 +742,15 @@ const SECRETS: readonly [string, string, string][] = [
   ["PGPASSWORD", "PGPASSWORD=hunter22 psql -h localhost", "hunter22"],
   ["JWT alone", `jwt ${JWT} expired`, JWT],
   ["stripe secret key", "sk_live_51HxYzAbCdEfGhIjKl", "51HxYzAbCdEfGhIjKl"],
+  // GitHub tokens, BARE in prose (no `token=` key in front, which another pattern would catch on its own).
+  ...GH_KINDS.map((k): [string, string, string] => [`github token gh${k}_, bare in prose`, `remote said: bad credentials for ${ghToken(k)} (HTTP 401)`, GH_BODY]),
+  // The payload is the part AFTER the inner underscore: a pattern that stops at it would leave exactly that tail behind.
+  ["github fine-grained token, bare", `cloning with ${finePat()} failed`, FINE_BODY.split("_")[1]],
+  ["github fine-grained token cut at 20 body characters", `echo: ${finePat(FINE_BODY.slice(0, 20))}`, FINE_BODY.slice(0, 20)],
+  ["github token glued to a name by an underscore (no word boundary there)", `ci used GITHUB_TOKEN_${ghToken("s")} for the call`, GH_BODY],
+  ["github token at the start of a line", `HTTP 401\n${ghToken("s")}`, GH_BODY],
+  ["github token cut at 20 body characters (a truncated message)", `echo: ${ghToken("p", GH_BODY.slice(0, 20))}`, GH_BODY.slice(0, 20)],
+  ["authorization header with GitHub's `token` scheme", `Authorization: token ${ghToken("s")}`, GH_BODY],
   // Review I1: a secret at the start of a line or after a tab. JSON escaping
   // turns the newline into `\n`, erasing the \b these patterns anchor on.
   ["JWT at the start of a line", `line1\n${JWT}`, JWT],
@@ -598,6 +785,15 @@ const EVIDENCE: readonly [string, string][] = [
   ["api path", "http://localhost:3000/api/v1/divisions/3f2b8c1e-9a4d-4e6f-8b2a-1c3d5e7f9a0b/stages → HTTP 400 VALIDATION: stage kind"],
   ["localhost with port", "SMOKE_BASE http://localhost:3123 answered 200"],
   ["notes", "stage league status after start: in_progress; config knockout: 400 FORMAT_LOCKED; loop cap 64 reached"],
+  // GitHub shapes that are not tokens: the prefixes named in prose, short identifiers, a run URL, a body one short of the floor.
+  ["github token prefixes named in prose", "the fine-grained prefix is github_pat_ and the classic ones are ghp_, ghs_ and gho_"],
+  ["short gh-looking identifiers", "ghs_report ghr_run_17 ghp_x1 github_pat_short ghost_writer"],
+  ["github actions run url", "https://github.com/onryde/seazn.club/actions/runs/37218574303"],
+  ["a ghs_ body one under the 20-character floor", `ghs_${GH_BODY.slice(0, 19)}`],
+  ["a github_pat_ body one under the 20-character floor", finePat(FINE_BODY.slice(0, 19))],
+  // Glued to a letter or digit there is no token start (an underscore, by contrast, is one: see the positive row above).
+  ["ghs_ inside a longer word", `weighs_${GH_BODY} is only a long identifier`],
+  ["github_pat_ inside a longer word", `x${finePat()} is only a long identifier`],
   ["variant names", "doubles-noad-mtb10 bwf score"],
   // Review M4: an ordinary word under a key whose real values are minted.
   ["authorization: none", "request sent with authorization: none"],
@@ -674,6 +870,8 @@ describe("findSecrets / redact — cost", () => {
       "token_".repeat(700), "x".repeat(20_000), "m-fm-w1a-a-".repeat(2_000), `sb-${"a-".repeat(2_000)}!`,
       // Review M1: an uncapped key suffix and an unanchored JWT start.
       "token.".repeat(10_000), "sb-a.".repeat(5_000), "eyJ-".repeat(10_000),
+      // GitHub shapes: a prefix repeated (every start almost matches), and one long body.
+      "ghs_".repeat(10_000), "github_pat_".repeat(5_000), `${"gh"}p_${"a".repeat(50_000)}`, `${"github"}_pat_${"_".repeat(50_000)}`,
     ];
     const t0 = performance.now();
     for (const s of inputs) { findSecrets(s); redact(s); }

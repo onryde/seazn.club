@@ -68,6 +68,43 @@ describe("fold", () => {
     expect(lineupsFor(H, A)).toEqual({ home: { entrantId: H, slots: [] }, away: { entrantId: A, slots: [] } });
   });
 
+  // W1d Task 14 (item 15e): a stream the harness kept bookkeeping for after a void. The harness's own void names its
+  // target by the id its stream gives it — the seq, as a string, as `envelopes` numbers them — where the product's
+  // is a uuid; the engine's resolveVoids (core/events.ts) drops the target and the void. A test below holds the
+  // two sides to the same answer.
+  it("a core.void in a harness stream voids the event it names: the fold sees the stream without both (generic, a 3-1 result voided)", () => {
+    const m = sportModule("generic");
+    const cfg = resolveSportCfg("generic", "score");
+    const result = { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } };
+    // Positive pair first: the result alone decides the match, so a void that did nothing would still read decided.
+    expect(foldStream(m, cfg, H, A, [START, result]).outcome).toMatchObject({ kind: "win", winner: H });
+    const voided = [START, result, { type: "core.void", payload: { event_id: "2" } }];
+    expect(foldStream(m, cfg, H, A, voided).outcome).toBeNull();
+    // …and the stream folds to exactly the state the start alone does.
+    expect(m.summary(foldStream(m, cfg, H, A, voided).state)).toEqual(m.summary(foldStream(m, cfg, H, A, [START]).state));
+    // A re-recorded result after the void is the match again (seq 4, the void sat at 3).
+    expect(foldStream(m, cfg, H, A, [...voided, result]).outcome).toMatchObject({ kind: "win", winner: H });
+  });
+
+  it("the void lift is by id, not by position: voiding the start (seq 1) leaves the later result standing alone", () => {
+    const env = envelopes("f1", [START, { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } }, { type: "core.void", payload: { event_id: "1" } }]);
+    expect(env.map((e) => [e.id, e.voids ?? null])).toEqual([["1", null], ["2", null], ["3", "1"]]);
+    // A void's envelope carries no payload the kernel would validate (the kernel validates active events only).
+    expect(env[2]!.payload).toEqual({});
+  });
+
+  it("a void the engine would refuse stays refused: an unknown or later target, a void of a void, and a void naming nothing", () => {
+    const m = sportModule("generic");
+    const cfg = resolveSportCfg("generic", "score");
+    const result = { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } };
+    const refused = (events: Parameters<typeof foldStream>[4]) => () => foldStream(m, cfg, H, A, events);
+    expect(refused([START, { type: "core.void", payload: { event_id: "9" } }])).toThrow(/targets unknown or non-prior event/);
+    expect(refused([START, { type: "core.void", payload: { event_id: "2" } }])).toThrow(/targets unknown or non-prior event/);
+    expect(refused([START, result, { type: "core.void", payload: { event_id: "2" } }, { type: "core.void", payload: { event_id: "3" } }])).toThrow(/voids are not themselves voidable/);
+    expect(refused([START, { type: "core.void", payload: {} }])).toThrow(/requires a `voids` target id/);
+    expect(refused([START, { type: "core.void", payload: { event_id: 2 } }])).toThrow(/requires a `voids` target id/);
+  });
+
   it("an empty stream folds to no outcome (empty case) and declares no points", () => {
     const m = sportModule("generic");
     const cfg = resolveSportCfg("generic", "score");

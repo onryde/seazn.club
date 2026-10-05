@@ -23,12 +23,12 @@ import {
 } from "../lib/browser/pages/ctx.ts";
 import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
-import { ForfeitNeedsBothSides, eventsPath, forfeitBudgets, forfeitSteps, postForfeit } from "../lib/browser/pages/fixture-console.ts";
+import { ForfeitNeedsBothSides, eventsPath, forfeitBudgets, forfeitSteps, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
-import { ALL_FILTER, fixtureLinkSelector, fixtureRowSelector, showAllFixtures } from "../lib/browser/pages/run-sheet.ts";
-import { GeneratedWithoutFixtureNumbers, newestCreatedFixtureNo, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
+import { ALL_FILTER, RUN_SHEET_FILTER_OPTIONS, type DefaultFilterSeen, fixtureLinkSelector, fixtureRowSelector, showAllFixtures } from "../lib/browser/pages/run-sheet.ts";
+import { GeneratedWithoutFixtureNumbers, MD_BREAKPOINT_PX, completeStageUi, completionShots, expectedFoldBranch, generateUi, judgeFoldBranch, newestCreatedFixtureNo, openFold, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
 import { DATA, NAME, TESTID, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { UnknownTemplate } from "../lib/templates.ts";
@@ -154,6 +154,47 @@ describe("the stage rail's fold", () => {
 
   it("a sheet that never attaches after the click is a TimeoutError, not a silent 'opened'", async () => {
     await expect(openFoldIfFolded(fakePage(), fakeLocator({ visible: true }), fakeLocator({ attached: false }), 1000)).rejects.toMatchObject({ name: "TimeoutError" });
+  });
+
+  // W1d Task 14 (item 15d): the fold's branch is RECORDED, with the width it was taken at. The product's md breakpoint
+  // is read from Tailwind's own theme text, never from the harness's constant, so the constant is judged and not
+  // restated; the trigger's visibility is derived from it exactly as the product's `md:hidden` does.
+  const productMdPx = (): number => {
+    const rem = /--breakpoint-md:\s*(\d+(?:\.\d+)?)rem;/.exec(src("apps/web/node_modules/tailwindcss/theme.css"))?.[1];
+    expect(rem, "tailwindcss theme.css declares --breakpoint-md in rem").toBeDefined();
+    expect(src("apps/web/src/app/globals.css"), "globals.css must not redefine md").not.toMatch(/--breakpoint-md\s*:/);
+    return Number(rem) * 16;
+  };
+
+  it("the harness's md breakpoint is Tailwind's (48rem = 768px), and the trigger the product folds behind is `md:hidden`", () => {
+    expect(MD_BREAKPOINT_PX).toBe(productMdPx());
+    expect(src(`${V2}/desk/stage-rail.tsx`)).toMatch(/focus-visible:outline-violet-400 md:hidden"/);
+  });
+
+  it("records the branch and the width: opened below the product's md, unfolded at and above it — every side of the edge", async () => {
+    const md = productMdPx();
+    let checked = 0;
+    for (const w of [320, md - 1, md, 834, 1280]) {
+      // The product's rule: the trigger shows below md and is hidden from md up.
+      const folded = w < md;
+      const clicks: string[] = [];
+      const fold = await openFold(fakePage(w), fakeLocator({ visible: folded, onClick: () => clicks.push("t") }), fakeLocator({ attached: true }), 1000);
+      expect(fold, `${w}px`).toEqual({ branch: folded ? "opened" : "unfolded", width: w });
+      expect(expectedFoldBranch(w), `${w}px`).toBe(fold.branch);
+      expect(judgeFoldBranch(fold), `${w}px`).toMatchObject({ verdict: "pass" });
+      expect(clicks, `${w}px`).toEqual(folded ? ["t"] : []);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("judgeFoldBranch: the branch the page took against the one the width demands — a mismatch fails by name, an unknown width fails too", () => {
+    expect(judgeFoldBranch({ branch: "unfolded", width: 320 })).toMatchObject({ verdict: "fail" });
+    expect(judgeFoldBranch({ branch: "opened", width: 1280 })).toMatchObject({ verdict: "fail" });
+    expect(judgeFoldBranch({ branch: "opened", width: 320 }).note).toContain("320");
+    const unknown = judgeFoldBranch({ branch: "opened", width: null });
+    expect(unknown).toMatchObject({ verdict: "fail" });
+    expect(unknown.note).toMatch(/viewport/);
   });
 
   it("the rail's sheet and trigger are the ids stage-rail.tsx composes from the stage id", () => {
@@ -1071,6 +1112,113 @@ describe("the run sheet, pictured once it shows every fixture (Task 14 carry 2)"
   });
 });
 
+// W1d Task 14 (item 15e): the console's "Void last entry". It has no testid, so it is found by its accessible name
+// (the dictionary's value, derived) and its title names the entry it offers to void; the screen proves the void once
+// no element carries that title any more.
+describe("voidLastUi: the console's Void last entry (W1d item 15e)", () => {
+  const BASE = "http://localhost:3999";
+  const TITLE = "Void generic.point (seq 2) — the entry stays in the ledger, struck through";
+  interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
+  type W = { pred: (r: Resp) => boolean; resolve: (r: Resp) => void; timer: ReturnType<typeof setTimeout> };
+
+  /** A console with the button offered (or not), whose click answers the events route as `answer` says. */
+  function consolePage(o: { offered?: boolean; answer?: { status: number; body: unknown }; titleGone?: boolean } = {}) {
+    const log: string[] = [];
+    let screen = 0;
+    const waiters: W[] = [];
+    const emit = (r: Resp) => { for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); waiters.splice(waiters.indexOf(w), 1); w.resolve(r); } };
+    const answer = o.answer ?? { status: 200, body: { ok: true, data: { seq: 3, status: "in_play", outcome: null, event_id: "ev-3" } } };
+    const loc = (d: string) => ({
+      d,
+      first: () => loc(d),
+      waitFor: async (w?: { state?: string }) => {
+        log.push(`wait ${w?.state} ${d}`);
+        const absentButton = o.offered === false && d.startsWith("role:button") && w?.state !== "detached";
+        const stillThere = o.titleGone === false && d.startsWith("title:") && w?.state === "detached";
+        if (absentButton || stillThere) { const e = new Error("locator.waitFor: Timeout exceeded"); e.name = "TimeoutError"; throw e; }
+      },
+      elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
+      getAttribute: async (a: string) => { log.push(`read ${a}`); return a === "title" ? TITLE : null; },
+      click: async () => {
+        log.push(`click ${d}`);
+        screen++;
+        emit({ request: () => ({ method: () => "POST" }), url: () => `${BASE}/api/v1/fixtures/fx-1/events`, status: () => answer.status, json: () => Promise.resolve(answer.body) });
+      },
+    });
+    const page = {
+      reload: async () => { log.push("reload"); },
+      getByRole: (role: string, f: { name: string }) => loc(`role:${role}:${f.name}`),
+      getByTitle: (text: string, f: { exact: boolean }) => loc(`title:${f.exact ? "exact:" : ""}${text}`),
+      waitForResponse: (pred: (r: Resp) => boolean, t: { timeout: number }): Promise<Resp> => new Promise((resolveW, reject) => {
+        const w: W = { pred, resolve: resolveW, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, t.timeout) };
+        waiters.push(w);
+      }),
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: unknown) => ({ jsonValue: async () => fn(arg), dispose: async () => undefined }),
+      evaluate: async () => ({ scrollWidth: 1280, clientWidth: 1280 }),
+      screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { log.push(`shot ${p.split("/").pop()!.replace(/\.png$/, "")}`); files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const evidence = new Evidence("/r", "case-1", fs);
+    const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence };
+    return { ctx, log, evidence };
+  }
+
+  it("the button is found by the dictionary's own words, and the console renders them with the title that names the entry", () => {
+    const en = JSON.parse(src("apps/web/src/dictionaries/en/ui.json")) as Record<string, string>;
+    expect(NAME.voidLast.text).toBe(en["score.voidLast"]);
+    expect(NAME.voidLast.text).toMatch(/Void last entry/);
+    const fc = src(`${V2}/fixture-console.tsx`);
+    expect(fc).toContain('msg("score.voidLast")');
+    expect(fc).toContain('title={msg("score.voidLastTitle", { type: lastVoidable.type, seq: lastVoidable.seq })}');
+    expect(fc).toContain('.find((e) => e.type !== "core.void" && !events.some((v) => v.voids_event_id === e.id));');
+    expect(en["score.voidLastTitle"]).toContain("{type}");
+    expect(en["score.voidLastTitle"]).toContain("{seq}");
+  });
+
+  it("reloads first, reads what is offered, pictures before, taps, takes the product's own answer, waits for the offer to go, pictures after", async () => {
+    const g = consolePage();
+    const posted = await voidLastUi(g.ctx, "fx-1");
+    expect(posted).toMatchObject({ seq: 3, event_id: "ev-3" });
+    expect(g.log).toEqual([
+      "reload",
+      `wait attached role:button:${NAME.voidLast.text}`,
+      `wait visible role:button:${NAME.voidLast.text}`,
+      "read title",
+      "shot 10-void-before",
+      `click role:button:${NAME.voidLast.text}`,
+      `wait detached title:exact:${TITLE}`,
+      "shot 10-void",
+    ]);
+    expect(g.log.some((l) => l.startsWith("wait detached title:exact:") && l.endsWith(TITLE))).toBe(true);
+    expect(g.evidence.checks().find((c) => c.id === "visual-evidence")).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+
+  it("the product's refusal of the void (the entry is already undone) is the RefusedCall it answered, with its code", async () => {
+    const g = consolePage({ answer: { status: 409, body: { ok: false, error: { code: "UNDO_ALREADY_VOIDED", message: "Nothing to undo — that entry is already undone" } } } });
+    const e = await voidLastUi(g.ctx, "fx-1").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 409, code: "UNDO_ALREADY_VOIDED" });
+    // Refused: nothing changed on screen, so no 'after' picture was taken.
+    expect(g.log.some((l) => l === "shot 10-void")).toBe(false);
+  });
+
+  it("a console that offers no Void last entry (nothing to void, or the match is decided) is ScreenNeverShowed, never a click on nothing", async () => {
+    const g = consolePage({ offered: false });
+    await expect(voidLastUi(g.ctx, "fx-1")).rejects.toBeInstanceOf(ScreenNeverShowed);
+    expect(g.log.some((l) => l.startsWith("click"))).toBe(false);
+  });
+
+  it("an offer that is still on screen after the void is ScreenNeverShowed (the screen did not change), not a pass", async () => {
+    const g = consolePage({ titleGone: false });
+    await expect(voidLastUi(g.ctx, "fx-1")).rejects.toBeInstanceOf(ScreenNeverShowed);
+  });
+});
+
 // W1-driving Task 13 (ruling 47): the template card. The walk is the
 // product's own (template-gallery.tsx, Step 0): /o/<org>/c/new → the card →
 // the detail sheet's form (name, Ends on) → "Use this template", which POSTs
@@ -1180,6 +1328,25 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
     expect(g.log.at(-1)).toBe("shot 01-competition-from-template");
   });
 
+  // W1d Task 13, item 20: a template competition is created PUBLIC (the product's default for the omitted
+  // visibility), and the run's org is the case's own (run-cli.test.ts pins one org per case on a template plan), so the
+  // public-dashboard quota that create spends is that org's and never accumulates across cases. Both halves rest on the
+  // gallery sending no `visibility`: read from the product's request body as text.
+  it("the gallery's create request carries no visibility key: its body is template_key, template_version, name, starts_on, ends_on", () => {
+    const product = readFileSync(resolve(REPO, "apps/web/src/components/v2/template-gallery.tsx"), "utf8");
+    const at = product.indexOf('"/api/v1/competitions/from-template"');
+    expect(at, "the gallery no longer posts to from-template").toBeGreaterThan(0);
+    const call = product.slice(at, product.indexOf("});", at));
+    const body = /json:\s*\{([^}]*)\}/.exec(call)?.[1];
+    expect(body, "the request's json body was not found").toBeDefined();
+    const keys = [...body!.matchAll(/^\s*(\w+)\s*[:,]/gm)].map((m) => m[1]);
+    expect(keys).toEqual(["template_key", "template_version", "name", "starts_on", "ends_on"]);
+    expect(keys).not.toContain("visibility");
+    // The parse reads a body that WOULD carry one: the same text with a visibility line yields it.
+    const withVis = /json:\s*\{([^}]*)\}/.exec(call.replace("ends_on: endsOn,", "ends_on: endsOn,\n          visibility: \"public\","))?.[1];
+    expect([...withVis!.matchAll(/^\s*(\w+)\s*[:,]/gm)].map((m) => m[1])).toContain("visibility");
+  });
+
   it("an unsafe or unknown template key is refused by name before any navigation", async () => {
     const g = galleryPage();
     const keys = ["", "box league", "box-league\"]", "no-such-template"];
@@ -1193,5 +1360,149 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
     }
     expect(refused).toBe(keys.length);
     expect(g.log).toEqual([]);
+  });
+});
+
+// W1d Task 13, item 22: a completion shot is named for the stage's place in its division. A multi-stage case's first
+// completion used to be filed `08-completed`, though the knockout was still pending ("the `groups_ko` case's
+// `08-completed` is the group stage's completion"); now the LAST stage's is `08-completed` and any earlier one is
+// `07-stage-<ordinal>-completed`, each with its `-before` picture. The page below holds the rails of every stage it
+// is given and answers each one's POST /complete.
+describe("completeStageUi: the completion shot names the stage's place in its division (W1d item 22)", () => {
+  const BASE = "http://localhost:3999";
+  interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
+  interface Loc { d: string; [k: string]: unknown }
+  const WHERE = { compSlug: "box-league-1", divSlug: "main", divisionId: "div-1" };
+
+  /** A fixtures tab with one rail per stage id: a click on a stage's Complete answers that stage's /complete.
+   *  `width`: the viewport; `folded`: the rails' triggers are visible (below md, where the rail folds behind them);
+   *  `defaultFilter`: the filter the run sheet opens pressed on, with the rows it draws. */
+  function railPage(stageIds: readonly string[], o: { width?: number; folded?: boolean; defaultFilter?: { filter: string; rows: number[] } } = {}) {
+    const log: string[] = [];
+    let screen = 0;
+    let url = "about:blank";
+    type W = { pred: (r: Resp) => boolean; resolve: (r: Resp) => void; timer: ReturnType<typeof setTimeout> };
+    const waiters: W[] = [];
+    const emit = (r: Resp) => { for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); waiters.splice(waiters.indexOf(w), 1); w.resolve(r); } };
+    const resp = (path: string, data: unknown): Resp => ({ request: () => ({ method: () => "POST" }), url: () => `${BASE}${path}`, status: () => 200, json: () => Promise.resolve({ ok: true, data }) });
+    const act = (line: string) => { log.push(line); screen++; };
+    const loc = (d: string): Loc => ({
+      d,
+      or: () => loc(d),
+      first: () => loc(d),
+      locator: (sel: string) => loc(`${d} >> ${sel}`),
+      getByTestId: (id: string) => loc(`${d} >> testid:${id}`),
+      waitFor: async () => undefined,
+      count: async () => (o.defaultFilter !== undefined && d === `${RUN_SHEET_FILTER_OPTIONS}[aria-pressed="true"]` ? 1 : 0),
+      getAttribute: async (a: string) => (a === "data-filter" && o.defaultFilter !== undefined ? o.defaultFilter.filter : null),
+      evaluateAll: async (fn: (els: { getAttribute: (n: string) => string | null }[]) => unknown) => {
+        log.push(`read rows ${d}`);
+        return fn((o.defaultFilter?.rows ?? []).map((n) => ({ getAttribute: (name: string) => (name === "data-fixture-no" ? String(n) : null) })));
+      },
+      isVisible: async () => o.folded === true && stageIds.some((id) => d === railTriggerSelector(id)),
+      elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
+      click: async () => {
+        act(`click ${d}`);
+        for (const id of stageIds) {
+          if (d === `${railSheetSelector(id)} >> testid:${TESTID.stageComplete.id}`) emit(resp(`/api/v1/stages/${id}/complete`, { completed: true, events: [] }));
+          if (d === `${railSheetSelector(id)} >> testid:${TESTID.stageGenerate.id}`) emit(resp(`/api/v1/stages/${id}/generate`, { created: 0, existing: 0, fixtures: [] }));
+        }
+      },
+    });
+    const page = {
+      goto: async (u: string) => { act(`goto ${new URL(u).pathname}`); url = u; },
+      url: () => url,
+      viewportSize: () => ({ width: o.width ?? 1280, height: 900 }),
+      request: { post: async () => ({ ok: () => true, status: () => 200 }) },
+      getByTestId: (id: string) => loc(`testid:${id}`),
+      locator: (sel: string) => loc(sel),
+      waitForResponse: (pred: (r: Resp) => boolean, t: { timeout: number }): Promise<Resp> => new Promise((resolveW, reject) => {
+        const w: W = { pred, resolve: resolveW, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, t.timeout) };
+        waiters.push(w);
+      }),
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: { els: { d: string }[] }) => ({ jsonValue: async () => fn(arg), dispose: async () => undefined }),
+      evaluate: async () => ({ scrollWidth: 1280, clientWidth: 1280 }),
+      screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { log.push(`shot ${p.split("/").pop()!.replace(/\.png$/, "")}`); files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const evidence = new Evidence("/r", "case-1", fs);
+    const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence };
+    return { log, ctx, evidence, shots: () => log.filter((l) => l.startsWith("shot ")).map((l) => l.slice(5)) };
+  }
+
+  it("a two-stage division: the first stage's completion is 07-stage-1-completed, the last stage's is 08-completed, each preceded by its own -before", async () => {
+    const g = railPage(["st-1", "st-2"]);
+    expect(await completeStageUi(g.ctx, WHERE, "st-1", { ordinal: 1, last: false })).toEqual({ completed: true, events: [] });
+    expect(await completeStageUi(g.ctx, WHERE, "st-2", { ordinal: 2, last: true })).toEqual({ completed: true, events: [] });
+    expect(g.shots()).toEqual(["07-stage-1-completed-before", "07-stage-1-completed", "08-completed-before", "08-completed"]);
+    // Each stage's own rail was the one clicked, in order.
+    expect(g.log.filter((l) => l.startsWith("click ")).map((l) => l.replace(/^click .*stage-rail-sheet-(st-\d).*$/, "$1"))).toEqual(["st-1", "st-2"]);
+    expect(g.evidence.checks().find((c) => c.id === "visual-evidence")).toMatchObject({ verdict: "pass", checked: 4 });
+  });
+
+  it("a three-stage division names the middle stage by its ordinal; a one-stage division (and a caller that passes nothing) still files 08-completed", async () => {
+    const three = railPage(["a", "b", "c"]);
+    await completeStageUi(three.ctx, WHERE, "b", { ordinal: 2, last: false });
+    await completeStageUi(three.ctx, WHERE, "c", { ordinal: 3, last: true });
+    expect(three.shots()).toEqual(["07-stage-2-completed-before", "07-stage-2-completed", "08-completed-before", "08-completed"]);
+    const one = railPage(["only"]);
+    await completeStageUi(one.ctx, WHERE, "only");
+    expect(one.shots()).toEqual(["08-completed-before", "08-completed"]);
+    const stated = railPage(["only"]);
+    await completeStageUi(stated.ctx, WHERE, "only", { ordinal: 1, last: true });
+    expect(stated.shots()).toEqual(one.shots());
+  });
+
+  // W1d Task 14: the seam proven through its real producer — railFor reports what the visit saw to its caller.
+  it("a rail visit tells its caller the fold's branch with the page's width: folded at 320 (the trigger shows, the page opens it), unfolded at 1280", async () => {
+    const seen: { branch: string; width: number | null }[] = [];
+    for (const [width, folded] of [[320, true], [1280, false]] as const) {
+      const g = railPage(["st-1"], { width, folded });
+      await completeStageUi(g.ctx, WHERE, "st-1", { ordinal: 1, last: true }, { onRail: (r) => { seen.push(r.fold); } });
+      // The trigger is clicked only when it was visible (class 22: keyed on visibility, never the width).
+      expect(g.log.some((l) => l.includes(`click ${railTriggerSelector("st-1")}`)), `${width}px`).toBe(folded);
+    }
+    expect(seen).toEqual([{ branch: "opened", width: 320 }, { branch: "unfolded", width: 1280 }]);
+  });
+
+  it("asked for the default filter, the visit reads it before the sheet is widened and hands it over; not asked, it hands over none and reads none", async () => {
+    const asked = railPage(["st-1"], { defaultFilter: { filter: "today", rows: [3, 1] } });
+    const got: (DefaultFilterSeen | null)[] = [];
+    await generateUi(asked.ctx, WHERE, "st-1", { readDefaultFilter: true, onRail: (r) => { got.push(r.defaultFilter); } });
+    expect(got).toEqual([{ filter: "today", rows: [1, 3] }]);
+    const not = railPage(["st-1"], { defaultFilter: { filter: "today", rows: [3, 1] } });
+    const none: (DefaultFilterSeen | null)[] = [];
+    await generateUi(not.ctx, WHERE, "st-1", { onRail: (r) => { none.push(r.defaultFilter); } });
+    expect(none).toEqual([null]);
+    expect(not.log.some((l) => l.startsWith("read rows"))).toBe(false);
+  });
+
+  it("a caller that passes no hooks is unchanged: the visit completes as it always did", async () => {
+    const g = railPage(["st-1"]);
+    expect(await completeStageUi(g.ctx, WHERE, "st-1")).toEqual({ completed: true, events: [] });
+  });
+
+  it("the shot labels are one table: every place gives distinct before/after labels, and a place that is not a place is refused by name", () => {
+    const labels = new Set<string>();
+    let checked = 0;
+    for (const ordinal of [1, 2, 3, 7]) {
+      for (const last of [false, true]) {
+        const { before, after } = completionShots({ ordinal, last });
+        expect(before).toBe(`${after}-before`);
+        expect(after).toBe(last ? "08-completed" : `07-stage-${ordinal}-completed`);
+        labels.add(before); labels.add(after);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+    // The last stage's label does not depend on its ordinal; the others do: 4 ordinals x (not last) + 1 shared last = 5 pairs.
+    expect(labels.size).toBe(10);
+    for (const bad of [0, -1, 1.5, Number.NaN]) expect(() => completionShots({ ordinal: bad, last: false }), String(bad)).toThrow(RangeError);
+    expect(() => completionShots({ ordinal: 0, last: true })).toThrow(/starts at 1/);
   });
 });

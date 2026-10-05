@@ -266,7 +266,7 @@ same `POST /stages/:id/generate`.
 
 | Layer | What | Size (derived in W1b from the committed files) |
 |---|---|---|
-| **L1** | every cell × full lifecycle **in the browser**, at 1280 and 320 | 231 × 2 = **462** runs |
+| **L1** | every cell × full lifecycle **in the browser**, at 1280 (ruling 39; the phone widths are L2's rotation) | **231** runs (462 before W1d: owner ruling 64 corrected it to 231, matching `counts.json` and `widths.ts`) |
 | **L2** | scenarios in the browser: every applicable (format, scenario) and (sport, scenario) pair at least once, widths rotating across the seven | ≥ number of applicable (format, scenario) pairs — up to 21 × 70 = 1,470 before drops |
 | **L3** | **every applicable (cell × scenario) at default config** (full cartesian, ruling 7) **+ config variants pair-covered across (format, sport)**, through the real server, no browser | ≤ 231 × 70 = 16,170 before drops, plus the variant set |
 

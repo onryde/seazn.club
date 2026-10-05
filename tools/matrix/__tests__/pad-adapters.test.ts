@@ -17,14 +17,14 @@ import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbase
 import { tennis } from "@seazn/engine/sports/tennis";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/drivers/adapters/generic.ts";
-import { START_MATCH_TESTID, selectorForTapStep, type PadPage, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, selectorForTapStep, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { PAD_OWNER, PAD_SPORTS, PAD_UNOWNED, noPadReason } from "../lib/pad-sports.ts";
 import { foldStream } from "../lib/fold.ts";
 import { BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
-import { CARROM_BOARD, CARROM_BOARD_TILE, carromPad } from "../lib/pads/carrom.ts";
-import { CRICKET_OVER_TILE, CRICKET_SUMMARY, cricketPad, overSplit } from "../lib/pads/cricket.ts";
+import { CARROM_BOARD, CARROM_BOARD_TILE, CARROM_COIN_MAX, carromPad } from "../lib/pads/carrom.ts";
+import { CRICKET_OVER_TILE, CRICKET_SUMMARY, cricketPad, makeCricketPad, overSplit } from "../lib/pads/cricket.ts";
 import { BADMINTON_SET_SCORE_TILE, BADMINTON_SUMMARY, badmintonPad } from "../lib/pads/badminton.ts";
 import { FOOTBALL_GOAL, FOOTBALL_PERIOD, FOOTBALL_PERIOD_TILE, footballGoalTile, footballPad } from "../lib/pads/football.ts";
 import { GENERIC_DRAW_TILE_ID, genericPad } from "../lib/pads/generic.ts";
@@ -36,7 +36,8 @@ import { TENNIS_SET_SCORE_TILE, TENNIS_SUMMARY, tennisPad } from "../lib/pads/te
 import { PERIOD_ADVANCE_TILE, periodGoalTile } from "../lib/pads/period.ts";
 import type { MatrixPadAdapter } from "../lib/pads/types.ts";
 import { VOLLEYBALL_SET_SCORE_TILE, VOLLEYBALL_SUMMARY, volleyballPad } from "../lib/pads/volleyball.ts";
-import { compareRow, replayEvents, type ReplayResult } from "../lib/pads/replay.ts";
+import { compareRow } from "../lib/pads/replay.ts";
+import { replayOnModel, type RowIn } from "./pad-model.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
 import { declaredAllOut } from "../lib/streams/cricket.ts";
 import { generateStream, matchesRequest } from "../lib/streams/index.ts";
@@ -59,24 +60,15 @@ function outcomesFor(sport: string, cfg: unknown): RequestedOutcome[] {
 }
 const req = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "league", home: HOME, away: AWAY, outcome });
 
-/** A cfg the sport's pad route refuses by name: cricket's over route covers
- *  single-innings cricket only (pads/cricket.ts cfgOf). Until ruling 44 the
- *  generator refused two innings too (GeneratorUnsupported, so streamOf gave
- *  []); it builds them now, and the pad has no route for a declaration, a
- *  follow-on or a time close. The sweeps keep the adapter's own scope, and
- *  "every request left out of the pad sweeps…" below pins that each request
- *  left out here is one the adapter itself refuses with that message. */
-const outOfPadRoute = (sport: string, cfg: unknown): boolean => sport === "cricket" && (cfg as { inningsPerSide?: unknown }).inningsPerSide !== 1;
-
-/** Every request over every system variant of `sport` inside its pad route.
- *  The builder default (offlineBuilderDefault, pinned to division-builder.tsx
- *  by catalogue.test.ts) comes first, and it is what PADPROOF plays. */
+/** Every request over every system variant of `sport`. The builder default
+ *  (offlineBuilderDefault, pinned to division-builder.tsx by catalogue.test.ts)
+ *  comes first, and it is what PADPROOF plays. Since W1d item 16 cricket's two
+ *  innings a side (the `test` preset) are inside the pad's route like any other. */
 function requestsFor(sport: string): StreamRequest[] {
   const def = offlineBuilderDefault(sport);
   const variants = [def, ...variantKeys(sport).filter((v) => v !== def)];
   return variants.flatMap((v) => {
     const cfg = resolveSportCfg(sport, v);
-    if (outOfPadRoute(sport, cfg)) return [];
     return outcomesFor(sport, cfg).map((o) => req(sport, cfg, o));
   });
 }
@@ -179,16 +171,30 @@ describe.each(ADAPTERS)("%s adapter", (sport, a) => {
     expect([...a.emits].sort()).toEqual([...seen].filter((t) => t !== "core.forfeit").sort());
   });
 
-  it("every generated scorer event is routed to ≥1 tap, and every fallback cites its file:line", () => {
+  it("every generated scorer event is routed to ≥1 tap — or its type is declared noControl, and refused by name — and every fallback cites its file:line", () => {
     let routed = 0;
+    let barred = 0;
+    const noControl = new Set(a.noControl?.eventTypes ?? []);
     for (const r of requestsFor(sport)) {
       for (const e of scorerEvents(streamOf(r))) {
-        expect(a.stepsFor(e, ctxOf(r)).length, `${r.cfg === undefined ? "" : JSON.stringify(r.outcome)} ${e.type}`).toBeGreaterThan(0);
+        const at = `${JSON.stringify(r.outcome)} ${e.type}`;
+        if (noControl.has(e.type)) {
+          expect(() => a.stepsFor(e, ctxOf(r)), at).toThrow(/has no addressable pad control/);
+          barred++;
+          continue;
+        }
+        expect(a.stepsFor(e, ctxOf(r)).length, at).toBeGreaterThan(0);
         routed++;
       }
     }
-    console.info(`pad-adapters: ${sport}: ${routed} generated event(s) routed`);
+    console.info(`pad-adapters: ${sport}: ${routed} generated event(s) routed, ${barred} declared noControl`);
     expect(routed).toBeGreaterThan(0);
+    // Every type an adapter declares noControl is one its generator emits (a stale declaration is a failure), and the route is frozen.
+    for (const t of noControl) expect(a.emits, t).toContain(t);
+    if (a.noControl !== undefined) {
+      expect(barred, `${sport} declares noControl but its generator never emits one`).toBeGreaterThan(0);
+      expect(Object.isFrozen(a.noControl.route)).toBe(true);
+    }
     for (const f of a.fallbacks) {
       expect(a.emits, f.eventType).toContain(f.eventType);
       expect(f.why, f.eventType).toMatch(/\.tsx?:\d+/);
@@ -496,49 +502,9 @@ describe("tennis", () => {
 // ---------------------------------------------------------------------------
 // Task 10: football, hockey, icehockey.
 
-type RowIn = { type: string; payload: unknown };
 const TILE = (tileId: string) => selectorForTapStep({ kind: "tile", tileId });
 const START_SEL = selectorForTapStep({ kind: "testid", testid: START_MATCH_TESTID });
 const CHOICE_ID = /^\[data-choice-option-id="([^"]+)"\]$/;
-
-/** Replays `events` through the real replay on a fake pad modelled on what
- *  Step 0 saw each route write. Every tap is recorded; the replay's hold
- *  release (its `pad-send-now` presence check, the one boundary it crosses
- *  after every event's taps) commits the rows `write` answers for the taps
- *  since the last release. */
-async function replayOnModel(
-  adapter: MatrixPadAdapter,
-  events: readonly StreamEvent[],
-  ctx: TapAdapterContext,
-  write: (taps: readonly string[], ledger: readonly LedgerRow[]) => RowIn[],
-): Promise<{ res: ReplayResult; ledger: LedgerRow[] }> {
-  const ledger: LedgerRow[] = [];
-  let taps: string[] = [];
-  const sendNow = selectorForTapStep({ kind: "releaseHold" });
-  const page: PadPage = {
-    locator: (sel: string) => ({
-      click: async () => { taps.push(sel); },
-      fill: async (v: string) => { taps.push(`${sel}=${v}`); },
-      waitFor: async () => undefined,
-      count: async () => {
-        if (sel === sendNow) {
-          for (const r of write(taps, ledger)) ledger.push({ id: `r${ledger.length + 1}`, seq: ledger.length + 1, type: r.type, payload: r.payload });
-          taps = [];
-        }
-        return 0;
-      },
-    }),
-    goto: async () => undefined,
-    setViewportSize: async () => undefined,
-  };
-  const res = await replayEvents(page, adapter, events, ctx, {
-    holdMs: 3000,
-    tip: async () => 0,
-    ledger: async (since: number) => ledger.filter((r) => r.seq > since),
-    sleep: async () => undefined,
-  });
-  return { res, ledger };
-}
 
 /** football as Step 0 saw it (2026-09-30, 320, 11-a-side): Start writes
  *  core.start; a goal tile writes `{by}` alone; the period tile then a marker
@@ -758,6 +724,26 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
     expect({ cases, advances }).toEqual(sport === "hockey" ? { cases: 3, advances: 12 } : { cases: 2, advances: 6 });
   });
 
+  it("Mn-1: a cfg whose periods.count is not a whole number ≥ 1 is refused by name at the first advance — 1.5 periods is no match, and the builder's own count is the positive pair", () => {
+    const def = resolveSportCfg(sport, offlineBuilderDefault(sport)) as { periods: { count: number } };
+    const r = req(sport, def, { kind: "win", winner: "home" });
+    const advance = generateStream(r).find((e) => e.type === `${sport}.period.advance`)!;
+    const asCfg = (count: unknown) => ({ ...def, periods: { ...def.periods, count } });
+    const first = (count: unknown) => {
+      const ctx: TapAdapterContext = { cfg: asCfg(count), entrants: { home: HOME, away: AWAY } };
+      pad.stepsFor({ type: "core.start", payload: {} }, ctx);
+      return pad.stepsFor(advance, ctx);
+    };
+    // The positive pair first: a whole count ≥ 1 routes (the builder default's own).
+    expect(first(def.periods.count)).toEqual([{ kind: "tile", tileId: PERIOD_ADVANCE_TILE }]);
+    let checked = 0;
+    for (const bad of [1.5, def.periods.count + 0.5, 0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, "4", null, undefined]) {
+      expect(() => first(bad), String(bad)).toThrow(/periods\.count is .*, not a whole number ≥ 1/);
+      checked++;
+    }
+    expect(checked).toBe(10);
+  });
+
   it("I-1: the advance fallback is judged — the right rows are `fallback`; an advance the pad writes to another label, or an `at` off {period, elapsed}, is a `mismatch` naming it", async () => {
     const cfg = resolveSportCfg(sport, offlineBuilderDefault(sport));
     const r = req(sport, cfg, { kind: "win", winner: "home" });
@@ -796,6 +782,9 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
     expect(judge(first, [row({ to: toOf(first), at: { ...at, extra: 1 } })]).ok).toBe(false);
     expect(judge(first, [row({ to: toOf(first), at: { period: "", elapsed: 0 } })]).ok).toBe(false);
     expect(judge(first, [row({ to: toOf(first), at: { period: "P", elapsed: -1 } })]).ok).toBe(false);
+    // "a whole number": a fraction is neither a stamp the advance tile writes nor a number of seconds the clock counts (W1d T12 review m-1).
+    expect(judge(first, [row({ to: toOf(first), at: { period: "P", elapsed: 1.5 } })]).ok).toBe(false);
+    expect(judge(first, [row({ to: toOf(first), at: { period: "P", elapsed: 30 } })]).ok).toBe(true); // its positive pair: a whole number of seconds is stamped
   });
 
   it("the cursor walks the ENGINE's advance order in every variant, per fixture, and refuses a wrong-order, early or extra advance naming both labels", () => {
@@ -925,7 +914,6 @@ describe("cricket", () => {
     let innings = 0;
     for (const v of variantKeys("cricket")) {
       const cfg = resolveSportCfg("cricket", v);
-      if (outOfPadRoute("cricket", cfg)) continue; // pinned below: the adapter refuses it by name
       const bpo = (cfg as { ballsPerOver: number }).ballsPerOver;
       for (const winner of ["home", "away"] as const) {
         const r = req("cricket", cfg, { kind: "win", winner });
@@ -962,25 +950,6 @@ describe("cricket", () => {
     }
     console.info(`pad-adapters: cricket: ${innings} generated innings split into overs`);
     expect(innings).toBeGreaterThanOrEqual(4); // t20 alone: 2 innings × 2 outcomes
-  });
-
-  it("every request left out of the pad sweeps (two innings a side) is one the adapter refuses by name, and the generator does build it (ruling 44)", () => {
-    let left = 0;
-    for (const v of variantKeys("cricket")) {
-      const cfg = resolveSportCfg("cricket", v);
-      if (!outOfPadRoute("cricket", cfg)) continue;
-      for (const outcome of outcomesFor("cricket", cfg)) {
-        const r = req("cricket", cfg, outcome);
-        const evs = streamOf(r);
-        const first = evs.find((e) => e.type === CRICKET_SUMMARY);
-        if (outcome.kind === "forfeit") { expect(first, `${v} ${JSON.stringify(outcome)}`).toBeUndefined(); continue; }
-        expect(first, `${v} ${JSON.stringify(outcome)}: the generator builds it`).toBeDefined();
-        cricketPad.stepsFor(START, ctxOf(r));
-        expect(() => cricketPad.stepsFor(first!, ctxOf(r)), `${v} ${JSON.stringify(outcome)}`).toThrow(/the over route covers single-innings cricket only/);
-        left++;
-      }
-    }
-    expect(left).toBeGreaterThan(0);
   });
 
   it("replayed on the fake ledger: every innings a fallback of one row per over, no finding, and the stored rows fold to the requested outcome", async () => {
@@ -1041,6 +1010,42 @@ describe("cricket", () => {
     expect(judge(s, [])).toEqual({ ok: false, note: "no over row stored for the innings" });
   });
 
+  it("M-4: what a fixture has tapped lives in the adapter, never the module — a second adapter knows nothing of the first's fixtures, and stepsFor is one-shot per event", () => {
+    const cfg = resolveSportCfg("cricket", offlineBuilderDefault("cricket"));
+    const r = req("cricket", cfg, { kind: "win", winner: "home" });
+    const ctx = ctxOf(r);
+    const [first, second] = generateStream(r).filter((e) => e.type === CRICKET_SUMMARY);
+    const a = makeCricketPad();
+    const b = makeCricketPad();
+    expect(a).not.toBe(b);
+    a.stepsFor(START, ctx);
+    const aFirst = a.stepsFor(first!, ctx);
+    // b never saw this fixture's core.start. A module-level record would hold a's innings for the same entrant pair
+    // and answer b's summary as the chase; each adapter's own record has nothing, and refuses it by name.
+    expect(() => b.stepsFor(first!, ctx)).toThrow(/before core\.start/);
+    // a's record is untouched by b's refusal: its next summary is its second innings, tapped as the chase.
+    expect(a.stepsFor(second!, ctx).length).toBeGreaterThan(0);
+    // b, once started, answers the same steps as a fresh adapter (and as a did).
+    const fresh = makeCricketPad();
+    fresh.stepsFor(START, ctx);
+    b.stepsFor(START, ctx);
+    expect(b.stepsFor(first!, ctx)).toEqual(fresh.stepsFor(first!, ctx));
+    expect(b.stepsFor(first!, ctx).length).toBeGreaterThan(0); // (b's own second innings: the one-shot below)
+    expect(fresh.stepsFor(first!, ctx)).toEqual(aFirst);
+    // Two fixtures on ONE adapter are independent (the entrant pair is the key): another pair has no record yet.
+    const other: TapAdapterContext = { cfg, entrants: { home: "e-other-h", away: "e-other-a" } };
+    expect(() => a.stepsFor(first!, other)).toThrow(/before core\.start/);
+    // One-shot per event (types.ts): asking again for the same event is a SECOND innings; a third ask is a third innings, refused.
+    const once = makeCricketPad();
+    once.stepsFor(START, ctx);
+    once.stepsFor(first!, ctx);
+    once.stepsFor(first!, ctx);
+    expect(() => once.stepsFor(first!, ctx)).toThrow(/a third innings/);
+    // core.start resets a fixture's record: the same pair is a fresh match.
+    once.stepsFor(START, ctx);
+    expect(once.stepsFor(first!, ctx)).toEqual(aFirst);
+  });
+
   it("an innings the engine would not close itself, a chase past its target before its last over, a third innings, or no core.start is refused by name", () => {
     const cfg = resolveSportCfg("cricket", offlineBuilderDefault("cricket"));
     const B = (cfg as { ballsPerInnings: number }).ballsPerInnings;
@@ -1068,7 +1073,7 @@ describe("cricket", () => {
     expect(() => cricketPad.stepsFor(sum(10, 1, 6), chase)).toThrow(/a third innings/);
     const shape = ctx("shape");
     cricketPad.stepsFor(START, shape);
-    for (const payload of [null, { runs: 1, wickets: 0 }, { runs: 1, wickets: 0, legalBalls: 0 }, { runs: -1, wickets: 0, legalBalls: B }, { runs: 1.5, wickets: 0, legalBalls: B }, { runs: 1, wickets: 0, legalBalls: B, partial: true }, { runs: 1, wickets: 0, legalBalls: B + 1 }] as unknown[]) {
+    for (const payload of [null, { runs: 1, wickets: 0 }, { runs: 1, wickets: 0, legalBalls: 0 }, { runs: -1, wickets: 0, legalBalls: B }, { runs: 1.5, wickets: 0, legalBalls: B }, { runs: 1, wickets: 0, legalBalls: B, partial: false }, { runs: 1, wickets: 0, legalBalls: B, declared: true }, { runs: 1, wickets: 0, legalBalls: B, extra: 1 }, { runs: 1, wickets: 0, legalBalls: B + 1 }] as unknown[]) {
       expect(() => cricketPad.stepsFor({ type: CRICKET_SUMMARY, payload }, shape), JSON.stringify(payload)).toThrow(/is not \{runs, wickets, legalBalls\}/);
     }
     expect(() => cricketPad.stepsFor({ type: "cricket.ball", payload: {} }, shape)).toThrow(/cricket\.ball/);
@@ -1255,6 +1260,21 @@ describe("carrom", () => {
       expect(() => carromPad.stepsFor({ type: CARROM_BOARD, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the board sheet's \{winner, opponentCoinsLeft 0\.\.9, queenTo null\}/);
     }
     expect(() => carromPad.stepsFor({ type: "carrom.adjust", payload: {} }, ctxOf(r))).toThrow(/carrom\.adjust/);
+  });
+
+  it("M-8: carrom's coin bound is the skin's — read from carrom.tsx as text, every coins field carries one `max`, the adapter accepts it and refuses one more", () => {
+    // Both board sheets (the plain board and the queen board) ask the opponent's coins as a number step with a max.
+    const maxes = [...skin.matchAll(/id: "coins",[^}]*?\bmax:\s*(\d+)/g)].map((m) => Number(m[1]));
+    expect(maxes.length, "carrom.tsx no longer has the coins number step(s)").toBeGreaterThanOrEqual(2);
+    expect(new Set(maxes).size, `the skin's coins fields disagree: ${maxes.join(", ")}`).toBe(1);
+    const max = maxes[0]!;
+    expect(CARROM_COIN_MAX).toBe(max);
+    const { r } = summariesOf("carrom", CARROM_BOARD, "home");
+    const board = (coins: number) => ({ type: CARROM_BOARD, payload: { winner: HOME, opponentCoinsLeft: coins, queenTo: null } });
+    expect(carromPad.stepsFor(board(max), ctxOf(r)).filter((st) => st.kind === "number")).toEqual([{ kind: "number", value: max }]);
+    expect(carromPad.stepsFor(board(0), ctxOf(r)).filter((st) => st.kind === "number")).toEqual([{ kind: "number", value: 0 }]);
+    expect(() => carromPad.stepsFor(board(max + 1), ctxOf(r))).toThrow(new RegExp(`opponentCoinsLeft 0\\.\\.${max},`));
+    expect(() => carromPad.stepsFor(board(-1), ctxOf(r))).toThrow(/opponentCoinsLeft/);
   });
 
   it("replayed on the fake ledger: every board row equal, and the stored rows fold to the requested outcome", async () => {

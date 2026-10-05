@@ -305,6 +305,49 @@ describe("regression cases (R29)", () => {
     }
     expect(refused).toBeGreaterThan(Object.keys(base).length);
   });
+  // W1d item 26: open cases that name one failure by cell, check and match are told apart by their `trigger` alone.
+  describe("trigger (W1d item 26)", () => {
+    const REFUSAL = "model-refusal-named";
+    const words = "would strand home_slot_label";
+    const twin = (id: string, over: Record<string, unknown> = {}) => ({ ...base, id, cell: "double_elim|generic", check: REFUSAL, match: words, fence: "ko-generate-after-roster-change", ...over });
+    it("a case with no trigger parses as before (the field is optional); a trigger is one of the two roster changes, nothing else", () => {
+      expect(parseRegressions(file(base))[0]!.trigger).toBeUndefined();
+      expect(parseRegressions(file(twin("MB-001", { trigger: "added" })))[0]!.trigger).toBe("added");
+      expect(parseRegressions(file(twin("MB-001", { trigger: "withdrawn" })))[0]!.trigger).toBe("withdrawn");
+      let refused = 0;
+      for (const bad of ["", "AddEntrant", "withdraw", "both", null, 1]) {
+        expect(() => parseRegressions(file(twin("MB-001", { trigger: bad }))), JSON.stringify(bad)).toThrow();
+        refused++;
+      }
+      expect(refused).toBe(6);
+    });
+    it("two OPEN cases sharing cell, check and match must each carry a distinct trigger: none, one, or the same twice is refused naming both", () => {
+      expect(parseRegressions(file(twin("MB-007", { trigger: "added" }), twin("MB-010", { trigger: "withdrawn" })))).toHaveLength(2);
+      let refused = 0;
+      for (const [a, b] of [[{}, {}], [{ trigger: "added" }, {}], [{}, { trigger: "added" }], [{ trigger: "added" }, { trigger: "added" }]] as const) {
+        expect(() => parseRegressions(file(twin("MB-007", a), twin("MB-010", b))), JSON.stringify([a, b])).toThrow(/MB-007 and MB-010 share a cell, a check and a match.*distinct "trigger"/);
+        refused++;
+      }
+      expect(refused).toBe(4);
+    });
+    it("a case that differs in cell, check or match does not collide; nor does a FIXED one (it names nothing)", () => {
+      const a = twin("MB-007");
+      let parsed = 0;
+      for (const other of [twin("MB-010", { cell: "knockout|generic" }), twin("MB-010", { check: "model-unexpected-refusal" }), twin("MB-010", { match: "a different answer" }), twin("MB-010", { status: "fixed" })]) {
+        expect(parseRegressions(file(a, other)), JSON.stringify(other)).toHaveLength(2);
+        parsed++;
+      }
+      expect(parsed).toBe(4);
+    });
+    it("the committed file passes the guard, and its two colliding cases carry the distinct triggers (the premise for model-run-cell.test.ts)", () => {
+      const rs = loadRegressions();
+      const open = rs.filter((r) => r.status === "open");
+      const colliding = open.filter((r) => open.some((o) => o !== r && o.cell === r.cell && o.check === r.check && o.match === r.match));
+      expect(colliding.length, "anti-vacuity: the committed file has colliding cases").toBeGreaterThan(1);
+      expect(colliding.every((r) => r.trigger !== undefined)).toBe(true);
+      expect(new Set(colliding.map((r) => r.trigger)).size).toBe(colliding.length);
+    });
+  });
   it("the Task 14 paste stub, as the plan prints it, is refused until its id, title and date are filled", () => {
     // The plan is W1b's record, written while the harness lived at its historical path: every spelling of the file counts.
     const stubs = spellingsOf(REGRESSIONS_PATH).map((p) => `regression stub for ${p}`);
@@ -632,6 +675,14 @@ const ROUTE_CALL = "routeTo";
  *  purpose: a wave-shaped token that names no programme wave (W11) is refused
  *  too, never read as prose. */
 const WAVE_TOKEN = /\bW\d+[a-z]?\b|W1-driving/;
+/** A decision citation, "(W1d D11)": the wave a ruling was made in and its number, in parentheses and nothing else.
+ *  It names a DECISION, never a route (W1d item 17: browser workers were declined, so the refusal cites D11 rather
+ *  than routing to a wave that is closed). It is cut from a literal's text before WAVE_TOKEN reads it, so a wave
+ *  named anywhere else in the same literal is still a stray. */
+const DECISION_CITATION = /\((W\d+[a-z]?|W1-driving) D\d+\)/g;
+/** A literal's text, in every shape the scan reads: a string, a no-substitution template, and each part of a template. */
+const isTextLiteral = (n: TS.Node): n is TS.StringLiteral | TS.NoSubstitutionTemplateLiteral | TS.TemplateHead | TS.TemplateMiddle | TS.TemplateTail =>
+  ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n);
 interface RouteScan { sites: number; waves: string[]; unread: string[] }
 /** Every route in `src`, read from the TypeScript AST (so a comment is never a
  *  site). Two constructs name a wave: `routeTo(<wave>, …)` and a `new` of a
@@ -694,8 +745,8 @@ function scanRoutes(src: string, file = "synthetic.ts"): RouteScan {
     if (ts.isIdentifier(n)) {
       if (Object.hasOwn(DEFERRALS, n.text)) classify(n, DEFERRALS[n.text]!);
       else if (n.text === ROUTE_CALL) classifyRoute(n);
-    } else if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) {
-      if (WAVE_TOKEN.test(n.text)) literals.push(n);
+    } else if (isTextLiteral(n)) {
+      if (WAVE_TOKEN.test(n.text.replace(DECISION_CITATION, ""))) literals.push(n);
     }
     ts.forEachChild(n, visit);
   };
@@ -704,6 +755,32 @@ function scanRoutes(src: string, file = "synthetic.ts"): RouteScan {
     if (!declared.has(n)) out.unread.push(`${at(n)} stray wave literal ${n.getText(sf)}: name a wave only through routeTo or a deferral class`);
   }
   return out;
+}
+/** A decision citation found in a literal (T13-POLISH): where it is and the wave it cites. */
+interface Citation { file: string; line: number; wave: string }
+/** Every decision citation in `src`'s string and template literals, read from the AST (a comment is never one). */
+function citationsIn(src: string, file = "synthetic.ts"): Citation[] {
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const out: Citation[] = [];
+  const visit = (n: TS.Node): void => {
+    if (isTextLiteral(n)) {
+      for (const m of n.text.matchAll(DECISION_CITATION)) out.push({ file, line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1, wave: m[1]! });
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+/** The decision citations the shipped harness carries, by file (relative to tools/matrix): exactly one today, the
+ *  browser-workers refusal in run.ts (W1d item 17, D11). The exemption in WAVE_TOKEN's read must not become a way to
+ *  write a wave into any literal: a new citation is a new decision, so it raises this pin beside it, in review. */
+const PINNED_CITATIONS: readonly string[] = ["run.ts"];
+/** The citation guard, apart from the tree: the citations found are exactly the pinned ones (count and place), and
+ *  each cites a wave that has a Status row in _INDEX.md (a closed wave is fine: a citation names a ruling, never a
+ *  route; a wave-shaped token that is no programme wave, W99 or W11, is not). */
+function judgeCitations(found: readonly Citation[], rows: ReadonlyMap<string, string>, pinned: readonly string[] = PINNED_CITATIONS): void {
+  expect(found.map((c) => c.file).sort(), "the decision citations in the shipped harness are pinned by file: a new one is a decision, raise the pin beside it").toEqual([...pinned].sort());
+  for (const c of found) expect(rows.has(c.wave), `${c.file}:${c.line} cites ${c.wave}, which has no status row in _INDEX.md`).toBe(true);
 }
 /** A Status-table state that is still owed work. Markdown emphasis is not part of the state. */
 const isOpen = (state: string): boolean => /^(not started|in progress|awaiting)/i.test(state.replace(/[*_]/g, "").trim());
@@ -794,6 +871,9 @@ describe("Q-A guard — the route reader", () => {
       routedTo: `const c = { routedTo: "W2" };`,
       // A template span, not a whole literal: "rosters are W1-driving" in a message.
       span: "const m = `model: ${sport} fields teams — rosters are W1-driving`;",
+      // ...and the head and a middle part of a template, not only its tail.
+      head: "const m = `W4 owes this: ${sport}`;",
+      middle: "const m = `${sport} is owed to W4 by ${row}`;",
       // A routeTo's WHY that names the wave is a stray too: the wave is argument 0's alone.
       why: `const r = routeTo("W2", "owed to W1-driving");`,
       // T1-R2: any wave inside prose, not only W1-driving — the shapes the tree carried at 00c2d8199.
@@ -816,6 +896,94 @@ describe("Q-A guard — the route reader", () => {
     expect(scanRoutes(`const w = pick(); routeTo(w, "x");`).sites).toBe(1);
     expect(scanRoutes(`routeTo();`).unread.length).toBeGreaterThan(0);
     expect(scanRoutes(`const r = routeTo; r(pick(), "x");`).unread.length).toBeGreaterThan(0);
+  });
+  // W1d item 17 (D11): a message may CITE the decision that closed a question, "(W1d D11)", without routing to the wave.
+  // The exemption is exactly that parenthesised shape; anything else in the same literal still reads as a stray.
+  it("a parenthesised decision citation is no stray wave literal, in a string, a template and a template span", () => {
+    const cited = {
+      string: `const m = "one browser case at a time per shard; parallelism is the shard matrix (W1d D11)";`,
+      template: "const m = `parallelism is the shard matrix (W1d D11)`;",
+      span: "const m = `--workers ${n} is refused: parallelism is the shard matrix (W1d D11)`;",
+      twoCitations: `const m = "(W1d D11), as ruled in (W1-driving D10)";`,
+      driving: `const m = "the cap (W1-driving D10)";`,
+    };
+    let checked = 0;
+    for (const [shape, src] of Object.entries(cited)) {
+      expect(scanRoutes(src), shape).toEqual({ sites: 0, waves: [], unread: [] });
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+  it("the citation exemption stops at its shape: a bare id, a bare decision, a half citation, or a wave named beside a citation is still a stray", () => {
+    const stray = {
+      bare: `const m = "see W1d D11";`,
+      waveOnly: `const m = "(W1d)";`,
+      noNumber: `const m = "(W1d D)";`,
+      noDecision: `const m = "(W1d 11)";`,
+      lowercase: `const m = "(W1d d11)";`,
+      unclosed: `const m = "(W1d D11";`,
+      suffixed: `const m = "(W1d D11x)";`,
+      // The route a citation might be dressed as: a wave named OUTSIDE the parentheses, in the same literal.
+      beside: `const m = "owed to W2 (W1d D11)";`,
+      besideAfter: `const m = "(W1d D11) is owed to W2";`,
+      // And the exemption never reaches a routeTo's why, where the wave is argument 0's alone.
+      why: `const r = routeTo("W2", "browser workers (W1d D11) and W3");`,
+    };
+    let refused = 0;
+    for (const [shape, src] of Object.entries(stray)) {
+      const scan = scanRoutes(src);
+      expect(scan.unread.some((u) => u.includes("stray wave literal")), `${shape}: ${JSON.stringify(scan)}`).toBe(true);
+      refused++;
+    }
+    expect(refused).toBe(Object.keys(stray).length);
+    // The positive pair: a routeTo whose why carries a citation and no other wave is read as one route, no stray.
+    expect(scanRoutes(`const r = routeTo("W2", "browser workers (W1d D11)");`)).toEqual({ sites: 1, waves: ["W2"], unread: [] });
+  });
+  // T13-POLISH: the exemption cuts every citation before the wave token is read, so a literal made only of citations
+  // passes the stray arm. These pin what may carry one: exactly the shipped citation, to a wave with a Status row.
+  it("citationsIn reads every citation in a string, template and template span, with its wave and line, and none in a comment or a non-citation", () => {
+    expect(citationsIn(`const m = "parallelism (W1d D11)";`, "a.ts")).toEqual([{ file: "a.ts", line: 1, wave: "W1d" }]);
+    expect(citationsIn("const t = `x`;\nconst m = `--workers ${n}: (W1d D11) and (W1-driving D10)`;", "b.ts")).toEqual([{ file: "b.ts", line: 2, wave: "W1d" }, { file: "b.ts", line: 2, wave: "W1-driving" }]);
+    // Each part of a template is read: the head, a middle and the tail.
+    expect(citationsIn("const t = `(W1d D11) ${a} then (W2 D1) ${b} and (W3 D2)`;", "c.ts").map((c) => c.wave)).toEqual(["W1d", "W2", "W3"]);
+    expect(citationsIn("// a comment: (W1d D11)\n/* (W2 D1) */\nconst k = 1;")).toEqual([]);
+    expect(citationsIn(`const m = "see W1d D11 and (W1d)";`)).toEqual([]);
+    expect(citationsIn("")).toEqual([]);
+  });
+  it("the shipped tree carries exactly the pinned citations (one, in run.ts), each to a wave with a Status row", () => {
+    const rows = statusRows();
+    expect(rows.size).toBeGreaterThan(0);
+    const root = resolve(REPO, "tools/matrix");
+    const modules = shipped(root);
+    expect(modules.length, "modules walked").toBeGreaterThan(0);
+    const found = modules.flatMap((f) => citationsIn(readFileSync(f, "utf8"), f.slice(root.length + 1)));
+    // Anti-vacuity: the walk reads the citation it exists to pin (a scan that found none would pin nothing).
+    expect(found.length).toBe(1);
+    expect(PINNED_CITATIONS).toHaveLength(1);
+    expect(found[0]!.wave).toBe("W1d");
+    judgeCitations(found, rows);
+  });
+  it("the citation guard refuses what it must: a second citation, a citation in another file, and a wave with no Status row (W99, W11)", () => {
+    const rows = statusRows();
+    const shipped1 = citationsIn(`const m = "parallelism is the shard matrix (W1d D11)";`, "run.ts");
+    expect(shipped1).toHaveLength(1);
+    // The positive pair: the shipped shape, in the pinned place, to a real wave.
+    expect(() => judgeCitations(shipped1, rows)).not.toThrow();
+    // A literal made only of a citation, or carrying prose around one, is still a NEW citation: the pin's count refuses it.
+    for (const extra of [`const m = "owed to (W2 D1)";`, `const m = "(W2 D1)";`, `const m = "(W1d D11)";`]) {
+      expect(() => judgeCitations([...shipped1, ...citationsIn(extra, "lib/x.ts")], rows), extra).toThrow(/pinned by file/);
+    }
+    // ...and the same citation in another file than the pinned one is refused too.
+    expect(() => judgeCitations(citationsIn(`const m = "owed to (W2 D1)";`, "lib/x.ts"), rows)).toThrow(/pinned by file/);
+    // A wave that has no Status row: right count, right place, wrong wave.
+    for (const bad of [`const m = "(W99 D7)";`, `const m = "(W11 D1)";`]) {
+      const found = citationsIn(bad, "run.ts");
+      expect(found, bad).toHaveLength(1);
+      expect(rows.has(found[0]!.wave), `the premise: ${found[0]!.wave} has no row`).toBe(false);
+      expect(() => judgeCitations(found, rows), bad).toThrow(/has no status row/);
+    }
+    // No citation at all is not the pinned one either (the tree walk must find it).
+    expect(() => judgeCitations([], rows)).toThrow(/pinned by file/);
   });
   it("text that only looks like a wave is not a site: a lowercase set name, a W inside a word, a W with no digit, a comment", () => {
     expect(scanRoutes(`const b = "w1-driving"; const c = "AW2"; const d = "W3C"; const e = "Wave"; // routeTo("W4", "x")`)).toEqual({ sites: 0, waves: [], unread: [] });

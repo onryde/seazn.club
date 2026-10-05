@@ -12,20 +12,38 @@
 // `--driver browser --layer L1|L2` (W1c Task 12, ruling 39) runs a LAYERED
 // plan (lib/layers.ts): L1 is the slice at 1280 only; L2 is the committed
 // l2-pairs.json runs, each at its own width — the scripted ones driven, the
-// rest recorded 🚫/░ with no driver, org or check. `--set width-sweep` and
+// rest recorded 🚫/░ with no driver, org or check. `--scope grid` (W1d Task 3,
+// ruling 64) widens either layer to the FULL grid — L1: every one of the 231
+// catalogue cells at 1280; L2: all 1,731 runs of l2-pairs.json; `--scope slice`
+// is the default and means what `--layer` always did. `--set width-sweep` and
 // `--set api-only-browser` are layered too. The browser opens at the first
 // driven browser case, so a plan that only records opens none.
+// `--shard k/N` (W1d Task 4, D4) runs one stripe of whatever plan the flags chose:
+// plan item i (0-based) belongs to shard (i mod N) + 1, so the partition is a pure
+// function of plan order and the same case lands in the same shard on every run
+// (ruling 61). The run writes `shard {index, of, planSize}` into its results.json;
+// `plan` stays the command line's plan without the shard, so every shard of one run
+// carries one plan string. Each shard needs its OWN --run-id (the run id names the
+// case orgs, `m-<id>-<n>`, with n the case's number within the stripe). The start
+// gates judge the WHOLE plan in every shard. merge-shards.ts rebuilds the plan from
+// the N shard files and refuses any that is short.
 //
 //   pnpm run matrix:l3 --
-//     [--base URL] [--run-id ID] [--report-dir DIR] [--workers N]
-//     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME]
+//     [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--shard k/N]
+//     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME] [--rows ROWS]
 //
 // `--only` takes any catalogue cell (W1-driving Task 12): a slice cell plans
 // as the slice always has; any other cell is planned by the w1-driving set
 // (lib/w1-driving-set.ts). `--set w1-driving` is the one named set that also
 // takes `--only` and `--scenario`.
+// `--set pr-sample --rows <row>[,<row>...]|all|none` (W1d Task 7, D13, R27) is the per-PR
+// sample over HTTP at L3: the w1-driving cases on the rows a PR declares, then a fixed 33
+// (the slice's 24, and league LIFECYCLE on the other nine sports; lib/pr-sample.ts).
+// `--rows` is that set's declaration and the set cannot run without one (no declaration is
+// not `none`); planOf records it sorted, so `--rows swiss,league` is `--rows league,swiss`.
 //   pnpm run matrix:browser -- --width W   (the same flags; W one of BROWSER_WIDTHS)
-//   pnpm run matrix:browser -- --layer L1|L2 [--only row|sport] [--scenario KEY (L1)]
+//   pnpm run matrix:browser -- --layer L1|L2 [--scope slice|grid] [--only row|sport] [--scenario KEY (L1)]
+//     (--scope grid takes no --only/--scenario: the grid is the whole grid)
 //
 // pnpm 10 passes that `--` through into argv — for matrix:browser AFTER the
 // script's own `--driver browser`, so mid-list (measured, W1c Task 6 fix
@@ -45,18 +63,30 @@
 //      cannot see the deliberate break (R17).
 //   2  refused, reason on stderr, nothing written: a usage error (unknown
 //      flag, a positional, --canary with --only/--scenario, --set with any
-//      filter but --set w1-driving with --only/--scenario, a run id that is empty or too long once slugged; a --workers
+//      filter but --set w1-driving with --only/--scenario, --rows beside anything but --set pr-sample,
+//      --set pr-sample without --rows, a row the catalogue lacks (UnknownRow),
+//      a run id that is empty or too long once slugged; a --workers
 //      that is not an integer in 1..MAX_WORKERS, or above 1 on a browser run
 //      (D10); an unknown
 //      --driver, --driver browser without --width, a --width outside
 //      BROWSER_WIDTHS, or a --width on an http run; --layer other than L1/L2,
 //      without --driver browser, beside --set or --canary, L2 with --scenario;
+//      --scope without --layer or other than slice|grid, or --scope grid with
+//      --only/--scenario (GridTakesNoFilter); a --shard that is not k/N with
+//      1 <= k <= N and 2 <= N <= MAX_SHARDS (BadShard), or beside --canary; a
+//      --shard whose stripe holds no item of the plan (ShardEmpty — fewer items
+//      than shards — after sign-in, before any case);
 //      a layered plan given any --width but its own — L1 and api-only-browser
 //      take 1280 only, L2 and width-sweep none; a layered set over http); a
 //      layered plan with no case (NothingPlanned) or with one result id twice
 //      (DuplicateCaseId) — both after sign-in, before any case; a run id whose
 //      <report-dir>/<run-id>/results.json already exists (RunIdReused, W1c
-//      Task 8 E-2 — its evidence is kept, never overwritten); an unknown
+//      Task 8 E-2 — its evidence is kept, never overwritten); a run id whose
+//      case orgs (`m-<run-id>-<n>`) this DATABASE already holds (RunIdUsedInDb,
+//      W1d items 12, 25 — the report dir cannot see another dir's run, or
+//      model.ts's: asked after the DB opens, BEFORE the sign-in, so every shard
+//      refuses a reused id too); a width no layer runs at (NoLayerForWidth,
+//      W1d item 5 — defensive: every --width the CLI accepts has a layer); an unknown
 //      filter value (UnknownFilter — checked before anything else, PF13); an
 //      unknown --set (UnknownSet) or a planner that refuses to be built (a
 //      bound variant case the engine cannot score, BoundVariantUnscorable; a
@@ -107,24 +137,32 @@ import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesFo
 import { expectedGates, type GateStage } from "./lib/format-gates-copy.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS } from "./lib/driver/http-driver.ts";
 import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
+import type { FillerName } from "./lib/fillers.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
-import { routeTo } from "./lib/routing.ts";
+import { routeViaTemplate } from "./lib/templates.ts";
 import {
-  API_ONLY_BROWSER_SET, LAYER_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
-  type LayerCase, type PlannedLayerCase,
+  API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, LAYER_PLANNERS, NoLayerForWidth, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
+  type LayerCase, type LayerScope, type PlannedLayerCase,
 } from "./lib/layers.ts";
-import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
+import { CARRY8_1280_SET, carry8Planner } from "./lib/carry-1280-set.ts";
+import { MATCH_DAY_SET, VOID_PROOF_SET, matchDayPlanner, voidProofPlanner } from "./lib/match-day-set.ts";
+import { PAD_INNINGS_SET, padInningsPlanner } from "./lib/pad-innings-set.ts";
+import { PAD_PROOF_SET, PadProofFilter, padProofPlanner, padProofSport } from "./lib/pad-proof-set.ts";
+import type { L2Run } from "./lib/pairs.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
+import { PR_SAMPLE_SET, PrSampleNeedsRows, UnknownRow, formatRows, parseRows, prSamplePlanner } from "./lib/pr-sample.ts";
 import { BaseNotUrl, baseScrubber, redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
-import { decideState, writeResults, type CaseResult, type CheckResult, type Layer, type RunAbort, type RunResults } from "./lib/results.ts";
+import { decideState, writeResults, type CaseResult, type CheckResult, type L2Record, type Layer, type RunAbort, type RunResults, type ShardHeader } from "./lib/results.ts";
+import { RUN_ID_MAX, slugRunId } from "./lib/run-id.ts";
 import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
 import { SCENARIOS } from "./lib/scenarios/index.ts";
 import { ScenarioUnsupported, type CaseSpec } from "./lib/scenarios/types.ts";
 import {
-  DataDirMismatch, DataDirUnset, caseOrgSlug, chooseTopPublicPlan, createRealMatrixSql, ownerEmail, prepareCaseOrg, requireOwnDataDir,
+  DataDirMismatch, DataDirUnset, RunIdUsedInDb, caseOrgSlug, chooseTopPublicPlan, createRealMatrixSql, ownerEmail, prepareCaseOrg, requireOwnDataDir,
 } from "./lib/seed-org.ts";
+import { BadShard, parseShard, stripe, type Shard } from "./lib/shard.ts";
 import { resolveSportCfg } from "./lib/sport-cfg.ts";
 import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkCellFilter, checkSliceFilter, isSliceCell, planCanaryCase, planSliceCases } from "./lib/slice.ts";
 import { W1_DRIVING_SET, w1DrivingPlanner } from "./lib/w1-driving-set.ts";
@@ -136,8 +174,10 @@ export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 
 
 /** A run id names the report directory, the owner's email and every case's
  *  org slug (`m-<id>-<n>`), so it must be slug-safe and short enough that no
- *  slug is ever cut — a cut slug would drop the case number and collide. */
-export const RUN_ID_MAX = 40;
+ *  slug is ever cut — a cut slug would drop the case number and collide. The
+ *  slug moved to lib/run-id.ts (W1d Task 4), and so did model.ts's import of
+ *  the bound (W1d Task 5); this re-export is for the callers that still name it here. */
+export { RUN_ID_MAX };
 
 export interface RunDb {
   userIdForEmail(email: string): Promise<string>;
@@ -147,6 +187,9 @@ export interface RunDb {
   planGrants(planKey: string): Promise<readonly string[]>;
   /** `planKey`'s numeric limit for `featureKey`, null = unlimited (seed-org.ts MatrixSql.planLimit). */
   planLimit(planKey: string, featureKey: string): Promise<number | null>;
+  /** How many case orgs `runId` has already seeded in this database (seed-org.ts MatrixSql.runIdTaken,
+   *  W1d items 12, 25). Required, never optional: a db without it would skip the refusal rather than fail. */
+  runIdTaken(runId: string): Promise<number>;
   dispose(): Promise<void>;
 }
 
@@ -192,7 +235,12 @@ export interface CaseDriverOptions {
   evidenceId: string;
 }
 /** One case's driver and the close that releases its browser context. */
-export interface CaseBrowserDriver { driver: OrganiserDriver & { checks(): CheckResult[] }; close(): Promise<void> }
+export interface CaseBrowserDriver {
+  /** `fillers` (W1d item 21): the setup filler the driver ran, by name — BrowserDriver's
+   *  own getter (driver/browser-driver.ts). Optional, so a driver that counts none writes none. */
+  driver: OrganiserDriver & { checks(): CheckResult[]; readonly fillers?: Readonly<Partial<Record<FillerName, number>>> };
+  close(): Promise<void>;
+}
 /** One browser per run: a driver per case, then one close. */
 export interface BrowserRun {
   caseDriver(o: CaseDriverOptions): Promise<CaseBrowserDriver>;
@@ -208,8 +256,9 @@ export class BrowserCaseAborted extends Error {
   }
 }
 
-/** What a planner may read from the command line. */
-export interface PlannerCli { only?: string; scenario?: string; canary?: string; set?: string }
+/** What a planner may read from the command line. `rows` (W1d Task 7) is the rows a PR declared, for `--set pr-sample`
+ *  only — parseCli refuses it beside any other plan. */
+export interface PlannerCli { only?: string; scenario?: string; canary?: string; set?: string; rows?: readonly string[] | "all" }
 
 /** A case list and the sports whose builder variant order it needs from the DB
  *  (read once each, before planning). W1a carry 4: tests inject one instead of
@@ -274,6 +323,8 @@ export const slicePlanner: PlanCases = (cli) => {
 /** The named sets `--set` chooses from. */
 export const SETS: Readonly<Record<string, PlanCases | PlanLayers>> = Object.freeze({
   [PROBE_SET]: probePlanner, [PAD_PROOF_SET]: padProofPlanner,
+  // W1d Task 12 fix round 1 (T12-I1): the one case that reaches cricket's two-innings pad route, under LIFECYCLE — it takes no filter.
+  [PAD_INNINGS_SET]: padInningsPlanner,
   // W1c Task 12 (ruling 39 / D7): layered — each places its own widths.
   [WIDTH_SWEEP_SET]: widthSweepPlanner, [API_ONLY_BROWSER_SET]: apiOnlyBrowserPlanner,
   // W1-driving Task 12 (ruling 48): every catalogue cell × the four scripts,
@@ -282,6 +333,11 @@ export const SETS: Readonly<Record<string, PlanCases | PlanLayers>> = Object.fre
   // W1-driving Task 13 (ruling 47): one L1 cell per capability, plus the two
   // template-only cells through their gallery cards — layered, at 1280.
   [W1_DRIVING_L1_SET]: w1DrivingL1Planner,
+  // W1d Task 7 (D13): the per-PR sample — the declared rows' w1-driving cases plus a fixed 33 — over HTTP, at L3.
+  [PR_SAMPLE_SET]: prSamplePlanner,
+  // W1d Task 14 (items 15c-15f), all layered and browser-only, none taking a filter: a match day (the run sheet's
+  // default filter, the rail's fold) and a void from the console, each at 1280 and 320; forfeit and withdraw at 1280.
+  [MATCH_DAY_SET]: matchDayPlanner, [VOID_PROOF_SET]: voidProofPlanner, [CARRY8_1280_SET]: carry8Planner,
 });
 
 export class UnknownSet extends Error {
@@ -315,6 +371,18 @@ export class NothingPlanned extends Error {
   constructor(label: string) {
     super(`${label}: nothing planned — the plan holds no case (driven or recorded), so there is no run to write`);
     this.name = "NothingPlanned";
+  }
+}
+
+/** W1d Task 4 (D4): `--shard k/N` of a plan with fewer items than N, so this
+ *  stripe holds none. A run of nothing must never read as a shard, so it is
+ *  refused (exit 2) and nothing is written — merge-shards would otherwise wait
+ *  for a file that can never be valid. Named "ShardEmpty": the merge's own name
+ *  for the same fact seen from the other side. */
+export class ShardEmptyPlan extends Error {
+  constructor(shard: Shard, planSize: number) {
+    super(`shard ${shard.index}/${shard.of} of a plan of ${planSize} items holds none — fewer items than shards`);
+    this.name = "ShardEmpty";
   }
 }
 
@@ -447,21 +515,20 @@ export interface CallRefusal { method: string; path: string; status: number; cod
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] (--set ${W1_DRIVING_SET} also takes --only/--scenario)`;
-
-/** D10 (ruling 52): browser workers are not this wave's — one chromium per
- *  run, one context per case, one case at a time. */
-const BROWSER_WORKERS = routeTo("W1d", "browser workers inside a shard (D10)");
+const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--scope slice|grid] [--shard k/N] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] [--rows ROWS] (--set ${W1_DRIVING_SET} also takes --only/--scenario; --set ${PAD_PROOF_SET} takes --only league|<sport>; --set ${PR_SAMPLE_SET} takes --rows: <row>[,<row>...] | all | none)
+  --shard k/N  run only plan items i with i mod N = k-1`;
 
 const say = (s: string): void => { process.stdout.write(`${redact(s)}\n`); };
 const warn = (s: string): void => { process.stderr.write(`${redact(s)}\n`); };
 const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
-/** `driver` and `widthArg` (W1c Task 6), `layer` (Task 12). The width is
+/** `driver` and `widthArg` (W1c Task 6), `layer` (Task 12), `scope` (W1d Task 3:
+ *  what `--layer` covers — absent is the slice, the W1c meaning), `shard` (W1d
+ *  Task 4: run only that stripe of the plan — absent runs it all). The width is
  *  kept as typed until the plan is chosen: a plain browser run needs one
  *  (resolved by plainBrowserWidth), a layered plan sets its own and refuses
  *  any other (layeredWidthRefusal). */
-interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; widthArg: string | undefined; workers: number }
+interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; rows?: readonly string[] | "all"; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; scope?: LayerScope; shard?: Shard; widthArg: string | undefined; workers: number }
 
 /** `--workers` (W1-driving T11): digits only, then 1..MAX_WORKERS — the same
  *  bound runQueue refuses by name (WorkersOutOfRange), checked here first so
@@ -481,12 +548,29 @@ function parseWorkers(v: string | undefined): { workers: number } | { usage: str
  *  the set from its case ids. parseCli has already refused every combination
  *  this does not name (--set or --canary beside a filter or a layer). The
  *  driver and width are recorded apart (D9). */
-export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario">): string {
+export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario" | "scope" | "rows">): string {
   const filters = [...(cli.only === undefined ? [] : [`--only ${cli.only}`]), ...(cli.scenario === undefined ? [] : [`--scenario ${cli.scenario}`])];
-  // Only --set w1-driving takes filters (Task 12); for every other set they are refused, so this is `--set NAME`.
+  // W1d Task 7 (D13): --set pr-sample is the one set that takes --rows, recorded in its one canonical spelling (sorted,
+  // none and all written out), so a judge reads back the plan the run was made from. A pr-sample plan with no
+  // rows is no plan.
+  if (cli.set === PR_SAMPLE_SET) {
+    if (cli.rows === undefined) throw new PrSampleNeedsRows();
+    return `--set ${cli.set} --rows ${formatRows(cli.rows)}`;
+  }
+  // Only --set w1-driving (Task 12) and --set pad-proof (W1d item 15b, --only alone) take filters; every other set refuses them, so this is `--set NAME`.
   if (cli.set !== undefined) return [`--set ${cli.set}`, ...filters].join(" ");
   if (cli.canary !== undefined) return `--canary ${cli.canary}`;
-  return [cli.layer === undefined ? "slice" : `--layer ${cli.layer}`, ...filters].join(" ");
+  // W1d Task 3: a grid run says so. A slice run (the default, or --scope slice)
+  // keeps the string it always had, so every committed lock entry still matches.
+  return [cli.layer === undefined ? "slice" : `--layer ${cli.layer}${cli.scope === "grid" ? " --scope grid" : ""}`, ...filters].join(" ");
+}
+
+/** The scope a `--layer` run records in results.json (W1d item 2, PF-8):
+ *  "<layer> (<scope>)", so a reader never guesses whether `--layer L1` meant the
+ *  slice or the grid. A run that chose no `--layer` has no scope: its `plan`
+ *  names it. */
+export function scopeOf(cli: Pick<Cli, "layer" | "scope">): string | undefined {
+  return cli.layer === undefined ? undefined : `${cli.layer} (${cli.scope ?? "slice"})`;
 }
 
 /** The driver the command line asked for, or the usage refusal. A width is a
@@ -528,12 +612,12 @@ export function withoutBareDashes(argv: readonly string[]): string[] {
 }
 
 function parseCli(argv: string[]): Cli | { usage: string } {
-  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string; layer?: string; workers?: string };
+  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; rows?: string; driver?: string; width?: string; layer?: string; scope?: string; shard?: string; workers?: string };
   try {
     ({ values } = parseArgs({ args: withoutBareDashes(argv), options: {
       base: { type: "string" }, "run-id": { type: "string" }, "report-dir": { type: "string" },
-      only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" },
-      driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" }, workers: { type: "string" },
+      only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" }, rows: { type: "string" },
+      driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" }, scope: { type: "string" }, shard: { type: "string" }, workers: { type: "string" },
     } }));
   } catch (e) {
     return { usage: e instanceof Error ? e.message : String(e) };
@@ -542,9 +626,11 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   if ("usage" in how) return how;
   const w = parseWorkers(values.workers);
   if ("usage" in w) return w;
-  // D10: every browser plan (plain or layered) runs one case at a time.
+  // D10 (ruling 52), declined for good by W1d D11: every browser plan (plain or layered) runs one case at a time,
+  // one chromium per run and one context per case. Nothing owes browser workers (no route), so the refusal names what
+  // was given and where parallelism lives: the shard matrix, one job per shard.
   if (how.driver === "browser" && w.workers > 1) {
-    return { usage: `--workers ${w.workers} is HTTP-only in this wave (D10); browser workers are owed by ${BROWSER_WORKERS.wave} — ${BROWSER_WORKERS.why}` };
+    return { usage: `--workers ${w.workers} is refused with --driver browser: one browser case at a time per shard; parallelism is the shard matrix (W1d D11)` };
   }
   // W1c Task 12: --layer chooses the plan, and it is a browser plan.
   let layer: Cli["layer"];
@@ -556,18 +642,46 @@ function parseCli(argv: string[]): Cli | { usage: string } {
     if (values.layer === "L2" && values.scenario !== undefined) return { usage: "--layer L2 plans the committed l2-pairs.json runs; it takes no --scenario" };
     layer = values.layer;
   }
+  // W1d Task 3 (ruling 64): --scope chooses what a --layer covers. It has no
+  // meaning beside --set or --canary (each names its own plan), so it takes --layer.
+  let scope: LayerScope | undefined;
+  if (values.scope !== undefined) {
+    if (values.scope !== "slice" && values.scope !== "grid") return { usage: `--scope must be slice or grid, got ${values.scope}` };
+    if (layer === undefined) return { usage: "--scope picks a --layer's scope; it takes --layer (a --set or --canary plan has none)" };
+    scope = values.scope;
+  }
+  // W1d Task 4 (D4): --shard runs one stripe of a plan; a canary is one case, so it has no stripes.
+  let shard: Shard | undefined;
+  if (values.shard !== undefined) {
+    if (values.canary !== undefined) return { usage: "--shard stripes a plan; --canary runs one case — pass one" };
+    try { shard = parseShard(values.shard); } catch (e) { if (e instanceof BadShard) return { usage: e.message }; throw e; }
+  }
   // W1-driving Task 12: the w1-driving set takes --only/--scenario, never --canary.
   if (values.set === W1_DRIVING_SET && values.canary !== undefined) return { usage: `--set ${W1_DRIVING_SET} takes --only and --scenario; it takes no --canary` };
-  if (values.set !== undefined && values.set !== W1_DRIVING_SET && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
+  // W1d item 15b: --set pad-proof takes one sport's --only (league|<sport>, a sport with a pad adapter) and nothing else.
+  if (values.set === PAD_PROOF_SET) {
+    if (values.scenario !== undefined || values.canary !== undefined) return { usage: `--set ${PAD_PROOF_SET} takes --only league|<sport> alone; it takes no --scenario or --canary` };
+    if (values.only !== undefined) {
+      try { padProofSport(values.only); } catch (e) { if (e instanceof PadProofFilter) return { usage: e.message }; throw e; }
+    }
+  } else if (values.set !== undefined && values.set !== W1_DRIVING_SET && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
     return { usage: "--set runs a named set; it takes no --only, --scenario or --canary" };
   }
   if (values.canary !== undefined && (values.only !== undefined || values.scenario !== undefined)) {
     return { usage: "--canary runs league|generic alone; it takes no --only or --scenario" };
   }
-  const slugged = (values["run-id"] ?? `w1a-${Date.now().toString(36)}`).toLowerCase().replace(/[^a-z0-9-]+/g, "-");
-  const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
-  if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
-  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, layer, widthArg: values.width, workers: w.workers };
+  // W1d Task 7 (D13): --rows is the pr-sample set's declaration, and that set cannot run without one (no declaration is
+  // not "none": the workflow always passes it, so its absence is a wiring fault).
+  let rows: Cli["rows"];
+  if (values.rows !== undefined) {
+    if (values.set !== PR_SAMPLE_SET) return { usage: `--rows is --set ${PR_SAMPLE_SET}'s declaration; it takes --set ${PR_SAMPLE_SET}` };
+    try { rows = parseRows(values.rows); } catch (e) { if (e instanceof UnknownRow) return { usage: `${e.name}: ${e.message}` }; throw e; }
+  } else if (values.set === PR_SAMPLE_SET) {
+    return { usage: `--set ${PR_SAMPLE_SET} needs --rows <row>[,<row>...] | all | none (the rows a PR declares)` };
+  }
+  const runId = slugRunId(values["run-id"] ?? `w1a-${Date.now().toString(36)}`);
+  if (runId === null) return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
+  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, ...(rows === undefined ? {} : { rows }), driver: how.driver, layer, ...(scope === undefined ? {} : { scope }), ...(shard === undefined ? {} : { shard }), widthArg: values.width, workers: w.workers };
 }
 
 /** PF4: `vacuous` is every case that is neither an error red nor deferred and
@@ -638,7 +752,22 @@ class BrowserOpenFailed extends Error {
 /** One case the runner DRIVES: its spec, the layer it records, and its browser
  *  and width — null over HTTP. A plain run gives every case the CLI's width
  *  (D9); a layered plan gives each its own (W1c Task 12). */
-interface DrivenCase { spec: CaseSpec; layer: Layer; browser: { run: BrowserRun; width: BrowserWidth } | null }
+interface DrivenCase { spec: CaseSpec; layer: Layer; run: L2Run | null; browser: { run: BrowserRun; width: BrowserWidth } | null }
+
+/** W1d item 4: the committed l2-pairs.json run an L2 case IS, as results.json
+ *  records it — its `n`, what it `covers`, and the `l3Gap` reason. Only a
+ *  layer-L2 case that carries a run writes one, whatever state it ends in. */
+function l2Of(layer: Layer, run: L2Run | null): { l2?: L2Record } {
+  return layer === "L2" && run !== null ? { l2: { n: run.n, covers: [...run.covers], l3Gap: run.l3Gap } } : {};
+}
+
+/** W1d item 21: the setup filler a browser case's driver ran — only the names
+ *  it counted at least once, and no field at all when none (or when the driver
+ *  keeps no count). */
+function fillersOf(counts: Readonly<Partial<Record<FillerName, number>>> | undefined): { fillers?: Partial<Record<FillerName, number>> } {
+  const ran = Object.entries(counts ?? {}).filter(([, n]) => n > 0);
+  return ran.length === 0 ? {} : { fillers: Object.fromEntries(ran) };
+}
 
 async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number): Promise<{ result: CaseResult; refusal: CallRefusal | null }> {
   const { spec } = item;
@@ -653,6 +782,7 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
   let caseBrowser: CaseBrowserDriver | null = null;
   let counts = { calls: 0, fixtures: 0, events: 0 };
   let notes: string[] = [];
+  let fillers: { fillers?: Partial<Record<FillerName, number>> } = {};
   try {
     const org = await deps.prepareCaseOrg(
       { base: run.base, session: run.session, userId: run.userId, plan: run.plan },
@@ -707,6 +837,10 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
     // Every case's context is closed, whatever the scenario did; a failed
     // close is warned, never allowed to replace the case's own outcome.
     if (caseBrowser !== null) {
+      // W1d item 21: the filler it ran, read once the scenario is over (or threw)
+      // and before the close — and, like every read here, never allowed to
+      // replace the case's own outcome.
+      try { fillers = fillersOf(caseBrowser.driver.fillers); } catch (k) { warn(`matrix: case ${spec.caseId}: its driver's setup filler could not be read — ${errText(k)}`); }
       try { await caseBrowser.close(); } catch (e) { warn(`matrix: case ${spec.caseId}: closing its browser failed — ${errText(e)}`); }
     }
   }
@@ -717,6 +851,8 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
     state, reason: redact(reason), checks, counts, durationMs: Date.now() - t0, notes,
     // D9: the layer, driver and width the case ran at.
     ...(b === null ? { layer: item.layer, driver: "http", width: null } as const : { layer: item.layer, driver: "browser", width: b.width } as const),
+    // W1d items 4 and 21: the pair-run an L2 case is, and the setup filler a browser case ran.
+    ...l2Of(item.layer, item.run), ...fillers,
   };
   return { result, refusal };
 }
@@ -731,6 +867,10 @@ function recordPlanned(c: PlannedLayerCase): CaseResult {
     caseId: layerCaseId(c), row: id.row, sport: id.sport, variant: id.variant, scenario: id.scenario, canary: false,
     state, reason: redact(reason), checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],
     layer: c.layer, driver: "browser", width: c.width,
+    // W1d item 3: the marker that says this case was planned, never run — so a
+    // reader no longer infers it from `durationMs === 0` (I-2's heuristic). And
+    // item 4: a ░ L2 case still names its pair-run.
+    planned: true, ...l2Of(c.layer, c.run),
   };
 }
 
@@ -761,26 +901,29 @@ export function canaryVerdict(key: string, c: CaseResult | undefined): number {
  *  case's error red, so this is a harness defect) is recorded red at its own
  *  plan index — every other worker's case keeps its result. Never for the
  *  environment (abortsRun) nor for a planned case: those abort the run. */
-function crashResult(spec: CaseSpec, layer: Layer, width: BrowserWidth | null, e: unknown): CaseResult {
+function crashResult(spec: CaseSpec, layer: Layer, run: L2Run | null, width: BrowserWidth | null, e: unknown): CaseResult {
   const { state, reason } = decideState({ checks: [], deferred: null, error: `crashed — ${errText(e)}`, mandated: null, noPath: null });
   return {
     caseId: atWidth(spec.caseId, width), row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
     state, reason: redact(reason), checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],
     ...(width === null ? { layer, driver: "http", width: null } as const : { layer, driver: "browser", width } as const),
+    // An L2 case that crashed is still the pair-run it was (W1d item 4).
+    ...l2Of(layer, run),
   };
 }
 
 /** One item of a run, in plan order: a case the runner drives at its layer
  *  and width (null over HTTP), or a layered plan's 🚫/░ case, recorded. */
 type RunItem =
-  | { readonly kind: "driven"; readonly spec: CaseSpec; readonly layer: Layer; readonly width: BrowserWidth | null }
+  | { readonly kind: "driven"; readonly spec: CaseSpec; readonly layer: Layer; readonly run: L2Run | null; readonly width: BrowserWidth | null }
   | { readonly kind: "planned"; readonly case: PlannedLayerCase };
 
 /** A plain plan's specs all run at the CLI's width (null over HTTP; D9); a
  *  layered plan places each of its cases itself. */
 function runItems(planner: CasePlanner | LayeredPlanner, variantFor: (sport: string) => string, width: BrowserWidth | null): RunItem[] {
-  if (!isLayered(planner)) return planner.plan(variantFor).map((spec) => ({ kind: "driven", spec, layer: width === null ? "L3" : layerOfWidth(width), width }));
-  const items = planner.layered(variantFor).map((c: LayerCase): RunItem => (c.spec !== null ? { kind: "driven", spec: c.spec, layer: c.layer, width: c.width } : { kind: "planned", case: c }));
+  // W1d item 20: over a browser (a width), a spec on a template cell drives through the template's card, as the grid's L1 case does. Over HTTP nothing changes: the committed plans stay frozen.
+  if (!isLayered(planner)) return planner.plan(variantFor).map((spec) => ({ kind: "driven", spec: width === null ? spec : routeViaTemplate(spec), layer: width === null ? "L3" : layerOfWidth(width), run: null, width }));
+  const items = planner.layered(variantFor).map((c: LayerCase): RunItem => (c.spec !== null ? { kind: "driven", spec: c.spec, layer: c.layer, run: c.run, width: c.width } : { kind: "planned", case: c }));
   if (items.length === 0) throw new NothingPlanned(planner.label);
   const seen = new Set<string>();
   const dupes = new Set<string>();
@@ -811,8 +954,17 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // Every case that finished, by plan index, and whether it finished after
   // the turns tripped (T12-R4: in flight at the abort, so not evidence).
   const finished = new Map<number, { result: CaseResult; duringAbort: boolean }>();
+  // W1d Task 4: set once the whole plan is known, when --shard is given.
+  let shardHeader: ShardHeader | undefined;
   const db = await deps.openDb();
   try {
+    // W1d items 12, 25: the case orgs' slugs are `m-<run id>-<n>` and unique, so a run id this DATABASE already
+    // holds would red its first org (organizations_slug_key) and then every case. The E-2 guard above reads only
+    // <report-dir>/<id>/results.json, which another --report-dir (or model.ts, which seeds the same slugs) never
+    // leaves. Asked here — after the DB (and its own-DB proof) is open, BEFORE the sign-in, the shard stripe, the
+    // plan reads and any case — so a sharded run refuses a reused id by name too, in every shard.
+    const taken = await db.runIdTaken(cli.runId);
+    if (taken > 0) throw new RunIdUsedInDb(cli.runId, taken);
     // LOAD-BEARING (final review gap hunt): the data-dir guard proves the
     // harness's OWN SQL connection, never the server's. That the server at
     // SMOKE_BASE writes the same DB is proven only by these two, each of which
@@ -845,8 +997,16 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       if (keys === undefined) throw new UndeclaredPlannerSport(s, planner.sports);
       return builderDefaultVariant(s, keys);
     };
-    const items = runItems(planner, variantFor, width);
-    const specs = items.flatMap((it) => (it.kind === "driven" ? [it.spec] : []));
+    const fullPlan = runItems(planner, variantFor, width);
+    // W1d Task 4 (D4): the stripe is taken from the WHOLE plan, after runItems has judged it
+    // (NothingPlanned, DuplicateCaseId), so every shard sees the same plan and the same refusals.
+    const planSize = fullPlan.length;
+    const items = cli.shard === undefined ? fullPlan : stripe(fullPlan, cli.shard);
+    if (cli.shard !== undefined && items.length === 0) throw new ShardEmptyPlan(cli.shard, planSize);
+    if (cli.shard !== undefined) shardHeader = { ...cli.shard, planSize };
+    // The start gates below judge the WHOLE plan, in every shard: a plan whose gate or stage cap fails
+    // fails all N shards at once, before any runs for an hour and the merge finds one short.
+    const specs = fullPlan.flatMap((it) => (it.kind === "driven" ? [it.spec] : []));
     const undeclared = planner.deniesFeatures ? [] : specs.filter((s) => (s.deny ?? []).length > 0).map((s) => s.caseId);
     if (undeclared.length > 0) throw new UndeclaredDeny(undeclared);
     // RR-1: before any case's DB work, the plan must grant every gate a case touches.
@@ -894,7 +1054,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
         // Outside runCase's try: a browser that cannot open aborts the run (above).
         try { browser = { run: await browserFor(), width: item.width }; } catch (e) { throw new BrowserOpenFailed(e); }
       }
-      const ran = await runCase(deps, { base, session, userId, plan, runId: cli.runId, reportDir: dir }, { spec: item.spec, layer: item.layer, browser }, i);
+      const ran = await runCase(deps, { base, session, userId, plan, runId: cli.runId, reportDir: dir }, { spec: item.spec, layer: item.layer, run: item.run, browser }, i);
       if (ran.refusal !== null) refusals.set(ran.result.caseId, ran.refusal);
       return progress(i, ran.result);
     };
@@ -907,7 +1067,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       // run's abort, never given a result: its request may still land.
       if (e instanceof TurnDeadlineExceeded && item.kind === "driven") timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: item.spec.caseId, worker: null, inFlight: [] };
       if (abortsRun(e) || item.kind === "planned") throw e;
-      return progress(i, crashResult(item.spec, item.layer, item.width, e));
+      return progress(i, crashResult(item.spec, item.layer, item.run, item.width, e));
     };
     // Found live (w1drv-t11-w3b, -w8): requesting a sign-in link deletes the
     // owner's unused ones (apps/web/src/lib/login-link.ts), so workers signing
@@ -959,6 +1119,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // The grid is snapshotted into the results (T11 review M4), so MATRIX.md
   // renders from results.json alone however the catalogue moves later.
   const grid = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
+  const scope = scopeOf(cli);
   // writeResults scans, THEN writes the run's base as LOCAL_BASE (final batch
   // FB-1); MATRIX.md renders what it wrote, so the two files agree.
   const results: RunResults = {
@@ -966,6 +1127,11 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // A layered plan names its layer; a plain one is its width's (layerOfWidth:
     // 1280 L1, a phone width L2), L3 over HTTP.
     layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, plan: planOf(cli),
+    // W1d item 2 (T3): which plan `--layer` meant, beside `plan` (which keeps its string).
+    ...(scope === undefined ? {} : { scope }),
+    // W1d Task 4 (D4): this run is one stripe of its plan. `plan` above is the command line's, without the
+    // shard, so every shard of one run carries the same plan string.
+    ...(shardHeader === undefined ? {} : { shard: shardHeader }),
     // Ruling 46: written only when more than one worker RAN (m-1: a --workers 8
     // run of one case ran one), so a one-worker run's header is today's.
     ...(lanes.opened > 1 ? { workers: lanes.opened } : {}),
@@ -1017,8 +1183,9 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
     // Own keys only: `toString` or `__proto__` would otherwise name a "set".
     if (cli.set !== undefined && !Object.prototype.hasOwnProperty.call(SETS, cli.set)) throw new UnknownSet(cli.set);
     // W1c Task 12: --layer chooses a layered plan (parseCli refused it beside --set).
-    const choose = deps.planCases ?? (cli.layer !== undefined ? LAYER_PLANNERS[cli.layer] : cli.set === undefined ? slicePlanner : SETS[cli.set]);
-    planner = choose({ only: cli.only, scenario: cli.scenario, canary: cli.canary, set: cli.set });
+    // W1d Task 3: --scope grid picks the full-grid planner of that layer; the slice is the default.
+    const choose = deps.planCases ?? (cli.layer !== undefined ? (cli.scope === "grid" ? LAYER_GRID_PLANNERS : LAYER_PLANNERS)[cli.layer] : cli.set === undefined ? slicePlanner : SETS[cli.set]);
+    planner = choose({ only: cli.only, scenario: cli.scenario, canary: cli.canary, set: cli.set, rows: cli.rows });
   } catch (e) {
     warn(`matrix: ${errText(e)}`);
     return EXIT.REFUSED;
@@ -1057,7 +1224,9 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
     return await execute(deps, cli, base, planner, width);
   } catch (e) {
     const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanLacksGate
-      || e instanceof PlanStageCapTooLow || e instanceof NothingPlanned || e instanceof DuplicateCaseId;
+      || e instanceof PlanStageCapTooLow || e instanceof NothingPlanned || e instanceof DuplicateCaseId || e instanceof ShardEmptyPlan
+      // W1d item 5: a width no layer runs at is a precondition, not a crash mid-run. W1d items 12, 25: so is a run id the DB holds.
+      || e instanceof NoLayerForWidth || e instanceof RunIdUsedInDb;
     warn(`matrix: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }
@@ -1149,6 +1318,7 @@ export function realDeps(dbf: DbFactories = REAL_DB, turnDeadlineMs: number = TU
         chooseTopPublicPlan: async () => chooseTopPublicPlan(await p.sql.planCandidateInfo(await m.sql.listPlanKeys())),
         planGrants: (k) => m.sql.planGrants(k),
         planLimit: (k, f) => m.sql.planLimit(k, f),
+        runIdTaken: (id) => m.sql.runIdTaken(id),
         dispose: () => closeHandles(m, p),
       };
       resolve(db);

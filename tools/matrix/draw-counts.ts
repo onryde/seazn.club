@@ -13,11 +13,20 @@
 // of a kind I2 judges — the invariant's own declaration (invariants.ts I2
 // stageKinds), never a list typed here.
 //
-// Refuses (exit 1, nothing written): a case with no competition or with two
-// (the name no longer identifies it), and zero cases counted. Like
-// seed-org.ts it refuses a database it cannot prove is its own:
-// BENCH_EXPECTED_DATA_DIR is mandatory and `show data_directory` must equal it.
-// Exit 2 is a usage error, 3 an unreadable results.json.
+// Exit codes (one meaning per code across every CLI, W1d item 6 / D8, lib/exit-codes.ts):
+//   0  the counts file is written: at least one case counted;
+//   1  is not used: this CLI judges nothing, it counts. Before W1d a refusal
+//      was filed here, under the code a verdict uses;
+//   2  refused, nothing written: usage (no run dir, no --out, an unknown flag);
+//      unreadable input (a results.json that is missing, not JSON, or refused
+//      by the schema); or a precondition it will not run on: a case with no
+//      competition or with two (the name no longer identifies it), zero cases
+//      counted, no DATABASE_URL, or a database it cannot prove is its own
+//      (like seed-org.ts: BENCH_EXPECTED_DATA_DIR is mandatory and
+//      `show data_directory` must equal it);
+//   3  a crash while the CLI loads, through the preload
+//      (scripts/lib/crash-exit.ts). Run it only through that script: without
+//      it, a load crash exits 1.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -26,7 +35,7 @@ import { INVARIANTS } from "./lib/invariants.ts";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
 import { redact } from "./lib/redact.ts";
 import { parseResults } from "./lib/results.ts";
-import { DataDirMismatch, requireOwnDataDir } from "./lib/seed-org.ts";
+import { DataDirMismatch, DataDirUnset, requireOwnDataDir } from "./lib/seed-org.ts";
 
 const USAGE = "usage: draw-counts.ts <run dir>... --out <file.json>";
 
@@ -120,13 +129,16 @@ export async function main(argv: readonly string[], env: Readonly<Record<string,
     });
   } catch (e) {
     process.stderr.write(`draw-counts: ${redact(e instanceof Error ? `${e.name}: ${e.message}` : String(e))}\n`);
-    return 3;
+    return 2;
   }
-  const expected = requireOwnDataDir(env);
-  const url = env.DATABASE_URL;
-  if (url === undefined || url === "") throw new DrawCountRefused("DATABASE_URL is unset");
-  const sql = postgres(url, { max: 1, onnotice: () => {} });
+  // A precondition it refuses is 2 like any other refusal (D8): the data-dir and URL checks sit inside the
+  // try, so an unset BENCH_EXPECTED_DATA_DIR or DATABASE_URL is a named refusal, not an uncaught throw.
+  let sql: ReturnType<typeof postgres> | undefined;
   try {
+    const expected = requireOwnDataDir(env);
+    const url = env.DATABASE_URL;
+    if (url === undefined || url === "") throw new DrawCountRefused("DATABASE_URL is unset");
+    sql = postgres(url, { max: 1, onnotice: () => {} });
     const cases = casesOf(runs);
     const [{ data_directory: actual }] = await sql<{ data_directory: string }[]>`show data_directory`;
     if (actual !== expected) throw new DataDirMismatch(expected, actual);
@@ -139,11 +151,11 @@ export async function main(argv: readonly string[], env: Readonly<Record<string,
     process.stdout.write(`draw-counts: ${counts.checked} case(s) over ${runs.length} run(s); ${withBracket} with ≥1 bracket draw → ${out}\n`);
     return 0;
   } catch (e) {
-    if (!(e instanceof DrawCountRefused) && !(e instanceof DataDirMismatch)) throw e;
+    if (!(e instanceof DrawCountRefused) && !(e instanceof DataDirMismatch) && !(e instanceof DataDirUnset)) throw e;
     process.stderr.write(`${redact(e.message)}\n`);
-    return 1;
+    return 2;
   } finally {
-    await sql.end();
+    await sql?.end();
   }
 }
 

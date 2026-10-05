@@ -36,13 +36,13 @@
 // Finalize left one core.finalize row. No HTTP case has one to compare, so it
 // is browser-only.
 import { HARNESS_SCENARIO } from "./scenario-catalogue.ts";
-import type { AnyRunResults, CaseResult, CaseResultV2, CheckResult, DriverKind } from "./results.ts";
+import { isPlannedShape, type AnyRunResults, type CaseResult, type CaseResultV2, type CheckResult, type DriverKind } from "./results.ts";
 
 /** Check ids only the browser driver emits (lib/driver/browser-driver.ts,
  *  mixed.ts, lib/browser/evidence.ts, the PADPROOF scenario). A prefix, or a
  *  whole id. parity.test.ts proves each one covers an id the driver emits, and
  *  that every browser-only id the committed browser runs record is covered. */
-export const BROWSER_ONLY_PREFIXES = ["ui-", "visual-", "no-horizontal-scroll", "mixed-", "builder-", "organiser-ui-path", "pad-", "finalize-ledger-row"] as const;
+export const BROWSER_ONLY_PREFIXES = ["ui-", "visual-", "no-horizontal-scroll", "mixed-", "builder-", "organiser-ui-path", "pad-", "finalize-ledger-row", "fold-branch", "runsheet-today-default"] as const;
 export const isBrowserOnly = (id: string): boolean => BROWSER_ONLY_PREFIXES.some((p) => id.startsWith(p));
 
 /** `vacuous` (review I-1): a pair with no common check whose state OR reason
@@ -163,8 +163,8 @@ function compareChecks(caseId: string, h: AnyCase, b: AnyCase, diffs: ParityRow[
   return common;
 }
 
-/** A 🚫/░ case as run.ts recordPlanned writes it: planned, never driven. */
-const PLANNED_STATES: ReadonlySet<string> = new Set(["no_path", "not_run"]);
+/** W1d item 3: recordPlanned's own marker. A v2 case predates it, so it never has one. */
+const markedPlanned = (c: AnyCase): boolean => "planned" in c && c.planned === true;
 
 /** Every browser case against the HTTP case it pairs with; then every HTTP
  *  case no browser case paired with (outsidePlan). Rows are in that order. */
@@ -181,13 +181,17 @@ export function compareRuns(http: AnyRunResults, browser: AnyRunResults): Parity
   let checks = 0;
   for (const b of browser.cases) {
     const key = httpKeyOf(b);
+    // Exempt only in recordPlanned's exact shape — 🚫/░ with no check — and then
+    // for either of its two witnesses: the marker it writes (W1d item 3), which
+    // holds even when the key MAPS (an API-only row's planned 🚫 is LIFECYCLE,
+    // a scripted scenario), or, in old evidence with no marker, a key that maps
+    // to no script. Anything else (a PADPROOF run, a mapping hole, a marked case
+    // in a state recordPlanned never writes) stays compared or a missing row.
+    if (isPlannedShape(b) && (markedPlanned(b) || "unmapped" in key)) {
+      notDriven.push({ caseId: b.caseId, state: b.state });
+      continue;
+    }
     if ("unmapped" in key) {
-      // Exempt only in recordPlanned's exact shape: no script, 🚫/░, no check.
-      // Anything else (a PADPROOF run, a mapping hole) stays a missing row.
-      if (PLANNED_STATES.has(b.state) && b.checks.length === 0) {
-        notDriven.push({ caseId: b.caseId, state: b.state });
-        continue;
-      }
       diffs.push({ caseId: b.caseId, kind: "missing", id: null, http: ABSENT, browser: `${b.state} — ${key.unmapped}` });
       continue;
     }

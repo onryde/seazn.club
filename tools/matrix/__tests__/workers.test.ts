@@ -8,6 +8,9 @@
 //   crashed or open throws → the queue ABORTS: no further item starts, the
 //     in-flight ones finish, and runQueue rejects with that error;
 //   a second call on the same inputs → the same answer (no state carried over).
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_WORKERS, TurnDeadlineExceeded, TurnsClosed, WorkersOutOfRange, oneAtATime, runQueue, sharedTurns } from "../lib/workers.ts";
@@ -77,6 +80,29 @@ describe("runQueue", () => {
     expect(MAX_WORKERS).toBe(8);
     expect(await runQueue([1, 2], 1, async () => 0, async (_w, x) => x, () => 0)).toEqual([1, 2]);
     expect(await runQueue([1, 2], MAX_WORKERS, async () => 0, async (_w, x) => x, () => 0)).toEqual([1, 2]);
+  });
+  // W1d item 18 (D11): the cap STAYS 8. The comment above it used to invite the next wave to raise it; D11 declined
+  // (parallelism is the shard matrix, which is free jobs), so the comment names D11 and the declaration is read as text:
+  // a raise is a diff to this test, never a silent one.
+  it("MAX_WORKERS stays 8 and its comment names D11: the declaration is text-pinned beside the decision, with no standing invitation to raise it", () => {
+    const text = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "lib", "workers.ts"), "utf8");
+    const at = text.indexOf("export const MAX_WORKERS");
+    expect(at, "workers.ts no longer declares MAX_WORKERS").toBeGreaterThan(0);
+    expect(text.slice(at).split("\n")[0]).toBe("export const MAX_WORKERS = 8;");
+    // The comment block directly above the declaration (contiguous `//` lines).
+    const above = text.slice(0, at).trimEnd().split("\n");
+    const block: string[] = [];
+    for (let i = above.length - 1; i >= 0 && above[i]!.startsWith("//"); i--) block.unshift(above[i]!);
+    const comment = block.join("\n");
+    expect(block.length, "no comment above MAX_WORKERS").toBeGreaterThan(0);
+    expect(comment).toMatch(/\bD11\b/);
+    expect(comment).toMatch(/stays 8/);
+    expect(comment, "the stale invitation").not.toMatch(/may raise it/);
+    // The decision, in its own words, and no imperative invitation in other words (a mutant that reworded the
+    // invitation to "raise it when the wave needs more" survived the one-phrase check above).
+    expect(comment).toMatch(/raising it is a decision, not a drift/);
+    expect(comment, "an imperative invitation").not.toMatch(/\braise it\b/i);
+    expect(MAX_WORKERS).toBe(8);
   });
   it("a second call on the same inputs gives the same answer and opens its own workers again", async () => {
     let opened = 0;

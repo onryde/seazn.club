@@ -10,6 +10,7 @@ import { stagesForRow } from "../catalogue.ts";
 import { RefusedCall, type StagesProbe } from "../driver/types.ts";
 import { expectedGate, type FormatGate } from "../format-gates-copy.ts";
 import { assertion, type Item } from "./assertions.ts";
+import { inSetup } from "./common.ts";
 import type { CaseSpec, Scenario, ScenarioContext, ScenarioOutput } from "./types.ts";
 
 export const DENIED_CHECKS = ["denied-refused-named", "denied-nothing-created", "denied-put-keeps-stages"] as const;
@@ -60,8 +61,11 @@ export const denied: Scenario = {
     }
     const gated = stagesForRow(ctx.spec.row);
     const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
-    const competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
-    const division = await ctx.driver.createDivision(competition.id, { name: "Matrix denied", slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant });
+    // W1d Task 6 (D6, review 3 R3-m3): the competition, both divisions and the working stage are SETUP —
+    // a refusal of one is the harness asking wrongly (SetupRefused). The gated POST below is the action
+    // under test, on the very route the working stage uses, so it stays OUTSIDE inSetup: its refusal is data.
+    const competition = await inSetup(() => ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug }));
+    const division = await inSetup(() => ctx.driver.createDivision(competition.id, { name: "Matrix denied", slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant }));
     let post: StagesProbe | null = null;
     try {
       await ctx.driver.postStages(division.id, gated);
@@ -73,8 +77,8 @@ export const denied: Scenario = {
     // after an insert refuses AND leaves a stage behind.
     const after = await ctx.driver.listStages(division.id);
     // The PUT probe: a division with a working stage, replaced by the gated body.
-    const second = await ctx.driver.createDivision(competition.id, { name: "Matrix denied put", slug: "d2", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant });
-    const kept = await ctx.driver.postStages(second.id, stagesForRow(WORKING_ROW));
+    const second = await inSetup(() => ctx.driver.createDivision(competition.id, { name: "Matrix denied put", slug: "d2", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant }));
+    const kept = await inSetup(() => ctx.driver.postStages(second.id, stagesForRow(WORKING_ROW)));
     const put = await ctx.driver.replaceStagesProbe(second.id, gated);
     const afterPut = await ctx.driver.listStages(second.id);
     const accepted = put.status >= 200 && put.status < 300;

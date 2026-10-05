@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, TEMPLATE_VISIBILITY, type Transport } from "../lib/driver/http-driver.ts";
-import { DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
+import { DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId, VOID_EVENT, voidTargetOf } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { nextMatchStartedText, wireCodeFor } from "./product-text.ts";
 
@@ -863,5 +863,156 @@ describe("HttpDriver — rosters and lineups (W1-driving Task 3)", () => {
     const { t, calls } = fake([(c) => (c.path === "/api/v1/persons" ? err(422, wireCodeFor(422)) : undefined)]);
     await expect(drv(t).setMembers("e1", roster)).rejects.toBeInstanceOf(RefusedCall);
     expect(calls.map((c) => c.method)).toEqual(["POST"]);
+  });
+});
+
+// W1d Task 14 (item 15e): voidLast. The console's own rule (fixture-console.tsx `lastVoidable`, text-pinned in
+// void-proof.test.ts): the newest event that is neither a core.void nor already voided. Expected values below are
+// that rule applied by hand to the ledgers written out in each test, never read back from the driver.
+describe("HttpDriver — voidLast (W1d Task 14, item 15e)", () => {
+  const row = (seq: number, type: string, payload: unknown = {}) => ({ id: `ev${seq}`, seq, type, payload });
+  const voidRow = (seq: number, target: string) => row(seq, "core.void", { event_id: target });
+  const EVENTS = "/api/v1/fixtures/f1/events";
+  /** A product whose ledger is `rows` (served for any since_seq) and which accepts a void by appending it. */
+  function product(rows: ReturnType<typeof row>[], answer?: (c: Call) => RawResult | undefined) {
+    return fake([
+      (c) => (c.method === "GET" && c.path.startsWith(`${EVENTS}?since_seq=`) ? ok(rows) : undefined),
+      (c) => answer?.(c),
+      (c) => (c.method === "POST" && c.path === EVENTS ? ok({ seq: rows.length + 1, status: "in_play", outcome: null, event_id: `ev${rows.length + 1}` }, 201) : undefined),
+    ]);
+  }
+
+  it("voids the newest event: reads the whole ledger first, then POSTs core.void {event_id} at the ledger's tip", async () => {
+    const { t, calls } = product([row(1, "core.start"), row(2, "badminton.game.summary", { home: 21, away: 0 })]);
+    const d = drv(t);
+    expect(await d.voidLast("f1")).toEqual({ voidedEventId: "ev2", voidedType: "badminton.game.summary" });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${EVENTS}?since_seq=0`, `POST ${EVENTS}`]);
+    expect(calls[1]!.body).toMatchObject({ expected_seq: 2, type: "core.void", payload: { event_id: "ev2" } });
+    // The key names one (fixture, tip): a void at another tip is another key, never a replay of this one.
+    expect((calls[1]!.body as { idempotency_key: string }).idempotency_key).toBe("void:f1:s2");
+    expect(d.callCount).toBe(2);
+  });
+
+  it("a second void, over the ledger the first left, voids the NEXT newest event — never the void itself", async () => {
+    const first = product([row(1, "core.start"), row(2, "x.a"), row(3, "x.b")]);
+    expect((await drv(first.t).voidLast("f1")).voidedEventId).toBe("ev3");
+    // The product now holds the void at seq 4: the newest row is a core.void, and ev3 is voided.
+    const second = product([row(1, "core.start"), row(2, "x.a"), row(3, "x.b"), voidRow(4, "ev3")]);
+    expect(await drv(second.t).voidLast("f1")).toEqual({ voidedEventId: "ev2", voidedType: "x.a" });
+    expect((second.calls[1]!.body as { expected_seq: number }).expected_seq).toBe(4);
+    // And a third: ev3 and ev2 are voided, so the next one down is the start.
+    const third = product([row(1, "core.start"), row(2, "x.a"), row(3, "x.b"), voidRow(4, "ev3"), voidRow(5, "ev2")]);
+    expect(await drv(third.t).voidLast("f1")).toEqual({ voidedEventId: "ev1", voidedType: "core.start" });
+  });
+
+  it("an event the harness re-recorded after its void is the newest live one again (a void is not a tombstone for the type)", async () => {
+    const { t } = product([row(1, "core.start"), row(2, "x.a"), voidRow(3, "ev2"), row(4, "x.a")]);
+    expect(await drv(t).voidLast("f1")).toEqual({ voidedEventId: "ev4", voidedType: "x.a" });
+  });
+
+  it("nothing to void — an empty ledger, or every event already voided — is refused by name and nothing is POSTed", async () => {
+    for (const [name, rows] of [["empty", []], ["all voided", [row(1, "core.start"), voidRow(2, "ev1")]]] as const) {
+      const { t, calls } = product([...rows]);
+      const e = await drv(t).voidLast("f1").catch((x: unknown) => x);
+      expect(e, name).toBeInstanceOf(DriverMisuse);
+      expect((e as Error).message, name).toMatch(/nothing to void/);
+      expect(calls.map((c) => c.method), name).toEqual(["GET"]);
+    }
+  });
+
+  it("a ledger row with no id cannot be voided: refused by name, nothing POSTed (the bench reader reads a missing id as an empty string)", async () => {
+    const { t, calls } = product([{ id: "", seq: 1, type: "core.start", payload: {} }]);
+    await expect(drv(t).voidLast("f1")).rejects.toThrow(/no id/);
+    expect(calls.map((c) => c.method)).toEqual(["GET"]);
+  });
+
+  it("the product's refusal is the RefusedCall it answered (a stale tip: SEQ_CONFLICT) and the void is NOT retried — the target was chosen under a ledger that has moved", async () => {
+    const { t, calls } = product([row(1, "core.start"), row(2, "x.a")], (c) => (c.method === "POST" ? err(409, "SEQ_CONFLICT", { current_seq: 3 }) : undefined));
+    const e = await drv(t).voidLast("f1").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 409, code: "SEQ_CONFLICT" });
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
+
+  it("voidTargetOf is the console's rule on its own: the newest non-void row nobody voided, null for none, and it does not read a void with no payload as naming anything", () => {
+    expect(voidTargetOf([])).toBeNull();
+    expect(voidTargetOf([row(1, "core.start")])?.id).toBe("ev1");
+    expect(voidTargetOf([row(1, "core.start"), row(2, "x.a"), voidRow(3, "ev2")])?.id).toBe("ev1");
+    expect(voidTargetOf([row(1, "core.start"), voidRow(2, "ev1")])).toBeNull();
+    // A void whose payload names nothing voids nothing: the start stays the newest live row.
+    expect(voidTargetOf([row(1, "core.start"), row(2, "core.void", {})])?.id).toBe("ev1");
+    expect(voidTargetOf([row(1, "core.start"), row(2, "core.void", null)])?.id).toBe("ev1");
+  });
+});
+
+// W1d Task 14 (item 15c): dating a fixture NOW — today in every venue time zone — is how a match day is made.
+// PATCH /fixtures/:id {scheduled_at} (api-v1 PatchFixture; usecases/fixtures.ts patchFixture). The product's own
+// answer is what comes back: a date that did not stick is refused, never read as dated.
+describe("HttpDriver — scheduleFixtureNow (W1d Task 14, item 15c)", () => {
+  const FIXTURE = "/api/v1/fixtures/f1";
+  it("PATCHes {scheduled_at: <now, ISO with offset>} and answers the instant the product stored", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2031-03-04T05:06:07.000Z"));
+    try {
+      const { t, calls } = fake([(c) => (c.method === "PATCH" && c.path === FIXTURE ? ok({ id: "f1", scheduled_at: "2031-03-04T05:06:07.000Z", conflicts: [] }) : undefined)]);
+      expect(await drv(t).scheduleFixtureNow("f1")).toEqual({ scheduledAt: "2031-03-04T05:06:07.000Z" });
+      expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`PATCH ${FIXTURE}`]);
+      expect(calls[0]!.body).toEqual({ scheduled_at: "2031-03-04T05:06:07.000Z" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a PATCH that answers no scheduled_at (the date did not stick) is refused by name, never read as dated", async () => {
+    const { t } = fake([() => ok({ id: "f1", scheduled_at: null, conflicts: [] })]);
+    await expect(drv(t).scheduleFixtureNow("f1")).rejects.toThrow(/did not stick/);
+  });
+
+  it("the product's refusal is the RefusedCall it answered", async () => {
+    const { t } = fake([() => err(409, "SEQ_CONFLICT")]);
+    await expect(drv(t).scheduleFixtureNow("f1")).rejects.toBeInstanceOf(RefusedCall);
+  });
+});
+
+// W1d Task 14 (item 15c): the division's phase as the product's own desk serves it — the producer the competition
+// page's pill reads (GET /competitions/:id/desk, one shape, two doors).
+describe("HttpDriver — divisionPhase (W1d Task 14, item 15c)", () => {
+  const DESK = "/api/v1/competitions/c1/desk";
+  const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const product = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
+
+  it("the phases it accepts are the product's DIVISION_PHASES, read from division-phase.ts; the desk route is the producer the SSR pill reads", () => {
+    const m = /export const DIVISION_PHASES = \[([^\]]*)\] as const;/.exec(product("apps/web/src/lib/division-phase.ts"));
+    expect(m, "division-phase.ts no longer declares DIVISION_PHASES").not.toBeNull();
+    const phases = [...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+    expect(phases.length).toBeGreaterThan(0);
+    expect([...DESK_PHASES]).toEqual(phases);
+    const route = product("apps/web/src/app/api/v1/competitions/[id]/desk/route.ts");
+    expect(route).toContain("divisions: Object.fromEntries(desk.divisions)");
+    expect(route).toContain("getCompetitionDesk(auth, id)");
+  });
+
+  it("the void and the dating are the product's: core.void is a kernel core event, and PATCH /fixtures/:id takes scheduled_at as an offset datetime or null", () => {
+    expect(product("packages/engine/src/core/events.ts")).toContain(`"${VOID_EVENT}": CoreVoid,`);
+    const schemas = product("apps/web/src/server/api-v1/schemas.ts");
+    const block = schemas.slice(schemas.indexOf("export const PatchFixture"), schemas.indexOf("export type PatchFixture"));
+    expect(block).toContain("scheduled_at: z.iso.datetime({ offset: true }).nullable(),");
+    // The instant it sends parses as that schema's offset datetime: an ISO string ending in Z.
+    expect(new Date().toISOString()).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+  it("reads the division's phase out of the desk, keyed by the division id", async () => {
+    const { t, calls } = fake([(c) => (c.path === DESK ? ok({ in_play: 0, divisions: { d1: { phase: "match_day" }, d2: { phase: "finished" } }, now: "2031-03-04T05:06:07.000Z" }) : undefined)]);
+    expect(await drv(t).divisionPhase("c1", "d1")).toBe("match_day");
+    expect(await drv(t).divisionPhase("c1", "d2")).toBe("finished");
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET ${DESK}`, `GET ${DESK}`]);
+  });
+
+  it("a division the desk does not list, or a phase that is not one of the product's four, is refused by name", async () => {
+    const missing = fake([() => ok({ divisions: { d9: { phase: "scheduled" } } })]);
+    await expect(drv(missing.t).divisionPhase("c1", "d1")).rejects.toThrow(/does not list division d1/);
+    const odd = fake([() => ok({ divisions: { d1: { phase: "in_play" } } })]);
+    await expect(drv(odd.t).divisionPhase("c1", "d1")).rejects.toThrow(/phase/);
+    const none = fake([() => ok({ divisions: { d1: {} } })]);
+    await expect(drv(none.t).divisionPhase("c1", "d1")).rejects.toThrow(/phase/);
   });
 });

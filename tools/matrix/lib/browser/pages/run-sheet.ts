@@ -21,6 +21,9 @@ import { UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, navBudget, sel
 import { paths } from "./paths.ts";
 
 export const ALL_FILTER = "all";
+/** The filter the sheet opens on during a match day (stages-panel.tsx:
+ *  `useState<RunSheetFilter>(phase === "match_day" ? "today" : "all")`; text-pinned by run-sheet-today.test.ts). */
+export const TODAY_FILTER = "today";
 
 /** A run-sheet row: DATA.fixtureRow (`li[data-fixture-no]`) for one fixture number. */
 export function fixtureRowSelector(no: number): string {
@@ -66,6 +69,52 @@ export async function showAllFixtures(c: PageCtx): Promise<void> {
   const t = navBudget(c);
   await awaitScreen(() => c.page.locator(`${option}[aria-pressed="true"]`).waitFor({ state: "attached", timeout: t }), "the run sheet showing every fixture", t);
   if (before !== undefined) await shoot(c, "run-sheet-all", before);
+}
+
+/** What the run sheet showed the moment the organiser arrived (W1d item 15c, D17): the filter it was pressed on and
+ *  the fixture numbers its rows carried, sorted. */
+export interface DefaultFilterSeen { readonly filter: string; readonly rows: readonly number[] }
+
+/** The run sheet as the organiser FIRST finds it: which filter is pressed and which rows it draws. Presses nothing, so
+ *  it must run BEFORE showAllFixtures widens the sheet (readThenShowAll holds that order). null: the sheet offers no
+ *  filter yet (nothing to filter), as showAllFixtures reads it. A row whose fixture number is unreadable is refused by
+ *  name, never counted as fixture 0. */
+export async function readDefaultFilter(c: PageCtx): Promise<DefaultFilterSeen | null> {
+  const pressed = c.page.locator(`${RUN_SHEET_FILTER_OPTIONS}[aria-pressed="true"]`);
+  const n = await pressed.count();
+  if (n === 0) return null;
+  if (n !== 1) throw new Error(`browser: the run sheet shows ${n} pressed filters; it offers one at a time`);
+  const filter = await pressed.getAttribute("data-filter", { timeout: actBudget(c, 1) });
+  if (filter === null) throw new Error("browser: the run sheet's pressed filter carries no data-filter value");
+  const numbers = await c.page.locator(DATA.fixtureRow.selector).evaluateAll((els) => els.map((e) => e.getAttribute("data-fixture-no")));
+  const rows = numbers.map((v) => (v !== null && /^\d+$/.test(v) ? Number(v) : Number.NaN));
+  if (rows.some((r) => !Number.isInteger(r) || r < 1)) throw new Error(`browser: a run-sheet row carries no readable fixture number (data-fixture-no: ${numbers.map((v) => JSON.stringify(v)).join(", ")})`);
+  return { filter, rows: [...rows].sort((a, b) => a - b) };
+}
+
+/** The sheet as it arrived (when `read`), then widened to every fixture. The order is the point: widening first
+ *  would leave the default unreadable. */
+export async function readThenShowAll(c: PageCtx, read: boolean): Promise<DefaultFilterSeen | null> {
+  const seen = read ? await readDefaultFilter(c) : null;
+  await showAllFixtures(c);
+  return seen;
+}
+
+/** `runsheet-today-default`'s verdict: the sheet opens on "today" on a match day and on "all" otherwise (stages-panel.tsx),
+ *  and "today" draws exactly the fixtures dated today (run-sheet.tsx runSheetKeeps). `phase` is the division's derived
+ *  phase as the competition desk shows it; `datedToday` the fixture numbers the product dates today. Nothing dated today
+ *  proves nothing, so it abstains, counted 0 (the empty case first). */
+export function judgeTodayDefault(a: { phase: string; seen: DefaultFilterSeen | null; datedToday: readonly number[] }): { verdict: "pass" | "fail" | "abstain"; checked: number; note: string } {
+  if (a.datedToday.length === 0) return { verdict: "abstain", checked: 0, note: `no fixture dated today, so the default filter has nothing to be proven by (phase ${a.phase})` };
+  if (a.seen === null) return { verdict: "fail", checked: 0, note: `the run sheet offered no filter, so its default (phase ${a.phase}) could not be read` };
+  const want = a.phase === "match_day" ? TODAY_FILTER : ALL_FILTER;
+  if (a.seen.filter !== want) return { verdict: "fail", checked: 1, note: `phase ${a.phase}: the sheet opened on '${a.seen.filter}', it should open on '${want}'` };
+  if (want === TODAY_FILTER) {
+    const dated = [...a.datedToday].sort((x, y) => x - y).join(", ");
+    const rows = a.seen.rows.join(", ");
+    if (rows !== dated) return { verdict: "fail", checked: 1, note: `phase ${a.phase}: the '${TODAY_FILTER}' sheet drew fixtures [${rows}], the product dates [${dated}] today` };
+  }
+  return { verdict: "pass", checked: 1, note: `phase ${a.phase}: the sheet opened on '${a.seen.filter}'${want === TODAY_FILTER ? `, drawing exactly the ${a.datedToday.length} fixture(s) dated today` : ""}` };
 }
 
 /** Any control the console mounts for an organiser, whatever the match's state. */

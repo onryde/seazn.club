@@ -7,9 +7,12 @@
 // This file is the exact layer: every import in those trees is resolved to a
 // path and judged, every package.json and tsconfig is read (the root
 // package.json too — its dependencies, and its scripts that reach tools/,
-// which no string in those trees may name: CL-R4, review I-1 and m-2), and the two
-// guards' shared source (scripts/lib/tools-import-guard.mjs) is held to the
-// tools/* workspaces that actually exist. The eslint rule built from that
+// which no string in those trees may name: CL-R4, review I-1 and m-2), every
+// spawn call's ARGUMENTS are read for a tools/ path (W1d item 28: a string
+// handed to exec/spawn/fork runs harness code with no import for the rest of
+// this scan to see — see spawnCallsIn for what it reads and its stated limits),
+// and the two guards' shared source (scripts/lib/tools-import-guard.mjs) is held
+// to the tools/* workspaces that actually exist. The eslint rule built from that
 // source is the coarse layer; the last block below runs each of the four real
 // eslint configs on stdin to prove the rule reaches the files it guards.
 // Single-sport reason: no sport is involved — this is an import-graph guard.
@@ -25,6 +28,10 @@ import { TOOLS_IMPORT_MESSAGE, TOOLS_IMPORT_REGEX, TOOLS_PACKAGES } from "../lib
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 /** The trees the guard holds. */
 const ROOTS = ["apps", "packages", "scripts"] as const;
+// FINAL-FIX M1 (AGENTS.md class 20): the two real-tree tests read every tracked source file under ROOTS. Alone that is about 5 s;
+// in a 70-file parallel run at a load average near 100 it took 31.8 s and 39.7 s, over CI's 30 s default. A stated budget, three
+// times the worst measured, so a loaded machine reports a slow test, not a red one.
+const REAL_TREE_MS = 120_000;
 const SOURCE = /\.(?:[cm]?[jt]sx?)$/;
 
 /** A specifier's package name: `@scope/name` or `name`; null for a path or a builtin. */
@@ -58,17 +65,120 @@ interface Scan {
   toolsScripts: string[];
   /** `<file>: <what>` for every edge into tools/. */
   offenders: string[];
+  /** Spawn calls (exec/spawn/fork and their Sync forms) inspected, across every file not in SPAWN_EXEMPT (item 28). */
+  spawnCalls: number;
+  /** The inspected calls by callee name — the spelling each was written with. */
+  spawnByName: Record<string, number>;
+  /** Files holding at least one inspected spawn call. */
+  spawnFiles: string[];
+  /** The SPAWN_EXEMPT files the walk met. They are skipped for every count above, but READ for hits. */
+  spawnExempted: string[];
+  /** Spawn calls found in the exempt files — what proves they are read at all. */
+  spawnExemptCalls: number;
+  /** A tools/ path in a spawn call's arguments in an EXEMPT file: kept apart from spawnHits, and pinned by SPAWN_EXEMPT_EXPECTED. */
+  spawnExemptHits: { file: string; line: number; arg: string }[];
+  /** A `tools/` path in a spawn call's ARGUMENTS: the line it is on, and the literal (or the joined pair) that names it. */
+  spawnHits: { file: string; line: number; arg: string }[];
 }
+
+/** Files whose spawn calls are never counted as hits — exact paths, never a pattern (item 28). They are
+ *  still read: a tools/ path they spawn lands in `spawnExemptHits`, and the real-tree test holds that to
+ *  SPAWN_EXEMPT_EXPECTED, so an exemption cannot go on covering for a spawn nobody wrote down. */
+const SPAWN_EXEMPT: readonly string[] = [
+  // Its trap rows hand `tools/bench/...` specifiers to the reference-boundary gate as DATA; a fixture
+  // of that suite that spawned one would be the trap, not a dependency.
+  "packages/reference/test/boundary-gate.test.ts",
+  // This file spells spawn calls and `tools/` paths in its own fixtures.
+  "scripts/__tests__/tools-import-guard.test.ts",
+];
+/** The tools/ paths the exempt files are KNOWN to spawn: none today. A new entry says, in a comment, why that spawn is legitimate. */
+const SPAWN_EXEMPT_EXPECTED: { file: string; line: number; arg: string }[] = [];
 
 /** Every string literal's text in a source file — template pieces included, comments never. */
 function stringLiterals(f: string, text: string): string[] {
-  const kind = /\.[cm]?jsx?$/.test(f) ? (f.endsWith("x") ? ts.ScriptKind.JSX : ts.ScriptKind.JS) : f.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const out: string[] = [];
   const walk = (n: ts.Node): void => {
-    if (ts.isStringLiteralLike(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) out.push(n.text);
+    if (isLiteralPiece(n)) out.push(n.text);
     n.forEachChild(walk);
   };
-  walk(ts.createSourceFile(f, text, ts.ScriptTarget.Latest, false, kind));
+  walk(ts.createSourceFile(f, text, ts.ScriptTarget.Latest, false, scriptKindOf(f)));
+  return out;
+}
+
+/** How the TypeScript parser should read `f`: by extension, JSX only where the extension says so. */
+const scriptKindOf = (f: string): ts.ScriptKind =>
+  /\.[cm]?jsx?$/.test(f) ? (f.endsWith("x") ? ts.ScriptKind.JSX : ts.ScriptKind.JS) : f.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+
+/** A string literal, or one piece of a template (head, middle or tail). */
+const isLiteralPiece = (n: ts.Node): n is ts.StringLiteralLike | ts.TemplateHead | ts.TemplateMiddle | ts.TemplateTail =>
+  ts.isStringLiteralLike(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n);
+
+/** The callees item 28 judges, by the name they are called under: `exec`, `cp.execSync` and `cp["execSync"]` alike.
+ *  ONE list: the callee test is exact membership and the cheap pre-read below is a substring test over the same
+ *  names, so neither can drift from the other and neither carries a regex anchor for the other to cover. */
+const SPAWNERS: ReadonlySet<string> = new Set(["exec", "execSync", "execFile", "execFileSync", "spawn", "spawnSync", "fork"]);
+/** What may precede `tools/` for it to be the repo's directory: the start of the literal, whitespace, a quote, or `/`
+ *  (`./tools`, `../tools`, `a/tools`), and the shell and option shapes that glue a path to a word — `=` (`--dir=tools/matrix`),
+ *  `:` (`link:tools/bench`), `(`, `&`, `|` and `;`. A word character, `-`, `@` or `.` does not: `mytools/`, `my-tools/`, `@tools/`,
+ *  `.tools/` are other directories. (The brief's class held `.`; it only ever adds `.tools/`, a hidden directory, so it is dropped.) */
+const LEAD = String.raw`(?:^|[\s"'/=:(&|;])`;
+/** A harness path inside ONE literal — `tools/matrix/…`, `./tools/bench/…`, `pnpm --dir tools/matrix`, `tools//matrix` — but not
+ *  `mytools/matrix`, `tools/matrixx` or `tools/benchmark`. Case-sensitive: `tools/Matrix` is a known gap (SPAWN_KNOWN_GAPS). */
+const TOOLS_LITERAL = new RegExp(`${LEAD}tools/+(?:matrix|bench)\\b`);
+/** The same path split across two adjacent literals: the first ends in `tools` (or `tools/`), the second opens with the harness. */
+const TOOLS_DIR_END = new RegExp(`${LEAD}tools/*$`);
+const HARNESS_START = /^\/*(?:matrix|bench)\b/;
+
+/** The spawn calls in one source file, and the `tools/` paths among their ARGUMENTS (item 28).
+ *  A call's arguments are every string literal and template piece beneath it — an array's items,
+ *  a nested `join(...)`, an options object's `cwd` — except a function passed
+ *  directly as an argument (a callback is not part of the command). Not the file at large: the dockerignore and retirement-drift scans spell `tools/…` in files
+ *  that spawn `git`, and those spell it far from the call.
+ *
+ *  Limits, stated: a path held in a variable or built from non-literal pieces is not seen, nor is
+ *  a spawner under an alias (`import { spawn as run }`, `promisify(execFile)`) or from another
+ *  library (`execa`). An alias is caught from the other side, by the real-tree test, which reds
+ *  on any file that imports child_process yet holds no call this reads; another library is not
+ *  caught. A `RegExp#exec` call is read as a spawn call too: it counts, and it would be a hit
+ *  only with a harness path in its argument. */
+function spawnCallsIn(f: string, text: string): { callees: string[]; hits: { line: number; arg: string }[] } {
+  const out: { callees: string[]; hits: { line: number; arg: string }[] } = { callees: [], hits: [] };
+  if (![...SPAWNERS].some((name) => text.includes(name))) return out;
+  const sf = ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, scriptKindOf(f));
+  const seen = new Set<string>();
+  const hit = (at: ts.Node, arg: string) => {
+    const line = sf.getLineAndCharacterOfPosition(at.getStart(sf)).line + 1;
+    // A spawn inside a spawn's arguments reaches the same literal twice: one hit.
+    if (!seen.has(`${line}\0${arg}`)) { seen.add(`${line}\0${arg}`); out.hits.push({ line, arg }); }
+  };
+  const calleeName = (e: ts.Expression): string | null =>
+    ts.isIdentifier(e) ? e.text
+      : ts.isPropertyAccessExpression(e) ? e.name.text
+        : ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression) ? e.argumentExpression.text
+          : null;
+  const judgeArguments = (call: ts.CallExpression) => {
+    const pieces: { at: ts.Node; text: string }[] = [];
+    const collect = (n: ts.Node): void => {
+      if (isLiteralPiece(n)) pieces.push({ at: n, text: n.text });
+      n.forEachChild(collect);
+    };
+    // A callback handed straight to the call (`exec(cmd, () => …)`) is not an argument to the command; a function
+    // deeper down (`[...names.map((x) => `tools/matrix/${x}`)]`, an IIFE) builds one, so its body is read.
+    for (const arg of call.arguments) if (!ts.isFunctionLike(arg)) collect(arg);
+    pieces.forEach((p, i) => {
+      if (TOOLS_LITERAL.test(p.text)) hit(p.at, p.text);
+      const next = pieces[i + 1];
+      if (next !== undefined && TOOLS_DIR_END.test(p.text) && HARNESS_START.test(next.text)) hit(p.at, `${p.text.replace(/\/+$/, "")}/${next.text.replace(/^\/+/, "")}`);
+    });
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const name = calleeName(n.expression);
+      if (name !== null && SPAWNERS.has(name)) { out.callees.push(name); judgeArguments(n); }
+    }
+    n.forEachChild(visit);
+  };
+  visit(sf);
   return out;
 }
 
@@ -101,7 +211,7 @@ function scan(root: string): Scan {
   const files = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...ROOTS], { cwd: root, encoding: "utf8" })
     .split("\0")
     .filter((f) => f !== "" && existsSync(join(root, f)));
-  const out: Scan = { perRoot: Object.fromEntries(ROOTS.map((r) => [r, 0])), specifiers: 0, manifests: 0, manifestFiles: [], tsconfigs: 0, rootScripts: 0, toolsScripts: [], offenders: [] };
+  const out: Scan = { perRoot: Object.fromEntries(ROOTS.map((r) => [r, 0])), specifiers: 0, manifests: 0, manifestFiles: [], tsconfigs: 0, rootScripts: 0, toolsScripts: [], offenders: [], spawnCalls: 0, spawnByName: {}, spawnFiles: [], spawnExempted: [], spawnExemptCalls: 0, spawnExemptHits: [], spawnHits: [] };
   const judge = (f: string, spec: string) => {
     out.specifiers++;
     const pkg = packageOf(spec);
@@ -155,6 +265,17 @@ function scan(root: string): Scan {
       for (const i of info.importedFiles) judge(f, i.fileName);
       for (const r of info.referencedFiles) judge(f, r.fileName.startsWith(".") ? r.fileName : `./${r.fileName}`);
       sourceNames(f, text);
+      const spawned = spawnCallsIn(f, text);
+      if (SPAWN_EXEMPT.includes(f)) {
+        // Exempt means "not a hit", never "not read": what an exempt file spawns is pinned by SPAWN_EXEMPT_EXPECTED.
+        out.spawnExempted.push(f);
+        out.spawnExemptCalls += spawned.callees.length;
+        for (const h of spawned.hits) out.spawnExemptHits.push({ file: f, ...h });
+      } else {
+        if (spawned.callees.length > 0) out.spawnFiles.push(f);
+        for (const c of spawned.callees) { out.spawnCalls++; out.spawnByName[c] = (out.spawnByName[c] ?? 0) + 1; }
+        for (const h of spawned.hits) out.spawnHits.push({ file: f, ...h });
+      }
     } else if (basename(f) === "package.json") {
       const m = manifest(f);
       for (const [n, cmd] of Object.entries((m.scripts ?? {}) as Record<string, string>)) {
@@ -191,6 +312,89 @@ function fixture(files: Record<string, string>): string {
   return root;
 }
 
+/** One source file, untracked, in a throwaway repo. */
+const fixtureWith = (path: string, text: string): string => fixture({ [path]: text });
+
+/** The spawn scan's fixture (item 28): a hit, the dockerignore/retirement-drift decoy shape (a tools literal in a
+ *  file whose spawn call runs something else), and an exempt file. */
+const spawnFixture = (): string => fixture({
+  "scripts/spawns.ts": `execFileSync("node", ["--experimental-strip-types", "tools/matrix/run.ts"]);\n`,
+  "apps/web/x/spawn-decoy.ts": `const p = "tools/matrix/run.ts"; spawnSync("git", ["ls-files"]);\n`,
+  "packages/reference/test/boundary-gate.test.ts": `spawnSync("node", ["tools/bench/x.ts"]);\n`,
+});
+
+/** A source file that loads child_process: `from "…"`, `require("…")`, `import("…")` (so `await import(...)` too), `node:` or not. The real-tree oracle. */
+const CHILD_PROCESS_IMPORT = /(?:\bfrom|\brequire\(|\bimport\()\s*["'](?:node:)?child_process["']/;
+
+/** Every callee the guard names (item 28's brief) — typed here, never read from the scan. */
+const SPAWN_NAMES = ["exec", "execSync", "execFile", "execFileSync", "spawn", "spawnSync", "fork"];
+/** Each row: a source that must be ONE hit. `calls` is how many spawn calls it holds (default 1), `line` where the hit sits (default 1). */
+const SPAWN_HITS: { label: string; source: string; callee: string; arg: string; calls?: number; line?: number; ext?: string }[] = [
+  { label: "exec, a command line", source: `exec("node tools/matrix/a.ts");`, callee: "exec", arg: "node tools/matrix/a.ts" },
+  { label: "execSync through a module object", source: `cp.execSync("pnpm --dir tools/matrix x");`, callee: "execSync", arg: "pnpm --dir tools/matrix x" },
+  { label: "execFile, ./tools", source: `execFile("node", ["./tools/matrix/run.ts"]);`, callee: "execFile", arg: "./tools/matrix/run.ts" },
+  { label: "execFileSync, ../tools", source: `execFileSync("node", ["../tools/bench/b.ts"]);`, callee: "execFileSync", arg: "../tools/bench/b.ts" },
+  { label: "spawn, a join of pieces", source: `spawn("node", [join(root, "tools", "matrix", "run.ts")]);`, callee: "spawn", arg: "tools/matrix" },
+  { label: "spawnSync through child_process", source: `child_process.spawnSync("node", ["tools/bench/x.ts"]);`, callee: "spawnSync", arg: "tools/bench/x.ts" },
+  { label: "fork, a bare relative path", source: `fork("./tools/bench/b.ts");`, callee: "fork", arg: "./tools/bench/b.ts" },
+  { label: "a bracketed callee", source: `cp["execSync"]("node tools/matrix/a.ts");`, callee: "execSync", arg: "node tools/matrix/a.ts" },
+  { label: "a template head", source: "exec(`node tools/matrix/a.ts ${x}`);", callee: "exec", arg: "node tools/matrix/a.ts " },
+  { label: "a template tail after a substitution", source: "spawn(`${root}/tools/matrix/run.ts`);", callee: "spawn", arg: "/tools/matrix/run.ts" },
+  { label: "the cwd in an options object", source: `spawnSync("pnpm", ["test"], { cwd: join(root, "tools", "bench") });`, callee: "spawnSync", arg: "tools/bench" },
+  { label: "a path split across a concatenation with doubled slashes", source: `execSync("node ../tools//" + "//matrix/run.ts");`, callee: "execSync", arg: "node ../tools/matrix/run.ts" },
+  { label: "a path split across a concatenation", source: `execSync("node ../tools" + "/matrix/run.ts");`, callee: "execSync", arg: "node ../tools/matrix/run.ts" },
+  { label: "a spawn inside a spawn's arguments is one hit, two calls", source: `execFileSync("node", [execFileSync("node", ["tools/matrix/x.ts"])]);`, callee: "execFileSync", arg: "tools/matrix/x.ts", calls: 2 },
+  { label: "a multi-line call: the hit sits on the literal's line", source: `spawnSync(\n  "node",\n  ["--import", "./tools/matrix/lib/crash-exit.ts"],\n);`, callee: "spawnSync", arg: "./tools/matrix/lib/crash-exit.ts", line: 3 },
+  { label: ".mjs", source: `spawnSync("node", ["tools/bench/x.ts"]);`, callee: "spawnSync", arg: "tools/bench/x.ts", ext: "mjs" },
+  { label: ".cjs", source: `require("node:child_process").spawnSync("node", ["tools/bench/x.ts"]);`, callee: "spawnSync", arg: "tools/bench/x.ts", ext: "cjs" },
+  // m3: a function is skipped only as the call's DIRECT argument; deeper, its body is part of the argument.
+  { label: "a .map callback inside the argument array builds the path", source: "spawnSync(\"node\", [...f.map((x) => `tools/matrix/${x}`)]);", callee: "spawnSync", arg: "tools/matrix/" },
+  { label: "an immediately-invoked function inside the argument array", source: `spawnSync("node", [(() => "tools/matrix/x.ts")()]);`, callee: "spawnSync", arg: "tools/matrix/x.ts" },
+  // m5, fixed: the lead class was whitespace, quotes, `.` and `/`; these shell-string and option shapes spell the same path.
+  { label: "an option's =value (--dir=tools/matrix)", source: `spawnSync("pnpm", ["--dir=tools/matrix", "x"]);`, callee: "spawnSync", arg: "--dir=tools/matrix" },
+  { label: "a link: specifier (pnpm add link:tools/bench)", source: `execSync("pnpm add link:tools/bench");`, callee: "execSync", arg: "pnpm add link:tools/bench" },
+  { label: "a parenthesised path", source: `exec("(tools/matrix/run.ts)");`, callee: "exec", arg: "(tools/matrix/run.ts)" },
+  { label: "a path after && with no space", source: `exec("cd . &&tools/matrix/run.ts");`, callee: "exec", arg: "cd . &&tools/matrix/run.ts" },
+  { label: "a path after ; with no space", source: `exec("a;tools/bench/run.ts");`, callee: "exec", arg: "a;tools/bench/run.ts" },
+  { label: "a path after | with no space", source: `exec("a|tools/bench/run.ts");`, callee: "exec", arg: "a|tools/bench/run.ts" },
+  { label: "a single-quoted path inside a command line", source: `exec("cd 'tools/matrix' && x");`, callee: "exec", arg: "cd 'tools/matrix' && x" },
+  { label: "a double-quoted path inside a command line", source: `exec('cd "tools/bench" && x');`, callee: "exec", arg: 'cd "tools/bench" && x' },
+  { label: "a doubled slash (tools//matrix) is the same directory", source: `spawn("node", ["tools//matrix/run.ts"]);`, callee: "spawn", arg: "tools//matrix/run.ts" },
+  // A KNOWN false positive, pinned: git reads the file, it does not run it, but `REV:tools/...` is the shape of a path spec and is flagged for review (exempt it by exact path if it is real).
+  { label: "git show REV:tools/matrix/run.ts reads, not runs, and is flagged all the same", source: `execFileSync("git", ["show", "HEAD:tools/matrix/run.ts"]);`, callee: "execFileSync", arg: "HEAD:tools/matrix/run.ts" },
+  // The call sits INSIDE the JSX: read as plain TypeScript, `<div>{…}</div>` is a type assertion and the call is lost.
+  { label: ".tsx, the call inside a JSX child", source: `const el = <div>{spawnSync("node", ["tools/bench/x.ts"])}</div>;`, callee: "spawnSync", arg: "tools/bench/x.ts", ext: "tsx" },
+  { label: ".jsx, the call inside a JSX child", source: `const el = <div>{spawnSync("node", ["tools/bench/x.ts"])}</div>;`, callee: "spawnSync", arg: "tools/bench/x.ts", ext: "jsx" },
+];
+/** Rows that are NOT hits: `calls` is how many spawn calls the scan must still have inspected. */
+const SPAWN_DECOYS: { label: string; source: string; calls: number }[] = [
+  { label: "a tools/ literal outside the call (the dockerignore/retirement-drift decoy shape)", source: `const p = "tools/matrix/run.ts"; spawnSync("git", ["ls-files"]);`, calls: 1 },
+  { label: "`tools` alone as a git pathspec", source: `execFileSync("git", ["ls-files", "--", "tools"]);`, calls: 1 },
+  { label: "a directory that merely contains the name", source: `spawn("node", ["mytools/matrix/a.ts", "toolsx/bench/b.ts", "tools/matrixx/c.ts", "tools/benchmark/d.ts"]);`, calls: 1 },
+  { label: "a callback's body is not the call's arguments", source: `exec("ls", () => { log("tools/matrix/run.ts"); });`, calls: 1 },
+  { label: "a gap between the two pieces", source: `spawn("node", ["tools", "--flag", "matrix"]);`, calls: 1 },
+  { label: "a comment", source: `// spawn("node", ["tools/matrix/run.ts"])\n/* exec("tools/matrix/a.ts") */\n`, calls: 0 },
+  { label: "a call in a string", source: `const t = 'spawn("tools/matrix/a.ts")';`, calls: 0 },
+  { label: "a call that is not a spawn", source: `readFileSync("tools/matrix/a.ts"); require.resolve("tools/bench/b.ts");`, calls: 0 },
+  { label: "a callee that merely contains a spawner's name", source: `respawn("node tools/matrix/a.ts"); forked("tools/bench/b.ts"); spawnSyncLike("tools/bench/b.ts");`, calls: 0 },
+  // m1: a REAL spawner word in the file, so only the callee's own exactness can reject the lookalike (a file with no
+  // spawner word is never parsed, which is what made the old rows above cover for it).
+  { label: "a spawner beside a lookalike with a PREFIX (respawn)", source: `spawn("git", ["status"]); respawn("node tools/matrix/a.ts");`, calls: 1 },
+  { label: "a spawner beside a lookalike with a SUFFIX (spawned, spawnSyncLike)", source: `spawn("git", ["status"]); spawned("node tools/matrix/a.ts"); spawnSyncLike("tools/bench/b.ts");`, calls: 1 },
+  { label: "a spawner beside a lookalike with both (forkedExec)", source: `fork("./x.ts"); myexecSyncs("tools/matrix/a.ts");`, calls: 1 },
+  { label: "a hyphenated or hidden directory is another directory (my-tools/, .tools/)", source: `spawn("node", ["my-tools/matrix/a.ts", ".tools/bench/b.ts"]);`, calls: 1 },
+  { label: "an npm scope that is not the directory (@tools/matrix)", source: `spawn("npm", ["i", "@tools/matrix"]);`, calls: 1 },
+];
+/** m5: measured misses, pinned as NOT hits so a change that closes one is deliberate: it must move its row to SPAWN_HITS. `calls` is what the scan inspects. */
+const SPAWN_KNOWN_GAPS: { label: string; source: string; calls: number }[] = [
+  { label: "the harness name is interpolated (`tools/${x}/run.ts`)", source: "spawn(`tools/${x}/run.ts`);", calls: 1 },
+  { label: "a different case (tools/Matrix resolves only on a case-insensitive filesystem; Linux CI is not one)", source: `spawn("node", ["tools/Matrix/run.ts"]);`, calls: 1 },
+  { label: "the path is held in a variable", source: `const p = "tools/matrix/run.ts"; spawn("node", [p]);`, calls: 1 },
+  { label: "the harness is named by package, not path", source: `spawn("pnpm", ["--filter", "@seazn/matrix", "x"]);`, calls: 1 },
+  { label: "an aliased spawner", source: `import { spawn as run } from "node:child_process"; run("node", ["tools/matrix/run.ts"]);`, calls: 0 },
+  { label: "a promisified spawner", source: `const run = promisify(execFile); await run("node", ["tools/matrix/run.ts"]);`, calls: 0 },
+];
+
 // One table drives the resolver's positive control AND the eslint regex: the
 // coarse layer must flag what the exact one finds, and pass every decoy.
 const EDGES: [file: string, spec: string][] = [
@@ -222,6 +426,8 @@ describe("tools import guard (ruling 56)", () => {
     // No root package.json: no manifest, no script read, none reaching tools/.
     expect({ manifests: s.manifests, rootScripts: s.rootScripts, toolsScripts: s.toolsScripts }).toEqual({ manifests: 0, rootScripts: 0, toolsScripts: [] });
     expect(s.offenders).toEqual([]);
+    // Nothing to spawn, so nothing inspected and nothing hit: the real-tree test below refuses a zero.
+    expect({ calls: s.spawnCalls, byName: s.spawnByName, files: s.spawnFiles, exempted: s.spawnExempted, exemptCalls: s.spawnExemptCalls, exemptHits: s.spawnExemptHits, hits: s.spawnHits }).toEqual({ calls: 0, byName: {}, files: [], exempted: [], exemptCalls: 0, exemptHits: [], hits: [] });
   });
 
   it("CL-R4 (review I-1, m-2): the root package.json is judged — a dependency on a harness, and a root script that reaches tools/ (directly, or by running one that does) named from a guarded tree", () => {
@@ -287,6 +493,94 @@ describe("tools import guard (ruling 56)", () => {
     expect(s.perRoot).toEqual({ apps: 5, packages: 2, scripts: 4 });
   });
 
+  it("item 28: a tools/ path passed to a spawn call is a hit; a tools/ literal elsewhere in a spawning file is not; the exempt file's hit is reported apart, as an exempt hit", () => {
+    const r = scan(spawnFixture());
+    expect(r.spawnHits).toEqual([{ file: "scripts/spawns.ts", line: 1, arg: "tools/matrix/run.ts" }]);
+    expect(r.spawnCalls).toBe(2); // spawns.ts and spawn-decoy.ts; the exempt file is not inspected
+    expect(r.spawnByName).toEqual({ execFileSync: 1, spawnSync: 1 });
+    expect(r.spawnFiles.sort()).toEqual(["apps/web/x/spawn-decoy.ts", "scripts/spawns.ts"]);
+    expect(r.spawnExempted).toEqual(["packages/reference/test/boundary-gate.test.ts"]);
+    // The exempt file is READ (item I1): its real hit is reported apart, never among spawnHits and never counted as a call.
+    expect(r.spawnExemptHits).toEqual([{ file: "packages/reference/test/boundary-gate.test.ts", line: 1, arg: "tools/bench/x.ts" }]);
+    expect(r.spawnExemptCalls).toBe(1);
+    // The spawn scan reads arguments, not imports: it adds nothing to the import judgement.
+    expect(r.offenders).toEqual([]);
+  });
+
+  it("item 28: the exemption is by exact path — the same call in a file beside the exempt one, or at the same name in another directory, is a hit", () => {
+    const call = `spawnSync("node", ["tools/bench/x.ts"]);\n`;
+    const r = scan(fixture({
+      "packages/reference/test/boundary-gate.test.ts": call, // exempt
+      "packages/reference/test/boundary-gate.test.tsx": call,
+      "packages/reference/test/other.test.ts": call,
+      "packages/other/test/boundary-gate.test.ts": call,
+      "scripts/__tests__/tools-import-guard.test.ts": call, // exempt
+      "scripts/__tests__/tools-import-guard.test.ts.bak.ts": call,
+    }));
+    expect(r.spawnHits.map((h) => h.file).sort()).toEqual([
+      "packages/other/test/boundary-gate.test.ts",
+      "packages/reference/test/boundary-gate.test.tsx",
+      "packages/reference/test/other.test.ts",
+      "scripts/__tests__/tools-import-guard.test.ts.bak.ts",
+    ]);
+    expect(r.spawnCalls).toBe(4);
+    expect(r.spawnExempted.sort()).toEqual([...SPAWN_EXEMPT].sort());
+    // Each exempt file's call was READ: it is an exempt hit, not a hit and not a call.
+    expect(r.spawnExemptHits.map((h) => h.file).sort()).toEqual([...SPAWN_EXEMPT].sort());
+    expect(r.spawnExemptCalls).toBe(2);
+  });
+
+  it("item 28, every spelling: each spawner, member and bracketed callees, ./tools and ../tools, a join of pieces, a template, an options object, every source extension — one hit each", () => {
+    for (const row of SPAWN_HITS) {
+      const file = `scripts/one.${row.ext ?? "ts"}`;
+      const r = scan(fixtureWith(file, `${row.source}\n`));
+      expect(r.spawnHits, row.label).toEqual([{ file, line: row.line ?? 1, arg: row.arg }]);
+      expect(r.spawnCalls, `${row.label}: calls inspected`).toBe(row.calls ?? 1);
+      expect(r.spawnByName, `${row.label}: the callee recorded`).toEqual({ [row.callee]: row.calls ?? 1 });
+    }
+    // Anti-vacuity: the table reaches every spawner the brief names, and every row ran.
+    expect([...new Set(SPAWN_HITS.map((r) => r.callee))].sort()).toEqual([...SPAWN_NAMES].sort());
+    expect(SPAWN_HITS).toHaveLength(31);
+  });
+
+  it("item 28, decoys: a tools/ literal that is not a spawn argument is no hit — and the spawn calls beside it were still inspected", () => {
+    for (const row of SPAWN_DECOYS) {
+      const r = scan(fixtureWith("scripts/decoy.ts", `${row.source}\n`));
+      expect(r.spawnHits, row.label).toEqual([]);
+      expect(r.spawnCalls, `${row.label}: calls inspected`).toBe(row.calls);
+    }
+    expect(SPAWN_DECOYS).toHaveLength(14);
+    // Not vacuous: the boundary decoys sit beside a real path in one call, and only the real path is the hit.
+    const beside = scan(fixtureWith("scripts/pos.ts", `spawn("node", ["mytools/matrix/a.ts", "tools/matrix/e.ts", "tools/matrixx/c.ts"]);\n`));
+    expect(beside.spawnHits).toEqual([{ file: "scripts/pos.ts", line: 1, arg: "tools/matrix/e.ts" }]);
+  });
+
+  it("item 28, known gaps: each measured miss is pinned as NOT a hit, so closing one is a deliberate change that moves its row to the hits table", () => {
+    for (const row of SPAWN_KNOWN_GAPS) {
+      const r = scan(fixtureWith("scripts/gap.ts", `${row.source}\n`));
+      expect(r.spawnHits, row.label).toEqual([]);
+      expect(r.spawnCalls, `${row.label}: calls inspected`).toBe(row.calls);
+    }
+    expect(SPAWN_KNOWN_GAPS).toHaveLength(6);
+  });
+
+  it("item 28, a sequence: hits across files and roots all report, in repo order, and a second scan of the same repo agrees with the first", () => {
+    const root = fixture({
+      "apps/web/a.ts": `spawnSync("node", ["tools/bench/x.ts"]);\n`,
+      "packages/y/b.ts": `const ok = 1;\nexecSync("pnpm --dir tools/matrix x");\n`,
+      "scripts/c.ts": `spawn("git", ["status"]);\n`, // inspected, no hit
+      "scripts/d.mjs": `fork("./tools/matrix/run.ts");\n`,
+    });
+    const first = scan(root);
+    expect(first.spawnHits).toEqual([
+      { file: "apps/web/a.ts", line: 1, arg: "tools/bench/x.ts" },
+      { file: "packages/y/b.ts", line: 2, arg: "pnpm --dir tools/matrix x" },
+      { file: "scripts/d.mjs", line: 1, arg: "./tools/matrix/run.ts" },
+    ]);
+    expect(first.spawnCalls).toBe(4);
+    expect(scan(root)).toEqual(first);
+  });
+
   it("the real tree: apps/, packages/ and scripts/ reach nothing under tools/ — every root read, every import judged", () => {
     const s = scan(REPO);
     console.info(`tools-import-guard: ${JSON.stringify(s.perRoot)} source files, ${s.specifiers} specifiers, ${s.manifests} manifests, ${s.tsconfigs} tsconfigs, ${s.rootScripts} root scripts (${s.toolsScripts.length} reach tools/) judged`);
@@ -313,6 +607,59 @@ describe("tools import guard (ruling 56)", () => {
     expect(s.toolsScripts).toEqual(oracle);
     expect(s.offenders).toEqual([]);
     expect(s.toolsScripts).not.toContain("reference:boundary");
+  }, REAL_TREE_MS);
+
+  it("item 28, the real tree: spawn calls were inspected — non-zero, the child_process names this tree really uses, every file that imports child_process — and none reaches tools/", () => {
+    const s = scan(REPO);
+    const real = (s.spawnByName.spawnSync ?? 0) + (s.spawnByName.execFileSync ?? 0) + (s.spawnByName.execSync ?? 0);
+    console.info(`tools-import-guard: ${s.spawnCalls} calls named like a spawner in ${s.spawnFiles.length} files (${real} are the child_process-only names spawnSync/execFileSync/execSync; the rest are mostly RegExp#exec, the protobuf writer's fork and the 2048 game's own spawn), ${s.spawnExempted.length} exempt files read for hits (${s.spawnExemptCalls} calls)`);
+    expect(s.spawnCalls).toBeGreaterThan(10);
+    // m2: spawnCalls alone proves little (361 of ~387 are RegExp#exec or the protobuf writer's fork). The names that
+    // can only be child_process: a stated floor (21 measured 2026-10-05), never a figure read back from the scan.
+    expect(real).toBeGreaterThanOrEqual(15);
+    expect(s.spawnByName.spawnSync).toBeGreaterThan(0);
+    expect(s.spawnByName.execFileSync).toBeGreaterThan(0);
+    // The oracle is a text read of the tracked files, not the scan: a file that loads child_process is in this tree
+    // to call it, so the scan must have found a call in each (an aliased or promisified spawner is the gap this
+    // reds on), bar the exempt files.
+    const files = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...ROOTS], { cwd: REPO, encoding: "utf8" })
+      .split("\0").filter((f) => f !== "" && SOURCE.test(f) && !SPAWN_EXEMPT.includes(f) && existsSync(join(REPO, f)));
+    const importers = files.filter((f) => CHILD_PROCESS_IMPORT.test(readFileSync(join(REPO, f), "utf8"))).sort();
+    expect(importers.length).toBeGreaterThanOrEqual(15);
+    expect(importers.filter((f) => !s.spawnFiles.includes(f)), "files that load child_process but hold no inspected spawn call").toEqual([]);
+    // Each exemption names a file that is really there and was really met — a rename strands it silently — and
+    // the exempt files are READ: a tools/ path they spawn is an exempt hit, and none is expected today.
+    expect([...s.spawnExempted].sort()).toEqual([...SPAWN_EXEMPT].sort());
+    expect(s.spawnExemptCalls, "the exempt files hold spawn calls, so reading them must find some").toBeGreaterThan(0);
+    expect(s.spawnExemptHits, "document the exemption or fix the spawn").toEqual(SPAWN_EXEMPT_EXPECTED);
+    expect(s.spawnHits).toEqual([]);
+  }, REAL_TREE_MS);
+
+  it("item 28: the child_process import oracle sees every way a file loads the module — and not a lookalike", () => {
+    const rows: [line: string, loads: boolean][] = [
+      [`import { spawnSync } from "node:child_process";`, true],
+      [`import { x } from 'child_process';`, true],
+      [`import {\n  spawn,\n  type ChildProcess,\n} from "node:child_process";`, true],
+      [`const cp = require("node:child_process");`, true],
+      [`const { spawn } = await import("node:child_process");`, true],
+      [`const m = import(\n  "child_process");`, true],
+      [`import x from "my-child_process";`, false],
+      [`import x from "node:child_process/promises-ish";`, false],
+      [`// spawn is imported from node:child_process elsewhere`, false],
+    ];
+    for (const [line, loads] of rows) expect(CHILD_PROCESS_IMPORT.test(line), line).toBe(loads);
+    expect(rows.filter(([, l]) => l)).toHaveLength(6);
+  });
+
+  it("item 28: the harness directories a spawn argument is judged against are exactly the tools/* workspaces that exist", () => {
+    const dirs = readdirSync(join(REPO, "tools")).filter((d) => existsSync(join(REPO, "tools", d, "package.json"))).sort();
+    expect(dirs).toContain("matrix");
+    expect(dirs).toContain("bench");
+    for (const d of dirs) {
+      const r = scan(fixtureWith("scripts/one.ts", `spawnSync("node", ["tools/${d}/x.ts"]);\n`));
+      expect(r.spawnHits, `tools/${d}`).toHaveLength(1);
+    }
+    expect(dirs).toEqual(["bench", "matrix"]);
   });
 
   it("the guard's package list is exactly the tools/* workspaces that exist, and its regex matches each — so a new harness joins the guard or reds here", () => {

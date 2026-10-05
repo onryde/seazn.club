@@ -12,16 +12,21 @@
 // Rows sort by wave number, then by TRIAGE number. The table goes to --out, or
 // to stdout without it; a one-line JSON summary goes to stderr.
 //
-// Exit codes, the house codes (W1b final batch F-6):
+// Exit codes, the house codes (W1b final batch F-6; one meaning per code across
+// every CLI, W1d item 6 / D8, lib/exit-codes.ts):
 //   0  the table: at least one product row, every row checked;
-//   1  refused, nothing written: a judged-on cell it cannot parse, a run whose
-//      harnessCommit differs from TRIAGE's, a case missing from its run or not
-//      red there, a red with no failing check and no error reason, a wave that
-//      is not W2..W10, or zero product rows;
-//   2  usage: not exactly two positionals, or an unknown flag;
-//   3  unreadable input: a missing TRIAGE.md or results.json, bad JSON, or
-//      results the schema refuses. A crash while the CLI loads is 3 too,
-//      through the preload (scripts/lib/crash-exit.ts).
+//   1  is not used: this CLI judges nothing, it renders. Before W1d a refusal
+//      was filed here, under the code a verdict uses;
+//   2  refused, nothing written: usage (not exactly two positionals, or an
+//      unknown flag); unreadable input (a missing TRIAGE.md or results.json,
+//      bad JSON, or results the schema refuses); or a table that would not be
+//      what the evidence says (FindingsRefused): a judged-on cell it cannot
+//      parse, a run whose harnessCommit differs from TRIAGE's, a case missing
+//      from its run or not red there, a red with no failing check and no error
+//      reason, a wave that is not W2..W10, or zero product rows;
+//   3  a crash while the CLI loads, through the preload
+//      (scripts/lib/crash-exit.ts). Run it only through the package script or
+//      with that preload: without it, a load crash exits 1.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -152,7 +157,7 @@ export function renderFindings(rows: readonly FindingRow[]): string {
 
 const why = (e: unknown): string => redact(e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
-/** Unreadable input (exit 3), as distinct from a refusal (exit 1). */
+/** Unreadable input: exit 2 like a refusal (D8) — the two are told apart by the name on stderr. */
 class Unreadable extends Error {
   constructor(why: string) {
     super(why);
@@ -175,7 +180,7 @@ export function main(argv: readonly string[]): number {
   const cli = parseCli(argv);
   if ("usage" in cli) { process.stderr.write(`${cli.usage}\n`); return 2; }
   let md: string;
-  try { md = readFileSync(cli.triage, "utf8"); } catch (e) { process.stderr.write(`findings-table: ${why(e)}\n`); return 3; }
+  try { md = readFileSync(cli.triage, "utf8"); } catch (e) { process.stderr.write(`findings-table: ${why(e)}\n`); return 2; }
   const load = (run: string): RunLike => {
     const file = join(cli.truthRuns, run, "results.json");
     try { return parseResults(JSON.parse(readFileSync(file, "utf8"))); } catch (e) { throw new Unreadable(`${file}: ${why(e)}`); }
@@ -185,8 +190,7 @@ export function main(argv: readonly string[]): number {
     f = findings(triageRows(md), load);
   } catch (e) {
     process.stderr.write(`findings-table: ${why(e)}\n`);
-    if (e instanceof Unreadable) return 3;
-    if (e instanceof FindingsRefused) return 1;
+    if (e instanceof Unreadable || e instanceof FindingsRefused) return 2;
     throw e;
   }
   const table = renderFindings(f.rows);

@@ -136,6 +136,15 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     super("org-model");
     this.opts = opts;
   }
+  /** W1d Task 14: the base fake's ledger and void ride `fixtures[].events`, which this driver never fills (its
+   *  own ledger is `ledgers`, with ids it mints). A void or a ledger read inherited from it would answer over an
+   *  empty list as if the product held nothing, so both are refused by name: the model does not drive voidLast. */
+  override voidLast(): Promise<never> {
+    return Promise.reject(new Error("fake: the model fake keeps its ledger in `ledgers`, not fixtures[].events — voidLast is not modelled here"));
+  }
+  override ledger(): Promise<never> {
+    return Promise.reject(new Error("fake: the model fake keeps its ledger in `ledgers`, not fixtures[].events — a ledger read is not modelled here"));
+  }
   /** Task 14: a league stage, or a single swiss stage (FP-T14-1). */
   override acceptsStage(kind: string): boolean { return kind === "league" || kind === "swiss"; }
   override refuseStages(): never { throw new Error("fake: league or swiss only"); }
@@ -508,5 +517,31 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   addFixture(home: string, away: string): FakeFixture {
     const round = Math.max(0, ...this.fixtures.map((f) => f.round_no ?? 0)) + 1;
     return this.seat(round, home, away);
+  }
+}
+
+/** W1d item 26: a bracket whose Generate 500s once the division's roster has changed the way `refuses` says —
+ *  the shape of MB-007 (an entrant added) and MB-010 (one withdrawn), which share the product's words. `message`
+ *  is those words. Per division (createDivision resets it, as model.ts reuses one driver across a cell's runs):
+ *  the model's own setup makes the one addEntrants call, so a second is an AddEntrant that the product took, and
+ *  a Withdraw the product took sets `withdrew`. A round-robin fake stands in for the bracket: only the roster
+ *  change and the refusal matter. */
+export class StaleBracketDriver extends ModelFakeDriver {
+  #adds = 0;
+  withdrew = false;
+  readonly message: string;
+  readonly refuses: (d: StaleBracketDriver) => boolean;
+  constructor(refuses: (d: StaleBracketDriver) => boolean, message: string) {
+    super();
+    this.refuses = refuses;
+    this.message = message;
+  }
+  /** An entrant arrived after the build's own. */
+  get added(): boolean { return this.#adds > 1; }
+  override createDivision(...a: Parameters<ModelFakeDriver["createDivision"]>) { this.#adds = 0; this.withdrew = false; return super.createDivision(...a); }
+  override addEntrants(...a: Parameters<ModelFakeDriver["addEntrants"]>) { return super.addEntrants(...a).then((r) => { this.#adds++; return r; }); }
+  override withdraw(...a: Parameters<ModelFakeDriver["withdraw"]>) { return super.withdraw(...a).then((r) => { this.withdrew = true; return r; }); }
+  override generate(...a: Parameters<ModelFakeDriver["generate"]>) {
+    return this.refuses(this) ? Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, "INTERNAL", this.message)) : super.generate(...a);
   }
 }

@@ -20,7 +20,8 @@ import { TAP_PACE_MS, budgetMs } from "../browser/budget.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import { executeStep } from "./execute.ts";
 import { asRecord, deepEqual, show } from "./judge.ts";
-import type { Fallback, FallbackJudgement, MatrixPadAdapter } from "./types.ts";
+import { redact } from "../redact.ts";
+import type { Fallback, FallbackJudgement, MatrixPadAdapter, TapTiming } from "./types.ts";
 
 /** The ledger's poll spacing: the bench's LEDGER_POLL_INTERVAL_MS (scorer.ts:197). */
 export const POLL_MS = 200;
@@ -36,6 +37,37 @@ export interface ReplayDeps {
   /** Called after each tap an event's route makes, with the event's index —
    *  the driver's mid-sheet picture rides it. */
   onTap?(eventIndex: number, step: TapStep): Promise<void>;
+  /** The clock the tap timings read, in ms from the caller's zero (the driver:
+   *  the case's start). Absent: ms since the replay began. */
+  readonly now?: () => number;
+}
+
+/** How many tap timings a tap-wait timeout carries (W1d item 15a). */
+export const TAP_TIMING_KEEP = 5;
+
+/** A tap's wait ran out (Playwright's TimeoutError). Its message is the
+ *  timeout's first line, then the timings of the last TAP_TIMING_KEEP taps as
+ *  JSON — everything redacted, since a driver error can quote an env value. */
+export class TapWaitTimeout extends Error {
+  readonly timings: readonly TapTiming[];
+  constructor(first: string, timings: readonly TapTiming[]) {
+    super(withTimings(first, timings));
+    this.name = "TapWaitTimeout";
+    this.timings = timings.map((t) => ({ ...t }));
+  }
+}
+
+/** `<text> — last taps: <JSON of the timings>`, redacted as one string (the
+ *  timings are numbers, so what redaction guards is `text`). */
+export function withTimings(text: string, timings: readonly TapTiming[]): string {
+  return redact(`${text} — last taps: ${JSON.stringify(timings)}`);
+}
+
+/** Playwright's own: `locator.waitFor: Timeout 15000ms exceeded.` is a
+ *  TimeoutError. The name is the contract; the message shape is the fallback
+ *  for a page object that wraps it. */
+function isWaitTimeout(e: unknown): e is Error {
+  return e instanceof Error && (e.name === "TimeoutError" || /\bTimeout \d+ms exceeded\b/.test(e.message.split("\n")[0]));
 }
 
 export type RowVerdict = "equal" | "tolerated" | "fallback" | "mismatch" | "missing";
@@ -100,15 +132,22 @@ function judgeFallback(f: Fallback, ev: StreamEvent, rows: readonly LedgerRow[])
   } catch (e) {
     return `FallbackMismatch — the ${f.eventType} judge threw (${errorLine(e)})`;
   }
-  return j.ok ? null : `FallbackMismatch — ${j.note ?? "the judge refused the rows without a note"}`;
+  if (j.ok) return null;
+  // W1d Mn-2: a judge that refuses and says nothing still owes both sides — a
+  // bare "refused" leaves the reader to refetch what was stored and what was generated.
+  const note = typeof j.note === "string" && j.note.trim() !== "" ? j.note
+    : `the judge refused ${rows.length} stored row(s) without a note: stored ${rows.map((r) => `${r.type} ${JSON.stringify(r.payload)}`).join(", ")}; generated ${ev.type} ${JSON.stringify(ev.payload)}`;
+  return `FallbackMismatch — ${note}`;
 }
 
 /** An error's name and first line — Playwright's messages carry a multi-line
  *  call log after it. A non-Error throw is quoted as it is. */
 function errorLine(e: unknown): string {
   if (!(e instanceof Error)) return String(e).split("\n")[0];
-  return `${e.name}: ${e.message.split("\n")[0]}`;
+  return `${e.name}: ${firstLine(e)}`;
 }
+
+const firstLine = (e: Error): string => e.message.split("\n")[0];
 
 /** Taps `events` in order and reads back the rows each one wrote. Stops at the
  *  first event that has no route, a row that differs, or rows that never came:
@@ -118,6 +157,11 @@ export async function replayEvents(page: PadPage, adapter: MatrixPadAdapter, eve
   if (events.length === 0) return out;
   let tip = await deps.tip();
   let tapped = false;
+  const zero = performance.now();
+  const now = deps.now ?? ((): number => performance.now() - zero);
+  /** The last TAP_TIMING_KEEP taps, oldest first; `count` is every tap made. */
+  const ring: TapTiming[] = [];
+  let count = 0;
   const waitMs = Math.max(TAP_WAIT_TIMEOUT_MS, budgetMs({ taps: 1, holds: 0, holdMs: deps.holdMs }));
   for (const [i, ev] of events.entries()) {
     const at = `event ${i + 1} of ${events.length} (${ev.type})`;
@@ -147,14 +191,23 @@ export async function replayEvents(page: PadPage, adapter: MatrixPadAdapter, eve
     // before it failed are still read, so the fold judges what it holds.
     const all: readonly TapStep[] = [...steps, { kind: "releaseHold" }];
     let failed: string | null = null;
+    // 15a: this event's timings, kept in the ring; the event's rows being read
+    // stamps them all `ledgerSeenAtMs`.
+    const evTimings: Array<{ -readonly [K in keyof TapTiming]: TapTiming[K] }> = [];
     for (const [k, step] of all.entries()) {
       const release = k === steps.length;
       if (tapped && step.kind !== "releaseHold") await deps.sleep(TAP_PACE_MS);
       tapped = true;
+      const timing: { -readonly [K in keyof TapTiming]: TapTiming[K] } = { tap: ++count, clickedAtMs: now(), ledgerSeenAtMs: null, waitedMs: 0, budgetMs: waitMs };
+      evTimings.push(timing);
+      ring.push(timing);
+      if (ring.length > TAP_TIMING_KEEP) ring.shift();
       try {
         await executeStep(page, step, waitMs);
+        timing.waitedMs = now() - timing.clickedAtMs;
       } catch (e) {
-        failed = `tap ${k + 1} of ${all.length} (${step.kind}) failed: ${errorLine(e)}`;
+        timing.waitedMs = now() - timing.clickedAtMs;
+        failed = `tap ${k + 1} of ${all.length} (${step.kind}) failed: ${errorLine(isWaitTimeout(e) ? new TapWaitTimeout(firstLine(e), ring) : e)}`;
         break;
       }
       if (!release) await deps.onTap?.(i, step);
@@ -175,11 +228,13 @@ export async function replayEvents(page: PadPage, adapter: MatrixPadAdapter, eve
       rows = await deps.ledger(tip);
     }
     if (rows.length < want) {
-      out.rows.push({ expected: ev, stored: rows, verdict: "missing", note: `${rows.length} of ${want} row(s) within ${deadline}ms` });
+      out.rows.push({ expected: ev, stored: rows, verdict: "missing", note: withTimings(`${rows.length} of ${want} row(s) within ${deadline}ms`, ring) });
       out.stored.push(...rows);
       out.findings.push(`stopped after event ${i + 1} of ${events.length}: row missing`);
       break;
     }
+    const seenAt = now();
+    for (const t of evTimings) t.ledgerSeenAtMs = seenAt;
     // No other tap ran since `tip`, so a row past `want` is this event's too:
     // the product wrote more than its route declares.
     if (rows.length > want) {

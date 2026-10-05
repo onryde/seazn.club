@@ -147,7 +147,8 @@ describe("findings-table (T16-R4 m-6)", () => {
     console.info(`I-2: ${checked} P1 rows, each draw count equal to draw-counts.json`);
   });
 
-  it("the CLI: 0 writes the table (twice, identically); 2 is usage; 3 an unreadable TRIAGE; 1 a refusal, with nothing written", () => {
+  // D8 (W1d item 6): usage, unreadable input and a refusal are ALL exit 2 now; 1 is unused (a verdict code, and this CLI has no verdict).
+  it("the CLI: 0 writes the table (twice, identically); 2 is usage, an unreadable TRIAGE, an unreadable run and a refusal — each with nothing written; never 1 or 3", () => {
     const dir = mkdtempSync(join(tmpdir(), "findings-"));
     const out = join(dir, "a", "t.md");
     expect(main([TRIAGE, TRUTH_RUNS, "--out", out])).toBe(0);
@@ -158,18 +159,19 @@ describe("findings-table (T16-R4 m-6)", () => {
     expect(main([])).toBe(2);
     expect(main([TRIAGE])).toBe(2);
     expect(main([TRIAGE, TRUTH_RUNS, "--bogus"])).toBe(2);
-    expect(main([join(dir, "missing.md"), TRUTH_RUNS])).toBe(3);
+    // D8: unreadable input is a refusal.
+    expect(main([join(dir, "missing.md"), TRUTH_RUNS])).toBe(2);
     // A product row whose run is not on disk: unreadable input, nothing written.
     const lost = join(dir, "lost.md");
     writeFileSync(lost, `## Every ❌\n\n| 1 | \`a\\|x\\|y\\|F1\` | I2 | — | nowhere-run @ ${SHA} | product | W2 | P1 x |\n`);
     const out3 = join(dir, "b", "t.md");
-    expect(main([lost, TRUTH_RUNS, "--out", out3])).toBe(3);
+    expect(main([lost, TRUTH_RUNS, "--out", out3])).toBe(2);
     expect(existsSync(out3)).toBe(false);
-    // No product row: refused, nothing written.
+    // No product row: refused (exit 2 — D8: 1 is not used), nothing written.
     const none = join(dir, "none.md");
     writeFileSync(none, `## Every ❌\n\n| 1 | \`a\\|x\\|y\\|F1\` | I2 | — | — | works | — | — |\n`);
     const out1 = join(dir, "c", "t.md");
-    expect(main([none, TRUTH_RUNS, "--out", out1])).toBe(1);
+    expect(main([none, TRUTH_RUNS, "--out", out1])).toBe(2);
     expect(existsSync(out1)).toBe(false);
   });
 });

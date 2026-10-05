@@ -65,6 +65,12 @@ const PATTERNS: readonly RegExp[] = [
   // Glued to a word (`x_dl_…`) there is no \b, so the 32-char floor alone guards that form.
   /\bdl_[A-Za-z0-9_-]{8,}|dl_[A-Za-z0-9_-]{32,}/g,
   /\b(?:sk|pk|rk|whsec)_(?:live|test)_[A-Za-z0-9]{8,}/g, // stripe keys
+  // GitHub tokens: ghp_ classic PAT, gho_ OAuth, ghu_ user-to-server, ghs_ server-to-server (the workflow's GITHUB_TOKEN),
+  // ghr_ refresh, and the fine-grained github_pat_. A failed `gh` call can echo one. The body is 36+ characters, so a floor
+  // of 20 keeps a truncated message safe (the rest of the token is not in it) and an identifier like `ghs_report` alone.
+  // No \b: `_` is a word character, so `GH_TOKEN_ghp_…` and `x_ghp_…` have no boundary before the prefix.
+  /(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{20,}/g,
+  /(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{20,}/g,
   /\bpostgres(?:ql)?:\/\/[^\s"']+/gi, // DB URL
   /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/[^\s/:@"']*:[^\s/@"']+@/gi, // any URL carrying a password (user:pass@)
   /\bbearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi, // bearer token outside a header

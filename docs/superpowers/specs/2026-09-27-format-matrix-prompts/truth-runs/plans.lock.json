@@ -2674,6 +2674,35 @@
         "stepladder_only|volleyball|F1"
       ],
       "planned": {}
+    },
+    "w1d-carry/match-day": {
+      "plan": "--set match-day",
+      "layered": true,
+      "driven": [
+        "league|badminton|LIFECYCLE@1280",
+        "league|badminton|LIFECYCLE@320"
+      ],
+      "planned": {}
+    },
+    "w1d-carry/void-proof": {
+      "plan": "--set void-proof",
+      "layered": true,
+      "driven": [
+        "league|badminton|VOIDPROOF@1280",
+        "league|badminton|VOIDPROOF@320"
+      ],
+      "planned": {}
+    },
+    "w1d-carry/carry8-1280": {
+      "plan": "--set carry8-1280",
+      "layered": true,
+      "driven": [
+        "league|generic|M1@1280",
+        "league|generic|R4@1280",
+        "knockout|badminton|M1@1280",
+        "knockout|badminton|R4@1280"
+      ],
+      "planned": {}
     }
   }
 }

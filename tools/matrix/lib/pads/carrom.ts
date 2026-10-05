@@ -17,6 +17,11 @@ import type { MatrixPadAdapter } from "./types.ts";
 export const CARROM_BOARD = "carrom.board.summary";
 /** carrom.tsx:373 (text-pinned in pad-adapters.test.ts). */
 export const CARROM_BOARD_TILE = "board";
+/** The most coins the board sheet's number step takes: its `max: 9`
+ *  (carrom.tsx:452, and the queen board's :479). pad-adapters.test.ts reads
+ *  the skin as text and holds this equal to it — a skin that moves its bound
+ *  moves that test, never a guess here. */
+export const CARROM_COIN_MAX = 9;
 
 function boardSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep[] {
   const p = (payload ?? {}) as Record<string, unknown>;
@@ -24,9 +29,9 @@ function boardSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep[
   const side = p.winner === ctx.entrants.home ? "home" : p.winner === ctx.entrants.away ? "away" : null;
   const coins = p.opponentCoinsLeft;
   if (payload === null || typeof payload !== "object" || extra.length > 0 || side === null
-    || !Number.isInteger(coins) || (coins as number) < 0 || (coins as number) > 9
+    || !Number.isInteger(coins) || (coins as number) < 0 || (coins as number) > CARROM_COIN_MAX
     || ("queenTo" in p && p.queenTo !== null)) {
-    throw new Error(`carromPad: ${CARROM_BOARD} payload ${JSON.stringify(payload)} is not the board sheet's {winner, opponentCoinsLeft 0..9, queenTo null}`);
+    throw new Error(`carromPad: ${CARROM_BOARD} payload ${JSON.stringify(payload)} is not the board sheet's {winner, opponentCoinsLeft 0..${CARROM_COIN_MAX}, queenTo null}`);
   }
   return [
     { kind: "tile", tileId: CARROM_BOARD_TILE },

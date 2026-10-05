@@ -1,0 +1,524 @@
+name: Matrix truth run
+
+# W1d (owner rulings 60-68, 2026-10-04). The format x sport matrix, sharded:
+# L1 (231 cells @1280), L2 (1,731 pair-runs), L3 (937 cases), each shard on its
+# own fresh Postgres with sync:sports. Triggers:
+#  - schedule: weekly, Sat 02:17 UTC — GATED by vars.MATRIX_WEEKLY_ENABLED (D2):
+#    while the variable is not 'true' a firing is a visible run of skipped jobs.
+#  - workflow_dispatch: the FULL scope only; inject_visibility proves the guard
+#    live. A dispatch is read as a weekly run (ci/staleness.ts counts the newest
+#    successful schedule or dispatch), so a dispatch that could be a slice would
+#    reset the staleness clock with a slice. The smoke scope is reached only by
+#    the pull_request trigger below, whose runs staleness never reads.
+#  - workflow_call: ci.yml's per-PR sample (R27, D13), scope pr-sample.
+#  - pull_request on this file and tools/matrix/ci/**: the smoke scope proves
+#    the workflow on its own PR (D3) — dispatch only fires main's copy.
+#    THE PATH SCOPE IS NARROW ON PURPOSE (final review M9): an edit to
+#    tools/matrix/lib/** or tools/matrix/run.ts (the harness itself) does NOT
+#    trigger this run. Those changes are covered by ci.yml's per-PR sample (R27,
+#    scope pr-sample, which runs on tools/matrix/** and the engine), and by the
+#    weekly full run; this self-proof exists to prove the WORKFLOW, not the harness.
+# A run that is not COMPLETE is RED: the merge job exits non-zero on any refused
+# merge, harness fault or missing layer, and its summary step runs with
+# --require-complete, so "the last successful run" is a complete one (T8->T9,
+# T9-HG). Harness-green is not a property of one run: it is three workflow runs
+# judged by `matrix:judge across` (PR-B Task 17), and the page says so.
+# PUBLIC REPO (R14a): synthetic orgs only; nothing here echoes a secret; no
+# Playwright trace is ever uploaded (D16). The matrix drives no solver route
+# (owner ruling 66, tools/matrix/__tests__/no-solver-route.test.ts), so no
+# solver service runs in any job.
+on:
+  schedule:
+    - cron: "17 2 * * 6"
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "full (ruling 64). Smoke runs only on this file's own pull_request, never by dispatch (a dispatch counts as the weekly run)."
+        type: choice
+        options: [full]
+        default: full
+      inject_visibility:
+        description: "mutation proof of the visibility guard: none, or a visibility to pretend (the run must then fail)"
+        type: choice
+        options: [none, private, internal]
+        default: none
+  workflow_call:
+    inputs:
+      scope:
+        type: string
+        required: true
+      rows:
+        type: string
+        default: none
+  pull_request:
+    paths:
+      - ".github/workflows/matrix-truth.yml"
+      - "tools/matrix/ci/**"
+
+permissions:
+  contents: read
+  actions: read
+
+# Its own group per event and scope, so ci.yml's call (event pull_request, scope
+# pr-sample) and this file's own pull_request run (scope 'self') never share one,
+# and neither can share ci.yml's own `ci-<ref>` group: a called workflow in its
+# caller's group is cancelled by it.
+concurrency:
+  group: matrix-truth-${{ github.event_name }}-${{ inputs.scope || 'self' }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SCOPE: ${{ inputs.scope || (github.event_name == 'pull_request' && 'smoke') || 'full' }}
+
+# FORK PRs (T9-FORK): every job is gated on the one condition below, spelled in each job's own `if:` — a pull request
+# from a fork must never reach vars.MATRIX_RUNNER, because a self-hosted label would run the fork's code on the
+# owner's machine. A non-PR event (schedule, dispatch) passes; a PR passes only from this repository, and a PR whose
+# head repository is gone (null) fails closed. Re-runs: every upload overwrites its own artifact (m3), or a "re-run
+# failed jobs" would 409 on the name its first attempt already holds.
+jobs:
+  plan:
+    name: Plan the shards
+    if: (github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INJECT: ${{ inputs.inject_visibility || 'none' }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
+          case "$INJECT" in
+            none) ;;
+            private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
+            *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
+          esac
+          if [ "$vis" != "public" ]; then
+            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            exit 1
+          fi
+          echo "repository is public; guard passes"
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Derive the shard matrix (D4)
+        id: matrix
+        env:
+          ROWS: ${{ inputs.rows || 'none' }}
+        run: |
+          set -euo pipefail
+          pnpm --silent matrix:shards --scope "$SCOPE" --rows "$ROWS" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build once
+    needs: [plan]
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
+    timeout-minutes: 30
+    env:
+      # bench.yml's job-level env, every key, copied with its comments. CI-only
+      # dummies, never real secrets. NEXT_PUBLIC_* is baked into the client bundle
+      # HERE, so the stubs must be present at build (review I13); the shard job
+      # carries the same keys and the same values, because the harness derives its
+      # own post-tap waits from the hold below.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres
+      DATABASE_SSL: disable
+      AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
+      DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # The NAME is load-bearing. Actions strips job-env vars by name match, and
+      # every "PRIVATE_KEY" spelling was proved to vanish from step envs (see
+      # e2e.yml's own comment, run 34830995761). Same CI-only dummy keypair as
+      # e2e.yml — a literal there, a literal here, never a real JWKS.
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJfdWhQc1BWSFI3ZGdRRHpKMTJlYmtSUXhmbmY1T3YyRVFROWpyckJOYnBBIiwieSI6Ikd2TUhJa2YzYUpiWElSdTlJaGNjOXlTMWhuR0RzMUFYVm40Wjk5akZpZzAiLCJjcnYiOiJQLTI1NiIsImQiOiJEVXlsTzdFMVhSdHdidkNEcG13YUkxbDFUMFFON21DOWNUM0EwenNld2d3IiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZHVtbXktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
+      SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
+      # Stub, not empty: publicStorageUrl("") hides every crest and badge.
+      NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_e2e_stub
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Required, and required to be a DUMMY. `env.ts` refuses a run outright
+      # when STRIPE_SECRET_KEY is shaped like a live key (`sk_live_` prefix),
+      # and an empty value breaks Stripe client construction. Nothing here makes
+      # a real Stripe call: the entitlement gate picks its plan by reading
+      # `plan_entitlements` directly, so this leg needs no `stripe:sync`.
+      STRIPE_SECRET_KEY: sk_test_ci_bench_dummy
+      # JOB level on purpose. NEXT_PUBLIC_* is baked into the client bundle at
+      # BUILD time, and the harness derives its own post-tap waits from the same
+      # number — setting it on only one of the two leaves the run racing a hold
+      # window the browser is not using.
+      NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      SKIP_TYPECHECK: "1"
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INJECT: ${{ inputs.inject_visibility || 'none' }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
+          case "$INJECT" in
+            none) ;;
+            private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
+            *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
+          esac
+          if [ "$vis" != "public" ]; then
+            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            exit 1
+          fi
+          echo "repository is public; guard passes"
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the web app (standalone)
+        run: npm run build --workspace apps/web
+      # Serve the standalone output, as fly.toml does. `.next/static` and `public/`
+      # are not part of it: without them the server answers /api/health and HTML
+      # 200 while every /_next/static/*.js 404s (the same staging bench.yml does).
+      - name: Pack the build
+        run: |
+          set -euo pipefail
+          rm -rf apps/web/.next/standalone/apps/web/.next/static apps/web/.next/standalone/apps/web/public
+          cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
+          cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+          tar -czf web.tgz -C apps/web/.next standalone
+      - name: Upload the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: build
+          overwrite: true
+          path: web.tgz
+          retention-days: 1
+
+  shard:
+    name: ${{ matrix.layer }} shard ${{ matrix.k }}/${{ matrix.of }}
+    needs: [plan, build]
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        # Host port 5433, NOT 5432: tools/bench/lib/env.ts refuses a DATABASE_URL
+        # resolving to 5432 (the owner's shared local dev database). The container
+        # still listens on 5432 internally. One database per job: every matrix leg
+        # has its own service container, so no two shards share data.
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # bench.yml's job-level env, every key once, at JOB level only. DATABASE_URL
+      # points at this job's service DB; the server step below does NOT repeat it
+      # (review m11: one level per key, so there is no precedence to reason about).
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres
+      DATABASE_SSL: disable
+      AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
+      DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # The NAME is load-bearing. Actions strips job-env vars by name match, and
+      # every "PRIVATE_KEY" spelling was proved to vanish from step envs (see
+      # e2e.yml's own comment, run 34830995761). Same CI-only dummy keypair as
+      # e2e.yml — a literal there, a literal here, never a real JWKS.
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJfdWhQc1BWSFI3ZGdRRHpKMTJlYmtSUXhmbmY1T3YyRVFROWpyckJOYnBBIiwieSI6Ikd2TUhJa2YzYUpiWElSdTlJaGNjOXlTMWhuR0RzMUFYVm40Wjk5akZpZzAiLCJjcnYiOiJQLTI1NiIsImQiOiJEVXlsTzdFMVhSdHdidkNEcG13YUkxbDFUMFFON21DOWNUM0EwenNld2d3IiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZHVtbXktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
+      SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
+      # Stub, not empty: publicStorageUrl("") hides every crest and badge.
+      NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_e2e_stub
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Required, and required to be a DUMMY (see the build job): a live-shaped key is refused.
+      STRIPE_SECRET_KEY: sk_test_ci_bench_dummy
+      # JOB level on purpose, and the same 3000 the build above baked in.
+      NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      SMOKE_BASE: http://localhost:3200
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INJECT: ${{ inputs.inject_visibility || 'none' }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
+          case "$INJECT" in
+            none) ;;
+            private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
+            *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
+          esac
+          if [ "$vis" != "public" ]; then
+            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            exit 1
+          fi
+          echo "repository is public; guard passes"
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Download the build
+        uses: actions/download-artifact@v4
+        with:
+          name: build
+      # Flyway CLI is downloaded by scripts/flyway.sh on first use; cache it per
+      # pinned version so CI does not re-download it for every shard.
+      - name: Cache Flyway CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/seazn-flyway
+          key: flyway-cli-10.22.0-linux-x64
+      - name: Apply migrations
+        run: npm run db:apply
+      # NOT optional and NOT implied by db:apply: without it the sport catalogue is
+      # unpopulated and sport-keyed cases resolve to `generic`.
+      - name: Sync sports (sync:sports)
+        run: npm run sync:sports
+      - name: Prove the DB is this job's own (BENCH_EXPECTED_DATA_DIR)
+        run: |
+          set -euo pipefail
+          dir="$(psql "$DATABASE_URL" -tAc 'show data_directory')"
+          test -n "$dir"
+          echo "BENCH_EXPECTED_DATA_DIR=$dir" >> "$GITHUB_ENV"
+      # The browser layers drive a real chromium; L3 is over HTTP and opens none.
+      # No --with-deps: it installs nothing on a hosted image (e2e.yml's own finding)
+      # and pays a full apt-get update; chromium refuses to launch, loudly, if that
+      # ever stops being true.
+      - name: Install chromium
+        if: matrix.layer != 'L3'
+        working-directory: apps/web
+        run: npx playwright install chromium
+      - name: Start the server
+        env:
+          # 3200, NOT 3000: env.ts refuses 3000 and 3100 (the owner's dev server and
+          # the e2e target). The standalone entrypoint reads PORT.
+          PORT: "3200"
+          # The harness's only auth path is the magic link, and it consumes the
+          # dev-exposed login_url, which a production build exposes only with this
+          # flag (apps/web/src/lib/dev-links.ts mayExposeDevLink).
+          AUTH_DEV_LINKS: "1"
+          # The default log level floods the log with every accepted event.
+          LOG_LEVEL: warn
+          # The three keys every production boot in this repo carries, the same as ci.yml's smoke
+          # server (apps/web/src/lib/__tests__/relay-drivers-ci-wiring.test.ts sweeps EVERY workflow
+          # and reds smoke-db on a boot without them). R5: server.js runs NODE_ENV=production, where
+          # an unset RELAY_DRIVERS disables streaming; the matrix drives score streams, never a video
+          # stream, but the sweep is by behaviour, so it says fake explicitly. Under production an
+          # explicit fake also needs an ENV_NAME from FAKE_DRIVER_ENV_NAMES: ci is one.
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
+          # The capture panel's phone-camera option sits behind a PostHog flag (fallback false) and a
+          # CI server has no PostHog; the override shows it, exactly "1". Staging and prod never set it.
+          CAPTURE_QR_V2_ALWAYS: "1"
+        run: |
+          set -euo pipefail
+          tar -xzf web.tgz
+          node standalone/apps/web/server.js > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:3200/api/health >/dev/null; then
+              echo "server up after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::server did not become healthy on :3200"
+          cat "$RUNNER_TEMP/server.log"
+          exit 1
+      - name: Run the shard
+        env:
+          MATRIX_ARGS: ${{ matrix.args }}
+          # matrix.id is lowercase (shard-matrix.ts); run.ts slugs --run-id, so the
+          # id must already be its own slug or "out/$RUN_ID" below names nothing (review C1).
+          RUN_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
+        run: |
+          set +e
+          mkdir -p out
+          if [ "$SCOPE" = "pr-sample" ]; then
+            # run-sample reads MATRIX_ARGS from the env: a dash-leading --args value is
+            # refused by util.parseArgs (review C3a).
+            pnpm matrix:sample --run-id "$RUN_ID" --report-dir out
+          else
+            pnpm matrix:l3 $MATRIX_ARGS --run-id "$RUN_ID" --report-dir out
+          fi
+          code=$?
+          dir="out/$RUN_ID"; mkdir -p "$dir"
+          echo "$code" > "$dir/exit.txt"
+          echo "EXIT=$code"
+          exit "$code"
+      - name: Upload shard results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shard-${{ matrix.layer }}-${{ matrix.k }}
+          overwrite: true
+          path: |
+            out/*/results.json
+            out/*/MATRIX.md
+            out/*/exit.txt
+            out/*/**/*.png
+          retention-days: 90
+          if-no-files-found: warn
+
+  merge:
+    name: Merge, judge, summarise
+    needs: [plan, shard]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && inputs.scope != 'pr-sample' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
+    timeout-minutes: 20
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INJECT: ${{ inputs.inject_visibility || 'none' }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
+          # Up to three asks, 1 s then 2 s apart (m4): one API blip must not refuse a run. Only a RECOGNISED answer ends
+          # the loop: on a 404/401/403/5xx gh exits 1 but still prints the raw JSON error body to stdout, so "non-empty"
+          # is not "answered". Anything else is cleared and retried; still unreadable after the third ask reads as
+          # 'unreadable' below, which refuses — the guard fails closed.
+          vis=""
+          for attempt in 1 2 3; do
+            vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+            case "$vis" in public|private|internal) break ;; esac
+            vis=""
+            if [ "$attempt" -lt 3 ]; then sleep "$attempt"; fi
+          done
+          case "$INJECT" in
+            none) ;;
+            private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
+            *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
+          esac
+          if [ "$vis" != "public" ]; then
+            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            exit 1
+          fi
+          echo "repository is public; guard passes"
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Download the shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          path: shards
+      - name: Merge each layer and judge its faults
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # ruling 65 (2026-10-04): "no ░" applies to driven cases only. A planned ░
+        # (L2's 1,505 unscripted pair-runs) is not a fault, so `allow` is the ruled
+        # behaviour; a ░ on a DRIVEN case is still a fault under it (judge.test.ts).
+        #
+        # Every failure below sets status=1 and the loop goes on, so one layer's
+        # refusal never hides another's verdict; the job still exits non-zero, which
+        # is what makes "the last successful run" a complete one. A layer with
+        # NO shard directory is a failure too: every full or smoke scope plans all
+        # three layers, so a missing one is an upload that failed or a shard job that
+        # never ran, never "nothing to do". The summary names a --judge file per
+        # layer, written or not: an absent file is "judge refused" there, never complete.
+        # --require-complete makes the summary's own verdict ("Run complete: no") exit 1,
+        # so the job's colour follows the page even when every step above exited 0.
+        run: |
+          set +e
+          shopt -s nullglob
+          status=0
+          judges=()
+          for layer in L1 L2 L3; do
+            # lower-cased with tr: bash 3.2 (macOS, or a self-hosted runner) has no case-modifying expansion.
+            lc="$(printf '%s' "$layer" | tr '[:upper:]' '[:lower:]')"
+            judges+=(--judge "merged/$layer/judge.json")
+            dirs=(shards/shard-$layer-*/*)
+            if [ "${#dirs[@]}" -eq 0 ]; then
+              echo "::error::$layer: no shard results were downloaded (scope $SCOPE): a layer the plan promised and nothing produced is a failed run"
+              status=1
+              continue
+            fi
+            pnpm --silent matrix:merge --run-id "ci-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$lc" --out "merged/$layer" "${dirs[@]}"
+            code=$?; echo "$layer merge EXIT=$code"
+            if [ "$code" -ne 0 ]; then status=1; continue; fi
+            pnpm --silent matrix:judge faults "merged/$layer/results.json" --planned-not-run allow --json-out "merged/$layer/judge.json" > "merged/$layer/faults.txt"
+            code=$?; echo "$layer faults EXIT=$code"
+            if [ "$code" -ne 0 ]; then status=1; fi
+          done
+          mkdir -p merged
+          pnpm --silent matrix:summary --merged merged "${judges[@]}" --previous-run auto --require-complete --out merged/SUMMARY.md
+          code=$?; echo "summary EXIT=$code"
+          if [ "$code" -ne 0 ]; then status=1; fi
+          if [ -f merged/SUMMARY.md ]; then cat merged/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"; fi
+          exit "$status"
+      - name: Upload merged results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: merged
+          overwrite: true
+          path: merged/
+          retention-days: 90

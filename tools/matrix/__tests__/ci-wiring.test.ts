@@ -1,55 +1,27 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
+import { indentOf, jobBlock, stepOf } from "./workflow-text.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WORKFLOWS = resolve(REPO, ".github/workflows");
 const ci = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8");
 const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> };
 
+// Task 12 minor 2 (routed to Task 16): a prefix shared by every session on the machine made "leaves no scratch
+// checkout behind" flake whenever another session's run of this file created or removed a checkout between the two
+// snapshots. Each process names its own scratch checkouts, and the leak check reads only that name.
+const SCRATCH_PREFIX = `fm-ci-${process.pid}-`;
+const scratchDirs = () => readdirSync(tmpdir()).filter((d) => d.startsWith(SCRATCH_PREFIX)).sort();
+
 const STEP_NAME = "Matrix harness unit tests (DB-free)";
 const STEP_HEAD = `      - name: ${STEP_NAME}`;
 
-const indentOf = (line: string) => line.length - line.trimStart().length;
-
-// A named step as GitHub sees it: its own keys, and its `run: |` block
-// dedented. Hand-parsed (no YAML dependency at the repo root); the parse is
-// strict about the one shape it accepts, so a reshaped step reds here rather
-// than parsing into something vacuous.
-function stepOf(text: string, name: string): { keys: string[]; body: string; script: string | null } {
-  const head = `      - name: ${name}`;
-  const lines = text.split("\n");
-  const heads = lines.flatMap((l, i) => (l === head ? [i] : []));
-  if (heads.length !== 1) throw new Error(`expected exactly one "${head.trim()}" line, found ${heads.length}`);
-  const start = heads[0]!;
-  let end = start + 1;
-  while (end < lines.length && (lines[end]!.trim() === "" || indentOf(lines[end]!) >= 8)) end++;
-  const body = lines.slice(start + 1, end);
-  const keys = ["name", ...body.flatMap((l) => /^ {8}([a-z][\w-]*):/.exec(l)?.slice(1) ?? [])];
-  const runAt = body.indexOf("        run: |");
-  if (runAt === -1) return { keys, body: body.join("\n"), script: null };
-  const script: string[] = [];
-  for (const l of body.slice(runAt + 1)) {
-    if (l.trim() !== "" && indentOf(l) < 10) break;
-    script.push(l.slice(10));
-  }
-  return { keys, body: body.join("\n"), script: script.join("\n").trimEnd() + "\n" };
-}
 const matrixStep = (t: string) => stepOf(t, STEP_NAME);
-
-/** A job-level (4-space) block of a job's YAML: its key line and every deeper
- *  line after it, or "" when the job has no such key. */
-function jobBlock(lines: string[], key: string): string {
-  const at = lines.indexOf(`    ${key}:`);
-  if (at === -1) return "";
-  let end = at + 1;
-  while (end < lines.length && (lines[end]!.trim() === "" || indentOf(lines[end]!) > 4)) end++;
-  return lines.slice(at, end).join("\n");
-}
 
 /** What in a job's YAML (comments dropped) could hand the matrix step a
  *  database (Task 10 review Minor 1): any `services:` block, a job-level `env:`
@@ -87,7 +59,7 @@ function report(root: string, o: { total: number; passed: number; failedSuites?:
 function runNamedStep(name: string, reportFile: string, o: { json: ReturnType<typeof report> | ((root: string) => ReturnType<typeof report>) | null; exit: number; stale?: (root: string) => ReturnType<typeof report> }) {
   const { script } = stepOf(ci, name);
   if (script === null) throw new Error(`the "${name}" step has no \`run: |\` block`);
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "fm-ci-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)));
   try {
     const bin = join(root, "packages/engine/node_modules/.bin");
     mkdirSync(bin, { recursive: true });
@@ -173,12 +145,35 @@ describe("matrix CI wiring", () => {
 
   describe("the step judges vitest by its JSON report, not by its exit code alone", () => {
     it("runStep leaves no scratch checkout behind (Task 10 review Minor 2)", () => {
-      const scratch = () => readdirSync(tmpdir()).filter((d) => d.startsWith("fm-ci-")).sort();
-      const before = scratch();
+      const before = scratchDirs();
       runStep({ json: (root) => report(root, { total: 1, passed: 1 }), exit: 0 });
       runStep({ json: null, exit: 1 });
-      expect(scratch()).toEqual(before);
+      expect(scratchDirs()).toEqual(before);
     }, spawnBudget(2));
+    // Task 12 minor 2: the checkout is named for THIS process, and the leak check reads only that name.
+    it("the scratch checkout is named for this process (fm-ci-<pid>-…), so another session's cannot be mistaken for ours", () => {
+      let seen = "";
+      const r = runStep({ json: (root) => { seen = root; return report(root, { total: 1, passed: 1 }); }, exit: 0 });
+      expect(r.status).toBe(0); // the step really ran in that checkout (a callback never called would leave seen empty)
+      expect(basename(seen)).toMatch(new RegExp(`^fm-ci-${process.pid}-[A-Za-z0-9]+$`));
+    }, spawnBudget(1));
+    it("another process's scratch checkout, appearing while this one's leak check runs, is not read as a leak; ours would be", () => {
+      const foreign = mkdtempSync(join(tmpdir(), `fm-ci-${process.pid + 1}-`));
+      const ours = mkdtempSync(join(tmpdir(), SCRATCH_PREFIX));
+      try {
+        // positive pair first: the check does see a checkout of this process's, and does not see the other's
+        expect(scratchDirs()).toContain(basename(ours));
+        expect(scratchDirs()).not.toContain(basename(foreign));
+        // and the sequence the flake took: snapshot, a foreign checkout comes and goes, snapshot
+        const before = scratchDirs();
+        const late = mkdtempSync(join(tmpdir(), `fm-ci-${process.pid + 2}-`));
+        rmSync(late, { recursive: true, force: true });
+        expect(scratchDirs()).toEqual(before);
+      } finally {
+        rmSync(foreign, { recursive: true, force: true });
+        rmSync(ours, { recursive: true, force: true });
+      }
+    });
     it("a real pass is green, and says what it counted", () => {
       const r = runStep({ json: (root) => report(root, { total: 3, passed: 3 }), exit: 0 });
       expect(r.stderr).toBe("");
@@ -241,14 +236,12 @@ describe("matrix CI wiring", () => {
     });
   });
 
-  it("no scheduled matrix workflow exists in W1a", () => {
-    expect(ci).not.toMatch(/matrix:l3/);
-    const files = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f));
-    expect(files).toContain("ci.yml");
-    expect(files).toContain("e2e.yml");
-    for (const f of files) {
-      expect({ f, hit: /matrix:l3|tools\/matrix\/run\b/.test(readFileSync(join(WORKFLOWS, f), "utf8")) }).toEqual({ f, hit: false });
-    }
+  it("the matrix runs only in matrix-truth.yml, and ci.yml reaches it only by calling that workflow (W1d; was W1a's 'no workflow')", () => {
+    const files = readdirSync(WORKFLOWS).filter((f) => f.endsWith(".yml"));
+    const runners = files.filter((f) => /matrix:l3|matrix:browser|tools\/matrix\/run\b/.test(readFileSync(join(WORKFLOWS, f), "utf8")));
+    expect(runners).toEqual(["matrix-truth.yml"]);
+    expect(ci).toMatch(/uses:\s*\.\/\.github\/workflows\/matrix-truth\.yml/);
+    expect(files.length).toBeGreaterThan(5);   // anti-vacuity: the directory was read
   });
 
   it("package scripts run the CLIs under strip-types", () => {
@@ -415,4 +408,134 @@ describe("reference CI wiring (Task 12)", () => {
     expect(stale.stdout).not.toContain("9/9");
     expect(stale.stderr).toMatch(/vitest-results-reference\.json/);
   }, spawnBudget(3));
+});
+
+// W1d Task 1 (item 1, D10): plans.lock.json is append-only. The gate's step is
+// pinned the way R26's is: a line-based read of ci.yml, so a reshaped step reds
+// here rather than parsing into something vacuous.
+describe("lock-append-only CI wiring (W1d Task 1, item 1 D10)", () => {
+  const LOCK_STEP = "- run: pnpm matrix:lock-check --against HEAD^1";
+  const lines = ci.split("\n");
+  const isComment = (l: string) => /^\s*#/.test(l);
+  const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+
+  it("the lock gate runs in gates, unconditionally, right after reference:boundary", () => {
+    const rb = lines.findIndex((l) => l.trim() === "- run: npm run reference:boundary");
+    expect(rb).toBeGreaterThan(0);
+    // the next non-comment line is the lock gate
+    let next = rb + 1;
+    while (next < lines.length && isComment(lines[next]!)) next++;
+    expect(lines[next]!.trim()).toBe(LOCK_STEP);
+    expect(lines[next]).toBe(`      ${LOCK_STEP}`);
+    // exactly one non-comment line names it, and it sits in the gates job
+    expect(lines.filter((l) => l.includes("matrix:lock-check") && !isComment(l))).toEqual([`      ${LOCK_STEP}`]);
+    expect(jobAt(next)).toBe("  gates:");
+    // nothing turns it off or makes it advisory: between it and the next step, only
+    // comments (a key under the step — `if:`, `continue-on-error:`, `env:` — sits at indent 8)
+    let end = next + 1;
+    while (end < lines.length && !lines[end]!.startsWith("      - ")) end++;
+    expect(end).toBeGreaterThan(next);
+    const between = lines.slice(next + 1, end);
+    expect(between.filter((l) => !isComment(l) && l.trim() !== "")).toEqual([]);
+    // the same job carries no job-level `if:` / `continue-on-error:` that could skip the step
+    const gatesAt = lines.indexOf("  gates:");
+    const header = lines.slice(gatesAt + 1, lines.indexOf("    steps:", gatesAt));
+    expect(header.length).toBeGreaterThan(0);
+    for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
+    // and R26's own assertion still holds: reference:boundary is the line right after the ratchet
+    const ss = lines.findIndex((l) => l.trim() === "- run: pnpm matrix:single-sport --check --against HEAD^1");
+    expect(lines[ss + 1]!.trim()).toBe("- run: npm run reference:boundary");
+  });
+
+  it("its package script preloads crash-exit.ts, runs the CLI, and the CLI exists", () => {
+    expect(pkg.scripts["matrix:lock-check"]).toBe("node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/lock-append-only.ts");
+    expect(existsSync(resolve(REPO, "tools/matrix/lock-append-only.ts"))).toBe(true);
+  });
+
+  it("the step's command as ci.yml spells it, run the way CI runs it, reaches the CLI and passes on this tree", () => {
+    const step = lines.find((l) => l.includes("matrix:lock-check") && !isComment(l));
+    expect(step).toBeDefined();
+    const cmd = (step ?? "").trim().replace(/^- run: /, "");
+    expect(cmd).toContain(" --against HEAD^1");
+    // HEAD^1 needs history and a merge commit; HEAD is always there and the lock is committed unchanged
+    const r = spawnSync("bash", ["-c", cmd.replace(" --against HEAD^1", " --against HEAD")], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS });
+    expect(r.status, r.stderr).toBe(0);
+    // only a CLI that read both flags prints this: --against reached it through pnpm
+    expect(r.stdout).toMatch(/^lock-append-only: \d+ entries compared, \d+ added$/m);
+  }, spawnBudget(1));
+});
+
+// W1d Task 10 (item 7, D9): tsconfig.scripts.json excludes every *.test.ts, so
+// type errors in test code reached main. tsconfig.tools-tests.json checks them,
+// and the check lives only in ci.yml's gates job (a full `tsc -p` inside the
+// unit step would duplicate the gates step's minutes against the unit step's
+// timeout). Nothing else goes red when the step is deleted, so this pins it:
+// a line-based read of ci.yml, as R26's and Task 1's are.
+describe("tools-tests type-check CI wiring (W1d Task 10, item 7 D9)", () => {
+  const STEP = "      - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json";
+  const lines = ci.split("\n");
+  const isComment = (l: string) => /^\s*#/.test(l);
+  // the job a line sits in: the last two-space job key at or above it
+  const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+
+  it("the tools-tests type-check runs in the gates job, exactly once, and nothing can make it conditional or advisory (W1d item 7)", () => {
+    const at = lines.indexOf(STEP);
+    expect(at).toBeGreaterThan(0);
+    expect(lines.filter((l) => l.includes("tsconfig.tools-tests.json") && !isComment(l))).toEqual([STEP]);
+    // a key under the step (`if:`, `continue-on-error:`, `env:`, …) would sit at indent 8
+    expect(lines[at + 1]).toMatch(/^ {6}(- |#)/);
+    expect(jobAt(at)).toBe("  gates:");
+    // nor a job-level `if:` / `continue-on-error:` on the job that hosts it
+    const gatesAt = lines.indexOf("  gates:");
+    const header = lines.slice(gatesAt + 1, lines.indexOf("    steps:", gatesAt));
+    expect(header.length).toBeGreaterThan(0);
+    for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
+  });
+});
+
+// W1d Task 15 (D14): the Stryker floor never falls. Nothing else goes red when the step is deleted or made advisory, so this
+// pins it, line-based as Task 10's is, and then RUNS the command as ci.yml spells it, so a flag pnpm swallowed or a script
+// that does not exist reds here and not on the first PR that lowers a floor.
+describe("Stryker floor CI wiring (W1d Task 15, D14)", () => {
+  const STEP = "      - run: pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1";
+  const TSC_STEP = "      - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json";
+  const lines = ci.split("\n");
+  const isComment = (l: string) => /^\s*#/.test(l);
+  // the job a line sits in: the last two-space job key at or above it
+  const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+
+  it("the Stryker floor gate runs in the gates job, exactly once, and nothing can make it conditional or advisory (W1d D14)", () => {
+    const at = lines.indexOf(STEP);
+    expect(at).toBeGreaterThan(0);
+    expect(lines.filter((l) => l.includes("mutation:floor") && !isComment(l))).toEqual([STEP]);
+    expect(lines[at + 1]).toMatch(/^ {6}(- |#)/);   // no key beneath it (`if:`, `continue-on-error:`, `env:`)
+    expect(jobAt(at)).toBe("  gates:");
+    // appended AFTER the steps Tasks 1 and 10 added, never directly after reference:boundary (Task 1 pins the lock step as the line after it)
+    expect(at).toBeGreaterThan(lines.indexOf(TSC_STEP));
+    expect(lines.indexOf(TSC_STEP)).toBeGreaterThan(0);
+    // nor a job-level `if:` / `continue-on-error:` on the job that hosts it
+    const gatesAt = lines.indexOf("  gates:");
+    const header = lines.slice(gatesAt + 1, lines.indexOf("    steps:", gatesAt));
+    expect(header.length).toBeGreaterThan(0);
+    for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
+  });
+
+  it("the engine's package script runs the CLI under strip-types, and the CLI exists", () => {
+    const engine = JSON.parse(readFileSync(resolve(REPO, "packages/engine/package.json"), "utf8")) as { scripts: Record<string, string> };
+    expect(engine.scripts["mutation:floor"]).toBe("node --experimental-strip-types scripts/stryker-floor.ts");
+    expect(existsSync(resolve(REPO, "packages/engine/scripts/stryker-floor.ts"))).toBe(true);
+    expect(engine.scripts.mutation).toBe("stryker run stryker.config.mjs");
+  });
+
+  it("the step's command as ci.yml spells it, run the way CI runs it, reaches the CLI with its flag and passes on this tree", () => {
+    const step = lines.find((l) => l.includes("mutation:floor") && !isComment(l));
+    expect(step).toBeDefined();
+    const cmd = (step ?? "").trim().replace(/^- run: /, "");
+    expect(cmd).toContain(" --check-file-against HEAD^1");
+    // HEAD^1 needs history and a merge commit; HEAD is always there. Either HEAD has no floor file yet (the PR before its commit) or has the committed one, unchanged.
+    const r = spawnSync("bash", ["-c", cmd.replace(" --check-file-against HEAD^1", " --check-file-against HEAD")], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS });
+    expect(r.status, r.stderr).toBe(0);
+    // only a CLI that read the flag through `pnpm --filter` prints this: the flag reached it, in the engine's directory
+    expect(r.stdout).toMatch(/^stryker-floor: (no floors at HEAD: nothing to compare|compared \d+ floor\(s\) against HEAD: 0 lowered or removed)$/m);
+  }, spawnBudget(1));
 });

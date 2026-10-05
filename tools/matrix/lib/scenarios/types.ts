@@ -6,7 +6,7 @@ import type { OrganiserDriver } from "../driver/types.ts";
 import type { ObservedRun } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 
-export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF";
+export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF";
 
 /** `row` is any catalogue row, API-only ones included (W1b Task 3 carry):
  *  stagesForRow builds every one. `deny` (ruling 24) lists the feature keys
@@ -21,6 +21,11 @@ export interface CaseSpec {
    *  card builds this case's division (lib/templates.ts) — set by the planner
    *  on the two template-only cells, absent everywhere else. */
   template?: string;
+  /** W1d Task 14 (item 15c, D17): the case is a MATCH DAY. LIFECYCLE dates the division's first fixtures NOW
+   *  (OrganiserDriver.scheduleFixtureNow) before any is played, so the division is on its match day when its run
+   *  sheet first loads, and the browser reads the filter the sheet OPENS on. Set by the match-day set's planner
+   *  only; absent everywhere else, so every committed plan is unchanged. */
+  matchDay?: true;
 }
 
 /** `denied`: the feature keys prepareCaseOrg actually denied the case org

@@ -7,7 +7,7 @@ import type { Transport } from "../lib/driver/http-driver.ts";
 import { slugify as productSlugify, uniqueSlug as productUniqueSlug } from "../../../apps/web/src/server/usecases/slugs.ts";
 import {
   CASE_ORG_SLUG_LIKE, CASE_OWNER_EMAIL_LIKE, DataDirMismatch, DataDirUnset, NoPublicPlan, NotACaseOrg, ORG_COOKIE, OrgSwitchFailed, caseOrgSlug,
-  chooseTopPublicPlan, createRealMatrixSql, gateOnOwnDataDir, matrixSqlOver, ownerEmail, prepareCaseOrg, requireOwnDataDir, switchToCaseOrg, type MatrixSql,
+  chooseTopPublicPlan, createRealMatrixSql, gateOnOwnDataDir, likePrefixOf, matrixSqlOver, ownerEmail, prepareCaseOrg, requireOwnDataDir, switchToCaseOrg, type MatrixSql,
 } from "../lib/seed-org.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -45,6 +45,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
       async denyFeature() { calls.push("denyFeature"); },
       async planGrants() { calls.push("planGrants"); return ["formats.double_elim"]; },
       async planLimit() { calls.push("planLimit"); return 20; },
+      async runIdTaken() { calls.push("runIdTaken"); return 0; },
     };
     return { calls, inner };
   };
@@ -56,6 +57,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
     () => sql.denyFeature({ orgId: "o1", featureKey: "formats.advanced", reason: "r" }),
     () => sql.planGrants("pro"),
     () => sql.planLimit("pro", "divisions.per_competition.max"),
+    () => sql.runIdTaken("w1d-a"),
   ];
 
   it("a blank expected dir refuses at construction", () => {
@@ -79,7 +81,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
     let reads = 0;
     const sql = gateOnOwnDataDir(inner, async () => { reads++; return "/tmp/pg-fm"; }, "/tmp/pg-fm");
     for (const call of everyMethod(sql)) await call();
-    expect(calls).toEqual(["userIdForEmail", "insertCaseOrg", "listPlanKeys", "variantKeysInBuilderOrder", "denyFeature", "planGrants", "planLimit"]);
+    expect(calls).toEqual(["userIdForEmail", "insertCaseOrg", "listPlanKeys", "variantKeysInBuilderOrder", "denyFeature", "planGrants", "planLimit", "runIdTaken"]);
     expect(reads).toBe(1);
     expect(await sql.insertCaseOrg({ userId: "u1", name: "n", slug: "m-r-1" })).toEqual({ orgId: "o1", orgSlug: "m-r-1" });
   });
@@ -258,6 +260,78 @@ describe("matrixSqlOver — the real queries, driven over a fake client", () => 
   it("…an int column that is not an integer is refused by name, never read as a cap", async () => {
     const { db } = fakeClient("/tmp/pg-fm", () => [{ int_value: "20" }]);
     await expect(matrixSqlOver(db, "/tmp/pg-fm").planLimit("pro", CAP)).rejects.toThrow(/not an integer or null/);
+  });
+});
+
+// W1d Task 5 (items 12, 25): the case orgs a run id already seeded. A case org's slug is `m-<id>-<n>` (caseOrgSlug) and
+// organizations.slug is unique, so a second run under the same id collides on its FIRST org. The query narrows with a
+// LIKE on the escaped prefix; which of those rows are THIS id's case orgs is decided in code, so it is pinned here by
+// the rows a fake client answers (the fake does not evaluate SQL — the bound pattern is what pins the LIKE).
+describe("likePrefixOf — the LIKE pattern's prefix for a run id's case-org slugs", () => {
+  // Postgres LIKE: `%` and `_` are wildcards and `\` is the default escape character.
+  const CASES: readonly (readonly [string, string])[] = [
+    ["w1d-dup", "m-w1d-dup-"],
+    ["w1d_a", "m-w1d\\_a-"],
+    ["100%", "m-100\\%-"],
+    ["a\\b", "m-a\\\\b-"],
+    ["_%_", "m-\\_\\%\\_-"],
+  ];
+  it("escapes every LIKE metacharacter (%, _ and the escape itself), and leaves a slug-safe id as it is", () => {
+    let checked = 0;
+    for (const [id, want] of CASES) { expect(likePrefixOf(id), id).toBe(want); checked++; }
+    expect(checked).toBe(CASES.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+  it("starts with the case-org prefix caseOrgSlug stamps, and ends where the case number begins — derived from caseOrgSlug, not typed", () => {
+    const slug = caseOrgSlug("w1d-x", 7);
+    expect(slug.startsWith(likePrefixOf("w1d-x"))).toBe(true);
+    expect(slug.slice(likePrefixOf("w1d-x").length)).toBe("7");
+  });
+});
+
+describe("runIdTaken (W1d items 12, 25) — gated, parameterised, and exact about which slugs are THIS id's", () => {
+  const slugsOf = (...slugs: string[]) => (text: string): unknown[] => (text.startsWith("select slug from organizations") ? slugs.map((slug) => ({ slug })) : []);
+  it("a foreign data_directory refuses it and runs nothing but the one probe", async () => {
+    const { db, seen } = fakeClient("/usr/local/var/postgres", slugsOf("m-a-1"));
+    await expect(matrixSqlOver(db, "/tmp/pg-fm").runIdTaken("a")).rejects.toBeInstanceOf(DataDirMismatch);
+    expect(seen).toEqual([PROBE]);
+  });
+  it("one SELECT, the escaped prefix bound as ONE parameter — never spliced into the text", async () => {
+    const { db, seen } = fakeClient("/tmp/pg-fm", slugsOf());
+    await matrixSqlOver(db, "/tmp/pg-fm").runIdTaken("w1d_a");
+    expect(seen).toEqual([PROBE, { via: "db", text: "select slug from organizations where slug like $", values: [`${likePrefixOf("w1d_a")}%`] }]);
+  });
+  it("the empty case: no org under the id is zero (a fresh id proceeds)", async () => {
+    const { db } = fakeClient("/tmp/pg-fm", slugsOf());
+    expect(await matrixSqlOver(db, "/tmp/pg-fm").runIdTaken("fresh")).toBe(0);
+  });
+  it("counts the id's case orgs — m-<id>-<digits> — and ONLY those: a longer id that shares the prefix is no collision (a-b's m-a-b-1 is not a's)", async () => {
+    // The LIKE `m-a-%` returns all of these but the last; only the first three can collide with caseOrgSlug("a", n).
+    // `m-x-7` is what an OVER-matching pattern (an unescaped `_` or `%`) would also hand back: the prefix is checked
+    // again in code, so a wildcard that leaked into the SQL still cannot inflate the count.
+    const { db } = fakeClient("/tmp/pg-fm", slugsOf("m-a-1", "m-a-2", "m-a-10", "m-a-b-1", "m-a-1-1", "m-a-", "m-a-x", "m-a-1x", "m-x-7"));
+    expect(await matrixSqlOver(db, "/tmp/pg-fm").runIdTaken("a")).toBe(3);
+    // …and read from the other side: the run id `a-b` owns exactly the one slug that is its own.
+    const other = fakeClient("/tmp/pg-fm", slugsOf("m-a-b-1"));
+    expect(await matrixSqlOver(other.db, "/tmp/pg-fm").runIdTaken("a-b")).toBe(1);
+  });
+  it("every slug a run really stamps is counted: caseOrgSlug(id, 1..N), for N = 1, 9, 10, 100", async () => {
+    let checked = 0;
+    for (const n of [1, 9, 10, 100]) {
+      const { db } = fakeClient("/tmp/pg-fm", slugsOf(...Array.from({ length: n }, (_, i) => caseOrgSlug("run-x", i + 1))));
+      expect(await matrixSqlOver(db, "/tmp/pg-fm").runIdTaken("run-x"), `n=${n}`).toBe(n);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+  it("a second call asks the database again — nothing is remembered between calls (the sequence: seed, then ask)", async () => {
+    const stored: string[] = [];
+    const { db, seen } = fakeClient("/tmp/pg-fm", (text) => (text.startsWith("select slug from organizations") ? stored.map((slug) => ({ slug })) : []));
+    const sql = matrixSqlOver(db, "/tmp/pg-fm");
+    expect(await sql.runIdTaken("seq")).toBe(0);
+    stored.push(caseOrgSlug("seq", 1), caseOrgSlug("seq", 2));
+    expect(await sql.runIdTaken("seq")).toBe(2);
+    expect(seen.filter((x) => typeof x !== "string" && x.text.startsWith("select slug")).length).toBe(2);
   });
 });
 
@@ -514,6 +588,7 @@ describe("prepareCaseOrg", () => {
     async denyFeature(i) { order.push(`deny ${i.orgId} ${i.featureKey}`); },
     async planGrants() { return []; },
     async planLimit() { return null; },
+    async runIdTaken() { return 0; },
   });
 
   it("inserts, switches, then provisions — in that order", async () => {

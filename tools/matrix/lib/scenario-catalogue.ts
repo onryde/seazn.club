@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { ROW_KEYS, SPORT_KEYS, cellId } from "./catalogue.ts";
 import { NO_CODE, NO_MESSAGE } from "./driver/types.ts";
-import { FENCES } from "./model/fences.ts";
+import { FENCES, ROSTER_TRIGGERS } from "./model/fences.ts";
 import { routeTo, type Route } from "./routing.ts";
 import type { ScenarioKey } from "./scenarios/types.ts";
 
@@ -253,6 +253,12 @@ const RegressionSchema = z.strictObject({
    *  names no fence of its own (replayFences). */
   fencesOn: z.boolean(),
   fence: z.string().min(1).nullable(),
+  /** The roster change the failure follows, for cases that cannot be told apart by their words (W1d item 26):
+   *  MB-007 (an entrant ADDED, then Generate) and MB-010 (one WITHDRAWN, then Generate) share a cell, a check and a
+   *  match. Read from the case's own finding commands (fences.ts triggersOf); absent on every case whose cell,
+   *  check and match name it alone. Two open cases that share all three must each carry a distinct one
+   *  (parseRegressions), or a failure would be named by whichever the file lists first. */
+  trigger: z.enum(ROSTER_TRIGGERS).optional(),
   /** Text that must appear in the product's own words (its refusal message,
    *  or a server assertion it carries — never RefusedCall's request line, never
    *  the harness's lines) for this case to name the failure: a failure is
@@ -297,6 +303,16 @@ export function parseRegressions(json: unknown): RegressionCase[] {
   for (const r of regressions) {
     if (seen.has(r.id)) throw new Error(`regressions: duplicate id ${r.id}`);
     seen.add(r.id);
+  }
+  // W1d item 26: open cases that name one failure by cell, check and match are told apart by their triggers alone.
+  const open = regressions.filter((r) => r.status === "open");
+  for (const [i, r] of open.entries()) {
+    for (const o of open.slice(i + 1)) {
+      if (o.cell !== r.cell || o.check !== r.check || o.match !== r.match) continue;
+      if (r.trigger === undefined || o.trigger === undefined || r.trigger === o.trigger) {
+        throw new Error(`regressions: ${r.id} and ${o.id} share a cell, a check and a match, so only a distinct "trigger" (${ROSTER_TRIGGERS.join(" or ")}) tells their failures apart — give each its own, read from its finding's commands`);
+      }
+    }
   }
   return regressions;
 }

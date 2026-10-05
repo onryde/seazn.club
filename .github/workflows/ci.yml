@@ -112,6 +112,18 @@ jobs:
       # ci-wiring.test.ts pins that this step always runs and always gates.
       - run: pnpm matrix:single-sport --check --against HEAD^1
       - run: npm run reference:boundary
+      # Item 1 (W1d D10): plans.lock.json is append-only — an edited or removed
+      # entry is a rewritten plan for evidence already committed. HEAD^1 as
+      # for the single-sport ratchet two steps above.
+      - run: pnpm matrix:lock-check --against HEAD^1
+      # Item 7 (W1d D9): tsconfig.scripts.json excludes every *.test.ts, so a type
+      # error in a test reached main. This config type-checks the matrix's and
+      # scripts' tests too; tools-tests-typecheck.test.ts proves its reach and
+      # ci-wiring.test.ts pins this step (no `if:`, no continue-on-error:).
+      - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json
+      # D14 (W1d): a Stryker floor never falls. HEAD^1 as for the lock gate. Absent at HEAD^1
+      # (PR-A's own first run) means "no floors yet": the CLI exits 0 for it.
+      - run: pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh
@@ -214,7 +226,9 @@ jobs:
       # not prove the DB-free claim. Same explicit-binary-path +
       # explicit-target-path + dual reporter + testTimeout convention as the
       # "Repo-root scripts tests" step in the smoke-db job (this file,
-      # further down): no root-level vitest install/config exists, so
+      # further down): no root-level vitest CONFIG exists (a root vitest
+      # devDependency does, since W1d item 7 — it only lets the tools-tests
+      # type-check resolve `vitest`'s types), so
       # packages/engine's already-installed binary is invoked directly with
       # an explicit target path rather than relying on config
       # auto-discovery, which would walk up from cwd and find nothing to
@@ -741,9 +755,11 @@ jobs:
       # scripts have no home in either workspace's own `npm test`: both
       # packages/engine and apps/web restrict their vitest `include` to their
       # own src/**, so neither would ever collect a file under scripts/, and
-      # there is no root-level vitest install (`npx vitest`/`pnpm exec
-      # vitest` from the repo root both fail to resolve the binary — proved
-      # locally, not assumed). Invoking packages/engine's already-installed
+      # there was no root-level vitest install (`npx vitest`/`pnpm exec
+      # vitest` from the repo root both failed to resolve the binary — proved
+      # locally, not assumed; W1d item 7 has since added a root devDependency
+      # so the tools-tests type-check can resolve `vitest`, which changes
+      # nothing below: still no root config). Invoking packages/engine's already-installed
       # binary directly, with an EXPLICIT path argument rather than a
       # config-driven include glob, sidesteps both: vitest's config
       # auto-discovery walks up from cwd, and the repo root has no
@@ -1682,3 +1698,81 @@ jobs:
         run: |
           docker logs placement-smoke || true
           docker rm -f placement-smoke >/dev/null 2>&1 || true
+
+  # -------------------------------------------------------------------------
+  # R27 (W1d D13): a PR touching the engine or stages.ts declares its matrix
+  # rows; the sample runs them + a fixed 33 against the committed baseline.
+  # The sample itself is matrix-truth.yml's `pr-sample` scope (a called
+  # workflow, so the visibility guard and the shard recipe live in ONE file).
+  # -------------------------------------------------------------------------
+  matrix-rows:
+    name: Matrix rows (R27) + truth-run staleness
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      run: ${{ steps.filter.outputs.matrix }}
+      rows: ${{ steps.rows.outputs.rows }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            matrix:
+              - 'packages/engine/**'
+              - 'apps/web/src/server/**'
+              - 'apps/web/src/lib/format-templates.ts'
+              - 'tools/matrix/**'
+              - 'pnpm-lock.yaml'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Rows the PR declares (R27)
+        id: rows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # LIVE read (review 3, R3-m1): editing the body fires no run, and a re-run replays the original event
+          # payload. `// ""` turns a null body into an empty string, which pr-rows refuses as undeclared.
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""' > "$RUNNER_TEMP/body.txt"
+          # --no-renames: a file moved OUT of packages/engine/ must still name its old path (T7->T9), or a rename
+          # would read as a new path nobody declares rows for.
+          # THREE dots (I1, T9-FIX1): the merge-base against the head, i.e. what THIS PR changed. Two dots diffs against
+          # the base TIP, so a PR behind main would list main's own commits as its changes (fetch-depth: 0 has them).
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+      - name: Truth-run staleness (D1b, non-blocking)
+        # always(): a failed rows step (R27 undeclared) must not hide the staleness signal (review m6).
+        if: ${{ always() && vars.MATRIX_WEEKLY_ENABLED == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm --silent matrix:staleness --max-days 8
+
+  matrix-sample:
+    name: Matrix per-PR sample (R27)
+    needs: matrix-rows
+    # T9-FORK: a fork PR never reaches vars.MATRIX_RUNNER (the called workflow's jobs carry the same condition).
+    if: needs.matrix-rows.outputs.run == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/matrix-truth.yml
+    with:
+      scope: pr-sample
+      rows: ${{ needs.matrix-rows.outputs.rows }}

@@ -9,12 +9,9 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { decideState, parseResults, type CaseResultV2 } from "../lib/results.ts";
-import { API_ONLY_BROWSER_SET, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, w1DrivingL1Planner, widthSweepPlanner, type LayerCase } from "../lib/layers.ts";
-import { PAD_PROOF_SET, padProofPlanner } from "../lib/pad-proof-set.ts";
-import { PROBE_SET, probePlanner } from "../lib/probe-set.ts";
-import { planCanaryCase, planSliceCases } from "../lib/slice.ts";
-import { W1_DRIVING_SET, w1DrivingPlanner } from "../lib/w1-driving-set.ts";
+import { decideState, isPlannedShape, parseResults, type CaseResultV2 } from "../lib/results.ts";
+import { livePlan, noVariant, noWidth, type ExpectedPlan } from "../lib/expected-plan.ts";
+import { PROBE_SET } from "../lib/probe-set.ts";
 
 export const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 export const TRUTH_RUNS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs";
@@ -60,63 +57,26 @@ export function reDecide(cases: readonly CaseResultV2[]): { checked: number; ski
   };
 }
 
-/** A plan's cases, keyed without the variant (the DB's builder default, which
- *  the planner reads live) and, for a plain run, without the run's one width. */
-export interface ExpectedPlan {
-  readonly plan: string;
-  readonly layered: boolean;
-  readonly driven: ReadonlySet<string>;
-  readonly planned: ReadonlyMap<string, { readonly state: "no_path" | "not_run"; readonly reason: string }>;
-}
-export const noVariant = (caseId: string): string => caseId.split("|").filter((_, i) => i !== 2).join("|");
-export const noWidth = (caseId: string): string => caseId.replace(/@\d+$/, "");
-/** Variant-free keys: every planner is handed the sport as its own variant, and the key drops it. */
-const anyVariant = (sport: string): string => sport;
+/** A case as judgeRun reads it: a v2 case, plus on a v3 run recordPlanned's marker (W1d item 3). */
+export type JudgedCase = CaseResultV2 & { readonly planned?: true };
 
-function fromLayered(plan: string, cases: readonly LayerCase[]): ExpectedPlan {
-  const driven = new Set<string>();
-  const planned = new Map<string, { state: "no_path" | "not_run"; reason: string }>();
-  for (const c of cases) {
-    const key = noVariant(layerCaseId(c));
-    if (c.spec !== null) { driven.add(key); continue; }
-    // The stored reason is what decideState makes of the planner's own 🚫/░ (run.ts recordPlanned).
-    const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
-    planned.set(key, { state: d.state as "no_path" | "not_run", reason: d.reason });
-  }
-  return { plan, layered: true, driven, planned };
-}
-const fromSpecs = (plan: string, ids: readonly string[]): ExpectedPlan =>
-  ({ plan, layered: false, driven: new Set(ids.map(noVariant)), planned: new Map() });
-
-/** The plan a recorded `plan` string names, built by TODAY's planners. */
-export function livePlan(plan: string): ExpectedPlan {
-  const words = plan.split(" ");
-  const flag = (name: string): string | undefined => { const i = words.indexOf(name); return i < 0 ? undefined : words[i + 1]; };
-  const filters = { only: flag("--only"), scenario: flag("--scenario") };
-  if (words[0] === "--set") {
-    const set = words[1];
-    if (set === PAD_PROOF_SET) return fromSpecs(plan, padProofPlanner({}).plan(anyVariant).map((c) => c.caseId));
-    if (set === PROBE_SET) return fromSpecs(plan, probePlanner({}).plan(anyVariant).map((c) => c.caseId));
-    if (set === API_ONLY_BROWSER_SET) return fromLayered(plan, apiOnlyBrowserPlanner({}).layered(anyVariant));
-    if (set === WIDTH_SWEEP_SET) return fromLayered(plan, widthSweepPlanner({}).layered(anyVariant));
-    // W1-driving Task 13 (T13-R1 I-1): the capability cells and the two template cards, at 1280.
-    if (set === W1_DRIVING_L1_SET) return fromLayered(plan, w1DrivingL1Planner({}).layered(anyVariant));
-    // W1-driving Task 12: the one set that takes --only / --scenario (run.ts planOf records them).
-    if (set === W1_DRIVING_SET) return fromSpecs(plan, w1DrivingPlanner(filters).plan(anyVariant).map((c) => c.caseId));
-  }
-  if (words[0] === "--canary" && words[1] !== undefined) return fromSpecs(plan, [planCanaryCase(anyVariant, words[1]).caseId]);
-  if (words[0] === "--layer" && words[1] === "L1") return fromLayered(plan, l1Planner(filters).layered(anyVariant));
-  if (words[0] === "--layer" && words[1] === "L2") return fromLayered(plan, l2Planner(filters).layered(anyVariant));
-  if (words[0] === "slice") return fromSpecs(plan, planSliceCases(anyVariant, filters).map((c) => c.caseId));
-  throw new Error(`committed-plans: no planner for the recorded plan "${plan}"`);
-}
+// W1d Task 7 (ruling T6-LIVEPLAN): the recorded-plan reader moved to lib/expected-plan.ts, so the judge CLI no
+// longer imports a test module. Re-exported here, so the tests that import it from this module are unchanged.
+export { livePlan, noVariant, noWidth, type ExpectedPlan };
 
 /** One run judged against its plan, case by case: a case the plan PLANS is
  *  stored as exactly the plan's 🚫/░ (state and reason) with no check; a case
  *  the plan DRIVES is never stored as planned (class 6); no case is missing,
  *  repeated or outside the plan; a plain run is one width. The counts are the
- *  plan's by construction: `driven` + `planned` = the run's cases. */
-export function judgeRun(cases: readonly CaseResultV2[], plan: ExpectedPlan): { driven: number; planned: number; wrong: string[] } {
+ *  plan's by construction: `driven` + `planned` = the run's cases.
+ *
+ *  W1d item 3: a run written since recordPlanned marks its planned cases
+ *  (`planned: true`) is judged by the marker as well — a SECOND witness beside
+ *  I-2's `durationMs === 0` shape, never a replacement, so committed evidence
+ *  with no marker is judged exactly as before. */
+export function judgeRun(cases: readonly JudgedCase[], plan: ExpectedPlan): { driven: number; planned: number; wrong: string[] } {
+  // A run that marks ANY case is expected to mark every planned one.
+  const marked = cases.some((c) => c.planned !== undefined);
   const keyOf = (id: string): string => (plan.layered ? noVariant(id) : noWidth(noVariant(id)));
   const wrong: string[] = [];
   const seen = new Set<string>();
@@ -132,8 +92,19 @@ export function judgeRun(cases: readonly CaseResultV2[], plan: ExpectedPlan): { 
     if (p !== undefined) {
       planned++;
       if (c.state !== p.state || c.reason !== p.reason) wrong.push(`${c.caseId}: the plan records ${p.state} "${p.reason}", stored ${c.state} "${c.reason}"`);
+      // W1d item 3, first refusal: in a marked run, a planned case without the
+      // planned shape recordPlanned writes (the marker, no time, no check).
+      if (marked && !(c.planned === true && c.durationMs === 0 && isPlannedShape(c))) {
+        wrong.push(`${c.caseId}: the plan records it planned, stored without the planned shape (planned=${c.planned}, ${c.durationMs} ms, ${c.checks.length} check(s))`);
+      }
     } else if (plan.driven.has(key)) {
       driven++;
+      // W1d item 3, second refusal: a driven case stored as planned. Not gated on
+      // `marked` — a single stray marker is exactly the case this catches, and I-2's
+      // shape below cannot see it while the case keeps its time and checks.
+      if (c.planned === true) {
+        wrong.push(`${c.caseId}: the plan DRIVES this case, stored with planned: true — a driven result recorded as planned (class 6)`);
+      }
       // Final review I-2: only recordPlanned writes not_run, and it writes 🚫/⏳
       // with no time spent and nothing counted. A driven case always spends
       // time in prepareCaseOrg, so that shape on a driven case is a lost result

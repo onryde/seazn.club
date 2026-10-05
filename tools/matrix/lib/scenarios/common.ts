@@ -6,7 +6,7 @@ import { EngineError, type MatchOutcome, type StageCtx, type StageKind } from "@
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import { templateBodies, templateField, templateRow } from "../templates.ts";
 import {
-  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type StageRef,
+  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, SetupRefused, VOID_EVENT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type PostedEvent, type StageRef,
 } from "../driver/types.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
 import { redact } from "../redact.ts";
@@ -23,7 +23,7 @@ import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
 import { lineupWarningLine, postedTeamSides, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
-import { rosterMembers, rosterSize } from "./rosters.ts";
+import { entrantName, rosterMembers, rosterSize } from "./rosters.ts";
 import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "./terminal-finals.ts";
 import type { ScenarioContext } from "./types.ts";
 
@@ -103,6 +103,53 @@ export class StageTrack {
   readonly pairRounds: PairRoundObs[] = [];
 }
 
+/** What decideFixture needs to finish a fixture the scenario already started (Recorder.resumed). */
+export interface Resumed { readonly outcome: RequestedOutcome; readonly live: number; readonly voidedType: string }
+
+/** A fixture the scenario started was resumed over a stream that is not the one it began: its live events are not
+ *  the generated stream's leading events, or the event it voided is not the next one the stream sends. Posting
+ *  would build a ledger the harness never meant, so it is refused before any post. */
+export class ResumeMismatch extends Error {
+  readonly fixtureId: string;
+  constructor(fixtureId: string, why: string) {
+    super(`scenario: fixture ${fixtureId} was started by the scenario and cannot be resumed — ${why}`);
+    this.name = "ResumeMismatch";
+    this.fixtureId = fixtureId;
+  }
+}
+
+/** The harness's own stream with its voids resolved: the events neither a core.void nor named by one. A harness
+ *  void names its target by the id fold.ts numbers an event with — its seq, as a string. */
+export function liveEvents(stream: readonly StreamEvent[]): StreamEvent[] {
+  const voided = new Set<string>();
+  for (const e of stream) {
+    const id = e.type === VOID_EVENT ? (e.payload as { event_id?: unknown } | null)?.event_id : undefined;
+    if (typeof id === "string") voided.add(id);
+  }
+  return stream.filter((e, i) => e.type !== VOID_EVENT && !voided.has(String(i + 1)));
+}
+
+/** What the harness holds of a fixture after `posted` answered `now`: the rows the pad stored, else the events sent
+ *  (a driver answers every event from the ledger, or none of them). Writes the whole stream, and the notes a post
+ *  leaves, to the Recorder; returns the whole stream. Shared by decideFixture and VOIDPROOF's first post, so the
+ *  stored-versus-sent rule has ONE implementation. */
+export function recordPosted(rec: Recorder, fixtureId: string, prior: readonly StreamEvent[], now: readonly StreamEvent[], posted: readonly PostedEvent[]): StreamEvent[] {
+  const stored = posted.filter((p) => p.stored !== undefined);
+  if (stored.length > 0 && stored.length < posted.length) {
+    throw new Error(`scenario: ${fixtureId}: ${stored.length} of ${posted.length} answered event(s) carry the stored row — a driver answers every event from the ledger, or none`);
+  }
+  const answeredNothing = posted.length === 0 && now.length > 0;
+  if (answeredNothing) rec.notes.push(`${fixtureId}: the driver answered no event for the ${now.length} sent`);
+  const sent = stored.length > 0 ? stored.map((p) => p.stored!) : answeredNothing ? [] : now;
+  if (stored.length > 0) rec.storedFixtures.add(fixtureId);
+  const whole = [...prior, ...sent];
+  rec.streams.set(fixtureId, whole);
+  // Parked Task 6 (b): a post that raced another writer is traced, not silent.
+  const retried = posted.filter((p) => p.retried === true).length;
+  if (retried > 0) rec.notes.push(`${fixtureId}: ${retried} event(s) landed on a SEQ_CONFLICT retry`);
+  return whole;
+}
+
 export class Recorder {
   /** The run's exit: a single stage's own, or (playDivision) "drained" only
    *  when every stage drained, else the first stage's that did not. */
@@ -123,6 +170,12 @@ export class Recorder {
    *  path), not the events the harness meant to send. PADPROOF requires every
    *  fixture it decides to be one. */
   readonly storedFixtures = new Set<string>();
+  /** W1d Task 14 (VOIDPROOF): a fixture the scenario STARTED before decideFixture came to it — its first score
+   *  event posted and then voided. decideFixture finishes it as it was started: the outcome it was started for, and
+   *  only the stream's events that are not yet live (the voided one again, then the rest — never the start twice).
+   *  `live`: how many leading events of its generated stream are still live in the ledger; `voidedType`: the type
+   *  of the event that was voided, which must be the next one the stream sends. */
+  readonly resumed = new Map<string, Resumed>();
   readonly notes: string[] = [];
   /** W1-driving Task 4: fixture → the sides ensureLineups has PUT a lineup
    *  for — once per SIDE, since a second PUT is a replacement nobody meant.
@@ -175,6 +228,23 @@ export const MAX_ITERATIONS = 64;
 /** engine-db/competition.ts:79 — the seat a bye's award is scored against. */
 const BYE_PHANTOM = "__bye__";
 
+/** W1d Task 6 (D6): runs one SETUP-PHASE driver call and tags a refusal from it. A
+ *  RefusedCall out of `f` is rethrown as a SetupRefused (a subclass, so every existing
+ *  `instanceof RefusedCall` catch still catches it): the harness asked the product to
+ *  build something it will not build. Anything else — a result, any other error, an
+ *  already-tagged refusal — passes through as it was. The tag is by PHASE, never by
+ *  route (review 2, R2-I2): `setUpDivision` wraps every driver call it makes before
+ *  `start`, and DENIED wraps its own four; `start` and the action under test stay
+ *  outside, because their refusals are the product answering. */
+export async function inSetup<T>(f: () => Promise<T>): Promise<T> {
+  try {
+    return await f();
+  } catch (e) {
+    if (e instanceof RefusedCall && !(e instanceof SetupRefused)) throw SetupRefused.from(e);
+    throw e;
+  }
+}
+
 /** `rosterlessTeams`: a team-kind sport plays on team entrants with no members
  *  and no lineups. Only PADPROOF asks for it (W1c Tasks 9–11): Step 0 saw the
  *  pad score a rosterless team fixture (volleyball beach), and the plan's D3
@@ -216,14 +286,14 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   if (template !== undefined) {
     // ONE organiser act: the card. It creates no entrant (templates.ts:351-366),
     // and its stages are never posted.
-    ({ competition, division } = await ctx.driver.createFromTemplate(template, { name: `Matrix ${ctx.spec.caseId}`, endsOn: TEMPLATE_ENDS_ON }));
+    ({ competition, division } = await inSetup(() => ctx.driver.createFromTemplate(template, { name: `Matrix ${ctx.spec.caseId}`, endsOn: TEMPLATE_ENDS_ON })));
   } else {
     const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
-    competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
-    division = await ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant, config });
-    await ctx.driver.postStages(division.id, bodies);
+    competition = await inSetup(() => ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug }));
+    division = await inSetup(() => ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant, config }));
+    await inSetup(() => ctx.driver.postStages(division.id, bodies));
   }
-  const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1 }));
+  const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: entrantName(kind, i + 1), seed: i + 1 }));
   // Task 4 (fold-in beneath ruling 49): a team entrant carries the catalog's
   // full roster (D2). Task 5: on an americano row an individual carries one
   // linked person, named as the entrant. Any other entrant carries no
@@ -235,10 +305,10 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
     if (linked) return [{ fullName: e.displayName, squadNumber: 1, isCaptain: true }];
     return undefined;
   };
-  const entrants = await ctx.driver.addEntrants(division.id, inputs.map((e) => {
+  const entrants = await inSetup(() => ctx.driver.addEntrants(division.id, inputs.map((e) => {
     const members = membersOf(e);
     return { ...e, kind, ...(members !== undefined ? { members } : {}) };
-  }));
+  })));
   // The members are the PRODUCT's person ids, read back for every entrant it
   // answered — never the inputs. A roster that is not the full declared size
   // would play short, and an americano individual with no person is no
@@ -249,7 +319,7 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   const size = seated ? rosterSize(ctx.spec.sport, ctx.cfg) : linked ? 1 : 0;
   if (size > 0) {
     for (const e of entrants) {
-      const stored = await ctx.driver.entrantMembers(e.id);
+      const stored = await inSetup(() => ctx.driver.entrantMembers(e.id));
       if (stored.length !== size) {
         throw new Error(seated
           ? `scenario: entrant ${e.id} (seed ${e.seed ?? "none"}) reads back ${stored.length} roster member(s), ${size} posted — a short roster would play short`
@@ -415,14 +485,24 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // Task 4: a team fixture's lineups go in first, on the score branch and the
   // forfeit branch alike (M1's walkover comes through here).
   await ensureLineups(ctx, rec, setup, { ...f, status: state.status });
-  const generated = generateStream({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: stage.kind as StageKind, home, away, outcome });
+  // W1d Task 14: a fixture the scenario already started is finished as it was started (Recorder.resumed).
+  const resumed = rec.resumed.get(f.id);
+  const asked = resumed === undefined ? outcome : resumed.outcome;
+  const generated = generateStream({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked });
+  const prior = rec.streams.get(f.id) ?? [];
+  if (resumed !== undefined) {
+    const live = liveEvents(prior).map((e) => e.type);
+    const lead = generated.slice(0, resumed.live).map((e) => e.type);
+    if (resumed.live < 1 || live.join(",") !== lead.join(",")) throw new ResumeMismatch(f.id, `its live events are [${live.join(", ")}], the generated stream leads with [${lead.join(", ")}] (${resumed.live} claimed live)`);
+    if (generated[resumed.live]?.type !== resumed.voidedType) throw new ResumeMismatch(f.id, `the event it voided was ${resumed.voidedType}, the stream's next is ${generated[resumed.live]?.type ?? "nothing"}`);
+  }
+  const fresh = resumed === undefined ? generated : generated.slice(resumed.live);
   // What the driver actually sends: a forfeit on a fixture already under way
   // is the bare core.forfeit (http-driver.ts forfeit), so START only when the
   // fixture is still scheduled.
-  const now = outcome.kind === "forfeit" && state.status !== "scheduled" ? generated.filter((e) => e.type !== START.type) : generated;
-  const prior = rec.streams.get(f.id) ?? [];
-  const posted = outcome.kind === "forfeit"
-    ? await ctx.driver.forfeit(f.id, outcome.by === "home" ? home : away, outcome.reason, `${ctx.tag}:${f.id}`)
+  const now = asked.kind === "forfeit" && state.status !== "scheduled" ? fresh.filter((e) => e.type !== START.type) : fresh;
+  const posted = asked.kind === "forfeit"
+    ? await ctx.driver.forfeit(f.id, asked.by === "home" ? home : away, asked.reason, `${ctx.tag}:${f.id}`)
     : await ctx.driver.postStream(f.id, now, `${ctx.tag}:${f.id}`);
   // W1c Task 7: the pad path answers each event with the ledger row the
   // product actually stored. Fold those rows, so a browser run is judged on
@@ -430,19 +510,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // driver answers every event from the ledger or none of them, and one that
   // answered nothing for a non-empty stream folds nothing: the stream it meant
   // to send is not evidence of anything.
-  const stored = posted.filter((p) => p.stored !== undefined);
-  if (stored.length > 0 && stored.length < posted.length) {
-    throw new Error(`scenario: ${f.id}: ${stored.length} of ${posted.length} answered event(s) carry the stored row — a driver answers every event from the ledger, or none`);
-  }
-  const answeredNothing = posted.length === 0 && now.length > 0;
-  if (answeredNothing) rec.notes.push(`${f.id}: the driver answered no event for the ${now.length} sent`);
-  const sent = stored.length > 0 ? stored.map((p) => p.stored!) : answeredNothing ? [] : now;
-  if (stored.length > 0) rec.storedFixtures.add(f.id);
-  const whole = [...prior, ...sent];
-  rec.streams.set(f.id, whole);
-  // Parked Task 6 (b): a post that raced another writer is traced, not silent.
-  const retried = posted.filter((p) => p.retried === true).length;
-  if (retried > 0) rec.notes.push(`${f.id}: ${retried} event(s) landed on a SEQ_CONFLICT retry`);
+  const whole = recordPosted(rec, f.id, prior, now, posted);
   const productOutcome = toObservedOutcome(posted.at(-1)?.outcome ?? null);
   // T45-R1: a scored team fixture owes a lineup per division-entrant side
   // (life-lineups-put holds every one of them to a PUT). A rosterless setup
@@ -450,7 +518,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   if (setup.kind === "team" && !setup.rosterless) rec.teamPosts.set(f.id, postedTeamSides(home, away, (e) => setup.entrantIds.has(e)));
   rec.events += now.length;
   rec.decided++;
-  if (outcome.kind === "draw") rec.drawsPosted++;
+  if (asked.kind === "draw") rec.drawsPosted++;
   const foreign = state.last_seq - prior.length;
   if (foreign !== 0) {
     rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign, finishedBefore: null, request: null });
@@ -459,10 +527,37 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   }
   const m = sportModule(ctx.spec.sport);
   const folded = foldStream(m, ctx.cfg, home, away, whole).outcome;
-  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: stage.kind as StageKind, home, away, outcome }, folded);
+  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked }, folded);
   rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(folded), product: productOutcome, foreign: 0, finishedBefore: null, request });
   const dp = declaredPoints(m, ctx.cfg, stageCtx(stage.kind, f), home, away, whole);
   if (dp !== null) rec.declared.set(f.id, { home: dp.home, away: dp.away, forOutcome: toObservedOutcome(dp.forOutcome)! });
+}
+
+/** A match-day case cannot be set up on this division: no way to date a fixture, no fixture to date, or a first
+ *  round that is the whole fixture list (so "today" and "all" show the same rows and the sheet's default cannot be
+ *  told apart). Named, and raised before any date is written. */
+export class MatchDayUnfit extends Error {
+  constructor(why: string) {
+    super(`scenario: match day — ${why}`);
+    this.name = "MatchDayUnfit";
+  }
+}
+
+/** W1d Task 14 (item 15c, D17): dates the root stage's seated, open fixtures of the FIRST round NOW, so the division
+ *  is on its match day (a scheduled fixture dated today) when the run sheet first loads. Only the first round is
+ *  dated: the rest of the fixtures stay undated, which is what makes "today" and "all" show different rows. The dates
+ *  go in through the driver's own filler, before any fixture is played. */
+export async function dateFirstRound(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup): Promise<void> {
+  const driver = ctx.driver;
+  if (driver.scheduleFixtureNow === undefined) throw new MatchDayUnfit("this driver has no scheduleFixtureNow, so no fixture can be dated today");
+  const all = (await driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === setup.stage.id);
+  const open = all.filter(seatedOpen);
+  if (open.length === 0) throw new MatchDayUnfit(`no seated open fixture to date (${all.length} fixture(s) in stage ${setup.stage.id})`);
+  const round = Math.min(...open.map((f) => f.round_no ?? 0));
+  const first = open.filter((f) => (f.round_no ?? 0) === round);
+  if (first.length === open.length) throw new MatchDayUnfit(`round ${round} is all ${open.length} open fixture(s) — "today" and "all" would show the same rows, so the sheet's default could not be told apart`);
+  for (const f of first) await driver.scheduleFixtureNow(f.id);
+  rec.notes.push(`match day: dated ${first.length} of ${all.length} fixture(s) today (round ${round})`);
 }
 
 export type RoundHook = (round: number, batch: FixtureRow[]) => Promise<void>;

@@ -25,6 +25,7 @@ import { RefusedCall, type FixtureRow, type GenerateOut, type StageRef } from ".
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { AmericanoModeMismatch, PAIR_PLAYERS_ROUTE, SELF_PAIR_CAUSE, STALL_ROUTE, TEAM_MEMBER_ROUTE, americanoPlannedRounds, americanoRoundSize, modeOf, notePairEntrantDuplicates, playMexicano } from "../lib/scenarios/americano-loop.ts";
 import { lineupsPut, seatsEntrant } from "../lib/scenarios/assertions.ts";
+import { rosterSize } from "../lib/scenarios/rosters.ts";
 import { MINTED_PAIRS_KIND_ROUTE, Recorder, decideFixture, ensureLineups, setUpDivision, type DivisionSetup } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { TARGET_OF } from "../lib/scenarios/m1-walkover.ts";
@@ -734,12 +735,31 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // T15-R6: americano plans every round at Start, so the k later games were PENDING when the withdrawal answered — the
     // derived policy is "walkover", and the product's "none" is the red (the oracle is the fake's own rows).
     expect(k).toBeGreaterThan(0);
-    expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "fail", checked: 1, evidence: [`policy none, expected walkover (${k} pending game(s) of ${p3} at withdrawal, through any entrant; withdrawal.ts open-format rule)`] });
+    expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "fail", checked: 1, evidence: [`policy none, expected walkover (${k} pending game(s) of the withdrawn entrant (1 person) at withdrawal, through any entrant; withdrawal.ts open-format rule)`] });
     expect(out.notes).toContain(`r4-withdrawn-player-kept-playing: ${p3} still seated in ${k} later fixture(s) — predicted product red → ${KEPT_PLAYING_ROUTE.wave}`);
     // T15-R9: the k later games red r4-not-seated-later too — both covered by the kept-playing signature.
     expect(failing(checks), "full failing set (review 3 I-2; T15-R9)").toEqual(["r4-not-seated-later", "r4-policy-reported"]);
     expect(check(checks, "r4-not-seated-later")).toMatchObject({ checked: driver.fixturesAfterRound(1).length });
     expect(check(checks, "r4-not-seated-later").evidence).toHaveLength(Math.min(12, k));
+  });
+
+  // W1d Task 13, item 24: the policy note named every person id ("of <id>+<id>+…"), which on a team division is the
+  // whole roster, three times. It now counts the persons: the policy and the pending count are still the note's content.
+  it("R4 on TEAM americano (football): the policy note names the withdrawn entrant's persons COUNT, never their ids", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "americano" });
+    const { out, checks } = await runOn(driver, "R4", { row: "americano", sport: "football" });
+    const withdrawn = out.observed.withdrawal!.entrantId;
+    const persons = (await driver.entrantMembers(withdrawn)).map((m) => m.person_id);
+    // The oracle is the fake's own roster for the entrant; a team holds several people, so the ids WOULD have been listed.
+    expect(persons.length).toBeGreaterThan(1);
+    expect(persons.length).toBe(rosterSize("football", resolveSportCfg("football", offlineBuilderDefault("football"))));
+    const policy = check(checks, "r4-policy-reported");
+    expect(policy.verdict).toBe("fail");
+    expect(policy.evidence).toHaveLength(1);
+    const note = policy.evidence[0]!;
+    expect(note).toMatch(new RegExp(`^policy none, expected walkover \\(\\d+ pending game\\(s\\) of the withdrawn entrant \\(${persons.length} persons\\) at withdrawal, through any entrant; withdrawal\\.ts open-format rule\\)$`));
+    for (const id of persons) expect(note, id).not.toContain(id);
+    expect(note).not.toContain("+");
   });
 
   it("R4 on americano WITHOUT the second leg (dropWithdrawnFromPlan): no predicted signature — the red goes to normal triage", async () => {

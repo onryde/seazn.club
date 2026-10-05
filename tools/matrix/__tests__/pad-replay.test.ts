@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { SEND_NOW_TESTID, TAP_WAIT_TIMEOUT_MS, selectorForTapStep, type PadLocator, type PadPage, type TapAdapterContext, type TapStep } from "../../bench/lib/drivers/scorer.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS, budgetMs } from "../lib/browser/budget.ts";
+import { findSecrets } from "../lib/redact.ts";
 import { compareRow, replayEvents, type ReplayDeps } from "../lib/pads/replay.ts";
 import type { MatrixPadAdapter } from "../lib/pads/types.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
@@ -43,12 +44,15 @@ function fakePage(deps: { commit(): void } | null = null): FakePage {
 }
 
 type RowIn = { type: string; payload: unknown };
-interface FakeDeps extends ReplayDeps { sleeps: number[]; polls: number; commit(): void; tips: number }
+interface FakeDeps extends ReplayDeps { sleeps: number[]; polls: number; commit(): void; tips: number; reads: number[]; held: LedgerRow[] }
 /** `rows` are released in `groups` (default: one row per committed event), at
- *  seqs after the server tip `tip`. */
-function fakeDeps(rows: readonly RowIn[], o: { holdMs?: number; groups?: readonly number[]; tip?: number } = {}): FakeDeps {
-  const ledgerRows: LedgerRow[] = [];
+ *  seqs after the server tip `tip`. `stale` rows are already in the ledger at
+ *  the seqs ending AT the tip (tip-n+1 .. tip): history the replay must never
+ *  read as its own. `reads` is every `sinceSeq` the replay asked the ledger for;
+ *  `held` is the whole ledger, stale rows included. */
+function fakeDeps(rows: readonly RowIn[], o: { holdMs?: number; groups?: readonly number[]; tip?: number; stale?: readonly RowIn[] } = {}): FakeDeps {
   const tip0 = o.tip ?? 1;
+  const ledgerRows: LedgerRow[] = (o.stale ?? []).map((r, i, all) => ({ id: `old${i}`, seq: tip0 - (all.length - 1 - i), type: r.type, payload: r.payload }));
   let seq = tip0;
   let released = 0;
   let group = 0;
@@ -57,8 +61,10 @@ function fakeDeps(rows: readonly RowIn[], o: { holdMs?: number; groups?: readonl
     sleeps: [],
     polls: 0,
     tips: 0,
+    reads: [],
+    held: ledgerRows,
     tip: async () => { d.tips++; return tip0; },
-    ledger: async (since: number) => { d.polls++; return ledgerRows.filter((r) => r.seq > since); },
+    ledger: async (since: number) => { d.polls++; d.reads.push(since); return ledgerRows.filter((r) => r.seq > since); },
     sleep: async (ms: number) => { d.sleeps.push(ms); },
     commit: () => {
       const n = o.groups?.[group++] ?? 1;
@@ -291,9 +297,13 @@ describe("replayEvents — one event, its taps, the rows they wrote", () => {
     };
     const r = await run(sheetAdapter, [SUMMARY(21, 13), SUMMARY(21, 16), SUMMARY(21, 18)], deps, page);
     expect(r.rows.map((x) => x.verdict)).toEqual(["equal", "missing"]);
-    expect(r.rows[1]!.note).toBe("tap 4 of 6 (number) failed: TimeoutError: locator.waitFor: Timeout 8000ms exceeded.");
+    // W1d 15a: a wait that timed out is a TapWaitTimeout — the first line of Playwright's message, then the last taps' timings.
+    const head = "tap 4 of 6 (number) failed: TapWaitTimeout: locator.waitFor: Timeout 8000ms exceeded. — last taps: ";
+    expect(r.rows[1]!.note!.startsWith(head)).toBe(true);
+    // Event 1 made taps 1-6 (its release the 6th); event 2's 4th is the 10th overall.
+    expect((JSON.parse(r.rows[1]!.note!.slice(head.length)) as Array<{ tap: number }>).map((t) => t.tap)).toEqual([6, 7, 8, 9, 10]);
     expect(r.rows[1]!.stored).toEqual([]);
-    expect(r.findings).toEqual(["stopped after event 2 of 3: tap 4 of 6 (number) failed: TimeoutError: locator.waitFor: Timeout 8000ms exceeded."]);
+    expect(r.findings).toEqual([`stopped after event 2 of 3: ${r.rows[1]!.note}`]);
     // What the product holds is still answered (the first event's row), and the third event was never tapped.
     expect(r.stored.map((s) => s.seq)).toEqual([2]);
     expect(page.taps.filter((t) => t.startsWith("click [data-tile-id"))).toHaveLength(2);
@@ -440,5 +450,191 @@ describe("compareRow — exact in both directions (the bench's R50(d))", () => {
   it("a payload that is no object on either side reads as no keys (the bench's normalisation), so an object stored against it still reds", () => {
     expect(compareRow({ type: "a", payload: null }, row("a", null), stubAdapter()).verdict).toBe("equal");
     expect(compareRow({ type: "a", payload: null }, row("a", { x: 1 }), stubAdapter()).verdict).toBe("mismatch");
+  });
+});
+
+// W1d Task 12 (items 8, 9 Mn-2, 15a). Expected values: the budget module's own
+// constants, the server tip the fake ledger is built around, and the Playwright
+// error shape the carry-(e) tests above already use — never replay.ts.
+describe("replayEvents — W1d Task 12: the tip, a judge that says nothing, and the last taps' timings", () => {
+  const N = (n: number): StreamEvent => ({ type: "f", payload: { n } });
+
+  it("item 8: a ledger row at seq ≤ the server tip is never replayed — only the rows after the tip, then after each event's last seq, are read as the event's own", async () => {
+    const deps = fakeDeps([ROW(SUMMARY_TYPE, { home: 21, away: 13 }), ROW(SUMMARY_TYPE, { home: 21, away: 16 })], {
+      tip: 5, stale: [ROW("stale.before-tip", { n: 1 }), ROW("stale.at-tip", { n: 2 })],
+    });
+    // Anti-vacuity: the ledger really holds history at tip-1 and AT the tip; the server's tip is 5.
+    expect(deps.held.map((r) => [r.seq, r.type])).toEqual([[4, "stale.before-tip"], [5, "stale.at-tip"]]);
+    expect(await deps.tip()).toBe(5);
+    const r = await run(sheetAdapter, [SUMMARY(21, 13), SUMMARY(21, 16)], deps);
+    expect(r.findings).toEqual([]);
+    expect(r.rows.map((x) => [x.verdict, x.stored.map((s) => s.seq)])).toEqual([["equal", [6]], ["equal", [7]]]);
+    expect(r.stored.map((s) => [s.seq, s.type])).toEqual([[6, SUMMARY_TYPE], [7, SUMMARY_TYPE]]);
+    // The first read is AT the tip (exclusive: seq > 5), each later one after the event before it, and the closing read after the last.
+    expect(deps.reads).toEqual([5, 6, 7]);
+    expect(deps.held).toHaveLength(4);
+  });
+
+  it("item 8: a replay that reads from BELOW the tip would take the history for the event's rows — a stale row is a mismatch, never `equal` (the witness the test above leans on)", async () => {
+    // A ledger that answers every read from seq 0, as a replay with no tip would: the stale rows come back first.
+    const deps = fakeDeps([ROW(SUMMARY_TYPE, { home: 21, away: 13 })], { tip: 5, stale: [ROW("stale.at-tip", { n: 2 })] });
+    const real = deps.ledger;
+    deps.ledger = (_since: number) => real(0);
+    const r = await run(sheetAdapter, [SUMMARY(21, 13)], deps);
+    expect(r.findings).toHaveLength(1);
+    expect(r.rows[0]!.verdict).not.toBe("equal");
+  });
+
+  it("Mn-2: a judge that refuses with no note (or an empty one) is a RETURNED `FallbackMismatch` naming both sides — what was stored and what was generated — never a throw and never a bare refusal", async () => {
+    let checked = 0;
+    for (const note of [null, ""]) {
+      const pad = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f"], why: "f.tsx:1", rowsFor: () => 2, judge: () => ({ ok: false, note }) }] });
+      const deps = fakeDeps([ROW("f", { n: 1 }), ROW("f", { n: 2 }), ROW("x")], { groups: [2, 1] });
+      const page = fakePage(deps);
+      // A replay that threw would reject here and fail the test.
+      const r = await run(pad, [N(3), { type: "x", payload: {} }], deps, page);
+      const text = 'FallbackMismatch — the judge refused 2 stored row(s) without a note: stored f {"n":1}, f {"n":2}; generated f {"n":3}';
+      expect(r.rows, JSON.stringify(note)).toHaveLength(1);
+      expect(r.rows[0], JSON.stringify(note)).toMatchObject({ verdict: "mismatch", note: text });
+      expect(r.findings, JSON.stringify(note)).toEqual([`stopped after event 1 of 2: ${text}`]);
+      expect(r.stored.map((s) => s.payload), JSON.stringify(note)).toEqual([{ n: 1 }, { n: 2 }]);
+      expect(page.taps, "the next event was never tapped").toHaveLength(1);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("Mn-2: a judge's own note is kept as it is — the no-note text is only for a judge that gave none", async () => {
+    const pad = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f"], why: "f.tsx:1", rowsFor: () => 1, judge: () => ({ ok: false, note: "n: stored 1, generated 2" }) }] });
+    const r = await run(pad, [N(2)], fakeDeps([ROW("f", { n: 1 })]));
+    expect(r.rows[0]).toMatchObject({ verdict: "mismatch", note: "FallbackMismatch — n: stored 1, generated 2" });
+  });
+
+  // 15a — what a tap-wait timeout says about itself.
+  const SECRET_URL = ["postgres", "://", "matrix", ":", "pw0", "@", "db.invalid", "/m"].join("");
+  const timeoutError = (ms: number, tail = ""): Error => {
+    const e = new Error(`locator.waitFor: Timeout ${ms}ms exceeded.${tail}\nCall log:\n  - waiting for locator('[data-tile-id="t0"]')`);
+    e.name = "TimeoutError";
+    return e;
+  };
+  /** A clock the test owns: every sleep and every timed-out wait moves it. */
+  function clocked(deps: FakeDeps): { now(): number; at(): number } {
+    let t = 0;
+    Object.assign(deps, { now: () => t });
+    deps.sleep = async (ms: number) => { deps.sleeps.push(ms); t += ms; };
+    return { now: () => t, at: () => t, ...{ advance: (ms: number) => { t += ms; } } } as { now(): number; at(): number } & { advance(ms: number): void };
+  }
+  /** A page whose `n`-th locator (that is, the n-th tap the replay makes, a release included) never attaches: it burns `waitMs` on the clock, then throws `err`. */
+  function failingPage(deps: FakeDeps, clock: { advance(ms: number): void }, n: number, waitMs: number, err: unknown): FakePage {
+    const page = fakePage(deps);
+    const locator = page.locator.bind(page);
+    let calls = 0;
+    page.locator = (selector: string) => {
+      const l = locator(selector);
+      if (++calls !== n) return l;
+      return { ...l, waitFor: async () => { clock.advance(waitMs); throw err; } };
+    };
+    return page;
+  }
+  /** The timings a finding's `last taps:` suffix carries. */
+  const lastTaps = (text: string): Array<{ tap: number; clickedAtMs: number; ledgerSeenAtMs: number | null; waitedMs: number; budgetMs: number }> => {
+    const m = /last taps: (\[.*\])$/.exec(text);
+    expect(m, `no "last taps: [...]" suffix in: ${text}`).not.toBeNull();
+    return JSON.parse(m![1]!) as never;
+  };
+
+  it("15a: a tap-wait timeout's message ends with the last 5 tap timings — tap, clickedAtMs, ledgerSeenAtMs (null while the event's rows are unseen), waitedMs, budgetMs — oldest first, the timed-out tap last", async () => {
+    const deps = fakeDeps([ROW(SUMMARY_TYPE, { home: 21, away: 13 })]);
+    const clock = clocked(deps) as unknown as { advance(ms: number): void };
+    // Event 2's third tap is the 9th the replay makes (event 1: 5 steps + its release = 6).
+    const page = failingPage(deps, clock, 9, FLOOR_MS, timeoutError(FLOOR_MS));
+    const r = await run(sheetAdapter, [SUMMARY(21, 13), SUMMARY(21, 16)], deps, page);
+    expect(r.rows.map((x) => x.verdict)).toEqual(["equal", "missing"]);
+    const finding = r.findings[0]!;
+    expect(finding).toMatch(/^stopped after event 2 of 2: tap 3 of 6 \(confirm\) failed: TapWaitTimeout: locator\.waitFor: Timeout 15000ms exceeded\. — last taps: \[/);
+    expect(r.rows[1]!.note).toBe(finding.replace(/^stopped after event 2 of 2: /, ""));
+    // The pace: tap 1 at 0, then TAP_PACE_MS between taps; the release is not paced; event 2 begins one pace after it.
+    const P = TAP_PACE_MS;
+    expect(lastTaps(finding)).toEqual([
+      { tap: 5, clickedAtMs: 4 * P, ledgerSeenAtMs: 4 * P, waitedMs: 0, budgetMs: FLOOR_MS },
+      { tap: 6, clickedAtMs: 4 * P, ledgerSeenAtMs: 4 * P, waitedMs: 0, budgetMs: FLOOR_MS },
+      { tap: 7, clickedAtMs: 5 * P, ledgerSeenAtMs: null, waitedMs: 0, budgetMs: FLOOR_MS },
+      { tap: 8, clickedAtMs: 6 * P, ledgerSeenAtMs: null, waitedMs: 0, budgetMs: FLOOR_MS },
+      { tap: 9, clickedAtMs: 7 * P, ledgerSeenAtMs: null, waitedMs: FLOOR_MS, budgetMs: FLOOR_MS },
+    ]);
+  });
+
+  it("15a: waitedMs is what each tap's own wait cost on the clock — a tap that LANDED slowly is not 0, and the timed-out one carries its whole wait on top", async () => {
+    const SLOW = 40;
+    const deps = fakeDeps([ROW(SUMMARY_TYPE, { home: 21, away: 13 })]);
+    const clock = clocked(deps) as unknown as { advance(ms: number): void };
+    const page = failingPage(deps, clock, 9, FLOOR_MS, timeoutError(FLOOR_MS));
+    const locator = page.locator.bind(page);
+    page.locator = (selector: string) => { clock.advance(SLOW); return locator(selector); }; // every tap costs SLOW, landed or not
+    const r = await run(sheetAdapter, [SUMMARY(21, 13), SUMMARY(21, 16)], deps, page);
+    const timings = lastTaps(r.findings[0]!);
+    expect(timings.map((t) => t.tap)).toEqual([5, 6, 7, 8, 9]);
+    expect(timings.map((t) => t.waitedMs)).toEqual([SLOW, SLOW, SLOW, SLOW, SLOW + FLOOR_MS]);
+    // The clock only moves forward: each tap is clicked no earlier than the one before.
+    for (const [i, t] of timings.entries()) if (i > 0) expect(t.clickedAtMs, JSON.stringify(timings)).toBeGreaterThanOrEqual(timings[i - 1]!.clickedAtMs + timings[i - 1]!.waitedMs);
+  });
+
+  it("15a: fewer than 5 taps made means fewer than 5 timings — never padded; a ledger that never advances (the pad wrote nothing) gives `missing` the same last taps, none of them ever seen", async () => {
+    const deps = fakeDeps([]);
+    const clock = clocked(deps);
+    const page = fakePage(deps);
+    const r = await run(sheetAdapter, [SUMMARY(21, 13)], deps, page);
+    expect(r.rows.map((x) => x.verdict)).toEqual(["missing"]);
+    expect(r.findings).toEqual(["stopped after event 1 of 1: row missing"]);
+    const timings = lastTaps(r.rows[0]!.note!);
+    expect(r.rows[0]!.note).toMatch(/^0 of 1 row\(s\) within \d+ms — last taps: \[/);
+    expect(timings.map((t) => t.tap)).toEqual([2, 3, 4, 5, 6]);
+    expect(timings.every((t) => t.ledgerSeenAtMs === null)).toBe(true);
+    // The waits are the clock's own: the deadline was polled out in full.
+    expect(clock.now()).toBeGreaterThanOrEqual(budgetMs({ taps: 5, holds: 1, holdMs: deps.holdMs }));
+    // Under 5 taps: one event of one step, plus its release.
+    const few = fakeDeps([]);
+    clocked(few);
+    const one = await run(stubAdapter({ steps: 1 }), [{ type: "x", payload: {} }], few);
+    expect(lastTaps(one.rows[0]!.note!).map((t) => t.tap)).toEqual([1, 2]);
+  });
+
+  it("15a: the ring is 5 — a longer run keeps the LAST five, and a tap that never timed out leaves no suffix on its finding (a non-timeout failure keeps its own text)", async () => {
+    const deps = fakeDeps([ROW("a"), ROW("a"), ROW("a")]);
+    const clock = clocked(deps) as unknown as { advance(ms: number): void };
+    // 3 events × (2 steps + release) = 9 taps; the 8th (event 3's second step) times out.
+    const page = failingPage(deps, clock, 8, FLOOR_MS, timeoutError(FLOOR_MS));
+    const r = await run(stubAdapter({ steps: 2 }), [{ type: "a", payload: {} }, { type: "a", payload: {} }, { type: "a", payload: {} }], deps, page);
+    expect(lastTaps(r.findings[0]!).map((t) => t.tap)).toEqual([4, 5, 6, 7, 8]);
+    // A non-timeout failure: the text the carry-(e) tests pin, with no timings.
+    const deps2 = fakeDeps([ROW("a")]);
+    const clock2 = clocked(deps2) as unknown as { advance(ms: number): void };
+    const page2 = failingPage(deps2, clock2, 2, 0, new Error("dock gone"));
+    const r2 = await run(stubAdapter({ steps: 2 }), [{ type: "a", payload: {} }], deps2, page2);
+    expect(r2.findings).toEqual(["stopped after event 1 of 1: tap 2 of 3 (tile) failed: Error: dock gone"]);
+  });
+
+  it("15a: the timings are redacted with the rest of the message — a secret-shaped string in the error's first line never reaches the finding", async () => {
+    const raw = timeoutError(FLOOR_MS, ` (DATABASE_URL=${SECRET_URL})`);
+    expect(findSecrets(raw.message.split("\n")[0]!), "the control: the raw message is secret-shaped").not.toEqual([]);
+    const deps = fakeDeps([]);
+    const clock = clocked(deps) as unknown as { advance(ms: number): void };
+    const page = failingPage(deps, clock, 2, FLOOR_MS, raw);
+    const r = await run(stubAdapter({ steps: 2 }), [{ type: "a", payload: {} }], deps, page);
+    const finding = r.findings[0]!;
+    expect(finding).toMatch(/TapWaitTimeout: .*last taps: \[/);
+    expect(finding).not.toContain("db.invalid");
+    expect(findSecrets(finding)).toEqual([]);
+    expect(lastTaps(finding).length).toBeGreaterThan(0);
+  });
+
+  it("15a: with no clock handed in the timings still come back — from the replay's own clock, never undefined", async () => {
+    const deps = fakeDeps([]);
+    const page = failingPage(deps, { advance: () => undefined }, 2, 0, timeoutError(FLOOR_MS));
+    const r = await run(stubAdapter({ steps: 2 }), [{ type: "a", payload: {} }], deps, page);
+    for (const t of lastTaps(r.findings[0]!)) {
+      expect(Number.isFinite(t.clickedAtMs) && t.clickedAtMs >= 0, JSON.stringify(t)).toBe(true);
+      expect(Number.isFinite(t.waitedMs) && t.waitedMs >= 0, JSON.stringify(t)).toBe(true);
+    }
   });
 });

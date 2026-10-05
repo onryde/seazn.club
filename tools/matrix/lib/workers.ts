@@ -23,8 +23,12 @@
 // to take: a halted run never reads as a finished one.
 //
 // MAX_WORKERS is the local-env bound: the prod DB budget note is 60
-// connections, and each worker's cases open their requests serially. The
-// next wave may raise it inside a shard.
+// connections, and each worker's cases open their requests serially. It
+// stays 8 (W1d D11): browser shards run one case at a time and parallelism is
+// the shard matrix, free jobs rather than contention on one server. Provisions
+// take one run-wide turn each (the staff flag and the sign-in links are per
+// user), so a cheaper entitlement bust or a dedicated synthetic owner per
+// shard would be what lifts it; raising it is a decision, not a drift.
 export const MAX_WORKERS = 8;
 
 export class WorkersOutOfRange extends Error {
