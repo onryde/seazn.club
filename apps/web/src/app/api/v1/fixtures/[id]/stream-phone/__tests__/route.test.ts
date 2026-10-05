@@ -113,7 +113,8 @@ describe.skipIf(!HAS_DB)("GET …/stream-phone over HTTP", () => {
     expect(data).toEqual(r.body.data);
     expect(data.phone?.present).toBe(true);
     expect(data.code?.state).toBe("active");
-    expect(data.destination).toEqual({ id: o.target.id, label: "Court" });
+    expect(data.destination, "the saved pick, and why (B8 review I-1)").toEqual({ id: o.target.id, label: "Court", source: "saved" });
+    expect(data.session, "no session open (B8 review I-2)").toBeNull();
     let checked = 0;
     for (const secret of [o.tok, createHash("sha256").update(o.tok, "utf8").digest("hex"), o.streamKey]) {
       expect(raw.includes(secret), "a secret on the wire").toBe(false);

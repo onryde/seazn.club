@@ -110,7 +110,8 @@ describe.skipIf(!HAS_DB)("getCode — the §6.3.1 decision", () => {
     const f = await fixtureRow(r.fixtureId);
     expect(f.status, "PREMISE: a started fixture, not in play").toBe("scheduled");
     expect(f.scheduled_at, "PREMISE: no scheduled_at — the far cadence").toBeNull();
-    const want = { state: "waiting", ...(await expectedWaiting(r, { label: "Alpha v Bravo", pollSeconds: POLL_FAR_SECONDS, destinationName: null })) };
+    // B8 review I-1: nothing saved → the org's oldest destination, the one the start would open on (the rig's "Club").
+    const want = { state: "waiting", ...(await expectedWaiting(r, { label: "Alpha v Bravo", pollSeconds: POLL_FAR_SECONDS, destinationName: "Club" })) };
     let checked = 0;
     for (const phone of [phoneId("x"), null]) {
       const body = await get(r, phone);
@@ -353,9 +354,11 @@ describe.skipIf(!HAS_DB)("getCode — each field from its §6.4 source", () => {
     expect(await get(r, mine)).toMatchObject({ warmingDeadline: epochS(created) + WARMING_TIMEOUT_MINUTES * 60 });
   });
 
-  it("destinationName: the pre-picked target's label; null when there is none or it is archived (T36)", async () => {
+  // B8 review I-1: the descriptor names what the phone's start would stream to (`fixtureStreamTarget`); every row of the
+  // rule's table is in stream-target-agreement.test.ts.
+  it("destinationName: the destination the start would open on — with nothing saved the org's oldest; the saved choice; null when that choice is archived (T36)", async () => {
     const r = await captureRig({ targetLabel: "Court One Feed" });
-    expect((await get(r, null)).destinationName, "no pre-pick yet").toBeNull();
+    expect((await get(r, null)).destinationName, "no pre-pick yet: the oldest (and only) destination").toBe("Court One Feed");
     const sid = await r.start(phoneId("mine"));
     expect((await get(r, null)).destinationName, "the Go live saved the pre-pick").toBe("Court One Feed");
     await moveTo(sid, "completed", { end: "stopped" });

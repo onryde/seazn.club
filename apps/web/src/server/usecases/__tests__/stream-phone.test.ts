@@ -25,7 +25,7 @@ import {
 } from "@/server/relay/config";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
-import { getCode, postBeat } from "../capture-phone";
+import { getCode, postBeat, postStart } from "../capture-phone";
 import { reissueStreamCode, saveStreamSettings } from "../stream-codes";
 import { createSession } from "../stream-sessions";
 import { createStreamTarget } from "../stream-targets";
@@ -110,7 +110,7 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     const auth: AuthCtx = { ...seeded, userId: await rigUser() };
     const { fixtureId } = await startedDivisionWithFixture(auth);
     const now = () => new Date();
-    const empty = { code: null, phone: null, destination: null, lastTakeover: null, auto: null, legacy: false, finished: false };
+    const empty = { code: null, phone: null, destination: null, lastTakeover: null, auto: null, legacy: false, finished: false, session: null };
     expect(await read(auth, fixtureId, now)).toEqual(empty);
     expect(await read(auth, fixtureId, now)).toEqual(empty);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_codes where fixture_id = ${fixtureId}`;
@@ -293,16 +293,24 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     expect(legacy.phone, "no phone facts").toBeNull();
     expect(legacy.lastTakeover, "no takeover").toBeNull();
     expect(legacy.code?.state).toBe("active");
-    expect(legacy.destination).toEqual({ id: r.target.id, label: r.target.label });
+    expect(legacy.destination).toEqual({ id: r.target.id, label: r.target.label, source: "saved" });
   });
 
-  it("T36: the pre-pick reads {id, label}; ARCHIVED in Directory it reads as none; cleared, none", async () => {
+  // B8 review I-1: the destination is what the phone's start would open on (`fixtureStreamTarget`) — every row of the
+  // rule's table is in stream-target-agreement.test.ts; this is the read model's own walk through one fixture's life.
+  it("T36 / I-1: nothing saved → the org's oldest (`default`); the pick → itself (`saved`); ARCHIVED in Directory → none, never another; cleared → none", async () => {
     const r = await captureRig({ targetLabel: "Court 1 YouTube" });
-    expect((await readRig(r)).destination, "no pick yet").toBeNull();
+    expect((await readRig(r)).destination, "no pick yet: the only (so oldest) destination").toEqual({ id: r.target.id, label: "Court 1 YouTube", source: "default" });
+    expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${r.fixtureId}`, "the read saved nothing").toHaveLength(0);
     await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
-    expect((await readRig(r)).destination).toEqual({ id: r.target.id, label: "Court 1 YouTube" });
+    expect((await readRig(r)).destination).toEqual({ id: r.target.id, label: "Court 1 YouTube", source: "saved" });
+    const newer = await createStreamTarget(r.auth, r.auth.orgId, { kind: "twitch", label: "Court 1 Twitch", streamKey: `tw-${randomUUID()}` });
     await sql`update org_stream_targets set archived_at = now() where id = ${r.target.id}`;
-    expect((await readRig(r)).destination, "archived reads as none").toBeNull();
+    expect((await readRig(r)).destination, "archived reads as none — the newer one is NOT put in its place").toBeNull();
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: newer.id });
+    expect((await readRig(r)).destination?.id).toBe(newer.id);
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: null });
+    expect((await readRig(r)).destination, "cleared reads as none").toBeNull();
   });
 
   it("NO SECRET: the answer carries neither the tok nor its hash, no `cred` value the descriptor serves, and no destination stream key", async () => {
@@ -393,6 +401,27 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     await sql`update fixtures set status = 'in_play' where id = ${r.fixtureId}`;   // the result reverted (§8.1 trigger clears finished_at)
     const reverted = await readRig(r);
     expect([reverted.finished, reverted.code?.state, reverted.code?.endCause], "C5: the code stays ended; the fixture is not finished").toEqual([false, "ended", "expired"]);
+  });
+
+  // B8 review I-2: the panel's `current` rests at Ready, so the read model is what tells it a session opened — including
+  // one the PHONE started (T8). The id of the OPEN session, whoever started it; none once it is over.
+  it("I-2: `session` names the fixture's OPEN session — the phone's own start and the organiser's Go live alike — and is null with none, and again once it ended", async () => {
+    const r = await captureRig();
+    expect((await readRig(r)).session, "no session ever").toBeNull();
+    const a = phoneId("a");
+    await beat(r, a, { claim: "new" });
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
+    const { sid: phoneSid } = await postStart(r.code, r.tok, { phone: a }, r.deps, r.now());
+    const [row] = await sql<{ start_cause: string }[]>`select start_cause from fixture_stream_sessions where id = ${phoneSid}`;
+    expect(row!.start_cause, "PREMISE: the PHONE started it").toBe("operator");
+    expect((await readRig(r)).session).toEqual({ id: phoneSid });
+    expect((await readRig(r)).session, "a second read is the same").toEqual({ id: phoneSid });
+    await sql`update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = now(), ending_at = now() where id = ${phoneSid}`;
+    expect((await readRig(r)).session, "over: none").toBeNull();
+    // The organiser's Go live, after it: the NEW session's id, never the ended one's.
+    const sid = await r.start(phoneId("b"));
+    expect(sid).not.toBe(phoneSid);
+    expect((await readRig(r)).session).toEqual({ id: sid });
   });
 
   it("anti-vacuity: this file read the model and parsed every answer through the strict schema", () => {

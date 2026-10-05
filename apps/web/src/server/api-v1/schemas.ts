@@ -1475,7 +1475,7 @@ export const StreamPhoneBeat = z
 /** Capture QR v2 §9 / §6.12 (T9): `GET /api/v1/fixtures/{id}/stream-phone`, the organiser panel's phone read model. It
  *  carries NO secret — never the tok or its hash, never `cred`, never a destination's stream key: every field is picked
  *  by name. `code` is the fixture's stream code (the active one, else the latest ended); `phone` the slot's phone (§6.9's
- *  present / silent / not responding, on the server's clock); `destination` the pre-pick, null when archived (T36);
+ *  present / silent / not responding, on the server's clock); `destination` what the phone's start opens on (I-1);
  *  `lastTakeover` the latest time another phone took the slot (§7.5); `auto` is PR-2's, always null here. */
 export const StreamPhone = z
   .object({
@@ -1509,7 +1509,10 @@ export const StreamPhone = z
       })
       .strict()
       .nullable(),
-    destination: z.object({ id: z.string(), label: z.string() }).strict().nullable(),
+    /** B8 review I-1: the destination the phone's own start opens on (`fixtureStreamTarget`) — the panel's picker shows
+     *  it. `saved`: the fixture's choice; `default`: nothing chosen yet, so the org's oldest. Null: no live destination,
+     *  or a choice that was cleared or archived (never swapped for another). */
+    destination: z.object({ id: z.string(), label: z.string(), source: z.enum(["saved", "default"]) }).strict().nullable(),
     lastTakeover: z.object({ at: z.string(), model: z.string().nullable() }).strict().nullable(),
     auto: z.null(),
     /** T11 (controller ruling C-1): the fixture's OPEN session has no pairing (it opened before stream codes) — the panel
@@ -1518,6 +1521,9 @@ export const StreamPhone = z
     /** T11 (C5): the FIXTURE is finished (`finished_at` set). "This match is over" needs this as well as an ended code — a
      *  reverted result clears it while the expired code stays ended, and Ready may mint again. */
     finished: z.boolean(),
+    /** B8 review I-2: the fixture's OPEN session (any starter — the organiser's Go live or the phone's own start), null
+     *  with none. The panel reads `current` when it names one the panel does not show. An id, nothing else. */
+    session: z.object({ id: z.string() }).strict().nullable(),
   })
   .strict();
 export type StreamPhone = z.infer<typeof StreamPhone>;

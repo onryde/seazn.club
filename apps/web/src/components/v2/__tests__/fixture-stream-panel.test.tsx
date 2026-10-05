@@ -55,6 +55,8 @@ import {
   type StreamSessionView,
 } from "@/lib/stream-session-view";
 import { StreamTargetKind, type StreamPhone, type StreamTarget } from "@/server/api-v1/schemas";
+import { resolveStreamTarget, type SavedStreamTarget } from "@/lib/stream-destinations";
+import { STREAM_TARGET_TABLE, STREAM_TARGET_TABLE_ROWS, rowName } from "@/lib/__tests__/_stream-target-table";
 import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
@@ -620,7 +622,7 @@ const facts = (over: Partial<Facts> = {}): Facts => ({
 /** The `stream-phone` read model (§9, T9): an active code with a paired, present phone — Ready's "paired" row. */
 const readModel = (over: Partial<StreamPhone> = {}): StreamPhone => ({
   code: { issuedAt: "2026-09-14T11:00:00.000Z", state: "active", endCause: null }, phone: facts(), destination: null,
-  lastTakeover: null, auto: null, legacy: false, finished: false, ...over,
+  lastTakeover: null, auto: null, legacy: false, finished: false, session: null, ...over,
 });
 /** §6.9: paired, but the phone has stopped answering. */
 const SILENT = facts({ present: false, silent: true, elapsedMs: 90_000 });
@@ -1369,11 +1371,11 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       body: { key: "stream.phone.countdown.warming.no_inbound_timeout", elapsedMs: 45_000, remainingMs: 555_000 },
     });
     const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session({ countdown: warming })} balance={2} />);
-    expect(html).toContain(`the stream is cancelled in <span class="whitespace-nowrap tabular-nums">9 min, 15 sec</span>`);
+    expect(html).toContain(`the stream is cancelled in <span aria-live="off" class="whitespace-nowrap tabular-nums">9 min, 15 sec</span>`);
     const lost = { kind: "live" as const, reason: "phone_lost" as const, elapsedMs: 160_000, remainingMs: 740_000 };
     const liveView = session({ state: "live", startedAt: "2026-09-14T11:50:00Z", countdown: lost });
     const liveHtml = renderToStaticMarkup(<PhoneTabBody {...BODY} view={liveView} balance={1} phone={readModel({ phone: SILENT })} />);
-    expect(liveHtml).toContain(`No video from the phone for <span class="whitespace-nowrap tabular-nums">2 min, 40 sec</span> — the stream ends in <span class="whitespace-nowrap tabular-nums">12 min, 20 sec</span>`);
+    expect(liveHtml).toContain(`No video from the phone for <span aria-live="off" class="whitespace-nowrap tabular-nums">2 min, 40 sec</span> — the stream ends in <span aria-live="off" class="whitespace-nowrap tabular-nums">12 min, 20 sec</span>`);
     expect(liveHtml).toContain(`>${m("stream.chain.word.reconnecting")}<`);
     // The empty case: a live session with the input down and NO countdown from the server shows no countdown sentence.
     const none = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })} balance={1} />);
@@ -2246,8 +2248,12 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     failTargets?: boolean;
     create?: () => unknown;
     stop?: () => unknown;
-    /** The `stream-phone` read model (T9). Unset: a paired, present phone (Ready's "paired" row). */
+    /** The `stream-phone` read model (T9). Unset: a paired, present phone (Ready's "paired" row). Its `destination` and
+     *  `session` are ALWAYS the server's own, from `saved` + `targets` and `current` (see `serve`). */
     phone?: StreamPhone;
+    /** The fixture's saved destination row (`fixture_stream_settings`). Unset: none — nobody has chosen. A pick (PUT
+     *  stream-settings) writes it, as the route does. A saved id the list does not hold is archived (or not the org's). */
+    saved?: { row: false } | { row: true; targetId: string | null };
     /** The read model's read fails while set. */
     failPhone?: boolean;
     /** The stream-code ensure (T5). Unset: the active code, as the route re-shows it. */
@@ -2276,11 +2282,28 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       }
       if (key === PHONE) {
         if (s.failPhone) throw new TypeError("Failed to fetch");
-        return structuredClone(s.phone ?? readModel());
+        // The server's own answers: the destination is `fixtureStreamTarget`'s — the REAL resolver over this fake's saved
+        // row and its live list (the list route serves the org's live destinations, oldest first) — and `session` names
+        // the open session, whoever started it (I-2).
+        const row = s.saved ?? { row: false };
+        const saved: SavedStreamTarget = row.row
+          ? { row: true, targetId: row.targetId, live: row.targetId !== null && s.targets.some((t) => t.id === row.targetId) }
+          : { row: false };
+        const pick = resolveStreamTarget(saved, s.targets);
+        const open = s.current !== null && !["completed", "failed"].includes(s.current.state);
+        return structuredClone({
+          ...(s.phone ?? readModel()),
+          destination: pick === null ? null : { id: pick.id, label: pick.label, source: pick.source },
+          session: open ? { id: s.current!.id } : null,
+        });
       }
       if (key === ENSURE) return s.code ? s.code() : { qr: { ...CODE_QR, exp: 1_900_000_000 }, issuedAt: (s.phone ?? readModel()).code?.issuedAt ?? "2026-09-14T11:00:00.000Z" };
       if (key === REISSUE) return s.reissue!();
-      if (key === SETTINGS) return { targetId: (options?.json as { targetId: string | null }).targetId };
+      if (key === SETTINGS) {
+        const targetId = (options?.json as { targetId: string | null }).targetId;
+        s.saved = { row: true, targetId };
+        return { targetId };
+      }
       if (key === "GET /api/v1/orgs/o-1/stream-targets") {
         if (s.failTargets) throw new TypeError("Failed to fetch");
         return structuredClone(s.targets);
@@ -2370,18 +2393,18 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const failed = { id: "s2", state: "failed" as const, failReason: "no_inbound_timeout" as const, balance: 0 };
     let checked = 0;
     for (const restart of [{ windowOpen: true, used: 1, limit: 3, free: true }, null]) {
-      const restartFree = restart !== null;
+      const windowOpen = restart !== null;
       const island = track(await mount({ current: session({ ...failed, restart }), targets: TARGETS }));
-      expect(bodyOf(island).restart, `${restartFree}: the container hands the projection's answer down`).toEqual(restart);
+      expect(bodyOf(island).restart, `${windowOpen}: the container hands the projection's answer down`).toEqual(restart);
       expect(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-retry"), "Try again is on the failed card").toBeDefined();
       bodyOf(island).onAgain();
       const b = bodyOf(island);
       expect(b.view, "Try again returns the tab to idle").toBeNull();
       expect(b.balance, "the projection's balance, kept").toBe(0);
       // …and the answer survives the dismiss: it is the FIXTURE's window, not the dismissed card's.
-      expect(b.restart, `${restartFree}: kept across Try again`).toEqual(restart);
+      expect(b.restart, `${windowOpen}: kept across Try again`).toEqual(restart);
       const tree = walk(expandWithHooks(PhoneTabBody, b));
-      if (restartFree) {
+      if (windowOpen) {
         expect(byTestId(tree, "stream-go-live"), "inside the window: Go live").toBeDefined();
         expect(byTestId(tree, "stream-buy-pack-5"), "inside the window: no forced tiles").toBeUndefined();
         expect(textAt(tree, "stream-restart")).toBe(m("stream.restart.used", { used: 1, limit: 3 }));
@@ -2406,9 +2429,10 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "a destination is selected").toBeFalsy();
   });
 
-  it("opens at the FIRST destination (created_at order, as the route returns it); no destination → none selected", async () => {
+  it("opens at the SERVER's destination — with nothing saved, the oldest (created_at order, as the route returns it); no destination → none selected; nothing is written", async () => {
     const two = track(await mount({ current: null, targets: TARGETS }));
     expect(bodyOf(two).selectedTargetId).toBe("t1");
+    expect(calls(), "opening the panel saves no choice").not.toContain(SETTINGS);
     expect(listOf(bodyOf(two).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
     const none = track(await mount({ current: null, targets: [] }));
     expect(bodyOf(none).selectedTargetId).toBeNull();
@@ -2543,6 +2567,31 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(ensures(), "the same ended answer does not spin the ensure").toBe(3);
   });
 
+  // B8 review m-6 (K6): the re-ask's `!finished` is reachable only here — the fold open on an Ended card, past C2's grace.
+  // The code expired BECAUSE the match is over: asking again would only meet ensure's 422 and turn the card into an error.
+  it("K6: the code fold open on an ENDED card when the code expires on a FINISHED match — the code is NOT asked for again", async () => {
+    const issuedAt = "2026-09-14T09:00:00.000Z";
+    const ended = session({ id: "s0", state: "completed", startedAt: "2026-09-14T09:10:00Z", endedAt: "2026-09-14T10:40:00Z", endReason: "stopped", creditUsed: true });
+    const s = serve({ current: ended, targets: TARGETS, phone: readModel({ finished: true, code: { issuedAt, state: "finishing", endCause: null } }) });
+    const island = track(await mount(s));
+    expect(ensures(), "PREMISE: a code is asked for only when the fold opens").toBe(0);
+    bodyOf(island).onToggleCode(true);
+    await settle();
+    expect(ensures()).toBe(1);
+    expect(bodyOf(island).code).toMatchObject({ status: "ok" });
+    // C2's grace runs out: the code ends `expired` — on a match that is still finished.
+    s.phone = readModel({ finished: true, code: { issuedAt, state: "ended", endCause: "expired" } });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(phoneReads(), "PREMISE: the read model was read again").toBeGreaterThanOrEqual(2);
+    expect(ensures(), "the match is over: no second ask").toBe(1);
+    // The positive pair: the result REVERTED (not finished) — the same ended code is re-minted, once.
+    s.phone = readModel({ finished: false, code: { issuedAt, state: "ended", endCause: "expired" } });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(ensures()).toBe(2);
+  });
+
   it("Revoke & reissue asks the house confirm (danger, §6.12's copy) and POSTs reissue, showing the NEW code; declined, nothing is sent", async () => {
     const NEW = CaptureQrV2.parse({ v: 2, code: "m3n4p5q6r7s8", slot: 0, tok: "Zz9_Yy8-Xx7Ww6Vv5Uu4Tt" });
     const s = serve({ current: null, targets: TARGETS, phone: readModel({ phone: null }) });
@@ -2572,7 +2621,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("§6.7.3: a pick writes the fixture's pre-pick (PUT stream-settings); the saved pre-pick is what the picker opens at until the organiser picks", async () => {
-    const s = serve({ current: null, targets: TARGETS, phone: readModel({ destination: { id: "t2", label: "Alt" } }) });
+    const s = serve({ current: null, targets: TARGETS, saved: { row: true, targetId: "t2" } });
     const island = track(await mount(s));
     expect(bodyOf(island).selectedTargetId, "the saved pre-pick, not the oldest").toBe("t2");
     expect(calls(), "opening writes nothing").not.toContain(SETTINGS);
@@ -2581,9 +2630,124 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const put = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/fixtures/f-1/stream-settings" && o?.method === "PUT");
     expect(put?.[1]?.json).toEqual({ targetId: "t1" });
     expect(bodyOf(island).selectedTargetId, "the organiser's pick outranks the saved one").toBe("t1");
-    // A pre-pick that is not listed (archived) is not offered: the list's own choice stands.
-    const gone = track(await mount({ current: null, targets: TARGETS, phone: readModel({ destination: { id: "t9", label: "Old" } }) }));
-    expect(bodyOf(gone).selectedTargetId).toBe("t1");
+    // B8 review I-1 (replaces "the list's own choice stands", which froze the divergence): a saved choice that is not
+    // listed — archived in Directory — is NONE, exactly as the phone's start answers it (409 no_destination). The picker
+    // is empty and Go live is held; the oldest is NOT put in its place.
+    const gone = track(await mount({ current: null, targets: TARGETS, saved: { row: true, targetId: "t9" } }));
+    expect(bodyOf(gone).selectedTargetId).toBeNull();
+    const shown = walk(expandWithHooks(PhoneTabBody, bodyOf(gone)));
+    expect(attr(byTestId(shown, "stream-target")!, "value"), "the placeholder").toBe("");
+    expect(propsOf(byTestId(shown, "stream-go-live")!).disabled, "Go live held").toBe(true);
+  });
+
+  // B8 review I-1 (controller ruling, §17.13): what the organiser sees is what streams. For EVERY row of THE table the
+  // picker shows the row's answer — the target the phone's start opens on (stream-target-agreement.test.ts proves the
+  // server half: read model == descriptor == start) — and Go live is held exactly on the rows whose answer is none.
+  it("§17.13 agreement: for every row of the destination table the panel's selection IS the admission target, and Go live is held on none", async () => {
+    const ID = { A: "t1", B: "t2" } as const;
+    let checked = 0;
+    for (const row of STREAM_TARGET_TABLE) {
+      const targets = row.live.map((n) => TARGETS[n === "A" ? 0 : 1]!);
+      const newest = targets[targets.length - 1]?.id ?? "t-ghost";
+      const saved =
+        row.saved === "none" ? { row: false as const }
+        : row.saved === "cleared" ? { row: true as const, targetId: null }
+        : row.saved === "live" ? { row: true as const, targetId: newest }
+        : { row: true as const, targetId: row.saved === "archived" ? "t-archived" : "t-other-org" };
+      apiV1.mockClear();
+      const island = track(await mount({ current: null, targets, saved }));
+      const want = row.expect === null ? null : ID[row.expect.pick];
+      expect(bodyOf(island).selectedTargetId, rowName(row)).toBe(want);
+      const shown = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+      expect(Boolean(propsOf(byTestId(shown, "stream-go-live")!).disabled), `${rowName(row)}: Go live held iff none`).toBe(want === null);
+      expect(calls(), `${rowName(row)}: nothing written`).not.toContain(SETTINGS);
+      checked++;
+    }
+    expect(checked).toBe(STREAM_TARGET_TABLE_ROWS);
+  });
+
+  // B8 review I-1, probe (a), kept: n1 acts on what is SHOWN. A saved pre-pick archived in Directory leaves the picker
+  // empty — never the oldest, which nobody chose — through the tab return AND the read model's next answer.
+  it("I-1 probe (a): a SHOWN pre-pick archived in Directory → a tab return and a phone poll leave the picker EMPTY and Go live held — never the oldest", async () => {
+    const { doc } = stubPage();
+    const s = serve({ current: null, targets: TARGETS, saved: { row: true, targetId: "t2" } });
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId, "PREMISE: the saved pre-pick is shown").toBe("t2");
+    s.targets = [TARGETS[0]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "after the return").toBeNull();
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "after the next phone poll").toBeNull();
+    expect(propsOf(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-go-live")!).disabled).toBe(true);
+  });
+
+  // B8 review I-1, probe (b), kept: the in-use lift acts on what is SHOWN. A refusal about the shown pre-pick (held by
+  // another match) stays across a return that finds it STILL held — the free oldest is not what is shown.
+  it("I-1 probe (b): target_in_use on the SHOWN pre-pick survives a return while it is still held; freed, it lifts", async () => {
+    const { doc } = stubPage();
+    const holder = { sessionId: "s9", fixtureId: "f-9", href: "/x/f/5", matchNo: 5, courtName: "Court 1", state: "live" as const };
+    const held = { ...TARGETS[1]!, inUse: holder };
+    const s = serve({ current: null, targets: [TARGETS[0]!, held], saved: { row: true, targetId: "t2" } });
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId, "PREMISE: the held pre-pick is shown").toBe("t2");
+    s.create = () => { throw new ApiV1Error("in use", 409, "target_in_use", { holder: { ...holder, label: "Alt" } }); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(apiV1.mock.calls.some(([u, o]) => o?.method === "POST" && /stream-sessions$/.test(u) && (o.json as { targetId?: string }).targetId === "t2"), "Go live sent the SHOWN destination").toBe(true);
+    expect(bodyOf(island).createError?.code).toBe("target_in_use");
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).createError?.code, "still held: the refusal stands").toBe("target_in_use");
+    s.targets = TARGETS;
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).createError, "freed: lifted").toBeNull();
+    expect(bodyOf(island).selectedTargetId).toBe("t2");
+  });
+
+  // B8 review I-2 (ruling: fix it). `current` rests at Ready and on an Ended card (terminal: no poll), and T8 made the
+  // paired PHONE a starter — so the read model names the open session, and the tab reads `current` for one it does not
+  // show. Without it the organiser watched "Paired · Go live" while the phone was warming, and Go live met active_session.
+  it("I-2: a session the PHONE starts while the tab sits at Ready — or on an Ended card — is shown within one poll: warming, no stale Go live, `current` read ONCE for it", async () => {
+    const CREATE = "POST /api/v1/fixtures/f-1/stream-sessions";
+    let checked = 0;
+    for (const [name, start] of [
+      ["Ready, paired", null],
+      ["an Ended card", session({ id: "s0", state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped", creditUsed: true })],
+    ] as const) {
+      apiV1.mockClear();
+      const s = serve({ current: start, targets: TARGETS });
+      // Not tracked: unmounted at the end of its case, so its own (now live) poll never lands in the next case's count.
+      const island = await mount(s);
+      const before = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+      if (start === null) {
+        expect(propsOf(byTestId(before, "stream-go-live")!).disabled, `${name}: PREMISE — Go live offered`).toBeFalsy();
+      } else {
+        expect(byTestId(before, "stream-again"), `${name}: PREMISE — the Ended card`).toBeDefined();
+      }
+      // Nothing changes on the server: the read model's next poll reads `current` for nothing.
+      const quiet = plainPolls();
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(plainPolls() - quiet, `${name}: no session opened — no read`).toBe(0);
+      // The phone's own start (T8): the server opens an OPERATOR session.
+      s.current = session({ id: "s-phone", state: "warming", startCause: "operator" });
+      const polls = plainPolls();
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(plainPolls() - polls, `${name}: \`current\` read once for the new id`).toBe(1);
+      expect(bodyOf(island).view?.id, name).toBe("s-phone");
+      expect(bodyOf(island).view?.state, name).toBe("warming");
+      const after = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+      expect(byTestId(after, "stream-go-live"), `${name}: no stale Go live`).toBeUndefined();
+      expect(byTestId(after, "stream-again"), `${name}: no stale Ended card`).toBeUndefined();
+      expect(calls().filter((c) => c === CREATE), `${name}: nothing tapped, nothing refused`).toEqual([]);
+      island.unmount();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("§8a's encoding settings are the helper's: EC-H, a 4-module quiet zone, and the Seazn logo (amended 2026-09-30, D7)", () => {
@@ -3207,7 +3371,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("m3: the Phone tab shares the retry — a failed first read keeps polling until the live session it missed is shown", async () => {
-    const s = serve({ current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, failCurrent: true });
+    // The read model is unreadable too: it would name the open session (I-2) and read `current` itself — this case is
+    // the session's OWN retry, so only that one may show it.
+    const s = serve({ current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, failCurrent: true, failPhone: true });
     apiV1.mockClear();
     const island = track(await mount(s));
     expect(bodyOf(island).view, "premise: the failed read leaves the tab usable, at idle").toBeNull();
@@ -3413,7 +3579,10 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(apiV1.mock.calls.some(([u, o]) => o?.method === "POST" && /stream-sessions$/.test(u) && (o.json as { targetId?: string }).targetId === "t1")).toBe(true);
   });
 
-  it("n1's edge: a removal that EMPTIES the list holds nothing — there is nothing to fall to, so the next destination added is a first one, offered (directory-stream-destinations I1, steps 4→5)", async () => {
+  // B8 review I-1 narrows this edge: the offer is the SERVER's (`fixtureStreamTarget`). With nothing ever SAVED, the first
+  // destination added after the list emptied is the oldest, offered. A saved choice that was removed stays none on the
+  // server — so a destination added after it is NOT offered: the organiser picks it (the last steps below).
+  it("n1's edge: a removal that EMPTIES the list holds nothing — with nothing saved, the next destination added is a first one, offered (directory-stream-destinations I1, steps 4→5)", async () => {
     const { doc } = stubPage();
     const s = serve({ current: null, targets: [TARGETS[0]!] });
     const island = track(await mount(s));
@@ -3435,14 +3604,20 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     doc.dispatchEvent(new Event("visibilitychange"));
     await settle();
     expect(bodyOf(island).selectedTargetId, "t1 removed, t2 still there: NOT picked for them").toBeNull();
-    // …and emptying it from there, then adding, offers again.
+    // …and emptying it from there, then adding a NEW destination: the saved choice (t1) is gone, so the server answers
+    // none (n1) — the new one is listed, not chosen for them. The organiser's pick is what offers it.
+    expect(s.saved, "PREMISE: the pick was saved").toEqual({ row: true, targetId: "t1" });
     s.targets = [];
     doc.dispatchEvent(new Event("visibilitychange"));
     await settle();
-    s.targets = [TARGETS[0]!];
+    const t3 = { ...TARGETS[0]!, id: "t3", label: "New" };
+    s.targets = [t3];
     doc.dispatchEvent(new Event("visibilitychange"));
     await settle();
-    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t3"]);
+    expect(bodyOf(island).selectedTargetId, "a removed CHOICE is never replaced — not even by the only destination").toBeNull();
+    bodyOf(island).onSelectTarget("t3");
+    expect(bodyOf(island).selectedTargetId).toBe("t3");
   });
 
   // B5 review m-2: an EMPTY list has nothing to "pick another" from. The empty state (No destinations yet + Manage) says
@@ -3523,11 +3698,45 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).createError, "picking another destination answers it").toBeNull();
   });
 
+  // B8 review m-4: the read model's reads race too — the poll, a tab return's, the reissue's. Only the NEWEST answer
+  // lands: an older poll answering late would put a phone that has since gone back on screen (or, as here, take a paired
+  // one away — and ask for the code it no longer needs).
+  it("m-4: an OLDER read-model answer that lands LATE never overwrites a newer one — and asks for no code it would have", async () => {
+    const { doc } = stubPage();
+    const pending: { resolve: (v: unknown) => void }[] = [];
+    serve({ current: null, targets: TARGETS });
+    const base = apiV1.getMockImplementation()!;
+    apiV1.mockImplementation((url, options) =>
+      `${options?.method ?? "GET"} ${url}` === PHONE ? new Promise((resolve) => { pending.push({ resolve }); }) : base(url, options),
+    );
+    const island = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(pending.length, "the mount's read is in flight").toBe(1);
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(pending.length, "the return asked again").toBe(2);
+    pending[1]!.resolve(readModel());                  // the NEWER answer: a paired phone
+    await settle();
+    expect(bodyOf(island).phone?.phone?.present).toBe(true);
+    pending[0]!.resolve(readModel({ phone: null }));   // the OLDER answer, late: no phone
+    await settle();
+    expect(bodyOf(island).phone?.phone?.present, "the late older answer is dropped").toBe(true);
+    expect(ensures(), "…so no code is asked for a phone that is still paired").toBe(0);
+    // The positive pair: a NEWER answer with no phone does land, and the card asks for the code once.
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    pending[2]!.resolve(readModel({ phone: null }));
+    await settle();
+    expect(bodyOf(island).phone?.phone).toBeNull();
+    expect(ensures()).toBe(1);
+  });
+
   it("m2: an OLDER read that answers LATE never overwrites a newer one — neither its list nor its failure", async () => {
     stubPage();
     // The list route answers in the order the TEST releases, not the order asked.
     const pending: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
-    const s = serve({ current: null, targets: [] });
+    // The server's org has the one destination the newer read answers with — so its read model offers it (I-1).
+    const s = serve({ current: null, targets: [TARGETS[1]!] });
     const base = apiV1.getMockImplementation()!;
     apiV1.mockImplementation((url, options) =>
       `${options?.method ?? "GET"} ${url}` === LIST

@@ -18,7 +18,7 @@ import { isNotResponding, isPresent, isSilent } from "@/server/relay/domain/pair
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { wipeStreamCodeTok } from "@/server/relay/secret-columns";
-import { requireSessionEditor } from "./stream-codes";
+import { fixtureStreamTarget, requireSessionEditor } from "./stream-codes";
 
 /** PR-1 carries one camera: the panel reads slot 0. */
 const SLOT = 0;
@@ -59,35 +59,40 @@ function beatOf(raw: unknown): NonNullable<StreamPhone["phone"]>["beat"] {
  *  - otherwise the current pairing on the fixture's ACTIVE code — exactly W5's lookup (`currentPhoneOf`), so the panel
  *    offers Go live on exactly the phone the server admits: after a reissue, only a claim on the NEW code pairs one.
  */
-async function phoneOf(fixtureId: string): Promise<{ row: PairingRow | null; held: boolean; legacy: boolean }> {
-  const [open] = await sql<{ pairing_id: string | null }[]>`
-    select pairing_id from fixture_stream_sessions
+async function phoneOf(fixtureId: string): Promise<{ row: PairingRow | null; held: boolean; legacy: boolean; openId: string | null }> {
+  const [open] = await sql<{ id: string; pairing_id: string | null }[]>`
+    select id, pairing_id from fixture_stream_sessions
      where fixture_id = ${fixtureId} and state in ${sql([...ACTIVE_STATES])}
      order by created_at desc, id desc limit 1`;
-  if (open && open.pairing_id === null) return { row: null, held: false, legacy: true };
+  const openId = open?.id ?? null;
+  if (open && open.pairing_id === null) return { row: null, held: false, legacy: true, openId };
   if (open) {
     const [held] = await sql<PairingRow[]>`
       select ${PAIRING_COLS()} from fixture_stream_pairings p where p.id = ${open.pairing_id} and p.ended_at is null`;
-    if (held) return { row: held, held: true, legacy: false };
+    if (held) return { row: held, held: true, legacy: false, openId };
   }
   const [cur] = await sql<PairingRow[]>`
     select ${PAIRING_COLS()}
       from fixture_stream_codes c
       join fixture_stream_pairings p on p.code_id = c.id and p.slot = ${SLOT} and p.ended_at is null
      where c.fixture_id = ${fixtureId} and c.ended_at is null`;
-  return { row: cur ?? null, held: false, legacy: false };
+  return { row: cur ?? null, held: false, legacy: false, openId };
 }
 
 /**
  * `GET /api/v1/fixtures/{id}/stream-phone` (§9). Editors only, session login only; another org's fixture is 404.
  *  - `code`: the fixture's ACTIVE code (else its latest ended one), with C2 evaluated on the server's clock;
  *  - `phone`: §6.9's present / silent / not responding, `elapsedMs` on the server's clock (the D3 M6 rule);
- *  - `destination`: the pre-pick, none when archived (T36);
+ *  - `destination`: `fixtureStreamTarget`'s — the target the phone's own start opens on (B8 review I-1), so the panel's
+ *    picker shows exactly that: the saved choice, or with none saved the oldest (`source: "default"`); none when the
+ *    choice was cleared or archived (T36, n1). Read, never written: opening the panel saves nothing;
  *  - `lastTakeover`: the latest time ANOTHER phone took the slot (§7.5, T2/T4) — read from the pairings, because a
  *    takeover on a slot with no session has no session to carry a `phone_takeover` event. The session's phone re-seated
  *    onto a reissued code (B6 I-2) is the same phone moving, never a takeover;
  *  - `auto`: PR-2's, null;
- *  - `legacy` / `finished` (T11): the open session has no pairing (C-1), and the fixture is finished (C5's match-over row).
+ *  - `legacy` / `finished` (T11): the open session has no pairing (C-1), and the fixture is finished (C5's match-over row);
+ *  - `session` (B8 review I-2): the fixture's OPEN session's id, whoever started it — the panel's `current` rests at
+ *    Ready, so a session the PHONE started would otherwise stay unseen there.
  */
 export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now: () => Date }): Promise<StreamPhone> {
   requireSessionEditor(auth);
@@ -120,7 +125,7 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
   }
 
   // --- the phone ---
-  const { row: p, held, legacy } = await phoneOf(fixtureId);
+  const { row: p, held, legacy, openId } = await phoneOf(fixtureId);
   let phone: StreamPhone["phone"] = null;
   if (p) {
     const lastBeatAt = new Date(p.last_beat_at);
@@ -142,11 +147,8 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
     };
   }
 
-  // --- the destination pre-pick (T36: an archived one reads as none) ---
-  const [dest] = await sql<{ id: string; label: string }[]>`
-    select t.id, t.label from fixture_stream_settings st
-      join org_stream_targets t on t.id = st.target_id and t.org_id = ${auth.orgId} and t.archived_at is null
-     where st.fixture_id = ${fixtureId}`;
+  // --- the destination: the one the phone's start would open on (T36: a choice archived reads as none) ---
+  const destination = await fixtureStreamTarget(sql, { orgId: auth.orgId, fixtureId });
 
   // --- the last takeover (§7.5): a pairing ended `replaced` by ANOTHER phone's ---
   let lastTakeover: StreamPhone["lastTakeover"] = null;
@@ -162,7 +164,7 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
   }
 
   return {
-    code, phone, destination: dest ? { id: dest.id, label: dest.label } : null, lastTakeover, auto: null,
-    legacy, finished: fx.finished_at !== null,
+    code, phone, destination, lastTakeover, auto: null,
+    legacy, finished: fx.finished_at !== null, session: openId === null ? null : { id: openId },
   };
 }

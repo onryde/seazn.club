@@ -20,9 +20,12 @@ import {
   checkDestination,
   destinationIdentity,
   isStreamPlatform,
+  resolveStreamTarget,
   type DestinationRefusal,
+  type SavedStreamTarget,
 } from "../stream-destinations";
 import { StreamTargetKind } from "@/server/api-v1/schemas";
+import { STREAM_TARGET_TABLE, STREAM_TARGET_TABLE_ROWS, rowName, type TargetRow } from "./_stream-target-table";
 
 /** The rule `checkDestination` refused `url` for, or null when it admits it — the ONE validator's verdict, read as a rule.
  *  (n4, B4 re-review: the lib's `destinationRefusal` wrapper had no production caller and was deleted; the tests keep
@@ -448,5 +451,51 @@ describe("platform presets (D6)", () => {
       checked++;
     }
     expect(checked).toBe(5);
+  });
+});
+
+// B8 review I-1 (controller ruling): the ONE default-target resolver. Its table is shared with the DB agreement test and
+// the panel's (`_stream-target-table.ts`), and its expected values are the rule text's, written out there.
+describe("resolveStreamTarget — §6.7.3 / n1 / T36: what the fixture streams to", () => {
+  const ID = { A: "id-a", B: "id-b" } as const;
+  /** A row's inputs: its live destinations oldest first, and its saved row as the server reads it. */
+  function inputs(r: TargetRow): { saved: SavedStreamTarget; live: { id: string }[] } {
+    const live = r.live.map((n) => ({ id: ID[n] }));
+    const newest = live[live.length - 1]?.id ?? "id-ghost";
+    const saved: SavedStreamTarget =
+      r.saved === "none" ? { row: false }
+      : r.saved === "cleared" ? { row: true, targetId: null, live: false }
+      : r.saved === "live" ? { row: true, targetId: newest, live: true }
+      : r.saved === "archived" ? { row: true, targetId: "id-archived", live: false }
+      : { row: true, targetId: "id-other-org", live: false };
+    return { saved, live };
+  }
+
+  it("the table: 5 saved shapes × {0, 1, 2} live destinations — the empty case first, every row its rule's answer", () => {
+    expect(STREAM_TARGET_TABLE[0], "the empty case first").toEqual({ saved: "none", live: [], expect: null });
+    let checked = 0;
+    for (const r of STREAM_TARGET_TABLE) {
+      const { saved, live } = inputs(r);
+      const want = r.expect === null ? null : { id: ID[r.expect.pick], source: r.expect.source };
+      expect(resolveStreamTarget(saved, live), rowName(r)).toEqual(want);
+      checked++;
+    }
+    expect(checked).toBe(STREAM_TARGET_TABLE_ROWS);
+    expect(new Set(STREAM_TARGET_TABLE.map(rowName)).size, "15 DISTINCT rows").toBe(STREAM_TARGET_TABLE_ROWS);
+  });
+
+  it("the guard: a saved choice marked live that the live list does not hold is NONE — never the oldest in its place", () => {
+    const live = [{ id: ID.A }, { id: ID.B }];
+    expect(resolveStreamTarget({ row: true, targetId: "id-z", live: true }, live)).toBeNull();
+    // The positive pair: the same row, listed, is the choice.
+    expect(resolveStreamTarget({ row: true, targetId: ID.B, live: true }, live)).toEqual({ id: ID.B, source: "saved" });
+  });
+
+  it("a second call on the same inputs is the same answer, and the inputs are not touched", () => {
+    const live = Object.freeze([Object.freeze({ id: ID.A }), Object.freeze({ id: ID.B })]);
+    const saved = Object.freeze({ row: false as const });
+    const first = resolveStreamTarget(saved, live);
+    expect(resolveStreamTarget(saved, live)).toEqual(first);
+    expect(first).toEqual({ id: ID.A, source: "default" });
   });
 });

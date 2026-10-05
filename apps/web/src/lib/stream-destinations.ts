@@ -40,6 +40,40 @@ export const TARGET_UNREADABLE = "TARGET_UNREADABLE";
 export const STREAM_KEY_EMPTY = "STREAM_KEY_EMPTY";
 export const DESTINATION_LABEL_EMPTY = "DESTINATION_LABEL_EMPTY";
 
+/**
+ * The fixture's saved destination row (`fixture_stream_settings`), as the ONE server reader reads it: no row at all, or a
+ * row whose target is null (cleared), or names a target — `live` when that target is the org's own and not archived.
+ */
+export type SavedStreamTarget =
+  | { readonly row: false }
+  | { readonly row: true; readonly targetId: string | null; readonly live: boolean };
+export type StreamTargetSource = "saved" | "default";
+
+/**
+ * THE fixture's stream destination (§6.7.3; B8 review I-1, controller ruling: ONE default-target resolver, no write on
+ * view). The phone's own start opens on it, the phone's descriptor names it, and the organiser's panel shows it — so
+ * what the organiser sees is what streams (§17.13). Client-safe like the rest of this file. The rules, empty case first:
+ *  - no live destination → none;
+ *  - no saved row (nobody has chosen) → the OLDEST live one (`default`) — `liveOldestFirst` is ordered by
+ *    `created_at, id`, the order the destination list is served in;
+ *  - a saved row whose target is live → that target (`saved`);
+ *  - a saved row that was cleared, archived, or is not one of the org's → NONE (n1/T36: a choice that is gone is never
+ *    swapped for another destination).
+ * A saved target marked live that the list does not hold cannot happen when both come from one statement; it is
+ * answered as none too — never the oldest in its place. The answer is the LISTED entry (its label with it) plus why.
+ */
+export function resolveStreamTarget<T extends { readonly id: string }>(
+  saved: SavedStreamTarget, liveOldestFirst: readonly T[],
+): (T & { readonly source: StreamTargetSource }) | null {
+  const oldest = liveOldestFirst[0];
+  if (oldest === undefined) return null;
+  if (!saved.row) return { ...oldest, source: "default" };
+  const { targetId } = saved;
+  if (targetId === null || !saved.live) return null;
+  const listed = liveOldestFirst.find((t) => t.id === targetId);
+  return listed === undefined ? null : { ...listed, source: "saved" };
+}
+
 /** Which rule refused — the `rule` on the 422. Never the URL itself: an
  *  ingest URL can carry the stream key in its path. */
 export const DESTINATION_REFUSALS = ["scheme", "userinfo", "ip_literal", "host", "port", "path"] as const;

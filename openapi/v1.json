@@ -44324,11 +44324,19 @@
                                 },
                                 "label": {
                                   "type": "string"
+                                },
+                                "source": {
+                                  "type": "string",
+                                  "enum": [
+                                    "saved",
+                                    "default"
+                                  ]
                                 }
                               },
                               "required": [
                                 "id",
-                                "label"
+                                "label",
+                                "source"
                               ],
                               "additionalProperties": false
                             },
@@ -44375,6 +44383,25 @@
                         },
                         "finished": {
                           "type": "boolean"
+                        },
+                        "session": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -44384,7 +44411,8 @@
                         "lastTakeover",
                         "auto",
                         "legacy",
-                        "finished"
+                        "finished",
+                        "session"
                       ],
                       "additionalProperties": false
                     },
@@ -44429,7 +44457,8 @@
                     },
                     "destination": {
                       "id": "example",
-                      "label": "example"
+                      "label": "example",
+                      "source": "saved"
                     },
                     "lastTakeover": {
                       "at": "example",
@@ -44437,7 +44466,10 @@
                     },
                     "auto": null,
                     "legacy": true,
-                    "finished": true
+                    "finished": true,
+                    "session": {
+                      "id": "example"
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

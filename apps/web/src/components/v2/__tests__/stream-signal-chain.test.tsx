@@ -297,14 +297,28 @@ describe("PhoneStripView — the phone's message under the chain (capture QR v2 
     expect(en).toContain("border-amber-300 bg-amber-50 text-amber-900");
     expect(en).toContain(`<p class="font-medium">Waiting for the phone&#x27;s video</p>`);
     // The mockup's own sentence, verbatim — the duration is the server's 555 000 ms, never a clock read here.
-    expect(en).toContain(`No video from the phone yet — the stream is cancelled in <span class="whitespace-nowrap tabular-nums">9 min, 15 sec</span> if it doesn&#x27;t arrive.`);
+    expect(en).toContain(`No video from the phone yet — the stream is cancelled in <span aria-live="off" class="whitespace-nowrap tabular-nums">9 min, 15 sec</span> if it doesn&#x27;t arrive.`);
     // French spaces with a narrow no-break space: the oracle is the platform's own Intl.DurationFormat, not a typed string.
     const DF = (Intl as unknown as { DurationFormat: new (l: string, o: object) => { format(d: object): string } }).DurationFormat;
     const fr = new DF("fr", { style: "short" }).format({ minutes: 9, seconds: 15 });
     expect(fr.replace(/\s/g, " ")).toBe("9 min et 15 s");
-    expect(strip(props, "fr")).toContain(`<span class="whitespace-nowrap tabular-nums">${fr}</span>`);
+    expect(strip(props, "fr")).toContain(`<span aria-live="off" class="whitespace-nowrap tabular-nums">${fr}</span>`);
     const live = strip({ id: "l", caret: true, strip: { tone: "amber", icon: "clock", lead: null, body: { key: "stream.phone.countdown.live.phone_lost", elapsedMs: 160_000, remainingMs: 740_000 } } });
-    expect(live).toContain(`No video from the phone for <span class="whitespace-nowrap tabular-nums">2 min, 40 sec</span> — the stream ends in <span class="whitespace-nowrap tabular-nums">12 min, 20 sec</span> if it doesn&#x27;t come back.`);
+    expect(live).toContain(`No video from the phone for <span aria-live="off" class="whitespace-nowrap tabular-nums">2 min, 40 sec</span> — the stream ends in <span aria-live="off" class="whitespace-nowrap tabular-nums">12 min, 20 sec</span> if it doesn&#x27;t come back.`);
+  });
+
+  // B8 review m-5: the strip is a status region and the panel re-renders it on every poll. A duration that moves would
+  // re-announce the whole sentence each time — so each duration is a live-OFF island, and nothing else in the box is.
+  it("m-5: only the countdown's durations are aria-live=off — the box stays the status region, and the words around them stay live", () => {
+    const html = strip({ id: "l", caret: true, strip: { tone: "amber", icon: "clock", lead: "stream.phone.waitingVideo", body: { key: "stream.phone.countdown.live.phone_lost", elapsedMs: 160_000, remainingMs: 740_000 } } });
+    expect(html).toMatch(/^<div id="l" data-testid="stream-phone-strip"[^>]* role="status"/);
+    const live = [...html.matchAll(/aria-live="([^"]+)"/g)].map((m) => m[1]);
+    const durations = [...html.matchAll(/<span[^>]*tabular-nums[^>]*>/g)].map((m) => m[0]);
+    expect(durations.length, "the sentence's two durations").toBe(2);
+    for (const d of durations) expect(d).toContain('aria-live="off"');
+    expect(live, "nothing else carries aria-live").toEqual(["off", "off"]);
+    // An untimed sentence has no island at all.
+    expect(strip({ id: "p", caret: true, strip: { tone: "slate", icon: "phone", lead: null, body: { key: "stream.phone.pairFirst" } } })).not.toContain("aria-live");
   });
 
   it("each icon is its own drawing (phone, alert, clock, pause), and no caret without a chain to point at", () => {

@@ -571,7 +571,7 @@ treats that as success (capture's answer table).
 | `scheduledStart` | `fixtures.scheduled_at`, as epoch seconds. With no `scheduled_at` it is **omitted** from the waiting shape (`scheduledStart?`) and `null` on the beat answer (`scheduledStart \| null`), per capture's shapes. |
 | `pollSeconds` | §6.9. |
 | `autoAllowed` | PR-1: always `false`. PR-2: the fixture's switch (§7.1). |
-| `destinationName` | The pre-picked target's `label` (§6.7.3), or null when there is none or it is archived (T36). Cut to the contract's maximum with one "…" (amended, §17.6). |
+| `destinationName` | The `label` of the destination the phone's start would open on (§6.7.3's resolver, amended §17.13), or null when that is none — a choice cleared or archived (T36), or no live destination. Cut to the contract's maximum with one "…" (amended, §17.6). |
 | `heartbeatUrl`, `startUrl` | `${captureOrigin()}/api/v1/capture/codes/{code}/beats` and `…/start`. |
 | `cred.rtmps.url` | The stored Cloudflare value with the **hostname** replaced by `STREAM_INGEST_HOST` (W15). See below. |
 | `cred.srt.url` | The stored Cloudflare value **unchanged**: `srt://live.cloudflare.com:778` (W21). It is never rewritten. |
@@ -705,6 +705,10 @@ refusal in the session events.
 - **The panel's picker writes it on change.** The organiser's Go live uses the body's `targetId` and saves it as the
   pre-pick on success, so the two never diverge.
 - **The phone start uses the saved pre-pick.** None means `409 no_destination`.
+  **Amended (§17.13, B8 review I-1, controller ruling):** ONE resolver (`resolveStreamTarget`, read by
+  `fixtureStreamTarget`) answers the fixture's destination for the phone's start, the phone's descriptor and the
+  panel's read model alike: a saved, live choice → it; **no saved row → the org's oldest live destination**; a saved
+  choice cleared or archived, or no live destination → none (`409 no_destination`). Reading writes nothing.
 - **Archiving** a destination in Directory leaves the pre-pick pointing at an archived row, which reads as none
   (T36). Nothing cascades: the row stays, as D2 requires.
 
@@ -1938,10 +1942,27 @@ controller's review. None is the controller's ruling, and none is the seazn.club
   match is over" alone. It has no chain, no Go live, no code, and no forced credits chooser, at any balance.
 - **A legacy session is today's panel without the v1 QR.** It has §3.2's chain words, no strip, no code line, and no
   far-cadence line. Its Waiting row is Cancel alone, because the v1 QR is gone (§6.13).
-- **The picker opens at the saved pre-pick.** It does so while that destination is listed, until the organiser picks.
-  A pick writes the pre-pick (`PUT stream-settings`). Opening the panel writes nothing. **Open question:** the
-  destination the picker offers by default (the oldest) is not saved, so a phone's own Start can answer
-  `no_destination` while the panel shows one selected.
+- **The picker shows what the phone would stream to (B8 review I-1, controller ruling — replaces the open question
+  recorded here).** ONE pure resolver, `resolveStreamTarget` (`lib/stream-destinations.ts`), read once by
+  `fixtureStreamTarget` beside its one writer: no live destination → none; a saved choice still live → it; a saved
+  choice cleared, archived or not the org's → **none, never another in its place** (n1/T36); no saved row → the org's
+  oldest (`order by created_at, id`, the list's own order). The phone's start, its descriptor and the read model's
+  `destination` (now with `source: saved | default`) all call it. The panel keeps ONE selection: it follows the read
+  model's destination while the list holds it, until the organiser picks; a pick removed in Directory clears it (n1).
+  n1 and the in-use lift act on what is shown. Opening the panel, or following the server, writes nothing; a pick
+  writes the pre-pick (`PUT stream-settings`). Consequences: with nothing saved the phone's own Start streams to the
+  oldest (it no longer answers `no_destination` there); and a destination added after a SAVED choice was removed is
+  listed but not chosen — the organiser picks it (the old "a first destination after an emptied list is offered" holds
+  only when nothing was saved). The capture-descriptor contract's prose for `destinationName` ("null when there is none
+  or it is archived") is unchanged (contracts are final); "none" now reads as the resolver's none.
+- **A session the phone starts shows on the panel (B8 review I-2, ruling: fix it).** The read model names the
+  fixture's open session (`session: {id} | null`, whoever started it); the Phone tab reads `current` once for an id it
+  does not show. So the tab at Ready or on an Ended card moves to Waiting within one poll of the phone's own start,
+  instead of offering a Go live that would meet `active_session`. The T9b "known limit" now covers only a page with the
+  Phone tab closed.
+- **The flag is asked once per org per minute (B8 review m-2).** The loader keeps one answer per org for 60 s
+  (`CAPTURE_FLAG_TTL_MS`, in-process, concurrent renders share the call), so a `router.refresh()` per scoring send no
+  longer makes a remote PostHog call each time. A flip shows within a minute.
 - **The strip replaces D3's phone box.** While a strip shows, D3's phone-cause box is not drawn. With no reason to
   give, D3 draws its box as before. The Phone node's "!" stays while a countdown runs. It is dropped while the phone
   beats with a reason (O5). With no reason, it follows D3's box as before.

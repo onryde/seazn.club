@@ -9,6 +9,7 @@ import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto
 import { sql, type Tx } from "@/lib/db";
 import { requireFeature } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
+import { resolveStreamTarget, type SavedStreamTarget, type StreamTargetSource } from "@/lib/stream-destinations";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import type { StreamCodeShown } from "@/server/api-v1/schemas";
@@ -256,6 +257,30 @@ export async function saveStreamSettings(
   requireSessionEditor(auth);
   await fixtureOf(auth, fixtureId);
   return sql.begin((tx) => writeStreamSettings(tx, { orgId: auth.orgId, fixtureId, targetId: body.targetId, updatedBy: auth.userId }));
+}
+
+/**
+ * THE fixture's stream destination, read once (§6.7.3; B8 review I-1, controller ruling: ONE default-target resolver, no
+ * write on view) — beside its one writer. The phone's start opens on it, the phone's descriptor names it, and the
+ * panel's read model serves it, so the organiser's picker shows exactly what the phone would stream to (§17.13). ONE
+ * statement reads both halves — the saved row (left-joined to its target, live when it is this org's and not archived)
+ * and the org's live destinations `order by created_at, id` (`listStreamTargets`'s order) — and `resolveStreamTarget`
+ * answers. It writes nothing. The caller has already proved the fixture is `orgId`'s.
+ */
+export async function fixtureStreamTarget(
+  exec: Tx | typeof sql, a: { orgId: string; fixtureId: string },
+): Promise<{ id: string; label: string; source: StreamTargetSource } | null> {
+  const [r] = await exec<{ has_row: boolean; saved_id: string | null; saved_live: boolean; live: { id: string; label: string }[] }[]>`
+    select st.fixture_id is not null as has_row, st.target_id as saved_id, t.id is not null as saved_live,
+           coalesce((select json_agg(json_build_object('id', o.id, 'label', o.label) order by o.created_at, o.id)
+                       from org_stream_targets o
+                      where o.org_id = ${a.orgId} and o.archived_at is null), '[]'::json) as live
+      from (select 1) as one
+      left join fixture_stream_settings st on st.fixture_id = ${a.fixtureId}
+      left join org_stream_targets t on t.id = st.target_id and t.org_id = ${a.orgId} and t.archived_at is null`;
+  const saved: SavedStreamTarget = r!.has_row ? { row: true, targetId: r!.saved_id, live: r!.saved_live } : { row: false };
+  const pick = resolveStreamTarget(saved, r!.live);
+  return pick === null ? null : { id: pick.id, label: pick.label, source: pick.source };
 }
 
 /** The one writer of `fixture_stream_settings.target_id`. The caller has already proved the fixture is `orgId`'s. */

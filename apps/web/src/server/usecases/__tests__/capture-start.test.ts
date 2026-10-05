@@ -179,7 +179,9 @@ describe.skipIf(!HAS_DB)("postStart — the phone's own start (§6.3.4, T12–T1
 
   // B6 review M-2: the pick's `archived_at is null` is NOT an equivalent filter — without it the answer is the same, but
   // the refused start reaches the one start path, which reads the provider's storage and writes a snapshot row.
-  it("no pre-pick, an ARCHIVED pre-pick → 409 no_destination; nothing written — and the provider is asked NOTHING (no storage read, no snapshot row); the same pick un-archived does both", async () => {
+  // B8 review I-1: with NOTHING saved the start opens on the org's oldest destination (as the panel shows it) — every row
+  // of that rule is in stream-target-agreement.test.ts. A choice CLEARED or ARCHIVED is none: never another in its place.
+  it("a CLEARED pick, an ARCHIVED pick → 409 no_destination; nothing written — and the provider is asked NOTHING (no storage read, no snapshot row); the same pick un-archived does both", async () => {
     const r = await captureRig();
     const limit = 100_000_000 + Math.floor(Math.random() * 1_000_000);   // marks THIS rig's snapshot rows (the table has no org)
     r.ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: limit, videoCount: 0 };
@@ -187,6 +189,7 @@ describe.skipIf(!HAS_DB)("postStart — the phone's own start (§6.3.4, T12–T1
     const snapshots = async () => (await sql<{ n: number }[]>`select count(*)::int as n from stream_storage_snapshots where limit_minutes = ${limit}`)[0]!.n;
     const A = phoneId("a");
     await claim(r, A);
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: null });
     expect(await refused(start(r, A))).toEqual({ status: 409, body: { code: "no_destination", message: expect.any(String) } });
     await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
     await sql`update org_stream_targets set archived_at = now() where id = ${r.target.id}`;

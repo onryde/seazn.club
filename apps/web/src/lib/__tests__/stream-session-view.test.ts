@@ -635,7 +635,7 @@ const phoneFacts = (over: Partial<Phone> = {}): Phone => ({
 });
 const readModel = (over: Partial<StreamPhone> = {}): StreamPhone => ({
   code: { issuedAt: "2026-09-14T11:00:00Z", state: "active", endCause: null }, phone: phoneFacts(), destination: null,
-  lastTakeover: null, auto: null, legacy: false, finished: false, ...over,
+  lastTakeover: null, auto: null, legacy: false, finished: false, session: null, ...over,
 });
 const SILENT = phoneFacts({ present: false, silent: true, elapsedMs: 90_000 });
 const ENDED_CODE = { issuedAt: "2026-09-14T09:00:00Z", state: "ended" as const, endCause: "expired" as const };

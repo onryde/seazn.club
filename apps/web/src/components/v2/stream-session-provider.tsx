@@ -9,7 +9,8 @@
 //
 // Known limit, recorded not fixed (T9b brief): the poll runs only while a session is NOT terminal, so a session started
 // from ANOTHER device stays invisible to an idle page (no dot) until a read happens — the page's load, or the Phone tab
-// opening (PhoneTab re-reads on mount).
+// opening (PhoneTab re-reads on mount). While the Phone tab is OPEN it is not a limit (B8 review I-2): the tab's read
+// model names the open session, and the tab reads `current` for one it does not show — the paired phone's own start.
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";

@@ -843,14 +843,31 @@ export function PhoneTab({
   // Resolves to the list it applied, or null (failed, or superseded).
   const listSeq = useRef(0);
   const listInFlight = useRef(false);
-  // B4 re-review n1: a choice removed in Directory is CLEARED, never swapped for another destination — and nothing is
-  // picked for the organiser again until they pick (`holdEmpty`). Streaming to a destination nobody chose is the worse
-  // mistake. The read answers against the selection as it is THEN (the ref), not as it was when the read was asked.
-  const holdEmpty = useRef(false);
+  // §6.7.3 / §17.13 (B8 review I-1, controller ruling): ONE selection — what the picker shows is what Go live sends and
+  // what n1 and the in-use lift act on. Until the organiser picks in this tab it FOLLOWS the server's answer, the read
+  // model's `destination` (`fixtureStreamTarget`: the target the phone's own start opens on), shown only while the list
+  // holds it — so the organiser sees what the phone would stream to. Nothing is chosen here (no "the first in the list"),
+  // and opening the panel writes nothing. After a pick it is the pick; a pick removed in Directory is CLEARED, never
+  // swapped for another destination, until the next pick (B4 re-review n1) — the server answers the same (a saved choice
+  // archived is none). Every answer settles against the state as it is THEN (the refs), not as it was when it was asked.
   const selectedRef = useRef<string | null>(null);
-  useEffect(() => {
-    selectedRef.current = selectedTargetId;
-  }, [selectedTargetId]);
+  const pickedHere = useRef(false);
+  const serverPick = useRef<string | null>(null);
+  const listShown = useRef<StreamTarget[] | null>(null);
+  const settleSelection = useCallback((): string | null => {
+    const list = listShown.current;
+    let next: string | null = null;
+    if (list !== null && list.length === 0) {
+      // Nothing left to stand by: a later list follows the server again (which keeps a removed choice as none).
+      pickedHere.current = false;
+    } else if (list !== null) {
+      const want = pickedHere.current ? selectedRef.current : serverPick.current;
+      next = want !== null && list.some((t) => t.id === want) ? want : null;
+    }
+    selectedRef.current = next;
+    setSelectedTargetId(next);
+    return next;
+  }, []);
   const readTargets = useCallback(
     async (loud: boolean): Promise<StreamTarget[] | null> => {
       const seq = ++listSeq.current;
@@ -861,23 +878,13 @@ export function PhoneTab({
         const list = await apiV1<StreamTarget[]>(`/api/v1/orgs/${orgId}/stream-targets`);
         if (seq !== listSeq.current) return null;
         setTargets({ status: "ok", list });
-        // A selection still listed stays. One removed in Directory while OTHERS are listed is cleared, and holds the
-        // picker empty (n1). An empty list holds nothing — there is nothing to fall to, so the next destination added
-        // is a first one. With nothing ever picked (the first list, a first destination) the oldest is offered.
-        const cur = selectedRef.current;
-        let next: string | null;
-        if (cur !== null && list.some((t) => t.id === cur)) next = cur;
-        else {
-          if (list.length === 0) holdEmpty.current = false;
-          else if (cur !== null) holdEmpty.current = true;
-          next = holdEmpty.current ? null : (list[0]?.id ?? null);
-        }
-        selectedRef.current = next;
-        setSelectedTargetId(next);
+        listShown.current = list;
+        const next = settleSelection();
         // A destination another match held (`target_in_use`) that this read finds FREE — or gone — no longer explains
-        // anything: the hold is lifted and Go live may try again. One still held keeps it.
-        const picked = next === null ? undefined : list.find((t) => t.id === next);
-        setCreateError((e) => (e?.code === "target_in_use" && !picked?.inUse ? null : e));
+        // anything: the hold is lifted and Go live may try again. One still held keeps it. Judged on the SHOWN selection,
+        // and only here, where the list's `inUse` is fresh.
+        const shownTarget = next === null ? undefined : list.find((t) => t.id === next);
+        setCreateError((e) => (e?.code === "target_in_use" && !shownTarget?.inUse ? null : e));
         // B5 review m-2: an EMPTY list has nothing to "pick another" from — the empty state (No destinations yet + Manage)
         // says what to do, and a "removed" line kept past it would later sit beside an enabled Go live.
         if (list.length === 0) setCreateError((e) => (e?.code === TARGET_REMOVED ? null : e));
@@ -891,7 +898,7 @@ export function PhoneTab({
         if (seq === listSeq.current) listInFlight.current = false;
       }
     },
-    [orgId],
+    [orgId, settleSelection],
   );
   // The mount and each Retry: a loud read. No cleanup is owed — another org's read (a new `readTargets`) takes a newer
   // sequence number, so the old answer is dropped by the rule above, and React ignores a set after unmount.
@@ -899,35 +906,59 @@ export function PhoneTab({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the loud read shows "loading" before it asks (as before I1)
     void readTargets(true);
   }, [readTargets, targetsTry]);
-  // I1: "Manage destinations" opens Directory in a NEW tab, so coming back never remounts this one — the return re-reads
-  // the list, while the picker is up. A real return fires focus AND visibilitychange: a read already in flight answers
-  // both.
-  const onTabReturn = useCallback(() => {
-    if (listInFlight.current) return;
-    void readTargets(false);
-  }, [readTargets]);
-  useTabReturn(onTabReturn, state === "idle");
-
   // Capture QR v2 §6.12: the phone's read model, polled every STREAM_POLL_MS while the tab is open — beside the session's
   // own poll, which idles at Ready. A failed read keeps the last answer (the next poll tries again); the first answer, or
   // its failure, is what lets the body render — a Ready state drawn before it would flash "no phone" at a paired one.
+  // B8 review m-4: each read takes a sequence number, and only the NEWEST read's answer lands — an older poll answering
+  // after a newer read (the reissue's, a tab return's) never puts stale facts back on screen.
   const [phone, setPhone] = useState<StreamPhone | null>(null);
   const [phoneLoaded, setPhoneLoaded] = useState(false);
+  const phoneSeq = useRef(0);
   const readPhone = useCallback(async () => {
+    const seq = ++phoneSeq.current;
     try {
-      setPhone(await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`));
+      const got = await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`);
+      if (seq !== phoneSeq.current) return;
+      setPhone(got);
+      serverPick.current = got.destination?.id ?? null;
+      settleSelection();
     } catch {
       // transient — the poll asks again
     } finally {
       setPhoneLoaded(true);
     }
-  }, [fixtureId]);
+  }, [fixtureId, settleSelection]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- every setState in readPhone runs after its await
     void readPhone();
     const id = setInterval(() => void readPhone(), STREAM_POLL_MS);
     return () => clearInterval(id);
   }, [readPhone]);
+
+  // I1: "Manage destinations" opens Directory in a NEW tab, so coming back never remounts this one — the return re-reads
+  // the list, while the picker is up, and the read model with it: the destination the server would now stream to (one
+  // added, or the choice archived) is what the picker shows. A real return fires focus AND visibilitychange: a read
+  // already in flight answers both.
+  const onTabReturn = useCallback(() => {
+    if (listInFlight.current) return;
+    void readTargets(false);
+    void readPhone();
+  }, [readTargets, readPhone]);
+  useTabReturn(onTabReturn, state === "idle");
+
+  // B8 review I-2: the PHONE starts sessions too (T8's start), and `current` rests at Ready — so the read model names the
+  // fixture's open session, and one the shared session does not hold is read from `current`, ONCE per id. Otherwise the
+  // organiser would watch "Paired · Go live" while the phone is warming, and Go live would meet `active_session`. A read
+  // that fails is asked again on the next answer of the read model.
+  const openSid = phone?.session?.id ?? null;
+  const readForSid = useRef<string | null>(null);
+  useEffect(() => {
+    if (openSid === null || openSid === view?.id || readForSid.current === openSid) return;
+    readForSid.current = openSid;
+    void read().catch(() => {
+      readForSid.current = null;
+    });
+  }, [openSid, view?.id, phone, read]);
 
   const ready = readyStateOf(phone, shown);
   const legacy = phone?.legacy ?? false;
@@ -1013,19 +1044,12 @@ export function PhoneTab({
     void readPhone();
   };
 
-  // §6.7.3: the picker shows the fixture's saved pre-pick until the organiser picks — the destination the phone's own
-  // start would use — when it is still listed; otherwise the list's own choice (the oldest, or none under n1's hold).
-  const [picked, setPicked] = useState(false);
-  const prePick = phone?.destination?.id ?? null;
-  const shownTargetId =
-    !picked && prePick !== null && targets.status === "ok" && targets.list.some((t) => t.id === prePick) ? prePick : selectedTargetId;
-
   // C1: with a session, the projection's `balance` is the fresher number. With NO session there is no projection at
   // all, so the server-resolved one is the only source — unless the server has since refused for want of credits (m2).
   const balance = view ? view.balance : noCredits ? 0 : streamBalance;
 
   const onGoLive = async () => {
-    const chosen = shownTargetId;
+    const chosen = selectedTargetId;
     if (!chosen) return;
     setBusy(true);
     setCreateError(null);
@@ -1133,7 +1157,7 @@ export function PhoneTab({
         busy={session.busy}
         createError={createError}
         checkoutError={checkoutError}
-        selectedTargetId={shownTargetId}
+        selectedTargetId={selectedTargetId}
         phone={phone}
         code={codeCard}
         codeOpen={codeOpen}
@@ -1153,12 +1177,13 @@ export function PhoneTab({
         // another match) goes with it. Any other refusal stays until the next attempt. (The hold needs no reset: a picked
         // selection only empties again through another removal, which holds it again.)
         onSelectTarget={(id) => {
+          pickedHere.current = true;
           selectedRef.current = id;
           setSelectedTargetId(id);
-          setPicked(true);
           setCreateError((e) => (e && (e.code === TARGET_REMOVED || e.code === "target_in_use") ? null : e));
           // §6.7.3: the picker writes the fixture's pre-pick on change — what the phone's own start streams to. Best
-          // effort: Go live saves it again on success, so the two cannot stay apart past the next start.
+          // effort: Go live saves it again on success, so the two cannot stay apart past the next start. A PICK is the
+          // only write: opening the panel, or following the server's answer, saves nothing (I-1).
           void apiV1(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { targetId: id } }).catch(() => {});
         }}
         onRetryTargets={() => setTargetsTry((n) => n + 1)}
@@ -1794,9 +1819,10 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
 
       {(state === "provisioning" || state === "warming") && (
         // §6.12 Waiting: no QR (the phone is already paired) — the strip above says what it waits for, then the far
-        // cadence's line (§6.6) while the phone is on it, and Cancel.
+        // cadence's line (§6.6) while the phone is on it, and Cancel. (A legacy session has no phone facts at all —
+        // stream-phone.ts serves `phone: null` with `legacy: true` — so the line needs no legacy test of its own.)
         <div data-testid="stream-waiting" className="mt-4 space-y-3">
-          {!legacy && p.phone?.phone?.farPoll && (
+          {p.phone?.phone?.farPoll && (
             <p data-testid="stream-poll-far" className="text-xs text-slate-600">
               {msg("stream.phone.pollFar")}
             </p>

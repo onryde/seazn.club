@@ -241,7 +241,10 @@ const STRIP_ICON: Record<PhoneStrip["icon"], ReactNode> = {
 };
 
 /** A countdown sentence with the server's two durations set as unbroken runs — split on sentinels, so the locale owns
- *  the word order around them. The durations are the server's (`remainingMs`, `elapsedMs`), formatted, never computed. */
+ *  the word order around them. The durations are the server's (`remainingMs`, `elapsedMs`), formatted, never computed.
+ *  B8 review m-5: each duration is `aria-live="off"` — the strip is a status region, and a duration that moves on every
+ *  poll would otherwise re-announce the whole sentence every few seconds. A NEW sentence (another kind or reason)
+ *  changes the words around them, which the region still announces — whole, durations included. */
 function timedSentence(
   msg: ReturnType<typeof useMsg>,
   locale: string,
@@ -254,7 +257,7 @@ function timedSentence(
     if (i % 2 === 0) return part;
     const ms = part === "elapsed" ? body.elapsedMs : body.remainingMs;
     return (
-      <span key={i} className="whitespace-nowrap tabular-nums">
+      <span key={i} aria-live="off" className="whitespace-nowrap tabular-nums">
         {durationLabel(ms ?? 0, locale)}
       </span>
     );

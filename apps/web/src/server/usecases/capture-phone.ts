@@ -39,7 +39,7 @@ import { ingestCred } from "@/server/relay/ingest-cred";
 import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
-import { resolveStreamCode, type ResolvedCode } from "./stream-codes";
+import { fixtureStreamTarget, resolveStreamCode, type ResolvedCode } from "./stream-codes";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
 type Descriptor = z.infer<typeof CaptureDescriptor>;
@@ -122,7 +122,6 @@ export type CaptureCommon = {
 type FixtureCtx = {
   fixture_no: number; status: string; scheduled_at: Date | null; finished_at: Date | null; competition_id: string;
   sport_key: string; tz: string; default_locale: string | null; home_name: string | null; away_name: string | null;
-  target_label: string | null;
 };
 
 /**
@@ -136,23 +135,23 @@ export async function captureCommon(
   now: Date,
 ): Promise<CaptureCommon> {
   // One statement for the fixture's facts: the V305 venue lane (division → org → UTC, the checkin-token.ts query), the
-  // org's locale (W25), both sides' names, and the pre-picked destination — an archived one reads as none (T36).
+  // org's locale (W25) and both sides' names. The destination is `fixtureStreamTarget`'s — the one the start opens on
+  // (B8 review I-1), so the phone names exactly what it would stream to.
   const [ctx] = await sql<FixtureCtx[]>`
     select f.fixture_no, f.status, f.scheduled_at, f.finished_at, d.competition_id, d.sport_key,
            coalesce(ss.tz, o.timezone, 'UTC') as tz, o.default_locale,
-           h.display_name as home_name, a.display_name as away_name, t.label as target_label
+           h.display_name as home_name, a.display_name as away_name
       from fixtures f
       join divisions d on d.id = f.division_id
       join organizations o on o.id = d.org_id
       left join schedule_settings ss on ss.division_id = d.id
       left join entrants h on h.id = f.home_entrant_id
       left join entrants a on a.id = f.away_entrant_id
-      left join fixture_stream_settings st on st.fixture_id = f.id
-      left join org_stream_targets t on t.id = st.target_id and t.org_id = ${c.orgId} and t.archived_at is null
      where f.id = ${c.fixtureId} and d.org_id = ${c.orgId}`;
   // The code cascades with its fixture (T35), so a resolved code's fixture is there; one deleted in between reads as an
   // ended code, never a 500.
   if (!ctx) throw codeEnded();
+  const target = await fixtureStreamTarget(sql, { orgId: c.orgId, fixtureId: c.fixtureId });
 
   const label = ctx.home_name !== null && ctx.away_name !== null
     ? `${ctx.home_name} v ${ctx.away_name}`
@@ -178,7 +177,7 @@ export async function captureCommon(
       finished: ctx.finished_at !== null,
     }, now),
     autoAllowed: false,   // §6.4: PR-1 always false; PR-2 wires the fixture's switch (§7.1)
-    destinationName: ctx.target_label === null ? null : fitText(ctx.target_label, DEST_MAX),
+    destinationName: target === null ? null : fitText(target.label, DEST_MAX),
     overlayUrl,
     scoreUpdates: keyed ? "realtime" : "polled",
     heartbeatUrl: `${origin}/api/v1/capture/codes/${c.code}/beats`,
@@ -655,7 +654,8 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
  *    holder a beat decides by: while a session is open, the phone holding it, wherever its code (C-2 — after a
  *    reissue the session's phone is still current on the new code); else the current pairing on this code;
  *  - T13: a session already running → 409 already_live {sid, startedBy} (F-A5: before the destination);
- *  - the pre-pick (§6.7.3): none, or archived → 409 no_destination;
+ *  - the destination (§6.7.3): `fixtureStreamTarget`'s — the saved choice, or with none saved the oldest; a choice cleared
+ *    or archived, or no live destination at all, is none → 409 no_destination (the panel shows the same, B8 review I-1);
  *  - startBroadcast; its refusals through §6.7.2's table (`phoneStartRefusal`) — a session that opened between this
  *    read and the admission is its active_session, named the same way.
  * Not idempotent by design: a retry after a lost 200 meets 409 already_live naming the same sid.
@@ -666,11 +666,8 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
   const current = await holderOf(sql, resolved.codeId, open);
   if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
   if (open) throw alreadyLive(open);
-  const [pick] = await sql<{ id: string }[]>`
-    select t.id from fixture_stream_settings st
-      join org_stream_targets t on t.id = st.target_id and t.org_id = ${resolved.orgId} and t.archived_at is null
-     where st.fixture_id = ${resolved.fixtureId}`;
-  if (!pick) throw noDestination("this match has no destination picked");
+  const pick = await fixtureStreamTarget(sql, { orgId: resolved.orgId, fixtureId: resolved.fixtureId });
+  if (!pick) throw noDestination("this match has no destination to stream to");
   try {
     const { sessionId } = await startBroadcast(
       { userId: resolved.issuedBy, orgId: resolved.orgId, source: "phone", pairingId: current.id },
