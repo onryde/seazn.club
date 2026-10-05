@@ -28,8 +28,9 @@ export default {
   // (stryker-timeouts.json) still bounds the whole run; this only decides when a HUNG dry run is given up on.
   dryRunTimeoutMinutes: Math.ceil((DRY_RUN_FLOOR_SECONDS * CI_SLOWDOWN) / 60),
   // Stryker's default, stated: the dry run runs only the test files related (by import) to the mutated files, which is what the
-  // measured 42 s dry run and 26 runner-seconds per mutant were taken with. The dry run's own warning ("Vitest failed to find
-  // test files related to mutated files") is what a leg whose files no test imports would print.
+  // measured dry runs (153 s hosted for the probe) and 77 runner-seconds per mutant (hosted, run 37330725739) were taken with.
+  // The dry run's own warning ("Vitest failed to find test files related to mutated files") is what a leg whose files no test
+  // imports would print.
   // `configFile` is the engine's vitest config with its reporters named (vitest.stryker.config.ts): without them vitest adds its
   // github-actions reporter on CI, and a crashed runner child's stdout becomes `##[error]` annotations on a green job.
   vitest: { related: true, configFile: "vitest.stryker.config.ts" },

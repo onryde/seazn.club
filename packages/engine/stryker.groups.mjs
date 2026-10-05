@@ -13,14 +13,22 @@
  *  negations would have Stryker mutate test files (review I11a). A leg lists them last. */
 const NO_TESTS = ["!src/**/*.test.ts", "!src/**/__tests__/**"];
 
-/** The files too big for one leg, each cut at top-level STATEMENT boundaries (T15-CUT). A cut is the name of the statement
- *  that STARTS the next part (an `export function`, `const`, `class`, `interface`, `type` or `enum` declares it), so
- *  `["a", "b"]` makes three parts: the statements before `a`, from `a` up to `b`, and from `b` to the end. Every part ends
- *  right after the last line of a statement, so a blank line, a comment or an edit anywhere cannot move a cut off its statement
- *  or lose a mutant to it; scripts/stryker-cuts.mjs resolves the cuts with the TypeScript parser, and test/stryker-cuts.test.ts proves
+/** The files too big for one leg, each cut at top-level STATEMENT boundaries (T15-CUT) and, where one statement is itself bigger
+ *  than a leg, between the MEMBERS of that declaration (T20-PRE). A cut is the name of the statement that STARTS the next part
+ *  (an `export function`, `const`, `class`, `interface`, `type` or `enum` declares it), so `["a", "b"]` makes three parts: the
+ *  statements before `a`, from `a` up to `b`, and from `b` to the end. A member anchor is `Host.member` (deeper: `Host.member.sub`):
+ *  the member of the named declaration that starts the next part, as in `padSpec.twoInnings` or `cricket.outcome`.
+ *
+ *  A STATEMENT cut ends a part right after the last line of a statement, so a blank line, a comment or an edit anywhere cannot
+ *  move it off its statement, and it loses no mutant. A MEMBER cut cannot be loss-free: Stryker keeps a mutant only if its whole
+ *  node lies inside one part, so the declaration that holds the cut (its object literal, its function body) lies inside none,
+ *  and that container's own mutant ("replace the body with {}") is held by no leg and so never scored. There are 9 of them in
+ *  24,842; stryker-unscored.json names each, file:line:mutator, and test/stryker-sizing.test.ts holds the list equal to what the
+ *  instrumenter finds. scripts/stryker-cuts.mjs resolves the cuts with the TypeScript parser, and test/stryker-cuts.test.ts proves
  *  it with Stryker's own instrumenter, with an edit at the top of cricket.ts. A rename of an anchor is a loud failure (no
- *  statement declares it), never a silent loss. The anchors are chosen by `pnpm --filter @seazn/engine mutation:recut
- *  <file> <parts>`, which minimises the largest part by Stryker's own mutant count. A leg takes part N of a file as `file#N`. */
+ *  statement or member declares it), never a silent loss. The anchors are chosen by `pnpm --filter @seazn/engine mutation:recut
+ *  <file> <parts> [--open <Host,...>]`, which minimises the largest part by Stryker's own mutant count. A leg takes part N of a
+ *  file as `file#N`. */
 export const STRYKER_SPLITS = {
   "src/competition/progression.ts": ["validateProgressionAgainstShapes"],
   "src/competition/tiebreakers.ts": ["directRefine"],
@@ -42,14 +50,16 @@ export const STRYKER_SPLITS = {
  *  turns into Stryker's `file:a-b` (the lines a..b, 1-based, inclusive). A directory leg lists the test-file negations LAST
  *  (`...NO_TESTS`).
  *
- *  SIZING (T15-SIZE, rulings 66, 67, D14). A leg's wall time is its mutant count times the measured cost of one mutant, so
- *  the legs are cut from Stryker's own dry-run count (its "Instrumented N source file(s) with M mutant(s)" line), never from
- *  line counts. The probe's real run measured 26 runner-seconds per mutant (134 mutants, 740 s at concurrency 5, 187 tests
- *  per mutant); D14's formula assumed 10 / 3 = 3.33 s of wall time per mutant at CI's concurrency of 3, and the measured
- *  figure is 26 / 3 = 8.67 s, 2.6 times as slow. At that rate a leg is under the 200-minute split line only while it holds
- *  at most 1,344 mutants; these legs hold at most 1,162, which leaves about 14% for the source to grow. Task 20 re-measures
- *  on CI. test/stryker-sizing.test.ts holds every leg to the line, from a fresh instrumenter count, and when a leg is over it
- *  says which command re-cuts the file (`pnpm --filter @seazn/engine mutation:recut <file> <parts>`).
+ *  SIZING (T15-SIZE, T20-PRE; rulings 66, 67, D14). A leg's wall time is its mutant count times the measured cost of one mutant,
+ *  so the legs are cut from Stryker's own dry-run count (its "Instrumented N source file(s) with M mutant(s)" line), never from
+ *  line counts. The cost is the HOSTED one: the probe's run on GitHub (run 37330725739, ubuntu-latest, 4 vCPU, concurrency 3)
+ *  spent 3,400.6 s on its 134 mutants, 76.13 runner-seconds each, pinned at 77 runner-seconds a mutant (the local run had
+ *  measured 26; a hosted runner is 2.9 times slower). D14's floor of 344 s for a dry run is added once per leg, and the leg's wall time at CI's
+ *  concurrency of 3 is that floor plus 77 / 3 seconds a mutant. A leg is under the 200-minute split line only while it holds
+ *  at most 454 mutants, and no leg holds more than that. It is ONE sample, on a file whose mutants survive 22% of the time
+ *  (the first full dispatch is the second); test/stryker-sizing.test.ts says so and holds the rate to its derivation. It holds
+ *  every leg to the line from a fresh instrumenter count, and when a leg is over it says which command re-cuts the file
+ *  (`pnpm --filter @seazn/engine mutation:recut <file> <parts>`).
  *
  *  Floors are keyed by FAMILY (STRYKER_FAMILIES, ruling 66's ten groups), the sum of a family's legs, never by leg: cutting a
  *  file again or adding a leg changes the legs, and never removes a floor key (T15-CUT).

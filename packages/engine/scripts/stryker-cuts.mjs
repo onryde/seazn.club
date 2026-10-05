@@ -23,7 +23,10 @@
 // opening line above). A member cut CANNOT be loss-free, unlike a statement cut: the node that contains the cut (the object
 // literal, the function body) lies inside no part, and Stryker drops a mutant whose node is in no range. That loss is the
 // container's own mutant ("replace the whole object with {}", "empty the whole body"), and nothing else; test/stryker-cuts.test.ts
-// measures it with Stryker's own instrumenter on every real split file and holds it to those containers.
+// measures it with Stryker's own instrumenter on every real split file and holds it to those containers. Those mutants are
+// never scored: the instrumenter DOES make them (an emptied body can be killed, or can survive), but no part holds them, so no
+// leg runs them and no report counts them. stryker-unscored.json names each, file:line:mutator, and test/stryker-sizing.test.ts
+// holds it equal to what the instrumenter finds; its count is the whole of the loss.
 //
 // Plain .mjs, like stryker.groups.mjs: stryker.config.mjs loads it under `stryker`, and the parser is loaded only when a cut is
 // resolved, so scripts/stryker-matrix.mjs (which needs only the group names and runs before any install) never touches it.

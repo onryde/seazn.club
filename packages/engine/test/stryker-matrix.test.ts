@@ -59,6 +59,25 @@ describe("stryker-matrix.mjs derives one matrix per event (D14)", () => {
     }
   });
 
+  spawnIt(2)("the legs and the probe fit GitHub's 256-job matrix limit, and so does every matrix a run prints (T20-FIX1, M6)", () => {
+    // 69 legs and the probe are 70 jobs, 3.7x under the limit; a matrix over it is refused by GitHub when the plan job hands it
+    // over, after the dispatch was chosen and the guard and the plan jobs ran. The limit is GitHub's, typed here from its docs.
+    const GITHUB_MATRIX_LIMIT = 256;
+    const keys = Object.keys(STRYKER_GROUPS);
+    const limit = `GitHub's limit of ${GITHUB_MATRIX_LIMIT} jobs per matrix: cut the legs into two workflows, or one leg at a time`;
+    expect(keys.length, `${keys.length} jobs (the legs and the probe) exceed ${limit}`).toBeLessThanOrEqual(GITHUB_MATRIX_LIMIT);
+    expect(keys.length, "the legs and the probe were counted").toBeGreaterThan(10);
+    const widest = [["schedule", ""], ["workflow_dispatch", "all"]] as const;
+    let checked = 0;
+    for (const [event, group] of widest) {
+      const n = groupsOf(real(event, group)).length;
+      expect(n, `${event} ${group}: a matrix of ${n} jobs exceeds ${limit}`).toBeLessThanOrEqual(GITHUB_MATRIX_LIMIT);
+      expect(n, `${event} ${group} printed a matrix`).toBeGreaterThan(10);
+      checked++;
+    }
+    expect(checked).toBe(widest.length);
+  });
+
   spawnIt(14)("a dispatch of one group gives that group alone, the probe included", () => {
     expect(groupsOf(real("workflow_dispatch", "probe"))).toEqual(["probe"]);
     let checked = 0;

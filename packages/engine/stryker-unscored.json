@@ -1,0 +1,65 @@
+[
+  {
+    "file": "src/import/plan.ts",
+    "line": 46,
+    "mutator": "BlockStatement",
+    "replacement": "{}",
+    "what": "planImport: its whole function body emptied"
+  },
+  {
+    "file": "src/sports/cricket/cricket.ts",
+    "line": 3015,
+    "mutator": "BlockStatement",
+    "replacement": "{}",
+    "what": "padSpec: its whole function body emptied"
+  },
+  {
+    "file": "src/sports/cricket/cricket.ts",
+    "line": 3524,
+    "mutator": "ObjectLiteral",
+    "replacement": "{}",
+    "what": "the cricket module object emptied (every member gone)"
+  },
+  {
+    "file": "src/sports/cricket/cricket.ts",
+    "line": 3989,
+    "mutator": "BlockStatement",
+    "replacement": "{}",
+    "what": "cricket.arbitraryEvent (simulation-only): its whole method body emptied; the one an emptied body might SURVIVE"
+  },
+  {
+    "file": "src/sports/football/football.ts",
+    "line": 2437,
+    "mutator": "ObjectLiteral",
+    "replacement": "{}",
+    "what": "the football module object emptied (every member gone)"
+  },
+  {
+    "file": "src/sports/period/kernel.ts",
+    "line": 1855,
+    "mutator": "BlockStatement",
+    "replacement": "{}",
+    "what": "makePeriodModule: its whole function body emptied"
+  },
+  {
+    "file": "src/sports/period/kernel.ts",
+    "line": 2434,
+    "mutator": "ObjectLiteral",
+    "replacement": "{}",
+    "what": "the module object makePeriodModule returns, emptied"
+  },
+  {
+    "file": "src/sports/setbased/kernel.ts",
+    "line": 2149,
+    "mutator": "BlockStatement",
+    "replacement": "{}",
+    "what": "makeSetBasedModule: its whole function body emptied"
+  },
+  {
+    "file": "src/sports/setbased/kernel.ts",
+    "line": 2267,
+    "mutator": "ObjectLiteral",
+    "replacement": "{}",
+    "what": "the module object makeSetBasedModule returns, emptied"
+  }
+]

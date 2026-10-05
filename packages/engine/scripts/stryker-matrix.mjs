@@ -8,11 +8,10 @@
 //   workflow_dispatch  -> --group all: every key except the probe; --group <key>: that key alone, the probe included
 //   anything else      -> refused
 // A group's timeout comes from stryker-timeouts.json (minutes; whole, at most 300): a selected group without one is refused,
-// and so is an empty matrix. The timeouts are NOT yet calibrated on a hosted runner: each is 1.5 times the leg's estimate,
-// from the dry run's mutant count at the cost of one mutant MEASURED LOCALLY (26 runner-seconds, T15-SIZE; test/stryker-sizing.test.ts
-// holds every leg to it), and no hosted run has measured it. The probe (the PR self-proof, D3) carries a further x2 allowance
-// for a slower hosted core and its own pin. Every leg's timeout is re-derived in PR-B (Task 20) from a measured hosted run,
-// and again whenever MATRIX_RUNNER changes (a different runner is a different rate).
+// and so is an empty matrix. Each timeout is 1.5 times the leg's estimate (the probe's too), from the leg's mutant count at the
+// cost of one mutant MEASURED ON A HOSTED RUNNER: GitHub run 37330725739 spent 76.13 runner-seconds a mutant, pinned at 77
+// (T20-PRE; test/stryker-sizing.test.ts holds every leg and the rate to it). That is one sample, and a different runner is a
+// different rate: every leg's timeout is re-derived whenever a hosted run disagrees with it, and whenever MATRIX_RUNNER changes.
 // Exit codes, each with one meaning (the one convention, D8):
 //   0  the matrix line was printed;
 //   2  refused, nothing printed to stdout: usage, an unknown event or group, or a selected group without a valid timeout.
