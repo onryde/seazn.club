@@ -396,6 +396,33 @@ describe("capture-qr-v2: the flag is asked once per org per minute, not once per
     }
   });
 
+  // B8 re-review n-3: the flag is asked for a (distinct id, org group) PAIR, so an answer is kept per pair — never one
+  // user's answer served to their whole org, nor one org's to the same user in another. Correct today only because the
+  // live flag is org-aggregated; this holds it if the flag is ever re-targeted by person.
+  it("kept per (org, user): two users in one org, and one user in two orgs, never share an answer inside the TTL", async () => {
+    flags.isServerFeatureEnabled.mockImplementation(async (_f, distinctId, opts) => distinctId === "user-1" && opts?.orgId === "org-1");
+    const as = (orgId: string, userId: string | null) => ({ ...AUTH, orgId, userId }) as unknown as AuthCtx;
+    const PAIRS: [AuthCtx, boolean][] = [
+      [as("org-1", "user-1"), true],
+      [as("org-1", "user-2"), false],   // another user, the same org
+      [as("org-2", "user-1"), false],   // the same user, another org
+      [as("org-1", null), false],       // an API-key caller in org-1: asked as the org
+    ];
+    let checked = 0;
+    for (const round of [1, 2]) {
+      for (const [auth, want] of PAIRS) {
+        expect((await load(undefined, { auth }))?.phoneCapture, `round ${round}: ${auth.orgId}/${auth.userId}`).toBe(want);
+        checked++;
+      }
+      // Round 1 asks once per pair; round 2 (inside the TTL) is served from the cache, each pair its OWN answer.
+      expect(flags.isServerFeatureEnabled, `after round ${round}`).toHaveBeenCalledTimes(PAIRS.length);
+    }
+    expect(flags.isServerFeatureEnabled.mock.calls.map(([, d, o]) => `${o?.orgId}/${d}`).sort()).toEqual(
+      ["org-1/user-1", "org-1/user-2", "org-2/user-1", "org-1/org-1"].sort(),
+    );
+    expect(checked).toBe(2 * PAIRS.length);
+  });
+
   it("concurrent renders before the first answer share ONE call", async () => {
     let release!: (v: boolean) => void;
     flags.isServerFeatureEnabled.mockImplementation(() => new Promise<boolean>((r) => { release = r; }));

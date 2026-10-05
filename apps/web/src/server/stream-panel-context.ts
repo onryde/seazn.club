@@ -47,25 +47,30 @@ export async function relayOffer(
  *  it unset. Deliberately not NODE_ENV. */
 export const CAPTURE_QR_V2_FLAG = "capture-qr-v2";
 /** B8 review m-2: the flag is a REMOTE call (no local evaluation), and this loader runs on every fixture-page render —
- *  each `router.refresh()` after a scoring send included. So one answer per ORG is kept for this long (the flag is
- *  org-targeted), in-process, and shared by every render inside it — the first render's own call included, so
- *  concurrent renders ask once. A flip in PostHog shows within a minute; nothing else reads the cache. */
+ *  each `router.refresh()` after a scoring send included. So one answer per (org, distinct id) PAIR — exactly what
+ *  PostHog is asked with — is kept for this long, in-process, and shared by every render inside it — the first render's
+ *  own call included, so concurrent renders ask once. Keyed on the pair, not the org (B8 re-review n-3): the live flag is
+ *  org-aggregated today, but one re-targeted by person must never serve one user's answer to their whole org. A flip in
+ *  PostHog shows within a minute; nothing else reads the cache. */
 export const CAPTURE_FLAG_TTL_MS = 60_000;
-const flagByOrg = new Map<string, { until: number; on: Promise<boolean> }>();
+const flagByAsk = new Map<string, { until: number; on: Promise<boolean> }>();
 /** Test seam: forget every cached answer (each test starts from a cold process). */
 export function forgetCaptureFlagCache(): void {
-  flagByOrg.clear();
+  flagByAsk.clear();
 }
 async function phoneCaptureOffered(auth: AuthCtx): Promise<boolean> {
   if (process.env.CAPTURE_QR_V2_ALWAYS === "1") return true;
   const now = Date.now();
-  const hit = flagByOrg.get(auth.orgId);
+  const distinctId = auth.userId ?? auth.orgId;
+  // JSON, so no id can run into the other: ["a|b","c"] and ["a","b|c"] are different keys.
+  const key = JSON.stringify([auth.orgId, distinctId]);
+  const hit = flagByAsk.get(key);
   if (hit && now < hit.until) return hit.on;
   // `isServerFeatureEnabled` never rejects (PostHog down → the `false` fallback), so a cached promise is an answer.
-  const on = isServerFeatureEnabled(CAPTURE_QR_V2_FLAG, auth.userId ?? auth.orgId, { orgId: auth.orgId, fallback: false });
-  // Bounded: an expired answer is dropped whenever the map grows past a thousand orgs.
-  if (flagByOrg.size >= 1000) for (const [org, v] of flagByOrg) if (now >= v.until) flagByOrg.delete(org);
-  flagByOrg.set(auth.orgId, { until: now + CAPTURE_FLAG_TTL_MS, on });
+  const on = isServerFeatureEnabled(CAPTURE_QR_V2_FLAG, distinctId, { orgId: auth.orgId, fallback: false });
+  // Bounded: an expired answer is dropped whenever the map grows past a thousand pairs.
+  if (flagByAsk.size >= 1000) for (const [k, v] of flagByAsk) if (now >= v.until) flagByAsk.delete(k);
+  flagByAsk.set(key, { until: now + CAPTURE_FLAG_TTL_MS, on });
   return on;
 }
 
