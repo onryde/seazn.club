@@ -10,8 +10,13 @@
 //   PHONE_PANEL_SHOTS_DIR=/tmp/panel PLAYWRIGHT_BASE=http://localhost:PORT E2E_PROD_TARGET=1 DATABASE_URL=… \
 //     pnpm exec playwright test --project=gallery e2e/stream-phone-panel.capture.ts
 //
-// The flag-off shot needs a server WITHOUT the override (and with no PostHog key, so `fallback: false` answers):
-// add PHONE_PANEL_FLAG_OFF=1 and the harness takes only that state.
+// The flag-off shots need a server WITHOUT the override (and with no PostHog key, so `fallback: false` answers):
+// add PHONE_PANEL_FLAG_OFF=1 and the harness takes only those states (B8 re-review item 2: the credit purchase stays).
+//
+// The ask-10 shot (07b) is REAL, not staged (B8 re-review item 1): a paired phone goes live and then stops checking in,
+// and the server's own countdown arms. It needs the session to stay in warming past ask 10's end — a server started
+// with FAKE_INGEST_CONNECT_AFTER_MS ≥ 150000 — so it is its own pass: add PHONE_PANEL_ASK10=1 and the harness takes
+// only that state.
 //
 // WHAT IS REAL AND WHAT IS STAGED. The phone, the code, the pairing, Go live, warming, live, Stop, Ended and the restart
 // line are the product's own: a real code minted by the panel, claimed by a real beat through the capture route, and a
@@ -37,6 +42,7 @@ import { expectQrDecodesAsPainted, qrModulesOf } from "./helpers/qr-enlarge";
 
 const DIR = process.env.PHONE_PANEL_SHOTS_DIR;
 const FLAG_OFF = process.env.PHONE_PANEL_FLAG_OFF === "1";
+const ASK10 = process.env.PHONE_PANEL_ASK10 === "1";
 /** Desktop, tablet, phone — the house bar (AGENTS.md). Heights are each device's own; the crop is the panel. */
 const WIDTHS = [
   { w: 1280, h: 900 },
@@ -223,7 +229,7 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       const narrow = shots.find((s) => s.state === st && s.width === 320)!.controls;
       return JSON.stringify(wide) === JSON.stringify(narrow) ? [] : [{ state: st, wide, narrow }];
     });
-    writeFileSync(join(DIR!, FLAG_OFF ? "shots-flag-off.json" : "shots.json"), JSON.stringify({ shots, dupes, diffs }, null, 2));
+    writeFileSync(join(DIR!, FLAG_OFF ? "shots-flag-off.json" : ASK10 ? "shots-ask10.json" : "shots.json"), JSON.stringify({ shots, dupes, diffs }, null, 2));
     expect(states.length, "states captured").toBeGreaterThan(0);
     expect(shots.length, "every state at every width").toBe(states.length * WIDTHS.length);
     expect(dupes, "two shots are pixel-identical").toEqual([]);
@@ -231,7 +237,7 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
   });
 
   test("flag ON: every phone state, real where the product can reach it, staged where only a clock can", async ({ page, baseURL }) => {
-    test.skip(FLAG_OFF, "the flag-off run takes only its own state");
+    test.skip(FLAG_OFF || ASK10, "the flag-off and ask-10 runs take only their own states");
     test.setTimeout(10 * 60_000);
     const rig = await seedRig(page);
     const target = await apiJson<{ id: string }>(page.request, `/api/v1/orgs/${rig.orgId}/stream-targets`, "POST", {
@@ -345,14 +351,7 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       await scope.getByTestId("stream-go-live").click();
       await expect(scope.getByTestId("stream-waiting")).toBeVisible({ timeout: POLL_WAIT_MS });
 
-      // 7b. Warming, the phone LOST (STAGED: the server's warming countdown with reason phone_lost, the phone silent) —
-      // the T11 sentence the signed-off mockup does not draw (m-1).
-      undo = await stage(page, CURRENT, (r) => ({ ...r, countdown: { kind: "warming", reason: "phone_lost", elapsedMs: 70_000, remainingMs: 530_000 } }));
-      let undoPhone = await stage(page, PHONE, (r) => ({ ...r, phone: { ...(r!.phone as object), present: false, silent: true } }));
-      await expect(scope.getByTestId("stream-phone-strip")).toContainText("8 min", { timeout: POLL_WAIT_MS });
-      await shoot(page, scope, "07b-waiting-phone-lost");
-      await undoPhone();
-      await undo();
+      // (7b, warming with the phone lost, is its own REAL pass: PHONE_PANEL_ASK10=1.)
 
       // Live (REAL), and the destination REALLY not receiving: D3's stream-key box once the server's 30 s have run.
       await expect(scope.getByTestId("stream-stop")).toBeVisible({ timeout: 60_000 });
@@ -364,7 +363,7 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
         ...r, ingest: { state: "disconnected", protocol: null },
         countdown: { kind: "live", reason: "phone_lost", elapsedMs: 160_000, remainingMs: 740_000 },
       }));
-      undoPhone = await stage(page, PHONE, (r) => ({ ...r, phone: { ...(r!.phone as object), present: false, silent: true } }));
+      let undoPhone = await stage(page, PHONE, (r) => ({ ...r, phone: { ...(r!.phone as object), present: false, silent: true } }));
       await expect(scope.getByTestId("stream-phone-strip")).toContainText("12 min", { timeout: POLL_WAIT_MS });
       await expect(scope.getByTestId("stream-output-warning"), "the strip replaces D3's phone box").toHaveCount(0);
       await expect(scope.getByTestId("stream-chain")).toContainText(EN["stream.chain.word.notReceiving"]!);
@@ -389,13 +388,63 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
   });
 
   test("flag OFF: the option is hidden — no Phone/OBS switch, the OBS overlay directly", async ({ page }) => {
-    test.skip(!FLAG_OFF, "needs a server without CAPTURE_QR_V2_ALWAYS (PHONE_PANEL_FLAG_OFF=1)");
+    test.skip(!FLAG_OFF || ASK10, "needs a server without CAPTURE_QR_V2_ALWAYS (PHONE_PANEL_FLAG_OFF=1)");
     test.setTimeout(3 * 60_000);
     const rig = await seedRig(page);
     const scope = await openPanel(page, rig);
     await expect(scope.getByTestId("stream-lead")).toBeVisible({ timeout: 30_000 });
     await expect(scope.getByTestId("stream-tab-phone")).toHaveCount(0);
     await expect(scope.getByTestId("stream-tab-obs")).toHaveCount(0);
+    // B8 re-review item 2: the credit purchase stays — the balance and Buy more under the overlay (a pro org holds its
+    // monthly credits), then the chooser it opens.
+    const section = scope.getByTestId("stream-credits-section");
+    await expect(section.getByTestId("stream-buy-more")).toBeVisible({ timeout: POLL_WAIT_MS });
+    await expect(section.getByTestId("stream-balance")).toBeVisible();
     await shoot(page, scope, "14-flag-off");
+    await section.getByTestId("stream-buy-more").click();
+    await expect(section.getByTestId("stream-buy-pack-5")).toBeVisible();
+    await expect(section.getByTestId("stream-buy-pack-5")).toBeEnabled();
+    await expect(section.getByTestId("stream-credits-close")).toBeVisible();
+    await shoot(page, scope, "14b-flag-off-buy");
+  });
+
+  test("ask 10, REAL: a paired phone goes live, then stops checking in — the server's countdown arms, and the Phone node says what the strip says", async ({ page, baseURL }) => {
+    test.skip(!ASK10, "needs a server with FAKE_INGEST_CONNECT_AFTER_MS ≥ 150000 (PHONE_PANEL_ASK10=1)");
+    test.setTimeout(5 * 60_000);
+    const rig = await seedRig(page);
+    const target = await apiJson<{ id: string }>(page.request, `/api/v1/orgs/${rig.orgId}/stream-targets`, "POST", {
+      kind: "youtube", label: "Riverside TV", streamKey: `e2e-${randomBytes(6).toString("hex")}`,
+    });
+    expect([200, 201]).toContain(target.status);
+    const CURRENT_URL = `/api/v1/fixtures/${rig.fixtureId}/stream-sessions/current`;
+    let phone: { stop: () => Promise<void> } | null = null;
+    try {
+      const scope = await openPanel(page, rig);
+      await expect(scope.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
+      phone = await pairPhone(baseURL!, await scope.getByTestId("stream-qr-text").inputValue());
+      await expect(scope.getByTestId("stream-go-live")).toBeEnabled({ timeout: POLL_WAIT_MS });
+      await scope.getByTestId("stream-go-live").click();
+      await expect(scope.getByTestId("stream-waiting")).toBeVisible({ timeout: POLL_WAIT_MS });
+      // The phone is lost right after go-live: no more beats. Nothing below is staged.
+      await phone.stop();
+      phone = null;
+      const sentence = EN["stream.phone.countdown.warming.phone_lost"]!.split("{remaining}")[0]!.trim();
+      await expect(scope.getByTestId("stream-phone-strip")).toContainText(sentence, { timeout: 120_000 });
+      const node = scope.locator('[data-node="phone"]');
+      await expect(node).toContainText(EN["stream.chain.word.notAnswering"]!);
+      await expect(node.locator('[data-mark="bang"]'), "the '!' on the phone node").toHaveCount(1);
+      await expect(scope.getByTestId("stream-chain")).not.toContainText(EN["stream.chain.word.starting"]!);
+      // The server's own numbers, read beside the shot: the evidence that the countdown is real.
+      const real = (await (await page.request.get(CURRENT_URL)).json()) as { data: { state: string; countdown: unknown } };
+      expect(real.data.state).toBe("warming");
+      expect(real.data.countdown).toMatchObject({ kind: "warming", reason: "phone_lost" });
+      writeFileSync(join(DIR!, "07b-current.json"), JSON.stringify({ at: new Date().toISOString(), state: real.data.state, countdown: real.data.countdown }, null, 2));
+      await shoot(page, scope, "07b-waiting-phone-lost");
+    } finally {
+      await phone?.stop();
+      const open = await withDb((sql) => sql<{ id: string }[]>`
+        select id from fixture_stream_sessions where fixture_id = ${rig.fixtureId} and state not in ('completed', 'failed')`);
+      for (const s of open) await page.request.post(`/api/v1/fixtures/${rig.fixtureId}/stream-sessions/${s.id}/stop`).catch(() => null);
+    }
   });
 });
