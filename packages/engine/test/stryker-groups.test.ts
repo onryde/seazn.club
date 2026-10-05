@@ -156,8 +156,8 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
     expect(Object.keys(STRYKER_EXCLUDED)).toContain("src/scheduling/generated/**");
     const scheduling = Object.keys(STRYKER_EXCLUDED).filter((k) => k.startsWith("src/scheduling/"));
     expect(scheduling).toHaveLength(6);
-    // the seven draw generators are not excluded and not placement, and the two draws legs hold exactly those seven
-    const draws = [...STRYKER_GROUPS["draws-bracket"], ...STRYKER_GROUPS["draws-pairing"]];
+    // the seven draw generators are not excluded and not placement, and the draws legs hold exactly those seven
+    const draws = STRYKER_FAMILIES.draws.flatMap((g) => STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS]);
     for (const n of ["bracket", "bracket-layout", "roundrobin", "swiss", "americano", "participants", "feedgraph"]) {
       expect(inMap(STRYKER_EXCLUDED, `src/scheduling/${n}.ts`), `${n} excluded`).toBe(false);
       expect(inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, `src/scheduling/${n}.ts`), `${n} placement`).toBe(false);
@@ -178,7 +178,7 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
   it("the probe is one exact file with a co-located test, and a draw generator (ruling 66)", () => {
     expect(STRYKER_GROUPS.probe).toEqual(["src/scheduling/roundrobin.ts"]);
     expect(existsSync(join(ENGINE, "src/scheduling/roundrobin.test.ts"))).toBe(true);
-    expect(STRYKER_GROUPS["draws-pairing"]).toContain("src/scheduling/roundrobin.ts");
+    expect(STRYKER_FAMILIES.draws.flatMap((g) => STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS]), "a draws leg holds it too").toContain("src/scheduling/roundrobin.ts");
     expect(inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, "src/scheduling/roundrobin.ts")).toBe(false);
   });
 
@@ -244,23 +244,34 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
     expect(checked).toBe(legs.length);
   });
 
-  it("cricket.ts is split into parts, one leg each; the other cricket files, and any new one, stay together in sports-cricket", () => {
+  it("cricket.ts is cut into parts spread over the cricket legs, and a new file under src/sports/cricket/ lands in exactly one leg: the one that holds the directory glob", () => {
     const kernel = "src/sports/cricket/cricket.ts";
-    const kernelLegs = Object.keys(STRYKER_GROUPS).filter((g) => g.startsWith("sports-cricket-kernel-"));
-    expect(kernelLegs.length).toBeGreaterThan(1);
-    kernelLegs.forEach((g, i) => {
-      // declared as a part of the file, and resolved to one range of it
-      expect(STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS], g).toEqual([`${kernel}#${i + 1}`]);
-      expect(RESOLVED[g], g).toHaveLength(1);
-      expect(parseEntry(RESOLVED[g]![0] as string).glob, g).toBe(kernel);
-      expect(parseEntry(RESOLVED[g]![0] as string).lines, `${g} is a range`).not.toBeNull();
-    });
-    const rest = [...selected(ENGINE, STRYKER_GROUPS["sports-cricket"]).keys()];
-    expect(rest).not.toContain(kernel);
-    // the rest is what is in the directory besides it and the tests
+    const legs = STRYKER_FAMILIES["sports-cricket"];
+    const holders = legs.filter((g) => selected(ENGINE, RESOLVED[g]!).has(kernel));
+    expect(holders.length, "legs that hold a part of cricket.ts").toBeGreaterThan(1);
+    for (const g of holders) {
+      expect(selected(ENGINE, RESOLVED[g]!).get(kernel), `${g} holds ranges of cricket.ts, never the whole file`).not.toBe("all");
+      expect(RESOLVED[g]!.some((e) => parseEntry(e).glob === kernel && parseEntry(e).lines !== null), `${g} says so itself`).toBe(true);
+    }
+    // between them the legs hold exactly the directory's files (the tests never)
     const all = universe().filter((f) => f.startsWith("src/sports/cricket/"));
     expect(all.length).toBeGreaterThan(1);
-    expect(rest.slice().sort()).toEqual(all.filter((f) => f !== kernel).sort());
+    expect([...new Set(legs.flatMap((g) => [...selected(ENGINE, RESOLVED[g]!).keys()]))].sort()).toEqual(all.slice().sort());
+    // a file added tomorrow is reached by one leg only. Stryker reads a `mutate` list in order: a positive glob adds, a `!` removes
+    // what it matches, a later positive adds again (a range re-adds its file); this is that reading, for one path.
+    const reaches = (entries: string[], path: string): boolean => {
+      let on = false;
+      for (const e of entries) {
+        if (e.startsWith("!")) {
+          if (matchesGlob(path, e.slice(1))) on = false;
+        } else if (matchesGlob(path, parseEntry(e).glob)) on = true;
+      }
+      return on;
+    };
+    const fresh = "src/sports/cricket/a-new-file.ts";
+    expect(legs.filter((g) => reaches(RESOLVED[g]!, fresh)), "legs that would take a new file").toHaveLength(1);
+    // and that reading agrees with the real files: each existing file is reached by the legs `selected` says hold it
+    for (const f of all) expect(legs.filter((g) => reaches(RESOLVED[g]!, f)), f).toEqual(legs.filter((g) => selected(ENGINE, RESOLVED[g]!).has(f)));
   });
 
   it("every part of every split file is taken by exactly one leg, and every `file#N` names a part that exists (STRYKER_SPLITS)", () => {
@@ -295,7 +306,8 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
     }
     const topLevel = globSync("src/sports/*.ts", { cwd: ENGINE }).filter((f) => !/\.test\.ts$/.test(f));
     expect(topLevel.length).toBeGreaterThan(0);
-    expect([...selected(ENGINE, STRYKER_GROUPS["sports-other"]).keys()]).toEqual(expect.arrayContaining(topLevel));
+    const other = new Set(STRYKER_FAMILIES["sports-other"].flatMap((g) => [...selected(ENGINE, RESOLVED[g]!).keys()]));
+    expect([...other]).toEqual(expect.arrayContaining(topLevel));
   });
 });
 
@@ -391,7 +403,7 @@ describe("stryker.config.mjs reads its group from STRYKER_GROUP, through the rea
       expect(c.concurrency, g).toBeGreaterThanOrEqual(1);
       // the dry run is given D14's 344 s floor times the CI slowdown, and the runner's `related` is stated (both pinned below)
       expect(c.dryRunTimeoutMinutes, g).toBe(DRY_RUN_TIMEOUT_MINUTES);
-      expect(c.vitest, g).toEqual({ related: true });
+      expect(c.vitest, g).toEqual({ related: true, configFile: "vitest.stryker.config.ts" });
     }
     expect(parts, "the parts of split files the configs resolved").toBeGreaterThan(Object.keys(STRYKER_SPLITS).length);
     // two groups really do differ (a config that ignored the env would give every group the same list)
@@ -438,6 +450,6 @@ describe("the dry run's timeout and the runner's `related` mode, pinned (fix rou
     // and the warning a leg whose files no test imports would print, which the config comment names
     expect(runner).toContain("Vitest failed to find test files related to mutated files");
     const config = readFileSync(join(ENGINE, "stryker.config.mjs"), "utf8");
-    expect(config).toMatch(/vitest: \{ related: true \},/);
+    expect(config).toMatch(/vitest: \{ related: true, configFile: "vitest\.stryker\.config\.ts" \},/);
   });
 });

@@ -23,8 +23,15 @@ const SCRIPT = join(ENGINE, "scripts/stryker-floor.ts");
 interface Counts { killed?: number; survived?: number; timeout?: number; noCoverage?: number; ignored?: number; compileError?: number; runtimeError?: number }
 const STATUS_OF: Record<keyof Counts, string> = { killed: "Killed", survived: "Survived", timeout: "Timeout", noCoverage: "NoCoverage", ignored: "Ignored", compileError: "CompileError", runtimeError: "RuntimeError" };
 
-/** The family most verdict tests use: `core` is ONE leg that selects src/core/**, so a one-leg report set is a whole family. */
+/** The family most verdict tests use: `core`. It is more than one leg since the hosted sizing (T20-PRE: 1,002 mutants, over the
+ *  454 a leg may hold), so a report set for it is one report per leg. `one(c)` gives EVERY leg the same counts `c`, each at a
+ *  whole file of its own: the family's score is then the ratio `c` alone, and every COUNT is `CORE_LEGS.length` times larger. */
+const CORE_LEGS = STRYKER_FAMILIES.core;
+/** A whole file each core leg selects, for fixtures only (guarded by the first test below). */
+const CORE_FILES: Record<string, string> = { "core-1": "src/core/clock.ts", "core-2": "src/core/errors.ts", "core-3": "src/core/rng.ts" };
 const CORE_FILE = "src/core/clock.ts";
+const N = CORE_LEGS.length;
+const fileOf = (leg: string): string => CORE_FILES[leg] ?? "";
 
 /** A report with `n` mutants of each status in ONE file; mutant i sits at line `firstLine + i`, column 1, in the order
  *  killed, survived, timeout, noCoverage, ignored, compileError, runtimeError. */
@@ -39,11 +46,13 @@ function report(c: Counts, file = CORE_FILE, firstLine = 1): Report {
   }
   return { files: { [file]: { mutants } } };
 }
-/** The reports of the one-leg family `core`. */
-const one = (c: Counts, file = CORE_FILE): LegReports => ({ core: report(c, file) });
+/** The reports of the family `core`: every leg with the same counts, at its own file (or all at `file`, for the wrong-report tests). */
+const one = (c: Counts, file?: string): LegReports => Object.fromEntries(CORE_LEGS.map((leg) => [leg, report(c, file ?? fileOf(leg))]));
 const floors = (g: Record<string, number>) => g;
 // Equivalent mutants are identified by `file:line:col mutator → replacement` (written here as literals, never produced by the code under test).
 const EQ = (line: number) => `${CORE_FILE}:${line}:1 ConditionalExpression → true`;
+/** The same equivalent in every core leg's file: a replicated report needs the equivalent replicated for the arithmetic to hold. */
+const EQS = (line: number, mutator = "ConditionalExpression", replacement = "true", column = 1): string[] => CORE_LEGS.map((leg) => `${fileOf(leg)}:${line}:${column} ${mutator} → ${replacement}`);
 
 /** A file and a line each leg of a family selects, for FIXTURES only (a valid report needs a mutant in the leg's own files and
  *  line ranges): the first file the leg's resolved `mutate` list selects, and the first line of its first range. Every verdict
@@ -62,6 +71,19 @@ function legSet(family: string, per: Record<string, Counts> = {}): LegReports {
   return out;
 }
 
+describe("the fixtures' premise: core is several legs, and each holds the whole file the fixtures put in it", () => {
+  it("core has more than one leg and the fixture file of each is selected WHOLE by that leg (else `one()` would test a refusal, not a verdict)", () => {
+    expect(N, "legs of core").toBeGreaterThan(1);
+    expect(Object.keys(CORE_FILES)).toEqual([...CORE_LEGS]);
+    let checked = 0;
+    for (const leg of CORE_LEGS) {
+      expect(selected(ENGINE, resolveGroup(leg)).get(fileOf(leg)), `${leg} selects ${fileOf(leg)} whole`).toBe("all");
+      checked++;
+    }
+    expect(checked).toBe(N);
+  });
+});
+
 describe("check: the verdict (zero mutants is a refusal, never a pass)", () => {
   it("zero mutants is a refusal (vacuous), never a pass", () => {
     expect(check("core", one({ killed: 0, survived: 0 }), floors({ core: 50 }))).toEqual({ exit: 2, why: expect.stringContaining("zero mutants") });
@@ -73,7 +95,8 @@ describe("check: the verdict (zero mutants is a refusal, never a pass)", () => {
   });
 
   it("a report with no files at all is zero mutants (the empty case first)", () => {
-    expect(check("core", { core: { files: {} } }, floors({ core: 0 }))).toEqual({ exit: 2, why: expect.stringContaining("zero mutants") });
+    const hollow = Object.fromEntries(CORE_LEGS.map((leg) => [leg, { files: {} }]));
+    expect(check("core", hollow, floors({ core: 0 }))).toEqual({ exit: 2, why: expect.stringContaining("zero mutants") });
   });
 
   it("no reports at all is refused too: a family judged on none of its legs is not a pass", () => {
@@ -85,7 +108,7 @@ describe("check: the verdict (zero mutants is a refusal, never a pass)", () => {
     const below = check("core", one({ killed: 49, survived: 51 }), floors({ core: 50 }));
     expect(below.exit).toBe(1);
     if (below.exit !== 1) throw new Error("unreachable");
-    expect(below.survivors).toHaveLength(51);
+    expect(below.survivors).toHaveLength(51 * N);
     expect(below.survivors[0]).toBe(`${CORE_FILE}:50:1 ConditionalExpression → true`);
     expect(check("core", one({ killed: 50, survived: 50 }), floors({ core: 50 })).exit).toBe(0);
     expect(check("core", one({ killed: 51, survived: 49 }), floors({ core: 50 })).exit).toBe(0);
@@ -112,15 +135,15 @@ describe("check: the verdict (zero mutants is a refusal, never a pass)", () => {
   });
 
   it("an equivalent mutant listed by file:line:col and mutator is excluded from the denominator", () => {
-    // 49 killed (lines 1-49), 51 survived (lines 50-100): 49/100 = 49.0 → exit 1. One equivalent listed → 49/99 = 49.4 → still < 50 → exit 1;
-    // two equivalents listed → 49/98 = 50.0 → exit 0
+    // in each leg, 49 killed (lines 1-49), 51 survived (lines 50-100): 49/100 = 49.0 → exit 1. One equivalent listed (in every leg)
+    // → 49/99 = 49.4 → still < 50 → exit 1; two equivalents listed → 49/98 = 50.0 → exit 0
     const rep = one({ killed: 49, survived: 51 });
     expect(check("core", rep, floors({ core: 50 }), []).exit).toBe(1);
-    expect(check("core", rep, floors({ core: 50 }), [EQ(50)]).exit).toBe(1);
-    const two = check("core", rep, floors({ core: 50 }), [EQ(50), EQ(51)]);
+    expect(check("core", rep, floors({ core: 50 }), EQS(50)).exit).toBe(1);
+    const two = check("core", rep, floors({ core: 50 }), [...EQS(50), ...EQS(51)]);
     expect(two.exit).toBe(0);
     if (two.exit !== 0) throw new Error("unreachable");
-    expect(two.survivors).toHaveLength(49); // the two equivalents are not survivors either
+    expect(two.survivors).toHaveLength(49 * N); // the two equivalents are not survivors either
     expect(two.survivors).not.toContain(EQ(50));
     expect(two.survivors).toContain(EQ(52));
   });
@@ -128,13 +151,20 @@ describe("check: the verdict (zero mutants is a refusal, never a pass)", () => {
   it("an equivalent entry only forgives a SURVIVOR at that exact location: not a killed mutant, not another mutator, not another replacement", () => {
     const rep = one({ killed: 49, survived: 51 });
     // lines 1 and 2 are Killed: listing them changes nothing (49/100 = 49.0%)
-    expect(check("core", rep, floors({ core: 50 }), [EQ(1), EQ(2)]).exit).toBe(1);
-    // a different mutator or replacement or column or file at a survivor's location is a different mutant: with EQ(51) alone it is 49/99 = 49.4 → 1
-    for (const wrong of [`${CORE_FILE}:50:1 EqualityOperator → true`, `${CORE_FILE}:50:1 ConditionalExpression → false`, `${CORE_FILE}:50:2 ConditionalExpression → true`, "src/core/events.ts:50:1 ConditionalExpression → true"]) {
-      expect(check("core", rep, floors({ core: 50 }), [wrong, EQ(51)]).exit, wrong).toBe(1);
+    expect(check("core", rep, floors({ core: 50 }), [...EQS(1), ...EQS(2)]).exit).toBe(1);
+    // a different mutator or replacement or column or file at a survivor's location is a different mutant: with line 51 alone it is 49/99 = 49.4 → 1
+    // (each wrong entry is written for every leg's file, so a check that matched it anyway would forgive one survivor per leg and pass)
+    const wrongs: [string, string[]][] = [
+      ["another mutator", EQS(50, "EqualityOperator")],
+      ["another replacement", EQS(50, "ConditionalExpression", "false")],
+      ["another column", EQS(50, "ConditionalExpression", "true", 2)],
+      ["a file no report has", ["src/core/events.ts:50:1 ConditionalExpression → true"]],
+    ];
+    for (const [why, wrong] of wrongs) {
+      expect(check("core", rep, floors({ core: 50 }), [...wrong, ...EQS(51)]).exit, why).toBe(1);
     }
     // the same two, spelt right, do pass (the loop above would be vacuous if nothing could ever forgive)
-    expect(check("core", rep, floors({ core: 50 }), [EQ(50), EQ(51)]).exit).toBe(0);
+    expect(check("core", rep, floors({ core: 50 }), [...EQS(50), ...EQS(51)]).exit).toBe(0);
   });
 
   it("no floor for a family is a refusal until PR-B sets one", () => {
@@ -153,8 +183,10 @@ describe("check: the verdict (zero mutants is a refusal, never a pass)", () => {
     const r = check("core", wrong, floors({ core: 50 }));
     expect(r.exit).toBe(2);
     expect(r.why).toContain("src/competition/standings.ts");
-    // the same file is fine for the leg that owns it (the family `competition` has three legs: each gets a report of its own files)
-    const own = { ...legSet("competition"), competition: report({ killed: 100 }, "src/competition/standings.ts") };
+    // the same file is fine for the leg that owns it (the family `competition` has several legs: each gets a report of its own files)
+    const owner = STRYKER_FAMILIES.competition.find((leg) => selected(ENGINE, resolveGroup(leg)).get("src/competition/standings.ts") === "all");
+    expect(owner, "a competition leg selects standings.ts whole").toBeDefined();
+    const own = { ...legSet("competition"), [owner as string]: report({ killed: 100 }, "src/competition/standings.ts") };
     expect(check("competition", own, floors({ competition: 50 })).exit).toBe(0);
   });
 
@@ -163,7 +195,7 @@ describe("check: the verdict (zero mutants is a refusal, never a pass)", () => {
     expect(unknown.exit).toBe(2);
     expect(unknown.why).toContain('unknown family "nosuch"');
     // a leg of a split file is named for its family and a suffix; judging or setting a floor by that name is refused, saying why
-    for (const leg of ["sports-cricket-kernel-1", "draws-bracket", "competition-tiebreakers", "sports-other-carrom"]) {
+    for (const leg of ["sports-cricket-1", "draws-1", "competition-1", "sports-other-1"]) {
       const r = check(leg, { [leg]: report({ killed: 1 }, placeOf(leg).file, placeOf(leg).line) }, floors({ [leg]: 1 }));
       expect(r.exit, leg).toBe(2);
       expect(r.why, leg).toMatch(/unknown family .* is a leg of "[\w-]+": floors are kept per family, never per leg/);
@@ -173,57 +205,72 @@ describe("check: the verdict (zero mutants is a refusal, never a pass)", () => {
 });
 
 describe("a family is the SUM of its legs: one score over all their mutants, judged on every leg", () => {
-  // draws: draws-bracket (src/scheduling/bracket.ts, ...) and draws-pairing. Leg A scores 90.0% over 100 mutants, leg B 10.0%
-  // over 10: the family holds 91 of 110 = 82.7%. The mean of the two scores is 50.0% and the weaker leg is 10.0%, so a floor of
-  // 80 separates the sum from both of the ways a per-leg floor could be read.
+  // draws has several legs. The first scores 90.0% over 100 mutants, the second 10.0% over 10, and every other one 50.0% over 2.
+  // The family holds (91 + extra) of (110 + 2 x extra) detected, `extra` the legs past the second. The mean of the legs' scores
+  // is 50.0% for every `extra` and the weakest leg is 10.0%, so a floor of 80 (the family scores 81 to 82) separates the sum from
+  // both of the ways a per-leg floor could be read.
+  const DRAWS = STRYKER_FAMILIES.draws;
   const A: Counts = { killed: 90, survived: 10 };
   const B: Counts = { killed: 1, survived: 9 };
+  const E: Counts = { killed: 1, survived: 1 };
+  const extra = DRAWS.length - 2;
+  const detected = 91 + extra;
+  const total = 110 + 2 * extra;
+  /** Floor to one decimal, as scripts/stryker-floor.ts writes a score, in plain arithmetic. */
+  const SCORE = Math.floor((detected / total) * 1000) / 10;
+  const per = (): Record<string, Counts> => Object.fromEntries(DRAWS.map((leg, i) => [leg, i === 0 ? A : i === 1 ? B : E]));
+  const sets = () => legSet("draws", per());
 
-  it("the family's score counts all its legs' mutants together: 91 of 110 is 82.7%, not the mean of 90 and 10 (50.0) and not the weaker leg (10.0)", () => {
-    const reports = legSet("draws", { "draws-bracket": A, "draws-pairing": B });
-    expect(Object.keys(reports)).toEqual(["draws-bracket", "draws-pairing"]);
-    expect(check("draws", reports, floors({ draws: 82.7 })).exit).toBe(0);
-    expect(check("draws", reports, floors({ draws: 82.8 })).exit).toBe(1);
+  it("the family's score counts all its legs' mutants together, not the mean of the legs' scores (50.0) and not the weakest leg (10.0)", () => {
+    expect(DRAWS.length, "draws has more than two legs, so the fixture's two named legs are not the whole family").toBeGreaterThan(2);
+    expect(SCORE, "the floor of 80 below is between the mean (50.0) and the sum").toBeGreaterThan(80);
+    const reports = sets();
+    expect(Object.keys(reports)).toEqual([...DRAWS]);
+    expect(check("draws", reports, floors({ draws: SCORE })).exit).toBe(0);
+    expect(check("draws", reports, floors({ draws: Math.round((SCORE + 0.1) * 10) / 10 })).exit).toBe(1);
     expect(check("draws", reports, floors({ draws: 80 })).exit).toBe(0);
     const verdict = check("draws", reports, floors({ draws: 80 }));
-    expect(verdict.why).toContain("82.7% (91 of 110 detected");
-    expect(verdict.why).toContain("over 2 leg(s)");
-    // the survivors listed on a miss are those of BOTH legs (10 + 9)
+    expect(verdict.why).toContain(`${SCORE.toFixed(1)}% (${detected} of ${total} detected`);
+    expect(verdict.why).toContain(`over ${DRAWS.length} leg(s)`);
+    // the survivors listed on a miss are those of EVERY leg (10 + 9 + 1 each of the others), in as many files as legs
     const miss = check("draws", reports, floors({ draws: 90 }));
     expect(miss.exit).toBe(1);
     if (miss.exit !== 1) throw new Error("unreachable");
-    expect(miss.survivors).toHaveLength(19);
-    expect(new Set(miss.survivors.map((s) => s.split(":")[0])).size, "the survivors name the files of both legs").toBe(2);
+    expect(miss.survivors).toHaveLength(19 + extra);
+    expect(new Set(miss.survivors.map((x) => x.split(":")[0])).size, "the survivors name the files of every leg").toBe(DRAWS.length);
   });
 
   it("setFloor writes the family's summed score, and refuses to lower it", () => {
-    const reports = legSet("draws", { "draws-bracket": A, "draws-pairing": B });
-    expect(setFloor("draws", reports, floors({ core: 10 }))).toMatchObject({ exit: 0, floors: { core: 10, draws: 82.7 } });
-    expect(setFloor("draws", reports, floors({ draws: 82.8 })).exit).toBe(2);
-    expect(setFloor("draws", reports, floors({ draws: 82.7 }))).toMatchObject({ exit: 0, floors: { draws: 82.7 } });
+    const reports = sets();
+    expect(setFloor("draws", reports, floors({ core: 10 }))).toMatchObject({ exit: 0, floors: { core: 10, draws: SCORE } });
+    expect(setFloor("draws", reports, floors({ draws: Math.round((SCORE + 0.1) * 10) / 10 })).exit).toBe(2);
+    expect(setFloor("draws", reports, floors({ draws: SCORE }))).toMatchObject({ exit: 0, floors: { draws: SCORE } });
   });
 
   it("every leg must be there, no other leg may be, and each must have measured something: a family is never judged on part of its mutants", () => {
-    const full = legSet("draws", { "draws-bracket": A, "draws-pairing": B });
-    const missing = check("draws", { "draws-bracket": full["draws-bracket"]! }, floors({ draws: 0 }));
-    expect(missing).toEqual({ exit: 2, why: expect.stringContaining("missing draws-pairing") });
-    const extra = check("draws", { ...full, core: report({ killed: 1 }) }, floors({ draws: 0 }));
-    expect(extra).toEqual({ exit: 2, why: expect.stringContaining("unexpected core") });
-    const bothWrong = check("draws", { "draws-pairing": full["draws-pairing"]!, core: report({ killed: 1 }) }, floors({ draws: 0 }));
-    expect(bothWrong.why).toMatch(/missing draws-bracket; unexpected core/);
-    // a leg that measured nothing is refused even when the other leg carries the family past the floor
-    const hollow = check("draws", { ...full, "draws-pairing": { files: {} } }, floors({ draws: 0 }));
-    expect(hollow).toEqual({ exit: 2, why: expect.stringMatching(/zero mutants counted for leg "draws-pairing" of family "draws"/) });
-    const ignoredOnly = check("draws", { ...full, "draws-pairing": report({ ignored: 4 }, placeOf("draws-pairing").file) }, floors({ draws: 0 }));
+    const full = sets();
+    const [first, second, ...rest] = DRAWS as unknown as [string, string, ...string[]];
+    const missing = check("draws", { [first]: full[first]! }, floors({ draws: 0 }));
+    expect(missing).toEqual({ exit: 2, why: expect.stringContaining(`missing ${[second, ...rest].join(", ")}`) });
+    const extraLeg = check("draws", { ...full, core: report({ killed: 1 }) }, floors({ draws: 0 }));
+    expect(extraLeg).toEqual({ exit: 2, why: expect.stringContaining("unexpected core") });
+    const last = rest[rest.length - 1] as string;
+    const bothWrong = check("draws", { [last]: full[last]!, core: report({ killed: 1 }) }, floors({ draws: 0 }));
+    expect(bothWrong.why).toContain(`missing ${DRAWS.filter((l) => l !== last).join(", ")}; unexpected core`);
+    // a leg that measured nothing is refused even when the other legs carry the family past the floor
+    const hollow = check("draws", { ...full, [second]: { files: {} } }, floors({ draws: 0 }));
+    expect(hollow).toEqual({ exit: 2, why: expect.stringMatching(new RegExp(`zero mutants counted for leg "${second}" of family "draws"`)) });
+    const ignoredOnly = check("draws", { ...full, [second]: report({ ignored: 4 }, placeOf(second).file) }, floors({ draws: 0 }));
     expect(ignoredOnly.exit).toBe(2);
-    expect(setFloor("draws", { "draws-bracket": full["draws-bracket"]! }, floors({})).exit).toBe(2);
+    expect(setFloor("draws", { [first]: full[first]! }, floors({})).exit).toBe(2);
   });
 
   it("a leg's report must be of THAT leg's files: the other leg's report under this leg's name is refused", () => {
-    const full = legSet("draws", { "draws-bracket": A, "draws-pairing": B });
-    const swapped = check("draws", { "draws-bracket": full["draws-pairing"]!, "draws-pairing": full["draws-bracket"]! }, floors({ draws: 0 }));
+    const full = sets();
+    const [first, second] = DRAWS as unknown as [string, string];
+    const swapped = check("draws", { ...full, [first]: full[second]!, [second]: full[first]! }, floors({ draws: 0 }));
     expect(swapped.exit).toBe(2);
-    expect(swapped.why).toMatch(/is not leg "draws-bracket"'s/);
+    expect(swapped.why).toContain(`is not leg "${first}"'s`);
   });
 
   it("mergeReports concatenates the mutants of a file two legs both report, and keeps the files of each", () => {
@@ -237,14 +284,11 @@ describe("a family is the SUM of its legs: one score over all their mutants, jud
   it("the legs of a split file are told apart by LINE: a leg accepts the mutants of its own range and refuses another leg's report of the same file (the file name alone cannot)", () => {
     const FILE = "src/sports/cricket/cricket.ts";
     const family = "sports-cricket";
-    const kernelLegs = STRYKER_FAMILIES[family].filter((g) => g.startsWith("sports-cricket-kernel-"));
-    expect(kernelLegs.length, "the cricket kernel is split into more than one leg").toBeGreaterThan(1);
-    // each kernel leg's range, read back from the resolved groups, never typed
-    const ranges = kernelLegs.map((g) => {
-      const { glob, lines } = parseEntry(resolveGroup(g)[0] as string);
-      expect(glob, g).toBe(FILE);
-      return { g, from: (lines as readonly [number, number])[0], to: (lines as readonly [number, number])[1] };
-    });
+    // every range of cricket.ts a cricket leg holds, read back from the resolved groups, never typed (a leg may hold two)
+    const ranges = STRYKER_FAMILIES[family].flatMap((g) =>
+      resolveGroup(g).map(parseEntry).filter((e) => e.glob === FILE && e.lines !== null).map((e) => ({ g, from: (e.lines as readonly [number, number])[0], to: (e.lines as readonly [number, number])[1] })),
+    );
+    expect(new Set(ranges.map((r) => r.g)).size, "the cricket module is split across more than one leg").toBeGreaterThan(1);
     // every leg of the family at its own place, one Killed mutant: the baseline that must pass
     const base = legSet(family);
     expect(check(family, base, floors({ [family]: 50 })).exit, "the baseline").toBe(0);
@@ -264,24 +308,30 @@ describe("a family is the SUM of its legs: one score over all their mutants, jud
       }
     }
     expect(accepted).toBe(ranges.length * 2);
-    expect(refused).toBe(ranges.length * (ranges.length - 1));
+    expect(refused, "other legs' lines refused").toBeGreaterThan(ranges.length);
   });
 
   it("a leg that negates a file and then ranges it is read in order: the file counts, but only through its range (and its directory's other files whole)", () => {
     const family = "sports-nested";
     const [first, second] = STRYKER_FAMILIES[family] as [string, string];
-    expect(STRYKER_FAMILIES[family]).toHaveLength(2);
+    expect(STRYKER_FAMILIES[family].length).toBeGreaterThan(1);
     const kernel = "src/sports/nested/kernel.ts";
-    const tailFrom = (parseEntry(resolveGroup(second).find((e) => parseEntry(e).lines !== null) as string).lines as readonly [number, number])[0];
+    // the first leg is the directory glob, the kernel negated, and then the kernel's first range; the second is a range alone
+    const rangeOf = (leg: string) => parseEntry(resolveGroup(leg).find((e) => parseEntry(e).lines !== null) as string).lines as readonly [number, number];
+    const secondFrom = rangeOf(second)[0];
+    const firstTo = rangeOf(first)[1];
+    expect(secondFrom, "the second leg's range follows the first's").toBe(firstTo + 1);
     const base = legSet(family);
     const fl = floors({ [family]: 50 });
     const withSecond = (r: Report) => check(family, { ...base, [second]: r }, fl);
     const withFirst = (r: Report) => check(family, { ...base, [first]: r }, fl);
-    expect(withSecond(report({ killed: 1 }, kernel, tailFrom)).exit, "the tail's own range").toBe(0);
-    expect(withSecond(report({ killed: 1 }, kernel, tailFrom - 1)).exit, "the line just before it belongs to the leg before").toBe(2);
-    expect(withSecond(report({ killed: 1 }, "src/sports/nested/index.ts", 1)).exit, "a whole file of the directory glob").toBe(0);
-    expect(withFirst(report({ killed: 1 }, "src/sports/nested/index.ts", 1)).exit, "the first leg is the range alone").toBe(2);
-    expect(withSecond(report({ killed: 1 }, "src/sports/period/kernel.ts", tailFrom)).exit, "another sport").toBe(2);
+    expect(withSecond(report({ killed: 1 }, kernel, secondFrom)).exit, "the second leg's own range").toBe(0);
+    expect(withSecond(report({ killed: 1 }, kernel, secondFrom - 1)).exit, "the line just before it belongs to the leg before").toBe(2);
+    expect(withSecond(report({ killed: 1 }, "src/sports/nested/index.ts", 1)).exit, "a whole file of the directory glob is the first leg's, not the second's").toBe(2);
+    expect(withFirst(report({ killed: 1 }, "src/sports/nested/index.ts", 1)).exit, "the first leg holds the directory's other files whole").toBe(0);
+    expect(withFirst(report({ killed: 1 }, kernel, 1)).exit, "and the kernel through its range").toBe(0);
+    expect(withFirst(report({ killed: 1 }, kernel, secondFrom)).exit, "but not past it: the kernel was negated and then ranged").toBe(2);
+    expect(withSecond(report({ killed: 1 }, "src/sports/period/kernel.ts", secondFrom)).exit, "another sport").toBe(2);
   });
 });
 
@@ -298,10 +348,10 @@ describe("the family table is what floors are keyed by: ruling 66's ten, none of
       }
     }
     expect(legs, "every non-probe leg is in a family").toBe(Object.keys(STRYKER_GROUPS).length - 1);
-    // the split kernels are legs of families, and no family key is a split leg's name: the floors survive a re-split
-    const splitLegs = Object.keys(STRYKER_GROUPS).filter((g) => /-kernel-\d+$/.test(g));
-    expect(splitLegs.length).toBeGreaterThan(0);
-    for (const leg of splitLegs) expect(keys, leg).not.toContain(leg);
+    // no family key is a leg's name (a leg is `<family>-<n>`): the floors survive a re-split, and a family can be judged by its name
+    const legNames = Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe");
+    expect(legNames.length).toBeGreaterThan(keys.length);
+    for (const leg of legNames) expect(keys, leg).not.toContain(leg);
     expect(Object.keys(STRYKER_SPLITS).length).toBeGreaterThan(0);
   });
 });
@@ -328,7 +378,7 @@ describe("parsing: a malformed input is a refusal, and so is a status nobody cou
     }
   });
 
-  it("parseFloors: families is a map of numbers 0-100 with at most one decimal; the note is optional; the old per-leg staff everyone localaccounts _appserverusr admin _appserveradm _lpadmin com.apple.sharepoint.group.1 _appstore _lpoperator _developer _analyticsusers com.apple.access_ftp com.apple.access_screensharing com.apple.access_ssh com.apple.access_remote_ae map is no floor file", () => {
+  it("parseFloors: families is a map of numbers 0-100 with at most one decimal; the note is optional; the old per-leg `groups` map is no floor file", () => {
     expect(parseFloors('{"note": "n", "families": {"draws": 50.5, "core": 0, "x": 100}}')).toEqual({ draws: 50.5, core: 0, x: 100 });
     expect(parseFloors('{"families": {}}')).toEqual({});
     for (const bad of ["{", "[]", "{}", '{"groups": {}}', '{"families": []}', '{"families": {"draws": "50"}}', '{"families": {"draws": 101}}', '{"families": {"draws": -1}}', '{"families": {"draws": 50.55}}', '{"families": {"draws": null}}']) {
@@ -381,8 +431,8 @@ describe("the floor never falls: floorDiff, setFloor, missingFloors", () => {
   it("setFloor honours the equivalents the same way check does (the floor is set on the score check will compute)", () => {
     const rep = one({ killed: 49, survived: 51 });
     // 49/98 = 50.0 with two equivalents; 49/99 = 49.4 with one; 49/100 = 49.0 with none
-    expect(setFloor("core", rep, floors({}), [EQ(50), EQ(51)])).toMatchObject({ exit: 0, floors: { core: 50 } });
-    expect(setFloor("core", rep, floors({}), [EQ(50)])).toMatchObject({ exit: 0, floors: { core: 49.4 } });
+    expect(setFloor("core", rep, floors({}), [...EQS(50), ...EQS(51)])).toMatchObject({ exit: 0, floors: { core: 50 } });
+    expect(setFloor("core", rep, floors({}), EQS(50))).toMatchObject({ exit: 0, floors: { core: 49.4 } });
     expect(setFloor("core", rep, floors({}), [])).toMatchObject({ exit: 0, floors: { core: 49 } });
   });
 
@@ -422,7 +472,7 @@ describe("survivors: file:line:col mutator → replacement, minus the recorded e
   };
 
   it("lists each Survived and NoCoverage mutant, sorted by file, line and column; a killed or timed-out mutant is not listed", () => {
-    const md = survivorsMarkdown("draws-bracket", rep, []);
+    const md = survivorsMarkdown("draws-3", rep, []);
     const listed = md.split("\n").filter((l) => /^src\//.test(l));
     expect(listed).toEqual([
       "src/scheduling/bracket.ts:3:7 ConditionalExpression → false",
@@ -430,12 +480,12 @@ describe("survivors: file:line:col mutator → replacement, minus the recorded e
       "src/scheduling/bracket.ts:41:1 StringLiteral → line one\\nline two", // a multi-line replacement stays on one line
       "src/scheduling/swiss.ts:9:4 ArithmeticOperator → a - b",
     ]);
-    expect(md).toContain("# Survivors: draws-bracket");
+    expect(md).toContain("# Survivors: draws-3");
     expect(md).toContain("4 listed");
   });
 
   it("an equivalent survivor is left out and counted; the key it is matched by is the listed line, verbatim", () => {
-    const md = survivorsMarkdown("draws-bracket", rep, ["src/scheduling/swiss.ts:9:4 ArithmeticOperator → a - b"]);
+    const md = survivorsMarkdown("draws-3", rep, ["src/scheduling/swiss.ts:9:4 ArithmeticOperator → a - b"]);
     const listed = md.split("\n").filter((l) => /^src\//.test(l));
     expect(listed).toHaveLength(3);
     expect(listed).not.toContain("src/scheduling/swiss.ts:9:4 ArithmeticOperator → a - b");
@@ -444,8 +494,8 @@ describe("survivors: file:line:col mutator → replacement, minus the recorded e
   });
 
   it("no survivors says so, and a report with nothing valid is still renderable (it is the CLI's check that refuses it)", () => {
-    expect(survivorsMarkdown("draws-bracket", report({ killed: 3 }), [])).toContain("No survivors");
-    expect(survivorsMarkdown("draws-bracket", { files: {} }, [])).toContain("No survivors");
+    expect(survivorsMarkdown("draws-3", report({ killed: 3 }), [])).toContain("No survivors");
+    expect(survivorsMarkdown("draws-3", { files: {} }, [])).toContain("No survivors");
   });
 });
 
@@ -598,7 +648,11 @@ describe("--check-file-against: the empty cases, driven through git (review 7, R
 });
 
 describe("the CLI's other modes and its refusals", () => {
-  const BRACKET = "src/scheduling/bracket.ts"; // a file of the leg draws-bracket (the survivors tests judge ONE leg)
+  const BRACKET = "src/scheduling/bracket.ts";
+  /** The draws leg that selects bracket.ts whole (the survivors tests judge ONE leg), read from the groups, not typed. */
+  const BRACKET_LEG = STRYKER_FAMILIES.draws.find((leg) => selected(ENGINE, resolveGroup(leg)).get(BRACKET) === "all") as string;
+  const DRAWS = STRYKER_FAMILIES.draws;
+  const CORE0 = CORE_LEGS[0] as string;
   type Reports = Record<string, Report | string>;
   /** A working directory holding the floor file, optional equivalents, and one report per leg: flat, as a local run writes them
    *  (reports/mutation/<leg>.json), or as `download-artifact` unpacks mutation.yml's (all/mutation-<leg>/reports/mutation/<leg>.json). */
@@ -614,9 +668,17 @@ describe("the CLI's other modes and its refusals", () => {
     }
     return { cwd, dir: artifacts ? "all" : "reports/mutation", pathOf };
   }
-  const coreOnly = (c: Counts): Reports => ({ core: report(c) });
-  /** The legs of `draws`, as reports: leg A scores 90.0% over 100 mutants, leg B 10.0% over 10 (the family: 91 of 110 = 82.7%). */
-  const drawsReports = (): Reports => legSet("draws", { "draws-bracket": { killed: 90, survived: 10 }, "draws-pairing": { killed: 1, survived: 9 } });
+  /** The legs of `core`, as reports: every leg the same counts, so the family scores the ratio alone (see `one`). */
+  const coreOnly = (c: Counts): Reports => one(c);
+  /** The legs of `draws`, as reports: the first leg scores 90.0% over 100 mutants, the second 10.0% over 10, each other one 50.0% over 2:
+   *  the family holds (91 + extra) of (110 + 2 x extra) detected, `extra` the legs past the second. */
+  const drawsExtra = DRAWS.length - 2;
+  const drawsDetected = 91 + drawsExtra;
+  const drawsTotal = 110 + 2 * drawsExtra;
+  const drawsScore = Math.floor((drawsDetected / drawsTotal) * 1000) / 10;
+  const drawsReports = (): Reports => legSet("draws", Object.fromEntries(DRAWS.map((leg, i) => [leg, i === 0 ? { killed: 90, survived: 10 } : i === 1 ? { killed: 1, survived: 9 } : { killed: 1, survived: 1 }])));
+  /** Writes every core leg's report again with `c` (a worse run of the same family). */
+  const rewriteCore = (w: { cwd: string; pathOf: (leg: string) => string }, c: Counts) => { for (const leg of CORE_LEGS) writeFileSync(join(w.cwd, w.pathOf(leg)), JSON.stringify(report(c, fileOf(leg)))); };
 
   spawnIt(2)("--check: at or above the floor is exit 0 and prints the score; below is exit 1 and lists the survivors", () => {
     const pass = workdir({ floors: { core: 50 }, reports: coreOnly({ killed: 50, survived: 50 }) });
@@ -628,23 +690,24 @@ describe("the CLI's other modes and its refusals", () => {
     expect(f.status).toBe(1);
     expect(f.stdout).toContain("core: score 49.0%");
     expect(f.stdout).toContain(`${CORE_FILE}:50:1 ConditionalExpression → true`);
-    expect(f.stdout.split("\n").filter((l) => l.startsWith("src/core/"))).toHaveLength(51);
+    expect(f.stdout.split("\n").filter((l) => l.startsWith("src/core/"))).toHaveLength(51 * N);
   });
 
-  spawnIt(3)("--check on a family of two legs sums them: 91 of 110 is 82.7%, found in the flat layout and in download-artifact's, and a floor of 82.8 fails", () => {
+  spawnIt(3)("--check on a family of several legs sums them (not their mean, 50.0%), found in the flat layout and in download-artifact's, and a floor one tenth above the sum fails", () => {
+    expect(drawsScore, "the sum is far from the mean of the legs' scores").toBeGreaterThan(80);
     for (const layout of ["flat", "artifacts"] as const) {
-      const w = workdir({ floors: { draws: 82.7 }, reports: drawsReports(), layout });
+      const w = workdir({ floors: { draws: drawsScore }, reports: drawsReports(), layout });
       const r = run(w.cwd, ["--check", "draws", w.dir]);
       expect({ layout, status: r.status, stderr: r.stderr }).toEqual({ layout, status: 0, stderr: "" });
-      expect(r.stdout, layout).toContain("draws: score 82.7% (91 of 110 detected");
-      expect(r.stdout, layout).toContain("over 2 leg(s)");
+      expect(r.stdout, layout).toContain(`draws: score ${drawsScore.toFixed(1)}% (${drawsDetected} of ${drawsTotal} detected`);
+      expect(r.stdout, layout).toContain(`over ${DRAWS.length} leg(s)`);
     }
-    const miss = workdir({ floors: { draws: 82.8 }, reports: drawsReports() });
+    const miss = workdir({ floors: { draws: Math.round((drawsScore + 0.1) * 10) / 10 }, reports: drawsReports() });
     expect(run(miss.cwd, ["--check", "draws", miss.dir]).status).toBe(1);
   });
 
-  spawnIt(2)("--check reads stryker-equivalent.json from the cwd: two recorded equivalents turn 49/99 into a pass", () => {
-    const eq = [EQ(50), EQ(51)].map((mutant) => ({ mutant, reason: "dead branch: the guard above already returned" }));
+  spawnIt(2)("--check reads stryker-equivalent.json from the cwd: two recorded equivalents in each leg turn 49/99 into a pass", () => {
+    const eq = [...EQS(50), ...EQS(51)].map((mutant) => ({ mutant, reason: "dead branch: the guard above already returned" }));
     const w = workdir({ floors: { core: 50 }, equivalents: eq, reports: coreOnly({ killed: 49, survived: 50 }) });
     expect(run(w.cwd, ["--check", "core", w.dir]).status).toBe(0);
     const none = workdir({ floors: { core: 50 }, equivalents: [], reports: coreOnly({ killed: 49, survived: 50 }) });
@@ -663,21 +726,21 @@ describe("the CLI's other modes and its refusals", () => {
     expect(nr.status).toBe(2);
     // the directory itself missing is a refusal too; and one leg of two missing names the leg, never judging the other alone
     expect(run(noReport.cwd, ["--check", "core", "no/such/dir"]).status).toBe(2);
-    const half = workdir({ floors: { draws: 0 }, reports: { "draws-bracket": drawsReports()["draws-bracket"]! } });
+    const half = workdir({ floors: { draws: 0 }, reports: { [DRAWS[0] as string]: drawsReports()[DRAWS[0] as string]! } });
     const h = run(half.cwd, ["--check", "draws", half.dir]);
     expect(h.status).toBe(2);
-    expect(h.stderr).toContain('no report for leg "draws-pairing"');
-    const badReport = workdir({ floors: { core: 50 }, reports: { core: "{ nope" } });
+    expect(h.stderr).toContain(`no report for leg "${DRAWS[1]}"`);
+    const badReport = workdir({ floors: { core: 50 }, reports: { ...coreOnly({ killed: 5 }), [CORE0]: "{ nope" } });
     expect(run(badReport.cwd, ["--check", "core", badReport.dir]).status).toBe(2);
     const noFloorFile = workdir({ reports: coreOnly({ killed: 5 }) });
     expect(run(noFloorFile.cwd, ["--check", "core", noFloorFile.dir]).status).toBe(2);
     const badEq = workdir({ floors: { core: 50 }, equivalents: [{ mutant: EQ(1) }], reports: coreOnly({ killed: 5 }) });
     expect(run(badEq.cwd, ["--check", "core", badEq.dir]).status).toBe(2);
-    const ok = workdir({ floors: { core: 50, probe: 10 }, reports: { ...coreOnly({ killed: 5 }), "sports-cricket-kernel-1": report({ killed: 1 }, "src/sports/cricket/cricket.ts", 1) } });
+    const ok = workdir({ floors: { core: 50, probe: 10 }, reports: { ...coreOnly({ killed: 5 }), "sports-cricket-1": report({ killed: 1 }, "src/sports/cricket/cricket.ts", 1) } });
     const unknown = run(ok.cwd, ["--check", "nosuch", ok.dir]);
     expect(unknown.status).toBe(2);
     expect(unknown.stderr).toContain('unknown family "nosuch"');   // not the missing-report refusal it would fall through to
-    const leg = run(ok.cwd, ["--check", "sports-cricket-kernel-1", ok.dir]);
+    const leg = run(ok.cwd, ["--check", "sports-cricket-1", ok.dir]);
     expect(leg.status).toBe(2);
     expect(leg.stderr).toContain('is a leg of "sports-cricket"');
     const probe = run(ok.cwd, ["--check", "probe", ok.dir]);
@@ -689,11 +752,11 @@ describe("the CLI's other modes and its refusals", () => {
   spawnIt(2)("two reports named for one leg are refused (which is the leg's?), and a leg's report of another leg's files is refused with the files it mutated", () => {
     const dup = workdir({ floors: { core: 50 }, reports: coreOnly({ killed: 5 }) });
     mkdirSync(join(dup.cwd, "reports/mutation/old"), { recursive: true });
-    writeFileSync(join(dup.cwd, "reports/mutation/old/core.json"), JSON.stringify(report({ killed: 5 })));
+    writeFileSync(join(dup.cwd, `reports/mutation/old/${CORE0}.json`), JSON.stringify(report({ killed: 5 }, fileOf(CORE0))));
     const d = run(dup.cwd, ["--check", "core", dup.dir]);
     expect(d.status).toBe(2);
-    expect(d.stderr).toContain("2 reports named core.json");
-    const wrong = workdir({ floors: { core: 50 }, reports: { core: report({ killed: 5 }, BRACKET) } });
+    expect(d.stderr).toContain(`2 reports named ${CORE0}.json`);
+    const wrong = workdir({ floors: { core: 50 }, reports: { ...coreOnly({ killed: 5 }), [CORE0]: report({ killed: 5 }, BRACKET) } });
     const w = run(wrong.cwd, ["--check", "core", wrong.dir]);
     expect(w.status).toBe(2);
     expect(w.stderr).toContain(`it mutated ${BRACKET}`);
@@ -719,9 +782,9 @@ describe("the CLI's other modes and its refusals", () => {
     expect(run(zero.cwd, ["--check", "core", zero.dir, "--skip-if-no-floors"]).status).toBe(2);
     const missing = workdir({ floors: {}, reports: {} });
     expect(run(missing.cwd, ["--check", "core", missing.dir, "--skip-if-no-floors"]).status).toBe(2);
-    const wrong = workdir({ floors: {}, reports: { core: report({ killed: 5 }, BRACKET) } });
+    const wrong = workdir({ floors: {}, reports: { ...coreOnly({ killed: 5 }), [CORE0]: report({ killed: 5 }, BRACKET) } });
     expect(run(wrong.cwd, ["--check", "core", wrong.dir, "--skip-if-no-floors"]).status).toBe(2);
-    const hollow = workdir({ floors: {}, reports: { ...drawsReports(), "draws-pairing": { files: {} } } });
+    const hollow = workdir({ floors: {}, reports: { ...drawsReports(), [DRAWS[1] as string]: { files: {} } } });
     expect(run(hollow.cwd, ["--check", "draws", hollow.dir, "--skip-if-no-floors"]).status).toBe(2);
     const noFile = workdir({ reports: coreOnly({ killed: 5 }) });
     expect(run(noFile.cwd, ["--check", "core", noFile.dir, "--skip-if-no-floors"]).status).toBe(2); // a deleted floor file is not "no floors yet"
@@ -736,7 +799,7 @@ describe("the CLI's other modes and its refusals", () => {
     expect(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8").endsWith("\n")).toBe(true);
     // lowering: a worse report against the 66.6 just written
     const before = readFileSync(join(w.cwd, "stryker-floor.json"), "utf8");
-    writeFileSync(join(w.cwd, w.pathOf("core")), JSON.stringify(report({ killed: 1, survived: 1 })));
+    rewriteCore(w, { killed: 1, survived: 1 });
     const lower = run(w.cwd, ["--set-floor", "core", w.dir]);
     expect(lower.status).toBe(2);
     expect(lower.stderr).toContain("lower");
@@ -750,52 +813,56 @@ describe("the CLI's other modes and its refusals", () => {
     expect((JSON.parse(readFileSync(join(zero.cwd, "stryker-floor.json"), "utf8")) as { families: object }).families).toEqual({});
   });
 
-  spawnIt(2)("--set-floor of a two-leg family writes the family's summed score under the FAMILY's key, and a leg's name is refused", () => {
+  spawnIt(2)("--set-floor of a family of several legs writes the family's summed score under the FAMILY's key, and a leg's name is refused", () => {
     const w = workdir({ floors: {}, reports: drawsReports() });
     expect(run(w.cwd, ["--set-floor", "draws", w.dir]).status).toBe(0);
-    expect((JSON.parse(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")) as { families: object }).families).toEqual({ draws: 82.7 });
-    const leg = run(w.cwd, ["--set-floor", "draws-bracket", w.dir]);
+    expect((JSON.parse(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")) as { families: object }).families).toEqual({ draws: drawsScore });
+    const leg = run(w.cwd, ["--set-floor", DRAWS[0] as string, w.dir]);
     expect(leg.status).toBe(2);
     expect(leg.stderr).toContain('is a leg of "draws"');
-    expect((JSON.parse(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")) as { families: object }).families).toEqual({ draws: 82.7 });
+    expect((JSON.parse(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")) as { families: object }).families).toEqual({ draws: drawsScore });
   });
 
   describe("--check-all: every family whose legs the run planned, from the directory the artifacts unpacked into", () => {
     const planned = (...legs: string[]) => legs.join(",");
+    const coreLegs = (): string[] => [...CORE_LEGS];
+    const drawsLegs = (): string[] => [...DRAWS];
 
     spawnIt(2)("judges each fully planned family on its legs' summed score, prints each verdict and the count, and exits 0 when none is below", () => {
-      const w = workdir({ floors: { core: 50, draws: 82.7 }, reports: { ...coreOnly({ killed: 3, survived: 1 }), ...drawsReports() }, layout: "artifacts" });
-      const r = run(w.cwd, ["--check-all", w.dir, "--legs", planned("core", "draws-bracket", "draws-pairing")]);
+      const w = workdir({ floors: { core: 50, draws: drawsScore }, reports: { ...coreOnly({ killed: 3, survived: 1 }), ...drawsReports() }, layout: "artifacts" });
+      const r = run(w.cwd, ["--check-all", w.dir, "--legs", planned(...coreLegs(), ...drawsLegs())]);
       expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
       expect(r.stdout).toContain("core: score 75.0%");
-      expect(r.stdout).toContain("draws: score 82.7% (91 of 110 detected");
+      expect(r.stdout).toContain(`draws: score ${drawsScore.toFixed(1)}% (${drawsDetected} of ${drawsTotal} detected`);
       expect(r.stdout).toContain("2 famil(ies) judged, 0 below the floor; 0 not judged (partly planned), 0 refused");
       // the same run with the draws floor one tenth higher: exit 1, and the count says which
-      const miss = workdir({ floors: { core: 50, draws: 82.8 }, reports: { ...coreOnly({ killed: 3, survived: 1 }), ...drawsReports() }, layout: "artifacts" });
-      const m = run(miss.cwd, ["--check-all", miss.dir, "--legs", planned("core", "draws-bracket", "draws-pairing")]);
+      const miss = workdir({ floors: { core: 50, draws: Math.round((drawsScore + 0.1) * 10) / 10 }, reports: { ...coreOnly({ killed: 3, survived: 1 }), ...drawsReports() }, layout: "artifacts" });
+      const m = run(miss.cwd, ["--check-all", miss.dir, "--legs", planned(...coreLegs(), ...drawsLegs())]);
       expect(m.status).toBe(1);
       expect(m.stdout).toContain("2 famil(ies) judged, 1 below the floor");
     });
 
     spawnIt(2)("a family with only some of its legs planned is printed as NOT judged, never judged on part of its mutants (a dispatch of one leg)", () => {
-      const w = workdir({ floors: { core: 50, draws: 99 }, reports: { ...coreOnly({ killed: 3, survived: 1 }), "draws-bracket": drawsReports()["draws-bracket"]! }, layout: "artifacts" });
-      const r = run(w.cwd, ["--check-all", w.dir, "--legs", planned("core", "draws-bracket")]);
+      const d0 = DRAWS[0] as string;
+      const w = workdir({ floors: { core: 50, draws: 99 }, reports: { ...coreOnly({ killed: 3, survived: 1 }), [d0]: drawsReports()[d0]! }, layout: "artifacts" });
+      const r = run(w.cwd, ["--check-all", w.dir, "--legs", planned(...coreLegs(), d0)]);
       expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
-      expect(r.stdout).toContain("draws: not judged, only 1 of its 2 legs were planned (draws-pairing not)");
+      expect(r.stdout).toContain(`draws: not judged, only 1 of its ${DRAWS.length} legs were planned (${DRAWS.slice(1).join(", ")} not)`);
       expect(r.stdout).toContain("1 famil(ies) judged, 0 below the floor; 1 not judged (partly planned), 0 refused");
       // a family nothing of which was planned is not mentioned at all (it is not a partial run of that family)
       expect(r.stdout).not.toContain("competition");
       // only a partly planned family: nothing judged, exit 0, and it says so
-      const only = run(w.cwd, ["--check-all", w.dir, "--legs", planned("draws-bracket")]);
+      const only = run(w.cwd, ["--check-all", w.dir, "--legs", planned(d0)]);
       expect(only.status).toBe(0);
       expect(only.stdout).toContain("0 famil(ies) judged, 0 below the floor; 1 not judged (partly planned), 0 refused");
     });
 
     spawnIt(2)("a planned leg with no report refuses its family (exit 2, naming the leg) while the other families are still judged and printed", () => {
-      const w = workdir({ floors: { core: 50, draws: 0 }, reports: { ...coreOnly({ killed: 3, survived: 1 }), "draws-bracket": drawsReports()["draws-bracket"]! }, layout: "artifacts" });
-      const r = run(w.cwd, ["--check-all", w.dir, "--legs", planned("core", "draws-bracket", "draws-pairing")]);
+      const d0 = DRAWS[0] as string;
+      const w = workdir({ floors: { core: 50, draws: 0 }, reports: { ...coreOnly({ killed: 3, survived: 1 }), [d0]: drawsReports()[d0]! }, layout: "artifacts" });
+      const r = run(w.cwd, ["--check-all", w.dir, "--legs", planned(...coreLegs(), ...drawsLegs())]);
       expect(r.status).toBe(2);
-      expect(r.stderr).toContain('draws: no report for leg "draws-pairing"');
+      expect(r.stderr).toContain(`draws: no report for leg "${DRAWS[1]}"`);
       expect(r.stdout).toContain("core: score 75.0%");
       expect(r.stdout).toContain("1 famil(ies) judged, 0 below the floor; 0 not judged (partly planned), 1 refused");
     });
@@ -803,7 +870,7 @@ describe("the CLI's other modes and its refusals", () => {
     spawnIt(3)("--skip-if-no-floors with an empty floor file prints `no floor yet` for each family and passes; without the flag the same run is refused (no floor for the family)", () => {
       const reports = { ...coreOnly({ killed: 3, survived: 1 }), ...drawsReports() };
       const w = workdir({ floors: {}, reports, layout: "artifacts" });
-      const legs = planned("core", "draws-bracket", "draws-pairing");
+      const legs = planned(...coreLegs(), ...drawsLegs());
       const skip = run(w.cwd, ["--check-all", w.dir, "--legs", legs, "--skip-if-no-floors"]);
       expect({ status: skip.status, stderr: skip.stderr }).toEqual({ status: 0, stderr: "" });
       expect(skip.stdout.match(/no floor yet: PR-B sets it/g)).toHaveLength(2);
@@ -812,7 +879,7 @@ describe("the CLI's other modes and its refusals", () => {
       expect(strict.status).toBe(2);
       expect(strict.stderr).toContain('no floor for family "core"');
       // a report that measured nothing is still refused while the floors are empty
-      const hollow = workdir({ floors: {}, reports: { ...reports, "draws-pairing": { files: {} } }, layout: "artifacts" });
+      const hollow = workdir({ floors: {}, reports: { ...reports, [DRAWS[1] as string]: { files: {} } }, layout: "artifacts" });
       expect(run(hollow.cwd, ["--check-all", hollow.dir, "--legs", legs, "--skip-if-no-floors"]).status).toBe(2);
     });
 
@@ -821,10 +888,10 @@ describe("the CLI's other modes and its refusals", () => {
       const cases: [string[], RegExp][] = [
         [["--check-all", w.dir], /--check-all needs --legs/],
         [["--check-all", w.dir, "--legs", ""], /--check-all needs --legs/],
-        [["--check-all", w.dir, "--legs", "core,,draws-bracket"], /empty entry/],
-        [["--check-all", w.dir, "--legs", "core,nosuch"], /unknown leg\(s\) nosuch/],
+        [["--check-all", w.dir, "--legs", `${CORE0},,${DRAWS[0]}`], /empty entry/],
+        [["--check-all", w.dir, "--legs", `${CORE0},nosuch`], /unknown leg\(s\) nosuch/],
         [["--check-all", w.dir, "--legs", "probe"], /names the probe/],
-        [["--check-all", w.dir, "--legs", "core,core"], /names a leg twice/],
+        [["--check-all", w.dir, "--legs", `${CORE0},${CORE0}`], /names a leg twice/],
         [["--check", "core", w.dir, "--legs", "core"], /--legs belongs to --check-all/],
       ];
       for (const [args, why] of cases) {
@@ -837,10 +904,10 @@ describe("the CLI's other modes and its refusals", () => {
   });
 
   spawnIt(4)("--survivors writes SURVIVORS.md at --out and says how many it listed; the report path and --out are required", () => {
-    const w = workdir({ floors: {}, equivalents: [{ mutant: `${BRACKET}:50:1 ConditionalExpression → true`, reason: "dead branch: the guard above already returned" }], reports: { "draws-bracket": report({ killed: 3, survived: 2, noCoverage: 1 }, BRACKET) } });
-    const reportPath = join(w.cwd, w.pathOf("draws-bracket"));
+    const w = workdir({ floors: {}, equivalents: [{ mutant: `${BRACKET}:50:1 ConditionalExpression → true`, reason: "dead branch: the guard above already returned" }], reports: { [BRACKET_LEG]: report({ killed: 3, survived: 2, noCoverage: 1 }, BRACKET) } });
+    const reportPath = join(w.cwd, w.pathOf(BRACKET_LEG));
     const out = join(w.cwd, "SURVIVORS.md");
-    const r = run(w.cwd, ["--survivors", "draws-bracket", reportPath, "--out", out]);
+    const r = run(w.cwd, ["--survivors", BRACKET_LEG, reportPath, "--out", out]);
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
     const md = readFileSync(out, "utf8");
     // killed lines 1-3, survived 4-5, noCoverage 6; the equivalent is line 50, which this report does not have, so nothing is forgiven
@@ -850,35 +917,35 @@ describe("the CLI's other modes and its refusals", () => {
       `${BRACKET}:6:1 ConditionalExpression → true`,
     ]);
     expect(r.stdout).toContain("3 listed");
-    expect(run(w.cwd, ["--survivors", "draws-bracket", reportPath]).status).toBe(2);
-    expect(run(w.cwd, ["--survivors", "draws-bracket", "--out", out]).status).toBe(2);
-    const missing = run(w.cwd, ["--survivors", "draws-bracket", join(w.cwd, "nope.json"), "--out", join(w.cwd, "S2.md")]);
+    expect(run(w.cwd, ["--survivors", BRACKET_LEG, reportPath]).status).toBe(2);
+    expect(run(w.cwd, ["--survivors", BRACKET_LEG, "--out", out]).status).toBe(2);
+    const missing = run(w.cwd, ["--survivors", BRACKET_LEG, join(w.cwd, "nope.json"), "--out", join(w.cwd, "S2.md")]);
     expect(missing.status).toBe(2);
     expect(existsSync(join(w.cwd, "S2.md"))).toBe(false);
   });
 
   spawnIt(1)("--survivors honours stryker-equivalent.json: the recorded equivalent is not listed", () => {
-    const w = workdir({ floors: {}, equivalents: [{ mutant: `${BRACKET}:4:1 ConditionalExpression → true`, reason: "dead branch: the guard above already returned" }], reports: { "draws-bracket": report({ killed: 3, survived: 2 }, BRACKET) } });
+    const w = workdir({ floors: {}, equivalents: [{ mutant: `${BRACKET}:4:1 ConditionalExpression → true`, reason: "dead branch: the guard above already returned" }], reports: { [BRACKET_LEG]: report({ killed: 3, survived: 2 }, BRACKET) } });
     const out = join(w.cwd, "SURVIVORS.md");
-    expect(run(w.cwd, ["--survivors", "draws-bracket", join(w.cwd, w.pathOf("draws-bracket")), "--out", out]).status).toBe(0);
+    expect(run(w.cwd, ["--survivors", BRACKET_LEG, join(w.cwd, w.pathOf(BRACKET_LEG)), "--out", out]).status).toBe(0);
     const listed = readFileSync(out, "utf8").split("\n").filter((l) => /^src\//.test(l));
     expect(listed).toEqual([`${BRACKET}:5:1 ConditionalExpression → true`]);
   });
 
   spawnIt(3)("--survivors refuses an unknown leg and another leg's report, and writes nothing", () => {
-    const w = workdir({ floors: {}, reports: { "draws-bracket": report({ killed: 3, survived: 2 }, BRACKET) } });
-    const reportPath = join(w.cwd, w.pathOf("draws-bracket"));
+    const w = workdir({ floors: {}, reports: { [BRACKET_LEG]: report({ killed: 3, survived: 2 }, BRACKET) } });
+    const reportPath = join(w.cwd, w.pathOf(BRACKET_LEG));
     const unknown = run(w.cwd, ["--survivors", "nosuch", reportPath, "--out", join(w.cwd, "U.md")]);
     expect(unknown.status).toBe(2);
     expect(unknown.stderr).toContain('unknown group "nosuch"');
     expect(existsSync(join(w.cwd, "U.md"))).toBe(false);
-    // draws-bracket's report (src/scheduling/bracket.ts) is not core's
-    const wrong = run(w.cwd, ["--survivors", "core", reportPath, "--out", join(w.cwd, "W.md")]);
+    // the bracket leg's report (src/scheduling/bracket.ts) is not a core leg's
+    const wrong = run(w.cwd, ["--survivors", CORE0, reportPath, "--out", join(w.cwd, "W.md")]);
     expect(wrong.status).toBe(2);
-    expect(wrong.stderr).toContain("is not group \"core\"'s");
+    expect(wrong.stderr).toContain(`is not group "${CORE0}"'s`);
     expect(existsSync(join(w.cwd, "W.md"))).toBe(false);
     // and the right leg's own report is still written (the pair: these are not refusals of everything)
-    expect(run(w.cwd, ["--survivors", "draws-bracket", reportPath, "--out", join(w.cwd, "R.md")]).status).toBe(0);
+    expect(run(w.cwd, ["--survivors", BRACKET_LEG, reportPath, "--out", join(w.cwd, "R.md")]).status).toBe(0);
     expect(existsSync(join(w.cwd, "R.md"))).toBe(true);
   });
 
@@ -893,13 +960,13 @@ describe("the CLI's other modes and its refusals", () => {
     expect(skipSet.status).toBe(2);
     expect(skipSet.stderr).toContain("--skip-if-no-floors belongs to --check");
     expect(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")).toBe(before);
-    const reportPath = join(w.cwd, w.pathOf("core"));
-    const skipSurvivors = run(w.cwd, ["--survivors", "core", reportPath, "--out", join(w.cwd, "S.md"), "--skip-if-no-floors"]);
+    const reportPath = join(w.cwd, w.pathOf(CORE0));
+    const skipSurvivors = run(w.cwd, ["--survivors", CORE0, reportPath, "--out", join(w.cwd, "S.md"), "--skip-if-no-floors"]);
     expect(skipSurvivors.status).toBe(2);
     expect(existsSync(join(w.cwd, "S.md"))).toBe(false);
     // the pair: each flag with its own mode is accepted
     expect(run(w.cwd, ["--check", "core", w.dir, "--skip-if-no-floors"]).status).toBe(0);
-    expect(run(w.cwd, ["--survivors", "core", reportPath, "--out", join(w.cwd, "S.md")]).status).toBe(0);
+    expect(run(w.cwd, ["--survivors", CORE0, reportPath, "--out", join(w.cwd, "S.md")]).status).toBe(0);
   });
 
   spawnIt(8)("usage: no mode, two modes, an unknown mode or flag, and a missing ref are each exit 2 with a usage line on stderr and nothing on stdout", () => {

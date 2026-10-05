@@ -25,6 +25,11 @@ const WORKFLOWS = join(REPO, ".github/workflows");
 const WF = readFileSync(join(WORKFLOWS, "matrix-truth.yml"), "utf8");
 const JOBS = jobsOf(WF);                               // job name → that job's text
 const GUARD = "Visibility guard (design §6.4; R14a)";
+// Task 20 pre-step, carry (b): the refusal said "Matrix truth run refused ... Sharded matrix runs", which is matrix-truth.yml's
+// name for itself, on a Stryker run. mutation.yml's guard is matrix-truth's script in every line but that message.
+const MATRIX_TRUTH_REFUSAL = "Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68).";
+const STRYKER_REFUSAL = "Stryker mutation run refused::repository visibility is '${vis:-unreadable}'. The Stryker mutation workflow (mutation.yml) runs one hosted job per group, and those minutes are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run it privately (ruling 68).";
+
 const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { packageManager: string; scripts: Record<string, string> };
 
 const scratch = mkdtempSync(join(tmpdir(), "w1d-wf-"));
@@ -106,12 +111,12 @@ describe("the visibility guard (Review Focus 2)", () => {
    *  raw JSON error body `body` when given, which is what gh 2.95 prints for a 404/401/403/5xx under `--jq`, else nothing) and
    *  then answers `answer`, and a `sleep` stand-in that records its argument instead of waiting (m4: the retry's backoff is
    *  observed, never slept). `calls` is how many times the guard asked, `sleeps` the backoffs it took between asks. */
-  const runWith = (env: Record<string, string>, gh: { fails: number; answer: string; body?: string }) => {
+  const runWith = (env: Record<string, string>, gh: { fails: number; answer: string; body?: string }, script: string = stepOf(JOBS.plan, GUARD).script!) => {
     const dir = mkdtempSync(join(tmpdir(), "gh-"));
     try {
       writeFileSync(join(dir, "gh"), `#!/bin/sh\nn=$(cat "$GH_STATE/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$GH_STATE/n"\nif [ "$n" -le "$GH_FAILS" ]; then if [ -n "$GH_BODY" ]; then echo "$GH_BODY"; fi; echo 'HTTP 403' >&2; exit 1; fi\necho "$GH_ANSWER"\n`, { mode: 0o755 });
       writeFileSync(join(dir, "sleep"), `#!/bin/sh\necho "$1" >> "$GH_STATE/sleeps"\n`, { mode: 0o755 });
-      const r = spawnSync("bash", ["-c", stepOf(JOBS.plan, GUARD).script!], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "onryde/seazn.club", GH_STATE: dir, GH_FAILS: String(gh.fails), GH_ANSWER: gh.answer, GH_BODY: gh.body ?? "", ...env }, encoding: "utf8" });
+      const r = spawnSync("bash", ["-c", script], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "onryde/seazn.club", GH_STATE: dir, GH_FAILS: String(gh.fails), GH_ANSWER: gh.answer, GH_BODY: gh.body ?? "", ...env }, encoding: "utf8" });
       const lines = (f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8").split("\n").filter(Boolean) : []);
       return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls: Number(lines("n")[0] ?? 0), sleeps: lines("sleeps") };
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -138,6 +143,27 @@ describe("the visibility guard (Review Focus 2)", () => {
   it("the four visibility × runner combinations of ruling 68 are all present and give the ruled exits", () => {
     const at = (r: string, g: string) => cases.find((c) => c.env.RUNNER_ENV === r && c.gh === g && c.env.INJECT === "none")!;
     expect([at("github-hosted", "public").want, at("self-hosted", "public").want, at("github-hosted", "private").want, at("self-hosted", "private").want]).toEqual([0, 0, 1, 0]);
+  });
+
+  it("carry (b): a refusal on a private repository NAMES the Stryker mutation workflow, in every job, and says nothing of a matrix truth run (run for real, with a stand-in gh)", () => {
+    const env = { RUNNER_ENV: "github-hosted", INJECT: "none" };
+    let checked = 0;
+    for (const [name, t] of Object.entries(MJOBS)) {
+      const r = runWith(env, { fails: 0, answer: "private" }, stepOf(t, GUARD).script!);
+      expect(r.status, `${name}: private, hosted is refused`).toBe(1);
+      expect(r.stdout, name).toContain("::error title=Stryker mutation run refused::repository visibility is 'private'");
+      expect(r.stdout, name).toContain("mutation.yml");
+      expect(r.stdout, name).not.toMatch(/Matrix truth|Sharded matrix/);
+      checked++;
+    }
+    expect(checked, "jobs of mutation.yml").toBe(Object.keys(MJOBS).length);
+    // the positive control: matrix-truth.yml's own guard still names itself (so the assertions above can tell the two apart)
+    const own = runWith(env, { fails: 0, answer: "private" });
+    expect(own.status).toBe(1);
+    expect(own.stdout).toContain("::error title=Matrix truth run refused::");
+    expect(own.stdout).not.toContain("Stryker mutation");
+    // and the public repository still passes through mutation.yml's guard (a refusal worded differently is not a refusal always)
+    expect(runWith(env, { fails: 0, answer: "public" }, stepOf(MJOBS.plan!, GUARD).script!).status).toBe(0);
   });
 
   it("every job of matrix-truth.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes (mutation.yml's jobs join this check in Task 15)", () => {
@@ -1039,9 +1065,12 @@ describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved her
     expect(opts).toEqual(["all", ...Object.keys(STRYKER_GROUPS)]);
     expect(opts.length).toBeGreaterThan(2);
   });
-  it("mutation.yml's guard is the first step of every job, with matrix-truth's script (the identical-script claim for the second workflow)", () => {
-    const want = stepOf(JOBS.plan!, GUARD).script;
-    expect(want).not.toBeNull();
+  it("mutation.yml's guard is the first step of every job, with matrix-truth's script in every line but the refusal's wording (the identical-script claim for the second workflow)", () => {
+    const base = stepOf(JOBS.plan!, GUARD).script;
+    expect(base).not.toBeNull();
+    expect(base, "matrix-truth's script still carries its own wording, so the substitution below is a real one").toContain(MATRIX_TRUTH_REFUSAL);
+    const want = base!.replace(MATRIX_TRUTH_REFUSAL, STRYKER_REFUSAL);
+    expect(want).not.toBe(base);
     expect(Object.keys(MJOBS).length).toBeGreaterThan(1);
     for (const [name, t] of Object.entries(MJOBS)) {
       expect(stepHeads(t)[0], name).toBe(`      - name: ${GUARD}`);
@@ -1084,7 +1113,7 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
     const ran = (event: string, group: string) => ({ event, matrix: planMatrix(event, group) });
     const cases: { name: string; ctx: Record<string, unknown>; plan: boolean; mutate: boolean; floors: boolean }[] = [
       { name: "workflow_dispatch group=all", ctx: ctxOf(ran("workflow_dispatch", "all")), plan: true, mutate: true, floors: true },
-      { name: "workflow_dispatch of one leg", ctx: ctxOf(ran("workflow_dispatch", "draws-bracket")), plan: true, mutate: true, floors: true },
+      { name: "workflow_dispatch of one leg", ctx: ctxOf(ran("workflow_dispatch", "draws-3")), plan: true, mutate: true, floors: true },
       // N1: the documented probe-only dispatch plans [probe]; floors must skip, not refuse the probe
       { name: "workflow_dispatch group=probe", ctx: ctxOf(ran("workflow_dispatch", "probe")), plan: true, mutate: true, floors: false },
       { name: "schedule, enabled", ctx: ctxOf({ ...ran("schedule", ""), weekly: "true" }), plan: true, mutate: true, floors: true },
@@ -1205,10 +1234,11 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
     expect(compared).toBe(names.length * (names.length - 1));
   });
 
-  it("the premise: a hyphen delimiter WOULD collide on the real names (so the '@' is doing work, not decoration)", () => {
+  it("the premise: a restore key that stopped at the group's name WOULD collide on the real names, `sports-cricket-1` reaching `sports-cricket-10` (so the '@' is doing work, not decoration)", () => {
     const names = Object.keys(STRYKER_GROUPS);
-    const colliding = names.flatMap((g) => names.filter((h) => h !== g && `stryker-${h}-0123abc`.startsWith(`stryker-${g}-`)).map((h) => `${g} -> ${h}`));
+    const colliding = names.flatMap((g) => names.filter((h) => h !== g && `stryker-${h}@0123abc`.startsWith(`stryker-${g}`)).map((h) => `${g} -> ${h}`));
     expect(colliding.length).toBeGreaterThan(0);
+    expect(colliding, "the numbered legs are the ones that collide").toContain("sports-cricket-1 -> sports-cricket-10");
   });
 });
 
@@ -1245,14 +1275,14 @@ function runBlock(script: string, o: { cwd: string; env?: Record<string, string>
   const r = spawnSync("bash", ["-c", script], { cwd: o.cwd, encoding: "utf8", timeout: SPAWN_MS * 3, env: { PATH: `${bin}:${process.env.PATH ?? ""}`, RECORD: recordFile, ...o.env } });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, record: readFileSync(recordFile, "utf8").split("\n").filter(Boolean) };
 }
-/** A scratch packages/engine: the floor file, and a `draws-bracket` report (3 killed, 1 survived: 75.0%) at reports/mutation/draws-bracket.json
+/** A scratch packages/engine: the floor file, and a `draws-3` report (3 killed, 1 survived: 75.0%) at reports/mutation/draws-3.json
  *  (the Survivors step's own layout: one leg's report in the leg's own job). */
 function engineDir(floors: Record<string, number>, over: { omitReport?: boolean } = {}): string {
   const cwd = fresh("engine");
   writeFileSync(join(cwd, "stryker-floor.json"), JSON.stringify({ note: "t", families: floors }));
   if (over.omitReport !== true) {
     mkdirSync(join(cwd, "reports/mutation"), { recursive: true });
-    writeFileSync(join(cwd, "reports/mutation/draws-bracket.json"), JSON.stringify({ files: { "src/scheduling/bracket.ts": { mutants: mutantsOf([["Killed", 1], ["Killed", 2], ["Timeout", 3], ["Survived", 4]]) } } }));
+    writeFileSync(join(cwd, "reports/mutation/draws-3.json"), JSON.stringify({ files: { "src/scheduling/bracket.ts": { mutants: mutantsOf([["Killed", 1], ["Killed", 2], ["Timeout", 3], ["Survived", 4]]) } } }));
   }
   return cwd;
 }
@@ -1289,7 +1319,7 @@ describe("mutation.yml: the plan step derives the matrix through the real script
     ["schedule", "", Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe")],
     ["workflow_dispatch", "all", Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe")],
     ["workflow_dispatch", "probe", ["probe"]],
-    ["workflow_dispatch", "draws-bracket", ["draws-bracket"]],
+    ["workflow_dispatch", "draws-3", ["draws-3"]],
   ])("EVENT=%s GROUP='%s' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with %j", (event, group, want) => {
     const r = derive({ EVENT: event, GROUP: group });
     expect(r.status, r.stderr).toBe(0);
@@ -1310,15 +1340,15 @@ describe("mutation.yml: the Stryker step keeps Stryker's own exit and writes it 
   const script = body.script!;
   it("it runs `pnpm mutation` in packages/engine with STRYKER_GROUP from the job's GROUP", () => {
     expect(body.body).toContain("working-directory: packages/engine");
-    const r = runBlock(script, { cwd: fresh("engine"), env: { GROUP: "draws-bracket" } });
+    const r = runBlock(script, { cwd: fresh("engine"), env: { GROUP: "draws-3" } });
     expect(r.status, r.stderr).toBe(0);
-    expect(r.record).toEqual(["mutation", "STRYKER_GROUP=draws-bracket"]);
+    expect(r.record).toEqual(["mutation", "STRYKER_GROUP=draws-3"]);
   }, spawnBudget(1));
   it("a failing run: the step exits with Stryker's code, reports/mutation/exit.txt says so (the directory is made even if Stryker died before writing one), and EXIT= is printed", () => {
     let checked = 0;
     for (const code of [1, 2, 137]) {
       const cwd = fresh("engine");
-      const r = runBlock(script, { cwd, env: { GROUP: "core", FAIL_CODE: String(code) } });
+      const r = runBlock(script, { cwd, env: { GROUP: "core-1", FAIL_CODE: String(code) } });
       expect(r.status, `exit ${code}`).toBe(code);
       expect(readFileSync(join(cwd, "reports/mutation/exit.txt"), "utf8").trim(), `exit ${code}`).toBe(String(code));
       expect(r.stdout).toContain(`EXIT=${code}`);
@@ -1332,14 +1362,19 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
   const floorStep = stepOf(MJOBS.floors!, "Floor check");
   const floorLine = runLine(MJOBS.floors!, "Floor check");
   const survivorsLine = runLine(MJOBS.mutate!, "Survivors");
-  // two families, three legs: `core` is one leg (3 killed, 1 survived: 75.0%); `draws` is two, 3 of 4 and 1 of 1, which SUM to 4 of 5 =
-  // 80.0% (the mean of the legs' scores is 87.5 and the weaker leg 75.0, so a floor of 80 tells the sum from both)
-  const THREE = "core,draws-bracket,draws-pairing";
-  const ALL = {
-    core: { file: "src/core/clock.ts", mutants: [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] as [string, number][] },
-    "draws-bracket": { file: "src/scheduling/bracket.ts", mutants: [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] as [string, number][] },
-    "draws-pairing": { file: "src/scheduling/swiss.ts", mutants: [["Killed", 1]] as [string, number][] },
+  // two families: `core` is three legs, each (3 killed, 1 survived), so the family is 9 of 12 = 75.0%; `draws` is four, bracket.ts
+  // 3 of 4 and one killed mutant in each of the others, which SUM to 6 of 7 = 85.7% (the mean of the legs' scores is 93.75 and the
+  // weakest leg 75.0, so a floor of 85.7 tells the sum from both)
+  const CORE = STRYKER_FAMILIES.core;
+  const DRAWS = STRYKER_FAMILIES.draws;
+  const CORE_FILES = ["src/core/clock.ts", "src/core/errors.ts", "src/core/rng.ts"];   // a whole file each core leg selects
+  const DRAWS_FILES: Record<string, string> = { "draws-1": "src/scheduling/americano.ts", "draws-2": "src/scheduling/feedgraph.ts", "draws-3": "src/scheduling/bracket.ts", "draws-4": "src/scheduling/swiss.ts" };
+  const LEGS = [...CORE, ...DRAWS].join(",");
+  const ALL: Record<string, { file: string; mutants: [string, number][] }> = {
+    ...Object.fromEntries(CORE.map((leg, i) => [leg, { file: CORE_FILES[i]!, mutants: [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] as [string, number][] }])),
+    ...Object.fromEntries(DRAWS.map((leg) => [leg, { file: DRAWS_FILES[leg]!, mutants: (leg === "draws-3" ? [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] : [["Killed", 1]]) as [string, number][] }])),
   };
+  const only = (legs: readonly string[]) => Object.fromEntries(legs.map((l) => [l, ALL[l]!]));
 
   it("the floors job reads the legs' artifacts from floors-in, judges them with --check-all over the legs the plan scheduled, and the step can be neither conditional nor advisory", () => {
     expect(MJOBS.floors).toContain("LEGS: ${{ join(fromJSON(needs.plan.outputs.matrix).include.*.group, ',') }}");
@@ -1357,6 +1392,9 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
     expect(MUT).not.toMatch(/run: pnpm install --frozen-lockfile\s*$/m);
     // the artifacts the job unpacks are those of the families it judges: every non-probe leg is in a family
     expect(Object.values(STRYKER_FAMILIES).flat().sort()).toEqual(Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe").sort());
+    // the fixtures below name legs of the real families (a re-cut that moved them reds here, not in a refusal that reads like a verdict)
+    expect(Object.keys(DRAWS_FILES), "the fixture's draws legs are the family's").toEqual([...DRAWS]);
+    expect(CORE).toHaveLength(CORE_FILES.length);
   });
 
   it("against the real plan, for every dispatch group and the weekly and the PR: floors runs exactly when the plan holds a leg with a floor, LEGS is those legs, and the probe is never in it (N1)", () => {
@@ -1383,7 +1421,7 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
     // (the probe dispatched alone and the pull request, the two probe-only plans, are the rest, each checked above)
     expect(plans.length).toBe(keys.length + 3);
     expect(ran).toBe(keys.length - 1 + 2);
-  }, spawnBudget(31));
+  }, spawnBudget(Object.keys(STRYKER_GROUPS).length + 3));   // one plan spawn per dispatch group, plus all, the weekly and the PR
 
   it("what the skip prevents: a probe-only dispatch's LEGS is `probe`, and the real CLI refuses it (exit 2, names the probe), so a floors job that ran would go red on a documented option", () => {
     const legsExpr = /^ {6}LEGS: \$\{\{\s*(.+?)\s*\}\}/m.exec(MJOBS.floors!)![1]!;
@@ -1392,44 +1430,44 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
     const r = runBlock(floorLine, { cwd: floorsRepo({}, {}), env: { LEGS: legs } });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain("--legs names the probe");
-    // and the same wiring on a real one-leg plan: the LEGS the expression gives is judged by the CLI
-    const core = String(evalExpr(legsExpr, ctxOf({ event: "workflow_dispatch", matrix: planMatrix("workflow_dispatch", "core") })));
-    expect(core).toBe("core");
-    const ok = runBlock(floorLine, { cwd: floorsRepo({}, { core: ALL.core }), env: { LEGS: core } });
+    // and the same wiring on a real one-leg plan: the LEGS the expression gives is read by the CLI (one leg of a family is not the family)
+    const core = String(evalExpr(legsExpr, ctxOf({ event: "workflow_dispatch", matrix: planMatrix("workflow_dispatch", "core-1") })));
+    expect(core).toBe("core-1");
+    const ok = runBlock(floorLine, { cwd: floorsRepo({}, only(["core-1"])), env: { LEGS: core } });
     expect({ status: ok.status, stderr: ok.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(ok.stdout).toContain("core: score 75.0%");
+    expect(ok.stdout).toContain(`core: not judged, only 1 of its ${CORE.length} legs were planned`);
   }, spawnBudget(4));
 
   it("PR-A's state (the committed floor file is empty): it prints `no floor yet: PR-B sets it` for each family and passes, for the legs' real reports", () => {
-    const r = runBlock(floorLine, { cwd: floorsRepo({}, ALL), env: { LEGS: THREE } });
+    const r = runBlock(floorLine, { cwd: floorsRepo({}, ALL), env: { LEGS } });
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
     expect(r.stdout.match(/no floor yet: PR-B sets it/g)).toHaveLength(2);
-    expect(r.stdout).toContain("core: score 75.0%");
-    expect(r.stdout).toContain("draws: score 80.0% (4 of 5 detected");   // the SUM of the two legs
-    expect(r.record).toEqual([`mutation:floor --check-all ../../floors-in --legs ${THREE} --skip-if-no-floors`]);
+    expect(r.stdout).toContain("core: score 75.0% (9 of 12 detected");
+    expect(r.stdout).toContain("draws: score 85.7% (6 of 7 detected");   // the SUM of the four legs
+    expect(r.record).toEqual([`mutation:floor --check-all ../../floors-in --legs ${LEGS} --skip-if-no-floors`]);
   }, spawnBudget(1));
 
   it("once PR-B commits floors: a family with no entry is a failure, met floors pass and a missed one fails", () => {
-    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75 }, ALL), env: { LEGS: THREE } }).status, "no entry for draws").toBe(2);
-    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 80 }, ALL), env: { LEGS: THREE } }).status).toBe(0);                  // 3 of 4 = 75.0, 4 of 5 = 80.0
-    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 80.1 }, ALL), env: { LEGS: THREE } }).status).toBe(1);                // one tenth over the sum
-    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75.1, draws: 80 }, ALL), env: { LEGS: THREE } }).status).toBe(1);
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75 }, ALL), env: { LEGS } }).status, "no entry for draws").toBe(2);
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 85.7 }, ALL), env: { LEGS } }).status).toBe(0);                  // 9 of 12 = 75.0, 6 of 7 = 85.7
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 85.8 }, ALL), env: { LEGS } }).status).toBe(1);                // one tenth over the sum
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75.1, draws: 85.7 }, ALL), env: { LEGS } }).status).toBe(1);
   }, spawnBudget(4));
 
   it("a planned leg that left no report is a failure even while no floor exists (a leg that died is never a skip), and the other families are still judged", () => {
-    const withoutPairing = { core: ALL.core, "draws-bracket": ALL["draws-bracket"] };   // draws-pairing's job died before it wrote a report
-    const r = runBlock(floorLine, { cwd: floorsRepo({}, withoutPairing), env: { LEGS: THREE } });
+    const withoutSwiss = only(LEGS.split(",").filter((l) => l !== "draws-4"));   // draws-4's job died before it wrote a report
+    const r = runBlock(floorLine, { cwd: floorsRepo({}, withoutSwiss), env: { LEGS } });
     expect(r.status).toBe(2);
-    expect(r.stderr).toContain('draws: no report for leg "draws-pairing"');
+    expect(r.stderr).toContain('draws: no report for leg "draws-4"');
     expect(r.stdout).toContain("core: score 75.0%");
   }, spawnBudget(1));
 
-  it("a dispatch of ONE leg of a two-leg family does not judge the family (it is not the sum of its legs) and still passes; a leg of a one-leg family is judged", () => {
-    const partial = runBlock(floorLine, { cwd: floorsRepo({ draws: 99 }, { "draws-bracket": ALL["draws-bracket"] }), env: { LEGS: "draws-bracket" } });
+  it("a dispatch of ONE leg of a family does not judge the family (it is not the sum of its legs) and still passes; every leg of a family is judged", () => {
+    const partial = runBlock(floorLine, { cwd: floorsRepo({ draws: 99 }, only(["draws-3"])), env: { LEGS: "draws-3" } });
     expect({ status: partial.status, stderr: partial.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(partial.stdout).toContain("draws: not judged, only 1 of its 2 legs were planned");
-    const whole = runBlock(floorLine, { cwd: floorsRepo({ core: 99 }, { core: ALL.core }), env: { LEGS: "core" } });
-    expect(whole.status, "core is judged on its one leg, and 75.0 is under 99").toBe(1);
+    expect(partial.stdout).toContain(`draws: not judged, only 1 of its ${DRAWS.length} legs were planned`);
+    const whole = runBlock(floorLine, { cwd: floorsRepo({ core: 99 }, only(CORE)), env: { LEGS: CORE.join(",") } });
+    expect(whole.status, "core is judged on its three legs, and 75.0 is under 99").toBe(1);
   }, spawnBudget(2));
 
   it("an empty LEGS (the expression evaluating to nothing) is a refusal, never a pass over zero families", () => {
@@ -1441,7 +1479,7 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
   it("the survivors step writes SURVIVORS.md next to the group's report, listing the one survivor", () => {
     expect(stepOf(MJOBS.mutate!, "Survivors").body).toContain("working-directory: packages/engine");
     const cwd = engineDir({});
-    const r = runBlock(survivorsLine, { cwd, env: { GROUP: "draws-bracket" } });
+    const r = runBlock(survivorsLine, { cwd, env: { GROUP: "draws-3" } });
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
     const md = readFileSync(join(cwd, "SURVIVORS.md"), "utf8");
     expect(md.split("\n").filter((l) => l.startsWith("src/"))).toEqual(["src/scheduling/bracket.ts:4:1 ConditionalExpression → true"]);

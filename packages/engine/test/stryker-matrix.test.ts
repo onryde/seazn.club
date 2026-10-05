@@ -47,7 +47,7 @@ describe("stryker-matrix.mjs derives one matrix per event (D14)", () => {
   spawnIt(3)("a pull_request runs the probe only, whatever group the (absent) input says", () => {
     expect(groupsOf(real("pull_request", ""))).toEqual(["probe"]);
     expect(groupsOf(real("pull_request", null))).toEqual(["probe"]);
-    expect(groupsOf(real("pull_request", "competition"))).toEqual(["probe"]); // a PR has no group input; a stray value does not widen it
+    expect(groupsOf(real("pull_request", "competition-1"))).toEqual(["probe"]); // a PR has no group input; a stray value does not widen it
   });
 
   spawnIt(3)("a schedule and a dispatch of `all` give every group but the probe, in declaration order, and there is more than one", () => {
@@ -134,27 +134,27 @@ describe("a broken timeouts file is a refusal, never a matrix", () => {
   });
 
   spawnIt(4)("a group with no timeout is a refusal naming it, but only for the groups the event selects", () => {
-    const { "draws-bracket": _drop, ...without } = TIMEOUTS;
+    const { "draws-1": _drop, ...without } = TIMEOUTS;
     const root = tree(JSON.stringify(without));
     const all = copy(root, "workflow_dispatch", "all");
     expect(all.status).toBe(2);
-    expect(all.stderr).toContain("draws-bracket");
+    expect(all.stderr).toContain("draws-1");
     expect(all.stdout).toBe("");
-    expect(copy(root, "workflow_dispatch", "draws-bracket").status).toBe(2);
+    expect(copy(root, "workflow_dispatch", "draws-1").status).toBe(2);
     expect(copy(root, "pull_request", "").status).toBe(0); // the probe's timeout is intact
-    expect(copy(root, "workflow_dispatch", "core").status).toBe(0);
+    expect(copy(root, "workflow_dispatch", "core-1").status).toBe(0);
   });
 
   spawnIt(9)("a timeout over the 300-minute cap, zero, negative, fractional or not a number is a refusal; exactly 300 is fine", () => {
     for (const bad of [301, 0, -5, 12.5, "60", null, true]) {
-      const r = copy(tree(full({ competition: bad })), "workflow_dispatch", "competition");
+      const r = copy(tree(full({ "competition-1": bad })), "workflow_dispatch", "competition-1");
       expect({ bad, status: r.status }).toEqual({ bad, status: 2 });
       expect(r.stdout).toBe("");
     }
-    const edge = copy(tree(full({ competition: 300 })), "workflow_dispatch", "competition");
-    expect(parsed(edge)).toEqual([{ group: "competition", timeout: 300 }]);
-    const one = copy(tree(full({ competition: 1 })), "workflow_dispatch", "competition");
-    expect(parsed(one)).toEqual([{ group: "competition", timeout: 1 }]);
+    const edge = copy(tree(full({ "competition-1": 300 })), "workflow_dispatch", "competition-1");
+    expect(parsed(edge)).toEqual([{ group: "competition-1", timeout: 300 }]);
+    const one = copy(tree(full({ "competition-1": 1 })), "workflow_dispatch", "competition-1");
+    expect(parsed(one)).toEqual([{ group: "competition-1", timeout: 1 }]);
   });
 
   spawnIt(6)("a missing, empty, malformed or non-object timeouts file is a refusal", () => {
