@@ -85,6 +85,25 @@ describe("--shard k/N: the stripe the runner runs, and the header it writes", ()
     expect(whole.orgs).toHaveLength(5);
   });
 
+  // W1d Task 8 (ruling T4-RENDER), through the REAL runner: the MATRIX.md a shard writes names its stripe, so its mostly-░
+  // grid is not read as a gap. The line is read back from the file runSlice wrote, not from a render of a fixture.
+  it("the MATRIX.md a shard writes says \"Shard 2 of 2\" and the plan size; the unsharded run's has no shard line; --layer adds the scope line", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(deps({ planCases: fivePlan }), ["--shard", "2/2", "--run-id", "mdsh", "--report-dir", dir])).toBe(0);
+    const shardMd = readFileSync(join(dir, "mdsh", "MATRIX.md"), "utf8");
+    expect(shardMd).toContain("> Shard **2 of 2** — one stripe of a plan of 5 items");
+    expect(shardMd).not.toContain("> Scope ");
+    expect(await runSlice(deps({ planCases: fivePlan }), ["--run-id", "mdall", "--report-dir", dir])).toBe(0);
+    expect(readFileSync(join(dir, "mdall", "MATRIX.md"), "utf8")).not.toContain("> Shard ");
+    // A layered run records its scope, so its header names it — and the shard line sits beneath it.
+    expect(await runSlice(deps({ openBrowserRun: async () => fakeBrowserRun().run }), ["--driver", "browser", "--layer", "L2", "--shard", "1/3", "--run-id", "mdl2", "--report-dir", dir])).toBe(0);
+    const l2Md = readFileSync(join(dir, "mdl2", "MATRIX.md"), "utf8");
+    expect(l2Md).toContain("> Scope **L2 (slice)**.");
+    expect(l2Md).toContain("> Shard **1 of 3**");
+    expect(l2Md.indexOf("> Scope ")).toBeLessThan(l2Md.indexOf("> Shard "));
+  });
+
   it("the shard's own console says how many it runs: [1/2] … [2/2], never [1/5]", async () => {
     const io = capture();
     const dir = dirFor();
