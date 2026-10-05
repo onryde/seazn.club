@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SmokeSelectionError, selectSmokeSuites } from "../smoke-select.ts";
 
-const KNOWN = ["streamTargets", "v1"] as const;
+const KNOWN = ["streamTargets", "v1", "captureV2"] as const;
 
 describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
   it("UNSET means run everything, and unset is the default: CI never sets SMOKE_ONLY, so CI's smoke is unchanged", () => {
@@ -36,7 +36,7 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     const src = readFileSync(join(import.meta.dirname, "..", "smoke.ts"), "utf8");
     // Lazy `[\s\S]*?` so the type annotation's `=>` (`Record<string, (c: SubsetCtx) => Promise<void>>`) is skipped
     // and the match stops at `= {`; a `[^=]*` stops at that `=>` and matches nothing (re-review N1). Proven in node
-    // against smoke.ts with this registry inserted: 2 names, ["streamTargets", "v1"].
+    // against smoke.ts with this registry inserted: 2 names, ["streamTargets", "v1"]; captureV2 joined it (capture QR v2 T12).
     const block = /const SELECTABLE_SUITES\b[\s\S]*?=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
     const names = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
     expect(names.length, "the registry block was found and read").toBeGreaterThan(0);

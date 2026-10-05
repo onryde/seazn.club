@@ -906,6 +906,9 @@ async function main() {
   // --- fixture-page stream T2b: streaming destinations over real HTTP — add, rename, replace key, remove (an archive),
   // remove again (404), re-add the same key (restored: the same id). On the shared Pro org; archives all it creates.
   await streamTargetsSuite(admin, org2.id);
+  // --- capture QR v2 (spec 2026-10-01 §11.1.6): the phone routes end to end — mint, claim, Go live, go-live, the
+  //     descriptor's cred (and none for a second phone), the fake connect, live, Stop, over; every answer private.
+  await captureV2Suite();
 
   // --- the above-Pro rung (Task 11): community's save-point window and its
   // ungated officials, api.write re-armed above Pro, and the rung above Pro
@@ -18568,6 +18571,172 @@ async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> 
 }
 
 /**
+ * Capture QR v2 over real HTTP (spec 2026-10-01 §11.1.6, case `capture-v2`), on the fake relay drivers: the organiser
+ * mints the stream code → a phone claims the slot with it → the organiser's Go live → the phone's beat hears `go-live`
+ * for that session → the phone's descriptor GET carries the session AND its `cred`, while a SECOND phone's GET of the
+ * same code carries the session and NO `cred` → the fake input connects (the T7 control route) → the phone's beat hears
+ * `live` → the organiser's Stop → the beat hears `over`, stopped. EVERY phone answer is `Cache-Control: private,
+ * no-store` (§6.3: each one can carry a credential) — counted, and zero counted is a failure. The phone is a bare HTTP
+ * client with the QR's Bearer tok and no cookie, as Seazn Capture is. Its own Pro org (a monthly credit to spend),
+ * purged by cleanup(). SMOKE_ONLY=captureV2 runs it alone (SELECTABLE_SUITES).
+ */
+async function captureV2Suite(): Promise<void> {
+  if (!process.env.DATABASE_URL) {
+    console.log("SKIP  capture-v2 suite (DATABASE_URL not set — the plan change needs SQL)");
+    return;
+  }
+  const EXPECTED_STEPS = 11;
+  let steps = 0;
+  const step = (label: string, cond: boolean) => {
+    check(`capture-v2 smoke: ${label}`, cond);
+    steps++;
+  };
+  const done = () => {
+    console.log(`capture-v2 smoke: ${steps} steps, ${phoneAnswers} phone answers`);
+    check(`capture-v2 smoke: all ${EXPECTED_STEPS} steps ran (ran ${steps})`, steps === EXPECTED_STEPS);
+  };
+  let phoneAnswers = 0;
+  const notPrivate: string[] = [];
+
+  const owner = newSession();
+  await signIn(owner, `delivered+capturev2_${tag}@resend.dev`);
+  const orgs = (await call(owner, "/api/orgs")) as { id: string }[];
+  const orgId = orgs[0].id;
+  await setPlan(orgId, "pro", owner);
+  const comp = v1data<{ id: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Capture ${tag}`, visibility: "public" }),
+  );
+  const fx = await timedFixture(owner, comp.id, {
+    name: "Capture",
+    sport_key: "hockey",
+    variant_key: "fih-outdoor",
+    entrants: [
+      { kind: "team", display_name: `Capture Home ${tag}`, seed: 1 },
+      { kind: "team", display_name: `Capture Away ${tag}`, seed: 2 },
+    ],
+  });
+
+  // 1. MINT — the organiser's stream code (§6.1): the v2 QR, exactly {v, code, slot, tok}, and private.
+  const minted = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-code`, "POST");
+  type Qr = { v: number; code: string; slot: number; tok: string };
+  const qr = (minted.json.data as { qr?: Qr } | undefined)?.qr;
+  step(
+    `POST stream-code → 200 with the v2 QR {v, code, slot, tok}, private, no-store (got ${minted.status})`,
+    minted.status === 200 &&
+      minted.headers.get("cache-control") === "private, no-store" &&
+      !!qr &&
+      JSON.stringify(Object.keys(qr)) === JSON.stringify(["v", "code", "slot", "tok"]) &&
+      qr.v === 2,
+  );
+  if (!qr) return done();
+
+  // The phone: Bearer tok, no cookie. Every answer's Cache-Control is recorded.
+  type Answer = { state?: string; sid?: string; startedBy?: string; endReason?: string; cred?: unknown; playbackUrl?: string; code?: string };
+  const phoneCall = async (path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; json: Answer | null }> => {
+    const res = await fetch(`${BASE}/api/v1/capture/codes/${qr.code}${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${qr.tok}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    phoneAnswers++;
+    const cache = res.headers.get("cache-control");
+    if (cache !== "private, no-store") notPrivate.push(`${method} ${path.split("?")[0] || "/"} → ${res.status} ${String(cache)}`);
+    return { status: res.status, json: (await res.json().catch(() => null)) as Answer | null };
+  };
+  const phoneA = randomBytes(16).toString("hex");
+  const phoneB = randomBytes(16).toString("hex");
+  const beat = (phone: string, extra: Record<string, unknown> = {}) =>
+    phoneCall("/beats", "POST", {
+      code: qr.code, slot: qr.slot, phone, claim: null, device: null, sid: null,
+      at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), state: "paired", cause: null, notReady: null,
+      startFailed: null, stopped: null, mode: "operator", transport: null, bitrateKbps: null, delivery: "unknown",
+      deliveredLagS: null, audioOk: null, battery: { percent: 80, charging: false, drainPctPerHour: null }, thermal: 0,
+      dataUsedMB: 0, appVersion: "1.4.0", ...extra,
+    });
+  const descriptor = (phone: string) => phoneCall(`?phone=${phone}&slot=${qr.slot}`, "GET");
+  /** Beat until the answer's state is `want` (requested/provisioning answer `waiting`; the server ticks on a beat that
+   *  names the session). Bounded: 40 beats a second apart. */
+  const beatUntil = async (want: string, extra: () => Record<string, unknown>): Promise<Answer | null> => {
+    for (let i = 0; i < 40; i++) {
+      const r = await beat(phoneA, extra());
+      if (r.json?.state === want) return r.json;
+      await new Promise((res) => setTimeout(res, 1_000));
+    }
+    return null;
+  };
+
+  // 2. CLAIM — phone A scans and claims the free slot: waiting (paired, nothing started).
+  const claimed = await beat(phoneA, { claim: "new", device: { model: "Smoke phone" } });
+  step(`a NEW claim on a free slot → 200 waiting (got ${claimed.status} ${claimed.json?.state})`, claimed.status === 200 && claimed.json?.state === "waiting");
+
+  // 3. GO LIVE — the organiser's destination, then the start: W5 admits it (a phone paired and answering).
+  const target = await v1(owner, `/api/v1/orgs/${orgId}/stream-targets`, "POST", {
+    kind: "youtube",
+    label: "capture-v2 smoke",
+    streamKey: `smoke-${randomBytes(6).toString("hex")}`,
+  });
+  const targetId = (target.json.data as { id?: string } | undefined)?.id;
+  const made = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions`, "POST", { mode: "passthrough", targetId });
+  const sid = (made.json.data as { sessionId?: string } | undefined)?.sessionId;
+  step(
+    `the organiser's Go live with the phone paired → 201 (destination ${target.status}, session ${made.status} ${made.json.error?.code ?? ""})`,
+    target.status === 201 && made.status === 201 && !!sid,
+  );
+  if (!sid) return done();
+
+  // 4. The phone's beat hears go-live for THIS session, started by the organiser (§6.3.3).
+  const heard = await beatUntil("go-live", () => ({}));
+  step(
+    `phone A's beat hears go-live for the session, startedBy organiser (got ${JSON.stringify(heard)})`,
+    heard?.sid === sid && heard?.startedBy === "organiser",
+  );
+
+  // 5–6. The descriptor: the session's own phone gets its cred; a SECOND phone, on the same code, never does.
+  const own = await descriptor(phoneA);
+  step(
+    `phone A's GET → 200, the session (${own.json?.state}) WITH cred (got ${own.status})`,
+    own.status === 200 && own.json?.sid === sid && !!own.json?.cred,
+  );
+  const other = await descriptor(phoneB);
+  step(
+    `a second phone's GET of the same code → 200, the session, and NO cred (got ${other.status}, cred ${other.json && "cred" in other.json ? "present" : "absent"})`,
+    other.status === 200 && other.json?.sid === sid && !!other.json && !("cred" in other.json),
+  );
+
+  // 7. FAKE CONNECT — the T7 control flips the session's fake input to connected (the phone's video arriving).
+  const inputId = own.json?.playbackUrl ? (new URL(own.json.playbackUrl).pathname.split("/")[1] ?? "") : "";
+  const flip = await fetch(`${BASE}/api/internal/relay/fake-ingest/${encodeURIComponent(inputId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state: "connected" }),
+  });
+  step(`POST fake-ingest/{input} {connected} → 200 (got ${flip.status}, input ${inputId ? "named" : "missing"})`, flip.status === 200 && inputId.length > 0);
+
+  // 8. LIVE — the phone, publishing the sid it holds, hears live (its beat ticks the session).
+  const publishing = () => ({ sid, state: "publishing", transport: "srt", delivery: "ok" });
+  const liveAnswer = await beatUntil("live", publishing);
+  step(`phone A's beat hears live for the session (got ${JSON.stringify(liveAnswer)})`, liveAnswer?.sid === sid);
+
+  // 9. STOP — the organiser's Stop.
+  const stopped = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions/${sid}/stop`, "POST");
+  step(`the organiser's Stop → 200 (got ${stopped.status})`, stopped.status === 200);
+
+  // 10. OVER — the phone that held it hears over, stopped.
+  const over = await beat(phoneA, publishing());
+  step(
+    `phone A's next beat hears over, stopped (got ${JSON.stringify(over.json)})`,
+    over.status === 200 && over.json?.state === "over" && over.json?.sid === sid && over.json?.endReason === "stopped",
+  );
+
+  // 11. Every phone answer above was private, no-store — and there were answers to judge.
+  step(
+    `every phone answer (${phoneAnswers}) is Cache-Control: private, no-store${notPrivate.length ? ` — not: ${notPrivate.join("; ")}` : ""}`,
+    phoneAnswers > 0 && notPrivate.length === 0,
+  );
+  done();
+}
+
+/**
  * The overlay route over real HTTP (stream overlay W1, Task 8) — the smoke
  * `overlay-tokens.ts` was owed since T1: the module has no HTTP surface of its
  * own, so its palette could only ever be proven where it is painted.
@@ -20240,6 +20409,8 @@ async function cleanup(tag: string): Promise<void> {
     // which without this line would stay listed in the sitemap of whatever
     // database the run was pointed at.
     `delivered+sitemap_${tag}@resend.dev`,
+    // captureV2Suite's own Pro org — its fixture, stream code, pairing and stopped session cascade with it.
+    `delivered+capturev2_${tag}@resend.dev`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
@@ -20379,6 +20550,7 @@ type SubsetCtx = { admin: Session; org2Id: string; org2Slug: string };
 const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   streamTargets: (c) => streamTargetsSuite(c.admin, c.org2Id),
   v1: (c) => v1Suite(c.admin, c.org2Id, c.org2Slug),
+  captureV2: () => captureV2Suite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan
