@@ -9,7 +9,8 @@
 //   anything else      -> refused
 // A group's timeout comes from stryker-timeouts.json (minutes; whole, at most 300): a selected group without one is refused,
 // and so is an empty matrix. The timeouts are calibrated on the 4-vCPU hosted runner and are re-derived when MATRIX_RUNNER
-// changes (the dry run's mutant count sets them, then PR-B's measured run replaces them).
+// changes: each is 1.5 times the leg's estimate, from the dry run's mutant count at the MEASURED cost of one mutant (26
+// runner-seconds, T15-SIZE; test/stryker-sizing.test.ts holds every leg to it), until Task 20's run on CI replaces them.
 // Exit codes, each with one meaning (the one convention, D8):
 //   0  the matrix line was printed;
 //   2  refused, nothing printed to stdout: usage, an unknown event or group, or a selected group without a valid timeout.

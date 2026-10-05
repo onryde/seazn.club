@@ -1155,14 +1155,14 @@ function runBlock(script: string, o: { cwd: string; env?: Record<string, string>
   const r = spawnSync("bash", ["-c", script], { cwd: o.cwd, encoding: "utf8", timeout: SPAWN_MS * 3, env: { PATH: `${bin}:${process.env.PATH ?? ""}`, RECORD: recordFile, ...o.env } });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, record: readFileSync(recordFile, "utf8").split("\n").filter(Boolean) };
 }
-/** A scratch packages/engine: the floor file, and a `draws` report (3 killed, 1 survived: 75.0%) at reports/mutation/draws.json. */
+/** A scratch packages/engine: the floor file, and a `draws-bracket` report (3 killed, 1 survived: 75.0%) at reports/mutation/draws-bracket.json. */
 function engineDir(floors: Record<string, number>, over: { omitReport?: boolean } = {}): string {
   const cwd = fresh("engine");
   writeFileSync(join(cwd, "stryker-floor.json"), JSON.stringify({ note: "t", groups: floors }));
   if (over.omitReport !== true) {
     mkdirSync(join(cwd, "reports/mutation"), { recursive: true });
     const m = (status: string, line: number) => ({ mutatorName: "ConditionalExpression", replacement: "true", status, location: { start: { line, column: 1 } } });
-    writeFileSync(join(cwd, "reports/mutation/draws.json"), JSON.stringify({ files: { "src/scheduling/bracket.ts": { mutants: [m("Killed", 1), m("Killed", 2), m("Timeout", 3), m("Survived", 4)] } } }));
+    writeFileSync(join(cwd, "reports/mutation/draws-bracket.json"), JSON.stringify({ files: { "src/scheduling/bracket.ts": { mutants: [m("Killed", 1), m("Killed", 2), m("Timeout", 3), m("Survived", 4)] } } }));
   }
   return cwd;
 }
@@ -1183,7 +1183,7 @@ describe("mutation.yml: the plan step derives the matrix through the real script
     ["schedule", "", Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe")],
     ["workflow_dispatch", "all", Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe")],
     ["workflow_dispatch", "probe", ["probe"]],
-    ["workflow_dispatch", "draws", ["draws"]],
+    ["workflow_dispatch", "draws-bracket", ["draws-bracket"]],
   ])("EVENT=%s GROUP='%s' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with %j", (event, group, want) => {
     const r = derive({ EVENT: event, GROUP: group });
     expect(r.status, r.stderr).toBe(0);
@@ -1204,9 +1204,9 @@ describe("mutation.yml: the Stryker step keeps Stryker's own exit and writes it 
   const script = body.script!;
   it("it runs `pnpm mutation` in packages/engine with STRYKER_GROUP from the job's GROUP", () => {
     expect(body.body).toContain("working-directory: packages/engine");
-    const r = runBlock(script, { cwd: fresh("engine"), env: { GROUP: "draws" } });
+    const r = runBlock(script, { cwd: fresh("engine"), env: { GROUP: "draws-bracket" } });
     expect(r.status, r.stderr).toBe(0);
-    expect(r.record).toEqual(["mutation", "STRYKER_GROUP=draws"]);
+    expect(r.record).toEqual(["mutation", "STRYKER_GROUP=draws-bracket"]);
   }, spawnBudget(1));
   it("a failing run: the step exits with Stryker's code, reports/mutation/exit.txt says so (the directory is made even if Stryker died before writing one), and EXIT= is printed", () => {
     let checked = 0;
@@ -1236,27 +1236,27 @@ describe("mutation.yml: the floor and survivors steps, run through the real engi
   });
 
   it("PR-A's state (the committed floor file is empty): it prints `no floor yet: PR-B sets it` and passes, for the group's real report", () => {
-    const r = runBlock(floorLine, { cwd: engineDir({}), env: { GROUP: "draws" } });
+    const r = runBlock(floorLine, { cwd: engineDir({}), env: { GROUP: "draws-bracket" } });
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
     expect(r.stdout).toContain("no floor yet: PR-B sets it");
-    expect(r.record).toEqual(['mutation:floor --check draws reports/mutation/draws.json --skip-if-no-floors']);
+    expect(r.record).toEqual(['mutation:floor --check draws-bracket reports/mutation/draws-bracket.json --skip-if-no-floors']);
   }, spawnBudget(1));
 
   it("once PR-B commits a floor: a group with no entry is a failure, a met floor passes and a missed one fails", () => {
-    expect(runBlock(floorLine, { cwd: engineDir({ competition: 40 }), env: { GROUP: "draws" } }).status).toBe(2);   // no entry for draws
-    expect(runBlock(floorLine, { cwd: engineDir({ draws: 75 }), env: { GROUP: "draws" } }).status).toBe(0);         // 3 of 4 = 75.0
-    expect(runBlock(floorLine, { cwd: engineDir({ draws: 75.1 }), env: { GROUP: "draws" } }).status).toBe(1);
+    expect(runBlock(floorLine, { cwd: engineDir({ competition: 40 }), env: { GROUP: "draws-bracket" } }).status).toBe(2);   // no entry for draws-bracket
+    expect(runBlock(floorLine, { cwd: engineDir({ "draws-bracket": 75 }), env: { GROUP: "draws-bracket" } }).status).toBe(0);         // 3 of 4 = 75.0
+    expect(runBlock(floorLine, { cwd: engineDir({ "draws-bracket": 75.1 }), env: { GROUP: "draws-bracket" } }).status).toBe(1);
   }, spawnBudget(3));
 
   it("a missing report is a failure even while no floor exists (a group that wrote nothing is never a skip)", () => {
-    const r = runBlock(floorLine, { cwd: engineDir({}, { omitReport: true }), env: { GROUP: "draws" } });
+    const r = runBlock(floorLine, { cwd: engineDir({}, { omitReport: true }), env: { GROUP: "draws-bracket" } });
     expect(r.status).toBe(2);
   }, spawnBudget(1));
 
   it("the survivors step writes SURVIVORS.md next to the group's report, listing the one survivor", () => {
     expect(stepOf(MJOBS.mutate!, "Survivors").body).toContain("working-directory: packages/engine");
     const cwd = engineDir({});
-    const r = runBlock(survivorsLine, { cwd, env: { GROUP: "draws" } });
+    const r = runBlock(survivorsLine, { cwd, env: { GROUP: "draws-bracket" } });
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
     const md = readFileSync(join(cwd, "SURVIVORS.md"), "utf8");
     expect(md.split("\n").filter((l) => l.startsWith("src/"))).toEqual(["src/scheduling/bracket.ts:4:1 ConditionalExpression → true"]);

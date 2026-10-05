@@ -181,12 +181,34 @@ function tally(report: Report, equivalents: readonly string[]): Tally {
 
 const fmt = (tenths: number): string => (tenths / 10).toFixed(1);
 
-/** The files of `report` that the group's `mutate` globs do not select (positives, then the negations). */
-function filesOutsideGroup(group: string, report: Report): string[] {
-  const globs = GROUPS[group] ?? [];
-  const positives = globs.filter((g) => !g.startsWith("!"));
-  const negations = globs.filter((g) => g.startsWith("!")).map((g) => g.slice(1));
-  return Object.keys(report.files).filter((f) => !positives.some((p) => matchesGlob(f, p)) || negations.some((n) => matchesGlob(f, n)));
+/** What a group's `mutate` entries select of one file, read in order as Stryker reads them (a glob adds the file, `!glob`
+ *  removes it, a later glob adds it back): null when none, "all", or the line ranges of the `file:a-b` entries. */
+function selection(entries: readonly string[], file: string): "all" | [number, number][] | null {
+  let sel: "all" | [number, number][] | null = null;
+  for (const e of entries) {
+    if (e.startsWith("!")) {
+      if (matchesGlob(file, e.slice(1))) sel = null;
+      continue;
+    }
+    const range = /^(.*):(\d+)-(\d+)$/.exec(e);
+    if (!matchesGlob(file, range === null ? e : (range[1] as string))) continue;
+    sel = range === null || sel === "all" ? "all" : [...(sel ?? []), [Number(range[2]), Number(range[3])]];
+  }
+  return sel;
+}
+
+/** What of `report` the group's `mutate` entries do not select: a file the group does not select, or, for a file the group
+ *  selects only by line range (a leg of a split file), a mutant that STARTS outside every range (`file:line`). A report of
+ *  another leg of the same file is the wrong report too. */
+function outsideGroup(group: string, report: Report): string[] {
+  const entries = GROUPS[group] ?? [];
+  const out: string[] = [];
+  for (const [file, { mutants }] of Object.entries(report.files)) {
+    const sel = selection(entries, file);
+    if (sel === null) out.push(file);
+    else if (sel !== "all") for (const m of mutants) if (!sel.some(([from, to]) => m.location.start.line >= from && m.location.start.line <= to)) out.push(`${file}:${m.location.start.line}`);
+  }
+  return out;
 }
 
 type Refused = { exit: 2; why: string };
@@ -195,8 +217,8 @@ type Refused = { exit: 2; why: string };
 function prepare(group: string, report: Report, equivalents: readonly string[]): Refused | { t: Tally } {
   if (GROUPS[group] === undefined) return { exit: 2, why: `unknown group "${group}": expected one of ${Object.keys(STRYKER_GROUPS).join(", ")}` };
   if (group === "probe") return { exit: 2, why: "the probe has no floor: it is the PR self-proof (D3), not a measured group" };
-  const outside = filesOutsideGroup(group, report);
-  if (outside.length > 0) return { exit: 2, why: `the report is not group "${group}"'s: it mutated ${outside.slice(0, 3).join(", ")}${outside.length > 3 ? ` and ${outside.length - 3} more` : ""}, outside the group's files` };
+  const outside = outsideGroup(group, report);
+  if (outside.length > 0) return { exit: 2, why: `the report is not group "${group}"'s: it mutated ${outside.slice(0, 3).join(", ")}${outside.length > 3 ? ` and ${outside.length - 3} more` : ""}, outside the group's files and line ranges` };
   const t = tally(report, equivalents);
   if (t.valid === 0) return { exit: 2, why: `zero mutants counted for group "${group}" (killed ${t.killed}, timeout ${t.timeout}, survived ${t.survived}, no coverage ${t.noCoverage}, ignored or errored ${t.outOfScore}, equivalent ${t.equivalent}): a report that measured nothing is refused, never passed` };
   return { t };
@@ -350,8 +372,8 @@ export function main(argv: string[]): number {
     if (mode === "survivors") {
       if (values.out === undefined || values.out === "") throw new Refusal(`--survivors needs --out <file>\n${USAGE}`);
       if (GROUPS[group] === undefined) throw new Refusal(`unknown group "${group}": expected one of ${Object.keys(STRYKER_GROUPS).join(", ")}`);
-      const outside = filesOutsideGroup(group, report);
-      if (outside.length > 0) throw new Refusal(`the report is not group "${group}"'s: it mutated ${outside.slice(0, 3).join(", ")}, outside the group's files`);
+      const outside = outsideGroup(group, report);
+      if (outside.length > 0) throw new Refusal(`the report is not group "${group}"'s: it mutated ${outside.slice(0, 3).join(", ")}, outside the group's files and line ranges`);
       const equivalents = readEquivalents();
       const md = survivorsMarkdown(group, report, equivalents);
       mkdirSync(dirname(resolve(values.out)), { recursive: true });

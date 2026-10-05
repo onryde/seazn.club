@@ -134,13 +134,13 @@ describe("a broken timeouts file is a refusal, never a matrix", () => {
   });
 
   spawnIt(4)("a group with no timeout is a refusal naming it, but only for the groups the event selects", () => {
-    const { draws: _drop, ...without } = TIMEOUTS;
+    const { "draws-bracket": _drop, ...without } = TIMEOUTS;
     const root = tree(JSON.stringify(without));
     const all = copy(root, "workflow_dispatch", "all");
     expect(all.status).toBe(2);
-    expect(all.stderr).toContain("draws");
+    expect(all.stderr).toContain("draws-bracket");
     expect(all.stdout).toBe("");
-    expect(copy(root, "workflow_dispatch", "draws").status).toBe(2);
+    expect(copy(root, "workflow_dispatch", "draws-bracket").status).toBe(2);
     expect(copy(root, "pull_request", "").status).toBe(0); // the probe's timeout is intact
     expect(copy(root, "workflow_dispatch", "core").status).toBe(0);
   });

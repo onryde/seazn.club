@@ -24,16 +24,32 @@ on:
         default: all
         options:
           - all
+          - competition-tiebreakers
+          - competition-progression
           - competition
           - core
-          - modules
-          - draws
+          - modules-io
+          - modules-sport
+          - modules-people
+          - draws-bracket
+          - draws-pairing
           - sports-cricket
-          - sports-cricket-kernel
-          - sports-football
-          - sports-period
-          - sports-setbased
-          - sports-nested
+          - sports-cricket-kernel-1
+          - sports-cricket-kernel-2
+          - sports-cricket-kernel-3
+          - sports-cricket-kernel-4
+          - sports-football-1
+          - sports-football-2
+          - sports-football-3
+          - sports-period-1
+          - sports-period-2
+          - sports-period-3
+          - sports-setbased-1
+          - sports-setbased-2
+          - sports-nested-1
+          - sports-nested-2
+          - sports-other-carrom
+          - sports-other-generic
           - sports-other
           - probe
       inject_visibility:
@@ -160,7 +176,7 @@ jobs:
       # separate steps, the save `if: always()`: actions/cache's own post-save runs only when the whole job succeeded, and a
       # group that missed its floor (the Floor check step below exits 1) would never keep the file it had just earned.
       # The key ends in '@<sha>' and the restore key in '@', never '-': a group name is lowercase letters and hyphens, so with
-      # a hyphen `stryker-sports-cricket-` would also match `stryker-sports-cricket-kernel-<sha>` and the wrong group's file
+      # a hyphen `stryker-sports-cricket-` would also match `stryker-sports-cricket-kernel-1@<sha>` and the wrong group's file
       # could be the one restored (matrix-workflow.test.ts derives that collision from the real group names).
       - name: Restore the incremental file
         uses: actions/cache/restore@v4

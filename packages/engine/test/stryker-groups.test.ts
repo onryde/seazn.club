@@ -9,6 +9,7 @@ import { dirname, join, matchesGlob, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as groupsModule from "../stryker.groups.mjs";
+import { lineCount, parseEntry, selected, type Selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 import { STRYKER_EXCLUDED, STRYKER_GROUPS, STRYKER_PLACEMENT_OUT_OF_SCOPE, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
 
@@ -21,37 +22,94 @@ const spawnIt = (n: number) => (name: string, fn: () => void) => it(name, fn, sp
 const universe = () => globSync("src/**/*.ts", { cwd: ENGINE }).filter((f) => !/__tests__|\.test\.ts$|\.d\.ts$/.test(f));
 // path.matchesGlob (node:path, Node 22+): minimatch is not a dependency of the engine or the root (review I11c).
 const inMap = (map: Record<string, string>, f: string) => Object.keys(map).some((e) => matchesGlob(f, e));
-// globSync's `exclude` option receives BASENAMES for files ('cascade.test.ts'), so a path negation never matches there
-// (probed on Node 26.8.2: 24 files, 14 of them tests). Expand the positives, then filter the RESULT (review 4, R4-I1).
-const expand = (globs: string[], only: string[] = globs.filter((g) => !g.startsWith("!"))) =>
-  globSync(only, { cwd: ENGINE }).filter((f) => !globs.filter((g) => g.startsWith("!")).some((n) => matchesGlob(f, n.slice(1))));
+// Ruling 66's ten groups, read here as FAMILIES now that the sizing (T15-SIZE) cut some of them into legs: a leg is named
+// for its family, or `<family>-<suffix>`. The ten are the ruling's own list, typed here and never derived from the groups.
+const FAMILIES = ["competition", "core", "modules", "draws", "sports-cricket", "sports-football", "sports-period", "sports-setbased", "sports-nested", "sports-other"] as const;
+const familyOf = (leg: string) => FAMILIES.find((f) => leg === f || leg.startsWith(`${f}-`));
+
+/** How the groups home one file: the legs that select it, and whether they home it exactly once: one leg selecting the whole
+ *  file, or legs that select ranges which tile it (the first starts at line 1, each next one at the line after the one
+ *  before, and the last runs to the end of the file or past it). Returns the problem, or null when the file is homed once. */
+function homingProblem(file: string, owners: { group: string; sel: Selected }[]): string | null {
+  if (owners.length === 1 && owners[0]!.sel === "all") return null;
+  const ranges: { group: string; from: number; to: number }[] = [];
+  for (const o of owners) {
+    if (o.sel === "all") return `${o.group} selects the whole file while ${owners.length - 1} other leg(s) select it too`;
+    for (const [from, to] of o.sel) ranges.push({ group: o.group, from, to });
+  }
+  ranges.sort((a, b) => a.from - b.from);
+  if (ranges[0]!.from !== 1) return `the first range starts at line ${ranges[0]!.from}, not line 1`;
+  for (let i = 1; i < ranges.length; i++) {
+    const prev = ranges[i - 1]!;
+    if (ranges[i]!.from !== prev.to + 1) return `${prev.group} ends at line ${prev.to} and ${ranges[i]!.group} starts at line ${ranges[i]!.from}`;
+  }
+  const last = ranges[ranges.length - 1]!;
+  const lines = lineCount(ENGINE, file);
+  if (last.to < lines) return `the last range (${last.group}) ends at line ${last.to}, but the file has ${lines} lines`;
+  return null;
+}
 
 describe("every engine source file has exactly one Stryker home (rulings 66, 67)", () => {
-  it("every non-test .ts under src/ is in exactly one group, a named exclusion, or the ruling-67 placement exclusion; unclassified = 0", () => {
+  it("every non-test .ts under src/ is homed once: whole in one group, or tiled by the ranges of several; or named in an exclusion or the ruling-67 placement exclusion. unclassified = 0", () => {
     const files = universe();
-    const owners = new Map<string, string[]>();
-    for (const [g, globs] of Object.entries(STRYKER_GROUPS)) if (g !== "probe") for (const f of expand(globs)) owners.set(f, [...(owners.get(f) ?? []), g]);
+    const owners = new Map<string, { group: string; sel: Selected }[]>();
+    for (const [g, globs] of Object.entries(STRYKER_GROUPS)) {
+      if (g === "probe") continue;
+      for (const [f, sel] of selected(ENGINE, globs)) owners.set(f, [...(owners.get(f) ?? []), { group: g, sel }]);
+    }
     const unclassified: string[] = [];
     const doubled: string[] = [];
-    let grouped = 0;
+    const untiled: string[] = [];
+    let whole = 0;
+    let split = 0;
+    let parts = 0;
     let excluded = 0;
     let placement = 0;
     for (const f of files) {
-      const homes = (owners.get(f)?.length ?? 0) + (inMap(STRYKER_EXCLUDED, f) ? 1 : 0) + (inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, f) ? 1 : 0);
+      const own = owners.get(f) ?? [];
+      const homed = own.length > 0;
+      const homes = (homed ? 1 : 0) + (inMap(STRYKER_EXCLUDED, f) ? 1 : 0) + (inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, f) ? 1 : 0);
       if (homes === 0) unclassified.push(f);
       if (homes > 1) doubled.push(f);
-      grouped += owners.get(f)?.length ?? 0;
+      if (homed) {
+        const problem = homingProblem(f, own);
+        if (problem !== null) untiled.push(`${f}: ${problem}`);
+        if (own.length === 1 && own[0]!.sel === "all") whole++;
+        else {
+          split++;
+          parts += own.length;
+        }
+      }
       excluded += inMap(STRYKER_EXCLUDED, f) ? 1 : 0;
       placement += inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, f) ? 1 : 0;
     }
     // the failure message reports the count, so a red names how many files escaped (ruling 67)
     expect(unclassified, `${unclassified.length} of ${files.length} file(s) unclassified`).toEqual([]);
     expect(doubled, "files with more than one home").toEqual([]);
+    expect(untiled, "files whose ranges do not tile them exactly once").toEqual([]);
     // anti-vacuity, derived from the maps and never typed: the universe is exactly what was homed, and every class was non-empty
-    expect(files.length).toBe(grouped + excluded + placement);
-    expect(grouped).toBeGreaterThan(0);
+    expect(files.length).toBe(whole + split + excluded + placement);
+    expect(whole).toBeGreaterThan(0);
+    expect(split, "files cut into ranges").toBeGreaterThan(0);
+    expect(parts, "ranges over those files").toBeGreaterThan(split);
     expect(excluded).toBeGreaterThan(0);
     expect(placement).toBe(Object.keys(STRYKER_PLACEMENT_OUT_OF_SCOPE).length); // every placement key is one existing exact file
+  });
+
+  it("the tiling check refuses each way a split file can go wrong: a gap, an overlap, a range that stops short of the end, one that does not start at line 1, and a whole file selected twice", () => {
+    const file = "src/sports/cricket/cricket.ts"; // a real file, so lineCount is real
+    const n = lineCount(ENGINE, file);
+    const r = (group: string, from: number, to: number) => ({ group, sel: [[from, to]] as Selected });
+    expect(homingProblem(file, [r("a", 1, 10), r("b", 11, n)]), "a clean tiling").toBeNull();
+    expect(homingProblem(file, [r("b", 11, n), r("a", 1, 10)]), "order of the owners does not matter").toBeNull();
+    expect(homingProblem(file, [r("a", 1, 10), r("b", 12, n)]), "a gap").toMatch(/a ends at line 10 and b starts at line 12/);
+    expect(homingProblem(file, [r("a", 1, 10), r("b", 10, n)]), "an overlap").toMatch(/a ends at line 10 and b starts at line 10/);
+    expect(homingProblem(file, [r("a", 1, 10), r("b", 11, n - 1)]), "short of the end").toMatch(/ends at line \d+, but the file has \d+ lines/);
+    expect(homingProblem(file, [r("a", 2, 10), r("b", 11, n)]), "not from line 1").toMatch(/starts at line 2, not line 1/);
+    expect(homingProblem(file, [r("a", 1, 10), r("b", 11, 99999)]), "99999 is how a range says to the end").toBeNull();
+    expect(homingProblem(file, [{ group: "a", sel: "all" }, r("b", 1, 99999)]), "a whole file plus a range").toMatch(/selects the whole file/);
+    expect(homingProblem(file, [{ group: "a", sel: "all" }, { group: "b", sel: "all" }]), "a whole file in two legs").toMatch(/selects the whole file/);
+    expect(homingProblem(file, [{ group: "a", sel: "all" }]), "one whole file is one home").toBeNull();
   });
 
   it("every exclusion names its own reason and globs at least one file, in BOTH maps", () => {
@@ -93,13 +151,14 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
     expect(Object.keys(STRYKER_EXCLUDED)).toContain("src/scheduling/generated/**");
     const scheduling = Object.keys(STRYKER_EXCLUDED).filter((k) => k.startsWith("src/scheduling/"));
     expect(scheduling).toHaveLength(6);
-    // the seven draw generators are not excluded and not placement
+    // the seven draw generators are not excluded and not placement, and the two draws legs hold exactly those seven
+    const draws = [...STRYKER_GROUPS["draws-bracket"], ...STRYKER_GROUPS["draws-pairing"]];
     for (const n of ["bracket", "bracket-layout", "roundrobin", "swiss", "americano", "participants", "feedgraph"]) {
       expect(inMap(STRYKER_EXCLUDED, `src/scheduling/${n}.ts`), `${n} excluded`).toBe(false);
       expect(inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, `src/scheduling/${n}.ts`), `${n} placement`).toBe(false);
-      expect(STRYKER_GROUPS.draws, n).toContain(`src/scheduling/${n}.ts`);
+      expect(draws.filter((e) => e === `src/scheduling/${n}.ts`), `${n} in exactly one draws leg`).toHaveLength(1);
     }
-    expect(STRYKER_GROUPS.draws).toHaveLength(7);
+    expect(draws).toHaveLength(7);
   });
 
   it("no in-scope production file imports payload-fixtures.ts, the file excluded because it feeds only the placement tests (review 4, R4-m4)", () => {
@@ -114,7 +173,7 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
   it("the probe is one exact file with a co-located test, and a draw generator (ruling 66)", () => {
     expect(STRYKER_GROUPS.probe).toEqual(["src/scheduling/roundrobin.ts"]);
     expect(existsSync(join(ENGINE, "src/scheduling/roundrobin.test.ts"))).toBe(true);
-    expect(STRYKER_GROUPS.draws).toContain("src/scheduling/roundrobin.ts");
+    expect(STRYKER_GROUPS["draws-pairing"]).toContain("src/scheduling/roundrobin.ts");
     expect(inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, "src/scheduling/roundrobin.ts")).toBe(false);
   });
 
@@ -123,17 +182,14 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
     let positives = 0;
     for (const [g, globs] of Object.entries(STRYKER_GROUPS)) {
       const pos = globs.filter((x) => !x.startsWith("!"));
-      const files = expand(globs);
-      // EACH positive entry must match a file, not just the group's total (review 4, R4-m5)
-      for (const p of pos) expect(globSync([p], { cwd: ENGINE }).length, `${g}: ${p} matches no file`).toBeGreaterThan(0);
+      const files = [...selected(ENGINE, globs).keys()];
+      // EACH positive entry must match a file, not just the group's total (review 4, R4-m5); a range entry matches its file
+      for (const p of pos) expect(globSync([parseEntry(p).glob], { cwd: ENGINE }).length, `${g}: ${p} matches no file`).toBeGreaterThan(0);
       checked += files.length;
       positives += pos.length;
       expect(files.filter((f) => /\.test\.ts$|__tests__/.test(f)), g).toEqual([]);
-      // a glob group carries the negations itself (Stryker reads `mutate`, not this test's filter)
-      if (pos.some((p) => p.includes("*"))) {
-        expect(globs, `${g} negations`).toEqual(expect.arrayContaining(["!src/**/*.test.ts", "!src/**/__tests__/**"]));
-        expect(globs.slice(pos.length), `${g}: negations come after every positive`).toEqual(globs.filter((x) => x.startsWith("!")));
-      }
+      // a glob group carries the negations itself (Stryker reads `mutate`, not this test's filter), as its last two entries
+      if (pos.some((p) => p.includes("*"))) expect(globs.slice(-2), `${g}: the test negations come last`).toEqual(["!src/**/*.test.ts", "!src/**/__tests__/**"]);
     }
     // the bound comes from the groups themselves, not a typed number
     expect(positives).toBeGreaterThan(Object.keys(STRYKER_GROUPS).length);
@@ -144,41 +200,55 @@ describe("every engine source file has exactly one Stryker home (rulings 66, 67)
   it("the negations are what keep test files out: without them the same positives DO reach test files (the guard has something to guard)", () => {
     let reached = 0;
     for (const globs of Object.values(STRYKER_GROUPS)) {
-      const pos = globs.filter((x) => !x.startsWith("!"));
+      const pos = globs.filter((x) => !x.startsWith("!")).map((x) => parseEntry(x).glob);
       reached += globSync(pos, { cwd: ENGINE }).filter((f) => /\.test\.ts$|__tests__/.test(f)).length;
     }
     expect(reached, "co-located tests exist under the grouped directories").toBeGreaterThan(0);
   });
 
-  it("the group names are ruling 66's ten plus the probe, plus the one carve-out the dry run forced, in declaration order (the dispatch choices test is order-sensitive)", () => {
-    expect(Object.keys(STRYKER_GROUPS)).toEqual([
-      "competition", "core", "modules", "draws", "sports-cricket", "sports-cricket-kernel", "sports-football", "sports-period", "sports-setbased", "sports-nested", "sports-other", "probe",
-    ]);
+  it("the legs are ruling 66's ten families and the probe: every leg belongs to one family, every family has a leg, the probe is last", () => {
+    const names = Object.keys(STRYKER_GROUPS);
+    expect(names.at(-1)).toBe("probe");
+    const legs = names.filter((g) => g !== "probe");
+    expect(legs.filter((g) => familyOf(g) === undefined), "legs of no family").toEqual([]);
+    for (const f of FAMILIES) expect(legs.filter((g) => familyOf(g) === f).length, `legs of ${f}`).toBeGreaterThan(0);
+    // a family's legs are declared together (the dispatch choices read them in this order)
+    for (const f of FAMILIES) {
+      const at = legs.map((g, i) => (familyOf(g) === f ? i : -1)).filter((i) => i >= 0);
+      expect(at[at.length - 1]! - at[0]! + 1, `${f}'s legs are contiguous`).toBe(at.length);
+    }
+    expect(legs.length, "more legs than families, or nothing was split").toBeGreaterThan(FAMILIES.length);
   });
 
-  it("cricket.ts is carved out of sports-cricket into its own group: the other cricket files, and any new one, stay in sports-cricket (the dry run's mutant count put the family over the split line)", () => {
-    expect(STRYKER_GROUPS["sports-cricket-kernel"]).toEqual(["src/sports/cricket/cricket.ts"]);
-    expect(existsSync(join(ENGINE, "src/sports/cricket/cricket.ts"))).toBe(true);
-    const rest = expand(STRYKER_GROUPS["sports-cricket"]);
-    expect(rest).not.toContain("src/sports/cricket/cricket.ts");
+  it("cricket.ts is split into ranges; the other cricket files, and any new one, stay together in sports-cricket", () => {
+    const kernel = "src/sports/cricket/cricket.ts";
+    const kernelLegs = Object.entries(STRYKER_GROUPS).filter(([g]) => g.startsWith("sports-cricket-kernel-"));
+    expect(kernelLegs.length).toBeGreaterThan(1);
+    for (const [g, entries] of kernelLegs) {
+      expect(entries, g).toHaveLength(1);
+      expect(parseEntry(entries[0] as string).glob, g).toBe(kernel);
+      expect(parseEntry(entries[0] as string).lines, `${g} is a range`).not.toBeNull();
+    }
+    const rest = [...selected(ENGINE, STRYKER_GROUPS["sports-cricket"]).keys()];
+    expect(rest).not.toContain(kernel);
     // the rest is what is in the directory besides it and the tests
     const all = universe().filter((f) => f.startsWith("src/sports/cricket/"));
     expect(all.length).toBeGreaterThan(1);
-    expect(rest.slice().sort()).toEqual(all.filter((f) => f !== "src/sports/cricket/cricket.ts").sort());
+    expect(rest.slice().sort()).toEqual(all.filter((f) => f !== kernel).sort());
   });
 
-  it("the sports groups split src/sports/ by family: every sport directory is in exactly one of them, and the top-level files are in sports-other", () => {
+  it("the sports legs split src/sports/ by family: every sport directory is in exactly one family, and the top-level files are in sports-other", () => {
     const dirs = new Set(readdirSync(join(ENGINE, "src/sports"), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name));
     expect(dirs.size).toBeGreaterThan(5);
     const sports = Object.entries(STRYKER_GROUPS).filter(([g]) => g.startsWith("sports-"));
-    expect(sports.length).toBe(7); // ruling 66's six, plus the cricket.ts carve-out
+    expect(sports.length).toBeGreaterThan(6);
     for (const d of dirs) {
-      const owners = sports.filter(([, globs]) => globs.some((x) => x === `src/sports/${d}/**/*.ts`)).map(([g]) => g);
-      expect(owners, `src/sports/${d}/`).toHaveLength(1);
+      const families = new Set(sports.filter(([, globs]) => globs.some((x) => !x.startsWith("!") && parseEntry(x).glob.startsWith(`src/sports/${d}/`))).map(([g]) => familyOf(g)));
+      expect([...families], `src/sports/${d}/`).toHaveLength(1);
     }
     const topLevel = globSync("src/sports/*.ts", { cwd: ENGINE }).filter((f) => !/\.test\.ts$/.test(f));
     expect(topLevel.length).toBeGreaterThan(0);
-    expect(expand(STRYKER_GROUPS["sports-other"])).toEqual(expect.arrayContaining(topLevel));
+    expect([...selected(ENGINE, STRYKER_GROUPS["sports-other"]).keys()]).toEqual(expect.arrayContaining(topLevel));
   });
 });
 
@@ -225,7 +295,7 @@ describe("stryker.groups.d.mts declares exactly what stryker.groups.mjs exports 
     expect(Object.keys(groupsModule).sort()).toEqual(declared);
   });
   it("the group-name union in the declaration is STRYKER_GROUPS's keys, in order", () => {
-    const union = /STRYKER_GROUPS: Record<([^,]+),/.exec(dts)?.[1];
+    const union = /STRYKER_GROUPS: Record<([\s\S]+?),\s*string\[\]\s*>;/.exec(dts)?.[1];
     expect(union, "STRYKER_GROUPS is declared as a Record over a union of names").toBeDefined();
     const names = [...union!.matchAll(/"([\w-]+)"/g)].map((m) => m[1]);
     expect(names.length).toBeGreaterThan(1);
