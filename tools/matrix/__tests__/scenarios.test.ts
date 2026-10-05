@@ -735,8 +735,11 @@ describe("knockout_third_place: the third-place match is BUILT, not only stored 
 });
 
 describe("final review I-1 on the fakes: a result the harness did not post, or one stored differently, reds the case", () => {
+  /** A mixin's base must construct with `...args: any[]` (TS2545): FakeLeagueDriver takes an orgId, FakeKnockoutDriver options. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type Ctor<T> = new (...args: any[]) => T;
   /** The product decides a seated fixture by itself when the division starts: no withdrawal, no bye. */
-  function autoDecides<T extends new () => FakeLeagueDriver>(Base: T) {
+  function autoDecides<T extends Ctor<FakeLeagueDriver>>(Base: T) {
     return class extends Base {
       override async start() {
         const out = await super.start();
@@ -747,7 +750,7 @@ describe("final review I-1 on the fakes: a result the harness did not post, or o
     };
   }
   /** The product answers each POST correctly but READS BACK the first two-sided decided fixture with the other winner. */
-  function flipsStored<T extends new () => FakeLeagueDriver>(Base: T) {
+  function flipsStored<T extends Ctor<FakeLeagueDriver>>(Base: T) {
     return class extends Base {
       override rows() {
         const rows = super.rows();
@@ -1570,7 +1573,7 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
     const ctx = ctxFor(driver, "LIFECYCLE", { sport: "badminton", variant: "bwf" });
     const rec = new Recorder();
     const setup = await setUpDivision(ctx, rec, 4);
-    const f = (await driver.listFixtures("d1"))[0]!;
+    const f = (await driver.listFixtures())[0]!;
     return { driver, ctx, rec, setup, f };
   }
   it("a forfeit on a live fixture the harness already started posts only core.forfeit and folds the full stream", async () => {
@@ -1773,13 +1776,13 @@ describe("the swiss branch of playStage on the swiss fake", () => {
   it("m-5: start mints an empty shell per board for EVERY round and seats nobody; each generate seats one round onto its shells", async () => {
     const driver = new FakeSwissDriver();
     const ctx = ctxFor(driver, "LIFECYCLE", { row: "swiss" });
-    const setup = await setUpDivision(ctx, new Recorder(), 7);
+    await setUpDivision(ctx, new Recorder(), 7);
     const budget = driver.budget;
     // swiss-shell.ts planSwissShells: floor(7/2) boards + one bye shell per round.
     expect(driver.fixtures).toHaveLength(budget * 4);
     expect(driver.fixtures.every((f) => f.home_entrant_id === null && f.away_entrant_id === null && f.status === "scheduled")).toBe(true);
     const ids = driver.fixtures.map((f) => f.id);
-    const g = await driver.generate(setup.stage.id);
+    const g = await driver.generate();
     expect(g.created).toBe(0); // seating UPDATEs shells (stages.ts swissGen)
     expect(driver.fixtures.map((f) => f.id)).toEqual(ids);
     const r1 = driver.fixtures.filter((f) => f.round_no === 1);
@@ -1788,7 +1791,7 @@ describe("the swiss branch of playStage on the swiss fake", () => {
     expect(driver.fixtures.filter((f) => (f.round_no ?? 0) > 1).every((f) => f.home_entrant_id === null)).toBe(true);
     // The next round is refused while this one has an undecided board (stages.ts swissGen gate),
     // with the status the product maps STAGE_NOT_READY to (Task 8 m-7: it is 422, not 409).
-    await expect(driver.generate(setup.stage.id)).rejects.toMatchObject({ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY" });
+    await expect(driver.generate()).rejects.toMatchObject({ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY" });
   });
   it("m-5: a withdrawal reshapes the next round's shells to the active field (8 → 7: one board shell dropped, a bye shell minted)", async () => {
     const r = await runOn(new FakeSwissDriver(), "R4", { row: "swiss" });

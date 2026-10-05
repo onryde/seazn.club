@@ -34,7 +34,8 @@
   "include": ["scripts/**/*.ts", "tools/**/*.ts"],
   // vitest test files under scripts/__tests__ run under vitest, not
   // `node --experimental-strip-types` — they don't belong to this config's
-  // node-module-semantics purpose, and can't type-resolve `vitest` from here
-  // anyway (no root-level vitest install; it's per-workspace only).
+  // node-module-semantics purpose. tsconfig.tools-tests.json type-checks them
+  // (and tools/matrix's) under bundler resolution instead; `vitest` is a root
+  // devDependency for exactly that (W1d item 7, D9).
   "exclude": ["scripts/**/*.test.ts", "tools/**/*.test.ts"]
 }

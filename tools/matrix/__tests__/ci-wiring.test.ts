@@ -435,3 +435,31 @@ describe("lock-append-only CI wiring (W1d Task 1, item 1 D10)", () => {
     expect(r.stdout).toMatch(/^lock-append-only: \d+ entries compared, \d+ added$/m);
   }, spawnBudget(1));
 });
+
+// W1d Task 10 (item 7, D9): tsconfig.scripts.json excludes every *.test.ts, so
+// type errors in test code reached main. tsconfig.tools-tests.json checks them,
+// and the check lives only in ci.yml's gates job (a full `tsc -p` inside the
+// unit step would duplicate the gates step's minutes against the unit step's
+// timeout). Nothing else goes red when the step is deleted, so this pins it:
+// a line-based read of ci.yml, as R26's and Task 1's are.
+describe("tools-tests type-check CI wiring (W1d Task 10, item 7 D9)", () => {
+  const STEP = "      - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json";
+  const lines = ci.split("\n");
+  const isComment = (l: string) => /^\s*#/.test(l);
+  // the job a line sits in: the last two-space job key at or above it
+  const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+
+  it("the tools-tests type-check runs in the gates job, exactly once, and nothing can make it conditional or advisory (W1d item 7)", () => {
+    const at = lines.indexOf(STEP);
+    expect(at).toBeGreaterThan(0);
+    expect(lines.filter((l) => l.includes("tsconfig.tools-tests.json") && !isComment(l))).toEqual([STEP]);
+    // a key under the step (`if:`, `continue-on-error:`, `env:`, …) would sit at indent 8
+    expect(lines[at + 1]).toMatch(/^ {6}(- |#)/);
+    expect(jobAt(at)).toBe("  gates:");
+    // nor a job-level `if:` / `continue-on-error:` on the job that hosts it
+    const gatesAt = lines.indexOf("  gates:");
+    const header = lines.slice(gatesAt + 1, lines.indexOf("    steps:", gatesAt));
+    expect(header.length).toBeGreaterThan(0);
+    for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
+  });
+});

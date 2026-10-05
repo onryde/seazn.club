@@ -134,7 +134,7 @@ describe("createFixtureAccount", () => {
    *  stripe-connect.test.ts uses — so a field rename in `stripe` moves this
    *  file rather than leaving it asserting a stale name. */
   const paramsOf = (fn: ReturnType<typeof stubStripe>["v2Create"]) =>
-    fn.mock.calls[0][0] as unknown as Stripe.V2.Core.AccountCreateParams;
+    (fn.mock.calls[0] as unknown[])[0] as Stripe.V2.Core.AccountCreateParams;
 
   it("creates through Accounts v2, never the v1 accounts API", async () => {
     const s = stubStripe();

@@ -116,6 +116,11 @@ jobs:
       # entry is a rewritten plan for evidence already committed. HEAD^1 as
       # for the single-sport ratchet two steps above.
       - run: pnpm matrix:lock-check --against HEAD^1
+      # Item 7 (W1d D9): tsconfig.scripts.json excludes every *.test.ts, so a type
+      # error in a test reached main. This config type-checks the matrix's and
+      # scripts' tests too; tools-tests-typecheck.test.ts proves its reach and
+      # ci-wiring.test.ts pins this step (no `if:`, no continue-on-error:).
+      - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh
@@ -218,7 +223,9 @@ jobs:
       # not prove the DB-free claim. Same explicit-binary-path +
       # explicit-target-path + dual reporter + testTimeout convention as the
       # "Repo-root scripts tests" step in the smoke-db job (this file,
-      # further down): no root-level vitest install/config exists, so
+      # further down): no root-level vitest CONFIG exists (a root vitest
+      # devDependency does, since W1d item 7 — it only lets the tools-tests
+      # type-check resolve `vitest`'s types), so
       # packages/engine's already-installed binary is invoked directly with
       # an explicit target path rather than relying on config
       # auto-discovery, which would walk up from cwd and find nothing to
@@ -745,9 +752,11 @@ jobs:
       # scripts have no home in either workspace's own `npm test`: both
       # packages/engine and apps/web restrict their vitest `include` to their
       # own src/**, so neither would ever collect a file under scripts/, and
-      # there is no root-level vitest install (`npx vitest`/`pnpm exec
-      # vitest` from the repo root both fail to resolve the binary — proved
-      # locally, not assumed). Invoking packages/engine's already-installed
+      # there was no root-level vitest install (`npx vitest`/`pnpm exec
+      # vitest` from the repo root both failed to resolve the binary — proved
+      # locally, not assumed; W1d item 7 has since added a root devDependency
+      # so the tools-tests type-check can resolve `vitest`, which changes
+      # nothing below: still no root config). Invoking packages/engine's already-installed
       # binary directly, with an EXPLICIT path argument rather than a
       # config-driven include glob, sidesteps both: vitest's config
       # auto-discovery walks up from cwd, and the repo root has no

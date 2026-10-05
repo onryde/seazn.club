@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.scripts.json",
+  "compilerOptions": { "module": "preserve", "moduleResolution": "bundler", "noEmit": true },
+  "include": ["scripts/**/*.ts", "tools/matrix/**/*.ts"],
+  "exclude": []
+}

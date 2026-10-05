@@ -122,10 +122,10 @@ export default defineConfig([
 
   {
     // Test files are EXCLUDED from tsconfig.scripts.json (its own comment
-    // explains why: they run under vitest, not `node --experimental-strip-types`,
-    // and cannot resolve `vitest` from a root-level project that has no vitest
-    // install). A type-aware rule set cannot parse a file outside its project,
-    // so these get the untyped ruleset rather than a fabricated second project.
+    // explains why: they run under vitest, not `node --experimental-strip-types`;
+    // tsconfig.tools-tests.json type-checks them separately, in CI). A type-aware
+    // rule set cannot parse a file outside its project, so these get the untyped
+    // ruleset rather than a fabricated second project.
     //
     // This is a real gap and worth naming: it is the same exclusion that makes
     // these files invisible to `typecheck:scripts`, and it already let a
@@ -149,7 +149,12 @@ export default defineConfig([
     // (only `scripts/**/*.ts` is included). `recommendedTypeChecked` still
     // matches them via `eslint scripts`, and typed rules then crash without
     // parserOptions.project — same failure mode as the test-file block above.
-    files: ["scripts/**/*.{mjs,cjs,js}", "tools/**/*.{mjs,cjs,js}"],
+    //
+    // `scripts/**/*.d.mts` joins them (W1d item 7, D9): a declaration file for
+    // one of these .mjs modules (scripts/lib/tools-import-guard.d.mts) is not in
+    // tsconfig.scripts.json either, and typescript-eslint's base config matches
+    // every `*.mts`, so `eslint scripts` picks it up and crashed on it.
+    files: ["scripts/**/*.{mjs,cjs,js}", "scripts/**/*.d.mts", "tools/**/*.{mjs,cjs,js}"],
     extends: [tseslint.configs.disableTypeChecked],
     rules: {
       "no-console": "off",
