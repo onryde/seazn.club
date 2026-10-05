@@ -920,7 +920,11 @@ export function PhoneTab({
       const got = await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`);
       if (seq !== phoneSeq.current) return;
       setPhone(got);
-      serverPick.current = got.destination?.id ?? null;
+      const answer = got.destination?.id ?? null;
+      // B8 final re-review n-6: "couldn't save" is news only while the server's answer is the one it was said beside —
+      // an answer that CHANGES (saved from another device or tab) retires it. A poll answering the same keeps it.
+      if (answer !== serverPick.current) setPickFailed(false);
+      serverPick.current = answer;
       settleSelection();
     } catch {
       // transient — the poll asks again
@@ -1058,6 +1062,8 @@ export function PhoneTab({
         method: "POST",
         json: { mode: "passthrough", targetId: chosen },
       });
+      // n-6: the start saved its destination — a pick that did not save is no longer news, at Ready after it either.
+      setPickFailed(false);
     } catch (err) {
       const code = createErrorCode(err);
       // D12: "your plan, not your credits" is the upgrade surface, never a retry sentence.

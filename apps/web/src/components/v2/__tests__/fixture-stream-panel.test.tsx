@@ -2755,6 +2755,64 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).pickFailed, "the failure was about a pick already replaced").toBe(false);
   });
 
+  // B8 final re-review n-6 (the reviewer's probe, made permanent): the "couldn't save" alert is about the server not
+  // holding the pick. It goes when that stops being news — the server's answer CHANGES (saved from another device or
+  // tab), or a Go live succeeds (the start saves its destination) — and never comes back at Ready after the session.
+  it("n-6: the pick-failure alert clears when the server's answer CHANGES (not on a poll that answers the same), and on a Go live that succeeds — and is not back at Ready after Stop and Start another", async () => {
+    let checked = 0;
+    // 1. The server's answer moves to the very destination the failed pick wanted (another device saved it).
+    {
+      const s = serve({ current: null, targets: TARGETS, saved: { row: true, targetId: "t2" } });
+      s.failSettings = () => { throw new TypeError("Failed to fetch"); };
+      const island = track(await mount(s));
+      bodyOf(island).onSelectTarget("t1");
+      await settle();
+      expect([bodyOf(island).selectedTargetId, bodyOf(island).pickFailed], "PREMISE — the failed pick").toEqual(["t2", true]);
+      // A poll that answers the SAME keeps the alert: nothing the organiser was told has changed.
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect([bodyOf(island).selectedTargetId, bodyOf(island).pickFailed], "the same answer: still said").toEqual(["t2", true]);
+      s.saved = { row: true, targetId: "t1" };
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(bodyOf(island).selectedTargetId, "the server's new answer").toBe("t1");
+      expect(bodyOf(island).pickFailed, "the answer changed: the alert goes").toBe(false);
+      expect(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-pick-error")).toBeUndefined();
+      checked++;
+    }
+    // 2. Go live on the server's answer succeeds, then Stop and Start another: Ready shows no stale alert.
+    {
+      const s = serve({ current: null, targets: TARGETS, saved: { row: true, targetId: "t2" } });
+      s.failSettings = () => { throw new TypeError("Failed to fetch"); };
+      s.create = () => { s.current = session({ id: "s1" }); s.saved = { row: true, targetId: "t2" }; return { sessionId: "s1" }; };
+      s.stop = () => {
+        s.current = session({ id: "s1", state: "completed", startedAt: "2026-09-14T11:50:00Z", endedAt: "2026-09-14T11:58:00Z", endReason: "stopped", creditUsed: true });
+        return s.current;
+      };
+      const island = track(await mount(s));
+      bodyOf(island).onSelectTarget("t1");
+      await settle();
+      expect([bodyOf(island).selectedTargetId, bodyOf(island).pickFailed], "PREMISE — the failed pick").toEqual(["t2", true]);
+      bodyOf(island).onGoLive();
+      await settle();
+      expect(bodyOf(island).view?.state, "PREMISE — the session is up").toBe("warming");
+      expect(bodyOf(island).pickFailed, "Go live succeeded: the alert goes").toBe(false);
+      s.current = session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" });
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      bodyOf(island).onStop();
+      await settle();
+      expect(bodyOf(island).view?.state, "PREMISE — the Ended card").toBe("completed");
+      bodyOf(island).onAgain();
+      await settle();
+      const ready = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+      expect(byTestId(ready, "stream-target"), "PREMISE — Ready, the picker shown").toBeDefined();
+      expect(byTestId(ready, "stream-pick-error"), "no stale alert at Ready").toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   // B8 review I-1 (controller ruling, §17.13): what the organiser sees is what streams. For EVERY row of THE table the
   // picker shows the row's answer — the target the phone's start opens on (stream-target-agreement.test.ts proves the
   // server half: read model == descriptor == start) — and Go live is held exactly on the rows whose answer is none.
