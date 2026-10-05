@@ -121,6 +121,9 @@ jobs:
       # scripts' tests too; tools-tests-typecheck.test.ts proves its reach and
       # ci-wiring.test.ts pins this step (no `if:`, no continue-on-error:).
       - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json
+      # D14 (W1d): a Stryker floor never falls. HEAD^1 as for the lock gate. Absent at HEAD^1
+      # (PR-A's own first run) means "no floors yet": the CLI exits 0 for it.
+      - run: pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh

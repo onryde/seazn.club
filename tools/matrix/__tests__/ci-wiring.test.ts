@@ -463,3 +463,50 @@ describe("tools-tests type-check CI wiring (W1d Task 10, item 7 D9)", () => {
     for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
   });
 });
+
+// W1d Task 15 (D14): the Stryker floor never falls. Nothing else goes red when the step is deleted or made advisory, so this
+// pins it, line-based as Task 10's is, and then RUNS the command as ci.yml spells it, so a flag pnpm swallowed or a script
+// that does not exist reds here and not on the first PR that lowers a floor.
+describe("Stryker floor CI wiring (W1d Task 15, D14)", () => {
+  const STEP = "      - run: pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1";
+  const TSC_STEP = "      - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json";
+  const lines = ci.split("\n");
+  const isComment = (l: string) => /^\s*#/.test(l);
+  // the job a line sits in: the last two-space job key at or above it
+  const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+
+  it("the Stryker floor gate runs in the gates job, exactly once, and nothing can make it conditional or advisory (W1d D14)", () => {
+    const at = lines.indexOf(STEP);
+    expect(at).toBeGreaterThan(0);
+    expect(lines.filter((l) => l.includes("mutation:floor") && !isComment(l))).toEqual([STEP]);
+    expect(lines[at + 1]).toMatch(/^ {6}(- |#)/);   // no key beneath it (`if:`, `continue-on-error:`, `env:`)
+    expect(jobAt(at)).toBe("  gates:");
+    // appended AFTER the steps Tasks 1 and 10 added, never directly after reference:boundary (Task 1 pins the lock step as the line after it)
+    expect(at).toBeGreaterThan(lines.indexOf(TSC_STEP));
+    expect(lines.indexOf(TSC_STEP)).toBeGreaterThan(0);
+    // nor a job-level `if:` / `continue-on-error:` on the job that hosts it
+    const gatesAt = lines.indexOf("  gates:");
+    const header = lines.slice(gatesAt + 1, lines.indexOf("    steps:", gatesAt));
+    expect(header.length).toBeGreaterThan(0);
+    for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
+  });
+
+  it("the engine's package script runs the CLI under strip-types, and the CLI exists", () => {
+    const engine = JSON.parse(readFileSync(resolve(REPO, "packages/engine/package.json"), "utf8")) as { scripts: Record<string, string> };
+    expect(engine.scripts["mutation:floor"]).toBe("node --experimental-strip-types scripts/stryker-floor.ts");
+    expect(existsSync(resolve(REPO, "packages/engine/scripts/stryker-floor.ts"))).toBe(true);
+    expect(engine.scripts.mutation).toBe("stryker run stryker.config.mjs");
+  });
+
+  it("the step's command as ci.yml spells it, run the way CI runs it, reaches the CLI with its flag and passes on this tree", () => {
+    const step = lines.find((l) => l.includes("mutation:floor") && !isComment(l));
+    expect(step).toBeDefined();
+    const cmd = (step ?? "").trim().replace(/^- run: /, "");
+    expect(cmd).toContain(" --check-file-against HEAD^1");
+    // HEAD^1 needs history and a merge commit; HEAD is always there. Either HEAD has no floor file yet (the PR before its commit) or has the committed one, unchanged.
+    const r = spawnSync("bash", ["-c", cmd.replace(" --check-file-against HEAD^1", " --check-file-against HEAD")], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS });
+    expect(r.status, r.stderr).toBe(0);
+    // only a CLI that read the flag through `pnpm --filter` prints this: the flag reached it, in the engine's directory
+    expect(r.stdout).toMatch(/^stryker-floor: (no floors at HEAD: nothing to compare|compared \d+ floor\(s\) against HEAD: 0 lowered or removed)$/m);
+  }, spawnBudget(1));
+});

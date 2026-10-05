@@ -155,6 +155,14 @@ export default defineConfig([
   },
 
   {
+    // scripts/stryker-matrix.mjs is plain JS on purpose: mutation.yml's plan job runs it with `node` alone, before any
+    // install. It sits in a subdirectory, which `allowDefaultProject: ["*.mjs"]` above cannot reach (typescript-eslint
+    // rejects `**` there), and it has no tsconfig, so it is linted without type information.
+    files: ["scripts/*.mjs"],
+    extends: [tseslint.configs.disableTypeChecked],
+  },
+
+  {
     // Hand-run benchmarks: printing the table IS their output.
     files: ["scripts/**/*.ts"],
     rules: { "no-console": "off" },

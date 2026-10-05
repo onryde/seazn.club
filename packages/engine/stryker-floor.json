@@ -1,0 +1,4 @@
+{
+  "note": "Per-family Stryker mutation-score floors (W1d D14; rulings 66, 67; T15-CUT): a family is ruling 66's group, the SUM of its legs, never a leg, so cutting a file again or adding a leg never removes a key. The score is Stryker's TOTAL score: (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage), so an uncovered line counts as a survivor; Ignored, CompileError and RuntimeError are outside the denominator, and the mutants recorded in stryker-equivalent.json are taken out of it. A floor is floor(score, 1 dp), set by `pnpm mutation:floor --set-floor <family> <dir>` (PR-B, after the first measured run) and the floor never falls: ci.yml's gates job runs `--check-file-against HEAD^1`. Empty until PR-B (W1d Task 20); mutation.yml's floors job prints `no floor yet` while it is empty, and once any floor exists a family without one is a failure.",
+  "families": {}
+}

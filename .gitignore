@@ -57,6 +57,9 @@ yarn-error.log*
 next-env.d.ts
 scripts/.seed-demo-state.json
 packages/engine/sim-report.json
+# Stryker (W1d D14): the per-group reports and incremental files, and its sandbox copies of the engine.
+packages/engine/reports/mutation/
+packages/engine/.stryker-tmp/
 .playwright-mcp/
 # Superpowers visual-companion brainstorm sessions
 .superpowers/

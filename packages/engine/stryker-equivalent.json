@@ -1,0 +1,4 @@
+{
+  "note": "Mutants judged equivalent (no test could tell them from the original), recorded by `file:line:col mutator → replacement` as SURVIVORS.md prints them, never by Stryker's unstable ids. Each entry is {\"mutant\": \"<that key>\", \"reason\": \"<why no test can distinguish it, at least 10 characters>\"}. A recorded mutant leaves the denominator of its group's score; the wave that owns the file records it, after reading the code.",
+  "equivalent": []
+}
