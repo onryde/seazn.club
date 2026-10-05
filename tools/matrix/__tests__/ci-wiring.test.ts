@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
@@ -11,6 +11,12 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WORKFLOWS = resolve(REPO, ".github/workflows");
 const ci = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8");
 const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> };
+
+// Task 12 minor 2 (routed to Task 16): a prefix shared by every session on the machine made "leaves no scratch
+// checkout behind" flake whenever another session's run of this file created or removed a checkout between the two
+// snapshots. Each process names its own scratch checkouts, and the leak check reads only that name.
+const SCRATCH_PREFIX = `fm-ci-${process.pid}-`;
+const scratchDirs = () => readdirSync(tmpdir()).filter((d) => d.startsWith(SCRATCH_PREFIX)).sort();
 
 const STEP_NAME = "Matrix harness unit tests (DB-free)";
 const STEP_HEAD = `      - name: ${STEP_NAME}`;
@@ -53,7 +59,7 @@ function report(root: string, o: { total: number; passed: number; failedSuites?:
 function runNamedStep(name: string, reportFile: string, o: { json: ReturnType<typeof report> | ((root: string) => ReturnType<typeof report>) | null; exit: number; stale?: (root: string) => ReturnType<typeof report> }) {
   const { script } = stepOf(ci, name);
   if (script === null) throw new Error(`the "${name}" step has no \`run: |\` block`);
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "fm-ci-")));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), SCRATCH_PREFIX)));
   try {
     const bin = join(root, "packages/engine/node_modules/.bin");
     mkdirSync(bin, { recursive: true });
@@ -139,12 +145,35 @@ describe("matrix CI wiring", () => {
 
   describe("the step judges vitest by its JSON report, not by its exit code alone", () => {
     it("runStep leaves no scratch checkout behind (Task 10 review Minor 2)", () => {
-      const scratch = () => readdirSync(tmpdir()).filter((d) => d.startsWith("fm-ci-")).sort();
-      const before = scratch();
+      const before = scratchDirs();
       runStep({ json: (root) => report(root, { total: 1, passed: 1 }), exit: 0 });
       runStep({ json: null, exit: 1 });
-      expect(scratch()).toEqual(before);
+      expect(scratchDirs()).toEqual(before);
     }, spawnBudget(2));
+    // Task 12 minor 2: the checkout is named for THIS process, and the leak check reads only that name.
+    it("the scratch checkout is named for this process (fm-ci-<pid>-…), so another session's cannot be mistaken for ours", () => {
+      let seen = "";
+      const r = runStep({ json: (root) => { seen = root; return report(root, { total: 1, passed: 1 }); }, exit: 0 });
+      expect(r.status).toBe(0); // the step really ran in that checkout (a callback never called would leave seen empty)
+      expect(basename(seen)).toMatch(new RegExp(`^fm-ci-${process.pid}-[A-Za-z0-9]+$`));
+    }, spawnBudget(1));
+    it("another process's scratch checkout, appearing while this one's leak check runs, is not read as a leak; ours would be", () => {
+      const foreign = mkdtempSync(join(tmpdir(), `fm-ci-${process.pid + 1}-`));
+      const ours = mkdtempSync(join(tmpdir(), SCRATCH_PREFIX));
+      try {
+        // positive pair first: the check does see a checkout of this process's, and does not see the other's
+        expect(scratchDirs()).toContain(basename(ours));
+        expect(scratchDirs()).not.toContain(basename(foreign));
+        // and the sequence the flake took: snapshot, a foreign checkout comes and goes, snapshot
+        const before = scratchDirs();
+        const late = mkdtempSync(join(tmpdir(), `fm-ci-${process.pid + 2}-`));
+        rmSync(late, { recursive: true, force: true });
+        expect(scratchDirs()).toEqual(before);
+      } finally {
+        rmSync(foreign, { recursive: true, force: true });
+        rmSync(ours, { recursive: true, force: true });
+      }
+    });
     it("a real pass is green, and says what it counted", () => {
       const r = runStep({ json: (root) => report(root, { total: 3, passed: 3 }), exit: 0 });
       expect(r.stderr).toBe("");

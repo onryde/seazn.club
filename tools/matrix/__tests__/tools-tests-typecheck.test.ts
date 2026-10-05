@@ -39,6 +39,30 @@ function listFiles() {
   return listing;
 }
 
+type Opts = Record<string, unknown>;
+
+/** The flags `strict` turns on. Any one set to `false` beside `strict: true` quietly un-strictens the program. */
+const STRICT_FAMILY = ["noImplicitAny", "strictNullChecks", "strictFunctionTypes", "strictBindCallApply", "strictPropertyInitialization", "noImplicitThis", "useUnknownInCatchVariables", "alwaysStrict"] as const;
+
+/** What would make a tests type-check lenient, from the EFFECTIVE options (`tsc --showConfig`, i.e. after `extends`):
+ *  `strict` not true, a member of its family switched off, or `skipLibCheck` turned ON where the config it extends
+ *  has it off (a widening: library and declaration errors stop being reported). A config that is STRICTER than its
+ *  base is no fault. `base` is the config this one extends, read the same way, never typed in here. */
+function strictnessFaults(effective: Opts, base: Opts): string[] {
+  const out: string[] = [];
+  if (effective.strict !== true) out.push(`strict is ${JSON.stringify(effective.strict)}, not true`);
+  for (const flag of STRICT_FAMILY) if (effective[flag] === false) out.push(`${flag} is false`);
+  if (effective.skipLibCheck === true && base.skipLibCheck !== true) out.push("skipLibCheck is on, and the config it extends has it off");
+  return out;
+}
+
+/** `tsc --showConfig -p <project>`'s compilerOptions: the options that program is really checked under. */
+function effectiveOptions(project: string): Opts {
+  const r = spawnSync(process.execPath, [TSC, "--showConfig", "-p", project], { cwd: REPO, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  expect(r.status, r.stderr).toBe(0);
+  return (JSON.parse(r.stdout) as { compilerOptions: Opts }).compilerOptions;
+}
+
 describe("tsconfig.tools-tests.json reach (W1d Task 10, item 7 D9)", () => {
   it("covers every tracked matrix test and every tracked scripts test, counted separately (review m13)", () => {
     const l = listFiles();
@@ -61,6 +85,22 @@ describe("tsconfig.tools-tests.json reach (W1d Task 10, item 7 D9)", () => {
     // and nothing else of bench's that is a test or lives in a `__tests__` directory
     expect([...l.listed].filter((f) => /^tools\/bench\//.test(f) && /\.test\.ts$|\/__tests__\//.test(f))).toEqual([]);
   }, LISTING_MS);
+
+  // Task 10 carry (routed to Task 16): the root has a `typecheck:scripts` script and the new config had none, so
+  // the check CI runs could not be run by name. The script is the step's own command, pinned equal to ci.yml's so
+  // the two cannot drift apart (ci-wiring.test.ts pins the step's text; this pins the script to the step).
+  it("package.json has a typecheck:tools-tests script, and it is the command the gates step runs", () => {
+    const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
+    const ci = readFileSync(resolve(REPO, ".github/workflows/ci.yml"), "utf8");
+    const steps = ci.split("\n").filter((l) => !l.trimStart().startsWith("#") && l.includes("tsconfig.tools-tests.json"));
+    // anti-vacuity: the step exists exactly once, so there is a command to compare against
+    expect(steps).toHaveLength(1);
+    const stepCommand = steps[0]!.replace(/^\s*- run:\s*/, "").trim();
+    expect(stepCommand).toMatch(/^node node_modules\/typescript-native\/bin\/tsc -p tsconfig\.tools-tests\.json$/);
+    expect(scripts["typecheck:tools-tests"]).toBe(stepCommand);
+    // its neighbour is the same shape, so the script sits where a reader looks for it
+    expect(Object.keys(scripts).indexOf("typecheck:tools-tests")).toBe(Object.keys(scripts).indexOf("typecheck:scripts") + 1);
+  });
 
   // The declaration file is only checked where something imports a name from it, and tools-import-guard.test.ts
   // hands `TOOLS_PACKAGES` to `expect(...)`, which takes anything, so a wrong or missing declaration passes tsc.
@@ -91,4 +131,42 @@ describe("tsconfig.tools-tests.json reach (W1d Task 10, item 7 D9)", () => {
     for (const f of decls) expect(linted.has(f), `${f} was not linted`).toBe(true);
     expect(results.reduce((n, x) => n + x.errorCount, 0)).toBe(0);
   }, LISTING_MS);
+});
+
+// Task 10 carry (routed to Task 16): the reach test above proves every test is IN the program, and nothing proved the
+// program is STRICT. A flipped `strict`, a switched-off family flag or a widened `skipLibCheck` in the config keeps
+// every reach assertion green and the gates step green, while the tests stop being type-checked in earnest.
+describe("tsconfig.tools-tests.json strictness (W1d Task 10 carry, Task 16)", () => {
+  it("the family list is the eight flags `strict` turns on (a literal, so a dropped name reds)", () => {
+    expect(STRICT_FAMILY).toHaveLength(8);
+  });
+
+  it.each<[string, Opts, Opts, number]>([
+    ["strict, same skipLibCheck as its base: clean", { strict: true, skipLibCheck: true }, { strict: true, skipLibCheck: true }, 0],
+    ["strict, skipLibCheck off in both: clean", { strict: true }, { strict: true }, 0],
+    ["a family flag set true explicitly is no fault", { strict: true, noImplicitAny: true }, { strict: true }, 0],
+    ["stricter than its base on skipLibCheck (off where the base has it on) is no fault", { strict: true, skipLibCheck: false }, { strict: true, skipLibCheck: true }, 0],
+    ["strict false", { strict: false, skipLibCheck: true }, { strict: true, skipLibCheck: true }, 1],
+    ["strict absent (a config that lost its `extends`)", { skipLibCheck: true }, { strict: true, skipLibCheck: true }, 1],
+    ["strict not a boolean", { strict: "true", skipLibCheck: true }, { strict: true, skipLibCheck: true }, 1],
+    ["skipLibCheck widened: on, where its base has it off", { strict: true, skipLibCheck: true }, { strict: true }, 1],
+    ["skipLibCheck widened: on, where its base has it explicitly false", { strict: true, skipLibCheck: true }, { strict: true, skipLibCheck: false }, 1],
+    ["strict false and widened skipLibCheck: both named", { strict: false, skipLibCheck: true }, { strict: true }, 2],
+  ])("strictnessFaults: %s", (_name, effective, base, faults) => {
+    expect(strictnessFaults(effective, base)).toHaveLength(faults);
+  });
+
+  it.each(STRICT_FAMILY.map((f) => [f]))("strictnessFaults: %s switched off beside strict: true is a fault, and names the flag", (flag) => {
+    expect(strictnessFaults({ strict: true, [flag]: false }, { strict: true })).toEqual([`${flag} is false`]);
+  });
+
+  it("the real config is strict and does not widen skipLibCheck over the config it extends", () => {
+    const effective = effectiveOptions("tsconfig.tools-tests.json");
+    const base = effectiveOptions("tsconfig.scripts.json");
+    // anti-vacuity: the options were really read, from the config this file is about (bundler resolution is its own)
+    expect(Object.keys(effective).length).toBeGreaterThan(5);
+    expect(effective.moduleResolution).toBe("bundler");
+    expect(base).not.toEqual(effective); // two different programs: the base is the scripts config, not this one again
+    expect(strictnessFaults(effective, base)).toEqual([]);
+  });
 });
