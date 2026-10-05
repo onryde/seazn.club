@@ -13,17 +13,42 @@ import { describe, expect, it } from "vitest";
 import { HARNESS_DIR, HISTORICAL_HARNESS_DIRS, RELOCATED_FILES, spellingsOf } from "../lib/harness-path.ts";
 
 const REPO = new URL("../../..", import.meta.url).pathname;
-/** Every matrix CLI (W1c Task 13 added `parity`; W1d Task 1 added `lock-append-only`, ruling T1-b;
- *  W1d Task 4 added `merge-shards`, Task 6 `judge` and Task 7 `ci/pr-rows`, ruling CLI-TABLES;
- *  Task 8 widens the pattern to every tools/matrix/**, and this row goes with it). */
-const CLIS = ["run", "render", "gen-catalogue", "single-sport", "model", "parity", "lock-append-only", "merge-shards", "judge", "ci/pr-rows"];
-// `(?:\.\/)?`: `./tools/matrix/run.ts` is the same bare run. Every directory the
-// harness has lived in (lib/harness-path.ts): a plan that ran a CLI bare at its
-// historical path is still a bare run, and still owes its HISTORY pin.
-// The directories are plain path segments, so they go into the pattern as-is.
+/** Every matrix CLI, as a hand-kept PIN (W1c Task 13 added `parity`; W1d Task 1 `lock-append-only`, ruling T1-b;
+ *  Task 4 `merge-shards`, Task 6 `judge`, Task 7 `ci/pr-rows`, ruling CLI-TABLES). Since W1d Task 8 (ruling CI-BLIND) it
+ *  no longer DEFINES what the scan looks for: BARE is built from the CLIs found in the tree (discoverClis), so a new CLI
+ *  anywhere under tools/matrix/ — `ci/` included — is scanned whether or not anyone remembers a row. This table is
+ *  held EQUAL to that discovery, so a CLI with no row, or a row naming no CLI, reds. `findings-table` and `draw-counts`
+ *  have no `matrix:*` script (a documented, preloaded `node` line runs them) and were never in this table: the
+ *  discovery found them. */
+const CLIS = ["run", "render", "gen-catalogue", "single-sport", "model", "parity", "lock-append-only", "merge-shards", "judge", "findings-table", "draw-counts", "ci/pr-rows"];
 const DIRS = [HARNESS_DIR, ...HISTORICAL_HARNESS_DIRS];
 if (!DIRS.every((d) => /^[\w-]+(?:\/[\w-]+)*$/.test(d))) throw new Error(`a harness directory is not a plain path: ${DIRS.join(", ")}`);
-const BARE = new RegExp(`node\\s+(?:--[a-z-]+\\s+)*(?:\\./)?(?:${DIRS.join("|")})/(?:${CLIS.join("|")})\\.ts`);
+
+/** A shipped CLI is a module under the harness directory that guards its main with isMainModule — every CLI does (a
+ *  main that runs when imported would run in every test that loads it), and a module that does not is no CLI. The name is
+ *  its path under the directory without `.ts`: `run`, `ci/pr-rows`. A test, and anything under `__tests__`, is no CLI. */
+function discoverClis(files: readonly { path: string; text: string }[]): string[] {
+  const under = new RegExp(`^${HARNESS_DIR}/((?:[\\w-]+/)*[\\w-]+)\\.ts$`);
+  const out: string[] = [];
+  for (const { path, text } of files) {
+    const m = under.exec(path);
+    if (m === null || m[1].split("/").includes("__tests__")) continue;
+    if (/\bisMainModule\(import\.meta\.url\)/.test(text)) out.push(m[1]);
+  }
+  return out.sort();
+}
+/** `node [--flag ...] [./]<dir>/<cli>.ts`: a CLI run without the crash-exit preload. `(?:\./)?`: `./tools/matrix/run.ts`
+ *  is the same bare run. Every directory the harness has lived in (lib/harness-path.ts): a plan that ran a CLI bare at
+ *  its historical path is still a bare run, and still owes its HISTORY pin. The directories are plain path segments, so
+ *  they go into the pattern as-is. */
+const bareRegex = (clis: readonly string[]): RegExp => new RegExp(`node\\s+(?:--[a-z-]+\\s+)*(?:\\./)?(?:${DIRS.join("|")})/(?:${clis.join("|")})\\.ts`);
+/** Every `tools/matrix/**\/*.ts` that is tracked, with its text. */
+function trackedModules(): { path: string; text: string }[] {
+  return execFileSync("git", ["ls-files", "--", `${HARNESS_DIR}/*.ts`], { cwd: REPO, encoding: "utf8" })
+    .split("\n").filter((f) => f !== "").map((path) => ({ path, text: readFileSync(`${REPO}${path}`, "utf8") }));
+}
+const DISCOVERED = discoverClis(trackedModules());
+const BARE = bareRegex(DISCOVERED);
 /** The preload's path today: scripts/lib, outside the harness (CL-R4). */
 const CRASH_EXIT = "scripts/lib/crash-exit.ts";
 const PRELOAD = `--import ./${CRASH_EXIT}`;
@@ -75,9 +100,45 @@ describe("CLI invocation (carry e)", () => {
       clis++;
     }
     expect(clis).toBe(CLIS.length);
+    // W1d Task 8 (ruling CI-BLIND): the scan's CLIs are the ones FOUND in the tree, and the table is a pin held equal to
+    // them — a CLI nobody added a row for (the ci/ ones were invisible to the old pattern) reds here, and so does a row
+    // that names no CLI. Pinned as a literal beside the derived bound, which is a tautology on its own.
+    expect(DISCOVERED.length).toBeGreaterThan(0);
+    expect(DISCOVERED, "a CLI under tools/matrix has no row in CLIS, or a row names none").toEqual([...CLIS].sort());
+    expect(CLIS).toHaveLength(12);
+    expect(DISCOVERED.filter((c) => c.includes("/")), "the nested (ci/) CLIs are discovered").toContain("ci/pr-rows");
     // Truth-run evidence is the one exclusion, and only it.
     expect(scanned("docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model-final/README.md")).toBe(false);
     expect(scanned("docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md")).toBe(true);
+  });
+
+  // The mechanism, on a tree of its own: a CLI that is NOT in any table is still found and still scanned. Before W1d
+  // Task 8 the pattern was spelled from a hand table of top-level names, so a new tools/matrix/ci/<cli>.ts shipped
+  // with no row and no scan at all (a plan or workflow quoting it bare was invisible to this file).
+  it("discovery: a new CLI under ci/ is found and its bare form is caught, with no table edited; a lib module and a test are no CLI", () => {
+    const main = "if (isMainModule(import.meta.url)) { process.exitCode = main(process.argv.slice(2)); }";
+    const found = discoverClis([
+      { path: "tools/matrix/ci/brand-new.ts", text: main },
+      { path: "tools/matrix/run.ts", text: main },
+      { path: "tools/matrix/lib/helper.ts", text: "export const x = 1;" },
+      { path: "tools/matrix/lib/exports-a-main.ts", text: "export function main() {}" },
+      { path: "tools/matrix/__tests__/a-fixture.ts", text: main },
+      { path: "tools/matrix/__tests__/a.test.ts", text: main },
+      { path: "tools/other/run.ts", text: main },
+    ]);
+    expect(found).toEqual(["ci/brand-new", "run"]);
+    const bare = bareRegex(found);
+    const line = (cli: string) => ["node", "--experimental-strip-types", `tools/matrix/${cli}.ts`, "--x"].join(" ");
+    expect(bare.test(line("ci/brand-new"))).toBe(true);
+    expect(bare.test(line("run"))).toBe(true);
+    // …and the real table, as it was before this task's discovery, does not see the new one: that is the blind spot.
+    expect(bareRegex(CLIS.filter((c) => !c.includes("/"))).test(line("ci/brand-new"))).toBe(false);
+    expect(bare.test(line("lib/helper"))).toBe(false);
+    // The preload form is exempt for a nested CLI as for a top-level one.
+    expect(bare.test(["node", "--experimental-strip-types", PRELOAD, "tools/matrix/ci/brand-new.ts"].join(" "))).toBe(false);
+    // The empty tree finds nothing (and a regex built from nothing would match `node …/.ts`; the real scan never builds one:
+    // the pin above holds the real set non-empty).
+    expect(discoverClis([])).toEqual([]);
   });
 
   it("the pattern matches the bare form, and the preload form is exempt", () => {

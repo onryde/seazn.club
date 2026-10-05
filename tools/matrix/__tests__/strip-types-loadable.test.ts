@@ -278,6 +278,15 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 7 (named here by Task 8, ruling T7->T8 a): the per-PR sample's planner, the plan-string map the judge and
+  // the sample both read (hoisted out of __tests__ so shipped code never reaches a test module), and the R27 reader CLI.
+  const W1D_T7 = ["lib/pr-sample.ts", "lib/expected-plan.ts", "ci/pr-rows.ts"];
+  it("W1d Task 7's modules are all in the walk", () => {
+    const missing = W1D_T7.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T7.length).toBe(3);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

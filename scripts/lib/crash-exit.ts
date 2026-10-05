@@ -1,7 +1,10 @@
 // Preloaded (node --import) by every matrix CLI's package script — matrix:l3,
 // matrix:browser, matrix:render, matrix:catalogue, matrix:single-sport,
-// matrix:model, matrix:parity, matrix:lock-check, matrix:merge — and by reference:boundary
-// (W1b final batch F-6; W1c added browser and parity; W1d added lock-check and merge).
+// matrix:model, matrix:parity, matrix:lock-check, matrix:merge, matrix:judge,
+// matrix:pr-rows — and by reference:boundary
+// (W1b final batch F-6; W1c added browser and parity; W1d added lock-check, merge, judge
+// and pr-rows). The list is held to package.json by tools/matrix/__tests__/crash-exit.test.ts:
+// a script that preloads this file and is not named here reds it.
 // Pinned twice: the harness's CLIs by
 // tools/matrix/__tests__/crash-exit.test.ts, the gate and the module by
 // scripts/__tests__/crash-exit.test.ts. It lives here, not in the harness, for the reason

@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS } from "../lib/catalogue.ts";
 import { UnknownRow } from "../lib/pr-sample.ts";
-import { DECLARING, decide, main, rowsFromBody, stripFences } from "../ci/pr-rows.ts";
+import { DECLARING, decide, main, rowsFromBody, stripComments, stripFences } from "../ci/pr-rows.ts";
 import { REPO } from "./committed-plans.ts";
 import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
 
@@ -108,6 +108,83 @@ describe("stripFences", () => {
     expect(stripFences("a\nb")).toBe("a\nb");
     expect(stripFences("")).toBe("");
     expect(stripFences("```\nonly a fence\n```")).toBe("");
+  });
+});
+
+// W1d T7 -> T8 ruling (c): a PR body is markdown, and GitHub does not render an HTML comment. A declaration inside one is
+// invisible to the author and the reviewer, so reading it would be a fail-open: the job would sample rows nobody can see
+// declared. (A PR template that carries the usage hint as a comment is the common way to get one into a body.)
+describe("HTML comments are not declarations (T7 -> T8 c)", () => {
+  it("a declaration inside a comment is ignored — on one line, or across several", () => {
+    expect(rowsFromBody("<!-- Matrix rows: league -->")).toBeNull();
+    expect(rowsFromBody("<!--\nMatrix rows: all\n-->")).toBeNull();
+    expect(rowsFromBody("intro\n<!-- a hint\nMatrix rows: swiss\nmore hint -->\nthanks")).toBeNull();
+    expect(rowsFromBody("<!--Matrix rows: all-->")).toBeNull();
+  });
+
+  it("the visible declaration after a comment is the one read: a template hint above the author's own line", () => {
+    expect(rowsFromBody("<!-- Matrix rows: league, swiss | all | none — <reason> -->\nMatrix rows: knockout")).toEqual(["knockout"]);
+    expect(rowsFromBody("<!--\nMatrix rows: all\n-->\n\nMatrix rows: none — copy only")).toEqual([]);
+  });
+
+  it("a comment after the value on its own line is no part of the value", () => {
+    expect(rowsFromBody("Matrix rows: league <!-- the rows this PR touches -->")).toEqual(["league"]);
+    expect(rowsFromBody("Matrix rows: league, swiss<!-- x -->")).toEqual(["league", "swiss"]);
+  });
+
+  it("an unterminated comment hides the rest of the body, as the rendering does (a declaration after it is not read)", () => {
+    expect(rowsFromBody("fixes a tie-break\n<!-- never closed\nMatrix rows: all")).toBeNull();
+    // …but what is BEFORE it is still read.
+    expect(rowsFromBody("Matrix rows: swiss\n<!-- never closed")).toEqual(["swiss"]);
+  });
+
+  it("two comments are two comments (the first --> ends the first, never the last)", () => {
+    expect(rowsFromBody("<!-- one -->\nMatrix rows: league\n<!-- two -->")).toEqual(["league"]);
+    expect(rowsFromBody("<!-- one --> <!-- Matrix rows: all -->")).toBeNull();
+    // Every comment is removed, not the first alone: a LATER one hides a declaration, and a later one trails a value.
+    expect(rowsFromBody("<!-- one -->\n<!--\nMatrix rows: all\n-->")).toBeNull();
+    expect(rowsFromBody("<!-- one -->\nMatrix rows: league <!-- two -->")).toEqual(["league"]);
+  });
+
+  it("a comment joining no lines: text glued to a comment keeps its own line start (the label must still START its line)", () => {
+    expect(rowsFromBody("see <!-- x -->Matrix rows: all")).toBeNull();
+    expect(rowsFromBody("<!-- x -->Matrix rows: league")).toEqual(["league"]);
+  });
+
+  it("a CRLF body's comments are comments", () => {
+    expect(rowsFromBody("<!--\r\nMatrix rows: all\r\n-->\r\nMatrix rows: league\r\n")).toEqual(["league"]);
+    expect(rowsFromBody("<!-- Matrix rows: all -->\r\n")).toBeNull();
+  });
+
+  it("a comment opener inside a code fence is quoted text, so it hides nothing after the fence (fences first, then comments)", () => {
+    expect(rowsFromBody("```\n<!-- Matrix rows: all\n```\nMatrix rows: league")).toEqual(["league"]);
+    // …and a quoted comment holding a declaration inside a fence is still not a declaration.
+    expect(rowsFromBody("```\n<!-- x -->\nMatrix rows: all\n```")).toBeNull();
+  });
+
+  it("an unknown row inside a comment is not refused (it is not read), and one outside still is", () => {
+    expect(rowsFromBody("<!-- Matrix rows: leage -->")).toBeNull();
+    expect(() => rowsFromBody("<!-- fine -->\nMatrix rows: leage")).toThrow(UnknownRow);
+  });
+
+  it("stripComments: removes comments only, leaves everything else line for line", () => {
+    expect(stripComments("a\nb")).toBe("a\nb");
+    expect(stripComments("")).toBe("");
+    expect(stripComments("a <!-- x --> b")).toBe("a  b");
+    expect(stripComments("a\n<!--\nx\n-->\nb")).toBe("a\n\nb");
+    expect(stripComments("a<!-- open")).toBe("a");
+    // Not a comment: no `--` after `<!`, or the opener is cut short.
+    expect(stripComments("<! not a comment -->")).toBe("<! not a comment -->");
+    expect(stripComments("<!- not -->")).toBe("<!- not -->");
+  });
+
+  it("the decision: a PR touching a declaring path whose only declaration is commented out is exit 1 (R27 undeclared), never the rows it hides", () => {
+    for (const body of ["<!-- Matrix rows: league -->", "<!--\nMatrix rows: all\n-->", "text <!-- Matrix rows: swiss"]) {
+      const d = decide({ body, changed: [ENGINE] });
+      expect(d.exit, body).toBe(1);
+    }
+    // The same body with the comment markers removed IS a declaration: the markers are what matter, not the words.
+    expect(decide({ body: "Matrix rows: league", changed: [ENGINE] })).toEqual({ exit: 0, rows: ["league"] });
   });
 });
 

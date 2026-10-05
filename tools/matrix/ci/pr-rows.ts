@@ -6,7 +6,8 @@
 //   Matrix rows: none — <reason>      (a declaration of none; the fixed sample still runs)
 // The CI job reads the body LIVE (a body edit fires no run, and a re-run replays the original event payload),
 // writes it and the changed-file list (`git diff --name-only`, one path per line) to files, and appends this
-// CLI's stdout to $GITHUB_OUTPUT. The first `Matrix rows:` line counts, and a fenced code block is ignored.
+// CLI's stdout to $GITHUB_OUTPUT. The first `Matrix rows:` line counts, and a fenced code block or an HTML comment is
+// ignored (neither is a declaration: a quote of the template, and text GitHub does not render).
 // Exit codes, each with one meaning (the one convention, D8):
 //   0  decided: `rows=<csv|all|none>` is the whole of stdout, the one line the job appends to $GITHUB_OUTPUT;
 //   1  a negative signal, stdout empty: the PR touches a declaring path and its body carries no `Matrix rows:`
@@ -48,11 +49,20 @@ export function stripFences(body: string): string {
   return kept.join("\n");
 }
 
+/** The text with every HTML comment (`<!-- … -->`, on one line or across several) removed. GitHub does not render a
+ *  comment, so a `Matrix rows:` line inside one is invisible to the author and the reviewer: reading it would be a fail-open
+ *  (the job would sample rows nobody can see declared). An unterminated comment hides the rest of the text, as the rendering
+ *  does. Run it AFTER stripFences: a `<!--` quoted inside a code fence is text, and must not hide what follows the fence.
+ *  What stays is joined as it was, so text glued to a comment keeps its own line start. */
+export function stripComments(text: string): string {
+  return text.replace(/<!--[\s\S]*?(?:-->|$)/g, "");
+}
+
 /** The first `Matrix rows:` line that carries a value (a label with nothing after it, on its own line, declares
  *  nothing — `[ \\t]*`, not `\\s*`, so it never borrows the next line as its value). null: the body declares nothing,
  *  which is not `none`. Throws UnknownRow for a row the catalogue lacks. */
 export function rowsFromBody(body: string): readonly string[] | "all" | null {
-  const m = /^Matrix rows:[ \t]*(\S.*)$/im.exec(stripFences(body));
+  const m = /^Matrix rows:[ \t]*(\S.*)$/im.exec(stripComments(stripFences(body)));
   return m === null ? null : parseRows(m[1]);
 }
 

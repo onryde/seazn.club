@@ -74,6 +74,35 @@ const MAINS: readonly (readonly [string, string, number])[] = [
   ["a verdict (exitCode 1)", put("main-verdict.mjs", "process.exitCode = 1;\n"), 1],
 ];
 
+// W1d T7 -> T8 ruling (b): crash-exit.ts's header is the one place that says who preloads it, and it had stopped
+// saying so (matrix:judge and matrix:pr-rows ran through the preload and were named nowhere in it). The list is DERIVED
+// from package.json here, so the next CLI that preloads it owes its name to the header or this reds.
+describe("crash-exit.ts's header names every package script that preloads it (T7 -> T8 b)", () => {
+  const header = (() => {
+    const lines = readFileSync(resolve(REPO, "scripts/lib/crash-exit.ts"), "utf8").split("\n");
+    const end = lines.findIndex((l) => !l.startsWith("//"));
+    return lines.slice(0, end < 0 ? lines.length : end).join("\n");
+  })();
+  const preloaders = Object.entries(scripts).filter(([, v]) => v.includes(`--import ${PRELOAD}`)).map(([k]) => k);
+
+  it("empty case first: the sweep finds the preloading scripts — the matrix CLIs and the boundary gate", () => {
+    expect(header.length).toBeGreaterThan(0);
+    expect(preloaders.length).toBeGreaterThanOrEqual(12);
+    expect(preloaders).toContain("reference:boundary");
+    for (const k of ["matrix:l3", "matrix:judge", "matrix:pr-rows"]) expect(preloaders, k).toContain(k);
+  });
+
+  it("every script that preloads crash-exit.ts is named in its header", () => {
+    let checked = 0;
+    for (const key of preloaders) {
+      // A whole token: `matrix:merge` must not be satisfied by a longer name that merely contains it.
+      expect(new RegExp(`(?<![\\w:-])${key.replace(/[-:]/g, "\\$&")}(?![\\w:-])`).test(header), `${key} is named in scripts/lib/crash-exit.ts's header`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(preloaders.length);
+  });
+});
+
 describe("an import-time crash exits 3 in every W1b, W1c and W1d CLI (final batch F-6, W1c final review m-11, W1d T1-b)", { timeout: meter.budget }, () => {
   it("every W1b, W1c and W1d CLI's package script preloads crash-exit.ts, then runs its CLI", () => {
     let checked = 0;
