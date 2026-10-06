@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import { HttpError, handler } from "@/lib/http";
 import { log } from "@/server/logger";
-import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_START_LIMIT, DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
+import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_START_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { normaliseCode } from "@/server/relay/domain/stream-code";
 import type { CaptureRefusalCode } from "./capture-schemas";
 
@@ -118,9 +118,9 @@ export function clientIpOf(req: Request): string {
  *     code AND the caller's credential (`credentialKeyOf`, B6 re-review R-1): a code has one tok, so for every real
  *     caller this is exactly §10.4's "per code", while a wrong tok spends only its own throwaway bucket — a flood that
  *     names the code (it is in every URL and beside the tok in the QR) can never refuse the phone holding the tok.
- *     W27's scoring link (§6.3.5) then spends the console's own mint budget, `DEVICE_LINK_MINT_LIMIT` per client IP, in
- *     the console's `dlmint:` bucket ("a reissue IS a mint: one bucket, one number"), on every call, a re-shown link
- *     included — as the console's ensure does;
+ *     W27's scoring link (§6.3.5) spends the console's mint budget too, but INSIDE its use-case (`postScoringLink`,
+ *     review M2), only once the tok and holder checks pass — so a caller without the tok, or a replaced phone, never
+ *     drains the bucket the organiser's console shares;
  *  2. the route runs. A 401 it answers spends the client IP's FAILED-attempt budget, and a failure past it answers 429
  *     instead of 401. The budget is consulted ONLY for a failure: a valid tok is always admitted, whatever the bucket
  *     holds (B6 review I-1 — the tok is 128 bits, so throttling hits buys nothing, and refusing them let anyone sharing
@@ -137,7 +137,6 @@ export async function capturePhoneRoute(
       await rateLimit(`capture-code:${code}:${who}`, CAPTURE_CODE_LIMIT);
       if (route === "start") await rateLimit(`capture-start:${code}:${who}`, CAPTURE_START_LIMIT);
     }
-    if (route === "scoring-link") await rateLimit(`dlmint:${clientIpOf(req)}`, DEVICE_LINK_MINT_LIMIT);
     try {
       return await fn();
     } catch (e) {

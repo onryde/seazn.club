@@ -1,5 +1,5 @@
 import { baseUrl } from "@/lib/oauth";
-import { CaptureRefusalError, captureBearer, captureJson, capturePhoneRoute } from "@/server/api-v1/capture-http";
+import { CaptureRefusalError, captureBearer, captureJson, capturePhoneRoute, clientIpOf } from "@/server/api-v1/capture-http";
 import { CaptureStartBody } from "@/server/api-v1/capture-schemas";
 import { postScoringLink } from "@/server/usecases/capture-phone";
 import { defaultDeps } from "@/server/usecases/stream-sessions";
@@ -11,7 +11,8 @@ type Ctx = { params: Promise<{ code: string }> };
  *  is the start's STRICT `{phone}`: anything else is `422 invalid`. `200 {url}` bare; every refusal is `{code, message}`;
  *  every answer is `private, no-store`. It returns the match's live link or creates one, and NEVER removes or replaces
  *  an existing link, so a repeat call returns the same url. The url is a credential: never logged. Rate-limited by the
- *  code's budget and the console's per-IP mint budget (`capturePhoneRoute`). */
+ *  code's budget (`capturePhoneRoute`) and, once the tok and holder checks pass, the console's per-IP mint budget
+ *  (`postScoringLink`). */
 export async function POST(req: Request, { params }: Ctx) {
   const { code } = await params;
   return capturePhoneRoute(req, code, "scoring-link", async () => {
@@ -27,6 +28,6 @@ export async function POST(req: Request, { params }: Ctx) {
       const fields = [...new Set(parsed.error.issues.map((i) => i.path.join(".") || "(body)"))].join(", ");
       throw new CaptureRefusalError(422, "invalid", `the request does not match the contract: ${fields}`);
     }
-    return captureJson(200, await postScoringLink(code, tok, parsed.data, defaultDeps(baseUrl(req)), new Date()));
+    return captureJson(200, await postScoringLink(code, tok, parsed.data, defaultDeps(baseUrl(req)), new Date(), clientIpOf(req)));
   });
 }

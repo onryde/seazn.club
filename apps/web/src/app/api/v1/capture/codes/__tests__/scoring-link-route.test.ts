@@ -205,6 +205,34 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/scoring-link", () =>
     expect(await linkCount(r), "every 200 was the same link").toBe(1);
   });
 
+  it("the mint budget is spent ONLY past the tok and holder checks (review M2): no Bearer, a wrong tok, a stranger phone and a replaced phone are refused WITHOUT touching dlmint:<ip>; the current phone then spends it exactly once", async () => {
+    const redis = windowedRedis();
+    const r = await captureRig();
+    const A = phoneId("a"), B = phoneId("b");
+    await claim(r, A);
+    const auth = `Bearer ${r.tok}`;
+    const mintKeys = () => redis.spent.filter((k) => k.includes("dlmint:"));
+    const refusedCalls: [string, () => Promise<Response>, number, string][] = [
+      ["no Bearer", () => call(r.code, { phone: A }, { auth: null }), 401, "code_ended"],
+      ["a wrong tok", () => call(r.code, { phone: A }, { auth: "Bearer wrong-tok" }), 401, "code_ended"],
+      ["a stranger phone", () => call(r.code, { phone: phoneId("x") }, { auth }), 409, "replaced"],
+      ["the replaced phone", async () => { await claim(r, B); return call(r.code, { phone: A }, { auth }); }, 409, "replaced"],
+    ];
+    let checked = 0;
+    for (const [why, run, status, code] of refusedCalls) {
+      redis.spent.length = 0;
+      expectRefusal(await read(await run()), status, code, why);
+      expect(redis.spent.length, `${why}: the limiter did run (the code's budget)`).toBeGreaterThan(0);
+      expect(mintKeys(), `${why}: the mint bucket is untouched`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // The positive pair: the current phone (B, after the take-over) is past both checks, and spends the bucket once.
+    redis.spent.length = 0;
+    expect((await read(await call(r.code, { phone: B }, { auth }))).status).toBe(200);
+    expect(mintKeys()).toEqual([`rl:dlmint:${IP}`]);
+  });
+
   it("OpenAPI (A16): under the internal `capture` tag, BARE, captureTok, the strict body; documents every status this file observed and the agreed 503", () => {
     const doc = buildOpenApiDocument() as { paths: Record<string, Record<string, { tags: string[]; security: unknown[]; requestBody?: unknown; responses: Record<string, unknown> }>> };
     const op = doc.paths["/api/v1/capture/codes/{code}/scoring-link"]!.post!;
@@ -219,7 +247,8 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/scoring-link", () =>
   it("never 410, and every refusal was the bare body: the file did answer", () => {
     expect(statuses.length).toBeGreaterThan(20);
     expect(statuses).not.toContain(410);
-    // replaced, match_finished, not_entitled, invalid ×5, code_ended ×3, not_a_stream_code.
-    expect(refusalsChecked).toBe(12);
+    // replaced, match_finished, not_entitled, invalid ×5, code_ended ×3, not_a_stream_code; the mint budget's
+    // code_ended ×2 and replaced ×2.
+    expect(refusalsChecked).toBe(16);
   });
 });

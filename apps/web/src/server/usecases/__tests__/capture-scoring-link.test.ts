@@ -61,7 +61,7 @@ async function claim(r: CaptureRig, phone: string, via: { code: string; tok: str
     appVersion: "capture-test/1",
   }), r.deps, r.now());
 }
-const link = (r: CaptureRig, phone: string, via: { code: string; tok: string } = r) => postScoringLink(via.code, via.tok, { phone }, r.deps, r.now());
+const link = (r: CaptureRig, phone: string, via: { code: string; tok: string } = r) => postScoringLink(via.code, via.tok, { phone }, r.deps, r.now(), "203.0.113.7");
 
 /** A rig whose phone A is current and whose plan has scoring links — the 200's premise. */
 async function ready(opts: Parameters<typeof captureRig>[0] = {}) {

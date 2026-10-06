@@ -11,6 +11,7 @@ import "server-only";
 import { sql, type Tx } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { captureError } from "@/lib/sentry";
 import { getDictionary, t, toLocale } from "@/lib/i18n";
@@ -711,13 +712,19 @@ const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
  *  - resolve as a `start` call: an ENDED code serves nothing here, even to its open session's phone (C1b) → 401;
  *  - the start's own holder check (T12, `holderOf`), session or none: any other phone → 409 replaced;
  *  - the origin is https (the contract's pattern), else 503 unavailable with nothing written;
+ *  - the console's mint budget, `DEVICE_LINK_MINT_LIMIT` per client IP in its own `dlmint:` bucket ("a reissue IS a
+ *    mint: one bucket, one number") → 429 rate_limited. Spent HERE, past the tok and holder checks (review M2): a caller
+ *    without the tok, or a replaced phone, never drains the bucket the organiser's console shares. Every call that
+ *    reaches it spends it, a re-shown link included — as the console's ensure does;
  *  - `provideDeviceLinkForPhone`: the console's plan gate (→ 402 not_entitled), then under the fixture's link lock a
  *    finished match (→ 409 match_finished, nothing written), else the live sealed link or a new one — NEVER revoking
  *    (the owner's rule: "must not remove or replace any existing QR"). A missing DEVICE_LINK_KEK → 503 unavailable.
  * 200 `{url}` = `captureOrigin()` + `/score/` + the secret. The URL is a credential: it is never logged, and it is
  * stored nowhere new (the row holds the hash and the sealed envelope, as every console link does).
  */
-export async function postScoringLink(rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date): Promise<CaptureScoringLinkOk> {
+export async function postScoringLink(
+  rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date, clientIp: string,
+): Promise<CaptureScoringLinkOk> {
   const resolved = await resolveStreamCode(rawCode, tok, "start", body.phone, now);
   const open = await openSessionOf(sql, resolved.fixtureId);
   const current = await holderOf(sql, resolved.codeId, open);
@@ -727,6 +734,7 @@ export async function postScoringLink(rawCode: string, tok: string, body: Captur
     log.error({ fixtureId: resolved.fixtureId, origin }, "capture scoring link: the server's origin is not https; no link is served");
     throw unavailable("origin_not_https");
   }
+  await rateLimit(`dlmint:${clientIp}`, DEVICE_LINK_MINT_LIMIT);
   let got: PhoneScoringLink;
   try {
     got = await provideDeviceLinkForPhone(resolved.orgId, resolved.fixtureId, resolved.issuedBy);
