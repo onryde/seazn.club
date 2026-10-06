@@ -745,7 +745,7 @@ export async function postScoringLink(
   const origin = captureOrigin(deps);
   if (!HTTPS_ORIGIN.test(origin)) {
     log.error({ fixtureId: resolved.fixtureId, origin }, "capture scoring link: the server's origin is not https; no link is served");
-    throw unavailable("origin_not_https");
+    throw new CaptureRefusalError(503, "unavailable", "scoring links need https, and this server's origin is not https (origin_not_https)");
   }
   await rateLimit(`dlmint:${clientIp}`, DEVICE_LINK_MINT_LIMIT);
   let got: PhoneScoringLink;

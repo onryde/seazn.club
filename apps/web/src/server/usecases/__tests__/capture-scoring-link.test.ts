@@ -391,6 +391,11 @@ describe.skipIf(!HAS_DB)("postScoringLink — the phone's Remote scoring link (�
     expect(r.deps.appUrl.startsWith("http://"), "premise: the rig's app url is http").toBe(true);
     const got = await refused(link(r, A));
     expect({ status: got.status, code: got.body.code }).toEqual({ status: 503, code: "unavailable" });
+    // review N1: the message says what is wrong — scoring links need https — never "streaming is unavailable", and it
+    // keeps the `origin_not_https` token the capture-v2 smoke keys on (so a crash's generic 503 cannot pass there).
+    expect(got.body.message).toMatch(/scoring links need https/);
+    expect(got.body.message).toContain("origin_not_https");
+    expect(got.body.message).not.toMatch(/streaming/);
     expect(await linksOf(r.fixtureId)).toEqual([]);
     process.env.NEXT_PUBLIC_BASE_URL = "https://public-base.test/";
     expect((await link(r, A)).url.startsWith("https://public-base.test/score/dl_")).toBe(true);

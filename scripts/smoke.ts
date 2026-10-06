@@ -18740,6 +18740,7 @@ async function captureV2Suite(): Promise<void> {
   type Answer = {
     state?: string; sid?: string; startedBy?: string; endReason?: string; cred?: unknown; playbackUrl?: string; code?: string;
     heartbeatUrl?: string; stage?: { code: string; role: { kind: string; n?: number; entrants?: number }; pool?: string }; url?: string;
+    message?: string;
   };
   const phoneCall = async (path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; json: Answer | null }> => {
     const res = await fetch(`${BASE}/api/v1/capture/codes/${qr.code}${path}`, {
@@ -18830,11 +18831,13 @@ async function captureV2Suite(): Promise<void> {
   step(
     origin.startsWith("https://")
       ? `phone A's scoring link → 200 {url} on the agreed pattern, the same url twice (got ${linkA.status}, ${linkAgain.status}, same ${linkA.json?.url === linkAgain.json?.url})`
-      : `phone A's scoring link on an http origin (${origin || "none"}) → 503 unavailable, twice (got ${linkA.status} ${linkA.json?.code}, ${linkAgain.status})`,
+      : `phone A's scoring link on an http origin (${origin || "none"}) → 503 unavailable naming origin_not_https, twice (got ${linkA.status} ${linkA.json?.code} "${linkA.json?.message}", ${linkAgain.status})`,
     origin.startsWith("https://")
       ? linkA.status === 200 && SCORING_URL.test(linkA.json?.url ?? "") && JSON.stringify(Object.keys(linkA.json ?? {})) === '["url"]'
         && linkAgain.status === 200 && linkAgain.json?.url === linkA.json?.url
-      : origin.startsWith("http://") && linkA.status === 503 && linkA.json?.code === "unavailable" && linkAgain.status === 503,
+      // The refusal's own words (review M3): a crash's generic 503 unavailable must not pass for the https refusal.
+      : origin.startsWith("http://") && [linkA, linkAgain].every((l) =>
+        l.status === 503 && l.json?.code === "unavailable" && String(l.json?.message ?? "").includes("origin_not_https")),
   );
   const linkB = await phoneCall("/scoring-link", "POST", { phone: phoneB });
   step(
