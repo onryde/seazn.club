@@ -1061,7 +1061,7 @@ describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved her
   });
   it("the mutate job runs at most 12 legs at a time, next to fail-fast: false: the leg fan-out cannot take every hosted slot of the org (T20-FIX1, I1)", () => {
     // Ruling T20-FIX1: the org is on GitHub's Free plan (about 20 concurrent hosted jobs, account-wide), and a `group=all` dispatch
-    // queues one job per leg (69 of them, 3 hours each). Without a cap it holds every slot for about 11 hours while ci.yml's PR
+    // queues one job per leg (69 of them when the cap was set, 79 after the legs the first full run timed out were cut again; 3 hours each). Without a cap it holds every slot for about 11 hours while ci.yml's PR
     // runs (13-16 jobs) and e2e.yml's push fan-out (11 jobs) wait behind it. The value is the owner's choice (12): a PR run
     // may partly queue, and a dispatch takes about 17 hours instead of about 25 at 8. A literal integer, never an expression:
     // the number is the thing this pin names, and an input or a variable would let a dispatch lift it unseen.

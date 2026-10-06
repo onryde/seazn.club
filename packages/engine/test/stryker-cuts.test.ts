@@ -362,6 +362,81 @@ describe("a member cut: `Host.member` starts the next part, inside one declarati
   });
 });
 
+// W1d Task 20, step 2: a body statement that declares nothing (an `if`, a `for`, a call) is named by its kind and its place among
+// the body's statements OF THAT KIND, `if#3` the third `if`. Football's `arbitraryEvent` is one `const roll` and an `if` chain that
+// holds 261 of its 336 mutants, and no declared name falls inside it, so without this the chain could not be cut at all.
+//
+// Hand-numbered:
+const CHAIN = [
+  "export function chain(x: number) {",    //  1
+  "  const r = x + 1;",                    //  2
+  "  if (r > 1) { x++; }",                 //  3  if#1
+  "  for (let i = 0; i < r; i++) {",       //  4  for#1
+  "    x += i;",                           //  5
+  "  }",                                   //  6
+  "  if (r > 2) {",                        //  7  if#2
+  "    x--;",                              //  8
+  "  }",                                   //  9
+  "  call(x);",                            // 10  expr#1
+  "  switch (x) { case 1: break; }",       // 11  switch#1
+  "  if (r > 3) { x = 0; }",               // 12  if#3
+  "  return x;",                           // 13
+  "}",                                     // 14
+].join("\n");
+
+describe("a statement that declares nothing is cut by its kind and ordinal: `Host.if#3` (T20)", () => {
+  it("each kind counts on its own, a cut falls on the line after the statement before it, and the ordinal is per body", () => {
+    expect(resolveSplit(CHAIN, ["chain.if#1"])).toEqual([[1, 2], [3, 99999]]);
+    expect(resolveSplit(CHAIN, ["chain.for#1"])).toEqual([[1, 3], [4, 99999]]);
+    expect(resolveSplit(CHAIN, ["chain.if#2"])).toEqual([[1, 6], [7, 99999]]);
+    expect(resolveSplit(CHAIN, ["chain.expr#1"])).toEqual([[1, 9], [10, 99999]]);
+    expect(resolveSplit(CHAIN, ["chain.switch#1"])).toEqual([[1, 10], [11, 99999]]);
+    expect(resolveSplit(CHAIN, ["chain.if#3"])).toEqual([[1, 11], [12, 99999]]);
+    expect(resolveSplit(CHAIN, ["chain.return"])).toEqual([[1, 12], [13, 99999]]);
+    expect(resolveSplit(CHAIN, ["chain.if#1", "chain.expr#1", "chain.if#3"])).toEqual([[1, 2], [3, 9], [10, 11], [12, 99999]]);
+  });
+
+  it("a declared statement keeps its own name and does not count toward a kind; a first statement is still refused", () => {
+    expect(() => resolveSplit(CHAIN, ["chain.r"])).toThrow(/"chain\.r" is the first member of "chain"/);
+    expect(() => resolveSplit(CHAIN, ["chain.if#4"])).toThrow(/no member of "chain" is named "if#4"/);
+    expect(() => resolveSplit(CHAIN, ["chain.if#0"])).toThrow(/no member of "chain" is named "if#0"/);
+    expect(() => resolveSplit(CHAIN, ["chain.while#1"])).toThrow(/no member of "chain" is named "while#1"/);
+    // the cut order is source order whatever the kind: if#3 is after expr#1
+    expect(() => resolveSplit(CHAIN, ["chain.if#3", "chain.expr#1"])).toThrow(/"chain\.expr#1".*(before|after|order)/s);
+  });
+
+  it("a body that STARTS with an unnamed statement refuses a cut before it (it would be the first member), and the one after it is allowed", () => {
+    const first = ["export function f(a: number) {", "  if (a) { a++; }", "  if (a > 1) { a--; }", "  return a;", "}"].join("\n");
+    expect(() => resolveSplit(first, ["f.if#1"])).toThrow(/"f\.if#1" is the first member of "f"/);
+    expect(resolveSplit(first, ["f.if#2"])).toEqual([[1, 2], [3, 99999]]);
+  });
+
+  it("cutUnits lists the unnamed statements as units when their host is opened, in source order, with the line the statement before ended on", () => {
+    const rows = cutUnits(CHAIN, ["chain"]).map((u) => [u.names.join("|"), u.startLine, u.prevEnd]);
+    expect(rows).toEqual([
+      ["chain", 1, null],
+      ["chain.if#1", 3, 2],
+      ["chain.for#1", 4, 3],
+      ["chain.if#2", 7, 6],
+      ["chain.expr#1", 10, 9],
+      ["chain.switch#1", 11, 10],
+      ["chain.if#3", 12, 11],
+      ["chain.return", 13, 12],
+    ]);
+  });
+
+  it("an edit above or inside the chain moves the cut with its statement, and an `if` added BEFORE it renumbers it (the documented drift)", () => {
+    const lines = CHAIN.split("\n");
+    const edited = [...lines.slice(0, 1), "  // a note", ...lines.slice(1)].join("\n");
+    expect(resolveSplit(edited, ["chain.if#3"])).toEqual([[1, 12], [13, 99999]]);
+    // a new `if` on line 3, ahead of it: the old `if#3` is now `if#4`, so `if#3` names the old `if#2` (lines 8-10 now) and the cut moves up to it.
+    // It stays loss-free (the parts still tile the file), it just no longer cuts where it did: re-run the recut helper after adding an `if` above a cut.
+    const grown = [...lines.slice(0, 2), "  if (r > 0) { x += 2; }", ...lines.slice(2)].join("\n");
+    expect(resolveSplit(grown, ["chain.if#3"])).toEqual([[1, 7], [8, 99999]]);
+    expect(resolveSplit(grown, ["chain.if#4"])).toEqual([[1, 12], [13, 99999]]);
+  });
+});
+
 describe("cutUnits and unitMutants: the recut helper's view of a file with some declarations opened up", () => {
   it("with nothing opened it is the top-level statements (each unit's names, lines and the line the statement before it ended on)", () => {
     const units = cutUnits(SRC, []);

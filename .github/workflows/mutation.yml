@@ -10,10 +10,11 @@ name: Stryker mutation
 #    are held equal to the keys by matrix-workflow.test.ts. inject_visibility proves the guard live.
 #  - pull_request on this file and the Stryker files: the probe, so the workflow proves itself on its own PR.
 # The matrix (and each job's timeout, from packages/engine/stryker-timeouts.json, at most 300 minutes) is derived by
-# packages/engine/scripts/stryker-matrix.mjs, whose own test spawns it per event. THE TIMEOUTS ARE FROM ONE HOSTED RUN: the probe's
-# (run 37330725739, ubuntu-latest, concurrency 3) took 76.13 runner-seconds per mutant, 77 in the sizing, and every leg's timeout
-# is min(300, ceil(1.5 x its predicted minutes)), the legs cut to at most 454 mutants (200 predicted minutes). It is ONE sample;
-# the first full run replaces it with the legs' own. The floor (stryker-floor.json) gates, not
+# packages/engine/scripts/stryker-matrix.mjs, whose own test spawns it per event. THE TIMEOUTS ARE FROM THE FIRST FULL RUN (run
+# 37371368951, sha 78c7ef3e6, ubuntu-latest, concurrency 3): packages/engine/stryker-measured.json records what each leg took, and a
+# leg's timeout is 1.5 x that (min 10, max 300 minutes). The run cancelled three legs at their timeouts and four more took over 200
+# minutes, so those seven were cut again into parts (10 more jobs, cut points in packages/engine/stryker.groups.mjs); a part is
+# timed from its share of the leg's measured phase. The floor (stryker-floor.json) gates, not
 # Stryker's `break`, and is kept per FAMILY (ruling 66's ten groups, the sum of their legs: a file cut again never removes a
 # floor), so the `floors` job, not a leg, judges it: it runs after every leg and reads the legs' artifacts. Until PR-B sets a floor
 # it prints "no floor yet" and the families' scores are only logged.
@@ -64,6 +65,8 @@ on:
           - sports-cricket-12
           - sports-cricket-13
           - sports-cricket-14
+          - sports-cricket-15
+          - sports-cricket-16
           - sports-football-1
           - sports-football-2
           - sports-football-3
@@ -71,6 +74,8 @@ on:
           - sports-football-5
           - sports-football-6
           - sports-football-7
+          - sports-football-8
+          - sports-football-9
           - sports-period-1
           - sports-period-2
           - sports-period-3
@@ -80,6 +85,9 @@ on:
           - sports-period-7
           - sports-period-8
           - sports-period-9
+          - sports-period-10
+          - sports-period-11
+          - sports-period-12
           - sports-setbased-1
           - sports-setbased-2
           - sports-setbased-3
@@ -91,6 +99,9 @@ on:
           - sports-nested-3
           - sports-nested-4
           - sports-nested-5
+          - sports-nested-6
+          - sports-nested-7
+          - sports-nested-8
           - sports-other-1
           - sports-other-2
           - sports-other-3

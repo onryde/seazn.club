@@ -35,6 +35,34 @@
     "line": 2437
   },
   {
+    "file": "src/sports/football/football.ts",
+    "mutator": "BlockStatement",
+    "replacement": "{}",
+    "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<FootballEv> | null {",
+    "line": 2823
+  },
+  {
+    "file": "src/sports/nested/kernel.ts",
+    "mutator": "BlockStatement",
+    "replacement": "{}",
+    "text": "): SportModule<NestedCfg, NestedEv, NestedState> {",
+    "line": 1982
+  },
+  {
+    "file": "src/sports/nested/kernel.ts",
+    "mutator": "ObjectLiteral",
+    "replacement": "{}",
+    "text": "return {",
+    "line": 2052
+  },
+  {
+    "file": "src/sports/nested/kernel.ts",
+    "mutator": "BlockStatement",
+    "replacement": "{}",
+    "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<NestedEv> | null {",
+    "line": 2252
+  },
+  {
     "file": "src/sports/period/kernel.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
@@ -47,6 +75,13 @@
     "replacement": "{}",
     "text": "return {",
     "line": 2434
+  },
+  {
+    "file": "src/sports/period/kernel.ts",
+    "mutator": "BlockStatement",
+    "replacement": "{}",
+    "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<PeriodEv> | null {",
+    "line": 2681
   },
   {
     "file": "src/sports/setbased/kernel.ts",

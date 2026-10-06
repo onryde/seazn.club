@@ -23,8 +23,8 @@ const SCRIPT = join(ENGINE, "scripts/stryker-floor.ts");
 interface Counts { killed?: number; survived?: number; timeout?: number; noCoverage?: number; ignored?: number; compileError?: number; runtimeError?: number }
 const STATUS_OF: Record<keyof Counts, string> = { killed: "Killed", survived: "Survived", timeout: "Timeout", noCoverage: "NoCoverage", ignored: "Ignored", compileError: "CompileError", runtimeError: "RuntimeError" };
 
-/** The family most verdict tests use: `core`. It is more than one leg since the hosted sizing (T20-PRE: 1,002 mutants, over the
- *  454 a leg may hold), so a report set for it is one report per leg. `one(c)` gives EVERY leg the same counts `c`, each at a
+/** The family most verdict tests use: `core`. It is more than one leg since the hosted sizing (T20-PRE: 1,002 mutants, more than a
+ *  leg may hold at the measured cost of one mutant), so a report set for it is one report per leg. `one(c)` gives EVERY leg the same counts `c`, each at a
  *  whole file of its own: the family's score is then the ratio `c` alone, and every COUNT is `CORE_LEGS.length` times larger. */
 const CORE_LEGS = STRYKER_FAMILIES.core;
 /** A whole file each core leg selects, for fixtures only (guarded by the first test below). */

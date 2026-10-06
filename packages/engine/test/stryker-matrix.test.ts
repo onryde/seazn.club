@@ -60,7 +60,7 @@ describe("stryker-matrix.mjs derives one matrix per event (D14)", () => {
   });
 
   spawnIt(2)("the legs and the probe fit GitHub's 256-job matrix limit, and so does every matrix a run prints (T20-FIX1, M6)", () => {
-    // 69 legs and the probe are 70 jobs, 3.7x under the limit; a matrix over it is refused by GitHub when the plan job hands it
+    // 79 legs and the probe are 80 jobs (T20 step 2 cut seven legs into 17 parts), 3.2x under the limit; a matrix over it is refused by GitHub when the plan job hands it
     // over, after the dispatch was chosen and the guard and the plan jobs ran. The limit is GitHub's, typed here from its docs.
     const GITHUB_MATRIX_LIMIT = 256;
     const keys = Object.keys(STRYKER_GROUPS);

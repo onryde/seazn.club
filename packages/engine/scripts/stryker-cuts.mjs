@@ -28,6 +28,15 @@
 // leg runs them and no report counts them. stryker-unscored.json names each by file, mutator, replacement and line text (the line number is information only), and test/stryker-sizing.test.ts
 // holds it equal to what the instrumenter finds; its count is the whole of the loss.
 //
+// A body statement that DECLARES NOTHING (an `if`, a `for`, a `switch`, a call) is named by its kind and its place among the
+// body's statements of that kind (T20 step 2): `Host.if#3` is the third `if` of the body, `for#1`, `while#1`, `switch#1`, `try#1`,
+// `throw#1`, `block#1` and `expr#1` (an expression statement) likewise. Football's `arbitraryEvent` is one `const roll` and then an
+// `if` chain that holds 261 of its 336 mutants, and no declared name falls inside the chain, so before this it could not be cut at
+// all. The ordinal counts only the statements that declare nothing, so an `if` added ABOVE a cut renumbers it: the cut then lands one
+// statement away from where it was (the parts still tile the file and nothing more is lost), and the sizing test's count drift check
+// is what notices; a rename of a declared anchor stays a loud failure, this one a quiet move, so re-run the recut helper after adding
+// an `if` above one.
+//
 // Plain .mjs, like stryker.groups.mjs: stryker.config.mjs loads it under `stryker`, and the parser is loaded only when a cut is
 // resolved, so scripts/stryker-matrix.mjs (which needs only the group names and runs before any install) never touches it.
 // scripts/stryker-cuts.d.mts types it for the engine's .ts tests; a test holds the two equal.
@@ -99,6 +108,20 @@ function memberName(ts, node) {
   return ts.isIdentifier(n) || ts.isStringLiteral(n) || ts.isNumericLiteral(n) || ts.isPrivateIdentifier(n) ? n.text : undefined;
 }
 
+/** What a statement that declares no name is called when a cut falls before it: `if`, `for` (for, for-in, for-of), `while` (while,
+ *  do), `switch`, `try`, `throw`, `block`, `expr` (an expression statement, a call or an assignment), else `stmt`. */
+function unnamedKind(ts, statement) {
+  if (ts.isIfStatement(statement)) return "if";
+  if (ts.isForStatement(statement) || ts.isForInStatement(statement) || ts.isForOfStatement(statement)) return "for";
+  if (ts.isWhileStatement(statement) || ts.isDoStatement(statement)) return "while";
+  if (ts.isSwitchStatement(statement)) return "switch";
+  if (ts.isTryStatement(statement)) return "try";
+  if (ts.isThrowStatement(statement)) return "throw";
+  if (ts.isBlock(statement)) return "block";
+  if (ts.isExpressionStatement(statement)) return "expr";
+  return "stmt";
+}
+
 /** An expression with its parentheses, `as` and `satisfies` taken off. */
 function unwrap(ts, expression) {
   let e = expression;
@@ -128,7 +151,19 @@ function membersOf(ts, source, line, node) {
   };
   const ofBody = (body) => {
     const stmts = body.statements;
-    const own = run([...stmts], (st) => (ts.isReturnStatement(st) ? ["return"] : declaredNames(ts, st)));
+    const ordinals = new Map();
+    // A statement that declares nothing (an `if`, a `for`, a `switch`, a call) is named by its kind and its place among the
+    // body's statements of that kind: `if#3` is the third `if` of this body (T20, step 2: football's `arbitraryEvent` is ONE
+    // `const roll` followed by an `if` chain that holds 261 of its 336 mutants, and no declared name falls inside it).
+    const own = run([...stmts], (st) => {
+      if (ts.isReturnStatement(st)) return ["return"];
+      const declared = declaredNames(ts, st);
+      if (declared.length > 0) return declared;
+      const kind = unnamedKind(ts, st);
+      const n = (ordinals.get(kind) ?? 0) + 1;
+      ordinals.set(kind, n);
+      return [`${kind}#${n}`];
+    });
     const last = stmts[stmts.length - 1];
     const returned = last !== undefined && ts.isReturnStatement(last) ? unwrap(ts, last.expression) : undefined;
     return returned !== undefined && ts.isObjectLiteralExpression(returned) ? [...own, ...run([...returned.properties], ofName)] : own;
