@@ -34,7 +34,17 @@ import { qualificationStatus, type QualificationInput, type QualRowResult, type 
 import { generic } from "@seazn/engine/sports/generic";
 import { TAG, addEntrantsViaApi, apiJson, expectNoHorizontalScroll, scoreFixture } from "./helpers";
 import { closeOpenContexts, openContexts } from "./spectator-public-helpers";
-import { API_CALL_MS, FLOOR_MS, activeOrgSlug, dictString, division, publicCompetition, spectator } from "./spectator-w2-kit";
+import {
+  API_CALL_MS,
+  FLOOR_MS,
+  STEP_MS,
+  activeOrgSlug,
+  dictString,
+  division,
+  mintSpectatorOrg,
+  publicCompetition,
+  spectator,
+} from "./spectator-w2-kit";
 
 const CFG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
 /** The Swiss: rounds declared, rounds played, places that go through. */
@@ -561,6 +571,77 @@ test("pools: Pool A reads above Pool B on the division page, the hub Table tab a
 
   await openUntil(page, paths.console(scene.pools.slug), (p) => consoleWithCut(p).count(), POOLS);
   expect(poolLetters(await page.locator("table > caption").allTextContents()), "console").toEqual(letters);
+});
+
+// ── Pool label in the org's locale (2026-10-06) ──────────────────────────
+//
+// `pools.name` is only ever stored as the English "Pool " + key
+// (`usecases/stages.ts`), and the public surfaces printed it — so the English
+// org above reads "Pool A" correctly by accident. A Spanish org's division
+// page and hub must name each pool with the public dictionary's
+// `table.poolLabel` over the pool's KEY ("Grupo A"), read here out of the
+// dictionary FILE, never typed. A dedicated org (`mintSpectatorOrg`), so the
+// shared org's locale never moves under a parallel test. Cropped pictures of
+// the pool heading at 1280, 768 and 320 land in this test's output directory.
+
+const LABEL_WIDTHS = [1280, 768, 320] as const;
+
+test("pools: a Spanish org's division page and hub name each pool from its key in Spanish, never the stored 'Pool A', at 1280, 768 and 320", async ({
+  browser,
+  request,
+}, testInfo) => {
+  // org (5 calls), competition, division (2), stage, entrants, generate,
+  // start, fixture list, POOLS first-round results at two calls each, ~4
+  // standings polls; then a page load per width per surface.
+  test.setTimeout(Math.max(FLOOR_MS, (5 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2 * POOLS + 4) * API_CALL_MS + 2 * LABEL_WIDTHS.length * STEP_MS));
+  const org = await mintSpectatorOrg(request, { name: `Pool label es ${TAG}`, plan: "pro", locale: "es" });
+  const comp = await publicCompetition(request, { name: `Grupos ${TAG}`, orgId: org.id });
+  const div = await division(request, comp.id, { name: "Grupos abiertos", sport_key: "generic", variant_key: "score", config: CFG });
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.id}/stages`, "POST", {
+    seq: 1,
+    kind: "group",
+    name: "Groups",
+    config: { pools: { count: POOLS } },
+  });
+  ok(stage, "groups stage");
+  const field = Array.from({ length: POOLS * POOL_SIZE }, (_, i) => `Lado ${i + 1} ${TAG}`);
+  expect((await addEntrantsViaApi(request, div.id, field)).status, "the field was created").toBe(201);
+  ok(await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST"), "generate groups");
+  ok(await apiJson(request, `/api/v1/divisions/${div.id}/start`, "POST"), "start groups");
+  const fx = (await fixturesOf(request, div.id)).filter((f) => f.stage_id === stage.data!.id);
+  const poolIds = [...new Set(fx.map((f) => f.pool_id))];
+  expect(poolIds, "two pools, each with an id").toHaveLength(POOLS);
+  const first = Math.min(...fx.map((f) => f.round_no));
+  for (const f of fx.filter((x) => x.round_no === first)) await scoreFixture(request, f.id, 2, 0);
+  for (const poolId of poolIds) await settle(request, { stageId: stage.data!.id, poolId }, POOL_SIZE);
+
+  const want = ["A", "B"].slice(0, POOLS).map((key) => `Groups — ${dictString("es", "table.poolLabel", { key })}`);
+  expect(want[0], "premise: Spanish is not the stored English name").not.toContain("Pool");
+
+  const divisionPath = `/shared/${org.slug}/${comp.slug}/${div.slug}?tab=standings`;
+  const hubPath = `/shared/${org.slug}/${comp.slug}?tab=table`;
+  const captions = (p: Page) => p.locator("#panel-standings table > caption");
+  const hubPools = (p: Page) => p.locator(`section[data-testid^="mh-table-${div.slug}-"]`);
+  let checked = 0;
+  for (const width of LABEL_WIDTHS) {
+    const page = await spectator(browser, { width, height: 900 });
+    await openUntil(page, divisionPath, (p) => captions(p).count(), POOLS);
+    expect((await captions(page).allTextContents()).map((s) => s.trim()), `division page at ${width}`).toEqual(want);
+    await expect(page.locator("#panel-standings")).not.toContainText("Pool ");
+    await expectNoHorizontalScroll(page);
+    await regions(page).first().screenshot({ path: testInfo.outputPath(`pool-label-es-division-${width}.png`) });
+    checked += POOLS;
+
+    const hub = await spectator(browser, { width, height: 900 });
+    await openUntil(hub, hubPath, (p) => hubPools(p).count(), POOLS);
+    expect((await hubPools(hub).locator("h3").allTextContents()).map((s) => s.trim()), `hub at ${width}`).toEqual(want);
+    await expect(hub.getByTestId("mh-tab-panel-table")).not.toContainText("Pool ");
+    await expectNoHorizontalScroll(hub);
+    await hubPools(hub).first().screenshot({ path: testInfo.outputPath(`pool-label-es-hub-${width}.png`) });
+    checked += POOLS;
+  }
+  // Anti-vacuity: every pool's label was read on both surfaces at every width.
+  expect(checked).toBe(2 * POOLS * LABEL_WIDTHS.length);
 });
 
 // ── No cut ───────────────────────────────────────────────────────────────
