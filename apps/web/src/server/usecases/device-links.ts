@@ -311,6 +311,64 @@ export async function ensureDeviceLinks(
   return out;
 }
 
+/** The phone's answer (capture QR v2 §6.3.5): the match's link, or "the match is over" (nothing written). */
+export type PhoneScoringLink =
+  | { kind: "link"; secret: string; linkId: string; minted: boolean }
+  | { kind: "finished"; status: string };
+
+/**
+ * Capture QR v2 W27 (§6.3.5, owner sign-off 2026-10-06): the match's Remote scoring link for the capture phone. The
+ * owner's rule: "must not remove or replace any existing QR … just provide or create the new one". So this NEVER
+ * revokes and never calls `mintInTx` (which revokes every live link first): a printed sheet, a console hand-over and a
+ * legacy or unreadable link all stay exactly as they were.
+ *
+ * The console's own gate (`scoring.device_links`, Event Pass included via the fixture's competition), then under the
+ * fixture's link lock — the one the console's ensure and the sheet print take, so a phone and a printer racing on a
+ * fixture with no link agree on ONE — in one transaction:
+ *  - a finalized or cancelled match → `{kind: "finished"}`, nothing written;
+ *  - the newest live sealed link whose envelope opens AND hashes to its row's `token_hash` is returned unchanged. One
+ *    that hashes elsewhere, or will not open, is PASSED OVER (logged by link id, never by secret) — never revoked;
+ *  - with none, a new sealed link is inserted: no label, no expiry, `issued_by` the stream code's issuer.
+ * A missing DEVICE_LINK_KEK is the 503 `DEVICE_LINK_KEK_MISSING` (open and seal both check it) with nothing written.
+ * The secret is the caller's to put on the wire: it is never logged here.
+ */
+export async function provideDeviceLinkForPhone(
+  orgId: string,
+  fixtureId: string,
+  issuedBy: string,
+): Promise<PhoneScoringLink> {
+  await requireFeature(orgId, "scoring.device_links", await competitionForFixture(fixtureId));
+  return withTenant(orgId, async (tx) => {
+    await lockFixtureLinks(tx, fixtureId);
+    const status = await linkableStatus(tx, fixtureId);
+    if (isFinishedFixtureStatus(status)) return { kind: "finished", status };
+    const live = await tx<{ id: string; secret_enc: Uint8Array; token_hash: string }[]>`
+      select id, secret_enc, token_hash from device_links
+      where fixture_id = ${fixtureId} and revoked_at is null and secret_enc is not null
+        and (expires_at is null or expires_at > now())
+      order by created_at desc, id desc`;
+    for (const row of live) {
+      let secret: string;
+      try {
+        secret = openSecret(row.secret_enc);
+      } catch (e) {
+        if (e instanceof HttpError) throw e; // the KEK is missing: a configuration gap, fail closed
+        log.warn({ linkId: row.id, fixtureId }, "device link (capture phone): sealed secret will not open; passed over, left as it is");
+        continue;
+      }
+      if (hashDeviceLinkToken(secret) === row.token_hash) return { kind: "link", secret, linkId: row.id, minted: false };
+      log.warn({ linkId: row.id, fixtureId }, "device link (capture phone): sealed secret does not match the row's token hash; passed over, left as it is");
+    }
+    const secret = mintDeviceLinkSecret();
+    const sealed = sealSecret(secret); // before the insert: a missing KEK writes nothing
+    const [created] = await tx<{ id: string }[]>`
+      insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at)
+      values (${orgId}, ${fixtureId}, ${hashDeviceLinkToken(secret)}, ${sealed}, null, ${issuedBy}, null)
+      returning id`;
+    return { kind: "link", secret, linkId: created.id, minted: true };
+  });
+}
+
 /** Revoke one link (immediate 401 for the holder). */
 export async function revokeDeviceLink(
   auth: AuthCtx,

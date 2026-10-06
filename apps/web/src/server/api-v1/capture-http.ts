@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import { HttpError, handler } from "@/lib/http";
 import { log } from "@/server/logger";
-import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_START_LIMIT, rateLimit } from "@/lib/rate-limit";
+import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_START_LIMIT, DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { normaliseCode } from "@/server/relay/domain/stream-code";
 import type { CaptureRefusalCode } from "./capture-schemas";
 
@@ -113,11 +113,14 @@ export function clientIpOf(req: Request): string {
 
 /**
  * A phone route with its rate limits (§10.4, amended §17.4), inside `captureRoute`, in this order:
- *  1. the code's own budget is spent — ONE budget across the three routes — and a start spends its own on top. Only a
+ *  1. the code's own budget is spent — ONE budget across the phone routes — and a start spends its own on top. Only a
  *     well-formed code has a budget (a malformed one is the use-case's 404, read from nothing). Both are keyed on the
  *     code AND the caller's credential (`credentialKeyOf`, B6 re-review R-1): a code has one tok, so for every real
  *     caller this is exactly §10.4's "per code", while a wrong tok spends only its own throwaway bucket — a flood that
- *     names the code (it is in every URL and beside the tok in the QR) can never refuse the phone holding the tok;
+ *     names the code (it is in every URL and beside the tok in the QR) can never refuse the phone holding the tok.
+ *     W27's scoring link (§6.3.5) then spends the console's own mint budget, `DEVICE_LINK_MINT_LIMIT` per client IP, in
+ *     the console's `dlmint:` bucket ("a reissue IS a mint: one bucket, one number"), on every call, a re-shown link
+ *     included — as the console's ensure does;
  *  2. the route runs. A 401 it answers spends the client IP's FAILED-attempt budget, and a failure past it answers 429
  *     instead of 401. The budget is consulted ONLY for a failure: a valid tok is always admitted, whatever the bucket
  *     holds (B6 review I-1 — the tok is 128 bits, so throttling hits buys nothing, and refusing them let anyone sharing
@@ -125,7 +128,7 @@ export function clientIpOf(req: Request): string {
  * Every 429 is the bare `{code: rate_limited, message}` with `Retry-After` = the window's true remaining seconds.
  */
 export async function capturePhoneRoute(
-  req: Request, rawCode: string, route: "get" | "beats" | "start", fn: () => Promise<Response>,
+  req: Request, rawCode: string, route: "get" | "beats" | "start" | "scoring-link", fn: () => Promise<Response>,
 ): Promise<Response> {
   return captureRoute(async () => {
     const code = normaliseCode(rawCode);
@@ -134,6 +137,7 @@ export async function capturePhoneRoute(
       await rateLimit(`capture-code:${code}:${who}`, CAPTURE_CODE_LIMIT);
       if (route === "start") await rateLimit(`capture-start:${code}:${who}`, CAPTURE_START_LIMIT);
     }
+    if (route === "scoring-link") await rateLimit(`dlmint:${clientIpOf(req)}`, DEVICE_LINK_MINT_LIMIT);
     try {
       return await fn();
     } catch (e) {

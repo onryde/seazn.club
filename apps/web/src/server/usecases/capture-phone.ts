@@ -1,7 +1,8 @@
 import "server-only";
 // server/usecases/capture-phone.ts — the phone-facing use-cases of capture QR v2 (§6.3): the descriptor (`getCode`,
-// T8a), the beat (`postBeat`, T8b), the phone's own start (`postStart`, T8c), and the waiting-fields builder both
-// answers share, so the two never disagree (R7: ONE owner of the length fit).
+// T8a), the beat (`postBeat`, T8b), the phone's own start (`postStart`, T8c), the match's Remote scoring link
+// (`postScoringLink`, W27), and the waiting-fields builder both answers share, so the two never disagree (R7: ONE owner
+// of the length fit).
 //
 // R1 (§17.1): the V430 tables are FORCE RLS with no policy, so every read here goes through the non-tenant `sql` —
 // never `withTenant` — and the org is the code row's (`resolveStreamCode`). Each answer is built field by field, never
@@ -18,7 +19,7 @@ import { defaultThemeFor } from "@/components/overlay/theme-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import {
   CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartBody,
-  type CaptureStartedBy, type CaptureStartOk,
+  CaptureScoringLinkOk, type CaptureStartedBy, type CaptureStartOk,
 } from "@/server/api-v1/capture-schemas";
 import type { z } from "zod";
 import { log } from "@/server/logger";
@@ -39,6 +40,7 @@ import { ingestCred } from "@/server/relay/ingest-cred";
 import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
+import { provideDeviceLinkForPhone, type PhoneScoringLink } from "./device-links";
 import { fixtureStreamTarget, resolveStreamCode, type ResolvedCode } from "./stream-codes";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
@@ -687,4 +689,52 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
     // The running session ended between admission and this read: nothing to name — the phone's "try again".
     throw new CaptureRefusalError(503, "unavailable", "a session was running and has just ended; try again");
   }
+}
+
+// ---------------------------------------------------------------------------
+// W27 — the phone's Remote scoring link (§6.3.5, owner sign-off 2026-10-06)
+// ---------------------------------------------------------------------------
+
+/** W27: the origin the URL is built on must be https — the agreed pattern is `^https://[^/]+/score/dl_…`. Checked BEFORE
+ *  the link is provided, so a deployment that would serve a URL the phone's parser rejects writes nothing. */
+const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
+
+/**
+ * `POST /capture/codes/{code}/scoring-link` (§6.3.5, W27): the match's Remote scoring link, for the slot's CURRENT phone.
+ * In order:
+ *  - resolve as a `start` call: an ENDED code serves nothing here, even to its open session's phone (C1b) → 401;
+ *  - the start's own holder check (T12, `holderOf`), session or none: any other phone → 409 replaced;
+ *  - the origin is https (the contract's pattern), else 503 unavailable with nothing written;
+ *  - `provideDeviceLinkForPhone`: the console's plan gate (→ 402 not_entitled), then under the fixture's link lock a
+ *    finished match (→ 409 match_finished, nothing written), else the live sealed link or a new one — NEVER revoking
+ *    (the owner's rule: "must not remove or replace any existing QR"). A missing DEVICE_LINK_KEK → 503 unavailable.
+ * 200 `{url}` = `captureOrigin()` + `/score/` + the secret. The URL is a credential: it is never logged, and it is
+ * stored nowhere new (the row holds the hash and the sealed envelope, as every console link does).
+ */
+export async function postScoringLink(rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date): Promise<CaptureScoringLinkOk> {
+  const resolved = await resolveStreamCode(rawCode, tok, "start", body.phone, now);
+  const open = await openSessionOf(sql, resolved.fixtureId);
+  const current = await holderOf(sql, resolved.codeId, open);
+  if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
+  const origin = captureOrigin(deps);
+  if (!HTTPS_ORIGIN.test(origin)) {
+    log.error({ fixtureId: resolved.fixtureId, origin }, "capture scoring link: the server's origin is not https; no link is served");
+    throw unavailable("origin_not_https");
+  }
+  let got: PhoneScoringLink;
+  try {
+    got = await provideDeviceLinkForPhone(resolved.orgId, resolved.fixtureId, resolved.issuedBy);
+  } catch (err) {
+    if (err instanceof PaymentRequiredError) throw new CaptureRefusalError(402, "not_entitled", `the plan lacks ${err.featureKey}`);
+    if (err instanceof HttpError && err.code === "DEVICE_LINK_KEK_MISSING") {
+      throw new CaptureRefusalError(503, "unavailable", "scoring links are not configured on this server");
+    }
+    throw err;
+  }
+  if (got.kind === "finished") throw new CaptureRefusalError(409, "match_finished", `the match is ${got.status}; it has no scoring link`);
+  const answer = CaptureScoringLinkOk.safeParse({ url: `${origin}/score/${got.secret}` });
+  // An assumption made a guard: every secret is `mintDeviceLinkSecret`'s and the origin was checked above. Refused by
+  // name (a logged 503) rather than served to a parser that rejects it — and never with the URL in the message.
+  if (!answer.success) throw new Error("postScoringLink: the scoring link does not match the contract's url pattern");
+  return answer.data;
 }
