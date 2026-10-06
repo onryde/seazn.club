@@ -1094,7 +1094,8 @@ Elsewhere the text is the controller's record.
     with the shard matrix.** Free parallelism, no unmeasured contention on pad holds. `MAX_WORKERS` stays 8. Built as
     recommended: `--driver browser --workers N` is a usage error that says so (`run.ts:633`). If the owner wants
     browser workers, they become a W1d follow-up task, and nothing else in the plan depends on the answer.
-  - **D2's enable step is the owner's act, after PR-B proves three green dispatches:** `gh variable set
+  - **D2's enable step is the owner's act, after PR-B merges (ruling T22-REORDER, 2026-10-06; it was "after PR-B proves
+    three green dispatches", which Task 17 has already done, so that wording would read as "enable now"):** `gh variable set
     MATRIX_WEEKLY_ENABLED --body true`. Until then both schedules (matrix-truth Saturday 02:17 UTC, mutation Sunday
     03:23 UTC) fire as a visible run of skipped jobs, and the same command with `false` switches them off in seconds,
     with no PR. The controller records the time and the first scheduled run id here (R22). Do not set

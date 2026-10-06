@@ -92,6 +92,8 @@ The fix for SW-H1 removes owner ruling 70's override in the same change: delete 
 (`truth-runs/w1d-baseline/README.md`, "Owner ruling 70"). A test fails once the committed baseline shows none of the three
 cells red, and a re-baselined L3 refuses the block. Both fire at the re-baseline, not when the fix lands: a W3 fix merged without re-baselining L3 leaves the override live, where it can hide a regression on those three cells only, so re-baseline in the same change.
 
+A re-baseline that carries the `ruling70` block forward instead (the stale-block message of `baselineOverrides` allows it until the fix) reds `tools/matrix/__tests__/backlog.test.ts` and `tools/matrix/__tests__/w1d-backlog-index.test.ts` by design: the W1d backlog's intro states what `judge regression` holds against the W1d L3, so its loader refuses a block that does not qualify that run. The wave retires the block and regenerates the backlog section of `_INDEX.md` (`pnpm matrix:backlog`, the command printed under that section) in the same change; the ruling-70 carry (`catalogue/backlog-carries.json`) goes with the block.
+
 Update the W3 row, decision log and "False premises found" in `_INDEX.md` as
 they happen (R22). The O7 answer moves to "Owner rulings" only when the owner
 signs the rulebook.

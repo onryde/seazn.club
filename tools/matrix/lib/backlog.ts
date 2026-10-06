@@ -30,7 +30,7 @@ export const DEFAULT_DESIGN = resolve(REPO_ROOT, "docs/superpowers/specs/2026-09
 export const BACKLOG_REFUSALS = [
   // the writer, over its input
   "NoCases", "TriageInconsistent", "LedgerHasFindings", "DesignRowMissing", "UnknownWave", "NewGapUnbacked", "NewGapWaveDisagrees",
-  "CarryUnknown", "CarryMissing", "CarryPlaceholder", "CarryWaveDisagrees", "CarrySourceMissing", "CarryEmpty", "CarryShapeUnknown",
+  "CarryUnknown", "CarryMissing", "CarryPlaceholder", "CarryWaveDisagrees", "CarrySourceMissing", "CarrySourcesDisagree", "CarryEmpty", "CarryShapeUnknown",
   // the loader, over the files
   "TriageUnreadable", "TriageNotBaseline", "ShaNotBaseline", "BaselineUnreadable", "CatalogueUnreadable", "DesignUnreadable",
 ] as const;
@@ -249,10 +249,26 @@ function rowsOf(triage: TriageJson, ids: readonly string[], carry: string): Tria
 }
 
 /** Owner ruling 70's cells (the list `judge regression` applies), and those of them the committed L3 does not have red: only `judge regression`
- *  holds those red, so the triage counts none of them. The list is baseline.json's, never the dispatch cut's flips (PR-B review m3). `label`
- *  names the reader in a refusal. */
+ *  holds those red, so the triage counts none of them. The list is baseline.json's, never the dispatch cut's flips (PR-B review m3): the held
+ *  figure describes what the judge applies. But the carry says these cells "flipped between works and red across the dispatches", a claim about
+ *  the cut made from the list, so the two must name the same cells or the writer refuses (PR-B re-review I2): a sentence that names a cell the
+ *  cut never flipped, or leaves out one it did, is a lie the writer will not print. An empty list is left to the carry's own CarryEmpty.
+ *  `label` names the reader in a refusal. */
 function ruledCells(input: BacklogInput, label: string): { cells: readonly string[]; held: { id: string; state: string }[] } {
   const cells = input.ruling70;
+  if (cells.length > 0) {
+    const flipping = input.cuts.ids.filter((id) => new Set(perDispatch(input.cuts, id, label).map((c) => c.state)).size > 1);
+    const listed = new Set(cells);
+    const cutOnly = flipping.filter((id) => !listed.has(id));
+    const listOnly = cells.filter((id) => !flipping.includes(id));
+    if (cutOnly.length + listOnly.length > 0) {
+      const said = [
+        ...cutOnly.map((id) => `the dispatch cut flips ${code(id)}, which baseline.json's ruling70 does not list`),
+        ...listOnly.map((id) => `baseline.json's ruling70 lists ${code(id)}, which the dispatch cut does not flip`),
+      ];
+      throw refuse("CarrySourcesDisagree", label, `${said.join("; ")} (ruling70: ${list(cells.map(code))}; flipped in the cut: ${list(flipping.map(code))}); the carry says the ruling's cells flipped across the dispatches, so the two must name the same cells`);
+    }
+  }
   const l3 = new Map(input.cases.filter((c) => c.layer === "L3").map((c) => [c.caseId, c.state]));
   const held = cells.flatMap((id) => {
     const state = l3.get(id);

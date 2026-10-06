@@ -424,32 +424,67 @@ describe("the ruling-70 held set is baseline.json's list, never the dispatch cut
     expect(RULING_70.length - heldIds().length, "and one it has red").toBeGreaterThan(0);
   });
 
-  it("the two sources DISAGREE, the list narrower: the section follows the list (one held cell, L3's reds + 1), though the cut still flips both", () => {
+  /** The cut made to stop flipping `id`: every dispatch records what the first one did. */
+  const steadied = (i: BacklogInput, id: string): void => {
+    for (const d of i.cuts.dispatches) {
+      const first = i.cuts.dispatches[0]!.cases.find((c) => c.caseId === id)!;
+      Object.assign(d.cases.find((c) => c.caseId === id)!, { state: first.state, reason: first.reason, checks: structuredClone(first.checks) });
+    }
+    expect(new Set(i.cuts.dispatches.map((d) => d.cases.find((c) => c.caseId === id)!.state)).size, "the cut no longer flips it").toBe(1);
+  };
+  const code = (id: string): string => `\`${id}\``;
+
+  // The carry says the ruling's cells "flipped between works and red across the dispatches": a claim about the cut, made from baseline.json's
+  // list. The figure follows the list (the judge applies it); the writer refuses what would make the sentence lie (PR-B re-review I2).
+  it("the two sources DISAGREE, the list narrower: the cut still flips a cell the list lacks, and the writer refuses it by name, naming both sides", () => {
+    const i = copy();
+    const [dropped] = heldIds();
+    i.ruling70 = i.ruling70.filter((id) => id !== dropped);
+    expect(i.cuts.ids, "the cut still flips the dropped cell").toContain(dropped);
+    const r = refused(i);
+    expect(r).toMatchObject({ name: "CarrySourcesDisagree", message: expect.stringMatching(/ruling-70: /) });
+    expect(r.message).toContain(`the dispatch cut flips ${code(dropped!)}, which baseline.json's ruling70 does not list`);
+    expect(i.ruling70.length, "the other side lists cells").toBeGreaterThan(0);
+    for (const id of i.ruling70) expect(r.message, "the list's side is named too").toContain(code(id));
+  });
+
+  it("the two sources DISAGREE, the cut narrower: a listed cell the cut no longer flips is refused by name, never named as having flipped", () => {
+    const i = copy();
+    const still = heldIds()[0]!;
+    steadied(i, still);
+    const r = refused(i);
+    expect(r).toMatchObject({ name: "CarrySourcesDisagree", message: expect.stringMatching(/ruling-70: /) });
+    expect(r.message).toContain(`baseline.json's ruling70 lists ${code(still)}, which the dispatch cut does not flip`);
+  });
+
+  it("a listed cell the cut does not hold at all is the same disagreement (not a perDispatch refusal of its own), in either position of the list", () => {
+    for (const at of [0, RULING_70.length - 1]) {
+      const i = copy();
+      const gone = RULING_70[at]!;
+      i.cuts.ids = i.cuts.ids.filter((id) => id !== gone);
+      expect(refused(i), gone).toMatchObject({ name: "CarrySourcesDisagree", message: expect.stringContaining(`lists ${code(gone)}, which the dispatch cut does not flip`) });
+    }
+  });
+
+  it("the same cells in another order are no disagreement (a set comparison), and the section is the one the real order gives", () => {
+    const i = copy();
+    i.ruling70 = [...i.ruling70].reverse();
+    expect(i.ruling70, "the order changed").not.toEqual(real.ruling70);
+    expect(refused(i)).toEqual({ name: "no refusal", message: "" });
+  });
+
+  it("narrowed in BOTH sources together there is no disagreement, and the figure is L3's reds + the one cell still held (the list and the L3 decide it)", () => {
     const i = copy();
     const [dropped, kept] = heldIds();
     expect(kept, "two held cells, or dropping one proves nothing").toBeDefined();
     i.ruling70 = i.ruling70.filter((id) => id !== dropped);
-    expect(i.cuts.ids, "the cut still flips the dropped cell").toContain(dropped);
+    steadied(i, dropped!);
     const { intro, held } = parts(i);
-    expect(intro).toContain(`\`${kept!}\` (1 cell, `);
+    expect(intro).toContain(`${code(kept!)} (1 cell, `);
     expect(intro).toContain(`it holds ${fmt(l3Reds() + 1)} red cases, not the ${fmt(l3Reds())} of the committed L3`);
     expect(intro, "the dropped cell is no part of the hold").not.toContain(dropped!);
     expect(held.startsWith(" 1 cell ("), held).toBe(true);
     expect(held).not.toContain(dropped!);
-  });
-
-  it("the two sources DISAGREE, the cut narrower: a cell the cut no longer flips is still held while the list names it", () => {
-    const i = copy();
-    const still = heldIds()[0]!;
-    for (const d of i.cuts.dispatches) {
-      const first = i.cuts.dispatches[0]!.cases.find((c) => c.caseId === still)!;
-      Object.assign(d.cases.find((c) => c.caseId === still)!, { state: first.state, reason: first.reason, checks: structuredClone(first.checks) });
-    }
-    expect(new Set(i.cuts.dispatches.map((d) => d.cases.find((c) => c.caseId === still)!.state)).size, "the cut no longer flips it").toBe(1);
-    const { intro, held } = parts(i);
-    expect(intro).toContain(`\`${still}\``);
-    expect(intro).toContain(`them it holds ${fmt(l3Reds() + heldIds().length)} red cases`);
-    expect(held).toContain(`\`${still}\``);
   });
 
   it("a list that names no cell is refused by name (the hold the carry describes is gone: remove the carry with it), and a cell the committed L3 lacks is refused", () => {
@@ -1033,6 +1068,10 @@ describe("each guard of the writer, by its own message (a guard that shares its 
     expect(refused(failing)).toMatchObject({ name: "CarryShapeUnknown", message: expect.stringMatching(/changes its state or its failing-check set/) });
     const state = copy();
     state.cuts.dispatches[2]!.cases.find((c) => c.caseId === "swiss_playoff|generic|score|R4")!.state = "works";
+    // A cell the cut newly flips and baseline.json's list does not name is the ruling-70 carry's disagreement first (PR-B re-review I2) ...
+    expect(refused(state)).toMatchObject({ name: "CarrySourcesDisagree", message: expect.stringContaining("the dispatch cut flips `swiss_playoff|generic|score|R4`, which baseline.json's ruling70 does not list") });
+    // ... and with the list naming it too (so the ruling-70 check passes) the reason-flip carry's own guard is the one that speaks.
+    state.ruling70 = [...state.ruling70, "swiss_playoff|generic|score|R4"];
     expect(refused(state)).toMatchObject({ name: "CarryShapeUnknown", message: expect.stringMatching(/swiss_playoff\|generic\|score\|R4 changes its state/) });
   });
 
