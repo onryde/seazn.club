@@ -14,3 +14,7 @@ export declare function resolveGroup(group: string, cwd?: string): string[];
 export declare function statementMutants(statements: readonly TopLevelStatement[], startLines: readonly number[]): number[];
 export declare function unitMutants(units: readonly CutUnit[], statements: readonly TopLevelStatement[], startLines: readonly number[]): number[];
 export declare function planSplit(o: { weights: readonly number[]; cutable: readonly boolean[]; parts: number; extra?: number }): { cuts: number[]; sizes: number[]; max: number } | null;
+export declare function isOrdinalAnchor(anchor: string): boolean;
+export declare function anchorStarts(text: string, anchor: string, label?: string): { starts: string; siblings: { name: string; starts: string }[] };
+export declare function anchorRecords(splits: Record<string, readonly string[]>, readText: (file: string) => string, lenient?: boolean): Record<string, Record<string, { starts: string }>>;
+export declare function checkAnchorRecords(splits: Record<string, readonly string[]>, records: Record<string, Record<string, { starts: string }>>, readText: (file: string) => string): { checked: number; problems: string[] };

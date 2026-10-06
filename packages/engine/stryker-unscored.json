@@ -3,98 +3,126 @@
     "file": "src/import/plan.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
+    "host": "planImport",
     "text": "): ImportPlan {",
+    "nth": 1,
     "line": 46
   },
   {
     "file": "src/sports/cricket/cricket.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
+    "host": "padSpec",
     "text": "export function padSpec(cfg: CricketCfg): PadSpec {",
+    "nth": 1,
     "line": 3015
   },
   {
     "file": "src/sports/cricket/cricket.ts",
     "mutator": "ObjectLiteral",
     "replacement": "{}",
+    "host": "cricket",
     "text": "export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {",
+    "nth": 1,
     "line": 3524
   },
   {
     "file": "src/sports/cricket/cricket.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
+    "host": "cricket",
     "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<CricketEv> | null {",
+    "nth": 1,
     "line": 3989
   },
   {
     "file": "src/sports/football/football.ts",
     "mutator": "ObjectLiteral",
     "replacement": "{}",
+    "host": "football",
     "text": "export const football: SportModule<FootballCfg, FootballEv, FootballState> = {",
+    "nth": 1,
     "line": 2437
   },
   {
     "file": "src/sports/football/football.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
+    "host": "football",
     "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<FootballEv> | null {",
+    "nth": 1,
     "line": 2823
   },
   {
     "file": "src/sports/nested/kernel.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
+    "host": "makeNestedModule",
     "text": "): SportModule<NestedCfg, NestedEv, NestedState> {",
+    "nth": 1,
     "line": 1982
   },
   {
     "file": "src/sports/nested/kernel.ts",
     "mutator": "ObjectLiteral",
     "replacement": "{}",
+    "host": "makeNestedModule",
     "text": "return {",
+    "nth": 2,
     "line": 2052
   },
   {
     "file": "src/sports/nested/kernel.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
+    "host": "makeNestedModule",
     "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<NestedEv> | null {",
+    "nth": 1,
     "line": 2252
   },
   {
     "file": "src/sports/period/kernel.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
+    "host": "makePeriodModule",
     "text": "): SportModule<PeriodCfg, PeriodEv, PeriodState> {",
+    "nth": 1,
     "line": 1855
   },
   {
     "file": "src/sports/period/kernel.ts",
     "mutator": "ObjectLiteral",
     "replacement": "{}",
+    "host": "makePeriodModule",
     "text": "return {",
+    "nth": 1,
     "line": 2434
   },
   {
     "file": "src/sports/period/kernel.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
+    "host": "makePeriodModule",
     "text": "arbitraryEvent(state, rng: Rng): ModuleEvent<PeriodEv> | null {",
+    "nth": 1,
     "line": 2681
   },
   {
     "file": "src/sports/setbased/kernel.ts",
     "mutator": "BlockStatement",
     "replacement": "{}",
+    "host": "makeSetBasedModule",
     "text": "export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {",
+    "nth": 1,
     "line": 2149
   },
   {
     "file": "src/sports/setbased/kernel.ts",
     "mutator": "ObjectLiteral",
     "replacement": "{}",
+    "host": "makeSetBasedModule",
     "text": "return {",
+    "nth": 1,
     "line": 2267
   }
 ]

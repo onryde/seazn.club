@@ -15,16 +15,20 @@
 // timeout is re-derived whenever a hosted run disagrees with it, and whenever MATRIX_RUNNER changes.
 // A group's `cut` is a fingerprint of WHAT THE LEG MUTATES, and the incremental cache is keyed on it (mutation.yml): the leg's
 // `mutate` entries, with a `file#N` part written as the two anchors that bound it in STRYKER_SPLITS (the statement that starts
-// the part and the one that starts the next), not as N and not as lines. A re-cut leg gets a new fingerprint, so it can never
+// the part and the one that starts the next), not as N and not as lines, and an ordinal anchor (`if#7`: the seventh `if` of a
+// body) with the trimmed line stryker-anchors.json recorded for it, since the name alone does not say which statement it is
+// (an `if` added above renumbers it). A re-cut leg gets a new fingerprint, so it can never
 // restore the file another cut wrote (T20: `sports-cricket-9` kept the text `cricket.ts#10` while its range halved, the old
 // 379-mutant incremental file was restored into a 173-mutant leg, and the Survivors guard refused the report). A leg that is not
 // re-cut keeps its fingerprint across edits of the source and across renumbering of the parts, so it keeps reusing last week's
 // results. It is computed here, from the groups file alone, because this runs before any install (no TypeScript parser, so the
-// resolved line ranges are not known): a cut that moves with no anchor changed (an `if#N` renumbered by an `if` added above it,
-// stryker-cuts.mjs) is NOT seen, and the Survivors guard is what refuses that report.
+// resolved line ranges are not known): a cut that moves while neither an anchor nor its recorded line changed is NOT seen, and
+// the Survivors guard is what refuses that report (an `if` added above an `if#N` is caught earlier, by the sizing tests, which
+// compare the record with the file).
 // Exit codes, each with one meaning (the one convention, D8):
 //   0  the matrix line was printed;
-//   2  refused, nothing printed to stdout: usage, an unknown event or group, or a selected group without a valid timeout.
+//   2  refused, nothing printed to stdout: usage, an unknown event or group, a selected group without a valid timeout, or a
+//      selected group cut at a part or an ordinal anchor that does not resolve (no such part, no split, no recorded line).
 //   (3, a crash while loading, is not claimed: this runs under plain `node`, where a load crash exits 1.)
 import { readFileSync } from "node:fs";
 import process from "node:process";
@@ -51,6 +55,23 @@ try {
 /** `file#N`: the Nth part of a split file, the form stryker-cuts.mjs reads (it resolves it to a line range; this does not). */
 const PART = /^(.*)#(\d+)$/;
 
+let ANCHOR_RECORDS;
+try {
+  ANCHOR_RECORDS = JSON.parse(readFileSync(new URL("../stryker-anchors.json", import.meta.url), "utf8"));
+} catch (e) {
+  refuse(`stryker-anchors.json is unreadable: ${e.message}`);
+}
+if (ANCHOR_RECORDS === null || typeof ANCHOR_RECORDS !== "object" || Array.isArray(ANCHOR_RECORDS)) refuse("stryker-anchors.json must be an object of file -> anchor -> {starts}");
+/** An ordinal anchor (`Host.if#7`): a kind and a place, which no declared name can be. */
+const ORDINAL = /(^|\.)[a-z]+#\d+$/;
+/** An anchor as the fingerprint holds it: its name, and for an ordinal one the line it was recorded at. */
+function anchorOf(group, file, anchor) {
+  if (!ORDINAL.test(anchor)) return anchor;
+  const starts = ANCHOR_RECORDS[file]?.[anchor]?.starts;
+  if (typeof starts !== "string" || starts === "") return refuse(`"${group}" is cut at the ordinal anchor "${anchor}" of ${file}, and stryker-anchors.json has no line recorded for it`);
+  return { anchor, starts };
+}
+
 /** What a group mutates, as data: its entries in order, a `file#N` part as `{file, from, to}` (`from` the anchor that starts the
  *  part, null for the first part; `to` the anchor that starts the next, null for the last). */
 function cutOf(group) {
@@ -62,7 +83,7 @@ function cutOf(group) {
     const anchors = STRYKER_SPLITS[file];
     if (anchors === undefined) return refuse(`"${group}" takes ${entry}, and ${file} has no split in STRYKER_SPLITS`);
     if (part < 1 || part > anchors.length + 1) return refuse(`"${group}" takes ${entry}, and ${file} has parts 1 to ${anchors.length + 1}`);
-    return { file, from: part === 1 ? null : anchors[part - 2], to: part === anchors.length + 1 ? null : anchors[part - 1] };
+    return { file, from: part === 1 ? null : anchorOf(group, file, anchors[part - 2]), to: part === anchors.length + 1 ? null : anchorOf(group, file, anchors[part - 1]) };
   });
 }
 /** The fingerprint of a group's cut: 16 hex characters of the SHA-256 of its cut as JSON. */

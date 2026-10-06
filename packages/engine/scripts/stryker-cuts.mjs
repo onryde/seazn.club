@@ -32,10 +32,13 @@
 // body's statements of that kind (T20 step 2): `Host.if#3` is the third `if` of the body, `for#1`, `while#1`, `switch#1`, `try#1`,
 // `throw#1`, `block#1` and `expr#1` (an expression statement) likewise. Football's `arbitraryEvent` is one `const roll` and then an
 // `if` chain that holds 261 of its 336 mutants, and no declared name falls inside the chain, so before this it could not be cut at
-// all. The ordinal counts only the statements that declare nothing, so an `if` added ABOVE a cut renumbers it: the cut then lands one
-// statement away from where it was (the parts still tile the file and nothing more is lost), and the sizing test's count drift check
-// is what notices; a rename of a declared anchor stays a loud failure, this one a quiet move, so re-run the recut helper after adding
-// an `if` above one.
+// all. The ordinal counts only the statements that declare nothing, so an `if` added or removed ABOVE a cut renumbers it: the cut
+// would then land one statement away from where it was (the parts still tile the file and nothing more is lost, so nothing else
+// would notice, and a part's count moves by less than the 10% the sizing test allows for most deletions). So an ordinal anchor is
+// PINNED to the statement it starts: stryker-anchors.json records the trimmed first line of that statement, checkAnchorRecords
+// reds (test/stryker-cuts.test.ts, on the real files) the moment the Nth `if` starts a different line, and says to RE-CUT (the
+// recut helper) and re-record; the plan step (scripts/stryker-matrix.mjs) puts the recorded line into the leg's cache fingerprint, so
+// a leg re-cut at a moved anchor never restores the file the old cut wrote.
 //
 // Plain .mjs, like stryker.groups.mjs: stryker.config.mjs loads it under `stryker`, and the parser is loaded only when a cut is
 // resolved, so scripts/stryker-matrix.mjs (which needs only the group names and runs before any install) never touches it.
@@ -234,9 +237,11 @@ function locate(ts, source, line, statements, anchor, label) {
   let node = source.statements[at];
   let walked = hostName;
   let m;
+  let siblings = [];
   for (const step of path) {
     const members = membersOf(ts, source, line, node);
     if (members === null) throw new Error(`${label}: "${walked}" has no members a cut can use (an object literal, a class, a function body)`);
+    siblings = members;
     const named = members.filter((x) => x.names.includes(step));
     if (named.length === 0) throw new Error(`${label}: no member of "${walked}" is named "${step}"`);
     if (named.length > 1) throw new Error(`${label}: "${walked}.${step}" names ${named.length} members of "${walked}", so a cut before it is ambiguous; anchor on another member`);
@@ -246,7 +251,7 @@ function locate(ts, source, line, statements, anchor, label) {
   }
   const container = walked.slice(0, walked.lastIndexOf("."));
   if (m.prevEnd === null) throw new Error(`${label}: "${anchor}" is the first member of "${container}", and a cut before it leaves only the declaration's opening line above it; anchor on a later member`);
-  return { startLine: m.startLine, prevEnd: m.prevEnd, what: "member" };
+  return { startLine: m.startLine, prevEnd: m.prevEnd, what: "member", siblings };
 }
 
 /** The ranges `file:a-b` that `anchors` cut a file into: the parts tile lines 1..TO_END_OF_FILE exactly. Part k ends on the
@@ -302,6 +307,97 @@ export function resolveGroup(group, cwd = ENGINE) {
   const entries = STRYKER_GROUPS[group];
   if (entries === undefined) throw new Error(`unknown group "${group}": expected one of ${Object.keys(STRYKER_GROUPS).join(", ")}`);
   return resolveEntries(entries, STRYKER_SPLITS, (file) => readFileSync(join(cwd, file), "utf8"));
+}
+
+/** An ordinal anchor: its last name is a kind and a place (`if#7`), unlike a declared name, which can hold no `#`. */
+export function isOrdinalAnchor(anchor) {
+  return /^[a-z]+#\d+$/.test(anchor.slice(anchor.lastIndexOf(".") + 1));
+}
+
+/** What the ordinal anchor `anchor` starts in `text` NOW: the trimmed first line of its statement, and the same-kind statements of
+ *  its body (each with its own name and first line), so that a statement that moved can be found again. */
+export function anchorStarts(text, anchor, label = "the file") {
+  const { ts, source, line } = parseText(text);
+  const statements = source.statements.map((s, index) => ({ index, names: declaredNames(ts, s), startLine: line(s.getStart(source)), endLine: line(s.getEnd()) }));
+  const at = locate(ts, source, line, statements, anchor, label);
+  const lines = text.split("\n");
+  const first = (startLine) => lines[startLine - 1].trim();
+  const kind = anchor.slice(anchor.lastIndexOf(".") + 1).replace(/\d+$/, "");
+  return {
+    starts: first(at.startLine),
+    siblings: at.siblings.flatMap((x) => x.names.filter((n) => n.startsWith(kind)).map((name) => ({ name, starts: first(x.startLine) }))),
+  };
+}
+
+/** The record of every ordinal anchor of `splits`, as stryker-anchors.json holds it: file -> anchor -> `{starts}`. An anchor that
+ *  names no statement is a refusal, unless `lenient` (a hint printed for an author who has yet to re-cut leaves it out). */
+export function anchorRecords(splits, readText, lenient = false) {
+  const out = {};
+  for (const [file, anchors] of Object.entries(splits)) {
+    for (const anchor of anchors) {
+      if (!isOrdinalAnchor(anchor)) continue;
+      let starts;
+      try {
+        starts = anchorStarts(readText(file), anchor, file).starts;
+      } catch (e) {
+        if (lenient) continue;
+        throw e;
+      }
+      (out[file] ??= {})[anchor] = { starts };
+    }
+  }
+  return out;
+}
+
+const ANCHORS_FILE = "packages/engine/stryker-anchors.json";
+const RECUT_COMMAND = "pnpm --filter @seazn/engine mutation:recut <file> <parts> [--extra <mutants>] [--open <Host,...>]";
+
+/** The faults of the ordinal anchors of `splits` against what `records` pinned them to, as messages ([] when there are none), and
+ *  how many anchors were checked (zero is the caller's failure). An anchor is at fault when it names no statement any more, when
+ *  it starts a different line than the one recorded (an `if` was added or removed above it, or the statement was edited), when
+ *  its line is shared by another statement of its kind (a renumber could not be told from no change), when it has no record, and
+ *  a record with no anchor is at fault too. Every message that is about a moved cut says to RE-CUT. */
+export function checkAnchorRecords(splits, records, readText) {
+  const problems = [];
+  let checked = 0;
+  const wanted = new Set();
+  const regenerate = () => `${ANCHORS_FILE}, from this run:\n${JSON.stringify(anchorRecords(splits, readText, true), null, 2)}`;
+  for (const [file, anchors] of Object.entries(splits)) {
+    for (const anchor of anchors) {
+      if (!isOrdinalAnchor(anchor)) continue;
+      checked++;
+      wanted.add(`${file}\n${anchor}`);
+      const kind = anchor.slice(anchor.lastIndexOf(".") + 1).replace(/\d+$/, "");
+      const record = records[file]?.[anchor];
+      if (record === undefined) {
+        problems.push(`${file}: the ordinal anchor "${anchor}" has no record in ${ANCHORS_FILE}: a cut at the Nth ${kind.replace(/#$/, "")} moves silently when one is added or removed above it, so each is pinned to the line it starts. Write ${regenerate()}`);
+        continue;
+      }
+      let now;
+      try {
+        now = anchorStarts(readText(file), anchor, file);
+      } catch (e) {
+        problems.push(`${file}: the ordinal anchor "${anchor}" no longer names a statement (${e.message}); it started \`${record.starts}\`. A statement was removed from above it: RE-CUT with ${RECUT_COMMAND}, paste its STRYKER_SPLITS line into stryker.groups.mjs, re-measure the legs, and write ${regenerate()}`);
+        continue;
+      }
+      const same = now.siblings.filter((x) => x.starts === now.starts && x.name !== anchor.slice(anchor.lastIndexOf(".") + 1));
+      if (same.length > 0) {
+        problems.push(`${file}: the ordinal anchor "${anchor}" starts \`${now.starts}\`, which ${same.map((x) => x.name).join(", ")} start too, so a renumber could not be told from no change. Cut before another statement`);
+        continue;
+      }
+      if (now.starts !== record.starts) {
+        const moved = now.siblings.filter((x) => x.starts === record.starts);
+        const where = anchor.slice(0, anchor.lastIndexOf("."));
+        problems.push(`${file}: the ordinal anchor "${anchor}" starts \`${now.starts}\` now, and started \`${record.starts}\` when it was cut: ${kind.replace(/#$/, "")} statements were added or removed above it (or that statement was edited), so the cut MOVED. ${moved.length === 1 ? `The statement it was cut at is now \`${where}.${moved[0].name}\`. ` : "The statement it was cut at is not in the body any more. "}RE-CUT: change the anchor in STRYKER_SPLITS (or run ${RECUT_COMMAND}), re-measure the legs it cuts (their parts and counts moved), and write ${regenerate()}`);
+      }
+    }
+  }
+  for (const [file, byAnchor] of Object.entries(records)) {
+    for (const anchor of Object.keys(byAnchor)) {
+      if (!wanted.has(`${file}\n${anchor}`)) problems.push(`${ANCHORS_FILE} records "${anchor}" of ${file}, which no leg is cut at any more: drop it. Write ${regenerate()}`);
+    }
+  }
+  return { checked, problems };
 }
 
 /** How many of the mutants that START on `startLines` (1-based, one entry per mutant) fall inside each top-level statement:

@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveGroup, resolveSplit } from "../scripts/stryker-cuts.mjs";
+import { resolveGroup, resolveSplit, topLevelStatements } from "../scripts/stryker-cuts.mjs";
 import { STRYKER_GROUPS, STRYKER_SPLITS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
 import { groupMutants, mutantCount, mutantsOf, mutantsOfText, parseEntry, selected, type Found, type Selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
@@ -65,9 +65,6 @@ const SETUP_SECONDS = 60;
 /** A leg's mutant count may drift this far from the one its time was measured with before the time is stale: the timeout's
  *  1.5 factor covers the growth, past it the leg must be measured (and, over the line, cut) again. */
 const COUNT_DRIFT = 0.1;
-/** The mutants no leg held when the run was cut (the T20-PRE member cuts): stryker-unscored.json held these 9, each a container
- *  node whose cut fell inside it. Every one of them is also absent from the counts the run measured. */
-const BASELINE_UNSCORED = 9;
 /** The probe's own run: 134 mutants (the PR self-proof, D3). */
 const PROBE_MUTANTS = HOSTED_PROBE_MUTANTS;
 /** The mutants no leg holds, from the committed list beside the sizing data (stryker-unscored.json). Where a cut falls INSIDE a
@@ -77,26 +74,57 @@ const PROBE_MUTANTS = HOSTED_PROBE_MUTANTS;
  *  or can survive; but no leg runs them, so no report ever scores them. The list names each one so a reader of MUTATION.md can
  *  see what the floors never judge, and the count pins below are DERIVED from it: one list, no second count.
  *
- *  KEYED ON WHAT THE SOURCE SAYS, never on where it is (T20-FIX2, I1'): an entry is its file, its mutator, its replacement and
- *  the TRIMMED TEXT of the source line the mutant starts on. `line` is information only (the line when the list was written; it
+ *  KEYED ON WHAT THE SOURCE SAYS, never on where it is (T20-FIX2, I1'): an entry is its file, its mutator, its replacement, the
+ *  declaration it sits in (`host`), the TRIMMED TEXT of the source line the mutant starts on, and which such mutant it is (`nth`;
+ *  T20 review M4, the text alone matched 19 lines). `line` is information only (the line when the list was written; it
  *  lags the file as soon as anything above it changes, and nothing compares it), because a line-keyed list reds the engine job
  *  of an unrelated PR that adds one comment line to cricket.ts, football.ts, the period or setbased kernels, or import/plan.ts.
  *  An edit to the TEXT of a listed line (a renamed parameter of `padSpec`) still reds, and the failure prints the list to paste. */
-interface Unscored { file: string; mutator: string; replacement: string; text: string; line: number }
+interface Unscored { file: string; mutator: string; replacement: string; host: string; text: string; nth: number; line: number }
 const UNSCORED = JSON.parse(readFileSync(join(ENGINE, "stryker-unscored.json"), "utf8")) as Unscored[];
-const unscoredKey = (u: Unscored): string => [u.file, u.mutator, u.replacement, u.text].join(" | ");
-const entryOf = (file: string, sourceLines: readonly string[], m: Found): Unscored => ({ file, mutator: m.mutator, replacement: m.replacement, text: (sourceLines[m.start.line] as string).trim(), line: m.start.line + 1 });
-/** The mutants of `whole` (the instrumenter's, over `text`) that no part holds: those whose node runs across the last line of a
- *  part. Never from the cuts: Stryker keeps a mutant only when its whole node lies inside one range (`start` and `end` are
- *  0-based lines; a range is 1-based and inclusive). */
-function lostBy(file: string, text: string, whole: readonly Found[], parts: readonly (readonly [number, number])[]): Unscored[] {
-  const boundaries = parts.slice(0, -1).map(([, to]) => to);
+/** UNIQUE (T20 review M4): the line text alone is not a key, `return {` is on 19 lines of nested/kernel.ts, so the key also names the
+ *  top-level declaration the mutant sits in (`host`) and which of the mutants of that file with the same mutator, replacement, host
+ *  and text it is (`nth`, counted in source order). `keyedMutants` refuses a file in which two mutants still share a key. */
+const unscoredKey = (u: Unscored): string => [u.file, u.mutator, u.replacement, u.host, u.text, u.nth].join(" | ");
+/** The old key (file, mutator, replacement, line text): what ambiguity is measured against. */
+const bareKey = (u: Pick<Unscored, "file" | "mutator" | "replacement" | "text">): string => [u.file, u.mutator, u.replacement, u.text].join(" | ");
+/** EVERY mutant of `whole` (the instrumenter's, over `text`) with its key, in source order; a file in which two share one is refused. */
+function keyedMutants(file: string, text: string, whole: readonly Found[]): { m: Found; entry: Unscored }[] {
   const lines = text.split("\n");
-  return whole.filter((m) => boundaries.some((b) => m.start.line + 1 <= b && m.end.line + 1 > b)).map((m) => entryOf(file, lines, m));
+  const statements = topLevelStatements(text);
+  const hostOf = (line: number): string => {
+    const at = statements.find((st) => line >= st.startLine && line <= st.endLine);
+    if (at === undefined) throw new Error(`${file}:${line}: a mutant outside every top-level statement`);
+    return at.names.length > 0 ? at.names.join("+") : `statement ${at.index + 1}`;
+  };
+  const ordered = [...whole].sort((a, b) => a.start.line - b.start.line || a.start.column - b.start.column || b.end.line - a.end.line || b.end.column - a.end.column);
+  const seen = new Map<string, number>();
+  const out = ordered.map((m) => {
+    const base = { file, mutator: m.mutator, replacement: m.replacement, host: hostOf(m.start.line + 1), text: (lines[m.start.line] as string).trim() };
+    const same = [base.mutator, base.replacement, base.host, base.text].join(" | ");
+    const nth = (seen.get(same) ?? 0) + 1;
+    seen.set(same, nth);
+    return { m, entry: { ...base, nth, line: m.start.line + 1 } };
+  });
+  const keys = new Set(out.map((x) => unscoredKey(x.entry)));
+  if (keys.size !== out.length) throw new Error(`${file}: ${out.length - keys.size} mutants share a key with another (an ambiguous key names two)`);
+  return out;
+}
+/** The mutants of `whole` whose node runs across one of `boundaries` (the LAST line of a part, 1-based): Stryker keeps a mutant only
+ *  when its whole node lies inside one range, so these are in no part. Never from the cuts' own arithmetic (`start` and `end` are
+ *  0-based lines). With a `window` (1-based lines, inclusive) only the mutants whose node lies inside it: the lines the leg held
+ *  BEFORE it was cut, since a container that ran outside them was in no leg already. */
+function lostAt(file: string, text: string, whole: readonly Found[], boundaries: readonly number[], window?: readonly [number, number]): Unscored[] {
+  const inside = (m: Found): boolean => window === undefined || (m.start.line + 1 >= window[0] && m.end.line + 1 <= window[1]);
+  return keyedMutants(file, text, whole).filter(({ m }) => inside(m) && boundaries.some((b) => m.start.line + 1 <= b && m.end.line + 1 > b)).map(({ entry }) => entry);
+}
+/** The mutants of `whole` that no part holds: those whose node runs across the last line of a part (a range is 1-based and inclusive). */
+function lostBy(file: string, text: string, whole: readonly Found[], parts: readonly (readonly [number, number])[]): Unscored[] {
+  return lostAt(file, text, whole, parts.slice(0, -1).map(([, to]) => to));
 }
 /** What a failing list pin tells its author: the file to write, whole, from this run (the timeouts test does the same). */
 const unscoredHint = (found: readonly Unscored[]): string =>
-  `regenerate: write this to packages/engine/stryker-unscored.json (the mutants no leg holds, keyed on file, mutator, replacement and the trimmed text of the line; \`line\` is information only; from this run):\n${JSON.stringify([...found].sort((x, y) => x.file.localeCompare(y.file) || x.line - y.line), null, 2)}`;
+  `regenerate: write this to packages/engine/stryker-unscored.json (the mutants no leg holds, keyed on file, mutator, replacement, the declaration they sit in, the trimmed text of the line and which such mutant it is; \`line\` is information only; from this run):\n${JSON.stringify([...found].sort((x, y) => x.file.localeCompare(y.file) || x.line - y.line), null, 2)}`;
 /** The list's count per file (a statement cut loses none, and every file not named is cut only by statements). */
 const MEMBER_CUT_LOSS: Record<string, number> = {};
 for (const u of UNSCORED) MEMBER_CUT_LOSS[u.file] = (MEMBER_CUT_LOSS[u.file] ?? 0) + 1;
@@ -110,13 +138,17 @@ const estimateMinutes = (mutants: number): number => Math.ceil((DRY_RUN_FLOOR_SE
 // ---- what the full run measured: packages/engine/stryker-measured.json (GitHub run 37371368951, sha 78c7ef3e6) -----------------
 interface MeasuredLeg { mutants: number; wallSeconds: number; dryRunSeconds: number; phaseSeconds: number }
 interface CancelledLeg { mutants: number; dryRunSeconds: number; rate: number; attempts: Record<string, { tested: number; phaseSeconds: number; lastHourTested: number }> }
-interface SplitPart { mutants: number; phaseSeconds: number; basis: "report" | "rate" }
+/** A report-basis part's mutants in the old leg's own report, by Stryker's `static` flag and final status (T20 review M5). */
+interface PartCounts { staticSurvived: number; staticKilled: number; staticOther: number; other: number }
+interface SplitPart { mutants: number; phaseSeconds: number; basis: "report" | "rate"; counts?: PartCounts }
+interface CostModel { staticSurvivedDryFactor: number; staticKilledDryFactor: number; otherRunnerSeconds: number }
 interface SplitLeg { mutants: number; lost: number; parts: Record<string, SplitPart> }
 interface Measured {
   run: { id: number; sha: string; attempts: number; runner: string; concurrency: number; maxParallel: number };
   measured: Record<string, MeasuredLeg>;
   cancelled: Record<string, CancelledLeg>;
   split: Record<string, SplitLeg>;
+  costModel: CostModel;
 }
 const MEASURED = JSON.parse(readFileSync(join(ENGINE, "stryker-measured.json"), "utf8")) as Measured;
 
@@ -251,6 +283,16 @@ describe("the probe's hosted sample, and the timeout rule on hand-worked numbers
     // a fraction rounds UP: 3 x 12,000 / 301 = 119.6
     expect(cancelledRate({ ...c, attempts: { attempt2: { tested: 301, phaseSeconds: 12_000, lastHourTested: 100 } } })).toBe(120);
   });
+
+  it("the FIRST attempt can be the dearer, and the rule takes it in either order of the data: neither the first attempt alone nor the last alone is the rule (T20 review M2)", () => {
+    const attempt2 = { tested: 250, phaseSeconds: 12_000, lastHourTested: 50 };    // average 3 x 12,000 / 250 = 144; last hour 3 x 3,600 / 50 = 216
+    const attempt3 = { tested: 310, phaseSeconds: 12_000, lastHourTested: 100 };   // average 116.13; last hour 3 x 3,600 / 100 = 108
+    const base: CancelledLeg = { mutants: 100, dryRunSeconds: 100, rate: 0, attempts: { attempt2, attempt3 } };
+    expect(cancelledRate(base)).toBe(216);
+    expect(cancelledRate({ ...base, attempts: { attempt3, attempt2 } }), "the order of the data is not the rule").toBe(216);
+    expect(cancelledRate({ ...base, attempts: { attempt2 } }), "the first alone").toBe(216);
+    expect(cancelledRate({ ...base, attempts: { attempt3 } }), "the last alone is a different number: a rule that read only it would get this one wrong").toBe(117);
+  });
 });
 
 describe("every leg is under the 200-minute split line, from what the full run measured (T15-SIZE, T20 step 2)", () => {
@@ -319,25 +361,57 @@ describe("every leg is under the 200-minute split line, from what the full run m
       checked++;
     }
     expect(checked, "legs checked").toBe(names.length);
-    expect(stale, "legs whose count moved more than 10%: re-run the leg, then record its measurement in stryker-measured.json").toEqual([]);
+    // a leg cut at an ordinal anchor (`if#7`) whose count moved most likely moved because an `if` was added or removed above the cut:
+    // that is a RE-CUT, not a re-run (stryker-cuts.test.ts reds on the anchor itself, with the statement it was cut at)
+    const atOrdinal = (g: string): boolean => ((STRYKER_GROUPS as Record<string, readonly string[]>)[g] ?? []).some((e: string) => { const m = /^(.*)#(\d+)$/.exec(e); return m !== null && (STRYKER_SPLITS[m[1] as string] ?? []).some((a) => a.includes("#")); });
+    const why = stale.some((x) => atOrdinal(x.split(":")[0] as string))
+      ? "; a leg cut at an ordinal anchor (`if#N`) moved because an `if` was added or removed above its cut: RE-CUT it (stryker-cuts.test.ts names the anchor), do not just re-run it"
+      : "";
+    expect(stale, `legs whose count moved more than 10%: re-run the leg, then record its measurement in stryker-measured.json${why}`).toEqual([]);
   }, INSTRUMENT_BUDGET_MS);
 
-  it("a re-split leg holds every mutant of the leg it came from: its parts' mutants plus the member cuts' lost containers are the count the run measured, and the lost ones are exactly the new entries of stryker-unscored.json", async () => {
+  it("a re-split leg holds every mutant of the leg it came from: its parts' mutants plus the lost containers are the count the run measured, and the containers it lost are the ones ITS OWN cuts leave in no part (T20 review M3)", async () => {
     const byLeg = await counts();
     let lost = 0;
     let parts = 0;
+    let boundaries = 0;
+    const lostByCuts: Unscored[] = [];
     for (const [g, s] of Object.entries(MEASURED.split)) {
       const recordedSum = Object.values(s.parts).reduce((n, p) => n + p.mutants, 0);
       expect(recordedSum + s.lost, `${g}: the parts recorded plus the lost containers are the leg's count`).toBe(s.mutants);
       // and today's count, from the instrumenter, agrees to the drift (the exact equality held when the cut was made)
       const nowSum = Object.keys(s.parts).reduce((n, leg) => n + (byLeg[leg] as number), 0);
       expect(Math.abs(nowSum - recordedSum), `${g}: the parts hold ${nowSum} mutants now, ${recordedSum} when cut`).toBeLessThanOrEqual(recordedSum * COUNT_DRIFT);
+      // What THIS leg's cuts lose, from the instrumenter (never from the recorded `lost`): the mutants the leg held whole before it was cut
+      // (inside the lines its parts cover together) whose node spans the line where one of its parts ends and the next of ITS parts
+      // begins. A boundary against another leg's part is that leg's older cut, and a container that ran outside the leg was in no leg.
+      const ranges = new Map<string, [number, number][]>();
+      for (const leg of Object.keys(s.parts)) for (const [f, sel] of selected(ENGINE, resolveGroup(leg))) if (sel !== "all") ranges.set(f, [...(ranges.get(f) ?? []), ...sel.map((r): [number, number] => [r[0], r[1]])]);
+      let own = 0;
+      for (const [f, rs] of ranges) {
+        rs.sort((x, y) => x[0] - y[0]);
+        const cuts = rs.slice(0, -1).filter((r, i) => r[1] + 1 === (rs[i + 1] as [number, number])[0]).map((r) => r[1]);
+        boundaries += cuts.length;
+        const found = lostAt(f, readFileSync(join(ENGINE, f), "utf8"), await mutantsOf(ENGINE, f, "all"), cuts, [(rs[0] as [number, number])[0], Math.max(...rs.map((r) => r[1]))]);
+        own += found.length;
+        lostByCuts.push(...found);
+      }
+      expect(own, `${g}: the containers its own cuts leave in no part, by the instrumenter, are the ${s.lost} the file records`).toBe(s.lost);
       lost += s.lost;
       parts += Object.keys(s.parts).length;
     }
     expect(parts, "parts checked").toBeGreaterThan(Object.keys(MEASURED.split).length);
-    expect(lost, "mutants no part holds (the new member cuts' containers)").toBe(UNSCORED.length - BASELINE_UNSCORED);
+    expect(boundaries, "every part meets the next one of its leg: one boundary fewer than parts, none unaccounted").toBe(parts - Object.keys(MEASURED.split).length);
     expect(lost, "and the cuts do cost something: a member cut loses its container").toBeGreaterThan(0);
+    expect(lostByCuts.length, "what the legs' own cuts lose, as many as the file records").toBe(lost);
+    // the list: every container a re-split leg's cuts lose is in it, and what the list holds besides is the OLDER member cuts' (derived: no number typed)
+    const listed = new Set(UNSCORED.map(unscoredKey));
+    for (const u of lostByCuts) expect(listed.has(unscoredKey(u)), `${unscoredKey(u)} is lost by a re-split leg's cuts and is not in stryker-unscored.json`).toBe(true);
+    const mine = new Set(lostByCuts.map(unscoredKey));
+    expect(mine.size, "no mutant is lost by two legs' cuts").toBe(lostByCuts.length);
+    const older = UNSCORED.filter((u) => !mine.has(unscoredKey(u)));
+    expect(older.length, "the older member cuts' entries (the T20-PRE cuts: no re-split leg's parts meet at them)").toBeGreaterThan(0);
+    expect(older.length + lost, "the list is the older entries and the re-split legs' own, nothing else").toBe(UNSCORED.length);
   }, INSTRUMENT_BUDGET_MS);
 
   it("a part's projected phase is the leg's measured phase divided between the parts, or the cancelled leg's pace times the part's mutants, and nothing else", () => {
@@ -364,6 +438,36 @@ describe("every leg is under the 200-minute split line, from what the full run m
     }
     expect(report, "legs split from a report").toBeGreaterThan(0);
     expect(rate, "legs split from a pace").toBeGreaterThan(0);
+  });
+
+  it("a report part's phase is the leg's measured phase divided by the cost of its mutants, reproduced from the committed counts and cost model alone (T20 review M5)", () => {
+    const model = MEASURED.costModel;
+    expect(model, "the cost model is committed").toBeDefined();
+    for (const [name, factor] of Object.entries(model)) if (typeof factor === "number") expect(factor, name).toBeGreaterThan(0);
+    const costOf = (c: PartCounts, dry: number): number => dry * (model.staticSurvivedDryFactor * c.staticSurvived + model.staticKilledDryFactor * c.staticKilled) + model.otherRunnerSeconds * (c.staticOther + c.other);
+    let reproduced = 0;
+    let legs = 0;
+    for (const [g, s] of Object.entries(MEASURED.split)) {
+      const ran = MEASURED.measured[g];
+      if (ran === undefined) continue; // a cancelled leg's parts are timed from its pace, held by the test above
+      const costs = Object.entries(s.parts).map(([leg, p]) => {
+        expect(p.counts, `${leg}: its counts are committed`).toBeDefined();
+        return [leg, p.counts as PartCounts] as const;
+      });
+      // every mutant of the leg's own report is in exactly one part (the counts are the report's, not the cuts')
+      expect(costs.reduce((n, [, c]) => n + c.staticSurvived + c.staticKilled + c.staticOther + c.other, 0), `${g}: the counts cover the leg's ${s.mutants} mutants`).toBe(s.mutants);
+      const weights = costs.map(([leg, c]) => [leg, costOf(c, ran.dryRunSeconds)] as const);
+      const total = weights.reduce((n, [, w]) => n + w, 0);
+      for (const [leg, w] of weights) {
+        const part = s.parts[leg] as SplitPart;
+        expect(Math.abs(part.phaseSeconds - (ran.phaseSeconds * w) / total), `${leg}: phase ${part.phaseSeconds} s against ${((ran.phaseSeconds * w) / total).toFixed(1)} s from its counts`).toBeLessThanOrEqual(1);
+        reproduced++;
+      }
+      legs++;
+    }
+    expect(legs, "legs split from a report").toBeGreaterThan(0);
+    expect(reproduced, "parts reproduced").toBe(Object.values(MEASURED.split).flatMap((s) => Object.values(s.parts)).filter((p) => p.basis === "report").length);
+    expect(reproduced).toBeGreaterThan(legs);
   });
 
   it("splitting a file by range loses a mutant only where a cut falls inside a declaration, and the loss is exactly the mutants whose node spans a cut (T20-PRE: member cuts)", async () => {
@@ -413,8 +517,26 @@ describe("every leg is under the 200-minute split line, from what the full run m
     expect(pasted.length, "the hint prints every mutant no leg holds").toBe(unscored.length);
     expect(pasted.map(unscoredKey).sort(), "and a list that satisfies the pin it is for").toEqual(UNSCORED.map(unscoredKey).sort());
     expect(UNSCORED.length, "the list is not empty: member cuts exist, and each one costs its container's mutants").toBeGreaterThan(0);
-    expect(new Set(UNSCORED.map((u) => JSON.stringify(u))).size, "no entry is listed twice").toBe(UNSCORED.length);
+    expect(new Set(UNSCORED.map(unscoredKey)).size, "no key is listed twice").toBe(UNSCORED.length);
     expect(lost, "mutants no leg holds: as many as the list names").toBe(UNSCORED.length);
+  }, INSTRUMENT_BUDGET_MS);
+
+  it("every listed key names ONE mutant of its file, and the old key (the line's text) named several for some, so the host and the nth do the work (T20 review M4)", async () => {
+    const byFile = new Map<string, Unscored[]>();
+    for (const u of UNSCORED) byFile.set(u.file, [...(byFile.get(u.file) ?? []), u]);
+    let checked = 0;
+    let ambiguousBefore = 0;
+    for (const [file, listed] of byFile) {
+      const keyed = keyedMutants(file, readFileSync(join(ENGINE, file), "utf8"), await mutantsOf(ENGINE, file, "all")); // refuses a file whose keys collide
+      for (const u of listed) {
+        expect(typeof u.host === "string" && u.host !== "" && Number.isInteger(u.nth) && u.nth >= 1, `${unscoredKey(u)}: a host and an nth (an entry keyed on the text alone is ambiguous and refused)`).toBe(true);
+        expect(keyed.filter((k) => unscoredKey(k.entry) === unscoredKey(u)), `${unscoredKey(u)} names exactly one mutant of ${file}`).toHaveLength(1);
+        if (keyed.filter((k) => bareKey(k.entry) === bareKey(u)).length > 1) ambiguousBefore++;
+        checked++;
+      }
+    }
+    expect(checked, "entries checked").toBe(UNSCORED.length);
+    expect(ambiguousBefore, "entries the old key could not tell from another mutant of the file (nested/kernel.ts's `return {`)").toBeGreaterThan(0);
   }, INSTRUMENT_BUDGET_MS);
 
   it("an edit that moves the lines (a comment line at the top, one above the first listed mutant) leaves the list matching: it is keyed on what the source says, not where it is (T20-FIX2, I1')", async () => {
@@ -637,9 +759,14 @@ describe("test/stryker-coverage.ts reads a group's mutate list as Stryker does (
 describe("the comments that quote the sizing quote the measured figures (T20-FIX1, M2; T20 step 2)", () => {
   const read = (f: string): string => readFileSync(join(ENGINE, f), "utf8");
   /** Every file whose comments speak of the rate, the ceiling, the timeouts' calibration or what a cut loses. */
-  const NOTES = ["stryker.groups.mjs", "stryker.config.mjs", "scripts/stryker-matrix.mjs", "scripts/stryker-cuts.mjs", "../../.github/workflows/mutation.yml"];
+  const NOTES = ["stryker.groups.mjs", "stryker.config.mjs", "scripts/stryker-matrix.mjs", "scripts/stryker-cuts.mjs", "../../.github/workflows/mutation.yml", "test/stryker-cuts.test.ts", "../../tools/matrix/__tests__/matrix-workflow.test.ts"];
   /** What the notes said before the measurements: each phrase is a claim the measured figures falsify. */
   const RETIRED: [RegExp, string][] = [
+    [/\(69, about 3 hours each/, "69 legs of about 3 hours each (79 legs of about 1.6 hours since the run was cut again)"],
+    [/about 17 hours \(about 25 at 8\)/, "a dispatch of about 17 hours (about 25 at 8): the measured walls give the figures the test below derives"],
+    [/about 11 hours/, "an uncapped dispatch of about 11 hours (derived below from the measured walls)"],
+    [/\(69 of them/, "69 legs in a dispatch (79 now)"],
+    [/441 minutes alone/, "cricket's module object as 441 minutes at the retired rate of 77 runner-seconds a mutant"],
     [/\b26 runner-second/, "the local rate of 26 runner-seconds per mutant"],
     [/1,344/, "the 1,344-mutant ceiling that rate gave"],
     [/not yet calibrated/i, "timeouts 'not yet calibrated on a hosted runner' (run 37371368951 measured every leg)"],
@@ -665,6 +792,36 @@ describe("the comments that quote the sizing quote the measured figures (T20-FIX
       }
     }
     expect(checked, "files x retired phrases checked").toBe(NOTES.length * RETIRED.length);
+  });
+
+  it("the fan-out figures the workflow and its test quote (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)", () => {
+    /** The org's concurrent hosted jobs, account-wide (GitHub Free; ruling T20-FIX1): what an uncapped dispatch can hold. */
+    const ORG_SLOTS = 20;
+    const order = Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe");
+    const walls = order.map((g) => planOf(g).wallMinutes);
+    /** The wall of a queue served first come first served by `slots` runners, in hours (a job takes the slot that frees first). */
+    const fifoHours = (minutes: readonly number[], slots: number): number => {
+      const free = new Array<number>(slots).fill(0);
+      for (const m of minutes) {
+        const at = free.indexOf(Math.min(...free));
+        free[at] = (free[at] as number) + m;
+      }
+      return Math.max(...free) / 60;
+    };
+    const hours = (h: number): string => String(Math.round(h * 10) / 10);
+    const jobHours = walls.reduce((n, m) => n + m, 0) / 60;
+    const figure = { legs: order.length, each: hours(jobHours / order.length), jobHours: String(Math.round(jobHours)), all: hours(fifoHours(walls, ORG_SLOTS)), at12: hours(fifoHours(walls, MEASURED.run.maxParallel)), at8: hours(fifoHours(walls, 8)) };
+    expect(figure.legs, "legs in a dispatch of `all`").toBe(79);
+    // the figures differ from one another, so a note that quoted one for another would be wrong
+    expect(new Set([figure.all, figure.at12, figure.at8]).size, "three different walls").toBe(3);
+    const workflow = read("../../.github/workflows/mutation.yml");
+    for (const phrase of [`(${figure.legs}, about ${figure.each} hours each, ${figure.jobHours} job-hours`, `for about ${figure.all} hours`, `takes about ${figure.at12} hours (about ${figure.at8} at 8)`]) {
+      expect(workflow, `mutation.yml quotes "${phrase}"`).toContain(phrase);
+    }
+    const pin = read("../../tools/matrix/__tests__/matrix-workflow.test.ts");
+    for (const phrase of [`${figure.legs} legs, about ${figure.each} hours each`, `for about ${figure.all} hours`, `takes about ${figure.at12} hours instead of about ${figure.at8} at 8`]) {
+      expect(pin, `matrix-workflow.test.ts quotes "${phrase}"`).toContain(phrase);
+    }
   });
 
   it("the notes quote the run the timeouts come from, and the cuts note says what a member cut never scores", () => {

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { STRYKER_GROUPS } from "../stryker.groups.mjs";
+import { STRYKER_GROUPS, STRYKER_SPLITS } from "../stryker.groups.mjs";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -143,6 +143,7 @@ describe("a broken timeouts file is a refusal, never a matrix", () => {
     mkdirSync(join(root, "scripts"), { recursive: true });
     copyFileSync(REAL, join(root, "scripts/stryker-matrix.mjs"));
     copyFileSync(join(ENGINE, "stryker.groups.mjs"), join(root, "stryker.groups.mjs"));
+    copyFileSync(join(ENGINE, "stryker-anchors.json"), join(root, "stryker-anchors.json"));
     if (timeouts !== null) writeFileSync(join(root, "stryker-timeouts.json"), timeouts);
     return root;
   }
@@ -215,12 +216,13 @@ describe("each leg carries the fingerprint of its cut, the key its incremental c
   afterAll(() => rmSync(scratch, { recursive: true, force: true }));
   let seq = 0;
   /** The script beside a groups file and a timeouts file of the test's choosing, laid out as in the engine. */
-  function world(groups: Record<string, string[]>, splits: Record<string, string[]>): string {
+  function world(groups: Record<string, string[]>, splits: Record<string, string[]>, anchors: Record<string, unknown> = {}): string {
     const root = join(scratch, String(++seq));
     mkdirSync(join(root, "scripts"), { recursive: true });
     copyFileSync(REAL, join(root, "scripts/stryker-matrix.mjs"));
     writeFileSync(join(root, "stryker.groups.mjs"), `export const STRYKER_GROUPS = ${JSON.stringify(groups)};\nexport const STRYKER_SPLITS = ${JSON.stringify(splits)};\n`);
     writeFileSync(join(root, "stryker-timeouts.json"), JSON.stringify(Object.fromEntries(Object.keys(groups).map((g) => [g, 10]))));
+    writeFileSync(join(root, "stryker-anchors.json"), JSON.stringify(anchors));
     return root;
   }
   const run = (root: string, group = "all") => matrixCli(join(root, "scripts/stryker-matrix.mjs"), root, "workflow_dispatch", group);
@@ -335,6 +337,72 @@ describe("each leg carries the fingerprint of its cut, the key its incremental c
     for (const v of variants) expect(v).toMatch(CUT);
     expect(new Set([base, ...variants]).size, "six different cuts, six different fingerprints").toBe(6);
     expect(cutOfEntry("src/a.ts", splits), "and the same one twice is the same").toBe(base);
+  });
+
+  spawnIt(4)("an ordinal anchor (`if#7`, the 7th `if` of a body) is fingerprinted with the line recorded for it: re-recording the line moves the key of the legs cut at it, and of no other leg", () => {
+    const groups = { "g-1": ["src/a.ts#1"], "g-2": ["src/a.ts#2"], "g-3": ["src/a.ts#3"], "g-4": ["src/b.ts#1"] };
+    const splits = { "src/a.ts": ["h.f.if#3", "h.f.if#7"], "src/b.ts": ["x"] };
+    const recorded = (third: string, seventh: string) => ({ "src/a.ts": { "h.f.if#3": { starts: third }, "h.f.if#7": { starts: seventh } } });
+    const base = cutsIn(world(groups, splits, recorded("if (a) {", "if (b) {")));
+    const seventh = cutsIn(world(groups, splits, recorded("if (a) {", "if (c) {")));
+    const third = cutsIn(world(groups, splits, recorded("if (z) {", "if (b) {")));
+    expect(Object.keys(base)).toEqual(["g-1", "g-2", "g-3", "g-4"]);
+    // g-1 is start..if#3, g-2 is if#3..if#7, g-3 is if#7..end
+    expect(seventh["g-1"], "g-1 does not touch the 7th").toBe(base["g-1"]);
+    expect(seventh["g-2"], "g-2 ends at the 7th").not.toBe(base["g-2"]);
+    expect(seventh["g-3"], "g-3 starts at the 7th").not.toBe(base["g-3"]);
+    expect(seventh["g-4"], "another file").toBe(base["g-4"]);
+    expect(third["g-1"], "g-1 ends at the 3rd").not.toBe(base["g-1"]);
+    expect(third["g-2"], "g-2 starts at the 3rd").not.toBe(base["g-2"]);
+    expect(third["g-3"], "g-3 does not touch the 3rd").toBe(base["g-3"]);
+    expect(third["g-4"], "another file").toBe(base["g-4"]);
+  });
+
+  spawnIt(4)("an ordinal anchor with no recorded line is a refusal naming it (nothing on stdout) for a leg cut at it, and no refusal for a leg that is not", () => {
+    const groups = { "g-1": ["src/a.ts#2"], "g-2": ["src/b.ts#1"] };
+    const splits = { "src/a.ts": ["h.f.if#3"], "src/b.ts": ["x"] };
+    const root = world(groups, splits, {});
+    const r = run(root, "g-1");
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain('"g-1" is cut at the ordinal anchor "h.f.if#3" of src/a.ts');
+    expect(r.stderr).toContain("no line recorded");
+    expect(parsed(run(root, "g-2")).map((e) => e.group), "a leg that is not cut at it").toEqual(["g-2"]);
+    // the pair: with a record it works
+    expect(parsed(run(world(groups, splits, { "src/a.ts": { "h.f.if#3": { starts: "if (a) {" } } }), "g-1")).map((e) => e.group)).toEqual(["g-1"]);
+    // an anchors file that is not an object is a refusal of its own
+    const broken = world(groups, splits, {});
+    writeFileSync(join(broken, "stryker-anchors.json"), "[]");
+    expect(run(broken, "g-2").status).toBe(2);
+  });
+
+  spawnIt(2)("the real legs cut at an ordinal anchor take its recorded line into their fingerprint; every other leg's is untouched by it", () => {
+    const realTree = (anchors: unknown): string => {
+      const root = join(scratch, String(++seq));
+      mkdirSync(join(root, "scripts"), { recursive: true });
+      copyFileSync(REAL, join(root, "scripts/stryker-matrix.mjs"));
+      copyFileSync(join(ENGINE, "stryker.groups.mjs"), join(root, "stryker.groups.mjs"));
+      copyFileSync(join(ENGINE, "stryker-timeouts.json"), join(root, "stryker-timeouts.json"));
+      writeFileSync(join(root, "stryker-anchors.json"), JSON.stringify(anchors));
+      return root;
+    };
+    const anchors = JSON.parse(readFileSync(join(ENGINE, "stryker-anchors.json"), "utf8")) as Record<string, Record<string, { starts: string }>>;
+    const moved = JSON.parse(JSON.stringify(anchors, (_k, v) => (typeof v === "string" ? `${v} // moved` : v))) as typeof anchors;
+    // the legs cut at an ordinal anchor, from the groups and the splits themselves (an anchor with a '#' in it): the part N of a file
+    // is bounded by anchors N-2 and N-1
+    const atOrdinal = Object.entries(STRYKER_GROUPS).filter(([, entries]) => entries.some((e) => {
+      const m = /^(.*)#(\d+)$/.exec(e);
+      if (m === null) return false;
+      const bounds = STRYKER_SPLITS[m[1] as string] ?? [];
+      return [bounds[Number(m[2]) - 2], bounds[Number(m[2]) - 1]].some((a) => a !== undefined && a.includes("#"));
+    })).map(([g]) => g).filter((g) => g !== "probe");
+    const before = cutsIn(realTree(anchors));
+    const after = cutsIn(realTree(moved));
+    expect(atOrdinal.length, "legs cut at an ordinal anchor").toBeGreaterThan(2);
+    for (const g of atOrdinal) expect(after[g], `${g} is cut at an ordinal anchor`).not.toBe(before[g]);
+    const others = NON_PROBE.filter((g) => !atOrdinal.includes(g));
+    expect(others.length, "legs not cut at one").toBeGreaterThan(10);
+    for (const g of others) expect(after[g], `${g} is not`).toBe(before[g]);
   });
 
   spawnIt(5)("a part the groups file cannot resolve is a refusal naming it, with nothing on stdout (a fingerprint of a broken cut would file a cache under it)", () => {

@@ -465,12 +465,24 @@
         "sports-cricket-9": {
           "mutants": 173,
           "phaseSeconds": 6664,
-          "basis": "report"
+          "basis": "report",
+          "counts": {
+            "staticSurvived": 37,
+            "staticKilled": 136,
+            "staticOther": 0,
+            "other": 0
+          }
         },
         "sports-cricket-15": {
           "mutants": 206,
           "phaseSeconds": 6898,
-          "basis": "report"
+          "basis": "report",
+          "counts": {
+            "staticSurvived": 36,
+            "staticKilled": 170,
+            "staticOther": 0,
+            "other": 0
+          }
         }
       },
       "lost": 0
@@ -481,12 +493,24 @@
         "sports-cricket-10": {
           "mutants": 99,
           "phaseSeconds": 6307,
-          "basis": "report"
+          "basis": "report",
+          "counts": {
+            "staticSurvived": 50,
+            "staticKilled": 49,
+            "staticOther": 0,
+            "other": 0
+          }
         },
         "sports-cricket-16": {
           "mutants": 248,
           "phaseSeconds": 6530,
-          "basis": "report"
+          "basis": "report",
+          "counts": {
+            "staticSurvived": 42,
+            "staticKilled": 170,
+            "staticOther": 0,
+            "other": 36
+          }
         }
       },
       "lost": 0
@@ -497,12 +521,24 @@
         "sports-period-2": {
           "mutants": 269,
           "phaseSeconds": 9984,
-          "basis": "report"
+          "basis": "report",
+          "counts": {
+            "staticSurvived": 87,
+            "staticKilled": 96,
+            "staticOther": 0,
+            "other": 86
+          }
         },
         "sports-period-11": {
           "mutants": 119,
           "phaseSeconds": 3096,
-          "basis": "report"
+          "basis": "report",
+          "counts": {
+            "staticSurvived": 22,
+            "staticKilled": 97,
+            "staticOther": 0,
+            "other": 0
+          }
         }
       },
       "lost": 0
@@ -513,12 +549,24 @@
         "sports-period-9": {
           "mutants": 228,
           "phaseSeconds": 8486,
-          "basis": "report"
+          "basis": "report",
+          "counts": {
+            "staticSurvived": 74,
+            "staticKilled": 113,
+            "staticOther": 0,
+            "other": 42
+          }
         },
         "sports-period-12": {
           "mutants": 181,
           "phaseSeconds": 7125,
-          "basis": "report"
+          "basis": "report",
+          "counts": {
+            "staticSurvived": 62,
+            "staticKilled": 99,
+            "staticOther": 0,
+            "other": 20
+          }
         }
       },
       "lost": 1
@@ -586,5 +634,11 @@
       },
       "lost": 3
     }
+  },
+  "costModel": {
+    "note": "How a report-basis part's phaseSeconds is the leg's measured phase divided between its parts (test/stryker-sizing.test.ts reproduces each from these figures alone): a part's share is its cost over the sum of the parts' costs, where cost = dryRunSeconds x (staticSurvivedDryFactor x staticSurvived + staticKilledDryFactor x staticKilled) + otherRunnerSeconds x (staticOther + other). `counts` are the part's mutants in the leg's own report by Stryker's `static` flag and final status (static survivors run against every test, so they cost the dry run's order; the rest are cheap). The three factors were fitted on the 66 reports of the run; the counts come from the 4 legs' reports.",
+    "staticSurvivedDryFactor": 2.1,
+    "staticKilledDryFactor": 0.165,
+    "otherRunnerSeconds": 4.0
   }
 }

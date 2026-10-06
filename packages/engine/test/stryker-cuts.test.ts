@@ -17,7 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { STRYKER_SPLITS } from "../stryker.groups.mjs";
-import { cutUnits, planSplit, resolveEntries, resolveSplit, statementMutants, topLevelStatements, unitMutants } from "../scripts/stryker-cuts.mjs";
+import { anchorRecords, anchorStarts, checkAnchorRecords, cutUnits, isOrdinalAnchor, planSplit, resolveEntries, resolveSplit, statementMutants, topLevelStatements, unitMutants } from "../scripts/stryker-cuts.mjs";
 import { mutantsOfText } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
@@ -234,8 +234,8 @@ describe("the real kernels: a cut between statements loses no mutant, a cut insi
   }, INSTRUMENT_BUDGET_MS);
 });
 
-// W1d Task 20 PRE-STEP (T20-PRE): a statement of its own can hold more mutants than a leg may (cricket's module object is 1,017
-// at 77 runner-seconds each, the hosted rate, 441 minutes alone), so a cut may also fall BETWEEN THE MEMBERS of one named
+// W1d Task 20 PRE-STEP (T20-PRE): a statement of its own can hold more mutants than a leg may (cricket's module object is 1,017:
+// over the 200-minute line at 36 runner-seconds a mutant or more, and the first full run measured up to 114), so a cut may also fall BETWEEN THE MEMBERS of one named
 // declaration: `Host.member` names the member that starts the next part. The members of an object-literal `const`, of a class,
 // of a function's body (its statements, and the members of a `return { ... }` that ends it). Such a cut cannot be loss-free:
 // Stryker keeps a mutant only when its whole node lies inside one range, so the node that CONTAINS the cut (the object literal,
@@ -434,6 +434,131 @@ describe("a statement that declares nothing is cut by its kind and ordinal: `Hos
     const grown = [...lines.slice(0, 2), "  if (r > 0) { x += 2; }", ...lines.slice(2)].join("\n");
     expect(resolveSplit(grown, ["chain.if#3"])).toEqual([[1, 7], [8, 99999]]);
     expect(resolveSplit(grown, ["chain.if#4"])).toEqual([[1, 12], [13, 99999]]);
+  });
+});
+
+// W1d Task 20 review, I1: an `if` added or removed above an ordinal anchor MOVES the cut, and nothing else noticed (the parts still tile, no
+// mutant is lost, and the 10% count drift missed 8 of 9 deletions in the period kernel). So each ordinal anchor is pinned to the
+// trimmed first line of the statement it starts (stryker-anchors.json), and these tests drive the real files through it.
+const ANCHORS = JSON.parse(read("stryker-anchors.json")) as Record<string, Record<string, { starts: string }>>;
+describe("an ordinal anchor is pinned to the statement it starts: an `if` added or removed above a cut is a loud red that says RE-CUT (T20 review I1)", () => {
+  const ordinalOf = (anchor: string) => {
+    const m = /^(.*)\.([a-z]+)#(\d+)$/.exec(anchor);
+    if (m === null) throw new Error(`${anchor} is not an ordinal anchor`);
+    return { host: m[1] as string, kind: m[2] as string, n: Number(m[3]) };
+  };
+  /** The real ordinal anchors, derived from STRYKER_SPLITS (any anchor with a '#'), never typed. */
+  const real = Object.entries(STRYKER_SPLITS).flatMap(([file, anchors]) => anchors.filter((a) => a.includes("#")).map((anchor) => ({ file, anchor })));
+  /** A statement of `kind`, written so that it parses where a statement of that kind can stand. */
+  const STATEMENT: Record<string, string> = { if: "if (false) { /* inserted by the test */ }", expr: "void 0; // inserted by the test" };
+  /** The text with lines `from..to` (1-based, inclusive) removed, or with `statement` put in before line `from` at its indentation. */
+  const without = (text: string, from: number, to: number) => text.split("\n").filter((_, i) => i + 1 < from || i + 1 > to).join("\n");
+  const within = (text: string, before: number, statement: string) => {
+    const lines = text.split("\n");
+    const indent = /^\s*/.exec(lines[before - 1] as string)![0];
+    return [...lines.slice(0, before - 1), `${indent}${statement}`, ...lines.slice(before - 1)].join("\n");
+  };
+  /** The units of `kind` in the body that `anchor` cuts, from cutUnits with its hosts opened: name -> lines. */
+  const unitsOf = (text: string, anchor: string) => {
+    const { host, kind } = ordinalOf(anchor);
+    const opens = host.split(".").map((_, i, all) => all.slice(0, i + 1).join("."));
+    return cutUnits(text, opens).flatMap((u) => u.names.filter((n) => n.startsWith(`${host}.${kind}#`)).map((name) => ({ n: Number(name.slice(name.lastIndexOf("#") + 1)), startLine: u.startLine, endLine: u.endLine })));
+  };
+  const check = (file: string, edited: string) => checkAnchorRecords({ [file]: STRYKER_SPLITS[file] as string[] }, { [file]: ANCHORS[file] as Record<string, { starts: string }> }, () => edited);
+
+  it("the real anchors: there are some, each is pinned, the pins hold today, and the record names exactly the ordinal anchors (nothing owed, nothing stale)", () => {
+    expect(real.length, "ordinal anchors in STRYKER_SPLITS").toBeGreaterThan(2);
+    for (const { anchor } of real) expect(isOrdinalAnchor(anchor), anchor).toBe(true);
+    const verdict = checkAnchorRecords(STRYKER_SPLITS, ANCHORS, read);
+    expect(verdict.problems, "the pins against the real files").toEqual([]);
+    expect(verdict.checked, "anchors checked").toBe(real.length);
+    expect(Object.values(ANCHORS).flatMap((byAnchor) => Object.keys(byAnchor)).sort(), "the record is exactly the ordinal anchors").toEqual(real.map((r) => r.anchor).sort());
+    // the record is what the files say: regenerating it from the files gives it back
+    expect(anchorRecords(STRYKER_SPLITS, read)).toEqual(ANCHORS);
+  });
+
+  it("an `if` ADDED above a cut reds, naming the anchor, saying RE-CUT, and finding the statement again one place down (each real ordinal anchor)", () => {
+    let edits = 0;
+    for (const { file, anchor } of real) {
+      const text = read(file);
+      const { host, kind, n } = ordinalOf(anchor);
+      const above = unitsOf(text, anchor).filter((u) => u.n < n).sort((a, b) => a.n - b.n);
+      expect(above.length, `${anchor}: a statement of its kind above it to put one before`).toBeGreaterThan(0);
+      const statement = STATEMENT[kind];
+      expect(statement, `a statement to insert for the kind "${kind}" (add one to STATEMENT)`).toBeDefined();
+      const edited = within(text, above[0]!.startLine, statement as string);
+      const problems = check(file, edited).problems.filter((p) => p.startsWith(`${file}: the ordinal anchor "${anchor}"`));
+      expect(problems, `${anchor}: one problem`).toHaveLength(1);
+      expect(problems[0], "says to re-cut").toMatch(/RE-CUT/);
+      expect(problems[0], "says the statement is now one place down").toContain(`\`${host}.${kind}#${n + 1}\``);
+      edits++;
+    }
+    expect(edits).toBe(real.length);
+  });
+
+  it("an `if` REMOVED above a cut reds just the same (the case the 10% drift missed 8 times in 9), finding the statement one place up", () => {
+    let edits = 0;
+    for (const { file, anchor } of real) {
+      const text = read(file);
+      const { host, kind, n } = ordinalOf(anchor);
+      const above = unitsOf(text, anchor).filter((u) => u.n < n).sort((a, b) => b.n - a.n);
+      expect(above.length, `${anchor}: a statement of its kind above it to remove`).toBeGreaterThan(0);
+      const edited = without(text, above[0]!.startLine, above[0]!.endLine);
+      const problems = check(file, edited).problems.filter((p) => p.startsWith(`${file}: the ordinal anchor "${anchor}"`));
+      expect(problems, `${anchor}: one problem`).toHaveLength(1);
+      expect(problems[0], "says to re-cut").toMatch(/RE-CUT/);
+      expect(problems[0], "says the statement is now one place up").toContain(`\`${host}.${kind}#${n - 1}\``);
+      edits++;
+    }
+    expect(edits).toBe(real.length);
+  });
+
+  it("what moves nothing stays green: a comment at the top, a comment above the cut, an `if` added BELOW every statement of the kind", () => {
+    let green = 0;
+    for (const { file, anchor } of real) {
+      const text = read(file);
+      const { kind } = ordinalOf(anchor);
+      const units = unitsOf(text, anchor);
+      const last = units.sort((a, b) => b.n - a.n)[0]!;
+      const lines = text.split("\n");
+      const at = anchorStarts(text, anchor, file);
+      const cutLines = lines.flatMap((l, i) => (l.trim() === at.starts ? [i + 1] : []));
+      expect(cutLines, `${anchor}: its line is in the file once`).toHaveLength(1);
+      const cutLine = cutLines[0] as number;
+      const below = within(text, last.endLine + 1, STATEMENT[kind] as string);
+      for (const [name, edited] of [["a comment at the top", `// a comment\n${text}`], ["a comment above the cut", within(text, cutLine, "// a comment")], ["an `if` below every one of its kind", below]] as const) {
+        expect(check(file, edited).problems, `${anchor}, ${name}`).toEqual([]);
+        green++;
+      }
+    }
+    expect(green).toBe(real.length * 3);
+  });
+
+  it("a cut with no record, a record with no cut, a statement gone, and a line two statements share are each a fault, and the fault says what to write", () => {
+    const records = { "chain.ts": { "chain.if#2": { starts: "if (r > 2) {" } } };
+    const splits = { "chain.ts": ["chain.if#2"] };
+    expect(checkAnchorRecords(splits, records, () => CHAIN)).toEqual({ checked: 1, problems: [] });
+    // no record: the cut is not pinned
+    const none = checkAnchorRecords(splits, {}, () => CHAIN);
+    expect(none.problems).toHaveLength(1);
+    expect(none.problems[0]).toMatch(/has no record in packages\/engine\/stryker-anchors\.json/);
+    expect(none.problems[0], "the hint is the file to write").toContain('"starts": "if (r > 2) {"');
+    // a record for a cut no leg makes any more
+    const orphan = checkAnchorRecords({ "chain.ts": [] }, records, () => CHAIN);
+    expect(orphan).toMatchObject({ checked: 0 });
+    expect(orphan.problems.join("\n")).toMatch(/records "chain\.if#2" of chain\.ts, which no leg is cut at any more/);
+    // the statement is gone: the body has two ifs, so if#2 now names nothing
+    const gone = CHAIN.split("\n").filter((l) => !l.includes("r > 3")).join("\n").replace("  if (r > 2) {\n    x--;\n  }\n", "");
+    const lost = checkAnchorRecords(splits, records, () => gone);
+    expect(lost.problems).toHaveLength(1);
+    expect(lost.problems[0]).toMatch(/no longer names a statement/);
+    expect(lost.problems[0]).toMatch(/RE-CUT/);
+    // two ifs of the body start with the same line: a renumber could not be told from no change
+    const twins = CHAIN.replace("  if (r > 3) { x = 0; }", "  if (r > 2) {\n    x = 0;\n  }");
+    const ambiguous = checkAnchorRecords(splits, records, () => twins);
+    expect(ambiguous.problems).toHaveLength(1);
+    expect(ambiguous.problems[0]).toMatch(/a renumber could not be told from no change/);
+    expect(ambiguous.problems[0]).toContain("if#3");
   });
 });
 
