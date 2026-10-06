@@ -34,6 +34,7 @@ import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { isMainModule } from "../../../scripts/lib/main-module.ts";
 import { harnessFaults, parseJudgeOut, type Fault, type JudgeOut } from "../lib/judge.ts";
+import { BaselineUnreadable, baselineOverrides } from "../lib/pr-sample.ts";
 import { redact } from "../lib/redact.ts";
 import { CASE_STATES, GLYPH, LAYERS, parseResults, type CaseResult, type CaseState, type Layer, type RunResults } from "../lib/results.ts";
 import { GhFailed, downloadMerged, realGh, successfulRuns, weeklySuccesses, type GhRunner } from "./gh.ts";
@@ -152,8 +153,28 @@ function diffLayer(now: RunResults, prev: RunResults): { compared: number; moves
   return { compared, moves, added, removed: before.size - compared };
 }
 
+/** Owner ruling 70's cells, for the weekly diff to mark (PR-B review m2): they move between works and red by the product's own lots
+ *  draw from one weekly run to the next, by design (the cause and the audit gap the block names), so a move of one is expected and
+ *  not news. `unreadable` is the block that could not be read (stale, or the file refused): said on the page, never dropped. */
+export type LotsFlips = { ids: readonly string[]; cause: string; gap: string; wave: string } | { unreadable: true } | null;
+
+/** The ruling-70 list of catalogue/baseline.json, read by the baseline's own reader (the one the judge applies): null when the file
+ *  carries no block (retired with the SW-H1 fix), `{ unreadable }` when that reader refuses it. */
+export function lotsFlips(dirs: { catalogue?: string } = {}): LotsFlips {
+  try {
+    const block = baselineOverrides(dirs);
+    return block === null ? null : { ids: block.ids, cause: block.cause, gap: block.gap, wave: block.wave };
+  } catch (e) {
+    if (e instanceof BaselineUnreadable) {
+      process.stderr.write(`${redact(`summary: ${e.message}`)}\n`);
+      return { unreadable: true };
+    }
+    throw e;
+  }
+}
+
 /** SUMMARY.md. `merged`: each layer's merged run, or null when its merge was refused or no shard ran. */
-export function summary(merged: Record<Layer, RunResults | null>, judges: readonly JudgeInput[], previous: PreviousInput, now: Date): string {
+export function summary(merged: Record<Layer, RunResults | null>, judges: readonly JudgeInput[], previous: PreviousInput, now: Date, lots: LotsFlips = null): string {
   const views = viewsOf(merged);
   const out: string[] = ["# Matrix truth run summary", "", previousLine(previous, now), ""];
 
@@ -244,7 +265,14 @@ export function summary(merged: Record<Layer, RunResults | null>, judges: readon
       for (const [key, ids] of [...d.moves].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))) {
         lines.push(`  - ${key} (${ids.length}): ${ids.slice(0, LIST_CAP).map((id) => `\`${id}\``).join(", ")}${ids.length > LIST_CAP ? `, … and ${ids.length - LIST_CAP} more` : ""}`);
       }
+      // Ruling 70's cells that moved: named apart, so the list cap cannot hide them and they are not read as news.
+      if (lots !== null && "ids" in lots) {
+        const ruled = new Set(lots.ids);
+        const marked = [...d.moves].flatMap(([key, ids]) => ids.filter((id) => ruled.has(id)).map((id) => `\`${id}\` ${key}`));
+        if (marked.length > 0) lines.push(`  - expected, not a regression: ${marked.join(", ")} — the lots draw is by design (owner ruling 70; ${lots.cause}, audit ${lots.gap}, ${lots.wave})`);
+      }
     }
+    if (lots !== null && "unreadable" in lots) lines.push("- Ruling 70's list could not be read (see the step log), so its lots flips are not marked as expected in this diff.");
     if (compared === 0) out.push(`Nothing to compare with run ${previous.runId}: it shares no case with this run.`, "");
     else if (moved === 0) out.push(`No state changed in the ${compared} cases both runs hold (compared with run ${previous.runId}).`, "");
     else out.push(`${plural(moved, "case")} changed state since run ${previous.runId} (${compared} compared):`, "");
@@ -329,7 +357,7 @@ export function main(argv: readonly string[], deps: SummaryDeps = realDeps()): n
   const { layers, notes } = readLayers(args.merged);
   for (const n of notes) process.stderr.write(`${redact(`summary: no merged run — ${n}`)}\n`);
   const judges = args.judge.map(readJudge);
-  const text = summary(layers, judges, args.previous === "auto" ? previousAuto(deps) : null, deps.now());
+  const text = summary(layers, judges, args.previous === "auto" ? previousAuto(deps) : null, deps.now(), lotsFlips());
   try {
     mkdirSync(dirname(args.out), { recursive: true });
     writeFileSync(args.out, text);

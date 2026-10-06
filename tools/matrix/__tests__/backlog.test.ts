@@ -9,7 +9,7 @@
 //   - a refusal: the guard's own NAME, never only an exit code (a catch-all would hide a deleted guard).
 // Every sweep reports how many items it checked, and zero is a failure.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -402,6 +402,107 @@ describe("the section says what the ❌ count leaves out, counted from the commi
   });
 });
 
+describe("the ruling-70 held set is baseline.json's list, never the dispatch cut's state flips (PR-B review m3)", () => {
+  /** The "What the ❌ count leaves out" paragraph of a rendered section, and the ruling-70 carry's sentence about the cells it holds. */
+  const parts = (i: BacklogInput): { intro: string; held: string } => {
+    const doc = renderBacklog(i);
+    return {
+      intro: doc.split("\n\n").find((p) => p.startsWith("What the ❌ count leaves out"))!,
+      held: waveSection(doc, "W3").split("\n").find((l) => l.startsWith("- **Owner ruling 70"))!.split("The ruling's other")[1] ?? "(no `The ruling's other` sentence)",
+    };
+  };
+  const l3Reds = (): number => RAW["L3"]!.filter((c) => c.state === "red").length;
+  const heldIds = (): string[] => RULING_70.filter((id) => stateOf("L3", id) !== "red");
+
+  it("the loader reads the list the judge applies: baseline.json's ids, in its order (and the committed run has both kinds of cell)", () => {
+    expect(real.ruling70).toEqual(RULING_70);
+    // On the committed data the two sources agree today (that is why the list is safe to follow): the cut's flipping cells are the list.
+    const flipping = real.cuts.ids.filter((id) => new Set(real.cuts.dispatches.map((d) => d.cases.find((c) => c.caseId === id)!.state)).size > 1);
+    expect(flipping.length, "the cut flips cells").toBeGreaterThan(0);
+    expect([...flipping].sort()).toEqual([...RULING_70].sort());
+    expect(heldIds().length, "ruling 70 holds cells the committed L3 has not red").toBeGreaterThan(0);
+    expect(RULING_70.length - heldIds().length, "and one it has red").toBeGreaterThan(0);
+  });
+
+  it("the two sources DISAGREE, the list narrower: the section follows the list (one held cell, L3's reds + 1), though the cut still flips both", () => {
+    const i = copy();
+    const [dropped, kept] = heldIds();
+    expect(kept, "two held cells, or dropping one proves nothing").toBeDefined();
+    i.ruling70 = i.ruling70.filter((id) => id !== dropped);
+    expect(i.cuts.ids, "the cut still flips the dropped cell").toContain(dropped);
+    const { intro, held } = parts(i);
+    expect(intro).toContain(`\`${kept!}\` (1 cell, `);
+    expect(intro).toContain(`it holds ${fmt(l3Reds() + 1)} red cases, not the ${fmt(l3Reds())} of the committed L3`);
+    expect(intro, "the dropped cell is no part of the hold").not.toContain(dropped!);
+    expect(held.startsWith(" 1 cell ("), held).toBe(true);
+    expect(held).not.toContain(dropped!);
+  });
+
+  it("the two sources DISAGREE, the cut narrower: a cell the cut no longer flips is still held while the list names it", () => {
+    const i = copy();
+    const still = heldIds()[0]!;
+    for (const d of i.cuts.dispatches) {
+      const first = i.cuts.dispatches[0]!.cases.find((c) => c.caseId === still)!;
+      Object.assign(d.cases.find((c) => c.caseId === still)!, { state: first.state, reason: first.reason, checks: structuredClone(first.checks) });
+    }
+    expect(new Set(i.cuts.dispatches.map((d) => d.cases.find((c) => c.caseId === still)!.state)).size, "the cut no longer flips it").toBe(1);
+    const { intro, held } = parts(i);
+    expect(intro).toContain(`\`${still}\``);
+    expect(intro).toContain(`them it holds ${fmt(l3Reds() + heldIds().length)} red cases`);
+    expect(held).toContain(`\`${still}\``);
+  });
+
+  it("a list that names no cell is refused by name (the hold the carry describes is gone: remove the carry with it), and a cell the committed L3 lacks is refused", () => {
+    const none = copy();
+    none.ruling70 = [];
+    expect(refused(none)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/ruling-70: baseline\.json carries no ruling70 list/) });
+    const lacks = copy();
+    const gone = RULING_70[0]!;
+    lacks.cases = lacks.cases.filter((c) => !(c.layer === "L3" && c.caseId === gone));
+    expect(refused(lacks)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/ruling-70: the committed L3 holds no case .*which baseline\.json's ruling70 lists/) });
+  });
+
+  it("the loader holds baseline.json's block to the committed L3 (stale, or no file) and says so by name", () => {
+    const base = JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { ruling70: { workflowRun: number } };
+    const catalogue = (name: string, baselineJson: string | null): string => {
+      const dir = join(scratch, name);
+      mkdirSync(dir, { recursive: true });
+      for (const f of ["triage-rules.json", "gap-routing.json", "new-gaps.json", "audit-verdicts.json", "backlog-carries.json"]) writeFileSync(join(dir, f), readFileSync(resolve(CATALOGUE_DIR, f)));
+      if (baselineJson !== null) writeFileSync(join(dir, "baseline.json"), baselineJson);
+      return dir;
+    };
+    const stale = structuredClone(base);
+    stale.ruling70.workflowRun += 1;
+    const attempt = (dir: string): BacklogRefused | null => {
+      try { loadBacklogInput({ triage: triageJsonPath(), sha: SHA, catalogue: dir }); } catch (e) { if (e instanceof BacklogRefused) return e; throw e; }
+      return null;
+    };
+    expect(attempt(catalogue("cat-stale", JSON.stringify(stale)))).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining("ruling70 was written for workflow run") });
+    expect(attempt(catalogue("cat-nofile", null))).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining("cannot be read") });
+    // The list must also qualify the L3 THIS backlog counts, not only the one baseline.json names: handed another evidence directory whose L3
+    // is another run (the triage written from it, so the triage check passes), the loader refuses the list by name.
+    const other = join(scratch, "baseline-other-l3");
+    mkdirSync(join(other, "L3"), { recursive: true });
+    for (const layer of ["L1", "L2"]) { mkdirSync(join(other, layer), { recursive: true }); symlinkSync(join(DEFAULT_BASELINE, layer, "results.json"), join(other, layer, "results.json")); }
+    symlinkSync(join(DEFAULT_BASELINE, "dispatch-cuts.json"), join(other, "dispatch-cuts.json"));
+    const l3 = JSON.parse(readFileSync(join(DEFAULT_BASELINE, "L3", "results.json"), "utf8")) as { runId: string };
+    const otherRun = l3.runId.replace(/^ci-(\d+)-/, (_m, n: string) => `ci-${Number(n) + 1}-`);
+    expect(otherRun, "the run id changed").not.toBe(l3.runId);
+    writeFileSync(join(other, "L3", "results.json"), JSON.stringify({ ...l3, runId: otherRun }));
+    const t = JSON.parse(readFileSync(triageJsonPath(), "utf8")) as { runs: { layer: string; runId: string }[] };
+    t.runs.find((r) => r.layer === "L3")!.runId = otherRun;
+    const triage = join(scratch, "triage-other-l3.json");
+    writeFileSync(triage, JSON.stringify(t));
+    let seen: BacklogRefused | null = null;
+    try { loadBacklogInput({ triage, sha: SHA, baseline: other }); } catch (e) { if (e instanceof BacklogRefused) seen = e; else throw e; }
+    expect(seen).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining(`the L3 this backlog counts is ${otherRun}`) });
+    // The block retired (no `ruling70`): the loader loads, with an empty list (the ruling-70 carry then refuses by name, above).
+    const { ruling70: _gone, ...retired } = base;
+    const loaded = loadBacklogInput({ triage: triageJsonPath(), sha: SHA, catalogue: catalogue("cat-retired", JSON.stringify({ L3: (JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { L3: string }).L3, ...retired })) });
+    expect(loaded.ruling70).toEqual([]);
+  });
+});
+
 describe("each wave says how many 🚫 cases route to it by their own reason (T22 review m4): W9 does not read as empty", () => {
   const WAVES9 = ["W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10"] as const;
   const routedTo = (wave: string): Record<string, number> => countState("no_path", (reason) => reason.startsWith(`${wave}: `));
@@ -509,7 +610,7 @@ describe("the carries: each hangs on its anchor gap, in that gap's wave", () => 
     expect(line("NEW-W1d-2")).toContain("names `americano` for `americano`");
   });
 
-  it("ruling 70's carry names its cells (baseline.json's own ruling70 block lists them; the writer finds them from the cut's state flips) and the retirement rule the W3 prompt states", () => {
+  it("ruling 70's carry names its cells (the writer reads them from baseline.json's own ruling70 block, the list the judge applies) and the retirement rule the W3 prompt states", () => {
     const sec = waveSection(md, "W3");
     expect(RULING_70.length, "the ruling lists cells").toBeGreaterThan(0);
     for (const id of RULING_70) expect(sec, id).toContain(`\`${id}\``);
@@ -711,9 +812,9 @@ describe("the writer refuses what would make the section lie (each guard, once, 
     b.carries.carries = b.carries.carries.slice(1);
     expect(refusal(b)).toBe("CarryMissing");
   });
-  it("a carry whose source is gone is refused: no state flip in the cut, no ledger entry, no rule note, no mexicano cell", () => {
+  it("a carry whose source is gone is refused: no ruling70 list in baseline.json, no ledger entry, no rule note, no mexicano cell", () => {
     const flips = copy();
-    for (const d of flips.cuts.dispatches) for (const c of d.cases) c.state = "red";
+    flips.ruling70 = [];
     expect(refusal(flips)).toBe("CarryEmpty");
     const entry = copy();
     entry.ledger.entries = entry.ledger.entries.filter((e) => e.id !== "SC-P4");
@@ -883,10 +984,12 @@ describe("each guard of the writer, by its own message (a guard that shares its 
     expect(refused(mexRow)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/mexicano-generate-500.*keys mexicano\|football\|11-a-side\|R4 to no gap/) });
   });
 
-  it("CarryEmpty: no state flip, no steady two-reason cell, no mexicano cell, no flipped one, and no dispatch showing the 500 are each refused, each by what it says", () => {
+  it("CarryEmpty: no ruling70 list, no steady two-reason cell, no mexicano cell, no flipped one, and no dispatch showing the 500 are each refused, each by what it says", () => {
     const states = copy();
-    for (const d of states.cuts.dispatches) for (const c of d.cases) c.state = "red";
-    expect(refused(states)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/no cell of the dispatch cut changes state/) });
+    // The cut still flips three cells: only the list decides, so emptying the list is the refusal and the cut's flips are no help.
+    expect(states.cuts.ids.length).toBeGreaterThan(0);
+    states.ruling70 = [];
+    expect(refused(states)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/baseline\.json carries no ruling70 list/) });
     const reasons = copy();
     for (const d of reasons.cuts.dispatches) for (const c of d.cases) if (c.caseId.startsWith("swiss_playoff|")) c.reason = "something else entirely";
     expect(refused(reasons)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/two reasons/) });

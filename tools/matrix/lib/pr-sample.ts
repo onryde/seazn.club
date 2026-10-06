@@ -222,7 +222,9 @@ export function ruling70AppliesTo(block: Pick<Ruling70Overrides, "workflowRun">,
 }
 
 /** The baseline's ruling-70 override list, or null when baseline.json carries none. `judge regression` applies it to the
- *  baseline it is given, so every caller that judges against the baseline (matrix:sample, a weekly run) honours it.
+ *  baseline it is given, so every caller that judges against the baseline honours it. That caller is the per-PR sample
+ *  (run-sample, through `judge regression`) and no other: the weekly run reads no baseline, it diffs against the previous
+ *  weekly run (D20), and its diff only marks the list's cells as expected flips (ci/summary.ts).
  *  A block is checked against the committed L3 it sits beside: written for another run (the L3 was re-baselined) or another
  *  tag commit, it is refused, so the override cannot outlive the baseline it qualifies (T21 review M1). */
 export function baselineOverrides(dirs: { catalogue?: string; repo?: string } = {}): Ruling70Overrides | null {

@@ -234,7 +234,7 @@ function regressionMode(cli: Cli, over: JudgeOver): Verdict {
     if (e instanceof BaselineUnreadable) throw new JudgeRefused("BaselineUnreadable", e.message);
     throw e;
   }
-  // The list qualifies the run it was written for (T21 review M1): handed any other baseline (a re-baselined L3, a weekly run) it forces nothing.
+  // The list qualifies the run it was written for (T21 review M1): handed any other baseline (a re-baselined L3, any other run file) it forces nothing.
   const applies = overrides !== null && ruling70AppliesTo(overrides, read.runId);
   const { run: baseline, applied } = forceBaselineStates(read, new Map(overrides === null || !applies ? [] : overrides.ids.map((id) => [id, overrides.state] as const)));
   // The line says what this verdict did, so it counts the cases of THIS sample (T21 review M7), never the baseline's.

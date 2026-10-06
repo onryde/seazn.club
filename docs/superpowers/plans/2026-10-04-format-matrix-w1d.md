@@ -4156,6 +4156,8 @@ Next to the W2 backlog, record W2 prompt trap 2's contradiction (false premise 2
 
 - [ ] **Step 3: Enable the schedule (the owner's act; D2)**
 
+> **Amended 2026-10-06 (ruling T22-REORDER): Step 3 runs after PR-B merges, not before.** `MATRIX_WEEKLY_ENABLED` is one repo variable that gates both the Saturday matrix-truth schedule and the Sunday Stryker schedule (`mutation.yml`), and no separate gate variable is added. Set before the merge, it would start main's PR-A Stryker workflow, which is uncalibrated and has no `max-parallel`. So the owner sets it once, after PR-B merges (with Task 20 Steps 2–4), and the first Saturday firing is read as written below. Cost if wrong: the weekly matrix starts one week later.
+
 Ask the owner in chat to run `gh variable set MATRIX_WEEKLY_ENABLED --body true`, or run it on their explicit instruction in this session, never on an inherited one (AGENTS 17). Record the time in `_INDEX.md`. Then read `gh variable list` to confirm.
 
 The first scheduled firing is the following Saturday 02:17 UTC, and GitHub's cron can be hours late (help-shots fires 5–6.5 h late). Record its run id when it appears, and from it:

@@ -10,8 +10,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GhRunner } from "../ci/gh.ts";
-import { GREEN_RUNS, main, percentile, summary, type JudgeInput, type Previous, type PreviousInput, type SummaryDeps } from "../ci/summary.ts";
+import { GREEN_RUNS, lotsFlips, main, percentile, summary, type JudgeInput, type LotsFlips, type Previous, type PreviousInput, type SummaryDeps } from "../ci/summary.ts";
 import type { JudgeOut } from "../lib/judge.ts";
+import { baselineOverrides } from "../lib/pr-sample.ts";
 import { findSecrets } from "../lib/redact.ts";
 import { LAYERS, type CaseResult, type Layer, type RunResults } from "../lib/results.ts";
 import { main as judgeMain } from "../judge.ts";
@@ -789,3 +790,107 @@ describe("summary.ts as its package script, a real process", () => {
 // Unused-type guard: PreviousInput is part of the module's public contract (summary's third parameter).
 const _contract: PreviousInput[] = [null, { unavailable: "x" }, { runId: 1, date: "2026-01-01T00:00:00Z", layers: {} }];
 void _contract;
+
+// --- owner ruling 70's cells in the weekly diff (PR-B review m2) ------------------------------------------------------------
+// The three ruling-70 cells move by lot from one weekly run to the next, by design (the lots draw, P6, audit SW-H1), so the diff
+// marks them as expected. Their ids are read from baseline.json's own `ruling70` block, never typed here.
+
+/** baseline.json's ruling70 block, read straight from the file (not through lotsFlips, the code under test). */
+const BASELINE_JSON = resolve(REPO, "tools", "matrix", "catalogue", "baseline.json");
+const RULING_70 = (JSON.parse(readFileSync(BASELINE_JSON, "utf8")) as { ruling70: { ids: string[]; cause: string; gap: string; wave: string } }).ruling70;
+
+describe("summary: the weekly diff marks ruling 70's lots flips as expected, and only those", () => {
+  const prevRun = (l: Layer, cases: CaseResult[]): RunResults => mergedRun(l, `prev-${l}`, cases);
+  const lotsBlock = (): LotsFlips => ({ ids: RULING_70.ids, cause: RULING_70.cause, gap: RULING_70.gap, wave: RULING_70.wave });
+  const NOT_RULED = "league|generic|score|LIFECYCLE";
+  const EXPECTED = /^ {2}- expected, not a regression: .*$/m;
+  /** L3 before and after: the ruling cells in the states given, plus one ordinary case that goes red. */
+  function weekly(ruled: { was: CaseResult["state"]; now: CaseResult["state"] }[], lots: LotsFlips): string {
+    const reason = (st: string): string => (st === "red" ? "round 5 paired nobody (SW-H1)" : "");
+    const before = prevRun("L3", [...RULING_70.ids.map((id, i) => kase("L3", { caseId: id, state: ruled[i]!.was, reason: reason(ruled[i]!.was) })), kase("L3", { caseId: NOT_RULED })]);
+    const now = mergedRun("L3", ID("L3"), [...RULING_70.ids.map((id, i) => kase("L3", { caseId: id, state: ruled[i]!.now, reason: reason(ruled[i]!.now) })), kase("L3", { caseId: NOT_RULED, state: "red", reason: "x failed" })]);
+    const md = summary({ ...allRuns(), L3: now }, [], { runId: 77, date: "2026-09-27T00:00:00Z", layers: { L3: before } }, NOW, lots);
+    return md.slice(md.indexOf("## Weekly diff"));
+  }
+
+  it("a ruling-70 cell that flips is annotated with the block's own cause, gap and wave, and every cell that moved is named once", () => {
+    expect(RULING_70.ids.length, "the ruling lists cells").toBeGreaterThan(0);
+    // Every cell flips, in alternating directions, so both glyph pairs are seen.
+    const flips = RULING_70.ids.map((_, i) => (i % 2 === 0 ? { was: "works", now: "red" } as const : { was: "red", now: "works" } as const));
+    const diff = weekly([...flips], lotsBlock());
+    const line = EXPECTED.exec(diff)?.[0];
+    expect(line, "an expected-flip line").toBeDefined();
+    expect(line).toContain(`${RULING_70.cause}, audit ${RULING_70.gap}, ${RULING_70.wave}`);
+    expect(line).toContain("owner ruling 70");
+    RULING_70.ids.forEach((id, i) => expect(line, id).toContain(`\`${id}\` ${i % 2 === 0 ? "✅→❌" : "❌→✅"}`));
+    expect(RULING_70.ids.filter((id) => line!.includes(`\`${id}\``)), "each once").toHaveLength(RULING_70.ids.length);
+  });
+
+  it("a case that is not ruling 70's is never annotated, even when it moves in the same diff (it stays an ordinary move)", () => {
+    const diff = weekly(RULING_70.ids.map(() => ({ was: "works", now: "red" }) as const), lotsBlock());
+    const line = EXPECTED.exec(diff)![0];
+    expect(line).not.toContain(NOT_RULED);
+    // It is still listed as a move, with the others, in the ordinary line.
+    expect(diff).toContain(`\`${NOT_RULED}\``);
+    expect(diff).toMatch(new RegExp(`✅→❌ \\(${RULING_70.ids.length + 1}\\): `));
+  });
+
+  it("with only a non-ruling case moving there is no expected-flip line at all (the empty case), and the ruling cells that did NOT move are not named", () => {
+    const diff = weekly(RULING_70.ids.map(() => ({ was: "works", now: "works" }) as const), lotsBlock());
+    expect(EXPECTED.test(diff)).toBe(false);
+    expect(diff).toContain("✅→❌ (1): `" + NOT_RULED + "`");
+    for (const id of RULING_70.ids) expect(diff, id).not.toContain(id);
+  });
+
+  it("no list (the block retired, or no baseline given) marks nothing: the same move is an ordinary one", () => {
+    const diff = weekly(RULING_70.ids.map(() => ({ was: "works", now: "red" }) as const), null);
+    expect(EXPECTED.test(diff)).toBe(false);
+    expect(diff).toContain(`✅→❌ (${RULING_70.ids.length + 1}): `);
+  });
+
+  it("a list that could not be read is said on the page, never silently dropped (a flip then reads as an unexplained move)", () => {
+    const diff = weekly(RULING_70.ids.map(() => ({ was: "works", now: "red" }) as const), { unreadable: true });
+    expect(diff).toMatch(/Ruling 70's list could not be read .*not marked as expected/);
+    expect(EXPECTED.test(diff)).toBe(false);
+  });
+
+  it("lotsFlips reads the block through the baseline's own reader: the committed baseline's ids, cause, gap and wave; null when the file carries none; unreadable when stale", () => {
+    const got = lotsFlips();
+    expect(got, "the committed baseline carries the block").not.toBeNull();
+    expect(got).toEqual({ ids: RULING_70.ids, cause: RULING_70.cause, gap: RULING_70.gap, wave: RULING_70.wave });
+    const base = JSON.parse(readFileSync(BASELINE_JSON, "utf8")) as { L3: string; ruling70?: Record<string, unknown> };
+    const catalogueWith = (name: string, edit: (b: typeof base) => void): string => {
+      const dir = fresh(name);
+      const b = structuredClone(base);
+      edit(b);
+      writeFileSync(join(dir, "baseline.json"), JSON.stringify(b));
+      return dir;
+    };
+    // The block retired: nothing to mark (the empty case), and no error.
+    expect(lotsFlips({ catalogue: catalogueWith("retired", (b) => { delete b.ruling70; }) })).toBeNull();
+    // The block written for another run than the committed L3: the baseline's reader refuses it, and the diff says so (once, on stderr too).
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(lotsFlips({ catalogue: catalogueWith("stale", (b) => { b.ruling70!.workflowRun = Number(b.ruling70!.workflowRun) + 1; }) })).toEqual({ unreadable: true });
+      expect(err.mock.calls.map((c) => String(c[0])).join(""), "the refusal reaches the step log").toMatch(/summary: pr-sample: the baseline file .* ruling70 was written for workflow run/);
+    } finally { err.mockRestore(); }
+  });
+
+  it("through the CLI (the real producer and consumer): main reads the committed baseline's ruling70, so a weekly diff marks the ruling cells and not the other mover", () => {
+    const dir = fresh("lots");
+    writeMerged(dir, { L1: mergedRun("L1", ID("L1"), baseCases("L1")), L2: mergedRun("L2", ID("L2"), baseCases("L2")), L3: mergedRun("L3", ID("L3"), [...RULING_70.ids.map((id) => kase("L3", { caseId: id, state: "red", reason: "round 5 paired nobody (SW-H1)" })), kase("L3", { caseId: NOT_RULED, state: "red", reason: "x failed" })]) });
+    const prev = { L3: mergedRun("L3", "ci-40-1-l3", [...RULING_70.ids.map((id) => kase("L3", { caseId: id })), kase("L3", { caseId: NOT_RULED })]) };
+    const { gh } = fakeGh([wireRun(9, 0), wireRun(40, 6)], { 40: prev });
+    const out = join(dir, "SUMMARY.md");
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      expect(main(["--merged", dir, "--previous-run", "auto", "--out", out], { gh, env: { GITHUB_REPOSITORY: "acme/seazn", GITHUB_RUN_ID: "9" }, now: () => NOW })).toBe(0);
+    } finally { stdout.mockRestore(); }
+    const md = written(out);
+    const line = EXPECTED.exec(md)?.[0];
+    expect(line, "the CLI's page carries the expected-flip line").toBeDefined();
+    for (const id of RULING_70.ids) expect(line, id).toContain(`\`${id}\``);
+    expect(line).not.toContain(NOT_RULED);
+    expect(baselineOverrides()?.ids, "the ids main marked are the baseline reader's").toEqual(RULING_70.ids);
+  });
+});

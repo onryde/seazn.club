@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { AUDIT_DIR, OUTCOMES, REPO_ROOT, buildLedger, parseVerdicts, readAudit, type Ledger, type LedgerEntry } from "./audit-ledger.ts";
+import { BaselineUnreadable, baselineOverrides, ruling70AppliesTo } from "./pr-sample.ts";
 import { redact } from "./redact.ts";
 import { GLYPH, LAYERS } from "./results.ts";
 import { CATALOGUE_DIR, isClean, loadCatalogue, parseTriage, routeOf, type GapRouting, type NewGaps, type TriageJson, type TriageRules } from "./triage.ts";
@@ -111,6 +112,10 @@ export interface BacklogInput {
   cuts: Cuts;
   /** Every case of the three committed layers: where it ran, the state it ended in and (a 🚫) why. The cut is a subset of L3's. */
   cases: BaselineCase[];
+  /** Owner ruling 70's cells: the `ruling70.ids` of catalogue/baseline.json, in its order, which is the list `judge regression` applies (and
+   *  the weekly diff marks). Empty once the SW-H1 fix retires the block. The held set and its figure derive from THIS and the committed L3,
+   *  never from the dispatch cut's state flips (PR-B review m3): the two are different sources and the judge reads this one. */
+  ruling70: readonly string[];
   /** The design document's text: section 8 is read by designWaves. */
   design: string;
 }
@@ -243,14 +248,15 @@ function rowsOf(triage: TriageJson, ids: readonly string[], carry: string): Tria
   });
 }
 
-/** The cells whose STATE flips between the dispatches (owner ruling 70's), and those of them the committed L3 does not have red: only
- *  `judge regression` holds those red, so the triage counts none of them. `label` names the reader in a refusal. */
-function stateFlips(input: BacklogInput, label: string): { cells: string[]; held: { id: string; state: string }[] } {
-  const cells = input.cuts.ids.filter((id) => new Set(perDispatch(input.cuts, id, label).map((c) => c.state)).size > 1);
+/** Owner ruling 70's cells (the list `judge regression` applies), and those of them the committed L3 does not have red: only `judge regression`
+ *  holds those red, so the triage counts none of them. The list is baseline.json's, never the dispatch cut's flips (PR-B review m3). `label`
+ *  names the reader in a refusal. */
+function ruledCells(input: BacklogInput, label: string): { cells: readonly string[]; held: { id: string; state: string }[] } {
+  const cells = input.ruling70;
   const l3 = new Map(input.cases.filter((c) => c.layer === "L3").map((c) => [c.caseId, c.state]));
   const held = cells.flatMap((id) => {
     const state = l3.get(id);
-    if (state === undefined) throw refuse("CarrySourceMissing", label, `the committed L3 holds no case ${id}, which the dispatch cut records`);
+    if (state === undefined) throw refuse("CarrySourceMissing", label, `the committed L3 holds no case ${id}, which baseline.json's ruling70 lists`);
     return state === "red" ? [] : [{ id, state }];
   });
   return { cells, held };
@@ -304,11 +310,11 @@ const DERIVERS: Record<string, Deriver> = {
     return { values: { outcome: e.outcome, evidence: e.evidence }, waves: [e.wave] };
   },
 
-  // Ruling 70: the cells whose STATE flips across the dispatches, where the committed run keys SW-H1, and which cells it holds red that the
-  // committed run does not have red (T22 review m3).
+  // Ruling 70: the cells of baseline.json's list, where the committed run keys SW-H1, and which of them it holds red that the committed run
+  // does not have red (T22 review m3; the list is the judge's, not the dispatch cut's flips: PR-B review m3).
   "ruling-70": ({ input, anchor }) => {
-    const { cells, held } = stateFlips(input, "ruling-70");
-    if (cells.length === 0) throw refuse("CarryEmpty", "ruling-70", "no cell of the dispatch cut changes state between the dispatches: there is no ruling to carry");
+    const { cells, held } = ruledCells(input, "ruling-70");
+    if (cells.length === 0) throw refuse("CarryEmpty", "ruling-70", "baseline.json carries no ruling70 list, so `judge regression` holds nothing: remove this carry with the block");
     const g = groupOf(input.triage, anchor, "ruling-70");
     const keyedCells = g.caseIds.filter((id) => cells.includes(id));
     const keyed = `${g.caseIds.length} cases of the committed run (${list(g.caseIds.map(code))}), of which ${keyedCells.length === 0 ? "none is" : `${list(keyedCells.map(code))} ${keyedCells.length === 1 ? "is" : "are"}`} one of the ruling's cells`;
@@ -494,7 +500,7 @@ const entriesOf = (ledger: Ledger, wave: string): LedgerEntry[] => ledger.entrie
  *  file; this is the data. */
 function leavesOut(input: BacklogInput): Record<(typeof LEAVES_OUT)[number], string> {
   const l3Reds = input.cases.filter((c) => c.layer === "L3" && c.state === "red").length;
-  const { held } = stateFlips(input, "the intro (ruling 70's cells)");
+  const { held } = ruledCells(input, "the intro (ruling 70's cells)");
   const many = held.length > 1;
   return {
     planned: layerText(perLayer(input.cases, (c) => c.state === "not_run")),
@@ -621,6 +627,22 @@ const HarnessRunSchema = z.object({
   cases: z.array(z.object({ caseId: z.string().min(1), state: z.string().min(1), reason: z.string().optional() })),
 });
 
+/** baseline.json's ruling-70 ids, read by the baseline's own reader (the one `judge regression` applies, which refuses a block written for another
+ *  run or tag), and held to the L3 run this backlog counts: a list that does not qualify that run holds nothing there. Empty when the file
+ *  carries no block (retired with the SW-H1 fix). */
+function ruling70Of(catalogue: string, l3RunId: string): string[] {
+  let block: ReturnType<typeof baselineOverrides>;
+  try { block = baselineOverrides({ catalogue }); } catch (e) {
+    if (e instanceof BaselineUnreadable) throw new BacklogRefused("BaselineUnreadable", e.message);
+    throw e;
+  }
+  if (block === null) return [];
+  if (!ruling70AppliesTo(block, l3RunId)) {
+    throw new BacklogRefused("BaselineUnreadable", `baseline.json's ruling70 was written for workflow run ${block.workflowRun}, and the L3 this backlog counts is ${l3RunId}: the held figure would describe a hold the judge does not apply to it`);
+  }
+  return [...block.ids];
+}
+
 export interface LoadOptions { triage: string; sha: string; baseline?: string; design?: string; catalogue?: string }
 
 /** Reads everything the writer needs, and holds it to the baseline it names: `sha` is the commit every layer's run records, EXACTLY (T22
@@ -662,5 +684,5 @@ export function loadBacklogInput(opts: LoadOptions): BacklogInput {
     throw new BacklogRefused("DesignUnreadable", `${design}: ${e instanceof Error ? e.message : String(e)}`);
   }
   const cases = runs.flatMap(({ layer, run }) => run.cases.map((c) => ({ layer, caseId: c.caseId, state: c.state, reason: c.reason ?? "" })));
-  return { sha: opts.sha, triage, ledger, newGaps: cat.newGaps, routing: cat.routing, rules: cat.rules, carries, cuts, cases, design: designText };
+  return { sha: opts.sha, triage, ledger, newGaps: cat.newGaps, routing: cat.routing, rules: cat.rules, carries, cuts, cases, ruling70: ruling70Of(catalogue, runs.find((r) => r.layer === "L3")!.run.runId), design: designText };
 }
