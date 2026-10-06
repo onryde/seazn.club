@@ -18678,7 +18678,10 @@ async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> 
  * mints the stream code → a phone claims the slot with it → the organiser's Go live → the phone's beat hears `go-live`
  * for that session → the phone's descriptor GET carries the session AND its `cred`, while a SECOND phone's GET of the
  * same code carries the session and NO `cred` → the fake input connects (the T7 control route) → the phone's beat hears
- * `live` → the organiser's Stop → the beat hears `over`, stopped. EVERY phone answer is `Cache-Control: private,
+ * `live` → the organiser's Stop → the beat hears `over`, stopped. W28/W27 (2026-10-06): both descriptors carry the
+ * match's `stage` (the league's R1), and the phone asks for the match's Remote scoring link (`…/scoring-link`) — the
+ * current phone is served `{url}` (the same one twice) on an https origin, or `503 unavailable` (nothing served on a URL
+ * the contract refuses) where the server's origin is http; another phone is `409 replaced`. EVERY phone answer is `Cache-Control: private,
  * no-store` (§6.3: each one can carry a credential) — counted, and zero counted is a failure. The phone is a bare HTTP
  * client with the QR's Bearer tok and no cookie, as Seazn Capture is. Its own Pro org (a monthly credit to spend),
  * purged by cleanup(). SMOKE_ONLY=captureV2 runs it alone (SELECTABLE_SUITES).
@@ -18688,7 +18691,7 @@ async function captureV2Suite(): Promise<void> {
     console.log("SKIP  capture-v2 suite (DATABASE_URL not set — the plan change needs SQL)");
     return;
   }
-  const EXPECTED_STEPS = 11;
+  const EXPECTED_STEPS = 14;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
@@ -18734,7 +18737,10 @@ async function captureV2Suite(): Promise<void> {
   if (!qr) return done();
 
   // The phone: Bearer tok, no cookie. Every answer's Cache-Control is recorded.
-  type Answer = { state?: string; sid?: string; startedBy?: string; endReason?: string; cred?: unknown; playbackUrl?: string; code?: string };
+  type Answer = {
+    state?: string; sid?: string; startedBy?: string; endReason?: string; cred?: unknown; playbackUrl?: string; code?: string;
+    heartbeatUrl?: string; stage?: { code: string; role: { kind: string; n?: number; entrants?: number }; pool?: string }; url?: string;
+  };
   const phoneCall = async (path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; json: Answer | null }> => {
     const res = await fetch(`${BASE}/api/v1/capture/codes/${qr.code}${path}`, {
       method,
@@ -18804,6 +18810,36 @@ async function captureV2Suite(): Promise<void> {
   step(
     `a second phone's GET of the same code → 200, the session, and NO cred (got ${other.status}, cred ${other.json && "cred" in other.json ? "present" : "absent"})`,
     other.status === 200 && other.json?.sid === sid && !!other.json && !("cred" in other.json),
+  );
+
+  // 6b. W28 — both descriptors carry the stage: the fixture is round 1 of a league (timedFixture), so the board's chip
+  // R1 and the engine's plain round 1.
+  const wantStage = JSON.stringify({ code: "R1", role: { kind: "plain_round", n: 1 } });
+  step(
+    `both descriptors carry the stage {code: R1, role: plain_round 1} (got ${JSON.stringify(own.json?.stage)} / ${JSON.stringify(other.json?.stage)})`,
+    JSON.stringify(own.json?.stage) === wantStage && JSON.stringify(other.json?.stage) === wantStage,
+  );
+
+  // 6c. W27 — the current phone's Remote scoring link. The descriptor's own heartbeatUrl names the server's capture
+  // origin: on https the phone is served {url} on the agreed pattern, the same url twice (never a second link); on an
+  // http origin (a local or CI server) the contract's pattern cannot be met, and the server refuses 503 unavailable.
+  const origin = own.json?.heartbeatUrl ? new URL(own.json.heartbeatUrl).origin : "";
+  const linkA = await phoneCall("/scoring-link", "POST", { phone: phoneA });
+  const linkAgain = await phoneCall("/scoring-link", "POST", { phone: phoneA });
+  const SCORING_URL = /^https:\/\/[^/]+\/score\/dl_[A-Za-z0-9_-]{43}$/;
+  step(
+    origin.startsWith("https://")
+      ? `phone A's scoring link → 200 {url} on the agreed pattern, the same url twice (got ${linkA.status}, ${linkAgain.status}, same ${linkA.json?.url === linkAgain.json?.url})`
+      : `phone A's scoring link on an http origin (${origin || "none"}) → 503 unavailable, twice (got ${linkA.status} ${linkA.json?.code}, ${linkAgain.status})`,
+    origin.startsWith("https://")
+      ? linkA.status === 200 && SCORING_URL.test(linkA.json?.url ?? "") && JSON.stringify(Object.keys(linkA.json ?? {})) === '["url"]'
+        && linkAgain.status === 200 && linkAgain.json?.url === linkA.json?.url
+      : origin.startsWith("http://") && linkA.status === 503 && linkA.json?.code === "unavailable" && linkAgain.status === 503,
+  );
+  const linkB = await phoneCall("/scoring-link", "POST", { phone: phoneB });
+  step(
+    `a second phone's scoring link → 409 replaced, no url (got ${linkB.status} ${linkB.json?.code})`,
+    linkB.status === 409 && linkB.json?.code === "replaced" && !("url" in (linkB.json ?? {})),
   );
 
   // 7. FAKE CONNECT — the T7 control flips the session's fake input to connected (the phone's video arriving).
