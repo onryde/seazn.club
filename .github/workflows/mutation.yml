@@ -14,7 +14,10 @@ name: Stryker mutation
 # 37371368951, sha 78c7ef3e6, ubuntu-latest, concurrency 3): packages/engine/stryker-measured.json records what each leg took, and a
 # leg's timeout is 1.5 x that (min 10, max 300 minutes). The run cancelled three legs at their timeouts and four more took over 200
 # minutes, so those seven were cut again into parts (10 more jobs, cut points in packages/engine/stryker.groups.mjs); a part is
-# timed from its share of the leg's measured phase. The floor (stryker-floor.json) gates, not
+# timed from its share of the leg's measured phase. A leg's Stryker incremental file is cached under a key that carries the
+# fingerprint of its CUT (`matrix.cut`, which stryker-matrix.mjs derives from the leg's STRYKER_GROUPS entry and the anchors of
+# the parts it takes), so a leg that is cut again never restores the file another cut wrote (T20: four re-cut legs kept their
+# names, restored the old cut's results and were refused by the Survivors guard, which stays as it is). The floor (stryker-floor.json) gates, not
 # Stryker's `break`, and is kept per FAMILY (ruling 66's ten groups, the sum of their legs: a file cut again never removes a
 # floor), so the `floors` job, not a leg, judges it: it runs after every leg and reads the legs' artifacts. Until PR-B sets a floor
 # it prints "no floor yet" and the families' scores are only logged.
@@ -251,17 +254,21 @@ jobs:
       # The incremental file carries last week's results forward, so an unchanged mutant is not re-run. Restore and save are
       # separate steps, the save `if: always()`: actions/cache's own post-save runs only when the whole job succeeded, and a
       # group whose Stryker run exited non-zero (the step above) would never keep the file it had just earned.
-      # The key ends in '@<sha>' and the restore key in '@': a group name is lowercase letters, digits and hyphens, and its
-      # number is the last part (`sports-cricket-1`, `sports-cricket-10`), so a restore key that stopped at the name would also
-      # match `stryker-sports-cricket-10@<sha>` and the wrong group's file could be the one restored. The '@' ends the name
-      # (matrix-workflow.test.ts derives that collision from the real group names).
+      # The key is `stryker-<group>@<cut>@<sha>` and the restore key stops after the second '@': a group name is lowercase
+      # letters, digits and hyphens, and its number is the last part (`sports-cricket-1`, `sports-cricket-10`), so a restore key
+      # that stopped at the name would also match `stryker-sports-cricket-10@...` and the wrong group's file could be the one
+      # restored. The first '@' ends the name (matrix-workflow.test.ts derives that collision from the real group names).
+      # `matrix.cut` is the fingerprint of the leg's cut (stryker-matrix.mjs, in the plan step: the leg's entries and the anchors
+      # of the parts it takes, never an entry's text alone, since `cricket.ts#10` stayed `cricket.ts#10` while its range halved).
+      # The second '@' ends the cut, so a restore key can only ever reach a file this SAME cut wrote, and an unchanged leg still
+      # carries last week's results forward. Nothing here hashes anything: the plan step does, before any install.
       - name: Restore the incremental file
         uses: actions/cache/restore@v4
         with:
           path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
-          key: stryker-${{ matrix.group }}@${{ github.sha }}
+          key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}
           restore-keys: |
-            stryker-${{ matrix.group }}@
+            stryker-${{ matrix.group }}@${{ matrix.cut }}@
       - name: Run Stryker
         working-directory: packages/engine
         run: |
@@ -274,7 +281,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
-          key: stryker-${{ matrix.group }}@${{ github.sha }}
+          key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}
       # One leg's evidence; the floor is judged per family, by the `floors` job once every leg has reported.
       - name: Survivors
         if: always()   # deliberate: save evidence after a non-zero Stryker exit (a manual cancel also runs it; accepted)

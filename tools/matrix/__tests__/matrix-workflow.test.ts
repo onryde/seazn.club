@@ -1244,10 +1244,19 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
   });
 });
 
-describe("mutation.yml: the incremental cache is keyed so no group can restore another's file", () => {
+describe("mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's", () => {
   const cache = stepOf(MJOBS.mutate!, "Restore the incremental file").body;
-  const keyOf = (g: string) => /^ {10}key: (.+)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ github.sha }}", "0123abc");
-  const restoreOf = (g: string) => /restore-keys: \|\n {12}(\S.*)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g);
+  /** What the plan step really hands the mutate job for every leg (the probe's PR matrix and the dispatch of all the others):
+   *  group -> { timeout, cut }, the values `matrix.cut` takes in the keys below. Spawned once, on first use. */
+  let planned: Record<string, { timeout: number; cut: string }> | undefined;
+  const plannedLegs = (): Record<string, { timeout: number; cut: string }> => {
+    planned ??= Object.fromEntries([planMatrix("pull_request", ""), planMatrix("workflow_dispatch", "all")]
+      .flatMap((m) => (JSON.parse(m) as { include: { group: string; timeout: number; cut: string }[] }).include)
+      .map((e) => [e.group, { timeout: e.timeout, cut: e.cut }]));
+    return planned;
+  };
+  const keyOf = (g: string, cut = plannedLegs()[g]!.cut) => /^ {10}key: (.+)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ matrix.cut }}", cut).replace("${{ github.sha }}", "0123abc");
+  const restoreOf = (g: string, cut = plannedLegs()[g]!.cut) => /restore-keys: \|\n {12}(\S.*)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ matrix.cut }}", cut);
 
   it("the cached path is the group's own incremental file, the one stryker.config.mjs writes", () => {
     expect(cache).toContain("path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json");
@@ -1270,8 +1279,9 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
     expect(MUT).not.toMatch(/uses: actions\/cache@/);
   });
 
-  it("no group's restore prefix is a prefix of another group's cache key (derived from the real group names)", () => {
+  it("no group's restore prefix is a prefix of another group's cache key (derived from the real group names, each with the cut the plan step gives it)", () => {
     const names = Object.keys(STRYKER_GROUPS);
+    expect(Object.keys(plannedLegs()).sort(), "the plan step gives every group a cut").toEqual([...names].sort());
     let compared = 0;
     for (const g of names) {
       for (const h of names) {
@@ -1285,9 +1295,52 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
 
   it("the premise: a restore key that stopped at the group's name WOULD collide on the real names, `sports-cricket-1` reaching `sports-cricket-10` (so the '@' is doing work, not decoration)", () => {
     const names = Object.keys(STRYKER_GROUPS);
-    const colliding = names.flatMap((g) => names.filter((h) => h !== g && `stryker-${h}@0123abc`.startsWith(`stryker-${g}`)).map((h) => `${g} -> ${h}`));
+    const colliding = names.flatMap((g) => names.filter((h) => h !== g && keyOf(h).startsWith(`stryker-${g}`)).map((h) => `${g} -> ${h}`));
     expect(colliding.length).toBeGreaterThan(0);
     expect(colliding, "the numbered legs are the ones that collide").toContain("sports-cricket-1 -> sports-cricket-10");
+  });
+
+  it("the cut is in the key, the restore key and the save key, and the restore key has no shorter fallback that would reach another cut's file", () => {
+    const save = stepOf(MJOBS.mutate!, "Save the incremental file").body;
+    expect(cache).toContain("key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}");
+    expect(save).toContain("key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}");
+    // exactly one restore key, and it stops AFTER the cut: `stryker-${{ matrix.group }}@` alone is the defect (T20)
+    const block = /restore-keys: \|\n((?: {12}\S.*\n?)+)/.exec(cache);
+    expect(block, "a restore-keys block").not.toBeNull();
+    expect(block![1]!.split("\n").filter((l) => l.trim() !== "").map((l) => l.trim())).toEqual(["stryker-${{ matrix.group }}@${{ matrix.cut }}@"]);
+  });
+
+  it("a leg that is cut again never restores the file another cut wrote, and one that is not still restores its own (each group, the cut the plan step gives it)", () => {
+    let checked = 0;
+    for (const g of Object.keys(STRYKER_GROUPS)) {
+      const own = plannedLegs()[g]!.cut;
+      const other = own.slice(0, -1) + (own.endsWith("0") ? "1" : "0"); // a different cut, the same group
+      expect(keyOf(g, own).startsWith(restoreOf(g, own)), `${g} restores the file its own cut saved`).toBe(true);
+      expect(keyOf(g, other).startsWith(restoreOf(g, own)), `${g} (cut ${own}) would restore a file saved by cut ${other}`).toBe(false);
+      // the key the workflow wrote before the cut was in it: `stryker-<group>@<sha>` (the old cut's file, which is NOT to be restored)
+      expect(`stryker-${g}@78c7ef3e6c0e5bb2b3c1d4f6a7e8d9c0b1a2f3e4`.startsWith(restoreOf(g, own)), `${g} would restore the pre-fix key`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(STRYKER_GROUPS).length);
+    expect(checked).toBeGreaterThan(10);
+  });
+
+  it("the premise: a restore key that stopped at the group's name and its '@' (the shape before the fix) WOULD reach a file another cut wrote (so the cut in the prefix is doing work)", () => {
+    const g = "sports-cricket-9";
+    const other = plannedLegs()[g]!.cut.replace(/^./, (c) => (c === "0" ? "1" : "0"));
+    expect(keyOf(g, other).startsWith(`stryker-${g}@`), "the old prefix reaches the other cut's key").toBe(true);
+    expect(keyOf(g, other).startsWith(restoreOf(g)), "the new one does not").toBe(false);
+  });
+
+  it("every `matrix.<field>` the mutate job reads is a field the plan step really emits (the seam: producer and consumer meet in the real output)", () => {
+    const read = new Set([...MJOBS.mutate!.matchAll(/(?<![\w-])matrix\.(\w+)/g)].map((m) => m[1]!));
+    const emitted = new Set(Object.keys(JSON.parse(planMatrix("workflow_dispatch", "core-1")).include[0] as Record<string, unknown>));
+    expect([...read].sort()).toEqual(["cut", "group", "timeout"]);
+    for (const f of read) expect(emitted.has(f), `matrix.${f} is not in the plan step's output (${[...emitted].join(", ")})`).toBe(true);
+  });
+
+  it("the workflow hashes nothing itself: the fingerprint comes from the plan step, not from inline shell over source", () => {
+    expect(MUT).not.toMatch(/sha\d*sum|shasum|md5|openssl|hashFiles|\bcksum\b/);
   });
 });
 

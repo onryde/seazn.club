@@ -27,18 +27,20 @@ const REAL = join(ENGINE, "scripts/stryker-matrix.mjs");
 const real = (event: string | null, group: string | null) => matrixCli(REAL, REPO, event, group);
 
 /** The matrix a successful run printed: one `matrix=` line of JSON and nothing else (the line is appended to $GITHUB_OUTPUT). */
-function parsed(o: Out): { group: string; timeout: number }[] {
+function parsed(o: Out): { group: string; timeout: number; cut: string }[] {
   expect(o.status, o.stderr).toBe(0);
   expect(o.stderr).toBe("");
   const lines = o.stdout.split("\n").filter((l) => l !== "");
   expect(lines, "exactly one output line").toHaveLength(1);
   expect(lines[0]).toMatch(/^matrix=\{"include":\[/);
-  const m = JSON.parse(lines[0]!.slice("matrix=".length)) as { include: { group: string; timeout: number }[] };
+  const m = JSON.parse(lines[0]!.slice("matrix=".length)) as { include: { group: string; timeout: number; cut: string }[] };
   expect(Object.keys(m)).toEqual(["include"]);
-  for (const e of m.include) expect(Object.keys(e).sort(), "an entry is exactly {group, timeout}").toEqual(["group", "timeout"]);
+  for (const e of m.include) expect(Object.keys(e).sort(), "an entry is exactly {group, timeout, cut}").toEqual(["cut", "group", "timeout"]);
   return m.include;
 }
 const groupsOf = (o: Out) => parsed(o).map((e) => e.group);
+/** An entry without its fingerprint (the tests of the timeout compare group and timeout; the fingerprint has its own tests). */
+const slim = (es: { group: string; timeout: number }[]) => es.map(({ group, timeout }) => ({ group, timeout }));
 
 /** A test that spawns `n` processes. */
 const spawnIt = (n: number) => (name: string, fn: () => void) => it(name, fn, spawnBudget(n));
@@ -171,9 +173,9 @@ describe("a broken timeouts file is a refusal, never a matrix", () => {
       expect(r.stdout).toBe("");
     }
     const edge = copy(tree(full({ "competition-1": 300 })), "workflow_dispatch", "competition-1");
-    expect(parsed(edge)).toEqual([{ group: "competition-1", timeout: 300 }]);
+    expect(slim(parsed(edge))).toEqual([{ group: "competition-1", timeout: 300 }]);
     const one = copy(tree(full({ "competition-1": 1 })), "workflow_dispatch", "competition-1");
-    expect(parsed(one)).toEqual([{ group: "competition-1", timeout: 1 }]);
+    expect(slim(parsed(one))).toEqual([{ group: "competition-1", timeout: 1 }]);
   });
 
   spawnIt(6)("a missing, empty, malformed or non-object timeouts file is a refusal", () => {
@@ -186,7 +188,7 @@ describe("a broken timeouts file is a refusal, never a matrix", () => {
 
   spawnIt(2)("an empty matrix is a refusal, never an empty-and-green job: a groups file whose only group is the probe, run for a schedule", () => {
     const root = tree(full());
-    writeFileSync(join(root, "stryker.groups.mjs"), 'export const STRYKER_GROUPS = { probe: ["src/scheduling/roundrobin.ts"] };\n');
+    writeFileSync(join(root, "stryker.groups.mjs"), 'export const STRYKER_GROUPS = { probe: ["src/scheduling/roundrobin.ts"] };\nexport const STRYKER_SPLITS = {};\n');
     const r = copy(root, "schedule", "");
     expect(r.status).toBe(2);
     expect(r.stdout).toBe("");
@@ -197,6 +199,155 @@ describe("a broken timeouts file is a refusal, never a matrix", () => {
 
   spawnIt(1)("the timeout comes from the file, not from the script: changing a value changes the matrix", () => {
     const r = copy(tree(full({ probe: 7 })), "pull_request", "");
-    expect(parsed(r)).toEqual([{ group: "probe", timeout: 7 }]);
+    expect(slim(parsed(r))).toEqual([{ group: "probe", timeout: 7 }]);
+  });
+});
+
+// --- the fingerprint of a leg's cut (T20 fix, D14) ----------------------------------------------------------------------
+// mutation.yml files a leg's Stryker incremental file under a key that carries this fingerprint, so a leg that is RE-CUT never
+// restores the file another cut wrote. The first full re-run proved the need: four legs (sports-cricket-9 and -10, sports-period-2
+// and -9) kept their names and changed their ranges, restored the old, wider cut's file, and reported mutants outside their own
+// range, which the Survivors guard refused. The fingerprint is derived here (the plan step, before any install), so the tests
+// spawn the real script, as the workflow does.
+describe("each leg carries the fingerprint of its cut, the key its incremental cache is filed under", () => {
+  const CUT = /^[0-9a-f]{16}$/;
+  const scratch = mkdtempSync(join(tmpdir(), "stryker-cut-"));
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+  let seq = 0;
+  /** The script beside a groups file and a timeouts file of the test's choosing, laid out as in the engine. */
+  function world(groups: Record<string, string[]>, splits: Record<string, string[]>): string {
+    const root = join(scratch, String(++seq));
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    copyFileSync(REAL, join(root, "scripts/stryker-matrix.mjs"));
+    writeFileSync(join(root, "stryker.groups.mjs"), `export const STRYKER_GROUPS = ${JSON.stringify(groups)};\nexport const STRYKER_SPLITS = ${JSON.stringify(splits)};\n`);
+    writeFileSync(join(root, "stryker-timeouts.json"), JSON.stringify(Object.fromEntries(Object.keys(groups).map((g) => [g, 10]))));
+    return root;
+  }
+  const run = (root: string, group = "all") => matrixCli(join(root, "scripts/stryker-matrix.mjs"), root, "workflow_dispatch", group);
+  /** group -> fingerprint, for every leg a `workflow_dispatch all` selects. */
+  const cutsIn = (root: string): Record<string, string> => Object.fromEntries(parsed(run(root)).map((e) => [e.group, e.cut]));
+  /** The fingerprint of a leg whose only entry is `entry`, under `splits`. */
+  const cutOfEntry = (entry: string, splits: Record<string, string[]>): string => cutsIn(world({ g: [entry] }, splits)).g!;
+
+  spawnIt(2)("every leg of every event carries one: 16 hex characters, and exactly the three fields", () => {
+    const entries = [...parsed(real("workflow_dispatch", "all")), ...parsed(real("pull_request", ""))];
+    expect(entries.length).toBe(NON_PROBE.length + 1);
+    expect(entries.length).toBeGreaterThan(10);
+    for (const e of entries) expect(e.cut, e.group).toMatch(CUT);
+  });
+
+  spawnIt(2)("no two legs share a fingerprint (a hash of a constant would give every leg the same key)", () => {
+    const entries = [...parsed(real("workflow_dispatch", "all")), ...parsed(real("pull_request", ""))];
+    expect(new Set(entries.map((e) => e.cut)).size).toBe(entries.length);
+    expect(entries.length).toBeGreaterThan(10);
+  });
+
+  spawnIt(4)("the same cut gives the same fingerprint however it is asked for: a second run, a schedule, a dispatch of that one leg", () => {
+    const first = Object.fromEntries(parsed(real("workflow_dispatch", "all")).map((e) => [e.group, e.cut]));
+    const second = Object.fromEntries(parsed(real("workflow_dispatch", "all")).map((e) => [e.group, e.cut]));
+    const schedule = Object.fromEntries(parsed(real("schedule", "")).map((e) => [e.group, e.cut]));
+    expect(Object.keys(first).length).toBe(NON_PROBE.length);
+    expect(second).toEqual(first);
+    expect(schedule).toEqual(first);
+    const one = parsed(real("workflow_dispatch", "sports-cricket-9"));
+    expect(one).toHaveLength(1);
+    expect(one[0]!.cut).toBe(first["sports-cricket-9"]);
+  });
+
+  spawnIt(2)("it is the cut and nothing else: a different timeout, or the same files in another directory, leave it alone", () => {
+    const base = cutsIn(world({ "g-1": ["src/a.ts#2"], "g-2": ["src/b/**", "!src/**/*.test.ts"] }, { "src/a.ts": ["x", "y"] }));
+    const again = cutsIn(world({ "g-1": ["src/a.ts#2"], "g-2": ["src/b/**", "!src/**/*.test.ts"] }, { "src/a.ts": ["x", "y"] }));
+    expect(Object.keys(base)).toEqual(["g-1", "g-2"]);
+    expect(again).toEqual(base);
+    const root = world({ "g-1": ["src/a.ts#2"], "g-2": ["src/b/**", "!src/**/*.test.ts"] }, { "src/a.ts": ["x", "y"] });
+    writeFileSync(join(root, "stryker-timeouts.json"), JSON.stringify({ "g-1": 99, "g-2": 3 }));
+    expect(cutsIn(root)).toEqual(base);
+  });
+
+  spawnIt(2)("a re-cut leg whose entry text did NOT change gets a different fingerprint (the cricket-9 defect: part 2 was x..y, an anchor between them made it x..m)", () => {
+    const before = cutOfEntry("src/a.ts#2", { "src/a.ts": ["x", "y"] });
+    const after = cutOfEntry("src/a.ts#2", { "src/a.ts": ["x", "m", "y"] });
+    expect(before).toMatch(CUT);
+    expect(after).toMatch(CUT);
+    expect(after).not.toBe(before);
+  });
+
+  // Each case is one leg's one part; `range` is what that part IS (the statement that starts it up to the statement that starts
+  // the next), written by hand from STRYKER_SPLITS' own definition ("a cut is the statement that STARTS the next part"), never
+  // from the script. Two cases with the same range must share a fingerprint, with different ranges must not.
+  const CASES: { entry: string; splits: Record<string, string[]>; range: string }[] = [
+    { entry: "src/a.ts#2", splits: { "src/a.ts": ["x", "y"] }, range: "a: x..y" },
+    { entry: "src/a.ts#3", splits: { "src/a.ts": ["w", "x", "y"] }, range: "a: x..y" },          // renumbered, longer list, same range
+    { entry: "src/a.ts#2", splits: { "src/a.ts": ["x", "m", "y"] }, range: "a: x..m" },          // an anchor inside it
+    { entry: "src/a.ts#3", splits: { "src/a.ts": ["x", "m", "y"] }, range: "a: m..y" },
+    { entry: "src/a.ts#1", splits: { "src/a.ts": ["x", "y"] }, range: "a: start..x" },
+    { entry: "src/a.ts#1", splits: { "src/a.ts": ["x", "z"] }, range: "a: start..x" },          // the anchor AFTER the part moved: same range
+    { entry: "src/a.ts#1", splits: { "src/a.ts": ["x"] }, range: "a: start..x" },
+    { entry: "src/a.ts#1", splits: { "src/a.ts": ["w", "x", "y"] }, range: "a: start..w" },
+    { entry: "src/a.ts#2", splits: { "src/a.ts": ["w", "x", "y"] }, range: "a: w..x" },
+    { entry: "src/a.ts#3", splits: { "src/a.ts": ["x", "y"] }, range: "a: y..end" },
+    { entry: "src/a.ts#4", splits: { "src/a.ts": ["w", "x", "y"] }, range: "a: y..end" },
+    { entry: "src/a.ts#2", splits: { "src/a.ts": ["y"] }, range: "a: y..end" },
+    { entry: "src/b.ts#1", splits: { "src/b.ts": ["x"] }, range: "b: start..x" },               // another file, the same anchor
+  ];
+
+  spawnIt(CASES.length)("a part's fingerprint is its range: equal for the same range however numbered, different for any other range or file", () => {
+    const cuts = CASES.map((c) => ({ ...c, cut: cutOfEntry(c.entry, c.splits) }));
+    let same = 0;
+    let different = 0;
+    for (const a of cuts) {
+      for (const b of cuts) {
+        if (a === b) continue;
+        if (a.range === b.range) {
+          expect(b.cut, `${a.entry} ${JSON.stringify(a.splits)} and ${b.entry} ${JSON.stringify(b.splits)} are both ${a.range}`).toBe(a.cut);
+          same++;
+        } else {
+          expect(b.cut, `${a.range} (${a.entry}) vs ${b.range} (${b.entry})`).not.toBe(a.cut);
+          different++;
+        }
+      }
+    }
+    expect(same, "ordered pairs with one range").toBeGreaterThan(0);
+    expect(different, "ordered pairs with different ranges").toBeGreaterThan(0);
+    expect(same + different).toBe(CASES.length * (CASES.length - 1));
+  });
+
+  spawnIt(2)("re-cutting one file moves only the legs that take a part of it", () => {
+    const groups = { "g-1": ["src/a.ts#1"], "g-2": ["src/b.ts#2"], "g-3": ["src/c/**", "!src/**/*.test.ts"] };
+    const before = cutsIn(world(groups, { "src/a.ts": ["x", "y"], "src/b.ts": ["p"] }));
+    const after = cutsIn(world(groups, { "src/a.ts": ["w", "x", "y"], "src/b.ts": ["p"] }));
+    expect(Object.keys(before)).toEqual(["g-1", "g-2", "g-3"]);
+    expect(after["g-1"], "a.ts's part 1 was start..x and is start..w").not.toBe(before["g-1"]);
+    expect(after["g-2"]).toBe(before["g-2"]);
+    expect(after["g-3"]).toBe(before["g-3"]);
+  });
+
+  spawnIt(6)("a leg's own file list is part of the cut: another glob, a dropped negation, a reorder (negations apply last), a part in place of a whole file", () => {
+    const splits = { "src/a.ts": ["x"] };
+    const base = cutOfEntry("src/a.ts", splits);
+    const variants = [
+      cutOfEntry("src/a.ts#1", splits),
+      cutOfEntry("src/other.ts", splits),
+      cutsIn(world({ g: ["src/a.ts", "src/b.ts"] }, splits)).g!,
+      cutsIn(world({ g: ["src/a.ts", "!src/a.test.ts"] }, splits)).g!,
+      cutsIn(world({ g: ["!src/a.test.ts", "src/a.ts"] }, splits)).g!,
+    ];
+    for (const v of variants) expect(v).toMatch(CUT);
+    expect(new Set([base, ...variants]).size, "six different cuts, six different fingerprints").toBe(6);
+    expect(cutOfEntry("src/a.ts", splits), "and the same one twice is the same").toBe(base);
+  });
+
+  spawnIt(5)("a part the groups file cannot resolve is a refusal naming it, with nothing on stdout (a fingerprint of a broken cut would file a cache under it)", () => {
+    const splits = { "src/a.ts": ["x", "y"] };
+    for (const [entry, why] of [["src/a.ts#0", "has parts 1 to 3"], ["src/a.ts#4", "has parts 1 to 3"], ["src/nosplit.ts#1", "has no split in STRYKER_SPLITS"]] as const) {
+      const r = run(world({ g: [entry] }, splits));
+      expect({ entry, status: r.status }).toEqual({ entry, status: 2 });
+      expect(r.stdout, entry).toBe("");
+      expect(r.stderr, entry).toContain(why);
+      expect(r.stderr, entry).toContain(entry);
+    }
+    // the pair: the first part and the last part of the same file are fine
+    expect(cutOfEntry("src/a.ts#1", splits)).toMatch(CUT);
+    expect(cutOfEntry("src/a.ts#3", splits)).toMatch(CUT);
   });
 });
