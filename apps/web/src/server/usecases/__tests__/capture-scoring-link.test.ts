@@ -146,63 +146,72 @@ describe.skipIf(!HAS_DB)("postScoringLink — the phone's Remote scoring link (�
     await expect(resolveDeviceLinkToken(secretOf(phoneFirst.url))).rejects.toMatchObject({ code: "LINK_REVOKED" });
   });
 
-  it("NEVER revokes: a legacy hash-only link, a link whose envelope hashes elsewhere and one whose envelope will not open all stay revoked_at IS NULL and still resolve; ONE new sealed row is the answer; the two passed-over envelopes are logged by link id, never by secret", async () => {
-    const { r, A } = await ready();
-    const issuer = await issuerOf(r);
-    const insertLink = async (secret: string, enc: Buffer | null) => (await sql<{ id: string }[]>`
-      insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at)
-      values (${r.auth.orgId}, ${r.fixtureId}, ${hashDeviceLinkToken(secret)}, ${enc}, null, ${issuer}, null) returning id`)[0]!.id;
-    const legacySecret = mintDeviceLinkSecret();
-    const swappedSecret = mintDeviceLinkSecret();
-    const tamperedSecret = mintDeviceLinkSecret();
-    const legacy = await insertLink(legacySecret, null);
-    // Opens under the KEK, but is ANOTHER secret's envelope (device-links.ts final review M2's case).
-    const swapped = await insertLink(swappedSecret, sealWith("DEVICE_LINK_KEK", mintDeviceLinkSecret()));
-    // Will not open at all: random bytes where an envelope belongs.
-    const tampered = await insertLink(tamperedSecret, randomBytes(64));
-    const before = await linksOf(r.fixtureId);
-    expect(before.map((x) => x.revoked_at), "premise: three live links").toEqual([null, null, null]);
+  it("NEVER revokes, and reads ONLY the newest live link (as the console's ensure does): when it is a legacy hash-only link, one whose envelope hashes elsewhere, or one that will not open, ONE new sealed link is inserted and answered; the passed-over row stays exactly as it was and still resolves; the console's next ensure RE-SHOWS the phone's link (minted: false) instead of revoking; a bad envelope is logged by link id, never by secret", async () => {
+    let checked = 0;
+    for (const kind of ["legacy", "swapped", "tampered"] as const) {
+      const { r, A } = await ready();
+      const issuer = await issuerOf(r);
+      const badSecret = mintDeviceLinkSecret();
+      const enc = kind === "legacy" ? null
+        // Opens under the KEK, but is ANOTHER secret's envelope (device-links.ts final review M2's case).
+        : kind === "swapped" ? sealWith("DEVICE_LINK_KEK", mintDeviceLinkSecret())
+        // Will not open at all: random bytes where an envelope belongs.
+        : randomBytes(64);
+      const bad = (await sql<{ id: string }[]>`
+        insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at)
+        values (${r.auth.orgId}, ${r.fixtureId}, ${hashDeviceLinkToken(badSecret)}, ${enc}, null, ${issuer}, null) returning id`)[0]!.id;
+      const before = await linksOf(r.fixtureId);
+      expect(before.map((x) => x.revoked_at), `${kind}: premise, one live link`).toEqual([null]);
 
-    const warn = vi.spyOn(log, "warn");
-    let ok: { url: string };
-    let warned: unknown[][];
-    try {
-      ok = await link(r, A);
-    } finally {
-      warned = [...warn.mock.calls];   // read BEFORE mockRestore, which clears them
-      warn.mockRestore();
+      const warn = vi.spyOn(log, "warn");
+      let ok: { url: string };
+      let warned: unknown[][];
+      try {
+        ok = await link(r, A);
+      } finally {
+        warned = [...warn.mock.calls];   // read BEFORE mockRestore, which clears them
+        warn.mockRestore();
+      }
+      const after = await linksOf(r.fixtureId);
+      expect(after, kind).toHaveLength(2);
+      expect(after.find((x) => x.id === bad), `${kind}: the passed-over link is exactly as it was`).toEqual(before[0]);
+      await expect(resolveDeviceLinkToken(badSecret), kind).resolves.toMatchObject({ fixture_id: r.fixtureId });
+      const fresh = after.find((x) => x.id !== bad)!;
+      expect(fresh.token_hash, kind).toBe(hashDeviceLinkToken(secretOf(ok!.url)));
+      expect(fresh.secret_enc, `${kind}: the new link is sealed`).not.toBeNull();
+      // The console re-shows the phone's link — the newest — rather than revoking anything.
+      const shown = await ensureDeviceLink(r.auth, r.fixtureId);
+      expect({ secret: shown.secret, minted: shown.minted }, `${kind}: the console agrees`).toEqual({ secret: secretOf(ok!.url), minted: false });
+      expect((await linksOf(r.fixtureId)).map((x) => x.revoked_at), `${kind}: nothing revoked`).toEqual([null, null]);
+      // A bad envelope is logged by its link id (a legacy row has none to log) — and no logged argument carries a secret.
+      const passedOver = warned.map((c) => (c[0] as { linkId?: string }).linkId).filter(Boolean);
+      expect(passedOver, kind).toEqual(kind === "legacy" ? [] : [bad]);
+      const logged = JSON.stringify(warned);
+      for (const s of [badSecret, secretOf(ok!.url)]) expect(logged, kind).not.toContain(s);
+      checked++;
     }
-    const after = await linksOf(r.fixtureId);
-    expect(after).toHaveLength(4);
-    for (const id of [legacy, swapped, tampered]) {
-      const was = before.find((x) => x.id === id)!, now = after.find((x) => x.id === id)!;
-      expect(now, `link ${id} is exactly as it was`).toEqual(was);
-    }
-    for (const s of [legacySecret, swappedSecret, tamperedSecret]) {
-      await expect(resolveDeviceLinkToken(s)).resolves.toMatchObject({ fixture_id: r.fixtureId });
-    }
-    const fresh = after.find((x) => ![legacy, swapped, tampered].includes(x.id))!;
-    expect(fresh.token_hash).toBe(hashDeviceLinkToken(secretOf(ok!.url)));
-    expect(secretOf(ok!.url)).not.toBe(swappedSecret);
-    // Both passed-over envelopes were logged, each by its link id — and no logged argument carries any secret.
-    const passedOver = warned.map((c) => (c[0] as { linkId?: string }).linkId).filter(Boolean).sort();
-    expect(passedOver).toEqual([swapped, tampered].sort());
-    const logged = JSON.stringify(warned);
-    for (const s of [legacySecret, swappedSecret, tamperedSecret, secretOf(ok!.url)]) expect(logged).not.toContain(s);
+    expect(checked).toBe(3);
   });
 
-  it("a NEWER link whose envelope hashes elsewhere does not hide an OLDER good one: the good one is returned, nothing inserted", async () => {
+  it("a NEWER bad link over an OLDER good one: the phone does NOT dig the older one out — a NEW link is inserted and answered, the older good link is NOT revoked (it still resolves), and the console's ensure re-shows the phone's link (minted: false); even when the bad row's created_at is AHEAD of the clock, the new row is stamped past it", async () => {
     const { r, A } = await ready();
     const good = await ensureDeviceLink(r.auth, r.fixtureId);
     const issuer = await issuerOf(r);
-    // A newer row whose envelope is another secret's: the phone passes over it to the older good one.
+    // A newer row whose envelope is another secret's, stamped a minute ahead (a clock stepped back since it was written).
     await sql`
       insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at, created_at)
       values (${r.auth.orgId}, ${r.fixtureId}, ${hashDeviceLinkToken(mintDeviceLinkSecret())}, ${sealWith("DEVICE_LINK_KEK", mintDeviceLinkSecret())},
               null, ${issuer}, null, now() + interval '1 minute')`;
     const ok = await link(r, A);
-    expect(secretOf(ok.url)).toBe(good.secret);
-    expect(await linksOf(r.fixtureId)).toHaveLength(2);
+    expect(secretOf(ok.url)).not.toBe(good.secret);
+    expect(await linksOf(r.fixtureId)).toHaveLength(3);
+    const shown = await ensureDeviceLink(r.auth, r.fixtureId);
+    expect({ secret: shown.secret, minted: shown.minted }, "the console re-shows the phone's link").toEqual({ secret: secretOf(ok.url), minted: false });
+    const rows = await linksOf(r.fixtureId);
+    expect(rows.map((x) => x.revoked_at), "nothing revoked: the older good link, the bad one, the phone's").toEqual([null, null, null]);
+    await expect(resolveDeviceLinkToken(good.secret), "the older good link still scores").resolves.toMatchObject({ fixture_id: r.fixtureId });
+    expect((await link(r, A)).url, "a second call: the same link").toBe(ok.url);
+    expect(await linksOf(r.fixtureId)).toHaveLength(3);
   });
 
   it("two GOOD live sealed links (written behind the app's back): the phone returns the NEWEST — the one the console's ensure re-shows — so the two never disagree; nothing inserted", async () => {

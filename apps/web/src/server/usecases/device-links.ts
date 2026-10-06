@@ -241,14 +241,23 @@ async function ensureInTx(
   return ensureLocked(tx, auth, fixtureId, label);
 }
 
-/** Re-open the fixture's live sealed link, or mint one. The caller holds the
- *  fixture's link lock and has checked the fixture is linkable. */
-async function ensureLocked(tx: Tx, auth: AuthCtx, fixtureId: string, label: string | null): Promise<EnsuredDeviceLink> {
-  const [live] = await tx<(DeviceLinkRow & { secret_enc: Uint8Array | null; token_hash: string })[]>`
+type LiveLinkRow = DeviceLinkRow & { secret_enc: Uint8Array | null; token_hash: string };
+
+/** The fixture's NEWEST live link — legacy or sealed — the one row the console's ensure re-shows or replaces. The
+ *  console's ensure and the phone's link (W27) both read it here, so the two always look at the same row. */
+async function newestLiveLink(tx: Tx, fixtureId: string): Promise<LiveLinkRow | null> {
+  const [live] = await tx<LiveLinkRow[]>`
     select ${tx(COLS)}, secret_enc, token_hash from device_links
     where fixture_id = ${fixtureId} and revoked_at is null
       and (expires_at is null or expires_at > now())
     order by created_at desc limit 1`;
+  return live ?? null;
+}
+
+/** Re-open the fixture's live sealed link, or mint one. The caller holds the
+ *  fixture's link lock and has checked the fixture is linkable. */
+async function ensureLocked(tx: Tx, auth: AuthCtx, fixtureId: string, label: string | null): Promise<EnsuredDeviceLink> {
+  const live = await newestLiveLink(tx, fixtureId);
   if (live && live.secret_enc) {
     const { secret_enc, token_hash, ...row } = live;
     const secret = openSecret(secret_enc);
@@ -326,9 +335,12 @@ export type PhoneScoringLink =
  * fixture's link lock — the one the console's ensure and the sheet print take, so a phone and a printer racing on a
  * fixture with no link agree on ONE — in one transaction:
  *  - a finalized or cancelled match → `{kind: "finished"}`, nothing written;
- *  - the newest live sealed link whose envelope opens AND hashes to its row's `token_hash` is returned unchanged. One
- *    that hashes elsewhere, or will not open, is PASSED OVER (logged by link id, never by secret) — never revoked;
- *  - with none, a new sealed link is inserted: no label, no expiry, `issued_by` the stream code's issuer.
+ *  - ONLY the fixture's newest live link is read — legacy or sealed, `newestLiveLink`, the row the console's ensure
+ *    reads (review M1). Sealed, and its envelope opens AND hashes to its `token_hash`: returned unchanged;
+ *  - otherwise (none, a legacy hash-only link, an envelope that hashes elsewhere or will not open — the last two logged
+ *    by link id, never by secret) a new sealed link is inserted beside it: no label, no expiry, `issued_by` the stream
+ *    code's issuer, and NOTHING revoked. It is stamped strictly after the row it was read past, so it IS the newest live
+ *    link and the console's next ensure re-shows it instead of revoking and reissuing.
  * A missing DEVICE_LINK_KEK is the 503 `DEVICE_LINK_KEK_MISSING` (open and seal both check it) with nothing written.
  * The secret is the caller's to put on the wire: it is never logged here.
  */
@@ -342,28 +354,30 @@ export async function provideDeviceLinkForPhone(
     await lockFixtureLinks(tx, fixtureId);
     const status = await linkableStatus(tx, fixtureId);
     if (isFinishedFixtureStatus(status)) return { kind: "finished", status };
-    const live = await tx<{ id: string; secret_enc: Uint8Array; token_hash: string }[]>`
-      select id, secret_enc, token_hash from device_links
-      where fixture_id = ${fixtureId} and revoked_at is null and secret_enc is not null
-        and (expires_at is null or expires_at > now())
-      order by created_at desc, id desc`;
-    for (const row of live) {
-      let secret: string;
+    const live = await newestLiveLink(tx, fixtureId);
+    if (live && live.secret_enc) {
+      let secret: string | null = null;
       try {
-        secret = openSecret(row.secret_enc);
+        secret = openSecret(live.secret_enc);
       } catch (e) {
         if (e instanceof HttpError) throw e; // the KEK is missing: a configuration gap, fail closed
-        log.warn({ linkId: row.id, fixtureId }, "device link (capture phone): sealed secret will not open; passed over, left as it is");
-        continue;
+        log.warn({ linkId: live.id, fixtureId }, "device link (capture phone): sealed secret will not open; passed over, left as it is, a new link issued");
       }
-      if (hashDeviceLinkToken(secret) === row.token_hash) return { kind: "link", secret, linkId: row.id, minted: false };
-      log.warn({ linkId: row.id, fixtureId }, "device link (capture phone): sealed secret does not match the row's token hash; passed over, left as it is");
+      if (secret !== null) {
+        if (hashDeviceLinkToken(secret) === live.token_hash) return { kind: "link", secret, linkId: live.id, minted: false };
+        log.warn({ linkId: live.id, fixtureId }, "device link (capture phone): sealed secret does not match the row's token hash; passed over, left as it is, a new link issued");
+      }
     }
     const secret = mintDeviceLinkSecret();
     const sealed = sealSecret(secret); // before the insert: a missing KEK writes nothing
+    // Stamped past every link the fixture has, in SQL (a JS Date would drop the microseconds and could land BEFORE the
+    // row it must follow; `greatest` ignores the null of "no link yet"): `now()` is this transaction's start, and a row
+    // written under a clock that has since stepped back would otherwise stay the newest — and the console's ensure would
+    // revoke the phone's link to replace it.
     const [created] = await tx<{ id: string }[]>`
-      insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at)
-      values (${orgId}, ${fixtureId}, ${hashDeviceLinkToken(secret)}, ${sealed}, null, ${issuedBy}, null)
+      insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at, created_at)
+      values (${orgId}, ${fixtureId}, ${hashDeviceLinkToken(secret)}, ${sealed}, null, ${issuedBy}, null,
+              greatest(now(), (select max(created_at) + interval '1 microsecond' from device_links where fixture_id = ${fixtureId})))
       returning id`;
     return { kind: "link", secret, linkId: created.id, minted: true };
   });
