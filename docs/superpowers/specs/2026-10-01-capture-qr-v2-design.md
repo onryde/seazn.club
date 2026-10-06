@@ -64,7 +64,7 @@ Each row below is the latest word on its subject. Where the log changed its mind
 | W24 | **A reconnecting countdown (2026-10-01).** While live with no video from the phone, the Phone node says "Reconnecting…" instead of "No signal". After a 30 s hold, a sentence counts down to the W19 end: "No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back." Warming ("Waiting for camera…") gets the same countdown to the 10-min warming timeout. Built in PR-1 (§6.12). The PR-1 mockups show these states. |
 | W25 | **The unnamed-match label is localised (2026-10-01).** The "Match {n}" fallback sent to the phone uses the competition's locale, not English (§6.4). |
 | W26 | **No custom ingest host (owner ruling, 2026-10-05). Supersedes W15 and the RTMPS half of W21.** Both credentials use Cloudflare's own host, exactly as Cloudflare issues them: `rtmps://live.cloudflare.com:443/live/` and `srt://live.cloudflare.com:778`, in every environment. `STREAM_INGEST_HOST` stays **unset** in Doppler `stg` and `prd` (removed from `stg` 2026-10-05 19:09:55Z); the code path is unchanged, since unset already serves Cloudflare's host. `live.stg.seazn.club` / `live.seazn.club` are no longer served to phones. **Capture-side consequence:** the capture app's RTMPS host pin admitted only `live.<env>.seazn.club`, so it refused `live.cloudflare.com` for RTMPS (seen on stg 19:11Z). Capture's owner then ruled (2026-10-05) that the app trusts **only** `live.cloudflare.com` for both SRT and RTMPS in every environment. So **setting `STREAM_INGEST_HOST` again would break every phone**: the RTMPS rewrite in `ingestCred` would serve a host the app refuses. |
-| W27 | **The phone fetches the match's Remote scoring link (2026-10-06; owner sign-off 2026-10-06, capture lane agreed — recorded here from the controller's brief of that date).** `POST /api/v1/capture/codes/{code}/scoring-link`, the start's Bearer `tok` and strict body `{phone}`. Only the slot's CURRENT phone (the start's holder check) is answered; any other phone gets `409 replaced`, and an ended code `401 code_ended`. It is allowed whether or not a session exists or is live. The owner's rule, verbatim: "must not remove or replace any existing QR … when phone requests a link/code for qr, just provide or create the new one". So the fixture's live sealed device link whose envelope opens AND hashes to its row's `token_hash` is returned; otherwise a new sealed link is inserted and **nothing is revoked** — never the console's revoke-and-mint. It takes the console's per-fixture link lock, so a concurrent console ensure or print cannot double-mint. `issued_by` is the code's issuer; no label; no expiry. `200 {url}`, the server's base URL plus `/score/<secret>`, matching `^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$`. Refusals: a plan without `scoring.device_links` → `402 not_entitled`; a finalized or cancelled match → **`409 match_finished`** (a new refusal code; the console answers 422, the phone 409 by agreement), no link made; `DEVICE_LINK_KEK` missing → `503 unavailable`; the console's `DEVICE_LINK_MINT_LIMIT` per IP → `429 rate_limited` with `Retry-After`. The URL is a credential: never logged, never stored anywhere new. §6.3.5. |
+| W27 | **The phone fetches the match's Remote scoring link (2026-10-06; owner sign-off 2026-10-06, capture lane agreed — recorded here from the controller's brief of that date).** `POST /api/v1/capture/codes/{code}/scoring-link`, the start's Bearer `tok` and strict body `{phone}`. Only the slot's CURRENT phone (the start's holder check) is answered; any other phone gets `409 replaced`, and an ended code `401 code_ended`. It is allowed whether or not a session exists or is live. The owner's rule, verbatim: "must not remove or replace any existing QR … when phone requests a link/code for qr, just provide or create the new one". So the fixture's NEWEST live link — the one row the console's ensure reads — is returned when it is sealed and its envelope opens AND hashes to its row's `token_hash`; otherwise a new sealed link is inserted beside it, stamped as the newest, and **nothing is revoked** — never the console's revoke-and-mint (amended 2026-10-07, review M1: an older good link is never dug out from under a newer bad one, so the phone and the console always agree on the row). It takes the console's per-fixture link lock, so a concurrent console ensure or print cannot double-mint. `issued_by` is the code's issuer; no label; no expiry. `200 {url}`, the server's base URL plus `/score/<secret>`, matching `^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$`. Refusals: a plan without `scoring.device_links` → `402 not_entitled`; a finalized or cancelled match → **`409 match_finished`** (a new refusal code; the console answers 422, the phone 409 by agreement), no link made; `DEVICE_LINK_KEK` missing → `503 unavailable`; the console's `DEVICE_LINK_MINT_LIMIT` per IP → `429 rate_limited` with `Retry-After`, spent only once the tok and holder checks pass (amended 2026-10-07, review M2); the link insert breaking a foreign key — the code's issuer deleted — → `401 code_ended` (amended 2026-10-07, review M4). The URL is a credential: never logged, never stored anywhere new. §6.3.5. |
 | W28 | **Every descriptor shape carries the match's `stage` (2026-10-06; owner sign-off 2026-10-06, capture lane agreed — recorded here from the controller's brief of that date).** An optional `stage: {code, role: {kind, n?, entrants?}, pool?}` on the waiting shape and on every session state, recomputed on every read. `code` (1–8 characters) is exactly the scheduler board's chip for the fixture, in the language the label uses (W25); `role` is the engine's `RoundRole`, serialised verbatim; `role.kind` is an OPEN string in the published schema, and a consumer shows nothing for a kind it does not know; `pool` (`^[A-Z]$`) is the key of the fixture's pool, never its English name. Absent when no code can be produced. §6.4. |
 | W17 | **Answers sent to mobile-s1** (their owner approved them): `autoAllowed` sits in both waiting and session; there is one start endpoint, with `409 already_live` meaning take over; the heartbeat answer carries go-live and over; the server drives `pollSeconds`, 60 s and then 10 s from 30 min before the scheduled start; code names are neutral; the waiting answer carries the chosen destination's display name, or `null`; the panel shows the phone's mode. |
 
@@ -580,13 +580,25 @@ The body is the start's strict `{phone}`. In order:
    phone.
 2. The caller must be the slot's CURRENT phone — the start's own holder check (§6.3.4 T12, `holderOf`), session or
    none. Any other phone: `409 replaced`.
-3. The plan gate, exactly as the console's ensure: `scoring.device_links`, Event Pass included (resolved against the
+3. The server's origin is https (the answer's pattern), else `503 unavailable` with nothing written (below).
+4. The console's mint budget, `DEVICE_LINK_MINT_LIMIT` per client IP (rate limits, below) → `429 rate_limited`. It is
+   spent HERE, past the tok and holder checks (amended 2026-10-07, review M2): a caller without the tok, or a replaced
+   phone, never drains the bucket the organiser's console shares.
+5. The plan gate, exactly as the console's ensure: `scoring.device_links`, Event Pass included (resolved against the
    fixture's competition). Lacking: `402 not_entitled`.
-4. Under the fixture's device-link advisory lock (the one the console's ensure and the sheet print take), in one
-   transaction: a finalized or cancelled match answers `409 match_finished` and writes nothing. Otherwise the newest
-   live sealed link whose envelope opens AND hashes to its row's `token_hash` is returned unchanged; with none, a new
-   sealed link is inserted (`issued_by` = the code's issuer, no label, no expiry) and **no row is revoked**. The secret
-   is sealed before the insert, so a missing `DEVICE_LINK_KEK` writes nothing: `503 unavailable`.
+6. Under the fixture's device-link advisory lock (the one the console's ensure and the sheet print take), in one
+   transaction: a finalized or cancelled match answers `409 match_finished` and writes nothing. Otherwise ONLY the
+   fixture's newest live link is read — legacy or sealed, the same row the console's ensure reads (amended 2026-10-07,
+   review M1). Sealed, with an envelope that opens AND hashes to its row's `token_hash`: it is returned unchanged.
+   Anything else — none, a legacy hash-only link, an envelope that hashes elsewhere or will not open — gets a new sealed
+   link inserted beside it (`issued_by` = the code's issuer, no label, no expiry) and **no row is revoked**. The new row
+   is stamped past every link the fixture has (in SQL: `greatest(now(), max(created_at) + 1µs)`), so it IS the newest
+   and the console's next ensure re-shows it rather than revoking and reissuing; an older good link is left live, never
+   dug out. The secret is sealed before the insert, so a missing `DEVICE_LINK_KEK` writes nothing: `503 unavailable`.
+   An insert that breaks a foreign key means the code's world is gone — in practice its issuer deleted
+   (`fixture_stream_codes.issued_by` has no foreign key, `device_links.issued_by` does) — and no retry can succeed: it
+   answers the ONE `401 code_ended` body, so the phone asks for a new QR, with a warning naming the code's id only and
+   no error report (amended 2026-10-07, review M4).
 
 Answers:
 
@@ -594,13 +606,16 @@ Answers:
   every deployment. A second call returns the same `url` and inserts nothing. Build decision (2026-10-06, for review):
   where `captureOrigin()` is not https — no `OAUTH_BASE_URL`/`NEXT_PUBLIC_BASE_URL`, as on a local or CI server — the
   pattern cannot be met, so the answer is `503 unavailable` before any write, never a url the phone's parser rejects.
+  Its message says scoring links need https and carries the token `origin_not_https` (amended 2026-10-07, review N1),
+  which the smoke keys on so a crash's generic `503 unavailable` cannot pass for it (review M3).
   Production and staging set both variables to https. Consequence: the `200` path is not reachable over HTTP on a local
   or CI server; the route test drives it with an https origin, and the capture-v2 smoke asserts the `503` there.
 - `409 {code: "replaced", message}`, `409 {code: "match_finished", message}`, `402 {code: "not_entitled", message}`,
   `503 {code: "unavailable", message}`, `401 {code: "code_ended", message}`, `404 not_a_stream_code`, `422 invalid`,
   `429 rate_limited` with `Retry-After`.
 
-Rate limits (§10.4): the code's own budget (`CAPTURE_CODE_LIMIT`, shared with the other phone routes), then the
+Rate limits (§10.4): the code's own budget (`CAPTURE_CODE_LIMIT`, shared with the other phone routes), spent by the
+route before anything else; then, inside the use-case once the tok and holder checks pass (step 4; review M2), the
 console's `DEVICE_LINK_MINT_LIMIT` per client IP. Build decision (2026-10-06, for review): the per-IP bucket is the
 console's own `dlmint:<ip>` — its rule is "a reissue IS a mint: one bucket, one number" — with the IP read by the
 capture routes' `clientIpOf`.
@@ -1420,7 +1435,8 @@ At the Cloudflare edge (adopted 2026-09-22), staging step S5 checks that `/api/v
   - `CAPTURE_FAIL_LIMIT`: 30 failed 401s per 60 s per IP, keyed through the existing `ipKey`;
   - `CAPTURE_START_LIMIT`: 6 per 60 s per `code`;
   - W27's `…/scoring-link` (2026-10-06): the code's budget, then the console's `DEVICE_LINK_MINT_LIMIT` (10 per 60 s)
-    per client IP, in the console's own `dlmint:` bucket (§6.3.5).
+    per client IP, in the console's own `dlmint:` bucket (§6.3.5) — spent only past the tok and holder checks
+    (amended 2026-10-07, review M2).
 - **Retry-After.** `HttpError` gains an optional `headers` field, and `handler()` and `v1()` set it. The limiter's 429
   carries `Retry-After` = the window's remaining seconds (capture request c; amended, §17.4). Nothing in `apps/web` sets
   `Retry-After` today. This is the first use, and a unit test pins it.
