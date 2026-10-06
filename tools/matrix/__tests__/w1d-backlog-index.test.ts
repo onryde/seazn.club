@@ -24,11 +24,17 @@ const BASE = resolve(REPO, TRUTH_RUNS, "w1d-baseline");
 const read = (rel: string): string => readFileSync(resolve(REPO, rel), "utf8");
 /** Whitespace collapsed: a quotation may sit on a wrapped line of its source. */
 const flat = (s: string): string => s.replace(/\s+/g, " ");
-/** The tag's commit (README, T17), typed from the tag: the heading's sha is a prefix of it. */
-const TAG_SHA = "47f210e3f2094405e4ed4c8b5c9ea6bd2a6085d9";
+/** The README's own rows (T17): the commit every results.json records as its harness commit, and the tag's full commit. Read, never typed:
+ *  a re-baseline moves them with the README. */
+const README = read(`${SPECS}/truth-runs/w1d-baseline/README.md`);
+const HARNESS_COMMIT = /^\| harness commit \| `([0-9a-f]+)`/m.exec(README)![1]!;
+const TAG_SHA = /^\| tag \| .*?`([0-9a-f]{40})`/m.exec(README)![1]!;
 
-const scratch = mkdtempSync(join(tmpdir(), "w1d-t22-ix-"));
-afterAll(() => { rmSync(scratch, { recursive: true, force: true }); });
+// Created in beforeAll, not at module top: sectionOf() below THROWS while this file is collected when the section is edited, and a throw at
+// collection runs no hook, so a directory made at the top leaked (T22 review m7). Registered before every other hook, so it exists for them.
+let scratch = "";
+beforeAll(() => { scratch = mkdtempSync(join(tmpdir(), "w1d-t22-ix-")); });
+afterAll(() => { if (scratch !== "") rmSync(scratch, { recursive: true, force: true }); });
 
 const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 function runScript(script: string, tail: readonly string[]): { status: number | null; stdout: string; stderr: string } {
@@ -67,7 +73,9 @@ function tableAfter(text: string, first: string): string[][] {
   }
   return rows;
 }
-const WAVES = ["W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10"] as const;
+/** The numbered waves of design section 8, in its order: `| **W<n> — name** …` (the done waves W1a..W1d are not `W<digits> — `). Read from
+ *  the design document, so a new wave row moves this list with the section and no count is typed here. */
+const WAVES: string[] = [...read("docs/superpowers/specs/2026-09-27-format-matrix-design.md").matchAll(/^\| \*\*(W\d+) — /gm)].map((m) => m[1]!);
 function waveSection(wave: string): string {
   const at = SECTION.search(new RegExp(`^### ${wave} — `, "m"));
   expect(at, `${wave} has a section`).toBeGreaterThanOrEqual(0);
@@ -131,17 +139,17 @@ describe("the committed section is what the command it prints writes", () => {
     expect(madeBy[5]!.endsWith("/out/backlog.md")).toBe(true);
   });
 
-  it("the heading's sha is the baseline tag's commit (a prefix of it, at least 7 characters), and every layer's harness commit is a prefix of the sha", () => {
-    expect(TAG_SHA.startsWith(SHA)).toBe(true);
-    expect(SHA.length).toBeGreaterThanOrEqual(7);
-    expect(read(`${SPECS}/truth-runs/w1d-baseline/README.md`)).toContain(TAG_SHA);
+  it("the heading's sha is the harness commit EXACTLY (T22 review m1): the README's row, every layer's `harnessCommit`, and a prefix of the tag's commit", () => {
+    expect(SHA, "the heading names the commit the README calls the harness commit").toBe(HARNESS_COMMIT);
+    expect(TAG_SHA.startsWith(SHA), "the tag's commit begins with it").toBe(true);
     let checked = 0;
     for (const l of LAYERS) {
       const run = JSON.parse(readFileSync(resolve(BASE, l, "results.json"), "utf8")) as { harnessCommit: string };
-      expect(SHA.startsWith(run.harnessCommit), `${l}: harness commit ${run.harnessCommit}`).toBe(true);
+      expect(run.harnessCommit, `${l}: harness commit`).toBe(SHA);
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(LAYERS.length);
+    expect(checked).toBeGreaterThan(0);
   });
 });
 
@@ -152,7 +160,8 @@ describe("the section agrees with TRIAGE.md (the triage's own renderer)", () => 
 
   it("each wave's gap and red counts are the `## <wave> — N reds in M gaps` headings; a wave TRIAGE.md has no heading for has none in the summary", () => {
     const summary = tableAfter(SECTION, "wave");
-    expect(summary.map((r) => r[0])).toEqual([...WAVES]);
+    expect(WAVES.length, "design section 8 has numbered waves").toBeGreaterThan(0);
+    expect(summary.map((r) => r[0])).toEqual(WAVES);
     const heads = new Map([...triageMd.matchAll(/^## (W\d+) — (\d+) reds? in (\d+) gaps?$/gm)].map((m) => [m[1]!, { reds: Number(m[2]), gaps: Number(m[3]) }]));
     expect(heads.size, "TRIAGE.md has wave headings").toBeGreaterThan(0);
     let checked = 0;
@@ -163,15 +172,17 @@ describe("the section agrees with TRIAGE.md (the triage's own renderer)", () => 
       reds += Number(r[3]);
       checked++;
     }
-    expect(checked).toBe(9);
-    expect([...heads.keys()].every((w) => (WAVES as readonly string[]).includes(w)), "TRIAGE.md names no wave the section lacks").toBe(true);
+    expect(checked, "every numbered wave of design section 8 was compared").toBe(WAVES.length);
+    expect([...heads.keys()].every((w) => WAVES.includes(w)), "TRIAGE.md names no wave the section lacks").toBe(true);
     expect(reds, "the reds TRIAGE.md's own title states").toBe(Number(/^# Triage — (\d+) reds of /m.exec(triageMd)![1]));
   });
 
   it("each gap's case count, layers and `also` lines are TRIAGE.md's, in its order", () => {
     // `## <wave> — N reds in M gaps`, then per gap `### <gap> — <title>`, `N cases; layers L1, L2` and (apart) its `- also fails here:` lines.
     const blocks = triageMd.split(/^(?=## W\d+ — )/m).filter((x) => x.startsWith("## W"));
-    expect(blocks.length, "wave blocks read from TRIAGE.md").toBe(5);
+    const headed = [...triageMd.matchAll(/^## W\d+ — (\d+) reds? in (\d+) gaps?$/gm)];
+    expect(headed.length, "TRIAGE.md has wave blocks").toBeGreaterThan(0);
+    expect(blocks.length, "wave blocks read from TRIAGE.md are its wave headings").toBe(headed.length);
     let checked = 0;
     for (const block of blocks) {
       const wave = /^## (W\d+) — /.exec(block)![1]!;
@@ -189,7 +200,12 @@ describe("the section agrees with TRIAGE.md (the triage's own renderer)", () => 
         checked++;
       }
     }
-    expect(checked, "every gap of TRIAGE.md was compared").toBe(12);
+    const stated = headed.reduce((n, m) => n + Number(m[2]), 0);
+    expect(checked, "every gap TRIAGE.md's own headings state was compared").toBe(stated);
+    // The section's gap tables hold no gap TRIAGE.md lacks: a table lost or added changes this count.
+    const inSection = WAVES.reduce((n, w) => n + tableAfter(waveSection(w), "gap").length, 0);
+    expect(inSection, "gap rows in the section").toBe(stated);
+    expect(stated).toBeGreaterThan(0);
   });
 });
 
@@ -205,7 +221,7 @@ describe("the section agrees with AUDIT-LEDGER.md (the ledger's own renderer)", 
     return body.split("\n").filter((l) => /^\| [A-Z]{2}-/.test(l)).map(cellsOf);
   }
 
-  it("the not-exercised ids of every wave are the ledger's `not-exercised` table, with its severity and title: 106 of them, none twice, none missing", () => {
+  it("the not-exercised ids of every wave are the ledger's `not-exercised` table, with its severity and title: all of them, none twice, none missing", () => {
     const want = ledgerRows("not-exercised");
     const head = /^## not-exercised — (\d+) ids$/m.exec(ledgerMd)!;
     expect(want.length, "rows read from the ledger").toBe(Number(head[1]));
@@ -243,8 +259,11 @@ describe("the section agrees with AUDIT-LEDGER.md (the ledger's own renderer)", 
       expect(Number(r[4]), `${r[0]}: audit ids`).toBe((repro.get(r[0]!) ?? 0) + (ne.get(r[0]!) ?? 0) + (vr.get(r[0]!) ?? 0) + Number(r[6]) + Number(r[9]));
       checked++;
     }
-    expect(checked).toBe(9);
-    expect(summary.reduce((n, r) => n + Number(r[4]), 0), "the audit's ids").toBe(150);
+    expect(checked).toBe(WAVES.length);
+    // The audit's ids: the five outcome headings of the ledger state their own counts (`## <outcome> — N ids`).
+    const stated = [...ledgerMd.matchAll(/^## (?:Reproduced|False premises found|not-exercised|verified-by-read|verified-by-failing-test) — (\d+) ids?/gm)].reduce((n, m) => n + Number(m[1]), 0);
+    expect(stated, "the ledger states ids").toBeGreaterThan(0);
+    expect(summary.reduce((n, r) => n + Number(r[4]), 0), "the audit's ids").toBe(stated);
   });
 });
 
@@ -270,38 +289,51 @@ describe("the example cases are red cases of the committed layers", () => {
         gaps++;
       }
     }
-    expect(gaps, "gaps read").toBe(12);
+    const stated = [...read(`${SPECS}/truth-runs/w1d-baseline/TRIAGE.md`).matchAll(/^## W\d+ — \d+ reds? in (\d+) gaps?$/gm)].reduce((n, m) => n + Number(m[1]), 0);
+    expect(gaps, "gaps read are the ones TRIAGE.md's headings state").toBe(stated);
+    expect(gaps).toBeGreaterThan(0);
     expect(examples, "examples read").toBeGreaterThan(gaps);
   });
 
-  it("the reds the gap tables count are the committed layers' red cases (209), re-counted from the results", () => {
+  it("the reds the gap tables count are the committed layers' red cases, re-counted from the results and from TRIAGE.md's own title", () => {
     let reds = 0;
     for (const l of LAYERS) reds += (JSON.parse(readFileSync(resolve(BASE, l, "results.json"), "utf8")) as { cases: { state: string }[] }).cases.filter((c) => c.state === "red").length;
     let counted = 0;
     for (const wave of WAVES) for (const r of tableAfter(waveSection(wave), "gap")) counted += Number(/^\d+/.exec(r[2]!)![0]);
-    expect(reds).toBe(209);
+    expect(reds, "the layers hold reds").toBeGreaterThan(0);
+    expect(reds, "TRIAGE.md's title states the same count").toBe(Number(/^# Triage — (\d+) reds of /m.exec(read(`${SPECS}/truth-runs/w1d-baseline/TRIAGE.md`))![1]));
     expect(counted).toBe(reds);
   });
 });
 
 // --- the status row ---------------------------------------------------------------------------------------------------------------
 
-describe("the W2 status row says the backlog is ready, and names the baseline the backlog was written from", () => {
+describe("the W2 status row has left `not started` for the backlog being ready or a later state, and the status table keeps every wave's row", () => {
   /** The status table's rows: between its heading and the next one. */
   const rows = (): string[] => {
     const at = INDEX.indexOf("\n## Status\n");
     const rest = INDEX.slice(at + 1);
     return rest.slice(0, rest.slice(3).search(/^## /m) + 3).split("\n").filter((l) => /^\| W\d+[a-z-]* \|/.test(l));
   };
-  it("W2's state starts `backlog ready (W1d baseline `<sha>`)` with this section's sha (retire this check when W2's own work replaces the state)", () => {
+  // This pin must not red on the edits the programme MANDATES (T22 review m5): the W2 planner's own status edit ("in progress", then
+  // done) and W3's re-baseline. So it holds the one thing that would be a defect, a lost flip, and the one cross-check that is true only
+  // while the state is still this task's: the sha the row names.
+  it("W2's state is not `not started` (the flip is not lost), and while it still says `backlog ready` it names this section's baseline", () => {
     const w2 = rows().find((l) => l.startsWith("| W2 |"));
     expect(w2, "W2's row").toBeDefined();
-    const state = cellsOf(w2!)[2]!;
-    expect(state.startsWith(`backlog ready (W1d baseline \`${SHA}\`)`), `W2's state reads: ${state.slice(0, 80)}`).toBe(true);
+    const state = cellsOf(w2!)[2]!.replaceAll("*", "").trim();
+    expect(state.length, "W2's state is not empty").toBeGreaterThan(0);
+    expect(/^not started/i.test(state), `W2's state reads: ${state.slice(0, 80)}`).toBe(false);
+    if (/^backlog ready/i.test(state)) {
+      expect(state.startsWith(`backlog ready (W1d baseline \`${SHA}\`)`), `W2's state reads: ${state.slice(0, 80)}`).toBe(true);
+    }
   });
-  it("the status table still has every wave's row once (a flip is an edit of one row, not a rewrite of the table)", () => {
+  it("the status table still has a row for every wave of design section 8, once each, and no name twice (a flip is an edit of one row, not a rewrite of the table)", () => {
     const names = rows().map((l) => l.split(" | ")[0]!.replace("| ", ""));
-    expect(names).toEqual(["W1a", "W1b", "W1c", "W1d", "W1-driving", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10"]);
+    const design = [...read("docs/superpowers/specs/2026-09-27-format-matrix-design.md").matchAll(/^\| \*\*(W\d+[a-z]?) — /gm)].map((m) => m[1]!);
+    expect(design.length, "design section 8 has waves").toBeGreaterThan(WAVES.length);
+    for (const w of design) expect(names.filter((n) => n === w), `${w}'s row`).toHaveLength(1);
+    expect(new Set(names).size, "no wave twice").toBe(names.length);
   });
 });
 

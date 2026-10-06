@@ -24,12 +24,17 @@ import { REPO, TRUTH_RUNS } from "./committed-plans.ts";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 
 const BASE = resolve(REPO, TRUTH_RUNS, "w1d-baseline");
-/** The baseline's commit as the heading names it: a prefix of the tag's commit (README, T17). */
-const SHA = "47f210e3f";
-const TAG_SHA = "47f210e3f2094405e4ed4c8b5c9ea6bd2a6085d9";
+/** The README's own rows (T17): the harness commit every results.json records, and the tag's full commit it was made from. */
+const README = readFileSync(resolve(BASE, "README.md"), "utf8");
+/** The baseline's commit exactly as the harness records it (the writer's --sha is held to this, never to a prefix or an extension of it). */
+const SHA = /^\| harness commit \| `([0-9a-f]+)`/m.exec(README)![1]!;
+const TAG_SHA = /^\| tag \| .*?`([0-9a-f]{40})`/m.exec(README)![1]!;
 
-const scratch = mkdtempSync(join(tmpdir(), "w1d-t22-bl-"));
-afterAll(() => { rmSync(scratch, { recursive: true, force: true }); });
+// Created in beforeAll, not at module top: a throw while the file is COLLECTED runs no hook, so a directory made at the top would
+// leak (T22 review m7). Removed in afterAll.
+let scratch = "";
+beforeAll(() => { scratch = mkdtempSync(join(tmpdir(), "w1d-t22-bl-")); });
+afterAll(() => { if (scratch !== "") rmSync(scratch, { recursive: true, force: true }); });
 
 const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 /** A package script as package.json spells it, run for real (node + its preload), cwd the repo. */
@@ -199,13 +204,17 @@ describe("backlog-carries.json: the prose the section holds, as data", () => {
     expect(c.heading).toContain("{sha}");
   });
   it("refuses a carry with no anchor, and a file with no carry (the empty case: a section without its carries is a different document)", () => {
-    const head = { heading: "h {sha}", intro: ["a {baseline}"] };
+    const head = { heading: "h {sha}", intro: ["a {baseline} {planned} {noPath} {overridden}"] };
     expect(() => parseCarries({ ...head, carries: [{ id: "x", title: "t", anchor: "SC-O1", text: "t" }] }), "the valid shape parses").not.toThrow();
     expect(() => parseCarries({ ...head, carries: [] })).toThrow(/carries/);
     expect(() => parseCarries({ ...head, carries: [{ id: "x", title: "t", text: "t" }] })).toThrow(/anchor/);
     expect(() => parseCarries({ ...head, carries: [{ id: "x", title: "t", anchor: "not a gap", text: "t" }] })).toThrow(/anchor/);
-    expect(() => parseCarries({ heading: "no baseline named", intro: ["a {baseline}"], carries: [{ id: "x", title: "t", anchor: "SC-O1", text: "t" }] })).toThrow(/sha/);
+    expect(() => parseCarries({ heading: "no baseline named", ...{ intro: head.intro }, carries: [{ id: "x", title: "t", anchor: "SC-O1", text: "t" }] })).toThrow(/sha/);
     expect(() => parseCarries({ heading: "h {sha}", intro: ["a"], carries: [{ id: "x", title: "t", anchor: "SC-O1", text: "t" }] })).toThrow(/baseline/);
+    // T22 review m3: the intro must say what the ❌ count leaves out, so the three clauses cannot be edited away.
+    for (const gone of ["{planned}", "{noPath}", "{overridden}"]) {
+      expect(() => parseCarries({ heading: "h {sha}", intro: [head.intro[0]!.replace(gone, "x")], carries: [{ id: "x", title: "t", anchor: "SC-O1", text: "t" }] }), gone).toThrow(/leaves out/);
+    }
     const dup = { id: "x", title: "t", anchor: "SC-O1", text: "t" };
     expect(() => parseCarries({ ...head, carries: [dup, dup] })).toThrow(/duplicate/);
   });
@@ -321,14 +330,148 @@ describe("the section over the committed baseline: structure and counts, re-coun
   });
 });
 
+// --- what the ❌ count leaves out (T22 review m3 and m4) -------------------------------------------------------------------------
+
+/** Every case of a committed layer, read here from its results.json (the writer's own reading of it is not trusted to count itself). */
+const rawCases = (layer: string): { caseId: string; state: string; reason?: string }[] => (JSON.parse(readFileSync(resolve(BASE, layer, "results.json"), "utf8")) as { cases: { caseId: string; state: string; reason?: string }[] }).cases;
+const RAW: Record<string, { caseId: string; state: string; reason?: string }[]> = Object.fromEntries(LAYERS.map((l) => [l, rawCases(l)]));
+const stateOf = (layer: string, id: string): string | undefined => RAW[layer]!.find((c) => c.caseId === id)?.state;
+/** Owner ruling 70's cells, as baseline.json's own block lists them (the writer finds them from the dispatch cut instead). */
+const RULING_70: string[] = (JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { ruling70: { ids: string[] } }).ruling70.ids;
+const fmt = (n: number): string => n.toLocaleString("en-US");
+/** "L1 53 and L2 164, 217 in all" (one layer: "L2 1,505"): per layer in layer order, the total only when there is more than one. */
+function byLayer(count: Record<string, number>): string {
+  const rows = LAYERS.filter((l) => (count[l] ?? 0) > 0).map((l) => `${l} ${fmt(count[l]!)}`);
+  const text = rows.length <= 1 ? rows.join("") : `${rows.slice(0, -1).join(", ")} and ${rows[rows.length - 1]!}`;
+  return rows.length > 1 ? `${text}, ${fmt(LAYERS.reduce((n, l) => n + (count[l] ?? 0), 0))} in all` : text;
+}
+const countState = (state: string, keep: (reason: string) => boolean = () => true): Record<string, number> =>
+  Object.fromEntries(LAYERS.map((l) => [l, RAW[l]!.filter((c) => c.state === state && keep(c.reason ?? "")).length]));
+type BaselineCaseLike = BacklogInput["cases"][number];
+const leavesOut = (): string => md.split("\n\n").find((p) => p.startsWith("What the ❌ count leaves out"))!;
+
+describe("the section says what the ❌ count leaves out, counted from the committed layers (T22 review m3)", () => {
+  it("the paragraph exists, and names the ░ planned cases by layer (ruling 65), none of them typed", () => {
+    expect(leavesOut(), "the paragraph is in the section").toBeDefined();
+    const planned = countState("not_run");
+    expect(Object.values(planned).reduce((a, b) => a + b, 0), "this baseline plans cases it never drove").toBeGreaterThan(0);
+    expect(leavesOut()).toContain(`░ (planned, never driven): ${byLayer(planned)};`);
+    expect(leavesOut()).toContain("ruling 65");
+  });
+
+  it("names the 🚫 cases with no organiser path, by layer and in all", () => {
+    const noPath = countState("no_path");
+    expect(Object.values(noPath).reduce((a, b) => a + b, 0)).toBeGreaterThan(0);
+    expect(leavesOut()).toContain(`🚫 (no organiser path): ${byLayer(noPath)};`);
+  });
+
+  it("names the ruling-70 cells the committed run has otherwise than red, and what the judge reads with them held (effective = reds + held)", () => {
+    const held = RULING_70.filter((id) => stateOf("L3", id) !== "red");
+    expect(held.length, "ruling 70 holds cells the committed run has not red").toBeGreaterThan(0);
+    const reds = LAYERS.reduce((n, l) => n + (countState("red")[l] ?? 0), 0);
+    const states = [...new Set(held.map((id) => `\`${stateOf("L3", id)}\``))].join(" and ");
+    const ids = held.map((id) => `\`${id}\``);
+    const idText = ids.length <= 1 ? ids.join("") : `${ids.slice(0, -1).join(", ")} and ${ids[ids.length - 1]!}`;
+    expect(leavesOut()).toContain(`${idText} (${held.length} cell${held.length === 1 ? "" : "s"}, ${states} in the committed run); with ${held.length === 1 ? "it" : "them"} the judge reads ${fmt(reds + held.length)} red cases, not ${fmt(reds)}`);
+    expect(leavesOut()).toContain("`judge regression`");
+  });
+
+  it("the empty case: with no cell the ruling holds out of the reds the clause says `none`, and the effective count is not printed", () => {
+    // Every ruling-70 cell red in the committed run: nothing is held outside the reds.
+    const j = copy();
+    for (const c of j.cases) if (c.layer === "L3" && RULING_70.includes(c.caseId)) c.state = "red";
+    const para = renderBacklog(j).split("\n\n").find((p) => p.startsWith("What the ❌ count leaves out"))!;
+    expect(para).toContain("`judge regression`: none.");
+    expect(para).not.toContain("the judge reads");
+  });
+
+  it("each clause the code fills must be used by the prose, and the prose may name nothing the code does not fill (refused by name, never printed as a guess)", () => {
+    let checked = 0;
+    for (const key of ["planned", "noPath", "overridden"]) {
+      const dropped = copy();
+      dropped.carries.intro = dropped.carries.intro.map((p) => p.replaceAll(`{${key}}`, "something"));
+      expect(refused(dropped), key).toMatchObject({ name: "CarryPlaceholder", message: expect.stringMatching(new RegExp(`the intro never uses \\{${key}\\}`)) });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+describe("each wave says how many 🚫 cases route to it by their own reason (T22 review m4): W9 does not read as empty", () => {
+  const WAVES9 = ["W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10"] as const;
+  const routedTo = (wave: string): Record<string, number> => countState("no_path", (reason) => reason.startsWith(`${wave}: `));
+  const lineOf = (wave: string, n: number, layers: string): string =>
+    n === 0 ? `No 🚫 case routes to ${wave} by its own reason.`
+      : n === 1 ? `🚫 1 planned case has no organiser path and routes to ${wave} by its own reason (${layers}); the baseline never drove it, so it is in no table below.`
+        : `🚫 ${fmt(n)} planned cases have no organiser path and route to ${wave} by their own reason (${layers}); the baseline never drove them, so they are in no table below.`;
+
+  it("every wave's section states its count by layer, re-counted from the results; the nine add up to every 🚫 case of the layers", () => {
+    let total = 0;
+    let waves = 0;
+    let nonEmpty = 0;
+    for (const wave of WAVES9) {
+      const by = routedTo(wave);
+      const n = Object.values(by).reduce((a, b) => a + b, 0);
+      expect(waveSection(md, wave), wave).toContain(lineOf(wave, n, byLayer(by)));
+      total += n;
+      waves++;
+      if (n > 0) nonEmpty++;
+    }
+    expect(waves).toBe(9);
+    expect(nonEmpty, "some wave owns a 🚫 case in this baseline").toBeGreaterThan(0);
+    const all = Object.values(countState("no_path")).reduce((a, b) => a + b, 0);
+    expect(all, "the layers hold 🚫 cases").toBeGreaterThan(0);
+    expect(total, "no 🚫 case is routed to a wave section 8 lacks, and none is counted twice").toBe(all);
+  });
+
+  it("one 🚫 case reads in the singular (the baseline has no wave with exactly one, so the branch is reached through an input that moves the rest)", () => {
+    const i = copy();
+    const owned = (w: string): BaselineCaseLike[] => i.cases.filter((c) => c.state === "no_path" && c.reason.startsWith(`${w}: `));
+    const src = WAVES9.find((w) => owned(w).length >= 2);
+    expect(src, "a wave owns two or more 🚫 cases in this baseline").toBeDefined();
+    const dst = WAVES9.find((w) => w !== src)!;
+    const [keep, ...move] = owned(src!);
+    for (const c of move) c.reason = c.reason.replace(`${src!}: `, `${dst}: `);
+    const sec = waveSection(renderBacklog(i), src!);
+    expect(sec).toContain(lineOf(src!, 1, `${keep!.layer} 1`));
+    expect(sec, "and not the plural template").not.toContain("planned cases have no organiser path");
+    // The wave that took the others reads them in the plural.
+    expect(waveSection(renderBacklog(i), dst)).toContain("planned cases have no organiser path");
+  });
+
+  it("the wave with no ❌ gap and no audit id that still owns 🚫 cases says so (the W9 reading the review asked for)", () => {
+    let seen = 0;
+    for (const wave of WAVES9) {
+      const own = Object.values(routedTo(wave)).reduce((a, b) => a + b, 0);
+      const sec = waveSection(md, wave);
+      if (own > 0 && sec.includes(`No ❌ case of the baseline is keyed to ${wave}.`) && sec.includes(`No audit id routes to ${wave}.`)) {
+        expect(sec).toContain(`🚫 ${fmt(own)} planned case`);
+        seen++;
+      }
+    }
+    expect(seen, "a wave in this baseline is empty of ❌ and ids and not of 🚫").toBeGreaterThan(0);
+  });
+
+  it("a 🚫 case whose reason names no wave of section 8, or a wave it lacks, is refused by name (its count would drop out of every wave)", () => {
+    const one = (reason: string): BacklogInput => {
+      const i = copy();
+      i.cases.find((c) => c.state === "no_path")!.reason = reason;
+      return i;
+    };
+    expect(refused(one("no organiser path, with no wave named"))).toMatchObject({ name: "UnknownWave", message: expect.stringMatching(/🚫 case .* names no wave of section 8/) });
+    expect(refused(one("W99: no organiser path"))).toMatchObject({ name: "UnknownWave", message: expect.stringMatching(/🚫 case .* names no wave of section 8/) });
+  });
+});
+
 describe("the carries: each hangs on its anchor gap, in that gap's wave", () => {
-  it("the six carries and the five design-row lines sit in the section of the wave their anchor routes to", () => {
-    // Anchor and wave typed from section 8 and the routing the carry cites (SC-P4 is W2's, SW-H1 W3's, ST-G5 W5's, NEW-W1d-1 W7's).
+  it("the seven carries and the five design-row lines sit in the section of the wave their anchor routes to", () => {
+    // Anchor and wave typed from section 8 and the routing the carry cites (SC-P4 and SC-O1 are W2's, SW-H1 W3's, ST-G5 W5's, NEW-W1d-1 W7's).
     const expected: [string, string][] = [
       ["SC-P4 and the prompt's trap 2 contradict each other", "W2"],
       ["Owner ruling 70", "W3"],
       ["Recommendation (the controller's, not an owner ruling)", "W3"],
       ["The swiss_playoff R4 reason flip", "W3"],
+      ["swiss_playoff R4 cells the committed run keys to this wave", "W2"],
       ["ST-G5 pool of one", "W5"],
       ["Mexicano R4: an intermittent 500", "W7"],
     ];
@@ -339,14 +482,14 @@ describe("the carries: each hangs on its anchor gap, in that gap's wave", () => 
       expect(waveSection(md, wave).includes(`- **${title}`), `${title} is under ${wave}`).toBe(true);
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(7);
     for (const gap of real.newGaps.gaps) {
       const line = `- **${gap.id} (${gap.wave}): a design row backs the wave.**`;
       expect([...md.matchAll(new RegExp(line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))], `${gap.id}: once`).toHaveLength(1);
       expect(waveSection(md, gap.wave).includes(line), `${gap.id} is under ${gap.wave}`).toBe(true);
       checked++;
     }
-    expect(checked, "six carries and five NEW gaps").toBe(11);
+    expect(checked, "seven carries and five NEW gaps").toBe(12);
   });
 
   it("the design-row line says named or family, with the design's own word: group_group_ko is the one that is not named", () => {
@@ -361,12 +504,27 @@ describe("the carries: each hangs on its anchor gap, in that gap's wave", () => 
     expect(line("NEW-W1d-2")).toContain("names `americano` for `americano`");
   });
 
-  it("ruling 70's carry names its three cells, from the cut's state flips, and the retirement rule the W3 prompt states", () => {
+  it("ruling 70's carry names its cells (baseline.json's own ruling70 block lists them; the writer finds them from the cut's state flips) and the retirement rule the W3 prompt states", () => {
     const sec = waveSection(md, "W3");
-    for (const id of ["swiss_knockout|football|11-a-side|R4", "swiss_knockout|carrom|club-29|R4", "swiss_knockout|generic|score|R4"]) expect(sec, id).toContain(`\`${id}\``);
+    expect(RULING_70.length, "the ruling lists cells").toBeGreaterThan(0);
+    for (const id of RULING_70) expect(sec, id).toContain(`\`${id}\``);
     expect(sec).toContain("re-baseline L3 in the same change");
     expect(sec).toContain("`ruling70`");
     expect(sec).toContain("RULING_70_IDS");
+  });
+
+  it("ruling 70's carry says which of its cells the committed run does NOT have red, and that only `judge regression` holds them (T22 review m3b)", () => {
+    const line = waveSection(md, "W3").split("\n").find((l) => l.startsWith("- **Owner ruling 70"))!;
+    const held = RULING_70.filter((id) => stateOf("L3", id) !== "red");
+    const keyed = RULING_70.filter((id) => stateOf("L3", id) === "red");
+    expect(held.length, "this baseline has ruling-70 cells that are not red, or the sentence is untested").toBeGreaterThan(0);
+    expect(keyed.length, "and one that is").toBeGreaterThan(0);
+    for (const id of held) expect(line, id).toContain(`\`${id}\``);
+    expect(line).toContain(`The ruling's other ${held.length} cell${held.length === 1 ? "" : "s"}`);
+    expect(line).toContain([...new Set(held.map((id) => `\`${stateOf("L3", id)}\``))].join(" and "));
+    expect(line).toContain("only `judge regression` holds");
+    // The keyed cell is the one the triage counts: it is not among the held.
+    for (const id of keyed) expect(line.split("The ruling's other")[1]!, `${id} is not held`).not.toContain(id);
   });
 
   it("the swiss_playoff reason flip: both cells, the per-dispatch reasons from the cut, and where the committed run keys them", () => {
@@ -377,6 +535,43 @@ describe("the carries: each hangs on its anchor gap, in that gap's wave", () => 
     expect(flip).toContain("dispatch 1 SW-H1, dispatch 2 stall, dispatch 3 stall");
     expect(flip).toContain("SC-O1");
     expect(flip).toContain("SC-O2");
+  });
+
+  it("the W2 pointer to the swiss_playoff flip (T22 review m8): both cells and their gaps, the owner wave and the carry's title are the data's, never typed", () => {
+    const line = waveSection(md, "W2").split("\n").find((l) => l.startsWith("- **swiss_playoff R4 cells the committed run keys to this wave"))!;
+    expect(line, "the pointer is in W2's section").toBeDefined();
+    const flip = real.carries.carries.find((c) => c.id === "swiss-playoff-reason-flip")!;
+    // The owner wave is the one the triage files the flip carry's anchor gap under (the triage's own data, not the writer's routing).
+    const owner = real.triage.gaps.find((g) => g.gap === flip.anchor)?.wave;
+    expect(owner, "the flip carry's anchor gap is keyed to a wave in the triage").toBeTruthy();
+    expect(owner, "the pointer points ELSEWHERE: a pointer to its own wave would be no pointer").not.toBe("W2");
+    // The cells are the swiss_playoff R4 cells of the dispatch cut (the ones whose reason flips), each keyed to its own gap in the committed run.
+    const cells = real.triage.rows.filter((r) => real.cuts.ids.includes(r.caseId) && /^swiss_playoff\|[^|]+\|[^|]+\|R4$/.test(r.caseId));
+    expect(cells.length, "swiss_playoff R4 cells of the cut are red in the committed run").toBeGreaterThan(0);
+    for (const r of cells) expect(line, r.caseId).toContain(`${r.gap} (\`${r.caseId}\`)`);
+    // The gaps the line tells the reader to watch are the gaps of those cells, each once.
+    const gaps = [...new Set(cells.map((r) => r.gap))];
+    expect(gaps.length, "the cells are keyed to more than one gap, or the list is untested").toBeGreaterThan(1);
+    const watched = /a move in (.+?) as progress/.exec(line);
+    expect(watched, "the line names the gaps to watch").not.toBeNull();
+    expect(watched![1]!.split(/, | and /).sort()).toEqual([...gaps].sort());
+    // A swiss_playoff R4 cell that is red and does NOT flip is not this carry's: the committed run keys one to SW-H1 and the line leaves it out.
+    const steady = real.triage.rows.filter((r) => !real.cuts.ids.includes(r.caseId) && /^swiss_playoff\|[^|]+\|[^|]+\|R4$/.test(r.caseId));
+    expect(steady.length, "the baseline has a swiss_playoff R4 cell that does not flip, or the exclusion is untested").toBeGreaterThan(0);
+    for (const r of steady) expect(line, r.caseId).not.toContain(r.caseId);
+    expect(line).toContain(`the ${owner!} carry "${flip.title}"`);
+    // And that wave's section holds the carry it points at, under that very title.
+    expect(waveSection(md, owner!)).toContain(`- **${flip.title}**`);
+  });
+
+  it("the pointer is refused by name when the carry it points at is gone, and when its anchor is not the wave the cells are keyed in", () => {
+    const gone = copy();
+    gone.carries.carries = gone.carries.carries.filter((c) => c.id !== "swiss-playoff-reason-flip");
+    // The derivation that fills the flip carry has no carry in the file: refused first, by the missing-carry guard.
+    expect(refused(gone)).toMatchObject({ name: "CarryMissing" });
+    const away = copy();
+    away.carries.carries.find((c) => c.id === "swiss-playoff-keyed-here")!.anchor = "SW-H1";
+    expect(refused(away)).toMatchObject({ name: "CarryWaveDisagrees", message: expect.stringMatching(/swiss-playoff-keyed-here/) });
   });
 
   it("the mexicano carry's counts are the cut's: 9 of the 11 R4 cells flip, and the 500s per dispatch are re-counted from the reasons", () => {
@@ -478,6 +673,7 @@ describe("the writer refuses what would make the section lie (each guard, once, 
     const a = copy();
     const gone = a.triage.gaps.find((x) => x.gap === "NEW-W1d-3")!;
     a.triage.gaps = a.triage.gaps.filter((x) => x !== gone);
+    for (const r of a.triage.rows) if (gone.caseIds.includes(r.caseId)) a.triage.runs.find((x) => x.layer === r.layer)!.reds -= 1;
     a.triage.rows = a.triage.rows.filter((r) => !gone.caseIds.includes(r.caseId));
     a.triage.checked = a.triage.rows.length;
     // The cases it owned that other gaps list as co-failures go with it (the triage is whole without them).
@@ -521,7 +717,7 @@ describe("the writer refuses what would make the section lie (each guard, once, 
     note.rules.rules = note.rules.rules.filter((r) => r.gap !== "ST-G5");
     expect(refusal(note)).toBe("CarrySourceMissing");
     const mex = copy();
-    mex.l3CaseIds = mex.l3CaseIds.filter((id) => !id.startsWith("mexicano|"));
+    mex.cases = mex.cases.filter((c) => !c.caseId.startsWith("mexicano|"));
     expect(refusal(mex)).toBe("CarryEmpty");
   });
   it("a carry whose anchor routes to another wave than the gaps its data is keyed to is refused (the wave is found, never typed)", () => {
@@ -567,10 +763,11 @@ function refused(input: BacklogInput): { name: string; message: string } {
   }
   return { name: "no refusal", message: "" };
 }
-/** The triage without the named cases, still whole: their rows, their place in every gap's lists (a gap left with none is gone) and
- *  the checked count. */
+/** The triage without the named cases, still whole: their rows, their place in every gap's lists (a gap left with none is gone), the
+ *  checked count and each layer's red count. */
 function withoutCases(input: BacklogInput, ids: readonly string[]): BacklogInput {
   const i = structuredClone(input);
+  for (const r of i.triage.rows) if (ids.includes(r.caseId)) i.triage.runs.find((x) => x.layer === r.layer)!.reds -= 1;
   i.triage.rows = i.triage.rows.filter((r) => !ids.includes(r.caseId));
   i.triage.checked = i.triage.rows.length;
   for (const g of i.triage.gaps) {
@@ -610,6 +807,38 @@ describe("each guard of the writer, by its own message (a guard that shares its 
     expect(refused(stray)).toMatchObject({ name: "TriageInconsistent", message: expect.stringMatching(/co-failure/) });
   });
 
+  it("the triage's own totals are reconciled with its rows (T22 review m2): a layer's red count, a layer with rows and no run, the scanned total, and zero scanned", () => {
+    const layerRows = (l: string): number => real.triage.rows.filter((r) => r.layer === l).length;
+    let checked = 0;
+    // Each layer's `reds` must be the rows keyed to that layer: the probe the review ran zeroed the first one and the section printed it.
+    for (const run of real.triage.runs) {
+      const i = copy();
+      i.triage.runs.find((x) => x.layer === run.layer)!.reds = 0;
+      expect(layerRows(run.layer), `${run.layer} holds reds in this baseline, or zeroing it proves nothing`).toBeGreaterThan(0);
+      expect(refused(i)).toMatchObject({ name: "TriageInconsistent", message: expect.stringMatching(new RegExp(`its ${run.layer} run holds 0 ❌ and keys ${layerRows(run.layer)} rows to it`)) });
+      checked++;
+    }
+    expect(checked, "every layer was reconciled").toBe(real.triage.runs.length);
+    expect(checked).toBeGreaterThan(0);
+    const orphan = copy();
+    orphan.triage.runs = orphan.triage.runs.filter((x) => x.layer !== "L3");
+    orphan.triage.scanned = orphan.triage.runs.reduce((n, r) => n + r.cases, 0);
+    expect(refused(orphan)).toMatchObject({ name: "TriageInconsistent", message: expect.stringMatching(/is a L3 case and the triage lists no L3 run/) });
+    const scanned = copy();
+    scanned.triage.scanned += 1;
+    expect(refused(scanned)).toMatchObject({ name: "TriageInconsistent", message: expect.stringMatching(/runs read \d+ cases and it says it scanned \d+/) });
+    const cases = copy();
+    cases.triage.runs[1]!.cases -= 1;
+    expect(refused(cases)).toMatchObject({ name: "TriageInconsistent", message: expect.stringMatching(/runs read \d+ cases and it says it scanned \d+/) });
+    const zero = copy();
+    zero.triage.scanned = 0;
+    for (const r of zero.triage.runs) r.cases = 0;
+    expect(refused(zero), "reds with nothing scanned is no triage; it must read as the vacuous case").toMatchObject({ name: "NoCases", message: expect.stringMatching(/scanned no case/) });
+    const none = copy();
+    none.cases = [];
+    expect(refused(none)).toMatchObject({ name: "NoCases", message: expect.stringMatching(/baseline holds no case/) });
+  });
+
   it("UnknownWave: a gap, an audit id and a carry's anchor each name the wave section 8 lacks; an audit id with no wave at all is refused too", () => {
     const gap = copy();
     gap.triage.gaps[0]!.wave = "W99";
@@ -639,6 +868,10 @@ describe("each guard of the writer, by its own message (a guard that shares its 
     const scenario = copy();
     for (const r of scenario.rules.rules) if (r.gap === "ST-G5") delete r.match.scenario;
     expect(refused(scenario)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/names no scenario/) });
+    // A cell the dispatch cut records and the committed L3 does not hold: the writer cannot say what state the run has it in.
+    const l3 = copy();
+    l3.cases = l3.cases.filter((c) => !(c.layer === "L3" && c.caseId === RULING_70[0]));
+    expect(refused(l3)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/ruling-70: the committed L3 holds no case/) });
     const swissRow = withoutCases(copy(), ["swiss_playoff|boardgame|blitz|R4"]);
     expect(refused(swissRow)).toMatchObject({ name: "CarrySourceMissing", message: expect.stringMatching(/swiss-playoff-reason-flip.*keys swiss_playoff\|boardgame\|blitz\|R4 to no gap/) });
     const mexRow = withoutCases(copy(), ["mexicano|football|11-a-side|R4"]);
@@ -653,7 +886,7 @@ describe("each guard of the writer, by its own message (a guard that shares its 
     for (const d of reasons.cuts.dispatches) for (const c of d.cases) if (c.caseId.startsWith("swiss_playoff|")) c.reason = "something else entirely";
     expect(refused(reasons)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/two reasons/) });
     const noMex = copy();
-    noMex.l3CaseIds = noMex.l3CaseIds.filter((id) => !id.startsWith("mexicano|"));
+    noMex.cases = noMex.cases.filter((c) => !c.caseId.startsWith("mexicano|"));
     expect(refused(noMex)).toMatchObject({ name: "CarryEmpty", message: expect.stringMatching(/holds no mexicano R4 cell/) });
     const steady = copy();
     for (const d of steady.cuts.dispatches) for (const c of d.cases) if (/^mexicano\|/.test(c.caseId)) c.checks = structuredClone(steady.cuts.dispatches[0]!.cases.find((x) => x.caseId === c.caseId)!.checks);
@@ -733,6 +966,41 @@ describe("loadBacklogInput's own refusals, by name and by what each says", () =>
     expect(load({ sha: "47F210E3F" })).toMatchObject({ name: "ShaNotBaseline", message: expect.stringContaining("is not a commit name") });
     expect(load({ sha: "deadbeef0" })).toMatchObject({ name: "ShaNotBaseline", message: expect.stringContaining("was made at") });
   });
+  it("the sha is the harness commit EXACTLY (T22 review m1): an extension of it, a typo past its last character, the tag's full commit and a shorter prefix are each refused", () => {
+    // The probe the review ran: `${SHA}3f0` starts with the layers' commit and is no commit at all.
+    const wrong = [`${SHA}3f`, `${SHA}3f0`, `${SHA}0`, TAG_SHA, SHA.slice(0, -1)];
+    let checked = 0;
+    for (const sha of wrong) {
+      expect(load({ sha }), sha).toMatchObject({ name: "ShaNotBaseline" });
+      checked++;
+    }
+    expect(checked).toBe(wrong.length);
+    // The refusal names the commit the baseline records, so the fix is on the screen.
+    expect(load({ sha: `${SHA}3f` }).message).toContain(`(${SHA})`);
+    // The exact commit loads (the positive of every refusal above).
+    expect(loadBacklogInput({ triage: triageJsonPath(), sha: SHA }).sha).toBe(SHA);
+  });
+  it("every layer's commit is held, not only the first: a baseline whose layers were made at different commits is refused, naming the layer", () => {
+    const dir = join(scratch, "split-commit-baseline");
+    const commits: Record<string, string> = { L1: SHA, L2: SHA, L3: "abcdef0" };
+    for (const l of LAYERS) {
+      mkdirSync(join(dir, l), { recursive: true });
+      writeFileSync(join(dir, l, "results.json"), JSON.stringify({ harnessCommit: commits[l], runId: `run-${l}`, cases: [] }));
+    }
+    expect(load({ baseline: dir })).toMatchObject({ name: "ShaNotBaseline", message: expect.stringMatching(/L3 run was made at \(abcdef0\)/) });
+  });
+  it("the triage's per-layer counts are the baseline's own (T22 review m2): a triage that read another number of cases, or counts another number of reds, is refused", () => {
+    const t = JSON.parse(readFileSync(triageJsonPath(), "utf8")) as { runs: { layer: string; cases: number; reds: number }[] };
+    const edit = (f: (runs: typeof t.runs) => void): string => {
+      const c = structuredClone(t);
+      f(c.runs);
+      const file = join(scratch, `triage-counts-${Math.random().toString(36).slice(2)}.json`);
+      writeFileSync(file, JSON.stringify(c));
+      return file;
+    };
+    expect(load({ triage: edit((r) => { r[0]!.cases += 1; }) })).toMatchObject({ name: "TriageNotBaseline", message: expect.stringMatching(/the triage's L1 run read \d+ cases and the baseline's holds \d+/) });
+    expect(load({ triage: edit((r) => { r[1]!.reds += 1; }) })).toMatchObject({ name: "TriageNotBaseline", message: expect.stringMatching(/the triage's L2 run holds \d+ ❌ and the baseline's has \d+ red/) });
+  });
 });
 
 // --- the CLI -----------------------------------------------------------------------------------------------------------------------
@@ -781,12 +1049,16 @@ describe("matrix:backlog, run for real", () => {
     expect(() => readFileSync(out)).toThrow();
     // Too short to name a commit at all.
     expect(runScript("matrix:backlog", args({ "--sha": "47f", "--out": out })).stderr).toContain("backlog: ShaNotBaseline: ");
-    // The tag's full commit is a longer name of the same commit.
-    const full = join(scratch, "cli-fullsha.md");
-    const ok = runScript("matrix:backlog", args({ "--sha": TAG_SHA, "--out": full }));
-    expect(ok.status, ok.stderr).toBe(0);
-    expect(readFileSync(full, "utf8").split("\n")[0]).toBe(`## W1d truth-run backlog (baseline \`${TAG_SHA}\`)`);
-  }, spawnBudget(3));
+    // The tag's full commit and a 9-character abbreviation are longer names of the same commit, and the heading names the harness
+    // commit exactly (T22 review m1): each is refused, not written under a different heading.
+    for (const sha of [TAG_SHA, `${SHA}3f`]) {
+      const longer = join(scratch, `cli-longer-${sha.length}.md`);
+      const r2 = runScript("matrix:backlog", args({ "--sha": sha, "--out": longer }));
+      expect(r2.status, sha).toBe(2);
+      expect(r2.stderr, sha).toContain("backlog: ShaNotBaseline: ");
+      expect(() => readFileSync(longer), `nothing written for ${sha}`).toThrow();
+    }
+  }, spawnBudget(4));
 
   it("an unreadable triage and a triage the schema refuses are each refused by name, nothing written", () => {
     const out = join(scratch, "cli-badtriage.md");
@@ -810,6 +1082,29 @@ describe("matrix:backlog, run for real", () => {
     expect(() => readFileSync(out)).toThrow();
   }, spawnBudget(2));
 
+  it("the review's probes of a triage whose totals are not its rows' (T22 review m2), through the real script: each exits 2 by name, nothing written", () => {
+    const base = JSON.parse(readFileSync(triageJsonPath(), "utf8")) as { runs: { layer: string; reds: number }[]; rows: { layer: string }[]; scanned: number; checked: number };
+    const via = (name: string, edit: (t: typeof base) => void, want: RegExp): void => {
+      const t = structuredClone(base);
+      edit(t);
+      const file = join(scratch, `cli-totals-${name}.json`);
+      writeFileSync(file, JSON.stringify(t));
+      const out = join(scratch, `cli-totals-${name}.md`);
+      const r = runScript("matrix:backlog", args({ "--triage": file, "--out": out }));
+      expect(r.status, `${name}: ${r.stderr}`).toBe(2);
+      expect(r.stderr, name).toMatch(want);
+      expect(() => readFileSync(out), `${name}: nothing written`).toThrow();
+    };
+    // `runs[0].reds = 0` (the probe): a triage not written from this baseline.
+    via("reds-zeroed", (t) => { t.runs[0]!.reds = 0; }, new RegExp(`^backlog: TriageNotBaseline: the triage's ${base.runs[0]!.layer} run holds 0 ❌ and the baseline's has \\d+ red`, "m"));
+    // `scanned = 0`: reds out of nothing. The triage's own schema refuses it by its own name before the writer sees it (the writer's guard,
+    // for an input that did not come through that schema, is the unit row above).
+    via("scanned-zero", (t) => { t.scanned = 0; }, /^backlog: TriageNoCases: /m);
+    // A row dropped and `checked` lowered with it, the run totals left alone: the layer's count and its rows part ways.
+    const layer = base.rows[0]!.layer;
+    via("row-dropped", (t) => { t.rows.shift(); t.checked -= 1; }, new RegExp(`^backlog: TriageInconsistent: the triage says its ${layer} run holds \\d+ ❌ and keys \\d+ rows to it`, "m"));
+  }, spawnBudget(3));
+
   it("a triage written from another run than the committed baseline is refused by name, nothing written", () => {
     const t = JSON.parse(readFileSync(triageJsonPath(), "utf8")) as { runs: { runId: string }[] };
     expect(t.runs.length, "the triage names its runs").toBe(3);
@@ -822,12 +1117,13 @@ describe("matrix:backlog, run for real", () => {
     expect(r.stderr).toContain("backlog: TriageNotBaseline: ");
   }, spawnBudget(1));
 
-  it("the baseline directory is the committed one by default: the layers' harness commit is what --sha is held to", () => {
+  it("the baseline directory is the committed one by default: the layers' harness commit is what --sha is held to, exactly", () => {
     expect(DEFAULT_BASELINE).toBe(BASE);
     let checked = 0;
     for (const l of LAYERS) {
       const run = JSON.parse(readFileSync(resolve(BASE, l, "results.json"), "utf8")) as { harnessCommit: string };
-      expect(TAG_SHA.startsWith(run.harnessCommit), l).toBe(true);
+      expect(run.harnessCommit, `${l}: the README's harness commit`).toBe(SHA);
+      expect(TAG_SHA.startsWith(run.harnessCommit), `${l}: a prefix of the tag's commit`).toBe(true);
       checked++;
     }
     expect(checked).toBe(3);

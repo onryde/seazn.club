@@ -2,8 +2,9 @@
 // W1d Task 22 (ruling 62, D19): writes the per-wave backlog section of the programme's _INDEX.md from the committed baseline and
 // catalogue (lib/backlog.ts): per numbered wave of design section 8, its gaps with their cases, the audit ids no baseline case drives,
 // and the carries the wave owes. --triage is the triage.json that `pnpm run matrix:triage` writes from the committed baseline (a triage
-// of any other run is refused), and --sha is the baseline commit the heading names (a hex prefix of at least 7, or the full commit;
-// it must be the commit the baseline's layers were run at). Exit codes, each with one meaning:
+// of any other run, or whose run, case or red counts are not the baseline's, is refused), and --sha is the baseline commit the heading
+// names: EXACTLY the commit every layer's results.json records as its harness commit (a longer name of it, the tag's full commit
+// among them, is refused as a shorter one is). Exit codes, each with one meaning:
 //   0  the section is written;
 //   2  usage or input error, with a message on stderr and nothing written: a missing flag, an unknown flag, a sha that is not the
 //      baseline's commit, a triage that is unreadable, that its schema refuses or that was not written from the committed baseline,

@@ -15,7 +15,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes; fix round 1 (`62d91dd48`, `93eb5af0d`), re-review 1 Approved. Final whole-branch review (2026-09-30): Needs fixes, 0 Critical / 2 Important / 19 Minor; the final fix landed (`0532d0cb6`, `e431cbbce`, `80f370e9f`, `d5ce3e871`, `6e857491d`, `975f53b23`). Final re-review: Needs fixes (I-2's own probe still passed); fixed in `f33c1b312` and the docs commit that writes this line. MERGED 2026-09-30 — PR #905, merge `ebf7ec040`.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | **In progress**: **PR-A merged (#921, merge commit `47f210e3f`, 2026-10-05). PR-B (Tasks 17–22) in progress on `feat/format-matrix-w1d-evidence`: Tasks 17–19 and 21 are done (17 the three dispatches, see "W1d dispatches"; 18 the triage tooling; 19 the triage rules and the 164 P-rule reds re-keyed (163 to a gap, 1 with none); 21 the baseline commit at `truth-runs/w1d-baseline`, owner ruling 70's three cells held red by `judge regression`). Task 20's Stryker run is live as workflow run 37371368951 (its result is not read yet); Task 22 is next.** PR-A is Tasks 1–16 on `feat/format-matrix-w1d-infra` (worktree `format-matrix-w1d-exec`), each task closed on a clean task review (the whole-branch review's fixes landed in the final-fix round), and the 28 "W1d first tasks" are closed below (each names its task and commit; item 13 is accepted with no code). Task 16's live smoke on a fresh env: the HTTP slice is unchanged (24/24, no difference against `w1drv-http-slice`), and the sharded form (`--shard 1/2`, `2/2`, `matrix:merge`) is state-for-state identical to the unsharded run. Merge gate: the owner merges PR-A (ruling 62); PR-B (Tasks 17–22, the evidence) is cut from `main` after. **Plan APPROVED (ruling 69)**; review 8 Approved (0C/0I/3m carried) on `2d3a7801f` (review-1 to review-7 fixes on `ed9801b60`) (2026-10-04): `docs/superpowers/plans/2026-10-04-format-matrix-w1d.md` on `docs/format-matrix-w1d-plan` off `main` `dfe8132da`. Owner rulings 60–68: GitHub weekly + dispatch, harness-green per §6.5, one plan and two PRs (PR-A Tasks 1–16 infra, PR-B Tasks 17–22 evidence), every ❌ keyed by gap ID, full scope L1 231 + L2 1,731 + L3 937. **D7 resolved by ruling 65** (no ░ applies to driven cases only; the merge judges with `--planned-not-run allow`). **Ruling 66:** the matrix proves formats and rules, not scheduling, so the placement container and greedy guard are removed. **Ruling 67:** Stryker covers the whole engine except placement scheduling, in ten groups sized from measured mutant counts and wall time (Task 15 cut them into 27 legs from the measured 26 runner-seconds per mutant, 2.6× the plan's formula). **Ruling 68:** the repo goes private after W1d, so every matrix and Stryker job takes a switchable runner (`vars.MATRIX_RUNNER`); the Fly runner is a follow-up outside W1d. Sonnet for implementers and task reviewers, Opus for the two whole-branch reviews (owner). No owner question blocks a task. |
 | W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | **Tasks 1–16 done 2026-10-01. Tasks 1–15 each closed on a clean review (Task 15 on re-review 1, Approved, after two fix rounds). Task 16's review: Needs fixes (0 Critical, 1 Important, 7 Minor); fix round 1 landed (T16-R3, T16-R4). Its re-review passed, and the final whole-branch review (the controller's, T15-R1) and its scoped re-review both Approved. MERGED as PR #912, merge commit `c347fedf9` (2026-10-01), and the worktree and branches were removed afterwards. The post-wave cleanup (rulings 55, 56, 58) is PR #913 (`67d6b1a8a`, 2026-10-04): the harness now lives at `tools/matrix`.** Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` (rulings 44–54; the owner's 2026-10-01 decisions are rulings 55–59); prompt `W1-driving.md`. Worktree `format-matrix-w1-driving-exec` and branch `feat/format-matrix-w1-driving` were removed after the merge. **Done-when (ruling 48), on `truth-runs/w1drv-l3/results.json`** (`--set w1-driving --workers 4`, harness `15ed62365`, clean): 937 cases = 743 ✅ + 194 ❌; ⏳ naming W1-driving **0** (⏳ of any wave 0); harness ❌ **0** after triage — the 60 harness reds were three defects, each fixed test first (`9a64ec4cd`, `b1325f721`, `e51bf3699`), and 30 of those cases are ✅ on their re-run. **164 product reds**, each judged on its latest committed run (`truth-runs/w1drv-l3-rerun/`, `truth-runs/w1drv-l3-fr1/`, `truth-runs/w1drv-l3-fr2/`), 0 unfit, 0 unclassified, per wave **W2 62, W4 32, W7 56, W5 11, W3 3** (`truth-runs/w1drv-l3/TRIAGE.md`; before ruling T15-R4 moved the bracket-draw stall to W2: W4 94, W7 56, W5 11, W3 3). HTTP slice on 4 workers: 24/24 ✅, the 378 checks it shares with W1c identical in verdict and count (`truth-runs/w1drv-http-slice/results.json`). **L1 proof at 1280, ×3** (`truth-runs/w1drv-l1/w1drv-l1-t15-r1/results.json`, `-r2`, `-r3`, harness `63bda33e4`): 7 cases each, 6 ✅ and `mexicano\|generic` ❌ (the predicted W7 round-2 self-pair 500); r2 and r3 identical to r1 on every check, and r1 identical to T13's `w1drv-l1-r1` on all 206 checks; per-screen verdicts in `truth-runs/w1drv-l1/README.md`. Model (`truth-runs/w1drv-model/`): swiss\|badminton and swiss\|generic ok at 40 runs, league\|football ok at 20; of the six single-stage rows without model evidence, four ok, and double elim and stepladder each found a NEW product red, committed as MB-007 and MB-008; Task 16's widened-fence run found MB-009 (`w1drv-t16-model-g1`), then both cells ran ok (`w1drv-t16-model-g1c`), and `--regressions` replayed all 8 committed cases as known (`w1drv-t16-model-reg2`). **MB-010 (fix round 1, T16-R3):** with the double-elim generate fence narrowed to the added-entrant branch, the live double-elim cell found Start → Withdraw → Generate 500ing in MB-007's words (`w1drv-t16fr1-model-de`). It is committed as MB-010, and the fence's withdrawn branch now covers double elim on its evidence. Double elim then ran ok 20/20 (`w1drv-t16fr1-model-de2`), and `--regressions` replays all 9 committed cases as known, each under its own id (`w1drv-t16fr1-model-reg`). See "Findings routed (W1-driving)" and "W1d first tasks". The branch was rebased onto `main` twice (2026-10-01): every recorded harness SHA is pre-rebase and stays as recorded; `truth-runs/W1-DRIVING-REBASES.md` maps each to its rebased commit and shows the harness unchanged across both. |
-| W2 | Sport scoring fidelity | backlog ready (W1d baseline `47f210e3f`) |
+| W2 | Sport scoring fidelity | backlog ready (W1d baseline `47f210e`) |
 | W3 | Swiss | not started |
 | W4 | Knockout family | not started |
 | W5 | Round-robin family | not started |
@@ -2972,17 +2972,19 @@ named exceptions.
 **Step 6 (false premise 17).** Nothing fires on a schedule yet: `vars.MATRIX_WEEKLY_ENABLED` is unset. Task 22 Step 3
 reads the first scheduled run's event payload.
 
-## W1d truth-run backlog (baseline `47f210e3f`)
+## W1d truth-run backlog (baseline `47f210e`)
 
 Generated by `pnpm matrix:backlog` from the committed baseline and the triage catalogue, and held to them by `tools/matrix/__tests__/w1d-backlog-index.test.ts`: the tables below are data and are never edited by hand. Each wave starts from the ❌ cases of its table and from the audit ids the baseline never drove. The ❌ list is a floor, not the whole backlog (design §8): an audit id in a not-exercised table is owed a scenario by its wave before the wave can call it closed.
 
 `(+N also)` in a cases cell: N further cases, keyed to another gap and counted once there, that also fail one of this gap's checks. The example cases are the first case of each layer the gap has, then the rest in plan order, up to five. `TRIAGE.md` lists every case and `AUDIT-LEDGER.md` the evidence of every id (both in `truth-runs/w1d-baseline/`).
 
-The baseline is the merged run of each layer (L1 `ci-37346206686-1-l1`: 231 cases, 23 ❌; L2 `ci-37346206686-1-l2`: 1731 cases, 22 ❌; L3 `ci-37346206686-1-l3`: 937 cases, 164 ❌). The triage read 2899 cases and keyed 209 ❌ to 12 gaps; the ledger holds 150 audit ids, 106 of them `not-exercised`.
+The baseline is the merged run of each layer (L1 `ci-37346206686-1-l1`: 231 cases, 23 ❌; L2 `ci-37346206686-1-l2`: 1,731 cases, 22 ❌; L3 `ci-37346206686-1-l3`: 937 cases, 164 ❌). The triage read 2,899 cases and keyed 209 ❌ to 12 gaps; the ledger holds 150 audit ids, 106 of them `not-exercised`.
+
+What the ❌ count leaves out, counted from the same three runs. ░ (planned, never driven): L2 1,505; ruling 65 keeps these as backlog, not as reds, and the count shrinks as the waves add scenario scripts. 🚫 (no organiser path): L1 53 and L2 164, 217 in all; each is routed to a wave by its own reason and counted in that wave's section. Held red by ruling 70 only inside `judge regression`: `swiss_knockout|carrom|club-29|R4` and `swiss_knockout|generic|score|R4` (2 cells, `works` in the committed run); with them the judge reads 211 red cases, not 209.
 
 Regenerate (`$OUT` is any empty directory): run the triage command of `truth-runs/w1d-baseline/README.md`, "Reproduce", into `$OUT`, then
 
-    pnpm matrix:backlog --triage $OUT/triage.json --sha 47f210e3f --out $OUT/backlog.md
+    pnpm matrix:backlog --triage $OUT/triage.json --sha 47f210e --out $OUT/backlog.md
 
 A test runs both commands as printed and requires the result to equal this section.
 
@@ -3001,6 +3003,8 @@ A test runs both commands as printed and requires the result to equal this secti
 ### W2 — sport scoring fidelity
 
 The ledger holds 54 audit ids for W2: 2 reproduced, 0 exercised-not-reproduced, 42 not-exercised, 10 verified-by-read, 0 verified-by-failing-test.
+
+🚫 21 planned cases have no organiser path and route to W2 by their own reason (L2 21); the baseline never drove them, so they are in no table below.
 
 | gap | title | cases | layers | examples |
 |---|---|---|---|---|
@@ -3055,10 +3059,13 @@ Audit ids no baseline case drives (`not-exercised`, 42): each is owed a scenario
 | ST-G32 | M | No table-ORDER test for tennis `game_ratio`, table tennis, or cricket NRR folded from real deltas. Cricket NR points and football abandon… |
 
 - **SC-P4 and the prompt's trap 2 contradict each other (false premise 20)** — `W2-scoring-fidelity.md` trap 2 names SC-P4 as the model of a collectable field that loses to the engine: "the declared 3/0 loses to the FIH 2/1 the rulebook adopts (§7.1), so the case is ❌ until fixed". Two other sources say otherwise. The SC-P4 entry of "False premises found" in this file: "FIH 2/1 shoot-out split" is the FIH Pro League rule only; FIH tournament regulations use 3/1/0 with draws standing and no pool shoot-outs, which the product already does by default, and the gap narrows to "no points fields when shoot-outs are switched on". And design §8's row for this wave: "FIH 2/1 is Pro League only". The goals-and-boards rulebook's RB2B-7 recommends seeding 2/1 when shoot-outs are on for a table stage, but that rulebook says "None is a ruling", and no entry of this file's "Owner rulings" signs it. The baseline cannot settle it: the ledger reads SC-P4 `not-exercised`: Shoot-out points split editable for football only: a match-rules editor limit; no scenario edits a division's match rules through the editor (D6/D7 change a stage's shape or rules). The planner of this wave resolves which oracle the SC-P4 case takes, with the rulebook's sign-off, before the case is written; a case written from the trap alone asserts a split the other two sources call a Pro League rule. This is false premise 20 of the W1d plan, and not W1d's to fix.
+- **swiss_playoff R4 cells the committed run keys to this wave** — The committed run keys these swiss_playoff R4 cells to this wave: SC-O1 (`swiss_playoff|boardgame|blitz|R4`) and SC-O2 (`swiss_playoff|generic|score|R4`). Their reason is not stable: it flips between the stall and SW-H1 across the dispatches (the W3 carry "The swiss_playoff R4 reason flip: red in all three dispatches, two reasons" lists the reason per dispatch). Read them there before counting a move in SC-O1 and SC-O2 as progress or as a regression: a drop here that comes with a matching rise under SW-H1 is the reason flipping, not a fix.
 
 ### W3 — Swiss
 
 The ledger holds 32 audit ids for W3: 1 reproduced, 0 exercised-not-reproduced, 20 not-exercised, 11 verified-by-read, 0 verified-by-failing-test.
+
+No 🚫 case routes to W3 by its own reason.
 
 | gap | title | cases | layers | examples |
 |---|---|---|---|---|
@@ -3089,13 +3096,15 @@ Audit ids no baseline case drives (`not-exercised`, 20): each is owed a scenario
 | SW-L11 | Low | Public surfaces have no Swiss-specific state (no "Round X of N", no "pairings announced after round N-1"). Nothing in `server/public-site`… |
 | SW-L12 | Low | No pairing preview or manual board swap for rounds 2+. Only round 1 has a hint (`roundOnePairs`). |
 
-- **Owner ruling 70: three cells held red, and the re-baseline that retires the hold** — Across the three dispatches the cells `swiss_knockout|football|11-a-side|R4`, `swiss_knockout|carrom|club-29|R4` and `swiss_knockout|generic|score|R4` flipped between works and red. Every red reads "round 5 paired nobody (SW-H1)", and the cause is the product's `lots` tiebreak (a UUID-hashed draw, by design) exposing P6 (SW-H1: an empty Swiss round reported as success). Ruling 70 (2026-10-05) records the three RED, cause P6, whatever the baseline run showed: the `ruling70` block of `catalogue/baseline.json`, applied by `judge regression`. **The SW-H1 fix must remove that block and `RULING_70_IDS` (`lib/pr-sample.ts`) and re-baseline L3 in the same change** (`W3-swiss.md`, "Output and handoff"). The guards that notice a stale block fire at the re-baseline, not when the fix merges, so a fix merged alone leaves the override live, where it can hide a regression on those three cells only. In this baseline SW-H1 is keyed on 3 cases of the committed run (`swiss_playoff|hockey|fih-outdoor|R4`, `swiss_knockout|football|11-a-side|R4` and `swiss_knockout|hockey|fih-outdoor|R4`), of which `swiss_knockout|football|11-a-side|R4` is one of the ruling's cells.
+- **Owner ruling 70: three cells held red, and the re-baseline that retires the hold** — Across the three dispatches the cells `swiss_knockout|football|11-a-side|R4`, `swiss_knockout|carrom|club-29|R4` and `swiss_knockout|generic|score|R4` flipped between works and red. Every red reads "round 5 paired nobody (SW-H1)", and the cause is the product's `lots` tiebreak (a UUID-hashed draw, by design) exposing P6 (SW-H1: an empty Swiss round reported as success). Ruling 70 (2026-10-05) records the three RED, cause P6, whatever the baseline run showed: the `ruling70` block of `catalogue/baseline.json`, applied by `judge regression`. **The SW-H1 fix must remove that block and `RULING_70_IDS` (`lib/pr-sample.ts`) and re-baseline L3 in the same change** (`W3-swiss.md`, "Output and handoff"). The guards that notice a stale block fire at the re-baseline, not when the fix merges, so a fix merged alone leaves the override live, where it can hide a regression on those three cells only. In this baseline SW-H1 is keyed on 3 cases of the committed run (`swiss_playoff|hockey|fih-outdoor|R4`, `swiss_knockout|football|11-a-side|R4` and `swiss_knockout|hockey|fih-outdoor|R4`), of which `swiss_knockout|football|11-a-side|R4` is one of the ruling's cells. The ruling's other 2 cells (`swiss_knockout|carrom|club-29|R4` and `swiss_knockout|generic|score|R4`) are `works` in the committed run: the triage counts none of them, and only `judge regression` holds them red until the re-baseline.
 - **Recommendation (the controller's, not an owner ruling): move P6 up** — Within this wave, take SW-H1 (P6) early: a real Swiss-into-knockout after a withdrawal can strand on an empty round 5 that says it succeeded. This is the controller's recommendation, as owner ruling 70's entry words it; the owner has not ruled on it.
 - **The swiss_playoff R4 reason flip: red in all three dispatches, two reasons** — `swiss_playoff|boardgame|blitz|R4` and `swiss_playoff|generic|score|R4` are red in all three dispatches with the same failing checks, but the reason flips: dispatch 1 SW-H1, dispatch 2 stall, dispatch 3 stall. SW-H1 is `round 5 paired nobody (SW-H1)`; stall is `stage 2: did not complete`, the drawn-game stall. The triage separates the two by reason, so the committed run (dispatch 3) keys them to SC-O1 (`swiss_playoff|boardgame|blitz|R4`) and SC-O2 (`swiss_playoff|generic|score|R4`). The SW-H1 fix does not turn these cells green: the stall reason stays with the gap that owns it, and a re-baseline that reads the SW-H1 reason on them again moves them back to SW-H1.
 
 ### W4 — knockout family
 
 The ledger holds 9 audit ids for W4: 2 reproduced, 0 exercised-not-reproduced, 6 not-exercised, 1 verified-by-read, 0 verified-by-failing-test.
+
+🚫 100 planned cases have no organiser path and route to W4 by their own reason (L1 33 and L2 67, 100 in all); the baseline never drove them, so they are in no table below.
 
 | gap | title | cases | layers | examples |
 |---|---|---|---|---|
@@ -3121,6 +3130,8 @@ Audit ids no baseline case drives (`not-exercised`, 6): each is owed a scenario 
 ### W5 — round-robin family
 
 The ledger holds 19 audit ids for W5: 1 reproduced, 0 exercised-not-reproduced, 13 not-exercised, 5 verified-by-read, 0 verified-by-failing-test.
+
+🚫 33 planned cases have no organiser path and route to W5 by their own reason (L1 20 and L2 13, 33 in all); the baseline never drove them, so they are in no table below.
 
 | gap | title | cases | layers | examples |
 |---|---|---|---|---|
@@ -3152,6 +3163,8 @@ Audit ids no baseline case drives (`not-exercised`, 13): each is owed a scenario
 
 The ledger holds 4 audit ids for W6: 0 reproduced, 0 exercised-not-reproduced, 1 not-exercised, 3 verified-by-read, 0 verified-by-failing-test.
 
+No 🚫 case routes to W6 by its own reason.
+
 No ❌ case of the baseline is keyed to W6.
 
 Audit ids no baseline case drives (`not-exercised`, 1): each is owed a scenario before W6 can close it.
@@ -3163,6 +3176,8 @@ Audit ids no baseline case drives (`not-exercised`, 1): each is owed a scenario 
 ### W7 — americano, mexicano, ladder
 
 The ledger holds 8 audit ids for W7: 1 reproduced, 0 exercised-not-reproduced, 2 not-exercised, 5 verified-by-read, 0 verified-by-failing-test.
+
+No 🚫 case routes to W7 by its own reason.
 
 | gap | title | cases | layers | examples |
 |---|---|---|---|---|
@@ -3184,6 +3199,8 @@ Audit ids no baseline case drives (`not-exercised`, 2): each is owed a scenario 
 ### W8 — scorer sheets
 
 The ledger holds 20 audit ids for W8: 0 reproduced, 0 exercised-not-reproduced, 19 not-exercised, 1 verified-by-read, 0 verified-by-failing-test.
+
+No 🚫 case routes to W8 by its own reason.
 
 No ❌ case of the baseline is keyed to W8.
 
@@ -3215,6 +3232,8 @@ Audit ids no baseline case drives (`not-exercised`, 19): each is owed a scenario
 
 No audit id routes to W9.
 
+🚫 63 planned cases have no organiser path and route to W9 by their own reason (L2 63); the baseline never drove them, so they are in no table below.
+
 No ❌ case of the baseline is keyed to W9.
 
 None of W9's audit ids is `not-exercised`.
@@ -3222,6 +3241,8 @@ None of W9's audit ids is `not-exercised`.
 ### W10 — sweep
 
 The ledger holds 4 audit ids for W10: 0 reproduced, 0 exercised-not-reproduced, 3 not-exercised, 1 verified-by-read, 0 verified-by-failing-test.
+
+No 🚫 case routes to W10 by its own reason.
 
 No ❌ case of the baseline is keyed to W10.
 

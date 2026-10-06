@@ -16,7 +16,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { AUDIT_DIR, OUTCOMES, REPO_ROOT, buildLedger, parseVerdicts, readAudit, type Ledger, type LedgerEntry } from "./audit-ledger.ts";
 import { redact } from "./redact.ts";
-import { LAYERS } from "./results.ts";
+import { GLYPH, LAYERS } from "./results.ts";
 import { CATALOGUE_DIR, isClean, loadCatalogue, parseTriage, routeOf, type GapRouting, type NewGaps, type TriageJson, type TriageRules } from "./triage.ts";
 
 /** The committed baseline: the three layers' merged results, the dispatch cut, README, TRIAGE.md. */
@@ -45,6 +45,10 @@ export class BacklogRefused extends Error {
 
 // --- the carries file ----------------------------------------------------------------------------------------------------------
 
+/** The intro placeholders the writer fills from the committed layers with what the ❌ count leaves out (T22 review m3): the ░ planned
+ *  cases, the 🚫 cases with no organiser path, and the cells an override holds red that the committed run does not. */
+const LEAVES_OUT = ["planned", "noPath", "overridden"] as const;
+
 const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)\}/g;
 const placeholdersOf = (text: string): Set<string> => new Set([...text.matchAll(PLACEHOLDER)].map((m) => m[1]));
 
@@ -59,7 +63,9 @@ const CarrySchema = z.strictObject({
 const CarriesSchema = z.strictObject({
   note: z.string().min(1).optional(),
   heading: z.string().min(1).refine((h) => h.includes("{sha}"), "the heading names the baseline: it carries {sha}"),
-  intro: z.array(z.string().min(1)).min(1).refine((p) => p.some((x) => x.includes("{baseline}")), "the intro carries {baseline}: the paragraph naming the runs the section was written from"),
+  intro: z.array(z.string().min(1)).min(1)
+    .refine((p) => p.some((x) => x.includes("{baseline}")), "the intro carries {baseline}: the paragraph naming the runs the section was written from")
+    .refine((p) => LEAVES_OUT.every((k) => p.some((x) => x.includes(`{${k}}`))), `the intro carries ${LEAVES_OUT.map((k) => `{${k}}`).join(", ")}: what the ❌ count leaves out (T22 review m3)`),
   carries: z.array(CarrySchema).min(1),
 }).superRefine((v, ctx) => {
   const seen = new Set<string>();
@@ -89,6 +95,9 @@ export const parseCuts = (json: unknown): Cuts => CutsSchema.parse(json);
 
 // --- the input -----------------------------------------------------------------------------------------------------------------
 
+/** One case of a committed layer, as the backlog reads it. */
+export interface BaselineCase { layer: string; caseId: string; state: string; reason: string }
+
 export interface BacklogInput {
   /** The baseline's commit as the heading names it. */
   sha: string;
@@ -100,8 +109,8 @@ export interface BacklogInput {
   carries: Carries;
   /** The L3 cases whose state, failing set or reason differ between the three dispatches, each as every dispatch recorded it. */
   cuts: Cuts;
-  /** Every case id of the committed L3 run (the cut is a subset). */
-  l3CaseIds: string[];
+  /** Every case of the three committed layers: where it ran, the state it ended in and (a 🚫) why. The cut is a subset of L3's. */
+  cases: BaselineCase[];
   /** The design document's text: section 8 is read by designWaves. */
   design: string;
 }
@@ -111,6 +120,8 @@ export interface BacklogInput {
 /** A table cell: a bare pipe would end it, and a case id or an audit title can hold one. */
 export const cell = (s: string): string => s.replaceAll("|", "\\|");
 const code = (s: string): string => `\`${s}\``;
+/** 1505 -> "1,505" (grouped by hand: the output must not depend on the host's locale data). */
+const num = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 /** "a", "a and b", "a, b and c". */
 const list = (items: readonly string[]): string => (items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
 const table = (head: readonly string[], rows: readonly (readonly string[])[]): string[] => [
@@ -200,7 +211,9 @@ export function backingOf(row: string, waves: readonly DesignWave[], wave: strin
 
 /** What a derivation hands back: the values of the carry's placeholders, and the waves its data is keyed in (each must be the anchor's). */
 interface Derived { values: Record<string, string>; waves: string[] }
-interface DeriveCtx { input: BacklogInput; anchor: string }
+/** `waveOf` is every carry's wave, found from its anchor: deriveCarries fills it for ALL carries (and refuses one whose anchor routes to
+ *  no wave of section 8) before any derivation runs, so a derivation that points at another carry may read it. */
+interface DeriveCtx { input: BacklogInput; anchor: string; waveOf: ReadonlyMap<string, string> }
 type Deriver = (ctx: DeriveCtx) => Derived;
 
 const refuse = (name: BacklogRefusalName, id: string, why: string): BacklogRefused => new BacklogRefused(name, `carry ${id}: ${why}`);
@@ -221,10 +234,67 @@ function groupOf(triage: TriageJson, gap: string, carry: string): TriageJson["ga
   return g;
 }
 
+/** The triage rows of the named cases, or the refusal that one of them is keyed to nothing. */
+function rowsOf(triage: TriageJson, ids: readonly string[], carry: string): TriageJson["rows"] {
+  return ids.map((id) => {
+    const row = triage.rows.find((r) => r.caseId === id);
+    if (row === undefined) throw refuse("CarrySourceMissing", carry, `the triage keys ${id} to no gap`);
+    return row;
+  });
+}
+
+/** The cells whose STATE flips between the dispatches (owner ruling 70's), and those of them the committed L3 does not have red: only
+ *  `judge regression` holds those red, so the triage counts none of them. `label` names the reader in a refusal. */
+function stateFlips(input: BacklogInput, label: string): { cells: string[]; held: { id: string; state: string }[] } {
+  const cells = input.cuts.ids.filter((id) => new Set(perDispatch(input.cuts, id, label).map((c) => c.state)).size > 1);
+  const l3 = new Map(input.cases.filter((c) => c.layer === "L3").map((c) => [c.caseId, c.state]));
+  const held = cells.flatMap((id) => {
+    const state = l3.get(id);
+    if (state === undefined) throw refuse("CarrySourceMissing", label, `the committed L3 holds no case ${id}, which the dispatch cut records`);
+    return state === "red" ? [] : [{ id, state }];
+  });
+  return { cells, held };
+}
+
+/** How many of the cases `keep` selects each layer holds, in layer order (a layer with none is left out). */
+const perLayer = (cases: readonly BaselineCase[], keep: (c: BaselineCase) => boolean): { layer: string; n: number }[] =>
+  LAYERS.map((layer) => ({ layer, n: cases.filter((c) => c.layer === layer && keep(c)).length })).filter((x) => x.n > 0);
+/** "L2 1,505"; with more than one layer "L1 53 and L2 164, 217 in all"; "none" for no layer at all. */
+function layerText(rows: readonly { layer: string; n: number }[]): string {
+  if (rows.length === 0) return "none";
+  const parts = list(rows.map((r) => `${r.layer} ${num(r.n)}`));
+  return rows.length === 1 ? parts : `${parts}, ${num(rows.reduce((n, r) => n + r.n, 0))} in all`;
+}
+/** The wave a 🚫 case's own reason routes it to: the text before its first `: ` (`<wave>: no organiser path, ...`). */
+const routedWave = (reason: string): string => reason.split(": ")[0];
+
 /** A mexicano R4 cell: the one family the intermittent-500 carry is about. */
 const MEXICANO_R4 = /^mexicano\|[^|]+\|[^|]+\|R4$/;
 /** A swiss_playoff R4 cell: the family whose reason flips between two classes while its state and failing set stay put. */
 const SWISS_PLAYOFF_R4 = /^swiss_playoff\|[^|]+\|[^|]+\|R4$/;
+
+type ReasonClass = "SW-H1" | "stall" | null;
+/** The swiss_playoff R4 cells of the dispatch cut that stay red with ONE failing set while their reason flips between the two classes, and
+ *  each cell's class per dispatch. A cell that also changes its state or its failing set is no cell of this shape, and a reason of a third
+ *  class is not printed as a guess: each is refused by name. `carry` is the reader named in a refusal. */
+function swissFlips(cuts: Cuts, carry: string): { flips: string[]; classes: Map<string, ReasonClass[]> } {
+  const classOf = (reason: string): ReasonClass => (/\(SW-H1\)|paired nobody/.test(reason) ? "SW-H1" : /did not complete/.test(reason) ? "stall" : null);
+  const steady = cuts.ids.filter((id) => SWISS_PLAYOFF_R4.test(id));
+  // The carry says these cells change only their reason: a cell that also changes its state or its failing set is no cell of it.
+  for (const id of steady) {
+    const cs = perDispatch(cuts, id, carry);
+    if (!cs.every((c) => c.state === "red") || new Set(cs.map(failingOf)).size !== 1) {
+      throw refuse("CarryShapeUnknown", carry, `${id} changes its state or its failing-check set between the dispatches: this carry describes cells that change only their reason`);
+    }
+  }
+  const classes = new Map(steady.map((id) => [id, perDispatch(cuts, id, carry).map((c) => classOf(c.reason))]));
+  const flips = steady.filter((id) => classes.get(id)!.includes("SW-H1") && classes.get(id)!.includes("stall"));
+  if (flips.length === 0) throw refuse("CarryEmpty", carry, "no swiss_playoff R4 cell of the dispatch cut is red in every dispatch with one failing set and two reasons");
+  for (const id of steady) {
+    if (classes.get(id)!.includes(null)) throw refuse("CarryShapeUnknown", carry, `${id} has a reason that is neither the SW-H1 shape (paired nobody) nor the stall shape (did not complete): say which it is before the carry prints it`);
+  }
+  return { flips, classes };
+}
 
 const DERIVERS: Record<string, Deriver> = {
   // SC-P4: the ledger's own reading of the id the W2 prompt's trap 2 cites.
@@ -234,14 +304,19 @@ const DERIVERS: Record<string, Deriver> = {
     return { values: { outcome: e.outcome, evidence: e.evidence }, waves: [e.wave] };
   },
 
-  // Ruling 70: the cells whose STATE flips across the dispatches, and where the committed run keys SW-H1.
+  // Ruling 70: the cells whose STATE flips across the dispatches, where the committed run keys SW-H1, and which cells it holds red that the
+  // committed run does not have red (T22 review m3).
   "ruling-70": ({ input, anchor }) => {
-    const cells = input.cuts.ids.filter((id) => new Set(perDispatch(input.cuts, id, "ruling-70").map((c) => c.state)).size > 1);
+    const { cells, held } = stateFlips(input, "ruling-70");
     if (cells.length === 0) throw refuse("CarryEmpty", "ruling-70", "no cell of the dispatch cut changes state between the dispatches: there is no ruling to carry");
     const g = groupOf(input.triage, anchor, "ruling-70");
-    const held = g.caseIds.filter((id) => cells.includes(id));
-    const keyed = `${g.caseIds.length} cases of the committed run (${list(g.caseIds.map(code))}), of which ${held.length === 0 ? "none is" : `${list(held.map(code))} ${held.length === 1 ? "is" : "are"}`} one of the ruling's cells`;
-    return { values: { cells: list(cells.map(code)), keyed }, waves: [g.wave] };
+    const keyedCells = g.caseIds.filter((id) => cells.includes(id));
+    const keyed = `${g.caseIds.length} cases of the committed run (${list(g.caseIds.map(code))}), of which ${keyedCells.length === 0 ? "none is" : `${list(keyedCells.map(code))} ${keyedCells.length === 1 ? "is" : "are"}`} one of the ruling's cells`;
+    const many = held.length > 1;
+    const rest = held.length === 0
+      ? "Every cell of the ruling is red in the committed run."
+      : `The ruling's other ${held.length} cell${many ? "s" : ""} (${list(held.map((h) => code(h.id)))}) ${many ? "are" : "is"} ${list([...new Set(held.map((h) => code(h.state)))])} in the committed run: the triage counts ${many ? "none of them" : "it nowhere"}, and only \`judge regression\` holds ${many ? "them" : "it"} red until the re-baseline.`;
+    return { values: { cells: list(cells.map(code)), keyed, held: rest }, waves: [g.wave] };
   },
 
   // The recommendation is prose with no number to derive; it still hangs on its anchor.
@@ -250,31 +325,27 @@ const DERIVERS: Record<string, Deriver> = {
   // swiss_playoff R4: red in every dispatch with one failing set, the reason flips between two classes.
   "swiss-playoff-reason-flip": ({ input }) => {
     const { cuts, triage } = input;
-    const classOf = (reason: string): "SW-H1" | "stall" | null => (/\(SW-H1\)|paired nobody/.test(reason) ? "SW-H1" : /did not complete/.test(reason) ? "stall" : null);
-    const steady = cuts.ids.filter((id) => SWISS_PLAYOFF_R4.test(id));
-    // The carry says these cells change only their reason: a cell that also changes its state or its failing set is no cell of it.
-    for (const id of steady) {
-      const cs = perDispatch(cuts, id, "swiss-playoff-reason-flip");
-      if (!cs.every((c) => c.state === "red") || new Set(cs.map(failingOf)).size !== 1) {
-        throw refuse("CarryShapeUnknown", "swiss-playoff-reason-flip", `${id} changes its state or its failing-check set between the dispatches: this carry describes cells that change only their reason`);
-      }
-    }
-    const classes = new Map(steady.map((id) => [id, perDispatch(cuts, id, "swiss-playoff-reason-flip").map((c) => classOf(c.reason))]));
-    const flips = steady.filter((id) => classes.get(id)!.includes("SW-H1") && classes.get(id)!.includes("stall"));
-    if (flips.length === 0) throw refuse("CarryEmpty", "swiss-playoff-reason-flip", "no swiss_playoff R4 cell of the dispatch cut is red in every dispatch with one failing set and two reasons");
-    for (const id of steady) {
-      if (classes.get(id)!.includes(null)) throw refuse("CarryShapeUnknown", "swiss-playoff-reason-flip", `${id} has a reason that is neither the SW-H1 shape (paired nobody) nor the stall shape (did not complete): say which it is before the carry prints it`);
-    }
+    const { flips, classes } = swissFlips(cuts, "swiss-playoff-reason-flip");
     const ns = cuts.dispatches.map((d) => d.n);
     const pattern = (id: string): string => classes.get(id)!.map((c, i) => `dispatch ${ns[i]} ${c}`).join(", ");
     const patterns = [...new Set(flips.map(pattern))];
     const flipsText = patterns.length === 1 ? patterns[0] : flips.map((id) => `${code(id)}: ${pattern(id)}`).join("; ");
-    const keyed = list(flips.map((id) => {
-      const row = triage.rows.find((r) => r.caseId === id);
-      if (row === undefined) throw refuse("CarrySourceMissing", "swiss-playoff-reason-flip", `the triage keys ${id} to no gap`);
-      return `${row.gap} (${code(id)})`;
-    }));
+    const keyed = list(rowsOf(triage, flips, "swiss-playoff-reason-flip").map((row) => `${row.gap} (${code(row.caseId)})`));
     return { values: { cells: list(flips.map(code)), flips: flipsText, keyed, committed: String(ns[ns.length - 1]) }, waves: [] };
+  },
+
+  // The same cells seen from the wave that owns the gaps the committed run keys them to (T22 review m8): a count of those gaps moves with
+  // the dispatch, and the carry that explains it sits in another wave's section. The owner wave and the carry's title are the carry's own.
+  "swiss-playoff-keyed-here": ({ input, waveOf }) => {
+    const { flips } = swissFlips(input.cuts, "swiss-playoff-keyed-here");
+    const rows = rowsOf(input.triage, flips, "swiss-playoff-keyed-here");
+    // The carry this one points at is in the file: DERIVERS holds its id, and deriveCarries refuses (CarryMissing) a file without it
+    // before any derivation runs (a test reaches that refusal).
+    const flip = input.carries.carries.find((c) => c.id === "swiss-playoff-reason-flip")!;
+    return {
+      values: { keyed: list(rows.map((r) => `${r.gap} (${code(r.caseId)})`)), gaps: list([...new Set(rows.map((r) => r.gap))]), owner: waveOf.get(flip.id)!, flipTitle: flip.title },
+      waves: rows.map((r) => r.wave),
+    };
   },
 
   // ST-G5: the field the rule's note describes, from the note itself.
@@ -291,8 +362,8 @@ const DERIVERS: Record<string, Deriver> = {
 
   // Mexicano R4: how many of the cells flip their failing set, and how often each dispatch shows the 500.
   "mexicano-generate-500": ({ input }) => {
-    const { cuts, triage, l3CaseIds } = input;
-    const total = l3CaseIds.filter((id) => MEXICANO_R4.test(id));
+    const { cuts, triage } = input;
+    const total = input.cases.filter((c) => c.layer === "L3" && MEXICANO_R4.test(c.caseId)).map((c) => c.caseId);
     if (total.length === 0) throw refuse("CarryEmpty", "mexicano-generate-500", "the committed L3 holds no mexicano R4 cell");
     const flipped = cuts.ids.filter((id) => MEXICANO_R4.test(id) && new Set(perDispatch(cuts, id, "mexicano-generate-500").map(failingOf)).size > 1);
     if (flipped.length === 0) throw refuse("CarryEmpty", "mexicano-generate-500", "no mexicano R4 cell of the dispatch cut changes its failing-check set between the dispatches");
@@ -318,17 +389,23 @@ const DERIVERS: Record<string, Deriver> = {
 
 interface WaveCarry { title: string; text: string }
 
-/** Every carry's text with its placeholders filled, by the wave its anchor routes to. */
+/** Every carry's text with its placeholders filled, by the wave its anchor routes to. Two passes: every carry's wave is found first (so a
+ *  derivation may point at another carry's wave), then each is derived, in the order the file lists them. */
 function deriveCarries(input: BacklogInput, waves: readonly DesignWave[]): Map<string, WaveCarry[]> {
   const ids = input.carries.carries.map((c) => c.id);
   for (const id of ids) if (!Object.hasOwn(DERIVERS, id)) throw new BacklogRefused("CarryUnknown", `carry ${id}: no derivation of lib/backlog.ts fills it`);
   for (const id of Object.keys(DERIVERS)) if (!ids.includes(id)) throw new BacklogRefused("CarryMissing", `carry ${id}: the derivation exists and backlog-carries.json holds no such carry`);
-  const out = new Map<string, WaveCarry[]>();
+  const waveOf = new Map<string, string>();
   for (const c of input.carries.carries) {
     const wave = routeOf(input.routing, c.anchor);
     if (wave === null) throw refuse("CarryWaveDisagrees", c.id, `its anchor ${c.anchor} routes to no wave`);
     if (!waves.some((w) => w.id === wave)) throw refuse("UnknownWave", c.id, `its anchor ${c.anchor} routes to ${wave}, a wave section 8 has no backlog for`);
-    const d = DERIVERS[c.id]({ input, anchor: c.anchor });
+    waveOf.set(c.id, wave);
+  }
+  const out = new Map<string, WaveCarry[]>();
+  for (const c of input.carries.carries) {
+    const wave = waveOf.get(c.id)!;
+    const d = DERIVERS[c.id]({ input, anchor: c.anchor, waveOf });
     const off = d.waves.filter((w) => w !== wave);
     if (off.length > 0) throw refuse("CarryWaveDisagrees", c.id, `its anchor ${c.anchor} routes to ${wave}, and the data it quotes is keyed in ${[...new Set(off)].join(", ")}`);
     const used = placeholdersOf(c.text);
@@ -348,10 +425,23 @@ function deriveCarries(input: BacklogInput, waves: readonly DesignWave[]): Map<s
 function guard(input: BacklogInput, waves: readonly DesignWave[]): void {
   const { triage, ledger } = input;
   if (triage.rows.length === 0 || triage.gaps.length === 0) throw new BacklogRefused("NoCases", "the triage keyed no red: a backlog with no case would read as a clean baseline (vacuous)");
+  if (triage.scanned === 0) throw new BacklogRefused("NoCases", "the triage scanned no case: reds out of nothing is no triage (vacuous)");
+  if (input.cases.length === 0) throw new BacklogRefused("NoCases", "the baseline holds no case: what the ❌ count leaves out would read as zero (vacuous)");
   const rowGap = new Map(triage.rows.map((r) => [r.caseId, r.gap]));
   if (rowGap.size !== triage.rows.length) throw new BacklogRefused("TriageInconsistent", "a case is keyed in two rows of the triage");
   if (!isClean(triage)) throw new BacklogRefused("TriageInconsistent", "the triage is not clean (an untriaged, ambiguous, misrouted or unknown-gap red): its gaps are not every red");
   if (triage.checked !== triage.rows.length) throw new BacklogRefused("TriageInconsistent", `the triage says it checked ${triage.checked} reds and holds ${triage.rows.length} rows`);
+  // T22 review m2: the totals the intro prints are the triage's own and are held to its rows, layer by layer, so a hand-edited or stale
+  // triage.json cannot print "L1: 231 cases, 0 ❌" beside 209 keyed.
+  for (const run of triage.runs) {
+    const keyed = triage.rows.filter((r) => r.layer === run.layer).length;
+    if (keyed !== run.reds) throw new BacklogRefused("TriageInconsistent", `the triage says its ${run.layer} run holds ${run.reds} ❌ and keys ${keyed} rows to it`);
+  }
+  const ran = new Set<string>(triage.runs.map((r) => r.layer));
+  const orphan = triage.rows.find((r) => !ran.has(r.layer));
+  if (orphan !== undefined) throw new BacklogRefused("TriageInconsistent", `${orphan.caseId} is a ${orphan.layer} case and the triage lists no ${orphan.layer} run`);
+  const read = triage.runs.reduce((n, r) => n + r.cases, 0);
+  if (read !== triage.scanned) throw new BacklogRefused("TriageInconsistent", `the triage's runs read ${read} cases and it says it scanned ${triage.scanned}`);
   const listed = triage.gaps.flatMap((g) => g.caseIds);
   const missing = [...rowGap.keys()].filter((id) => !listed.includes(id));
   const extra = listed.filter((id) => !rowGap.has(id));
@@ -369,6 +459,10 @@ function guard(input: BacklogInput, waves: readonly DesignWave[]): void {
   const known = new Set(waves.map((w) => w.id));
   const unknownGap = triage.gaps.find((g) => !known.has(g.wave));
   if (unknownGap !== undefined) throw new BacklogRefused("UnknownWave", `${unknownGap.gap} is keyed to ${unknownGap.wave}, a wave section 8 has no backlog for: its reds would be swallowed`);
+  const strayPath = input.cases.find((c) => c.state === "no_path" && !known.has(routedWave(c.reason)));
+  if (strayPath !== undefined) {
+    throw new BacklogRefused("UnknownWave", `${GLYPH.no_path} case ${strayPath.caseId} (${strayPath.layer}) names no wave of section 8 in its reason (${JSON.stringify(strayPath.reason.slice(0, 60))}): its count would drop out of every wave's line`);
+  }
   const unknownId = ledger.entries.find((e) => e.wave === null || !known.has(e.wave));
   if (unknownId !== undefined) throw new BacklogRefused("UnknownWave", `${unknownId.id} routes to ${unknownId.wave ?? "no wave"}, a wave section 8 has no backlog for: it would drop out of every table`);
 }
@@ -393,6 +487,23 @@ function designRowLine(ng: NewGaps["gaps"][number], input: BacklogInput, waves: 
 
 const entriesOf = (ledger: Ledger, wave: string): LedgerEntry[] => ledger.entries.filter((e) => e.wave === wave);
 
+/** What the ❌ count leaves out (T22 review m3), each as the clause the intro prints, counted from the committed layers and never typed:
+ *  the ░ planned cases, the 🚫 cases with no organiser path, and the cells owner ruling 70 holds red inside `judge regression` that the
+ *  committed run has in another state (with them the judge reads more red cases than the triage keys). The frame is prose in the carries
+ *  file; this is the data. */
+function leavesOut(input: BacklogInput): Record<(typeof LEAVES_OUT)[number], string> {
+  const reds = input.triage.rows.length;
+  const { held } = stateFlips(input, "the intro (ruling 70's cells)");
+  const many = held.length > 1;
+  return {
+    planned: layerText(perLayer(input.cases, (c) => c.state === "not_run")),
+    noPath: layerText(perLayer(input.cases, (c) => c.state === "no_path")),
+    overridden: held.length === 0
+      ? "none"
+      : `${list(held.map((h) => code(h.id)))} (${held.length} cell${many ? "s" : ""}, ${list([...new Set(held.map((h) => code(h.state)))])} in the committed run); with ${many ? "them" : "it"} the judge reads ${num(reds + held.length)} red cases, not ${num(reds)}`,
+  };
+}
+
 /** The section, ending with one newline. Pure over its input; the text passes through redact() (the repo is public). */
 export function renderBacklog(input: BacklogInput): string {
   const waves = designWaves(input.design);
@@ -403,14 +514,23 @@ export function renderBacklog(input: BacklogInput): string {
   const layerOf = new Map(triage.rows.map((r) => [r.caseId, r.layer as string]));
   const fill = (s: string): string => s.replaceAll("{sha}", input.sha);
 
-  const baseline = `The baseline is the merged run of each layer (${triage.runs.map((r) => `${r.layer} ${code(r.runId)}: ${r.cases} cases, ${r.reds} ❌`).join("; ")}). The triage read ${triage.scanned} cases and keyed ${triage.rows.length} ❌ to ${triage.gaps.length} gaps; the ledger holds ${ledger.entries.length} audit ids, ${ledger.counts["not-exercised"]} of them \`not-exercised\`.`;
+  const baseline = `The baseline is the merged run of each layer (${triage.runs.map((r) => `${r.layer} ${code(r.runId)}: ${num(r.cases)} cases, ${num(r.reds)} ❌`).join("; ")}). The triage read ${num(triage.scanned)} cases and keyed ${triage.rows.length} ❌ to ${triage.gaps.length} gaps; the ledger holds ${ledger.entries.length} audit ids, ${ledger.counts["not-exercised"]} of them \`not-exercised\`.`;
   const out: string[] = [`## ${fill(input.carries.heading)}`, ""];
+  const introValues: Record<string, string> = { baseline, ...leavesOut(input) };
+  const introUsed = new Set<string>();
   for (const p of input.carries.intro) {
-    const text = fill(p.replaceAll("{baseline}", baseline));
+    let text = p;
+    for (const [k, v] of Object.entries(introValues)) {
+      if (text.includes(`{${k}}`)) introUsed.add(k);
+      text = text.replaceAll(`{${k}}`, v);
+    }
+    text = fill(text);
     const left = [...placeholdersOf(text)];
     if (left.length > 0) throw new BacklogRefused("CarryPlaceholder", `the intro names {${left.join("}, {")}}, which nothing fills`);
     out.push(text, "");
   }
+  const dropped = LEAVES_OUT.filter((k) => !introUsed.has(k));
+  if (dropped.length > 0) throw new BacklogRefused("CarryPlaceholder", `the intro never uses {${dropped.join("}, {")}}, which the layers fill: a count the section computed would not be printed`);
 
   const gapsOf = (wave: string): TriageJson["gaps"] => triage.gaps.filter((g) => g.wave === wave);
   const redsOf = (wave: string): number => gapsOf(wave).reduce((n, g) => n + g.caseIds.length, 0);
@@ -427,6 +547,14 @@ export function renderBacklog(input: BacklogInput): string {
     const gaps = gapsOf(w.id);
     out.push(`### ${w.id} — ${w.name}`, "");
     out.push(mine.length === 0 ? `No audit id routes to ${w.id}.` : `The ledger holds ${mine.length} audit ids for ${w.id}: ${OUTCOMES.map((o) => `${mine.filter((e) => e.outcome === o).length} ${o}`).join(", ")}.`, "");
+    const path = perLayer(input.cases, (c) => c.state === "no_path" && routedWave(c.reason) === w.id);
+    const pathN = path.reduce((n, r) => n + r.n, 0);
+    out.push(
+      pathN === 0 ? `No ${GLYPH.no_path} case routes to ${w.id} by its own reason.`
+        : pathN === 1 ? `${GLYPH.no_path} 1 planned case has no organiser path and routes to ${w.id} by its own reason (${layerText(path)}); the baseline never drove it, so it is in no table below.`
+          : `${GLYPH.no_path} ${num(pathN)} planned cases have no organiser path and route to ${w.id} by their own reason (${layerText(path)}); the baseline never drove them, so they are in no table below.`,
+      "",
+    );
     if (gaps.length === 0) out.push(`No ❌ case of the baseline is keyed to ${w.id}.`, "");
     else {
       out.push(...table(
@@ -486,12 +614,17 @@ function repoReader(repo: string): (rel: string) => string | null {
   };
 }
 
-const HarnessRunSchema = z.object({ harnessCommit: z.string().min(7), runId: z.string().min(1), cases: z.array(z.object({ caseId: z.string().min(1) })) });
+const HarnessRunSchema = z.object({
+  harnessCommit: z.string().min(7),
+  runId: z.string().min(1),
+  cases: z.array(z.object({ caseId: z.string().min(1), state: z.string().min(1), reason: z.string().optional() })),
+});
 
 export interface LoadOptions { triage: string; sha: string; baseline?: string; design?: string; catalogue?: string }
 
-/** Reads everything the writer needs, and holds it to the baseline it names: `sha` is that commit (the layers' harness commit is a
- *  prefix of it, so it is at least as long) and the triage was written from those runs. */
+/** Reads everything the writer needs, and holds it to the baseline it names: `sha` is the commit every layer's run records, EXACTLY (T22
+ *  review m1: a prefix check let a typo past the recorded characters through) and the triage was written from those runs, its run ids and
+ *  its per-layer case and red counts the baseline's own. */
 export function loadBacklogInput(opts: LoadOptions): BacklogInput {
   const baseline = opts.baseline ?? DEFAULT_BASELINE;
   const catalogue = opts.catalogue ?? CATALOGUE_DIR;
@@ -500,8 +633,8 @@ export function loadBacklogInput(opts: LoadOptions): BacklogInput {
 
   if (!/^[0-9a-f]{7,40}$/.test(opts.sha)) throw new BacklogRefused("ShaNotBaseline", `--sha ${opts.sha} is not a commit name (7 to 40 hex characters)`);
   for (const { layer, run } of runs) {
-    if (!opts.sha.startsWith(run.harnessCommit)) {
-      throw new BacklogRefused("ShaNotBaseline", `--sha ${opts.sha} is not the commit the baseline's ${layer} run was made at (${run.harnessCommit})`);
+    if (opts.sha !== run.harnessCommit) {
+      throw new BacklogRefused("ShaNotBaseline", `--sha ${opts.sha} is not the commit the baseline's ${layer} run was made at (${run.harnessCommit}): the heading names that commit exactly, not a longer or a shorter name of it`);
     }
   }
   for (const { layer, run } of runs) {
@@ -509,6 +642,9 @@ export function loadBacklogInput(opts: LoadOptions): BacklogInput {
     if (t === undefined || t.runId !== run.runId) {
       throw new BacklogRefused("TriageNotBaseline", `the triage's ${layer} run is ${t?.runId ?? "missing"} and the baseline's is ${run.runId}: write the triage from the committed baseline`);
     }
+    const reds = run.cases.filter((c) => c.state === "red").length;
+    if (t.cases !== run.cases.length) throw new BacklogRefused("TriageNotBaseline", `the triage's ${layer} run read ${t.cases} cases and the baseline's holds ${run.cases.length}: write the triage from the committed baseline`);
+    if (t.reds !== reds) throw new BacklogRefused("TriageNotBaseline", `the triage's ${layer} run holds ${t.reds} ❌ and the baseline's has ${reds} red: write the triage from the committed baseline`);
   }
 
   const cat = loadCatalogue(catalogue);
@@ -524,6 +660,6 @@ export function loadBacklogInput(opts: LoadOptions): BacklogInput {
   } catch (e) {
     throw new BacklogRefused("DesignUnreadable", `${design}: ${e instanceof Error ? e.message : String(e)}`);
   }
-  const l3 = runs.find((r) => r.layer === "L3")!.run;
-  return { sha: opts.sha, triage, ledger, newGaps: cat.newGaps, routing: cat.routing, rules: cat.rules, carries, cuts, l3CaseIds: l3.cases.map((c) => c.caseId), design: designText };
+  const cases = runs.flatMap(({ layer, run }) => run.cases.map((c) => ({ layer, caseId: c.caseId, state: c.state, reason: c.reason ?? "" })));
+  return { sha: opts.sha, triage, ledger, newGaps: cat.newGaps, routing: cat.routing, rules: cat.rules, carries, cuts, cases, design: designText };
 }
