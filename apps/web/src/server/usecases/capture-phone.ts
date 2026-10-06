@@ -19,7 +19,7 @@ import { defaultThemeFor } from "@/components/overlay/theme-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import {
   CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartBody,
-  CaptureScoringLinkOk, type CaptureStartedBy, type CaptureStartOk,
+  CaptureScoringLinkOk, type CaptureStage, type CaptureStartedBy, type CaptureStartOk,
 } from "@/server/api-v1/capture-schemas";
 import type { z } from "zod";
 import { log } from "@/server/logger";
@@ -40,6 +40,7 @@ import { ingestCred } from "@/server/relay/ingest-cred";
 import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
+import { captureStageOf } from "./capture-stage";
 import { provideDeviceLinkForPhone, type PhoneScoringLink } from "./device-links";
 import { fixtureStreamTarget, resolveStreamCode, type ResolvedCode } from "./stream-codes";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
@@ -187,13 +188,15 @@ export async function captureCommon(
   };
 }
 
-/** The waiting shape's fields, picked by name (the strict wire): `scheduledStart` is OMITTED when null (§6.4). */
-function waitingFieldsOf(w: CaptureCommon) {
+/** The waiting shape's fields, picked by name (the strict wire): `scheduledStart` is OMITTED when null (§6.4), and so
+ *  is W28's `stage` when no code can be produced (`captureStageOf`) — on every shape, since every shape spreads this. */
+function waitingFieldsOf(w: CaptureCommon, stage: CaptureStage | null) {
   return {
     code: w.code, label: w.label, venueTimezone: w.venueTimezone,
     ...(w.scheduledStart !== null ? { scheduledStart: w.scheduledStart } : {}),
     pollSeconds: w.pollSeconds, autoAllowed: w.autoAllowed, destinationName: w.destinationName, overlayUrl: w.overlayUrl,
     heartbeatUrl: w.heartbeatUrl, startUrl: w.startUrl,
+    ...(stage !== null ? { stage } : {}),
   };
 }
 
@@ -214,17 +217,20 @@ export async function getCode(
   const latest = await latestSession(resolved.fixtureId);
   const open = latest !== null && isActive(latest.state) ? latest.state : null;
   const common = await captureCommon({ orgId: resolved.orgId, fixtureId: resolved.fixtureId, code }, { open, themeId: latest?.theme_id ?? null }, deps, now);
+  // W28: the descriptor's own read (the beat answer carries no stage), recomputed on every GET.
+  const stage = await captureStageOf(resolved.orgId, resolved.fixtureId);
 
   const sessionShape = q.phone !== null && latest !== null && (
     latest.state === "warming" || latest.state === "live" || latest.state === "ending"
     || ((latest.state === "completed" || latest.state === "failed") && latest.warming_at !== null)
   );
-  if (!sessionShape) return { state: "waiting", ...waitingFieldsOf(common) };
-  return sessionDescriptor(resolved, latest!, q, common, deps, now);
+  if (!sessionShape) return { state: "waiting", ...waitingFieldsOf(common, stage) };
+  return sessionDescriptor(resolved, latest!, q, common, stage, deps, now);
 }
 
 async function sessionDescriptor(
-  resolved: ResolvedCode, s: LatestSession, q: { slot: number; phone: string | null }, common: CaptureCommon, deps: SessionDeps, now: Date,
+  resolved: ResolvedCode, s: LatestSession, q: { slot: number; phone: string | null }, common: CaptureCommon, stage: CaptureStage | null,
+  deps: SessionDeps, now: Date,
 ): Promise<Descriptor> {
   // A deployment with no relay has no capability to read and no playback to name: the phone waits and retries.
   if (deps.drivers.disabled) throw unavailable("relay_disabled");
@@ -250,7 +256,7 @@ async function sessionDescriptor(
     // A8: the SAME anchor as the warming timeout — warming_at, or created_at for a session opened before V430.
     warmingDeadline: Math.floor((new Date(s.warming_at ?? s.created_at).getTime() + WARMING_TIMEOUT_MINUTES * 60_000) / 1000),
     scoreUpdates: common.scoreUpdates,
-    ...waitingFieldsOf(common),
+    ...waitingFieldsOf(common, stage),
   };
   const withCred = cred !== null ? { cred } : {};
   switch (s.state) {
