@@ -18,6 +18,7 @@ import { deps } from "./run-deps.ts";
 import { ID, baseCases, judgeOut, mergedRun } from "./summary-fixtures.ts";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 import { fillRunId, jobBlock, jobsOf, runIdTemplate, stepHeads, stepOf } from "./workflow-text.ts";
+import { resolveGroup } from "../../../packages/engine/scripts/stryker-cuts.mjs";
 import { STRYKER_FAMILIES, STRYKER_GROUPS } from "../../../packages/engine/stryker.groups.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -847,7 +848,7 @@ function evalIf(raw: string, ctx: Record<string, unknown>, cancelled = false): b
 function evalExpr(raw: string, ctx: Record<string, unknown>, cancelled = false): unknown {
   const expr = raw.trim().replace(/^\$\{\{\s*/, "").replace(/\s*\}\}$/, "");
   const js = expr
-    .replace(/\b(github|vars|needs|inputs)((?:\.[A-Za-z_][\w-]*)+)/g, (_m, root: string, path: string) => `ref(${JSON.stringify(root + path)})`)
+    .replace(/\b(github|vars|needs|inputs|steps)((?:\.[A-Za-z_][\w-]*)+)/g, (_m, root: string, path: string) => `ref(${JSON.stringify(root + path)})`)
     .replace(/fromJSON\((ref\("[^"]*"\))\)((?:\.[A-Za-z_*][\w-]*)+)/g, (_m, arg: string, path: string) => `fj(${arg}, ${JSON.stringify(path)})`)
     .replace(/fromJSON\((ref\("[^"]*"\))\)/g, (_m, arg: string) => `fj(${arg}, "")`);
   const bare = js.replace(/"[^"]*"|'[^']*'/g, '""');   // the whitelist is read with string contents out, so `*` and `{0}` may sit in a literal
@@ -1264,21 +1265,67 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
     expect(cache).toContain("uses: actions/cache/restore@v4");
   });
 
-  it("the file is SAVED by its own step, `if: always()`, after Stryker and under the key the restore looks for (a red Stryker run must not lose it)", () => {
+  it("the file is SAVED by its own step, after Stryker and the check, `if: always()` and only when the check passed, under the key the restore looks for (a red Stryker run must not lose it; a refused file must not be kept)", () => {
     const save = stepOf(MJOBS.mutate!, "Save the incremental file").body;
     expect(save).toContain("uses: actions/cache/save@v4");
-    expect(save).toContain("if: always()");
+    expect(save).toContain("if: always() && steps.incremental.outcome == 'success'");
     expect(save).toContain("path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json");
     expect(save).toContain(`key: ${/^ {10}key: (.+)$/m.exec(cache)![1]!}`);
     const heads = stepHeads(MJOBS.mutate!);
     const at = (n: string) => heads.indexOf(`      - name: ${n}`);
     expect(at("Run Stryker")).toBeGreaterThan(at("Restore the incremental file"));
-    expect(at("Save the incremental file")).toBe(at("Run Stryker") + 1);   // before any later step that can exit non-zero
+    // the check and the save sit right after Stryker, each `if: always()`, before any later step that can exit non-zero
+    expect(at("Check the incremental file")).toBe(at("Run Stryker") + 1);
+    expect(at("Save the incremental file")).toBe(at("Run Stryker") + 2);
     expect(at("Survivors")).toBeGreaterThan(at("Save the incremental file"));
     expect(heads.filter((h) => h.includes("Floor check")), "the floor is judged per family by the floors job, never by a leg").toEqual([]);
     // the plain `actions/cache@v4` would save only on a green job: none may remain
     expect(MUT).not.toMatch(/uses: actions\/cache@/);
   });
+
+  it("the check before the save is the engine's own selection check on the incremental file, `if: always()`, a red step when it refuses, and the save runs only on its success (evaluated, not just read)", () => {
+    const check = stepOf(MJOBS.mutate!, "Check the incremental file").body;
+    expect(check).toContain("id: incremental");
+    expect(check).toMatch(/^ {8}if: always\(\)$/m);
+    expect(check).toContain("working-directory: packages/engine");
+    expect(check, "a refusal is a red step, never advisory").not.toContain("continue-on-error");
+    expect(check).toContain('run: node --experimental-strip-types scripts/stryker-floor.ts --check-selection "$GROUP" "reports/mutation/$GROUP.incremental.json"');
+    // the same CLI and the same working directory Survivors uses, so the two judge alike
+    expect(stepOf(MJOBS.mutate!, "Survivors").body).toContain("working-directory: packages/engine");
+    expect(stepOf(MJOBS.mutate!, "Survivors").body).toContain("run: node --experimental-strip-types scripts/stryker-floor.ts --survivors");
+    // the save's own condition, evaluated for each outcome the check can have
+    const raw = /^ {8}if: (.+?)\s*(?:#.*)?$/m.exec(stepOf(MJOBS.mutate!, "Save the incremental file").body)![1]!;
+    const saves = (outcome: string, cancelled = false) => evalIf(raw, { steps: { incremental: { outcome } } }, cancelled);
+    expect(saves("success"), "the check accepted the file").toBe(true);
+    expect(saves("failure"), "the check refused it").toBe(false);
+    expect(saves("skipped"), "the check did not run").toBe(false);
+    expect(saves("cancelled"), "the check was cancelled").toBe(false);
+    expect(saves("success", true), "a cancelled job still saves what the check accepted (an interrupted leg's partial file)").toBe(true);
+  });
+
+  it("the check step run for real: a file inside the leg's ranges is exit 0, one with a mutant past them (the first re-run's poisoned file), a missing file and an empty one are exit 2 and the step is red", () => {
+    const LEG = "sports-cricket-9";
+    const CRICKET = "src/sports/cricket/cricket.ts";
+    const range = resolveGroup(LEG).map((e) => /^(.*):(\d+)-(\d+)$/.exec(e)).find((m) => m !== null && m[1] === CRICKET);
+    expect(range, `${LEG} takes a range of cricket.ts`).toBeDefined();
+    const to = Number(range![3]);
+    const from = Number(range![2]);
+    const line = runLine(MJOBS.mutate!, "Check the incremental file");
+    const inc = (lines: number[]) => JSON.stringify({ files: { [CRICKET]: { mutants: lines.map((l, i) => ({ id: String(i), mutatorName: "BlockStatement", status: i % 2 === 0 ? "Killed" : "Pending", location: { start: { line: l, column: 1 } } })) } } });
+    const stepRun = (text: string | null) => {
+      const cwd = fresh("incremental");
+      mkdirSync(join(cwd, "reports/mutation"), { recursive: true });
+      if (text !== null) writeFileSync(join(cwd, "reports/mutation", `${LEG}.incremental.json`), text);
+      const r = spawnSync("bash", ["-c", line], { cwd, encoding: "utf8", timeout: SPAWN_MS, env: { PATH: process.env.PATH ?? "", GROUP: LEG } });
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+    };
+    expect(stepRun(inc([from, from + 1, to])).status, "inside").toBe(0);
+    const poisoned = stepRun(inc([from, to + 1]));
+    expect(poisoned.status, "a mutant one line past the leg's range").toBe(2);
+    expect(poisoned.stderr).toContain(`is not group "${LEG}"'s`);
+    expect(stepRun(null).status, "no file: Stryker died before it wrote one").toBe(2);
+    expect(stepRun(inc([])).status, "no mutants").toBe(2);
+  }, spawnBudget(4));
 
   it("no group's restore prefix is a prefix of another group's cache key (derived from the real group names, each with the cut the plan step gives it)", () => {
     const names = Object.keys(STRYKER_GROUPS);

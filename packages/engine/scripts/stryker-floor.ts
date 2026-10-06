@@ -32,6 +32,11 @@
 //   --survivors <leg> <mutation.json> --out <file>
 //       writes `file:line:col mutator → replacement` for each Survived / NoCoverage mutant not in stryker-equivalent.json:
 //       one LEG's evidence (a leg is what a CI job runs), not a floor.
+//   --check-selection <leg> <report.json>
+//       judges only WHERE a report's mutants are: exit 0 when every one lies inside the leg's files and line ranges (the check
+//       --survivors makes first), 2 when one does not, or when there are none. It reads a report or Stryker's INCREMENTAL file
+//       (the same shape, written whole or, after an interrupt, partial), whose statuses it does not read: the workflow runs it on
+//       the incremental file before saving that to the cache, so a file Survivors would refuse is never cached (W1d T20).
 //
 // Exit codes, each with one meaning (the one convention, D8):
 //   0  done: the score is at or above the floor / the floor was written / nothing fell / the survivors were written;
@@ -56,6 +61,7 @@ const USAGE = [
   "       stryker-floor.ts --set-floor <family> <dir>",
   "       stryker-floor.ts --check-file-against <ref>",
   "       stryker-floor.ts --survivors <leg> <mutation.json> --out <file>",
+  "       stryker-floor.ts --check-selection <leg> <report.json>",
 ].join("\n");
 
 export interface Mutant {
@@ -229,7 +235,7 @@ function selection(entries: readonly string[], file: string): "all" | [number, n
 /** What of `report` the leg's `mutate` entries do not select: a file the leg does not select, or, for a file the leg selects
  *  only by line range (a leg of a split file), a mutant that STARTS outside every range (`file:line`). A report of another leg
  *  of the same file is the wrong report too. */
-function outsideGroup(leg: string, report: Report): string[] {
+function outsideGroup(leg: string, report: { files: Record<string, { mutants: { location: { start: { line: number } } }[] }> }): string[] {
   const entries = entriesOf(leg);
   const out: string[] = [];
   for (const [file, { mutants }] of Object.entries(report.files)) {
@@ -238,6 +244,26 @@ function outsideGroup(leg: string, report: Report): string[] {
     else if (sel !== "all") for (const m of mutants) if (!sel.some(([from, to]) => m.location.start.line >= from && m.location.start.line <= to)) out.push(`${file}:${m.location.start.line}`);
   }
   return out;
+}
+
+/** The places of a report's (or an incremental file's) mutants, and nothing else: the statuses of a partial file are not judged
+ *  here (a Pending one is the interrupted run's own). Refuses what is not a `files` map of mutants with a start line. */
+function parsePlaces(text: string, what: string): { files: Record<string, { mutants: { location: { start: { line: number } } }[] }>; mutants: number } {
+  const raw = parseJson(text, what);
+  if (!isObject(raw) || !isObject(raw.files)) throw new Refusal(`${what} has no \`files\` map`);
+  const files: Record<string, { mutants: { location: { start: { line: number } } }[] }> = {};
+  let mutants = 0;
+  for (const [file, entry] of Object.entries(raw.files)) {
+    if (!isObject(entry) || !Array.isArray(entry.mutants)) throw new Refusal(`${what}'s ${file} has no \`mutants\` array`);
+    files[file] = { mutants: [] };
+    for (const [i, m] of (entry.mutants as unknown[]).entries()) {
+      const start = isObject(m) && isObject(m.location) && isObject(m.location.start) ? m.location.start : null;
+      if (start === null || !isCount(start.line)) throw new Refusal(`${what}'s ${file} mutant #${i} has no location.start line`);
+      files[file].mutants.push({ location: { start: { line: start.line } } });
+      mutants++;
+    }
+  }
+  return { files, mutants };
 }
 
 /** The legs' reports as one: a file two legs both report (the parts of a split file) lists the mutants of all of them. */
@@ -469,6 +495,7 @@ function parse(argv: string[]) {
         "set-floor": { type: "boolean" },
         "check-file-against": { type: "string" },
         survivors: { type: "boolean" },
+        "check-selection": { type: "boolean" },
         out: { type: "string" },
         "skip-if-no-floors": { type: "boolean" },
       },
@@ -483,10 +510,10 @@ export function main(argv: string[]): number {
   try {
     const parsed = parse(argv);
     const { values, positionals } = parsed;
-    const modes = (["check", "check-all", "set-floor", "check-file-against", "survivors"] as const).filter((m) => values[m] !== undefined);
+    const modes = (["check", "check-all", "set-floor", "check-file-against", "survivors", "check-selection"] as const).filter((m) => values[m] !== undefined);
     if (modes.length !== 1) throw new Refusal(`exactly one mode is required\n${USAGE}`);
     const mode = modes[0]!;
-    const takes = { check: "<family> <dir>", "set-floor": "<family> <dir>", survivors: "<leg> <mutation.json>", "check-all": "<dir>", "check-file-against": "" } as const;
+    const takes = { check: "<family> <dir>", "set-floor": "<family> <dir>", survivors: "<leg> <mutation.json>", "check-all": "<dir>", "check-file-against": "", "check-selection": "<leg> <report.json>" } as const;
     const need = mode === "check-file-against" ? 0 : mode === "check-all" ? 1 : 2;
     if (positionals.length !== need) throw new Refusal(`${mode} takes ${need === 0 ? "no positional arguments" : takes[mode]}\n${USAGE}`);
     if (values.out !== undefined && mode !== "survivors") throw new Refusal(`--out belongs to --survivors\n${USAGE}`);
@@ -495,6 +522,17 @@ export function main(argv: string[]): number {
     if (mode === "check-all" && (values.legs === undefined || values.legs === "")) throw new Refusal(`--check-all needs --legs <leg,leg,...>: the legs the run planned\n${USAGE}`);
 
     if (mode === "check-file-against") return checkFileAgainst(values["check-file-against"] ?? "");
+
+    if (mode === "check-selection") {
+      const [leg = "", reportPath = ""] = positionals;
+      if (GROUPS[leg] === undefined) throw new Refusal(`unknown group "${leg}": expected one of ${Object.keys(STRYKER_GROUPS).join(", ")}`);
+      const places = parsePlaces(readText(reportPath, "the incremental file"), "the incremental file");
+      if (places.mutants === 0) throw new Refusal(`the incremental file holds no mutants: nothing to judge, and nothing earned to keep`);
+      const outside = outsideGroup(leg, places);
+      if (outside.length > 0) throw new Refusal(`the incremental file is not group "${leg}"'s: it holds ${outside.slice(0, 3).join(", ")}, outside the group's files and line ranges`);
+      out(`stryker-floor: check-selection ${leg}: ${places.mutants} mutants in ${Object.keys(places.files).length} files, all inside the group's files and line ranges`);
+      return 0;
+    }
 
     if (mode === "survivors") {
       const [leg = "", reportPath = ""] = positionals;

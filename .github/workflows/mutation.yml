@@ -15,9 +15,10 @@ name: Stryker mutation
 # leg's timeout is 1.5 x that (min 10, max 300 minutes). The run cancelled three legs at their timeouts and four more took over 200
 # minutes, so those seven were cut again into parts (10 more jobs, cut points in packages/engine/stryker.groups.mjs); a part is
 # timed from its share of the leg's measured phase. A leg's Stryker incremental file is cached under a key that carries the
-# fingerprint of its CUT (`matrix.cut`, which stryker-matrix.mjs derives from the leg's STRYKER_GROUPS entry and the anchors of
-# the parts it takes), so a leg that is cut again never restores the file another cut wrote (T20: four re-cut legs kept their
-# names, restored the old cut's results and were refused by the Survivors guard, which stays as it is). The floor (stryker-floor.json) gates, not
+# fingerprint of its CUT (`matrix.cut`, which stryker-matrix.mjs derives from the leg's STRYKER_GROUPS entry, the anchors of
+# the parts it takes and the files its globs resolve to), so a leg that is cut again never restores the file another cut wrote (T20:
+# four re-cut legs kept their names, restored the old cut's results and were refused by the Survivors guard, which stays as it
+# is), and a file that cannot be judged by where its mutants are is never saved. The floor (stryker-floor.json) gates, not
 # Stryker's `break`, and is kept per FAMILY (ruling 66's ten groups, the sum of their legs: a file cut again never removes a
 # floor), so the `floors` job, not a leg, judges it: it runs after every leg and reads the legs' artifacts. Until PR-B sets a floor
 # it prints "no floor yet" and the families' scores are only logged.
@@ -259,10 +260,17 @@ jobs:
       # letters, digits and hyphens, and its number is the last part (`sports-cricket-1`, `sports-cricket-10`), so a restore key
       # that stopped at the name would also match `stryker-sports-cricket-10@...` and the wrong group's file could be the one
       # restored. The first '@' ends the name (matrix-workflow.test.ts derives that collision from the real group names).
-      # `matrix.cut` is the fingerprint of the leg's cut (stryker-matrix.mjs, in the plan step: the leg's entries and the anchors
-      # of the parts it takes, never an entry's text alone, since `cricket.ts#10` stayed `cricket.ts#10` while its range halved).
-      # The second '@' ends the cut, so a restore key can only ever reach a file this SAME cut wrote, and an unchanged leg still
-      # carries last week's results forward. Nothing here hashes anything: the plan step does, before any install.
+      # `matrix.cut` is the fingerprint of the leg's cut (stryker-matrix.mjs, in the plan step: the leg's entries, the anchors
+      # of the parts it takes, never an entry's text alone, since `cricket.ts#10` stayed `cricket.ts#10` while its range halved,
+      # and the sorted files its globs resolve to, since a file added, removed or renamed inside a glob changes what the leg holds
+      # under the same entries). The second '@' ends the cut, so a restore key can only ever reach a file this SAME cut wrote, and
+      # an unchanged leg still carries last week's results forward. Nothing here hashes anything: the plan step does, before any
+      # install.
+      # The save follows a CHECK, not Survivors: `--check-selection` is the first thing Survivors does (every mutant inside the leg's
+      # files and line ranges), run on the incremental file itself, so a file Survivors would refuse is never cached and cannot be
+      # restored into next week's run. It is not Survivors itself because an interrupted Stryker (the timeout, a cancel) writes a
+      # PARTIAL incremental file and no JSON report (Stryker's "Saved a partial incremental report ... after an unexpected
+      # interrupt"), so a save that waited for Survivors would never keep what the longest legs earned before the clock stopped them.
       - name: Restore the incremental file
         uses: actions/cache/restore@v4
         with:
@@ -277,8 +285,15 @@ jobs:
           mkdir -p reports/mutation
           STRYKER_GROUP="$GROUP" pnpm mutation
           code=$?; echo "EXIT=$code"; echo "$code" > reports/mutation/exit.txt; exit "$code"
+      # `if: always()` on purpose, as below. A missing file (Stryker died before it wrote one) or one outside the leg is a red step, and
+      # the save after it is skipped.
+      - name: Check the incremental file
+        id: incremental
+        if: always()
+        working-directory: packages/engine
+        run: node --experimental-strip-types scripts/stryker-floor.ts --check-selection "$GROUP" "reports/mutation/$GROUP.incremental.json"
       - name: Save the incremental file
-        if: always()   # deliberate, as below; a missing file (Stryker died first) is a warning from the action, not a failure
+        if: always() && steps.incremental.outcome == 'success'   # deliberate: only a file the check accepted
         uses: actions/cache/save@v4
         with:
           path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json

@@ -949,6 +949,88 @@ describe("the CLI's other modes and its refusals", () => {
     expect(existsSync(join(w.cwd, "R.md"))).toBe(true);
   });
 
+  // --check-selection (T20 review, Minor 3): the incremental file is judged by WHERE its mutants are before it is cached, so a file
+  // Survivors would refuse (the one a re-cut leg restored in the first re-run) is never saved. It is the check --survivors makes
+  // first, on a file whose statuses may be partial (an interrupted run writes one).
+  describe("--check-selection judges where an incremental file's mutants are, before it is cached", () => {
+    const LEG = "sports-cricket-9";
+    const CRICKET = "src/sports/cricket/cricket.ts";
+    /** The ranges the leg takes of cricket.ts, from the groups through the resolver (the incident's leg: it took half of what it had). */
+    const ranges = (selected(ENGINE, resolveGroup(LEG)).get(CRICKET) ?? []) as [number, number][];
+    /** A Stryker incremental file as a run leaves it: the report's own shape, with mutants at `lines` (1-based start lines) of `file`. */
+    const incremental = (file: string, lines: number[], status = "Killed") => JSON.stringify({
+      schemaVersion: "2", thresholds: { high: 80, low: 60 },
+      files: { [file]: { language: "typescript", source: "", mutants: lines.map((line, i) => ({ id: String(i), mutatorName: "ConditionalExpression", replacement: "true", status, location: { start: { line, column: 1 }, end: { line, column: 9 } } })) } },
+      testFiles: {},
+    });
+    const checked = (text: string, leg = LEG) => {
+      const w = workdir({ floors: {} });
+      writeFileSync(join(w.cwd, "inc.json"), text);
+      return run(w.cwd, ["--check-selection", leg, join(w.cwd, "inc.json")]);
+    };
+
+    spawnIt(5)("a file whose mutants all lie inside the leg's ranges passes, the first and last line of a range included; a mutant one line past the end (the next part's) or before the start is refused, naming the line", () => {
+      expect(ranges.length, "the leg takes a range of cricket.ts").toBeGreaterThan(0);
+      const [from, to] = ranges[0] as [number, number];
+      const ok = checked(incremental(CRICKET, [from, from + 1, to]));
+      expect({ status: ok.status, stderr: ok.stderr }).toEqual({ status: 0, stderr: "" });
+      expect(ok.stdout).toContain("3 mutants in 1 files");
+      for (const line of [to + 1, from - 1]) {
+        const r = checked(incremental(CRICKET, [from, line]));
+        expect({ line, status: r.status }).toEqual({ line, status: 2 });
+        expect(r.stdout).toBe("");
+        expect(r.stderr).toContain(`is not group "${LEG}"'s`);
+        expect(r.stderr).toContain(`${CRICKET}:${line}`);
+      }
+      // another leg's file altogether
+      const wrong = checked(incremental("src/scheduling/bracket.ts", [1, 2]));
+      expect(wrong.status).toBe(2);
+      expect(wrong.stderr).toContain("src/scheduling/bracket.ts");
+    });
+
+    spawnIt(1)("the statuses are not read: a partial file (an interrupted run's, Pending mutants among them) passes on where its mutants are", () => {
+      const r = checked(incremental(CRICKET, [(ranges[0] as [number, number])[0]], "Pending"));
+      expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
+    });
+
+    spawnIt(7)("a file with no mutants, one that is not JSON, one without `files`, one whose mutant has no start line, a missing file and an unknown leg are each exit 2 with nothing on stdout, and each says why", () => {
+      const cases: [string, string, RegExp, string?][] = [
+        ["no mutants", JSON.stringify({ files: { [CRICKET]: { mutants: [] } } }), /holds no mutants/],
+        ["not json", "{ nope", /not valid JSON/],
+        ["no files", "{}", /no `files` map/],
+        ["no start line", JSON.stringify({ files: { [CRICKET]: { mutants: [{ location: {} }] } } }), /no location\.start line/],
+        ["a start without its line", JSON.stringify({ files: { [CRICKET]: { mutants: [{ location: { start: { column: 1 } } }] } } }), /no location\.start line/],
+        ["unknown leg", incremental(CRICKET, [1]), /unknown group "nosuch"/, "nosuch"],
+      ];
+      for (const [name, text, why, leg] of cases) {
+        const r = checked(text, leg);
+        expect({ name, status: r.status }).toEqual({ name, status: 2 });
+        expect(r.stdout, name).toBe("");
+        expect(r.stderr, name).toMatch(why);
+      }
+      const w = workdir({ floors: {} });
+      expect(run(w.cwd, ["--check-selection", LEG, join(w.cwd, "nope.json")]).status).toBe(2);
+    });
+
+    spawnIt(2)("--survivors judges the same way: a file --check-selection refuses, --survivors refuses with the same sentence about the group, so the two checks cannot part", () => {
+      const [from, to] = ranges[0] as [number, number];
+      const poisoned = incremental(CRICKET, [from, to + 1]);
+      const w = workdir({ floors: {} });
+      writeFileSync(join(w.cwd, "inc.json"), poisoned);
+      const a = run(w.cwd, ["--check-selection", LEG, join(w.cwd, "inc.json")]);
+      const b = run(w.cwd, ["--survivors", LEG, join(w.cwd, "inc.json"), "--out", join(w.cwd, "S.md")]);
+      expect([a.status, b.status]).toEqual([2, 2]);
+      expect(a.stderr).toContain(`${CRICKET}:${to + 1}, outside the group's files and line ranges`);
+      expect(b.stderr).toContain(`${CRICKET}:${to + 1}, outside the group's files and line ranges`);
+    });
+
+    spawnIt(2)("--check-selection takes exactly a leg and a path, and no --out", () => {
+      const w = workdir({ floors: {} });
+      expect(run(w.cwd, ["--check-selection", LEG]).status).toBe(2);
+      expect(run(w.cwd, ["--check-selection", LEG, "a.json", "--out", "x"]).stderr).toContain("--out belongs to --survivors");
+    });
+  });
+
   spawnIt(5)("--out belongs to --survivors and --skip-if-no-floors to --check: each given to another mode is exit 2, and the mode does not run", () => {
     const w = workdir({ floors: { core: 50 }, reports: coreOnly({ killed: 50, survived: 50 }) });
     const before = readFileSync(join(w.cwd, "stryker-floor.json"), "utf8");

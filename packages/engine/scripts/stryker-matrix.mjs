@@ -13,7 +13,9 @@
 // 78c7ef3e6, ubuntu-latest, 4 vCPU), whole minutes, at least 10 and at most 300; the probe's is from its own sample, run 37330725739
 // (T20 step 2; test/stryker-sizing.test.ts derives every one from the data). A different runner is a different wall: every
 // timeout is re-derived whenever a hosted run disagrees with it, and whenever MATRIX_RUNNER changes.
-// A group's `cut` is a fingerprint of WHAT THE LEG MUTATES, and the incremental cache is keyed on it (mutation.yml): the leg's
+// A group's `cut` is a fingerprint of WHAT THE LEG MUTATES, and the incremental cache is keyed on it (mutation.yml): the files its
+// `mutate` list resolves to (sorted, relative to packages/engine: a file added, removed or renamed inside a glob changes what the
+// leg holds while every entry stays the same; scripts/stryker-files.mjs reads the globs with node: built-ins alone) and the leg's
 // `mutate` entries, with a `file#N` part written as the two anchors that bound it in STRYKER_SPLITS (the statement that starts
 // the part and the one that starts the next), not as N and not as lines, and an ordinal anchor (`if#7`: the seventh `if` of a
 // body) with the trimmed line stryker-anchors.json recorded for it, since the name alone does not say which statement it is
@@ -28,14 +30,16 @@
 // Exit codes, each with one meaning (the one convention, D8):
 //   0  the matrix line was printed;
 //   2  refused, nothing printed to stdout: usage, an unknown event or group, a selected group without a valid timeout, or a
-//      selected group cut at a part or an ordinal anchor that does not resolve (no such part, no split, no recorded line).
+//      selected group cut at a part or an ordinal anchor that does not resolve (no such part, no split, no recorded line), or a
+//      selected group whose entries select no files or use glob syntax scripts/stryker-files.mjs does not read.
 //   (3, a crash while loading, is not claimed: this runs under plain `node`, where a load crash exits 1.)
 import { readFileSync } from "node:fs";
 import process from "node:process";
-import { URL } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 import { parseArgs } from "node:util";
 import { createHash } from "node:crypto";
 import { STRYKER_GROUPS, STRYKER_SPLITS } from "../stryker.groups.mjs";
+import { filesOf } from "./stryker-files.mjs";
 
 const MAX_MINUTES = 300; // ONE cap, everywhere (D14, Step 4, Task 20)
 const USAGE = 'usage: stryker-matrix.mjs --event <pull_request|schedule|workflow_dispatch> [--group <all|group>]';
@@ -86,8 +90,22 @@ function cutOf(group) {
     return { file, from: part === 1 ? null : anchorOf(group, file, anchors[part - 2]), to: part === anchors.length + 1 ? null : anchorOf(group, file, anchors[part - 1]) };
   });
 }
-/** The fingerprint of a group's cut: 16 hex characters of the SHA-256 of its cut as JSON. */
-const cutKey = (group) => createHash("sha256").update(JSON.stringify(cutOf(group))).digest("hex").slice(0, 16);
+/** The engine directory (the one above scripts/), which the groups' paths are relative to. */
+const ENGINE = fileURLToPath(new URL("..", import.meta.url));
+/** The files a group's entries resolve to, sorted; a group that selects none is a refusal (nothing to mutate is a fault, and an
+ *  empty list would fingerprint every such leg alike). */
+function filesOfGroup(group) {
+  let files;
+  try {
+    files = filesOf(STRYKER_GROUPS[group], ENGINE);
+  } catch (e) {
+    return refuse(`"${group}": ${e.message}`);
+  }
+  if (files.length === 0) return refuse(`"${group}" selects no files under ${ENGINE}: its entries match nothing`);
+  return files;
+}
+/** The fingerprint of a group's cut: 16 hex characters of the SHA-256 of its cut and its resolved files as JSON. */
+const cutKey = (group) => createHash("sha256").update(JSON.stringify({ cut: cutOf(group), files: filesOfGroup(group) })).digest("hex").slice(0, 16);
 
 const all = Object.keys(STRYKER_GROUPS);
 const nonProbe = all.filter((g) => g !== "probe");

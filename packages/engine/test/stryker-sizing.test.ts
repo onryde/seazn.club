@@ -84,11 +84,13 @@ interface Unscored { file: string; mutator: string; replacement: string; host: s
 const UNSCORED = JSON.parse(readFileSync(join(ENGINE, "stryker-unscored.json"), "utf8")) as Unscored[];
 /** UNIQUE (T20 review M4): the line text alone is not a key, `return {` is on 19 lines of nested/kernel.ts, so the key also names the
  *  top-level declaration the mutant sits in (`host`) and which of the mutants of that file with the same mutator, replacement, host
- *  and text it is (`nth`, counted in source order). `keyedMutants` refuses a file in which two mutants still share a key. */
+ *  and text it is (`nth`, counted in source order): unique BY CONSTRUCTION, since `nth` numbers the mutants that share the rest,
+ *  and the test "every listed key names ONE mutant" holds it on every mutant of every listed file. */
 const unscoredKey = (u: Unscored): string => [u.file, u.mutator, u.replacement, u.host, u.text, u.nth].join(" | ");
 /** The old key (file, mutator, replacement, line text): what ambiguity is measured against. */
 const bareKey = (u: Pick<Unscored, "file" | "mutator" | "replacement" | "text">): string => [u.file, u.mutator, u.replacement, u.text].join(" | ");
-/** EVERY mutant of `whole` (the instrumenter's, over `text`) with its key, in source order; a file in which two share one is refused. */
+/** EVERY mutant of `whole` (the instrumenter's, over `text`) with its key, in source order. A mutant outside every top-level
+ *  statement is refused (the instrumenter never makes one; a place that says so is a wrong report, not a key to invent). */
 function keyedMutants(file: string, text: string, whole: readonly Found[]): { m: Found; entry: Unscored }[] {
   const lines = text.split("\n");
   const statements = topLevelStatements(text);
@@ -106,8 +108,6 @@ function keyedMutants(file: string, text: string, whole: readonly Found[]): { m:
     seen.set(same, nth);
     return { m, entry: { ...base, nth, line: m.start.line + 1 } };
   });
-  const keys = new Set(out.map((x) => unscoredKey(x.entry)));
-  if (keys.size !== out.length) throw new Error(`${file}: ${out.length - keys.size} mutants share a key with another (an ambiguous key names two)`);
   return out;
 }
 /** The mutants of `whole` whose node runs across one of `boundaries` (the LAST line of a part, 1-based): Stryker keeps a mutant only
@@ -521,13 +521,31 @@ describe("every leg is under the 200-minute split line, from what the full run m
     expect(lost, "mutants no leg holds: as many as the list names").toBe(UNSCORED.length);
   }, INSTRUMENT_BUDGET_MS);
 
+  it("the key's own guards are reached: a mutant outside every statement is refused, a host that declares nothing is named by its place, and mutants alike in every other way are told apart by `nth`", () => {
+    const at = (line: number, column: number): Found => ({ mutator: "BlockStatement", replacement: "{}", start: { line, column }, end: { line, column: column + 1 } });
+    const text = ["call();", "export function f() {", "  return {", "  };", "}", "export function g() {", "  return {", "  };", "}"].join("\n");
+    // outside every statement: line 40 (0-based 39) of a 9-line file
+    expect(() => keyedMutants("x.ts", text, [at(39, 0)])).toThrow(/x\.ts:40: a mutant outside every top-level statement/);
+    // a statement that declares nothing is `statement N` (N its place among the file's top-level statements)
+    expect(keyedMutants("x.ts", text, [at(0, 0)])[0]?.entry.host).toBe("statement 1");
+    // two `return {` in two functions differ by host; two in ONE function differ by nth, counted in source order whatever the order given
+    const twice = ["export function h() {", "  return {", "  };", "  return {", "  };", "}"].join("\n");
+    const keyed = keyedMutants("x.ts", twice, [at(3, 2), at(1, 2)]);
+    expect(keyed.map((k) => [k.entry.line, k.entry.nth])).toEqual([[2, 1], [4, 2]]);
+    const apart = keyedMutants("x.ts", text, [at(2, 2), at(6, 2)]);
+    expect(apart.map((k) => [k.entry.host, k.entry.nth])).toEqual([["f", 1], ["g", 1]]);
+    expect(new Set([...keyed, ...apart].map((k) => unscoredKey(k.entry))).size, "all four keys differ").toBe(4);
+  });
+
   it("every listed key names ONE mutant of its file, and the old key (the line's text) named several for some, so the host and the nth do the work (T20 review M4)", async () => {
     const byFile = new Map<string, Unscored[]>();
     for (const u of UNSCORED) byFile.set(u.file, [...(byFile.get(u.file) ?? []), u]);
     let checked = 0;
     let ambiguousBefore = 0;
     for (const [file, listed] of byFile) {
-      const keyed = keyedMutants(file, readFileSync(join(ENGINE, file), "utf8"), await mutantsOf(ENGINE, file, "all")); // refuses a file whose keys collide
+      const keyed = keyedMutants(file, readFileSync(join(ENGINE, file), "utf8"), await mutantsOf(ENGINE, file, "all"));
+      expect(keyed.length, `${file}: mutants keyed`).toBeGreaterThan(0);
+      expect(new Set(keyed.map((k) => unscoredKey(k.entry))).size, `${file}: no two of its ${keyed.length} mutants share a key`).toBe(keyed.length);
       for (const u of listed) {
         expect(typeof u.host === "string" && u.host !== "" && Number.isInteger(u.nth) && u.nth >= 1, `${unscoredKey(u)}: a host and an nth (an entry keyed on the text alone is ambiguous and refused)`).toBe(true);
         expect(keyed.filter((k) => unscoredKey(k.entry) === unscoredKey(u)), `${unscoredKey(u)} names exactly one mutant of ${file}`).toHaveLength(1);

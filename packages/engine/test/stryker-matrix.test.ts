@@ -5,10 +5,13 @@
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, matchesGlob, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
+import { resolveGroup } from "../scripts/stryker-cuts.mjs";
+import { filesOf, globMatches } from "../scripts/stryker-files.mjs";
 import { STRYKER_GROUPS, STRYKER_SPLITS } from "../stryker.groups.mjs";
+import { selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -41,6 +44,17 @@ function parsed(o: Out): { group: string; timeout: number; cut: string }[] {
 const groupsOf = (o: Out) => parsed(o).map((e) => e.group);
 /** An entry without its fingerprint (the tests of the timeout compare group and timeout; the fingerprint has its own tests). */
 const slim = (es: { group: string; timeout: number }[]) => es.map(({ group, timeout }) => ({ group, timeout }));
+
+/** Every file the real groups select, as an EMPTY file under `root`: the plan needs which files exist, never what they hold. (Never a
+ *  link to the real tree: a test that wrote through it would write the real source.) */
+function emptyCopiesOfRealFiles(root: string): void {
+  const all = new Set(Object.values(STRYKER_GROUPS).flatMap((entries) => filesOf(entries, ENGINE)));
+  if (all.size < 50) throw new Error(`the real groups select ${all.size} files: the fixture would be vacuous`);
+  for (const f of all) {
+    mkdirSync(dirname(join(root, f)), { recursive: true });
+    writeFileSync(join(root, f), "");
+  }
+}
 
 /** A test that spawns `n` processes. */
 const spawnIt = (n: number) => (name: string, fn: () => void) => it(name, fn, spawnBudget(n));
@@ -142,8 +156,10 @@ describe("a broken timeouts file is a refusal, never a matrix", () => {
     const root = join(scratch, String(++seq));
     mkdirSync(join(root, "scripts"), { recursive: true });
     copyFileSync(REAL, join(root, "scripts/stryker-matrix.mjs"));
+    copyFileSync(join(ENGINE, "scripts/stryker-files.mjs"), join(root, "scripts/stryker-files.mjs"));
     copyFileSync(join(ENGINE, "stryker.groups.mjs"), join(root, "stryker.groups.mjs"));
     copyFileSync(join(ENGINE, "stryker-anchors.json"), join(root, "stryker-anchors.json"));
+    emptyCopiesOfRealFiles(root); // the real groups name real files
     if (timeouts !== null) writeFileSync(join(root, "stryker-timeouts.json"), timeouts);
     return root;
   }
@@ -216,13 +232,24 @@ describe("each leg carries the fingerprint of its cut, the key its incremental c
   afterAll(() => rmSync(scratch, { recursive: true, force: true }));
   let seq = 0;
   /** The script beside a groups file and a timeouts file of the test's choosing, laid out as in the engine. */
-  function world(groups: Record<string, string[]>, splits: Record<string, string[]>, anchors: Record<string, unknown> = {}): string {
+  function world(groups: Record<string, string[]>, splits: Record<string, string[]>, anchors: Record<string, unknown> = {}, files?: readonly string[]): string {
     const root = join(scratch, String(++seq));
     mkdirSync(join(root, "scripts"), { recursive: true });
     copyFileSync(REAL, join(root, "scripts/stryker-matrix.mjs"));
+    copyFileSync(join(ENGINE, "scripts/stryker-files.mjs"), join(root, "scripts/stryker-files.mjs"));
     writeFileSync(join(root, "stryker.groups.mjs"), `export const STRYKER_GROUPS = ${JSON.stringify(groups)};\nexport const STRYKER_SPLITS = ${JSON.stringify(splits)};\n`);
     writeFileSync(join(root, "stryker-timeouts.json"), JSON.stringify(Object.fromEntries(Object.keys(groups).map((g) => [g, 10]))));
     writeFileSync(join(root, "stryker-anchors.json"), JSON.stringify(anchors));
+    // the files the entries select (a leg that selects none is refused): the ones the test names, else one per entry
+    const here = files ?? Object.values(groups).flat().filter((e) => !e.startsWith("!")).map((e) => {
+      const path = e.replace(/(?:#\d+|:\d+-\d+)$/, "");
+      const at = path.indexOf("*");
+      return at === -1 ? path : `${path.slice(0, path.lastIndexOf("/", at))}/default.ts`;
+    });
+    for (const f of here) {
+      mkdirSync(dirname(join(root, f)), { recursive: true });
+      writeFileSync(join(root, f), "export {};\n");
+    }
     return root;
   }
   const run = (root: string, group = "all") => matrixCli(join(root, "scripts/stryker-matrix.mjs"), root, "workflow_dispatch", group);
@@ -381,9 +408,11 @@ describe("each leg carries the fingerprint of its cut, the key its incremental c
       const root = join(scratch, String(++seq));
       mkdirSync(join(root, "scripts"), { recursive: true });
       copyFileSync(REAL, join(root, "scripts/stryker-matrix.mjs"));
+    copyFileSync(join(ENGINE, "scripts/stryker-files.mjs"), join(root, "scripts/stryker-files.mjs"));
       copyFileSync(join(ENGINE, "stryker.groups.mjs"), join(root, "stryker.groups.mjs"));
       copyFileSync(join(ENGINE, "stryker-timeouts.json"), join(root, "stryker-timeouts.json"));
       writeFileSync(join(root, "stryker-anchors.json"), JSON.stringify(anchors));
+      emptyCopiesOfRealFiles(root);
       return root;
     };
     const anchors = JSON.parse(readFileSync(join(ENGINE, "stryker-anchors.json"), "utf8")) as Record<string, Record<string, { starts: string }>>;
@@ -403,6 +432,120 @@ describe("each leg carries the fingerprint of its cut, the key its incremental c
     const others = NON_PROBE.filter((g) => !atOrdinal.includes(g));
     expect(others.length, "legs not cut at one").toBeGreaterThan(10);
     for (const g of others) expect(after[g], `${g} is not`).toBe(before[g]);
+  });
+
+  // --- the files a leg's globs resolve to are part of its cut (T20 review, Minor 3) ------------------------------------------
+  // A file added, removed or renamed inside a glob changes what the leg mutates while every entry stays the same: without the files
+  // in the fingerprint a cache restored across it carries results for a file the leg no longer holds.
+  const GLOB_GROUPS = { "g-1": ["src/dir/**/*.ts", "!src/dir/**/*.test.ts"], "g-2": ["src/other/**/*.ts"], "g-3": ["src/fixed.ts"] };
+  const FILES = ["src/dir/a.ts", "src/dir/deep/b.ts", "src/dir/a.test.ts", "src/other/o.ts", "src/fixed.ts", "src/unrelated/u.ts"];
+  const globWorld = (files: readonly string[]) => cutsIn(world(GLOB_GROUPS, {}, {}, files));
+
+  spawnIt(7)("a file added, removed or renamed inside a leg's glob changes that leg's fingerprint and no other leg's; a file outside every glob, or one a negation removes, changes nothing", () => {
+    const base = globWorld(FILES);
+    expect(Object.keys(base)).toEqual(["g-1", "g-2", "g-3"]);
+    // the same files again: the same fingerprints (the premise of every difference below)
+    expect(globWorld(FILES)).toEqual(base);
+    const added = globWorld([...FILES, "src/dir/new.ts"]);
+    expect(added["g-1"], "a file added to g-1's glob").not.toBe(base["g-1"]);
+    expect(added["g-2"]).toBe(base["g-2"]);
+    expect(added["g-3"]).toBe(base["g-3"]);
+    const addedDeep = globWorld([...FILES, "src/dir/deep/er/new.ts"]);
+    expect(addedDeep["g-1"], "a file added two directories down").not.toBe(base["g-1"]);
+    const removed = globWorld(FILES.filter((f) => f !== "src/dir/deep/b.ts"));
+    expect(removed["g-1"], "a file removed from g-1's glob").not.toBe(base["g-1"]);
+    expect(removed["g-2"]).toBe(base["g-2"]);
+    const renamed = globWorld(FILES.map((f) => (f === "src/dir/a.ts" ? "src/dir/renamed.ts" : f)));
+    expect(renamed["g-1"], "a file renamed inside g-1's glob").not.toBe(base["g-1"]);
+    expect(renamed["g-1"], "and the rename is a different set from the removal").not.toBe(removed["g-1"]);
+    expect(globWorld([...FILES, "src/unrelated/other.ts", "docs/readme.md"]), "files no glob selects").toEqual(base);
+    expect(globWorld([...FILES, "src/dir/b.test.ts", "src/dir/deep/c.test.ts"]), "files g-1's own negation removes").toEqual(base);
+    expect(globWorld([...FILES, "src/dir/data.json"]), "a file the glob's extension does not select").toEqual(base);
+    // a literal entry's file: removed it selects nothing (the other legs still have files, so the matrix is built; g-3 itself is refused below)
+    expect(globWorld([...FILES, "src/fixed.ts"]), "a file already there, listed twice").toEqual(base);
+  });
+
+  spawnIt(2)("a rename that keeps the leg's file COUNT still moves the fingerprint (the list, not its length)", () => {
+    const a = globWorld(["src/dir/a.ts", "src/other/o.ts", "src/fixed.ts"]);
+    const b = globWorld(["src/dir/z.ts", "src/other/o.ts", "src/fixed.ts"]);
+    expect(b["g-1"]).not.toBe(a["g-1"]);
+  });
+
+  spawnIt(5)("a leg whose entries select no file is a refusal naming it, nothing on stdout; a glob the reader cannot read, or one that starts with a wildcard, is a refusal of its own", () => {
+    const cases: [string, Record<string, string[]>, string[], RegExp][] = [
+      ["selects nothing", { g: ["src/dir/**/*.ts"] }, [], /"g" selects no files/],
+      ["only negated away", { g: ["src/dir/**/*.ts", "!src/dir/**/*.ts"] }, ["src/dir/a.ts"], /"g" selects no files/],
+      ["a brace set", { g: ["src/{a,b}.ts"] }, ["src/a.ts"], /uses glob syntax this reader does not implement/],
+      ["a leading wildcard", { g: ["**/*.ts"] }, ["src/a.ts"], /must start with a literal directory/],
+    ];
+    for (const [name, groups, files, why] of cases) {
+      const r = run(world(groups, {}, {}, files));
+      expect({ name, status: r.status }).toEqual({ name, status: 2 });
+      expect(r.stdout, name).toBe("");
+      expect(r.stderr, name).toMatch(why);
+    }
+    // the pair: with a file the same leg works
+    expect(parsed(run(world({ g: ["src/dir/**/*.ts"] }, {}, {}, ["src/dir/a.ts"]))).map((e) => e.group)).toEqual(["g"]);
+  });
+
+  it("the reader finds exactly the files Stryker's own glob reading selects, for every real leg (the plan runs without node's glob; the tests do not)", () => {
+    let legs = 0;
+    let files = 0;
+    for (const g of Object.keys(STRYKER_GROUPS)) {
+      const theirs = [...selected(ENGINE, resolveGroup(g)).keys()].sort();
+      const ours = filesOf(STRYKER_GROUPS[g as keyof typeof STRYKER_GROUPS], ENGINE);
+      expect(ours, g).toEqual(theirs);
+      legs++;
+      files += ours.length;
+    }
+    expect(legs, "legs compared").toBe(Object.keys(STRYKER_GROUPS).length);
+    expect(files, "files compared").toBeGreaterThan(100);
+  }, 120_000);
+
+  it("the glob reader agrees with node's own glob matcher on every case of a table (and the table has both answers)", () => {
+    const CASES: [string, string][] = [
+      ["src/a/**/*.ts", "src/a/x.ts"], ["src/a/**/*.ts", "src/a/b/c.ts"], ["src/a/**/*.ts", "src/a/b/c/d.ts"], ["src/a/**/*.ts", "src/a/x.js"],
+      ["src/a/**/*.ts", "src/ax.ts"], ["src/a/**/*.ts", "src/b/x.ts"], ["src/a/*.ts", "src/a/x.ts"], ["src/a/*.ts", "src/a/b/x.ts"],
+      ["src/**/*.test.ts", "src/x.test.ts"], ["src/**/*.test.ts", "src/a/b/x.test.ts"], ["src/**/*.test.ts", "src/a/x.ts"],
+      ["src/**/__tests__/**", "src/a/__tests__/h.ts"], ["src/**/__tests__/**", "src/__tests__/h.ts"], ["src/**/__tests__/**", "src/a/b.ts"],
+      ["src/a/**", "src/a/x.ts"], ["src/a/**", "src/a/b/x.ts"], ["src/a/**", "src/ax/x.ts"],
+      ["src/a.ts", "src/a.ts"], ["src/a.ts", "src/b.ts"], ["src/*/x.ts", "src/a/x.ts"], ["src/*/x.ts", "src/a/b/x.ts"],
+      ["src/a/**/*.ts", "src/a/.hidden/x.ts"], ["src/a/*.ts", "src/a/.x.ts"], ["src/a/**", "src/a/.hidden/x.ts"], ["src/a/**", "src/a/.x.ts"], ["src/a-*.ts", "src/a-b.ts"], ["src/a-*.ts", "src/a.ts"],
+    ];
+    let yes = 0;
+    let no = 0;
+    for (const [glob, file] of CASES) {
+      const theirs = matchesGlob(file, glob);
+      expect(globMatches(glob, file), `${glob} against ${file}`).toBe(theirs);
+      if (theirs) yes++;
+      else no++;
+    }
+    expect(yes, "cases that match").toBeGreaterThan(5);
+    expect(no, "cases that do not").toBeGreaterThan(5);
+    expect(yes + no).toBe(CASES.length);
+  });
+
+  it("filesOf reads a list in Stryker's order: a negation removes what came before, a later entry adds it back, a part or a range names its file", () => {
+    const root = join(scratch, `files-${++seq}`);
+    for (const f of ["src/a/x.ts", "src/a/y.ts", "src/a/y.test.ts", "src/b/z.ts"]) {
+      mkdirSync(dirname(join(root, f)), { recursive: true });
+      writeFileSync(join(root, f), "export {};\n");
+    }
+    expect(filesOf(["src/a/**/*.ts"], root)).toEqual(["src/a/x.ts", "src/a/y.test.ts", "src/a/y.ts"]);
+    expect(filesOf(["src/a/**/*.ts", "!src/a/**/*.test.ts"], root)).toEqual(["src/a/x.ts", "src/a/y.ts"]);
+    expect(filesOf(["!src/a/**/*.test.ts", "src/a/**/*.ts"], root), "a negation before the add removes nothing").toEqual(["src/a/x.ts", "src/a/y.test.ts", "src/a/y.ts"]);
+    expect(filesOf(["src/a/**/*.ts", "!src/a/y.ts", "src/a/y.ts"], root), "added back").toEqual(["src/a/x.ts", "src/a/y.test.ts", "src/a/y.ts"]);
+    expect(filesOf(["src/b/z.ts#2", "src/a/x.ts:3-9"], root), "a part and a range select their file").toEqual(["src/a/x.ts", "src/b/z.ts"]);
+    expect(filesOf(["src/missing.ts", "src/nodir/**/*.ts"], root), "a missing file and a missing directory select nothing").toEqual([]);
+    // a second root with the same directory names but other files: a listing kept from the first root would answer for it
+    const other = join(scratch, `files-${++seq}`);
+    mkdirSync(join(other, "src/a"), { recursive: true });
+    writeFileSync(join(other, "src/a/q.ts"), "export {};\n");
+    expect(filesOf(["src/a/**/*.ts"], other), "another root, the same directory").toEqual(["src/a/q.ts"]);
+    expect(filesOf(["src/a/**/*.ts"], root), "and the first root again").toEqual(["src/a/x.ts", "src/a/y.test.ts", "src/a/y.ts"]);
+    expect(() => filesOf(["src/{a,b}/x.ts"], root)).toThrow(/does not implement/);
+    expect(() => filesOf(["/src/a/x.ts"], root)).toThrow(/relative path/);
+    expect(() => filesOf(["src/a**/x.ts"], root)).toThrow(/whole segment/);
   });
 
   spawnIt(5)("a part the groups file cannot resolve is a refusal naming it, with nothing on stdout (a fingerprint of a broken cut would file a cache under it)", () => {
