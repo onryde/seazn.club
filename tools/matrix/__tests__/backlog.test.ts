@@ -365,24 +365,29 @@ describe("the section says what the ❌ count leaves out, counted from the commi
     expect(leavesOut()).toContain(`🚫 (no organiser path): ${byLayer(noPath)};`);
   });
 
-  it("names the ruling-70 cells the committed run has otherwise than red, and what the judge reads with them held (effective = reds + held)", () => {
+  it("names the ruling-70 cells the committed L3 has otherwise than red, and the L3 figure `judge regression` holds with them (it reads the L3 baseline only; T22 fix round 2)", () => {
     const held = RULING_70.filter((id) => stateOf("L3", id) !== "red");
-    expect(held.length, "ruling 70 holds cells the committed run has not red").toBeGreaterThan(0);
-    const reds = LAYERS.reduce((n, l) => n + (countState("red")[l] ?? 0), 0);
+    expect(held.length, "ruling 70 holds cells the committed L3 has not red").toBeGreaterThan(0);
+    // The judge's figure is L3's reds plus the held cells, counted here from L3's results.json (never from the writer's own sum).
+    const l3Reds = RAW["L3"]!.filter((c) => c.state === "red").length;
+    const allReds = LAYERS.reduce((n, l) => n + (countState("red")[l] ?? 0), 0);
+    expect(l3Reds, "L3 holds reds").toBeGreaterThan(0);
+    expect(l3Reds, "L1 and L2 hold reds too, so the all-layer sum (the false 211) differs from L3's").toBeLessThan(allReds);
     const states = [...new Set(held.map((id) => `\`${stateOf("L3", id)}\``))].join(" and ");
     const ids = held.map((id) => `\`${id}\``);
     const idText = ids.length <= 1 ? ids.join("") : `${ids.slice(0, -1).join(", ")} and ${ids[ids.length - 1]!}`;
-    expect(leavesOut()).toContain(`${idText} (${held.length} cell${held.length === 1 ? "" : "s"}, ${states} in the committed run); with ${held.length === 1 ? "it" : "them"} the judge reads ${fmt(reds + held.length)} red cases, not ${fmt(reds)}`);
-    expect(leavesOut()).toContain("`judge regression`");
+    const them = held.length === 1 ? "it" : "them";
+    expect(leavesOut()).toContain(`${idText} (${held.length} cell${held.length === 1 ? "" : "s"}, ${states} in the committed L3); \`judge regression\` reads the L3 baseline only, so with ${them} it holds ${fmt(l3Reds + held.length)} red cases, not the ${fmt(l3Reds)} of the committed L3`);
+    expect(leavesOut(), "the all-layer sum is no figure of the judge's").not.toContain(fmt(allReds + held.length));
   });
 
-  it("the empty case: with no cell the ruling holds out of the reds the clause says `none`, and the effective count is not printed", () => {
+  it("the empty case: with no cell the ruling holds out of the reds the clause says `none`, and the L3 figure is not printed", () => {
     // Every ruling-70 cell red in the committed run: nothing is held outside the reds.
     const j = copy();
     for (const c of j.cases) if (c.layer === "L3" && RULING_70.includes(c.caseId)) c.state = "red";
     const para = renderBacklog(j).split("\n\n").find((p) => p.startsWith("What the ❌ count leaves out"))!;
     expect(para).toContain("`judge regression`: none.");
-    expect(para).not.toContain("the judge reads");
+    expect(para).not.toContain("reads the L3 baseline only");
   });
 
   it("each clause the code fills must be used by the prose, and the prose may name nothing the code does not fill (refused by name, never printed as a guess)", () => {

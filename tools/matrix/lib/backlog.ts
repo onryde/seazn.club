@@ -489,10 +489,11 @@ const entriesOf = (ledger: Ledger, wave: string): LedgerEntry[] => ledger.entrie
 
 /** What the ❌ count leaves out (T22 review m3), each as the clause the intro prints, counted from the committed layers and never typed:
  *  the ░ planned cases, the 🚫 cases with no organiser path, and the cells owner ruling 70 holds red inside `judge regression` that the
- *  committed run has in another state (with them the judge reads more red cases than the triage keys). The frame is prose in the carries
+ *  committed L3 has in another state. `judge regression` reads the L3 baseline ONLY (baselineL3Path), so its figure with the override is
+ *  L3's own reds plus the held cells, never the all-layer count the triage keys (T22 fix round 2). The frame is prose in the carries
  *  file; this is the data. */
 function leavesOut(input: BacklogInput): Record<(typeof LEAVES_OUT)[number], string> {
-  const reds = input.triage.rows.length;
+  const l3Reds = input.cases.filter((c) => c.layer === "L3" && c.state === "red").length;
   const { held } = stateFlips(input, "the intro (ruling 70's cells)");
   const many = held.length > 1;
   return {
@@ -500,7 +501,7 @@ function leavesOut(input: BacklogInput): Record<(typeof LEAVES_OUT)[number], str
     noPath: layerText(perLayer(input.cases, (c) => c.state === "no_path")),
     overridden: held.length === 0
       ? "none"
-      : `${list(held.map((h) => code(h.id)))} (${held.length} cell${many ? "s" : ""}, ${list([...new Set(held.map((h) => code(h.state)))])} in the committed run); with ${many ? "them" : "it"} the judge reads ${num(reds + held.length)} red cases, not ${num(reds)}`,
+      : `${list(held.map((h) => code(h.id)))} (${held.length} cell${many ? "s" : ""}, ${list([...new Set(held.map((h) => code(h.state)))])} in the committed L3); \`judge regression\` reads the L3 baseline only, so with ${many ? "them" : "it"} it holds ${num(l3Reds + held.length)} red cases, not the ${num(l3Reds)} of the committed L3`,
   };
 }
 
