@@ -313,6 +313,7 @@
   "table.col.boardRatio": "Bordverhouding",
   "table.col.pointRatio": "Puntenverhouding",
   "table.pool": "Poule",
+  "table.poolLabel": "Poule {key}",
   "table.tieBreak": "Gelijk met {with} — gescheiden op {rule}",
   "table.withdrawn": "Teruggetrokken",
   "table.disqualified": "Gediskwalificeerd",

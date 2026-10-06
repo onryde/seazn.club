@@ -6470,6 +6470,7 @@ export type DictionaryKey =
   | "table.fullDivision"
   | "table.more"
   | "table.pool"
+  | "table.poolLabel"
   | "table.qual.cut.one"
   | "table.qual.cut.other"
   | "table.qual.headline.needsHelp"

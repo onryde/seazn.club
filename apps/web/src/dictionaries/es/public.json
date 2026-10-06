@@ -313,6 +313,7 @@
   "table.col.boardRatio": "Ratio de tableros",
   "table.col.pointRatio": "Ratio de puntos",
   "table.pool": "Grupo",
+  "table.poolLabel": "Grupo {key}",
   "table.tieBreak": "Empatado con {with} — desempatado por {rule}",
   "table.withdrawn": "Retirado",
   "table.disqualified": "Descalificado",
