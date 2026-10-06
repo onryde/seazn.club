@@ -706,6 +706,10 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
  *  the link is provided, so a deployment that would serve a URL the phone's parser rejects writes nothing. */
 const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
 
+/** SQLSTATE 23503, as `postgres` reports it (`code`; lib/billing.ts reads the same shape off a real failure). */
+const isForeignKeyViolation = (err: unknown): boolean =>
+  typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23503";
+
 /**
  * `POST /capture/codes/{code}/scoring-link` (§6.3.5, W27): the match's Remote scoring link, for the slot's CURRENT phone.
  * In order:
@@ -718,7 +722,8 @@ const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
  *    reaches it spends it, a re-shown link included — as the console's ensure does;
  *  - `provideDeviceLinkForPhone`: the console's plan gate (→ 402 not_entitled), then under the fixture's link lock a
  *    finished match (→ 409 match_finished, nothing written), else the live sealed link or a new one — NEVER revoking
- *    (the owner's rule: "must not remove or replace any existing QR"). A missing DEVICE_LINK_KEK → 503 unavailable.
+ *    (the owner's rule: "must not remove or replace any existing QR"). A missing DEVICE_LINK_KEK → 503 unavailable;
+ *    the link insert breaking a foreign key (the code's issuer deleted) → 401 code_ended, warned, not reported.
  * 200 `{url}` = `captureOrigin()` + `/score/` + the secret. The URL is a credential: it is never logged, and it is
  * stored nowhere new (the row holds the hash and the sealed envelope, as every console link does).
  */
@@ -742,6 +747,14 @@ export async function postScoringLink(
     if (err instanceof PaymentRequiredError) throw new CaptureRefusalError(402, "not_entitled", `the plan lacks ${err.featureKey}`);
     if (err instanceof HttpError && err.code === "DEVICE_LINK_KEK_MISSING") {
       throw new CaptureRefusalError(503, "unavailable", "scoring links are not configured on this server");
+    }
+    // The only write is the link insert, and a foreign key it breaks means the code's world is gone — in practice its
+    // issuer deleted (`fixture_stream_codes.issued_by` has no foreign key; `device_links.issued_by` does). No retry
+    // can succeed, so it is the code's end (review M4): the ONE 401, which sends the phone back for a new QR. Expected,
+    // not a fault — a warn naming the code's id and nothing else, never Sentry.
+    if (isForeignKeyViolation(err)) {
+      log.warn({ codeId: resolved.codeId }, "capture scoring link: the link insert broke a foreign key (the code's issuer is gone); answered code_ended");
+      throw codeEnded();
     }
     throw err;
   }

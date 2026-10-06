@@ -23,6 +23,7 @@ import {
   resolveDeviceLinkToken,
 } from "../device-links";
 import { reissueStreamCode } from "../stream-codes";
+import { rigUser } from "@/server/relay/__tests__/_session-rig";
 import { captureRig, override, phoneId, type CaptureRig } from "./_capture-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -279,6 +280,37 @@ describe.skipIf(!HAS_DB)("postScoringLink — the phone's Remote scoring link (�
     expect((await link(r, A, via)).url).toMatch(URL_PATTERN);
   });
 
+  it("the code's issuer DELETED (device_links.issued_by's foreign key, review M4) → 401 code_ended, the ONE 401 body, so the phone asks for a new QR rather than retrying a 503; ONE warn carrying the code id and nothing else, no error log; nothing written — the issuer back, the same code is served", async () => {
+    const { r, A } = await ready();
+    const [{ id: codeId, issued_by: issuer }] = await sql<{ id: string; issued_by: string }[]>`
+      select id, issued_by from fixture_stream_codes where fixture_id = ${r.fixtureId} and ended_at is null`;
+    // fixture_stream_codes.issued_by has no foreign key, so the code outlives its issuer; the link insert's does.
+    const gone = await rigUser();
+    await sql`update fixture_stream_codes set issued_by = ${gone} where id = ${codeId}`;
+    await sql`delete from users where id = ${gone}`;
+    const warn = vi.spyOn(log, "warn");
+    const error = vi.spyOn(log, "error");
+    let got: Awaited<ReturnType<typeof refused>>;
+    let warned: unknown[][], errored: unknown[][];
+    try {
+      got = await refused(link(r, A));
+    } finally {
+      warned = [...warn.mock.calls];
+      errored = [...error.mock.calls];
+      warn.mockRestore();
+      error.mockRestore();
+    }
+    expect({ status: got!.status, code: got!.body.code }).toEqual({ status: 401, code: "code_ended" });
+    const wrongTok = await refused(link(r, A, { code: r.code, tok: "wrong-tok" }));
+    expect(got!.body, "C1: the ONE 401 sentence, never which kind").toEqual(wrongTok.body);
+    expect(warned.map((c) => c[0]), "one warn, carrying the code id only").toEqual([{ codeId }]);
+    expect(errored, "not an error: nothing for Sentry").toEqual([]);
+    expect(await linksOf(r.fixtureId)).toEqual([]);
+    // The positive pair: the code's issuer back, the same code and phone are served.
+    await sql`update fixture_stream_codes set issued_by = ${issuer} where id = ${codeId}`;
+    expect((await link(r, A)).url).toMatch(URL_PATTERN);
+  });
+
   it("a wrong tok → 401 code_ended; nothing written", async () => {
     const { r, A } = await ready();
     const bad = await refused(link(r, A, { code: r.code, tok: "wrong-tok" }));
@@ -405,7 +437,8 @@ describe.skipIf(!HAS_DB)("postScoringLink — the phone's Remote scoring link (�
   });
 
   it("anti-vacuity: this file asserted raw refusal bodies", () => {
-    // replaced ×2, code_ended ×2, match_finished ×3, not_entitled ×1, unavailable ×4 + 1.
-    expect(refusalsChecked).toBe(13);
+    // replaced ×2, code_ended ×2 + 2 (the deleted issuer and its wrong-tok twin), match_finished ×3, not_entitled ×1,
+    // unavailable ×4 + 1.
+    expect(refusalsChecked).toBe(15);
   });
 });

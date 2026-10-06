@@ -11,10 +11,13 @@
 //   - every answer is `private, no-store`; none is ever 410; the OpenAPI operation documents what was observed.
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): the route reads no sport (capture-scoring-link.test.ts pins cricket).
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { captureRoute } from "@/server/api-v1/capture-http";
+import { log } from "@/server/logger";
+import { rigUser } from "@/server/relay/__tests__/_session-rig";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { CaptureBeat, CaptureRefusal, CaptureScoringLinkOk } from "@/server/api-v1/capture-schemas";
 import { createApiKey } from "@/server/usecases/api-keys";
@@ -25,6 +28,11 @@ import { POST } from "../[code]/scoring-link/route";
 import { POST as START } from "../[code]/start/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// Sentry's `captureException`, spied (http.test.ts's precedent) and otherwise the real module: it is what proves a
+// refusal the phone acts on does not page anyone (review M4).
+const sentry = vi.hoisted(() => ({ captureException: vi.fn() }));
+vi.mock("@sentry/nextjs", async (io) => ({ ...(await io<Record<string, unknown>>()), captureException: sentry.captureException }));
 
 async function captureRig(opts: Parameters<typeof rawRig>[0] = {}) {
   const r = await rawRig(opts);
@@ -233,6 +241,37 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/scoring-link", () =>
     expect(mintKeys()).toEqual([`rl:dlmint:${IP}`]);
   });
 
+  it("the code's issuer DELETED → 401 code_ended on the wire, the ONE 401 body; never reported to Sentry, never an error log, nothing written (review M4) — and the spy does see an unmapped error (the positive pair)", async () => {
+    const r = await captureRig();
+    const A = phoneId("a");
+    await claim(r, A);
+    const gone = await rigUser();
+    await sql`update fixture_stream_codes set issued_by = ${gone} where fixture_id = ${r.fixtureId} and ended_at is null`;
+    await sql`delete from users where id = ${gone}`;
+    sentry.captureException.mockClear();
+    const error = vi.spyOn(log, "error");
+    let errored: unknown[][];
+    try {
+      const a = await read(await call(r.code, { phone: A }, { auth: `Bearer ${r.tok}` }));
+      expectRefusal(a, 401, "code_ended", "the issuer deleted");
+      const wrong = await read(await call(r.code, { phone: A }, { auth: "Bearer wrong-tok" }));
+      expect(a.body, "C1: the same body as a wrong tok").toEqual(wrong.body);
+    } finally {
+      errored = [...error.mock.calls];
+      error.mockRestore();
+    }
+    expect(sentry.captureException, "no Sentry report").not.toHaveBeenCalled();
+    expect(errored, "no error log").toEqual([]);
+    expect(await linkCount(r)).toBe(0);
+    const silenced = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      expect((await captureRoute(async () => { throw new Error("an unmapped failure"); })).status).toBe(503);
+    } finally {
+      silenced.mockRestore();
+    }
+    expect(sentry.captureException, "the positive pair: an unmapped error IS reported").toHaveBeenCalledTimes(1);
+  });
+
   it("OpenAPI (A16): under the internal `capture` tag, BARE, captureTok, the strict body; documents every status this file observed and the agreed 503", () => {
     const doc = buildOpenApiDocument() as { paths: Record<string, Record<string, { tags: string[]; security: unknown[]; requestBody?: unknown; responses: Record<string, unknown> }>> };
     const op = doc.paths["/api/v1/capture/codes/{code}/scoring-link"]!.post!;
@@ -248,7 +287,7 @@ describe.skipIf(!HAS_DB)("POST /api/v1/capture/codes/{code}/scoring-link", () =>
     expect(statuses.length).toBeGreaterThan(20);
     expect(statuses).not.toContain(410);
     // replaced, match_finished, not_entitled, invalid ×5, code_ended ×3, not_a_stream_code; the mint budget's
-    // code_ended ×2 and replaced ×2.
-    expect(refusalsChecked).toBe(16);
+    // code_ended ×2 and replaced ×2; the deleted issuer's code_ended.
+    expect(refusalsChecked).toBe(17);
   });
 });
