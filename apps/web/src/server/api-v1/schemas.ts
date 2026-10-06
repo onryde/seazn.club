@@ -48,6 +48,8 @@ export {
   CAPTURE_CODE_RE, CaptureEndReason, CaptureStartedBy, CaptureCause, CapturePhoneState, CaptureNotReady,
   CaptureStartFailed, CaptureWaiting, CaptureCred, CaptureSession, CaptureDescriptor, CaptureBeat, CaptureBeatAnswer,
   CaptureStartBody, CaptureStartOk, CaptureRefusalCode, CaptureRefusal,
+  // W27 / W28 (2026-10-06).
+  CAPTURE_POOL_RE, CaptureStageRole, CaptureStage, CAPTURE_SCORING_LINK_URL_RE, CaptureScoringLinkOk,
 } from "./capture-schemas.ts";
 // T9: the panel's read model (StreamPhone) reuses the beat's own field shapes, so it cannot drift from the contract.
 import { CaptureBeat, CaptureNotReady, CapturePhoneState, CaptureStartFailed } from "./capture-schemas.ts";

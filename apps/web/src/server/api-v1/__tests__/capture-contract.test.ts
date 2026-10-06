@@ -11,7 +11,10 @@
 //   * the per-state field matrices (R5 final, A21), TYPED HERE FROM THE SPEC'S TEXT (§6.3.1, §17.5) — the rulebook,
 //     never read off the twin — run against BOTH the twin (through the fixtures) and the JSON file (structurally);
 //   * optional-versus-null, `at`'s offset, strictness surviving .extend()/.partial(), W21's hosts, QR v2 (with
-//     capture's optional `exp`, which this server never sends), and 409.
+//     capture's optional `exp`, which this server never sends), and 409;
+//   * W27 (2026-10-06): the scoring-link route's contract — its {phone} body, its 200 {url} and every refusal it
+//     answers, `match_finished` among them — and W28: the descriptor's optional `stage` on every state, its bounds
+//     (code 1..8, pool ^[A-Z]$), and `role.kind` as an OPEN string whose prose lists every kind the engine declares.
 // Every sweep counts what it checked, and the counts are pinned: a skipped cell, branch or fixture fails the run.
 //
 // Pure — no DB. One "sport" on purpose: the contract reads no sport (the capture surface is sport-agnostic).
@@ -25,6 +28,7 @@ import addFormats from "ajv-formats";
 import * as CS from "../capture-schemas";
 import * as S from "../schemas";
 import { CaptureQrV2, captureQrV2Text, parseCaptureQrV2 } from "@/lib/capture-qr";
+import type { RoundRole } from "@seazn/engine/competition";
 
 type Json = Record<string, unknown>;
 type Twin = z.ZodType;
@@ -42,9 +46,10 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
  *  same commit, and capture re-vendors the file. */
 const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "3292e33f84b693e5def6048012f6653ca7e31e1573fda3901da4fe67a62c5d43",
-  "capture-descriptor.v1.json": "3052101953e6998969749455a10b7343621e6b1c37908457c3520477b8a38612",
+  "capture-descriptor.v1.json": "dae5d1f68f6718321f6b917f013f9081dcea2ff60229ec398fdd7ba66f214491",
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
-  "capture-start.v1.json": "d48f45fee7d1a73da22da83f3406bcaeb6a0b1f1c734278313de294f9215b2ea",
+  "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
+  "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -76,10 +81,12 @@ const ANSWER_MATRIX: Record<string, Record<AnswerField, Cell>> = {
  *  failed, and absent on warming and live; cred is optional on warming, live and ending, and absent on completed and
  *  failed." */
 const SESSION_ONLY = ["sid", "preferred", "playbackUrl", "holdWindowSeconds", "maxDurationMinutes", "warmingDeadline", "scoreUpdates"] as const;
-const DESCRIPTOR_FIELDS = ["cred", "endReason", ...SESSION_ONLY] as const;
+const DESCRIPTOR_FIELDS = ["cred", "endReason", "stage", ...SESSION_ONLY] as const;
 type DescriptorField = (typeof DESCRIPTOR_FIELDS)[number];
+/** W28 (2026-10-06): "Optional field `stage` on EVERY descriptor shape, the waiting one included" — so it is optional
+ *  in every row, never a column of its own. */
 const descriptorRow = (cred: Cell, endReason: Cell, session: Cell): Record<DescriptorField, Cell> => ({
-  cred, endReason, ...(Object.fromEntries(SESSION_ONLY.map((f) => [f, session])) as Record<(typeof SESSION_ONLY)[number], Cell>),
+  cred, endReason, stage: OPT, ...(Object.fromEntries(SESSION_ONLY.map((f) => [f, session])) as Record<(typeof SESSION_ONLY)[number], Cell>),
 });
 const DESCRIPTOR_MATRIX: Record<string, Record<DescriptorField, Cell>> = {
   waiting: descriptorRow(NO, NO, NO),
@@ -124,6 +131,23 @@ const SPEC_DESCRIPTOR = {
 const SPEC_REFUSALS: Record<string, number> = {
   already_live: 409, replaced: 409, no_destination: 409, no_credit: 402, not_entitled: 403, unavailable: 503,
   code_ended: 401, not_a_stream_code: 404, invalid: 422, rate_limited: 429,
+};
+/** W27 (§6.3.5, the 2026-10-06 brief's own table): the refusals `POST …/scoring-link` answers, with their statuses.
+ *  `not_entitled` is 402 here (a plan gate) where the start answers 403 — the agreed contract, not a typo. */
+const SPEC_SCORING_LINK_REFUSALS: Record<string, number> = {
+  code_ended: 401, not_a_stream_code: 404, replaced: 409, match_finished: 409, not_entitled: 402, unavailable: 503,
+  invalid: 422, rate_limited: 429,
+};
+/** Every refusal word on the capture wire: the start's ten and W27's `match_finished`. */
+const SPEC_REFUSAL_CODES = [...new Set([...Object.keys(SPEC_REFUSALS), ...Object.keys(SPEC_SCORING_LINK_REFUSALS)])];
+/** W27: "The URL must match `^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$`" — the brief's text. */
+const SPEC_SCORING_LINK_URL = "^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$";
+/** W28: `role.kind` is the engine's `RoundRole["kind"]`. Typed against the engine's own declaration: a kind the engine
+ *  adds or drops fails typecheck here until this list moves, and the test then demands the published prose lists it. */
+const ROLE_KINDS: Record<RoundRole["kind"], true> = {
+  round_of: true, quarter_final: true, semi_final: true, final: true, winners_final: true, losers_round: true,
+  losers_final: true, grand_final: true, grand_final_reset: true, third_place: true, qualifier1: true, eliminator: true,
+  qualifier2: true, rung: true, plain_round: true,
 };
 /** §6.3.1's statuses for GET codes/{code}: 401, 404, 422, 429, 503 — never 409, 402, 403 (no start runs there). */
 const SPEC_DESCRIPTOR_REFUSALS = ["code_ended", "not_a_stream_code", "invalid", "rate_limited", "unavailable"];
@@ -205,17 +229,19 @@ function enumOf(node: Json): string[] {
 // The file → twin map, and the fixture directories' routing.
 // ---------------------------------------------------------------------------------------------------------------
 const QR = "capture-qr.v2.json", DESCRIPTOR = "capture-descriptor.v1.json", BEAT = "capture-beat.v1.json", START = "capture-start.v1.json";
+const SCORING = "capture-scoring-link.v1.json";
 /** Each file's `$defs`, exactly. */
-const DEFS: Record<string, string[]> = { [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer"], [START]: ["ok", "refusal"] };
+const DEFS: Record<string, string[]> = { [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer"], [START]: ["ok", "refusal"], [SCORING]: ["ok", "refusal"] };
 
 /** Per directory: its contract file; [file prefix, twin, the shape's pointer in that file], first match wins; and the
  *  exact fixture count (never 0). */
 type Route = [prefix: string, twin: Twin, pointer: "" | "#/$defs/refusal" | "#/$defs/answer" | "#/$defs/ok"];
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
-  "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 31 },
+  "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 49 },
   "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 40 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
+  "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
 };
 
 /** The published bytes as a validator sees them: ajv 2020-12, strict, formats ASSERTED (uuid, uri, date-time) — the
@@ -232,16 +258,16 @@ function fileValidator(): (file: string, pointer: string, value: unknown) => boo
 }
 
 describe("capture contracts (docs/contracts/capture-*.json)", () => {
-  it("each of the four contracts is checksummed (the cross-repo drift gate)", () => {
+  it("each of the five contracts is checksummed (the cross-repo drift gate)", () => {
     let checked = 0;
     for (const [file, sha] of Object.entries(SHA256)) {
       expect(createHash("sha256").update(contractText(file)).digest("hex"), file).toBe(sha);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(5);
   });
 
-  it("v1 is gone, and every published capture contract is one of the four twinned ones (W4, §6.13)", () => {
+  it("v1 is gone, and every published capture contract is one of the five twinned ones (W4, §6.13; W27)", () => {
     expect(existsSync(resolve(CONTRACTS, "capture-qr.v1.json")), "the v1 contract").toBe(false);
     expect(existsSync(resolve(FIXTURES, "capture-qr.v1")), "the v1 fixtures").toBe(false);
     const files = readdirSync(CONTRACTS).filter((f) => f.startsWith("capture-")).sort();
@@ -261,22 +287,24 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // The brief's interface list (T1) — the names later tasks import.
     for (const name of ["CAPTURE_CODE_RE", "CaptureEndReason", "CaptureStartedBy", "CaptureCause", "CapturePhoneState",
       "CaptureNotReady", "CaptureStartFailed", "CaptureWaiting", "CaptureSession", "CaptureDescriptor", "CaptureBeat",
-      "CaptureBeatAnswer", "CaptureStartBody", "CaptureStartOk", "CaptureRefusal", "CaptureRefusalCode"]) {
+      "CaptureBeatAnswer", "CaptureStartBody", "CaptureStartOk", "CaptureRefusal", "CaptureRefusalCode",
+      // W27 / W28 (2026-10-06).
+      "CaptureScoringLinkOk", "CaptureStage"]) {
       expect(names, name).toContain(name);
     }
     expect(checked).toBe(names.length);
   });
 
   it("parity: each file (and each $def) equals z.toJSONSchema of its twin, as output AND as input, unions compared branch by branch on `state`", () => {
-    const qr = contract(QR), desc = contract(DESCRIPTOR), beat = contract(BEAT), start = contract(START);
+    const qr = contract(QR), desc = contract(DESCRIPTOR), beat = contract(BEAT), start = contract(START), scoring = contract(SCORING);
     let defsChecked = 0;
-    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start]] as const) {
+    for (const [file, json] of [[QR, qr], [DESCRIPTOR, desc], [BEAT, beat], [START, start], [SCORING, scoring]] as const) {
       expect(Object.keys((json.$defs as Json | undefined) ?? {}).sort(), `${file} $defs`).toEqual([...DEFS[file]!].sort());
       expect(json.$id, `${file} $id`).toBe(`https://seazn.club/contracts/${file}`);
       expect(json.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
       defsChecked++;
     }
-    expect(defsChecked).toBe(4);
+    expect(defsChecked).toBe(5);
 
     const whole: [string, Json, Twin][] = [
       [QR, rootOf(qr), CaptureQrV2],
@@ -285,6 +313,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       [START, rootOf(start), S.CaptureStartBody],
       [`${START}#/$defs/ok`, defOf(start, "ok"), S.CaptureStartOk],
       [`${START}#/$defs/refusal`, defOf(start, "refusal"), S.CaptureRefusal],
+      [SCORING, rootOf(scoring), S.CaptureStartBody],
+      [`${SCORING}#/$defs/ok`, defOf(scoring, "ok"), S.CaptureScoringLinkOk],
+      [`${SCORING}#/$defs/refusal`, defOf(scoring, "refusal"), S.CaptureRefusal],
     ];
     let wholeChecked = 0;
     for (const io of IO) {
@@ -293,7 +324,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         wholeChecked++;
       }
     }
-    expect(wholeChecked).toBe(6 * 2);
+    expect(wholeChecked).toBe(9 * 2);
 
     const unions: [string, Json, Twin, string[]][] = [
       [DESCRIPTOR, rootOf(desc), S.CaptureDescriptor, Object.keys(DESCRIPTOR_MATRIX)],
@@ -349,7 +380,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 31 + 40 + 18);
+    expect(total).toBe(12 + 49 + 40 + 18 + 17);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -401,8 +432,8 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       ["descriptor state", desc, S.CaptureDescriptor, "state", SPEC_DESCRIPTOR.state, 6, true],
       ["descriptor preferred (5 session states)", desc, S.CaptureDescriptor, "preferred", SPEC_DESCRIPTOR.preferred, 5, false],
       ["descriptor scoreUpdates (5 session states)", desc, S.CaptureDescriptor, "scoreUpdates", SPEC_DESCRIPTOR.scoreUpdates, 5, false],
-      ...[START, DESCRIPTOR].flatMap((file): [string, Json, Twin, string, string[], number, boolean][] => [
-        [`${file} refusal code`, defOf(contract(file), "refusal"), S.CaptureRefusal, "code", Object.keys(SPEC_REFUSALS), 2, true],
+      ...[START, DESCRIPTOR, SCORING].flatMap((file): [string, Json, Twin, string, string[], number, boolean][] => [
+        [`${file} refusal code`, defOf(contract(file), "refusal"), S.CaptureRefusal, "code", SPEC_REFUSAL_CODES, 2, true],
         [`${file} refusal startedBy (already_live only)`, defOf(contract(file), "refusal"), S.CaptureRefusal, "startedBy", SPEC_STARTED_BY, 1, false],
       ]),
     ];
@@ -416,13 +447,13 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         nodes += found.length;
       }
     }
-    // 9 beat + answer 6 + 1 + descriptor 6 + 5 + 5 + refusal (2 + 1) × 2 files = 38 nodes, each on the file and the twin.
-    expect(nodes).toBe(38 * 2);
+    // 9 beat + answer 6 + 1 + descriptor 6 + 5 + 5 + refusal (2 + 1) × 3 files = 41 nodes, each on the file and the twin.
+    expect(nodes).toBe(41 * 2);
     // The exported enum twins later tasks import, by their own options.
     const exported: [string, z.ZodEnum, string[]][] = [
       ["CapturePhoneState", CS.CapturePhoneState, SPEC_BEAT.state], ["CaptureCause", CS.CaptureCause, SPEC_BEAT.cause],
       ["CaptureNotReady", CS.CaptureNotReady, SPEC_BEAT.notReady], ["CaptureStartFailed", CS.CaptureStartFailed, SPEC_BEAT.startFailed],
-      ["CaptureStartedBy", CS.CaptureStartedBy, SPEC_STARTED_BY], ["CaptureRefusalCode", CS.CaptureRefusalCode, Object.keys(SPEC_REFUSALS)],
+      ["CaptureStartedBy", CS.CaptureStartedBy, SPEC_STARTED_BY], ["CaptureRefusalCode", CS.CaptureRefusalCode, SPEC_REFUSAL_CODES],
     ];
     for (const [name, twin, list] of exported) expect([...twin.options].sort(), name).toEqual([...list].sort());
     expect(exported).toHaveLength(6);
@@ -465,13 +496,15 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(fileCells).toBe(60);
   });
 
-  it("R5/A21 descriptor: each state admits only its own fields — 6 states × 9 fields against the twin AND the file", () => {
+  it("R5/A21 descriptor: each state admits only its own fields — 6 states × 10 fields (W28's stage included) against the twin AND the file", () => {
     const states = Object.keys(DESCRIPTOR_MATRIX);
     const valid = Object.fromEntries(states.map((s) => [s, fixture("capture-descriptor.v1", `valid-${s}`)]));
-    const twinCells = sweepTwin(DESCRIPTOR_MATRIX, DESCRIPTOR_FIELDS, valid, Object.values(valid), S.CaptureDescriptor);
-    expect(twinCells).toBe(54);
+    // W28: the stage donors — the plain valid-<state> fixtures carry no stage (it is optional), these do.
+    const donors = [...Object.values(valid), fixture("capture-descriptor.v1", "valid-waiting-stage"), fixture("capture-descriptor.v1", "valid-live-stage")];
+    const twinCells = sweepTwin(DESCRIPTOR_MATRIX, DESCRIPTOR_FIELDS, valid, donors, S.CaptureDescriptor);
+    expect(twinCells).toBe(60);
     const fileCells = sweepFile(DESCRIPTOR_MATRIX, DESCRIPTOR_FIELDS, branchesByState(rootOf(contract(DESCRIPTOR))));
-    expect(fileCells).toBe(54);
+    expect(fileCells).toBe(60);
   });
 
   it("optional is not nullable: each optional-and-not-`| null` field set to null is refused, and the same fixture without it parses", () => {
@@ -494,8 +527,8 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(parses(twin, without(f, field)), `${name}: the same fixture without ${field} parses`).toBe(true);
       checked++;
     }
-    // 6 scheduledStart + 3 cred (descriptor) + 2 × {device, label, autoAllowed, pollSeconds} (answer).
-    expect(checked).toBe(17);
+    // 6 scheduledStart + 3 cred + 6 stage (W28) (descriptor) + 2 × {device, label, autoAllowed, pollSeconds} (answer).
+    expect(checked).toBe(23);
     // …and the `| null` common fields on replaced and taken DO admit null (the twin of the refusals above).
     let nullable = 0;
     for (const state of ["replaced", "taken"]) {
@@ -747,6 +780,116 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // The descriptor directory carries no start-only refusal (409, 402, 403 cannot come from GET).
     const present = readdirSync(resolve(FIXTURES, "capture-descriptor.v1")).filter((f) => f.startsWith("refusal-valid-"));
     expect(present.map((f) => f.slice("refusal-valid-".length, -5)).sort()).toEqual([...SPEC_DESCRIPTOR_REFUSALS].sort());
+  });
+
+  it("W28 stage: each stage fixture differs from its sibling in `stage` alone; the twin AND the file admit the valid ones (an unknown role.kind and an 8-character code included) and refuse a pool of \"AA\", a 9-character code and every other breach", () => {
+    const fileAdmits = fileValidator();
+    const dir = "capture-descriptor.v1";
+    // [fixture, its sibling, admitted?] — every sibling is a plain valid-<state> fixture, which carries NO stage.
+    const owed: [name: string, sibling: string, admitted: boolean][] = [
+      ["valid-waiting-stage", "valid-waiting", true],
+      ["valid-live-stage", "valid-live", true],
+      ["valid-waiting-stage-unknown-kind", "valid-waiting", true],
+      ["valid-waiting-stage-code-8", "valid-waiting", true],
+      ["invalid-stage-pool-AA", "valid-waiting", false],
+      ["invalid-stage-pool-lowercase", "valid-waiting", false],
+      ["invalid-stage-code-9", "valid-waiting", false],
+      ["invalid-stage-code-empty", "valid-waiting", false],
+      ["invalid-stage-role-n-0", "valid-waiting", false],
+      ["invalid-stage-role-entrants-1", "valid-waiting", false],
+      ["invalid-stage-role-no-kind", "valid-waiting", false],
+      ["invalid-stage-extra-key", "valid-waiting", false],
+    ];
+    let checked = 0;
+    for (const [name, sibling, admitted] of owed) {
+      const f = fixture(dir, name), base = fixture(dir, sibling);
+      expect("stage" in base, `${name}: premise — ${sibling} carries no stage`).toBe(false);
+      expect(without(f, "stage"), `${name}: premise — differs from ${sibling} in stage alone`).toEqual(base);
+      expect(parses(S.CaptureDescriptor, f), `${name}: the twin ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
+      expect(fileAdmits(DESCRIPTOR, "", f), `${name}: the file ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
+      if (!admitted) {
+        // The refusal is about the stage, not some other guard.
+        const paths = S.CaptureDescriptor.safeParse(f).error!.issues.map((i) => i.path[0]);
+        expect(paths.every((p) => p === "stage"), `${name}: refused on stage (${JSON.stringify(paths)})`).toBe(true);
+      }
+      checked++;
+    }
+    expect(checked).toBe(owed.length);
+    expect(checked).toBe(12);
+    // The brief's own boundary values, read off the fixtures so the premise is visible.
+    const stageOf = (name: string) => fixture(dir, name).stage as { code: string; role: Json; pool?: string };
+    expect(stageOf("invalid-stage-pool-AA").pool).toBe("AA");
+    expect(stageOf("invalid-stage-code-9").code).toHaveLength(9);
+    expect(stageOf("valid-waiting-stage-code-8").code).toHaveLength(8);
+    expect(Object.keys(ROLE_KINDS), "premise: the fixture's kind is not one the engine declares").not.toContain(stageOf("valid-waiting-stage-unknown-kind").role.kind);
+    expect(stageOf("valid-waiting-stage").pool, "a pooled fixture carries its pool").toMatch(/^[A-Z]$/);
+  });
+
+  it("W28 role.kind is OPEN: no enum or const in the file or the twin, on every state; its prose lists every kind the engine declares and the rule for an unknown one", () => {
+    const desc = rootOf(contract(DESCRIPTOR));
+    const kinds = Object.keys(ROLE_KINDS);
+    expect(kinds).toHaveLength(15);
+    let nodes = 0;
+    for (const [side, shape] of [["file", desc], ["twin", zodJson(S.CaptureDescriptor, "output")]] as const) {
+      const found = nodesAt(shape, ["stage", "role", "kind"]);
+      expect(found, `${side}: role.kind on all six states`).toHaveLength(6);
+      for (const node of found) {
+        expect(enumOf(node), `${side}: role.kind closes nothing`).toEqual([]);
+        expect(node.type, side).toBe("string");
+        nodes++;
+      }
+    }
+    expect(nodes).toBe(12);
+    let prose = 0;
+    for (const node of nodesAt(desc, ["stage", "role", "kind"])) {
+      for (const k of kinds) expect(node.description, `role.kind prose names ${k}`).toContain(`\`${k}\``);
+      expect(node.description).toContain("show nothing for an unknown kind");
+      prose++;
+    }
+    expect(prose).toBe(6);
+  });
+
+  it("W27 scoring-link: the 200 is the bare {url} on the brief's exact pattern; every refusal the route answers has a fixture, admitted by the twin and the file; extras ride on none of them", () => {
+    const fileAdmits = fileValidator();
+    const dir = "capture-scoring-link.v1";
+    // The pattern is the brief's text, on the file and on the twin.
+    for (const [side, shape] of [["file", defOf(contract(SCORING), "ok")], ["twin", zodJson(S.CaptureScoringLinkOk, "output")]] as const) {
+      const url = (shape.properties as Record<string, Json>).url!;
+      // JSON Schema stores a RegExp's `.source`, which escapes "/": compare the two as patterns, not as bytes.
+      expect(new RegExp(String(url.pattern)).source, side).toBe(new RegExp(SPEC_SCORING_LINK_URL).source);
+      expect(shape.required, side).toEqual(["url"]);
+    }
+    const ok = fixture(dir, "ok-valid");
+    expect(String(ok.url)).toMatch(new RegExp(SPEC_SCORING_LINK_URL));
+    // Each refusal of the ok shape differs from ok-valid in `url` alone (or adds one key).
+    let okChecked = 0;
+    for (const name of ["ok-invalid-http", "ok-invalid-path", "ok-invalid-secret-42", "ok-tampered"]) {
+      const f = fixture(dir, name);
+      if (name === "ok-tampered") expect(Object.keys(f).sort()).toEqual(["secret", "url"]);
+      else expect(String(f.url), `${name}: premise`).not.toMatch(new RegExp(SPEC_SCORING_LINK_URL));
+      expect(parses(S.CaptureScoringLinkOk, f), name).toBe(false);
+      expect(fileAdmits(SCORING, "#/$defs/ok", f), name).toBe(false);
+      okChecked++;
+    }
+    expect(okChecked).toBe(4);
+    const codes = Object.keys(SPEC_SCORING_LINK_REFUSALS);
+    expect(codes).toHaveLength(8);
+    let checked = 0;
+    for (const code of codes) {
+      const f = fixture(dir, `valid-${code}`);
+      expect(f.code).toBe(code);
+      expect(Object.keys(f).sort(), code).toEqual(["code", "message"]);
+      expect(parses(S.CaptureRefusal, f), code).toBe(true);
+      expect(fileAdmits(SCORING, "#/$defs/refusal", f), code).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(8);
+    // The directory carries exactly the route's refusals: no start-only word (already_live, no_destination, no_credit).
+    const present = readdirSync(resolve(FIXTURES, dir)).filter((f) => /^valid-/.test(f)).map((f) => f.slice("valid-".length, -5));
+    expect(present.sort()).toEqual([...codes].sort());
+    // match_finished is the one NEW word; it carries no extras.
+    expect(SPEC_REFUSAL_CODES.filter((c) => !(c in SPEC_REFUSALS))).toEqual(["match_finished"]);
+    expect(parses(S.CaptureRefusal, { ...fixture(dir, "valid-match_finished"), sid: fixture("capture-start.v1", "valid-already_live").sid }), "match_finished carrying sid").toBe(false);
   });
 });
 

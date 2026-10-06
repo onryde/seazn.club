@@ -29,6 +29,23 @@ export type CaptureNotReady = z.infer<typeof CaptureNotReady>;
 export const CaptureStartFailed = z.enum(["not-found", "cred-host", "config", "start-error"]);
 export type CaptureStartFailed = z.infer<typeof CaptureStartFailed>;
 
+/** W28 (2026-10-06): the pool's key, one capital letter (stages.ts POOL_KEYS) — never its English name. */
+export const CAPTURE_POOL_RE = /^[A-Z]$/;
+/** W28: the engine's `RoundRole`, serialised verbatim — `kind`, plus `n` or `entrants` where the variant has one.
+ *  `kind` is OPEN on the wire (no enum): a consumer shows nothing for a kind it does not know. */
+export const CaptureStageRole = z.strictObject({
+  kind: z.string().min(1),
+  n: z.number().int().min(1).optional(),
+  entrants: z.number().int().min(2).optional(),
+});
+/** W28: the match's place in its stage — the scheduler board's chip (`code`), its round role, and its pool's key. */
+export const CaptureStage = z.strictObject({
+  code: z.string().min(1).max(8),
+  role: CaptureStageRole,
+  pool: z.string().regex(CAPTURE_POOL_RE).optional(),
+});
+export type CaptureStage = z.infer<typeof CaptureStage>;
+
 const WaitingFields = {
   code: Code,
   label: z.string().min(1).max(200),
@@ -40,6 +57,8 @@ const WaitingFields = {
   overlayUrl: Url.nullable(),
   heartbeatUrl: Url,
   startUrl: Url,
+  /** W28: on the waiting shape and every session state; omitted, never null, when no code can be produced. */
+  stage: CaptureStage.optional(),
 };
 
 export const CaptureWaiting = z.strictObject({ state: z.literal("waiting"), ...WaitingFields });
@@ -163,9 +182,17 @@ export type CaptureStartBody = z.infer<typeof CaptureStartBody>;
 export const CaptureStartOk = z.strictObject({ sid: z.uuid() });
 export type CaptureStartOk = z.infer<typeof CaptureStartOk>;
 
+/** W27 (2026-10-06): `POST …/scoring-link` answers `{url}` — the match's Remote scoring link. The pattern is the agreed
+ *  contract, verbatim: an https origin, `/score/`, and a device-link secret (`dl_` + 32 bytes as base64url). */
+export const CAPTURE_SCORING_LINK_URL_RE = new RegExp("^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$");
+export const CaptureScoringLinkOk = z.strictObject({ url: z.string().regex(CAPTURE_SCORING_LINK_URL_RE) });
+export type CaptureScoringLinkOk = z.infer<typeof CaptureScoringLinkOk>;
+
 export const CaptureRefusalCode = z.enum([
   "code_ended", "not_a_stream_code", "already_live", "replaced", "no_destination", "no_credit", "not_entitled",
   "unavailable", "invalid", "rate_limited",
+  // W27 (2026-10-06): the scoring link of a finalized or cancelled match — answered only by `…/scoring-link`.
+  "match_finished",
 ]);
 export type CaptureRefusalCode = z.infer<typeof CaptureRefusalCode>;
 /** Every refusal: {code, message, ...extras}. Only already_live carries extras: {code, message, sid, startedBy}
