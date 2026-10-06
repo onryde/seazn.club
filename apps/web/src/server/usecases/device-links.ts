@@ -12,6 +12,7 @@ import { requireFeature } from "@/lib/entitlements";
 import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
+import type { ResolvedCode } from "./stream-codes";
 
 export const DEVICE_LINK_PREFIX = "dl_";
 
@@ -320,6 +321,12 @@ export async function ensureDeviceLinks(
   return out;
 }
 
+declare const holderVerified: unique symbol;
+/** A stream code whose caller has passed the capture phone's holder check (§6.3.4 T12, `holderOf`) — the ONLY thing
+ *  `provideDeviceLinkForPhone` takes, so no caller can provide a link for a code nobody checked (review M5). Branded only
+ *  by capture-phone.ts's `currentPhoneCode`, right after that check. */
+export type HolderVerifiedCode = ResolvedCode & { readonly [holderVerified]: true };
+
 /** The phone's answer (capture QR v2 §6.3.5): the match's link, or "the match is over" (nothing written). */
 export type PhoneScoringLink =
   | { kind: "link"; secret: string; linkId: string; minted: boolean }
@@ -344,11 +351,8 @@ export type PhoneScoringLink =
  * A missing DEVICE_LINK_KEK is the 503 `DEVICE_LINK_KEK_MISSING` (open and seal both check it) with nothing written.
  * The secret is the caller's to put on the wire: it is never logged here.
  */
-export async function provideDeviceLinkForPhone(
-  orgId: string,
-  fixtureId: string,
-  issuedBy: string,
-): Promise<PhoneScoringLink> {
+export async function provideDeviceLinkForPhone(code: HolderVerifiedCode): Promise<PhoneScoringLink> {
+  const { orgId, fixtureId, issuedBy } = code;
   await requireFeature(orgId, "scoring.device_links", await competitionForFixture(fixtureId));
   return withTenant(orgId, async (tx) => {
     await lockFixtureLinks(tx, fixtureId);

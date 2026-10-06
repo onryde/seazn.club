@@ -20,9 +20,9 @@ import { log } from "@/server/logger";
 import { postBeat, postScoringLink } from "../capture-phone";
 import {
   createDeviceLink, deviceLinkCoversFixture, ensureDeviceLink, hashDeviceLinkToken, mintDeviceLinkSecret,
-  resolveDeviceLinkToken,
+  provideDeviceLinkForPhone, resolveDeviceLinkToken,
 } from "../device-links";
-import { reissueStreamCode } from "../stream-codes";
+import { reissueStreamCode, type ResolvedCode } from "../stream-codes";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
 import { captureRig, override, phoneId, type CaptureRig } from "./_capture-rig";
 
@@ -434,6 +434,16 @@ describe.skipIf(!HAS_DB)("postScoringLink — the phone's Remote scoring link (�
     const ok = await link(r, A);
     expect(ok.url).toMatch(URL_PATTERN);
     expect(await linksOf(r.fixtureId)).toHaveLength(1);
+  });
+
+  it("review M5: the provider takes ONLY a holder-checked code — a bare ResolvedCode and three loose strings do not compile (tsc checks this file; each directive below fails tsc if its call ever compiles)", () => {
+    const unchecked = (resolved: ResolvedCode): void => {
+      // @ts-expect-error — a resolved code that has NOT passed the holder check
+      void provideDeviceLinkForPhone(resolved);
+      // @ts-expect-error — the pre-M5 shape: three loose strings
+      void provideDeviceLinkForPhone(resolved.orgId, resolved.fixtureId, resolved.issuedBy);
+    };
+    expect(unchecked).toBeTypeOf("function");
   });
 
   it("anti-vacuity: this file asserted raw refusal bodies", () => {

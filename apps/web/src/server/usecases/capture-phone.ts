@@ -42,7 +42,7 @@ import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
 import { captureStageOf } from "./capture-stage";
-import { provideDeviceLinkForPhone, type PhoneScoringLink } from "./device-links";
+import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
 import { fixtureStreamTarget, resolveStreamCode, type ResolvedCode } from "./stream-codes";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
@@ -706,6 +706,16 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
  *  the link is provided, so a deployment that would serve a URL the phone's parser rejects writes nothing. */
 const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
 
+/** T12's holder check exactly as the start runs it (`holderOf`, session or none) — any other phone → 409 replaced —
+ *  returning the code BRANDED as checked (review M5): the only value `provideDeviceLinkForPhone` accepts, and this the
+ *  only place that brands one. */
+async function currentPhoneCode(resolved: ResolvedCode, phone: string): Promise<HolderVerifiedCode> {
+  const open = await openSessionOf(sql, resolved.fixtureId);
+  const current = await holderOf(sql, resolved.codeId, open);
+  if (!current || current.phone !== phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
+  return resolved as HolderVerifiedCode;
+}
+
 /** SQLSTATE 23503, as `postgres` reports it (`code`; lib/billing.ts reads the same shape off a real failure). */
 const isForeignKeyViolation = (err: unknown): boolean =>
   typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23503";
@@ -731,9 +741,7 @@ export async function postScoringLink(
   rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date, clientIp: string,
 ): Promise<CaptureScoringLinkOk> {
   const resolved = await resolveStreamCode(rawCode, tok, "start", body.phone, now);
-  const open = await openSessionOf(sql, resolved.fixtureId);
-  const current = await holderOf(sql, resolved.codeId, open);
-  if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
+  const checked = await currentPhoneCode(resolved, body.phone);
   const origin = captureOrigin(deps);
   if (!HTTPS_ORIGIN.test(origin)) {
     log.error({ fixtureId: resolved.fixtureId, origin }, "capture scoring link: the server's origin is not https; no link is served");
@@ -742,7 +750,7 @@ export async function postScoringLink(
   await rateLimit(`dlmint:${clientIp}`, DEVICE_LINK_MINT_LIMIT);
   let got: PhoneScoringLink;
   try {
-    got = await provideDeviceLinkForPhone(resolved.orgId, resolved.fixtureId, resolved.issuedBy);
+    got = await provideDeviceLinkForPhone(checked);
   } catch (err) {
     if (err instanceof PaymentRequiredError) throw new CaptureRefusalError(402, "not_entitled", `the plan lacks ${err.featureKey}`);
     if (err instanceof HttpError && err.code === "DEVICE_LINK_KEK_MISSING") {
