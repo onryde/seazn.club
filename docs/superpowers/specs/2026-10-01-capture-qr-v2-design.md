@@ -591,7 +591,11 @@ The body is the start's strict `{phone}`. In order:
 Answers:
 
 - `200 {url}`: `captureOrigin()` (§6.4) + `/score/` + the secret — `^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$` on
-  every deployment. A second call returns the same `url` and inserts nothing.
+  every deployment. A second call returns the same `url` and inserts nothing. Build decision (2026-10-06, for review):
+  where `captureOrigin()` is not https — no `OAUTH_BASE_URL`/`NEXT_PUBLIC_BASE_URL`, as on a local or CI server — the
+  pattern cannot be met, so the answer is `503 unavailable` before any write, never a url the phone's parser rejects.
+  Production and staging set both variables to https. Consequence: the `200` path is not reachable over HTTP on a local
+  or CI server; the route test drives it with an https origin, and the capture-v2 smoke asserts the `503` there.
 - `409 {code: "replaced", message}`, `409 {code: "match_finished", message}`, `402 {code: "not_entitled", message}`,
   `503 {code: "unavailable", message}`, `401 {code: "code_ended", message}`, `404 not_a_stream_code`, `422 invalid`,
   `429 rate_limited` with `Retry-After`.
