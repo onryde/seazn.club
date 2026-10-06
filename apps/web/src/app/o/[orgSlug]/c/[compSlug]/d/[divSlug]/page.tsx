@@ -36,6 +36,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
 import { comparePools } from "@/lib/pool-order";
+import { poolLabel } from "@/lib/pool-label";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
@@ -440,6 +441,12 @@ export default async function DivisionPage({
         )
       : undefined;
 
+  // The standings table and results grid take their words from the PUBLIC
+  // dictionary (the same helpers as the hub's table), in this viewer's
+  // locale — and so do the pool labels below. Loaded only on the tab that
+  // draws them, like `standings`.
+  const publicDict = tab === "standings" ? await getDictionary(locale, "public") : {};
+
   // Standings per table stage (+ per pool), with pool labels.
   const tableStages = stages.filter((s) => TABLE_KINDS.has(s.kind));
   const standings =
@@ -458,7 +465,9 @@ export default async function DivisionPage({
               pools.length > 0
                 ? await Promise.all(
                     pools.map(async (p) => ({
-                      caption: `${stage.name} — ${p.name}`,
+                      // From the pool's KEY in the viewer's locale, never
+                      // its stored English name (`lib/pool-label.ts`).
+                      caption: `${stage.name} — ${poolLabel(publicDict, p.key)}`,
                       poolId: p.id as string | null,
                       snap: await getStandings(auth, stage.id, p.id),
                     })),
@@ -468,10 +477,6 @@ export default async function DivisionPage({
           }),
         )
       : [];
-  // The standings table and results grid take their words from the PUBLIC
-  // dictionary (the same helpers as the hub's table), in this viewer's
-  // locale. Loaded only on the tab that draws them, like `standings` above.
-  const publicDict = tab === "standings" ? await getDictionary(locale, "public") : {};
   // Standings qualification status (R1a, spec 2026-09-22 §4.2): the same cut
   // line, markers, legend and popover the public pages draw. The meta comes
   // from V414's `stage_qualification_meta` — the function `public_stages_v`

@@ -28,6 +28,7 @@ import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { playerLinkId } from "@/lib/name-display";
 import { byPoolOrder } from "@/lib/pool-order";
+import { poolLabel } from "@/lib/pool-label";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -124,7 +125,9 @@ export default async function DivisionHomePage({ params }: Props) {
     ]),
   );
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
-  const poolName = new Map(pools.map((p) => [p.id, p.name]));
+  // A pool is named from its KEY in the org's locale, never by its stored
+  // English name (`lib/pool-label.ts`).
+  const poolKey = new Map(pools.map((p) => [p.id, p.key]));
   const stageById = new Map(stages.map((s) => [s.id, s]));
 
   // P6 fix round 1, finding #2 (CRITICAL): slot-label copy for a spectator
@@ -320,7 +323,7 @@ export default async function DivisionHomePage({ params }: Props) {
                     entrantStatuses={entrantStatuses}
                     caption={
                       snap.pool_id
-                        ? `${stage.name} — ${poolName.get(snap.pool_id) ?? t(dict, "table.pool")}`
+                        ? `${stage.name} — ${poolLabel(dict, poolKey.get(snap.pool_id))}`
                         : stage.name
                     }
                     dict={dict}

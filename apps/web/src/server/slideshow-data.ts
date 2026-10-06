@@ -15,6 +15,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { getDictionary } from "@/lib/i18n";
+import { poolLabel } from "@/lib/pool-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
@@ -258,6 +259,8 @@ export async function buildDivisionSlides(
   ]);
   const locale = toLocale(org[0]?.default_locale);
   const lookup: SlotLabelLookup = (k, v) => msgFor(locale, k, v);
+  // The pool labels' words (`table.poolLabel`), same org locale as `lookup`.
+  const publicDict = await getDictionary(locale, "public");
   // RS008: "stricter wins" per entrant — ANY roster member's explicit
   // opt-out masks that entrant's own display_name (a solo "individual"
   // entrant has exactly one member; a "pair"/"team" can have several).
@@ -293,14 +296,16 @@ export async function buildDivisionSlides(
   // ── Standings — one slide per table stage (per pool when pooled) ──
   for (const stage of stages.filter((s) => TABLE_KINDS.has(s.kind))) {
     const pools = await withTenant(auth.orgId, (tx) =>
-      tx<{ id: string; name: string }[]>`
-        select id, name from pools where stage_id = ${stage.id} order by key`,
+      tx<{ id: string; key: string }[]>`
+        select id, key from pools where stage_id = ${stage.id} order by key`,
     );
     const tables =
       pools.length > 0
         ? await Promise.all(
             pools.map(async (p) => ({
-              caption: `${stage.name} — ${p.name}`,
+              // From the pool's KEY in the org's locale, never its stored
+              // English name (`lib/pool-label.ts`).
+              caption: `${stage.name} — ${poolLabel(publicDict, p.key)}`,
               snap: await getStandings(auth, stage.id, p.id),
             })),
           )
@@ -431,7 +436,9 @@ export interface PublicSlideInput {
     tiebreakers?: string[] | null;
   };
   stages: { id: string; kind: string; name: string }[];
-  pools: { id: string; stage_id: string; name: string }[];
+  /** A pool is labelled from its KEY (`lib/pool-label.ts`); the stored
+   *  English `name` is deliberately not part of this input. */
+  pools: { id: string; stage_id: string; key: string }[];
   fixtures: {
     id: string;
     stage_id: string;
@@ -506,9 +513,10 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   // match centre and the division page use, never the organiser board's
   // "Winner of R1·2". Its phrases live in the PUBLIC dictionary, loaded here
   // from the same `orgLocale` as `lookup`, so the two cannot disagree.
+  const publicDict = await getDictionary(orgLocale, "public");
   const namer = publicRoundNamer({
     ui: lookup,
-    dict: await getDictionary(orgLocale, "public"),
+    dict: publicDict,
     fixtures: data.fixtures,
     stageKind: (stageId) => data.stages.find((s) => s.id === stageId)?.kind,
   });
@@ -546,7 +554,9 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     slides.push({
       kind: "standings",
       division: data.division.name,
-      caption: pool !== undefined ? `${stage.name} — ${pool.name}` : stage.name,
+      // From the pool's KEY in the org's locale, never its stored English
+      // name (`lib/pool-label.ts`).
+      caption: pool !== undefined ? `${stage.name} — ${poolLabel(publicDict, pool.key)}` : stage.name,
       rows: standingsSlideRows(snap.rows, shape, names),
     });
   }

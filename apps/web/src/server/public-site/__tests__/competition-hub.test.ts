@@ -90,7 +90,9 @@ import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { t } from "@/lib/i18n-runtime";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import enPublic from "@/dictionaries/en/public.json";
+import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
+import nlPublic from "@/dictionaries/nl/public.json";
 import { resolveLatestModule } from "@/server/engine-db";
 import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
 import { registry, type AnySportModule } from "@seazn/engine/sport";
@@ -215,9 +217,10 @@ describe("STATUS_LINE_KEYS", () => {
 // from, and `FORMAT_KEYS` is scanned out of `describe-format.ts`'s own source
 // text (the same drift-guard convention `STATUS_LINE_KEYS`'s
 // `schemas.ts` scan above uses) so a new `format.*` sentence lands in this
-// list unattended. `table.pool` (competition-hub.ts:583) and `table.tieBreak`
-// (standings-view.ts:174) are the two literals with no exported source to
-// scan — both are call sites this file already imports/exercises elsewhere.
+// list unattended. `table.pool` / `table.poolLabel` (`lib/pool-label.ts`, the
+// hub's pool caption) and `table.tieBreak` (standings-view.ts:174) are the
+// literals with no exported source to scan — all are call sites this file
+// already imports/exercises elsewhere.
 describe("table.* / format.* dictionary coverage (final-review fix F2)", () => {
   const formatSrc = readFileSync(new URL("../describe-format.ts", import.meta.url), "utf8");
   const FORMAT_KEYS = [...new Set([...formatSrc.matchAll(/key:\s*"(format\.[a-zA-Z0-9_.]+)"/g)].map((m) => m[1]!))];
@@ -258,6 +261,7 @@ describe("table.* / format.* dictionary coverage (final-review fix F2)", () => {
     const required = [
       ...[...STRUCTURAL_KEYS].map((k) => `table.col.${k}`),
       "table.pool",
+      "table.poolLabel",
       "table.tieBreak",
       ...Object.values(TIE_BREAK_MSG_KEYS),
       ...FORMAT_KEYS,
@@ -1268,6 +1272,71 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
     expect(doc.tables.map((t) => t.caption)).toEqual(["League — Pool A", "League — Pool B"]);
     expect(doc.tables.map((t) => t.id)).toEqual(["open-st1-pA", "open-st1-pB"]);
+  });
+
+  // Pool label i18n (2026-10-06). `pools.name` is only ever written as the
+  // English "Pool " + key (`usecases/stages.ts`), so a caption read off it put
+  // English in front of every es/fr/nl spectator. The pools below carry
+  // exactly that stored name; the caption must be the org-locale dictionary's
+  // `table.poolLabel` over the pool's KEY. Expected text is read out of the
+  // dictionary FILES, never through the code under test.
+  it("each pool's caption is the ORG's locale's pool label over its key — never the stored English name, in every locale", async () => {
+    const files: Record<(typeof LOCALES)[number], Record<string, string>> = {
+      en: enPublic,
+      es: esPublic,
+      fr: frPublic,
+      nl: nlPublic,
+    };
+    const label = (locale: (typeof LOCALES)[number], key: string) => files[locale]["table.poolLabel"].replace("{key}", key);
+    // Premise: the right answer differs from the stored name in a non-English
+    // locale, or this test could not see the defect it exists for.
+    expect(label("es", "A")).not.toBe("Pool A");
+    const pools = [
+      { id: "pB", stage_id: "st1", key: "B", name: "Pool B" },
+      { id: "pA", stage_id: "st1", key: "A", name: "Pool A" },
+    ];
+    const standings: PublicStandings[] = [
+      { ...SNAPSHOT, pool_id: "pB" },
+      { ...SNAPSHOT, pool_id: "pA" },
+    ];
+    let checked = 0;
+    for (const locale of LOCALES) {
+      getPublicCompetitionMock.mockResolvedValue({
+        org: { ...ORG, default_locale: locale },
+        competition: COMP,
+        divisions: [DIV],
+        liveNow: [],
+      });
+      getPublicDivisionMock.mockResolvedValue(
+        divisionDetail({ stages: [{ ...STAGE, kind: "group", name: "Groups" }], pools, standings }),
+      );
+      const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+      expect(doc.tables.map((t) => t.caption), locale).toEqual([
+        `Groups — ${label(locale, "A")}`,
+        `Groups — ${label(locale, "B")}`,
+      ]);
+      checked += doc.tables.length;
+    }
+    // Anti-vacuity: two pool captions per locale, four locales.
+    expect(checked).toBe(LOCALES.length * pools.length);
+  });
+
+  it("a snapshot whose pool the read does not list keeps the bare pool word, in the org's locale", async () => {
+    getPublicCompetitionMock.mockResolvedValue({
+      org: { ...ORG, default_locale: "es" },
+      competition: COMP,
+      divisions: [DIV],
+      liveNow: [],
+    });
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        stages: [{ ...STAGE, kind: "group", name: "Groups" }],
+        pools: [],
+        standings: [{ ...SNAPSHOT, pool_id: "p-unlisted" }],
+      }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(doc.tables.map((t) => t.caption)).toEqual([`Groups — ${esPublic["table.pool"]}`]);
   });
 
   it("one team card per entrant, with badge, colour and seed", async () => {

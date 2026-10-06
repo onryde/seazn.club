@@ -31,6 +31,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import type { PublicFixture, PublicEntrant, PublicDivision } from "@/server/public-site/data";
+import esPublic from "@/dictionaries/es/public.json";
 
 const getPublicCompetition = vi.fn();
 const getPublicDivision = vi.fn();
@@ -435,6 +436,59 @@ describe("GET .../poster.pdf — day-one fixtures add the draw from page 2", () 
     const text = decodePdfText(buf);
     expect(text).toContain("contre");
     expect(text).not.toContain("vs");
+  });
+});
+
+// Pool label i18n (2026-10-06). The read hands over each pool's stored name,
+// which the generator only ever writes as the English "Pool " + key; the
+// printed pool heading must be the ORG's locale's `table.poolLabel` over the
+// pool's KEY. Expected words come out of the dictionary FILE.
+describe("GET .../poster.pdf — a pool heading is printed in the org's own locale", () => {
+  const POOLED_DRAW = {
+    stages: [{ id: "s1", division_id: "d1", seq: 1, kind: "group" as const, name: "Grupos", status: "active" }],
+    pools: [
+      { id: "pa", stage_id: "s1", key: "A", name: "Pool A" },
+      { id: "pb", stage_id: "s1", key: "B", name: "Pool B" },
+    ],
+    fixtures: [
+      F({ id: "a1", stage_id: "s1", pool_id: "pa", round_no: 1, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2" }),
+      F({ id: "b1", stage_id: "s1", pool_id: "pb", round_no: 1, seq_in_round: 1, home_entrant_id: "e3", away_entrant_id: "e4" }),
+    ],
+    standings: [],
+    entrants: [
+      E({ id: "e1", display_name: "Lions" }),
+      E({ id: "e2", display_name: "Tigers", seed: 2 }),
+      E({ id: "e3", display_name: "Bears", seed: 3 }),
+      E({ id: "e4", display_name: "Wolves", seed: 4 }),
+    ],
+    tz: "UTC",
+  };
+
+  it("a Spanish org's poster heads each pool 'Grupos · Grupo A', never the stored 'Pool A'", async () => {
+    const label = (key: string) => esPublic["table.poolLabel"].replace("{key}", key);
+    expect(label("A"), "premise: Spanish differs from the stored name").not.toBe("Pool A");
+    getPublicCompetition.mockResolvedValue({
+      org: ORG("es"),
+      competition: COMPETITION,
+      divisions: [DIVISION()],
+      liveNow: [],
+    });
+    getPublicDivision.mockResolvedValue({
+      org: ORG("es"),
+      competition: COMPETITION,
+      division: DIVISION(),
+      ...POOLED_DRAW,
+    });
+
+    const { status, buf } = await get();
+    expect(status).toBe(200);
+    const text = decodePdfText(buf);
+    const headings = ["A", "B"].map((k) => `Grupos · ${label(k)}`);
+    for (const h of headings) expect(text).toContain(h);
+    expect(text).not.toContain("Pool A");
+    expect(text).not.toContain("Pool B");
+    // Anti-vacuity: both pool headings were found on the page.
+    expect(headings.filter((h) => text.includes(h))).toHaveLength(2);
   });
 });
 
