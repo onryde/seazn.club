@@ -42,7 +42,8 @@ import { CODE_GRACE_AFTER_FINISH_MINUTES } from "@/server/relay/config";
 import { insertStreamCode, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import { createStreamTarget } from "../stream-targets";
-import { ensureStreamCode, reissueStreamCode, resolveStreamCode, saveStreamSettings } from "../stream-codes";
+import { deltaText, stripSqlComments } from "@/server/relay/__tests__/_stream-migration";
+import { ensureStreamCode, fixtureStreamTarget, reissueStreamCode, resolveStreamCode, saveStreamSettings, writeStreamSettings } from "../stream-codes";
 import { seedOrg } from "./_seed";
 import { startedDivisionWithFixture } from "./_rig";
 
@@ -612,5 +613,105 @@ describe.skipIf(!HAS_DB)("stream settings — the destination pre-pick (§6.7.3)
     const key = { ...r.auth, via: "api_key" as const, userId: null, keyId: randomUUID() };
     expect(await refusalOf(saveStreamSettings(key, r.fixtureId, { targetId: null }))).toMatchObject({ status: 403 });
     expect(await settingsOf(r.fixtureId)).toBeNull();
+  });
+});
+
+// Plan R-1 (FP1, owner-accepted 2026-10-07). V430 read "a settings row exists" as "the organiser chose a destination", and
+// `target_id` null as "the organiser cleared it". PR-2's switch (and the A12 Stop stamp) creates rows that chose NOTHING,
+// so V431 adds `target_chosen`: only a destination write sets it, and `fixtureStreamTarget` reads THAT, not the row.
+describe.skipIf(!HAS_DB)("stream settings — a row records whether the organiser CHOSE a destination (plan R-1, V431)", () => {
+  const dest = (r: Awaited<ReturnType<typeof rig>>, label: string) =>
+    createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label, streamKey: `k-${randomUUID().slice(0, 8)}` });
+  const pickOf = (r: Awaited<ReturnType<typeof rig>>) => fixtureStreamTarget(sql, { orgId: r.auth.orgId, fixtureId: r.fixtureId });
+  const rowOf = async (fixtureId: string) =>
+    (await sql<{ target_chosen: boolean; target_id: string | null }[]>`
+      select target_chosen, target_id from fixture_stream_settings where fixture_id = ${fixtureId}`)[0] ?? null;
+  /** A row the switch (or the A12 Stop stamp) would create: a fixture and an org, and NO destination write. */
+  const switchRow = (r: Awaited<ReturnType<typeof rig>>) =>
+    sql`insert into fixture_stream_settings (fixture_id, org_id) values (${r.fixtureId}, ${r.auth.orgId})`;
+  /** V431's OWN backfill statement, read out of the migration text and scoped to one fixture: a shared test database's
+   *  other rows are not rewritten, and a migration without the statement fails here by name. */
+  async function runBackfill(fixtureId: string): Promise<void> {
+    // The whole statement up to its `;`, so a WHERE added to it (a backfill that skips the cleared rows) is not hidden by the
+    // scoping below: it no longer matches, and the extraction fails by name.
+    const stmt = /update fixture_stream_settings set target_chosen = true(?=\s*;)/.exec(stripSqlComments(deltaText(431)))?.[0];
+    expect(stmt, "V431 carries an UNCONDITIONAL target_chosen backfill").toBeDefined();
+    await sql.unsafe(`${stmt} where fixture_id = $1`, [fixtureId]);
+  }
+  /** Two live destinations; the OLDEST is `old` (the default), `fresh` is the newer — so "default" and "saved fresh" differ. */
+  async function twoDestinations(r: Awaited<ReturnType<typeof rig>>) {
+    const old = await dest(r, "Old feed");
+    const fresh = await dest(r, "Fresh feed");
+    await sql`update org_stream_targets set created_at = now() - interval '3 hours' where id = ${old.id}`;
+    await sql`update org_stream_targets set created_at = now() - interval '1 hour' where id = ${fresh.id}`;
+    return { old, fresh };
+  }
+
+  it("a settings row that never chose a destination still resolves the org's oldest live destination (the empty-row case, R-1)", async () => {
+    const r = await rig();
+    const { old } = await twoDestinations(r);
+    expect(await pickOf(r), "no row at all: the default").toMatchObject({ id: old.id, source: "default" });
+    await switchRow(r);
+    expect(await rowOf(r.fixtureId)).toEqual({ target_chosen: false, target_id: null });
+    expect(await pickOf(r), "a row that chose nothing: still the default, exactly as before the toggle").toMatchObject({ id: old.id, label: "Old feed", source: "default" });
+  });
+
+  it("a chosen null (the organiser cleared it) still resolves none — the same org, the same destinations, only the flag differs (positive pair)", async () => {
+    const r = await rig();
+    await twoDestinations(r);
+    await sql.begin((tx) => writeStreamSettings(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, targetId: null, updatedBy: null }));
+    expect(await rowOf(r.fixtureId)).toEqual({ target_chosen: true, target_id: null });
+    expect(await pickOf(r)).toBeNull();
+  });
+
+  it("the SEQUENCE: switch row (default) → pick the newer (saved) → clear (none) → pick again (saved); every destination write records the choice, a second write too", async () => {
+    const r = await rig();
+    const { old, fresh } = await twoDestinations(r);
+    await switchRow(r);
+    expect(await pickOf(r)).toMatchObject({ id: old.id, source: "default" });
+    const pick = (targetId: string | null) => sql.begin((tx) => writeStreamSettings(tx, { orgId: r.auth.orgId, fixtureId: r.fixtureId, targetId, updatedBy: r.auth.userId }));
+    await pick(fresh.id);
+    expect(await rowOf(r.fixtureId)).toEqual({ target_chosen: true, target_id: fresh.id });
+    expect(await pickOf(r)).toMatchObject({ id: fresh.id, source: "saved" });   // differs from the default's answer
+    await pick(null);
+    expect(await rowOf(r.fixtureId)).toEqual({ target_chosen: true, target_id: null });
+    expect(await pickOf(r)).toBeNull();
+    await pick(fresh.id);
+    await pick(fresh.id);   // a second identical write: still chosen, still saved
+    expect(await rowOf(r.fixtureId)).toEqual({ target_chosen: true, target_id: fresh.id });
+    expect(await pickOf(r)).toMatchObject({ id: fresh.id, source: "saved" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+    expect(n).toBe(1);
+  });
+
+  it("saveStreamSettings (the organiser's PUT) records the choice too — through the real entry point, not only the writer", async () => {
+    const r = await rig();
+    const { fresh } = await twoDestinations(r);
+    await switchRow(r);
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: fresh.id });
+    expect(await rowOf(r.fixtureId)).toEqual({ target_chosen: true, target_id: fresh.id });
+    expect(await pickOf(r)).toMatchObject({ id: fresh.id, source: "saved" });
+  });
+
+  it("a V430-shaped row (a destination WAS picked, target_chosen is the column default) reads as chosen only after V431's backfill — saved, not the default", async () => {
+    const r = await rig();
+    const { old, fresh } = await twoDestinations(r);
+    // What V430's writer left behind: target_id set. The V431 column default (false) is what a pre-V431 row has before the backfill.
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, target_id) values (${r.fixtureId}, ${r.auth.orgId}, ${fresh.id})`;
+    expect(await rowOf(r.fixtureId)).toEqual({ target_chosen: false, target_id: fresh.id });
+    expect(await pickOf(r), "before the backfill the pick is not seen").toMatchObject({ id: old.id, source: "default" });
+    await runBackfill(r.fixtureId);
+    expect(await rowOf(r.fixtureId)).toEqual({ target_chosen: true, target_id: fresh.id });
+    expect(await pickOf(r), "after the backfill the saved pick stands").toMatchObject({ id: fresh.id, source: "saved" });
+  });
+
+  it("a V430-shaped CLEARED row (target_id null, written by a destination write) stays cleared after the backfill — none, never the default", async () => {
+    const r = await rig();
+    await twoDestinations(r);
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, target_id) values (${r.fixtureId}, ${r.auth.orgId}, ${null})`;
+    expect(await pickOf(r), "before the backfill it reads as unchosen").not.toBeNull();
+    await runBackfill(r.fixtureId);
+    expect(await rowOf(r.fixtureId)).toEqual({ target_chosen: true, target_id: null });
+    expect(await pickOf(r)).toBeNull();
   });
 });

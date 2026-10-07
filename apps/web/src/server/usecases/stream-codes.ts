@@ -266,12 +266,14 @@ export async function saveStreamSettings(
  * statement reads both halves — the saved row and the org's live destinations `order by created_at, id`
  * (`listStreamTargets`'s order) — and `resolveStreamTarget` answers. A saved target archived, or not this org's, is simply
  * not in that list: the list is the one guard (B8 re-review n-1 removed a join that duplicated it). It writes nothing. The caller has already proved the fixture is `orgId`'s.
+ * "A saved row" means a row that CHOSE (`target_chosen`, plan R-1): a settings row made by the auto switch or the A12 Stop
+ * stamp has chosen nothing and reads as no row, so the fixture keeps the org's default destination.
  */
 export async function fixtureStreamTarget(
   exec: Tx | typeof sql, a: { orgId: string; fixtureId: string },
 ): Promise<{ id: string; label: string; source: StreamTargetSource } | null> {
   const [r] = await exec<{ has_row: boolean; saved_id: string | null; live: { id: string; label: string }[] }[]>`
-    select st.fixture_id is not null as has_row, st.target_id as saved_id,
+    select coalesce(st.target_chosen, false) as has_row, st.target_id as saved_id,
            coalesce((select json_agg(json_build_object('id', o.id, 'label', o.label) order by o.created_at, o.id)
                        from org_stream_targets o
                       where o.org_id = ${a.orgId} and o.archived_at is null), '[]'::json) as live
@@ -282,7 +284,10 @@ export async function fixtureStreamTarget(
   return pick === null ? null : { id: pick.id, label: pick.label, source: pick.source };
 }
 
-/** The one writer of `fixture_stream_settings.target_id`. The caller has already proved the fixture is `orgId`'s. */
+/** The one writer of `fixture_stream_settings.target_id`. The caller has already proved the fixture is `orgId`'s. It also
+ *  records that the organiser CHOSE (`target_chosen`, V431, plan R-1): a null `targetId` here is "cleared", whereas a
+ *  settings row made for any other reason (the auto switch, the A12 Stop stamp) leaves the flag false and the fixture on
+ *  the org's default destination. */
 export async function writeStreamSettings(
   tx: Tx, a: { orgId: string; fixtureId: string; targetId: string | null; updatedBy: string | null },
 ): Promise<{ targetId: string | null }> {
@@ -292,9 +297,9 @@ export async function writeStreamSettings(
     if (live.length === 0) throw new HttpError(404, "stream target not found");
   }
   await tx`
-    insert into fixture_stream_settings (fixture_id, org_id, target_id, updated_by, updated_at)
-    values (${a.fixtureId}, ${a.orgId}, ${a.targetId}, ${a.updatedBy}, now())
+    insert into fixture_stream_settings (fixture_id, org_id, target_id, target_chosen, updated_by, updated_at)
+    values (${a.fixtureId}, ${a.orgId}, ${a.targetId}, true, ${a.updatedBy}, now())
     on conflict (fixture_id) do update
-       set target_id = excluded.target_id, updated_by = excluded.updated_by, updated_at = now()`;
+       set target_id = excluded.target_id, target_chosen = true, updated_by = excluded.updated_by, updated_at = now()`;
   return { targetId: a.targetId };
 }
