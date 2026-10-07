@@ -36,7 +36,7 @@ What the margin costs: a regression smaller than the slack above goes unflagged 
 ## 2. Runs and where every report came from
 
 Every report was downloaded by its run id and artifact id (never by name: duplicate artifact names exist from the contaminated and cancelled runs) and the artifact's own
-metadata (name, run id, not expired) was checked against the table before unzipping. The first 78 reports are byte-identical to the copies pre-flighted before the download; the last three (the sports-period-9, -13 and -14 parts) were fetched once by id, and each passed `--check-selection` (every mutant inside the leg's files and line ranges, none Pending).
+metadata (name, run id, not expired) was checked against the table before unzipping. The first 78 reports are byte-identical to the copies pre-flighted before the download; the last three (the sports-period-9, -13 and -14 parts) were fetched once by id, and each passed `--check-selection` (every mutant inside the leg's files and line ranges); separately, none of the 81 reports holds a Pending mutant.
 
 | run id | what | legs taken from it | count |
 |---|---|---|---|
@@ -545,6 +545,8 @@ Stryker's own estimate, nearly all of the test time. With the option on, Stryker
 stop saying anything about mutants in code that runs at module load. Every floor, every timeout and every cut in this file was measured with the static mutants in, so changing the option means re-measuring all three. This task changes nothing about it and does not recommend a change.
 
 ## 9. Incremental reuse, with the evidence
+
+**Reuse is not guaranteed on a weekly cadence.** The incremental file lives in the GitHub Actions cache, which evicts an entry not read for 7 days, and a weekly run reads it every 7 days, on that edge. Every cache written so far is scoped to the `feat/format-matrix-w1d-t20` branch, which a run on `main` cannot read, so the first weekly run on `main` is cold for all 81 legs (about 11.5 h at 12 slots). Budget every weekly run as cold until a run shows otherwise.
 
 `mutation.yml` restores the leg's `*.incremental.json` and saves it again, so a re-run of an unchanged leg tests nothing it has already tested. The live proof came from the failed re-dispatch of the
 four re-cut legs (run 37532612195, job 112505580391, sports-cricket-9, sha 0920dbf5e):

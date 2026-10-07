@@ -257,7 +257,9 @@ jobs:
           cache: pnpm
       # Only the engine and what it needs (Stryker, vitest and the parser are its devDependencies): the apps' trees are never run here.
       - run: pnpm install --frozen-lockfile --filter @seazn/engine...
-      # The incremental file carries last week's results forward, so an unchanged mutant is not re-run. Restore and save are
+      # The incremental file can carry the last run's results forward, so an unchanged mutant is not re-run, but only while the
+      # cache entry survives: GitHub evicts an entry not read for 7 days, and a weekly run sits on that edge, so budget it as cold
+      # (MUTATION.md section 9). Restore and save are
       # separate steps, the save `if: always()`: actions/cache's own post-save runs only when the whole job succeeded, and a
       # group whose Stryker run exited non-zero (the step above) would never keep the file it had just earned.
       # The key is `stryker-<group>@<cut>@<sha>` and the restore key stops after the second '@': a group name is lowercase
