@@ -4,7 +4,7 @@
 // by stand-ins on the PATH — so what is proven is the YAML's own wiring (the flags it passes, the exit codes it keeps, the files
 // it reads), never a copy of it kept in the test.
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ import { deps } from "./run-deps.ts";
 import { ID, baseCases, judgeOut, mergedRun } from "./summary-fixtures.ts";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 import { fillRunId, jobBlock, jobsOf, runIdTemplate, stepHeads, stepOf } from "./workflow-text.ts";
+import { resolveGroup } from "../../../packages/engine/scripts/stryker-cuts.mjs";
 import { STRYKER_FAMILIES, STRYKER_GROUPS } from "../../../packages/engine/stryker.groups.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -25,6 +26,11 @@ const WORKFLOWS = join(REPO, ".github/workflows");
 const WF = readFileSync(join(WORKFLOWS, "matrix-truth.yml"), "utf8");
 const JOBS = jobsOf(WF);                               // job name → that job's text
 const GUARD = "Visibility guard (design §6.4; R14a)";
+// Task 20 pre-step, carry (b): the refusal said "Matrix truth run refused ... Sharded matrix runs", which is matrix-truth.yml's
+// name for itself, on a Stryker run. mutation.yml's guard is matrix-truth's script in every line but that message.
+const MATRIX_TRUTH_REFUSAL = "Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68).";
+const STRYKER_REFUSAL = "Stryker mutation run refused::repository visibility is '${vis:-unreadable}'. The Stryker mutation workflow (mutation.yml) runs one hosted job per group, and those minutes are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run it privately (ruling 68).";
+
 const pkg = JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { packageManager: string; scripts: Record<string, string> };
 
 const scratch = mkdtempSync(join(tmpdir(), "w1d-wf-"));
@@ -106,12 +112,12 @@ describe("the visibility guard (Review Focus 2)", () => {
    *  raw JSON error body `body` when given, which is what gh 2.95 prints for a 404/401/403/5xx under `--jq`, else nothing) and
    *  then answers `answer`, and a `sleep` stand-in that records its argument instead of waiting (m4: the retry's backoff is
    *  observed, never slept). `calls` is how many times the guard asked, `sleeps` the backoffs it took between asks. */
-  const runWith = (env: Record<string, string>, gh: { fails: number; answer: string; body?: string }) => {
+  const runWith = (env: Record<string, string>, gh: { fails: number; answer: string; body?: string }, script: string = stepOf(JOBS.plan, GUARD).script!) => {
     const dir = mkdtempSync(join(tmpdir(), "gh-"));
     try {
       writeFileSync(join(dir, "gh"), `#!/bin/sh\nn=$(cat "$GH_STATE/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$GH_STATE/n"\nif [ "$n" -le "$GH_FAILS" ]; then if [ -n "$GH_BODY" ]; then echo "$GH_BODY"; fi; echo 'HTTP 403' >&2; exit 1; fi\necho "$GH_ANSWER"\n`, { mode: 0o755 });
       writeFileSync(join(dir, "sleep"), `#!/bin/sh\necho "$1" >> "$GH_STATE/sleeps"\n`, { mode: 0o755 });
-      const r = spawnSync("bash", ["-c", stepOf(JOBS.plan, GUARD).script!], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "onryde/seazn.club", GH_STATE: dir, GH_FAILS: String(gh.fails), GH_ANSWER: gh.answer, GH_BODY: gh.body ?? "", ...env }, encoding: "utf8" });
+      const r = spawnSync("bash", ["-c", script], { env: { PATH: `${dir}:${process.env.PATH ?? ""}`, GITHUB_REPOSITORY: "onryde/seazn.club", GH_STATE: dir, GH_FAILS: String(gh.fails), GH_ANSWER: gh.answer, GH_BODY: gh.body ?? "", ...env }, encoding: "utf8" });
       const lines = (f: string) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8").split("\n").filter(Boolean) : []);
       return { status: r.status, stdout: r.stdout, stderr: r.stderr, calls: Number(lines("n")[0] ?? 0), sleeps: lines("sleeps") };
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -138,6 +144,27 @@ describe("the visibility guard (Review Focus 2)", () => {
   it("the four visibility × runner combinations of ruling 68 are all present and give the ruled exits", () => {
     const at = (r: string, g: string) => cases.find((c) => c.env.RUNNER_ENV === r && c.gh === g && c.env.INJECT === "none")!;
     expect([at("github-hosted", "public").want, at("self-hosted", "public").want, at("github-hosted", "private").want, at("self-hosted", "private").want]).toEqual([0, 0, 1, 0]);
+  });
+
+  it("carry (b): a refusal on a private repository NAMES the Stryker mutation workflow, in every job, and says nothing of a matrix truth run (run for real, with a stand-in gh)", () => {
+    const env = { RUNNER_ENV: "github-hosted", INJECT: "none" };
+    let checked = 0;
+    for (const [name, t] of Object.entries(MJOBS)) {
+      const r = runWith(env, { fails: 0, answer: "private" }, stepOf(t, GUARD).script!);
+      expect(r.status, `${name}: private, hosted is refused`).toBe(1);
+      expect(r.stdout, name).toContain("::error title=Stryker mutation run refused::repository visibility is 'private'");
+      expect(r.stdout, name).toContain("mutation.yml");
+      expect(r.stdout, name).not.toMatch(/Matrix truth|Sharded matrix/);
+      checked++;
+    }
+    expect(checked, "jobs of mutation.yml").toBe(Object.keys(MJOBS).length);
+    // the positive control: matrix-truth.yml's own guard still names itself (so the assertions above can tell the two apart)
+    const own = runWith(env, { fails: 0, answer: "private" });
+    expect(own.status).toBe(1);
+    expect(own.stdout).toContain("::error title=Matrix truth run refused::");
+    expect(own.stdout).not.toContain("Stryker mutation");
+    // and the public repository still passes through mutation.yml's guard (a refusal worded differently is not a refusal always)
+    expect(runWith(env, { fails: 0, answer: "public" }, stepOf(MJOBS.plan!, GUARD).script!).status).toBe(0);
   });
 
   it("every job of matrix-truth.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes (mutation.yml's jobs join this check in Task 15)", () => {
@@ -821,7 +848,7 @@ function evalIf(raw: string, ctx: Record<string, unknown>, cancelled = false): b
 function evalExpr(raw: string, ctx: Record<string, unknown>, cancelled = false): unknown {
   const expr = raw.trim().replace(/^\$\{\{\s*/, "").replace(/\s*\}\}$/, "");
   const js = expr
-    .replace(/\b(github|vars|needs|inputs)((?:\.[A-Za-z_][\w-]*)+)/g, (_m, root: string, path: string) => `ref(${JSON.stringify(root + path)})`)
+    .replace(/\b(github|vars|needs|inputs|steps)((?:\.[A-Za-z_][\w-]*)+)/g, (_m, root: string, path: string) => `ref(${JSON.stringify(root + path)})`)
     .replace(/fromJSON\((ref\("[^"]*"\))\)((?:\.[A-Za-z_*][\w-]*)+)/g, (_m, arg: string, path: string) => `fj(${arg}, ${JSON.stringify(path)})`)
     .replace(/fromJSON\((ref\("[^"]*"\))\)/g, (_m, arg: string) => `fj(${arg}, "")`);
   const bare = js.replace(/"[^"]*"|'[^']*'/g, '""');   // the whitelist is read with string contents out, so `*` and `{0}` may sit in a literal
@@ -1033,15 +1060,40 @@ describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved her
     expect(MJOBS.mutate).toContain("timeout-minutes: ${{ matrix.timeout }}");
     for (const n of ["Survivors", "Upload mutation results"]) expect(stepOf(MJOBS.mutate!, n).body).toContain("if: always()");
   });
+  it("the mutate job runs at most 12 legs at a time, next to fail-fast: false: the leg fan-out cannot take every hosted slot of the org (T20-FIX1, I1)", () => {
+    // Ruling T20-FIX1: the org is on GitHub's Free plan (about 20 concurrent hosted jobs, account-wide), and a `group=all` dispatch
+    // queues one job per leg (81 legs, about 1.5 hours each, since the first full run's slow legs were cut again and every part ran). Without a cap it holds
+    // every slot for about 7.7 hours while ci.yml's PR runs (13-16 jobs) and e2e.yml's push fan-out (11 jobs) wait behind it. The
+    // value is the owner's choice (12): a PR run may partly queue, and a dispatch takes about 11.5 hours instead of about 16.1 at 8
+    // (derived from the measured walls by packages/engine/test/stryker-sizing.test.ts). A literal integer, never an expression:
+    // the number is the thing this pin names, and an input or a variable would let a dispatch lift it unseen.
+    const strategy = /\n {4}strategy:\n((?: {6}\S.*\n)+)/.exec(`${MJOBS.mutate!}\n`);
+    expect(strategy, "the mutate job has a strategy block").not.toBeNull();
+    const keys = new Map<string, string>();
+    for (const line of strategy![1]!.split("\n")) {
+      const m = /^ {6}([a-z-]+):\s*(.*?)\s*(?:#.*)?$/.exec(line);
+      if (m) keys.set(m[1]!, m[2]!);
+    }
+    expect([...keys.keys()].sort(), "the strategy holds exactly these keys").toEqual(["fail-fast", "matrix", "max-parallel"]);
+    expect(keys.get("fail-fast")).toBe("false");
+    expect(keys.get("max-parallel"), "a literal integer, not an expression").toMatch(/^\d+$/);
+    expect(keys.get("max-parallel"), "the cap, 12").toBe("12");
+    // the cap is on the job that fans out and nowhere else (plan and floors are single jobs: a cap there would mean nothing)
+    for (const n of ["plan", "floors"]) expect(MJOBS[n], `${n} has no matrix to cap`).not.toContain("max-parallel");
+    expect(Object.keys(MJOBS).length, "all three jobs were read").toBe(3);
+  });
   it("the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys, in declaration order (m2)", () => {
     // a trailing `# comment` on an option line is stripped (review 6, m4)
     const opts = /group:[\s\S]*?options:\n((?:\s+- .+\n)+)/.exec(MUT)![1]!.split("\n").map((l) => l.replace(/\s+#.*$/, "").replace(/^\s+- /, "").trim()).filter(Boolean);
     expect(opts).toEqual(["all", ...Object.keys(STRYKER_GROUPS)]);
     expect(opts.length).toBeGreaterThan(2);
   });
-  it("mutation.yml's guard is the first step of every job, with matrix-truth's script (the identical-script claim for the second workflow)", () => {
-    const want = stepOf(JOBS.plan!, GUARD).script;
-    expect(want).not.toBeNull();
+  it("mutation.yml's guard is the first step of every job, with matrix-truth's script in every line but the refusal's wording (the identical-script claim for the second workflow)", () => {
+    const base = stepOf(JOBS.plan!, GUARD).script;
+    expect(base).not.toBeNull();
+    expect(base, "matrix-truth's script still carries its own wording, so the substitution below is a real one").toContain(MATRIX_TRUTH_REFUSAL);
+    const want = base!.replace(MATRIX_TRUTH_REFUSAL, STRYKER_REFUSAL);
+    expect(want).not.toBe(base);
     expect(Object.keys(MJOBS).length).toBeGreaterThan(1);
     for (const [name, t] of Object.entries(MJOBS)) {
       expect(stepHeads(t)[0], name).toBe(`      - name: ${GUARD}`);
@@ -1058,7 +1110,35 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
     expect(MUT).not.toMatch(/^\s{2}push:/m);
     expect(MUT).not.toContain("workflow_call");
     expect(MUT).not.toContain("pull_request_target");
-    expect(MUT).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/mutation\.yml"\s*\n\s*- "packages\/engine\/stryker\*"\s*\n\s*- "packages\/engine\/scripts\/stryker-\*"/);
+    expect(MUT).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/mutation\.yml"\s*\n\s*- "packages\/engine\/stryker\*"\s*\n\s*- "packages\/engine\/vitest\.config\.ts"\s*\n\s*- "packages\/engine\/vitest\.stryker\.config\.ts"\s*\n\s*- "packages\/engine\/scripts\/stryker-\*"/);
+  });
+
+  it("the probe's pull_request paths cover every Stryker file of the engine, and the vitest config the runner is handed (T20-FIX1, M3)", () => {
+    // `packages/engine/stryker*` does not match `vitest.stryker.config.ts` (it starts with `vitest.`), so a PR that changed the
+    // reporters the Stryker runs use, the fix T20-PRE made, would not have run the probe that proves them. The files are read
+    // from the TREE (every file named for Stryker, in the engine and its scripts) and from the config's own declaration of the
+    // runner's vitest config, never typed here. GitHub's filter: `*` is any run of characters but `/`, `**` is any run at all.
+    const paths = /pull_request:\n\s+paths:\n((?:\s+- ".+"\n)+)/.exec(MUT)![1]!.split("\n").map((l) => /- "(.+)"/.exec(l)?.[1]).filter((x): x is string => x !== undefined);
+    expect(paths.length, "the trigger names paths").toBeGreaterThan(2);
+    const esc = (t: string): string => t.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    const glob = (g: string): RegExp => new RegExp(`^${g.split("**").map((deep) => deep.split("*").map(esc).join("[^/]*")).join(".*")}$`);
+    const covered = (f: string): boolean => paths.some((g) => glob(g).test(f));
+    expect(covered("packages/engine/stryker.config.mjs"), "the filter matches a plain Stryker file (a control: the matcher works)").toBe(true);
+    expect(covered("packages/engine/test/stryker-sizing.test.ts"), "and refuses a file the probe does not depend on (a control: it is not a catch-all)").toBe(false);
+    const engine = join(REPO, "packages/engine");
+    const named = [...readdirSync(engine).map((f) => f), ...readdirSync(join(engine, "scripts")).map((f) => `scripts/${f}`)]
+      .filter((f) => /stryker/.test(f) && statSync(join(engine, f)).isFile())
+      .map((f) => `packages/engine/${f}`);
+    const declared = /configFile:\s*"([^"]+)"/.exec(readFileSync(join(engine, "stryker.config.mjs"), "utf8"))![1]!;
+    // and what that config MERGES (T20-FIX2, m3): vitest.stryker.config.ts is `mergeConfig(base, ...)`, so a change to the base it
+    // imports (`./vitest.config.ts`) alters every Stryker run, and the probe must run on it
+    const imported = [...readFileSync(join(engine, declared), "utf8").matchAll(/from "\.\/([^"]+)"/g)].map((m) => m[1]!);
+    expect(imported, "the runner's vitest config imports the engine's own vitest config").toContain("vitest.config.ts");
+    const files = [...new Set([...named, `packages/engine/${declared}`, ...imported.map((f) => `packages/engine/${f}`)])];
+    expect(files.length, "Stryker files read from the tree").toBeGreaterThan(6);
+    expect(files, "the runner's vitest config is among them").toContain("packages/engine/vitest.stryker.config.ts");
+    expect(files, "and the base it merges").toContain("packages/engine/vitest.config.ts");
+    expect(files.filter((f) => !covered(f)), "Stryker files the probe's trigger does not cover").toEqual([]);
   });
 
   it("the three jobs are plan, mutate and floors; mutate needs plan, floors needs both, and plan and floors have the 15-minute timeout", () => {
@@ -1084,7 +1164,7 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
     const ran = (event: string, group: string) => ({ event, matrix: planMatrix(event, group) });
     const cases: { name: string; ctx: Record<string, unknown>; plan: boolean; mutate: boolean; floors: boolean }[] = [
       { name: "workflow_dispatch group=all", ctx: ctxOf(ran("workflow_dispatch", "all")), plan: true, mutate: true, floors: true },
-      { name: "workflow_dispatch of one leg", ctx: ctxOf(ran("workflow_dispatch", "draws-bracket")), plan: true, mutate: true, floors: true },
+      { name: "workflow_dispatch of one leg", ctx: ctxOf(ran("workflow_dispatch", "draws-3")), plan: true, mutate: true, floors: true },
       // N1: the documented probe-only dispatch plans [probe]; floors must skip, not refuse the probe
       { name: "workflow_dispatch group=probe", ctx: ctxOf(ran("workflow_dispatch", "probe")), plan: true, mutate: true, floors: false },
       { name: "schedule, enabled", ctx: ctxOf({ ...ran("schedule", ""), weekly: "true" }), plan: true, mutate: true, floors: true },
@@ -1166,34 +1246,90 @@ describe("mutation.yml: triggers, the weekly gate and the fork gate (T9 conventi
   });
 });
 
-describe("mutation.yml: the incremental cache is keyed so no group can restore another's file", () => {
+describe("mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's", () => {
   const cache = stepOf(MJOBS.mutate!, "Restore the incremental file").body;
-  const keyOf = (g: string) => /^ {10}key: (.+)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ github.sha }}", "0123abc");
-  const restoreOf = (g: string) => /restore-keys: \|\n {12}(\S.*)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g);
+  /** What the plan step really hands the mutate job for every leg (the probe's PR matrix and the dispatch of all the others):
+   *  group -> { timeout, cut }, the values `matrix.cut` takes in the keys below. Spawned once, on first use. */
+  let planned: Record<string, { timeout: number; cut: string }> | undefined;
+  const plannedLegs = (): Record<string, { timeout: number; cut: string }> => {
+    planned ??= Object.fromEntries([planMatrix("pull_request", ""), planMatrix("workflow_dispatch", "all")]
+      .flatMap((m) => (JSON.parse(m) as { include: { group: string; timeout: number; cut: string }[] }).include)
+      .map((e) => [e.group, { timeout: e.timeout, cut: e.cut }]));
+    return planned;
+  };
+  const keyOf = (g: string, cut = plannedLegs()[g]!.cut) => /^ {10}key: (.+)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ matrix.cut }}", cut).replace("${{ github.sha }}", "0123abc");
+  const restoreOf = (g: string, cut = plannedLegs()[g]!.cut) => /restore-keys: \|\n {12}(\S.*)$/m.exec(cache)![1]!.replace("${{ matrix.group }}", g).replace("${{ matrix.cut }}", cut);
 
   it("the cached path is the group's own incremental file, the one stryker.config.mjs writes", () => {
     expect(cache).toContain("path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json");
     expect(cache).toContain("uses: actions/cache/restore@v4");
   });
 
-  it("the file is SAVED by its own step, `if: always()`, after Stryker and under the key the restore looks for (a red Stryker run must not lose it)", () => {
+  it("the file is SAVED by its own step, after Stryker and the check, `if: always()` and only when the check passed, under the key the restore looks for (a red Stryker run must not lose it; a refused file must not be kept)", () => {
     const save = stepOf(MJOBS.mutate!, "Save the incremental file").body;
     expect(save).toContain("uses: actions/cache/save@v4");
-    expect(save).toContain("if: always()");
+    expect(save).toContain("if: always() && steps.incremental.outcome == 'success'");
     expect(save).toContain("path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json");
     expect(save).toContain(`key: ${/^ {10}key: (.+)$/m.exec(cache)![1]!}`);
     const heads = stepHeads(MJOBS.mutate!);
     const at = (n: string) => heads.indexOf(`      - name: ${n}`);
     expect(at("Run Stryker")).toBeGreaterThan(at("Restore the incremental file"));
-    expect(at("Save the incremental file")).toBe(at("Run Stryker") + 1);   // before any later step that can exit non-zero
+    // the check and the save sit right after Stryker, each `if: always()`, before any later step that can exit non-zero
+    expect(at("Check the incremental file")).toBe(at("Run Stryker") + 1);
+    expect(at("Save the incremental file")).toBe(at("Run Stryker") + 2);
     expect(at("Survivors")).toBeGreaterThan(at("Save the incremental file"));
     expect(heads.filter((h) => h.includes("Floor check")), "the floor is judged per family by the floors job, never by a leg").toEqual([]);
     // the plain `actions/cache@v4` would save only on a green job: none may remain
     expect(MUT).not.toMatch(/uses: actions\/cache@/);
   });
 
-  it("no group's restore prefix is a prefix of another group's cache key (derived from the real group names)", () => {
+  it("the check before the save is the engine's own selection check on the incremental file, `if: always()`, a red step when it refuses, and the save runs only on its success (evaluated, not just read)", () => {
+    const check = stepOf(MJOBS.mutate!, "Check the incremental file").body;
+    expect(check).toContain("id: incremental");
+    expect(check).toMatch(/^ {8}if: always\(\)$/m);
+    expect(check).toContain("working-directory: packages/engine");
+    expect(check, "a refusal is a red step, never advisory").not.toContain("continue-on-error");
+    expect(check).toContain('run: node --experimental-strip-types scripts/stryker-floor.ts --check-selection "$GROUP" "reports/mutation/$GROUP.incremental.json"');
+    // the same CLI and the same working directory Survivors uses, so the two judge alike
+    expect(stepOf(MJOBS.mutate!, "Survivors").body).toContain("working-directory: packages/engine");
+    expect(stepOf(MJOBS.mutate!, "Survivors").body).toContain("run: node --experimental-strip-types scripts/stryker-floor.ts --survivors");
+    // the save's own condition, evaluated for each outcome the check can have
+    const raw = /^ {8}if: (.+?)\s*(?:#.*)?$/m.exec(stepOf(MJOBS.mutate!, "Save the incremental file").body)![1]!;
+    const saves = (outcome: string, cancelled = false) => evalIf(raw, { steps: { incremental: { outcome } } }, cancelled);
+    expect(saves("success"), "the check accepted the file").toBe(true);
+    expect(saves("failure"), "the check refused it").toBe(false);
+    expect(saves("skipped"), "the check did not run").toBe(false);
+    expect(saves("cancelled"), "the check was cancelled").toBe(false);
+    expect(saves("success", true), "a cancelled job still saves what the check accepted (an interrupted leg's partial file)").toBe(true);
+  });
+
+  it("the check step run for real: a file inside the leg's ranges is exit 0, one with a mutant past them (the first re-run's poisoned file), a missing file and an empty one are exit 2 and the step is red", () => {
+    const LEG = "sports-cricket-9";
+    const CRICKET = "src/sports/cricket/cricket.ts";
+    const range = resolveGroup(LEG).map((e) => /^(.*):(\d+)-(\d+)$/.exec(e)).find((m) => m !== null && m[1] === CRICKET);
+    expect(range, `${LEG} takes a range of cricket.ts`).toBeDefined();
+    const to = Number(range![3]);
+    const from = Number(range![2]);
+    const line = runLine(MJOBS.mutate!, "Check the incremental file");
+    const inc = (lines: number[]) => JSON.stringify({ files: { [CRICKET]: { mutants: lines.map((l, i) => ({ id: String(i), mutatorName: "BlockStatement", status: i % 2 === 0 ? "Killed" : "Pending", location: { start: { line: l, column: 1 } } })) } } });
+    const stepRun = (text: string | null) => {
+      const cwd = fresh("incremental");
+      mkdirSync(join(cwd, "reports/mutation"), { recursive: true });
+      if (text !== null) writeFileSync(join(cwd, "reports/mutation", `${LEG}.incremental.json`), text);
+      const r = spawnSync("bash", ["-c", line], { cwd, encoding: "utf8", timeout: SPAWN_MS, env: { PATH: process.env.PATH ?? "", GROUP: LEG } });
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+    };
+    expect(stepRun(inc([from, from + 1, to])).status, "inside").toBe(0);
+    const poisoned = stepRun(inc([from, to + 1]));
+    expect(poisoned.status, "a mutant one line past the leg's range").toBe(2);
+    expect(poisoned.stderr).toContain(`is not group "${LEG}"'s`);
+    expect(stepRun(null).status, "no file: Stryker died before it wrote one").toBe(2);
+    expect(stepRun(inc([])).status, "no mutants").toBe(2);
+  }, spawnBudget(4));
+
+  it("no group's restore prefix is a prefix of another group's cache key (derived from the real group names, each with the cut the plan step gives it)", () => {
     const names = Object.keys(STRYKER_GROUPS);
+    expect(Object.keys(plannedLegs()).sort(), "the plan step gives every group a cut").toEqual([...names].sort());
     let compared = 0;
     for (const g of names) {
       for (const h of names) {
@@ -1205,10 +1341,54 @@ describe("mutation.yml: the incremental cache is keyed so no group can restore a
     expect(compared).toBe(names.length * (names.length - 1));
   });
 
-  it("the premise: a hyphen delimiter WOULD collide on the real names (so the '@' is doing work, not decoration)", () => {
+  it("the premise: a restore key that stopped at the group's name WOULD collide on the real names, `sports-cricket-1` reaching `sports-cricket-10` (so the '@' is doing work, not decoration)", () => {
     const names = Object.keys(STRYKER_GROUPS);
-    const colliding = names.flatMap((g) => names.filter((h) => h !== g && `stryker-${h}-0123abc`.startsWith(`stryker-${g}-`)).map((h) => `${g} -> ${h}`));
+    const colliding = names.flatMap((g) => names.filter((h) => h !== g && keyOf(h).startsWith(`stryker-${g}`)).map((h) => `${g} -> ${h}`));
     expect(colliding.length).toBeGreaterThan(0);
+    expect(colliding, "the numbered legs are the ones that collide").toContain("sports-cricket-1 -> sports-cricket-10");
+  });
+
+  it("the cut is in the key, the restore key and the save key, and the restore key has no shorter fallback that would reach another cut's file", () => {
+    const save = stepOf(MJOBS.mutate!, "Save the incremental file").body;
+    expect(cache).toContain("key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}");
+    expect(save).toContain("key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}");
+    // exactly one restore key, and it stops AFTER the cut: `stryker-${{ matrix.group }}@` alone is the defect (T20)
+    const block = /restore-keys: \|\n((?: {12}\S.*\n?)+)/.exec(cache);
+    expect(block, "a restore-keys block").not.toBeNull();
+    expect(block![1]!.split("\n").filter((l) => l.trim() !== "").map((l) => l.trim())).toEqual(["stryker-${{ matrix.group }}@${{ matrix.cut }}@"]);
+  });
+
+  it("a leg that is cut again never restores the file another cut wrote, and one that is not still restores its own (each group, the cut the plan step gives it)", () => {
+    let checked = 0;
+    for (const g of Object.keys(STRYKER_GROUPS)) {
+      const own = plannedLegs()[g]!.cut;
+      const other = own.slice(0, -1) + (own.endsWith("0") ? "1" : "0"); // a different cut, the same group
+      expect(keyOf(g, own).startsWith(restoreOf(g, own)), `${g} restores the file its own cut saved`).toBe(true);
+      expect(keyOf(g, other).startsWith(restoreOf(g, own)), `${g} (cut ${own}) would restore a file saved by cut ${other}`).toBe(false);
+      // the key the workflow wrote before the cut was in it: `stryker-<group>@<sha>` (the old cut's file, which is NOT to be restored)
+      expect(`stryker-${g}@78c7ef3e6c0e5bb2b3c1d4f6a7e8d9c0b1a2f3e4`.startsWith(restoreOf(g, own)), `${g} would restore the pre-fix key`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(STRYKER_GROUPS).length);
+    expect(checked).toBeGreaterThan(10);
+  });
+
+  it("the premise: a restore key that stopped at the group's name and its '@' (the shape before the fix) WOULD reach a file another cut wrote (so the cut in the prefix is doing work)", () => {
+    const g = "sports-cricket-9";
+    const other = plannedLegs()[g]!.cut.replace(/^./, (c) => (c === "0" ? "1" : "0"));
+    expect(keyOf(g, other).startsWith(`stryker-${g}@`), "the old prefix reaches the other cut's key").toBe(true);
+    expect(keyOf(g, other).startsWith(restoreOf(g)), "the new one does not").toBe(false);
+  });
+
+  it("every `matrix.<field>` the mutate job reads is a field the plan step really emits (the seam: producer and consumer meet in the real output)", () => {
+    const read = new Set([...MJOBS.mutate!.matchAll(/(?<![\w-])matrix\.(\w+)/g)].map((m) => m[1]!));
+    const emitted = new Set(Object.keys(JSON.parse(planMatrix("workflow_dispatch", "core-1")).include[0] as Record<string, unknown>));
+    expect([...read].sort()).toEqual(["cut", "group", "timeout"]);
+    for (const f of read) expect(emitted.has(f), `matrix.${f} is not in the plan step's output (${[...emitted].join(", ")})`).toBe(true);
+  });
+
+  it("the workflow hashes nothing itself: the fingerprint comes from the plan step, not from inline shell over source", () => {
+    expect(MUT).not.toMatch(/sha\d*sum|shasum|md5|openssl|hashFiles|\bcksum\b/);
   });
 });
 
@@ -1245,14 +1425,14 @@ function runBlock(script: string, o: { cwd: string; env?: Record<string, string>
   const r = spawnSync("bash", ["-c", script], { cwd: o.cwd, encoding: "utf8", timeout: SPAWN_MS * 3, env: { PATH: `${bin}:${process.env.PATH ?? ""}`, RECORD: recordFile, ...o.env } });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr, record: readFileSync(recordFile, "utf8").split("\n").filter(Boolean) };
 }
-/** A scratch packages/engine: the floor file, and a `draws-bracket` report (3 killed, 1 survived: 75.0%) at reports/mutation/draws-bracket.json
+/** A scratch packages/engine: the floor file, and a `draws-3` report (3 killed, 1 survived: 75.0%) at reports/mutation/draws-3.json
  *  (the Survivors step's own layout: one leg's report in the leg's own job). */
 function engineDir(floors: Record<string, number>, over: { omitReport?: boolean } = {}): string {
   const cwd = fresh("engine");
   writeFileSync(join(cwd, "stryker-floor.json"), JSON.stringify({ note: "t", families: floors }));
   if (over.omitReport !== true) {
     mkdirSync(join(cwd, "reports/mutation"), { recursive: true });
-    writeFileSync(join(cwd, "reports/mutation/draws-bracket.json"), JSON.stringify({ files: { "src/scheduling/bracket.ts": { mutants: mutantsOf([["Killed", 1], ["Killed", 2], ["Timeout", 3], ["Survived", 4]]) } } }));
+    writeFileSync(join(cwd, "reports/mutation/draws-3.json"), JSON.stringify({ files: { "src/scheduling/bracket.ts": { mutants: mutantsOf([["Killed", 1], ["Killed", 2], ["Timeout", 3], ["Survived", 4]]) } } }));
   }
   return cwd;
 }
@@ -1289,7 +1469,7 @@ describe("mutation.yml: the plan step derives the matrix through the real script
     ["schedule", "", Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe")],
     ["workflow_dispatch", "all", Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe")],
     ["workflow_dispatch", "probe", ["probe"]],
-    ["workflow_dispatch", "draws-bracket", ["draws-bracket"]],
+    ["workflow_dispatch", "draws-3", ["draws-3"]],
   ])("EVENT=%s GROUP='%s' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with %j", (event, group, want) => {
     const r = derive({ EVENT: event, GROUP: group });
     expect(r.status, r.stderr).toBe(0);
@@ -1310,15 +1490,15 @@ describe("mutation.yml: the Stryker step keeps Stryker's own exit and writes it 
   const script = body.script!;
   it("it runs `pnpm mutation` in packages/engine with STRYKER_GROUP from the job's GROUP", () => {
     expect(body.body).toContain("working-directory: packages/engine");
-    const r = runBlock(script, { cwd: fresh("engine"), env: { GROUP: "draws-bracket" } });
+    const r = runBlock(script, { cwd: fresh("engine"), env: { GROUP: "draws-3" } });
     expect(r.status, r.stderr).toBe(0);
-    expect(r.record).toEqual(["mutation", "STRYKER_GROUP=draws-bracket"]);
+    expect(r.record).toEqual(["mutation", "STRYKER_GROUP=draws-3"]);
   }, spawnBudget(1));
   it("a failing run: the step exits with Stryker's code, reports/mutation/exit.txt says so (the directory is made even if Stryker died before writing one), and EXIT= is printed", () => {
     let checked = 0;
     for (const code of [1, 2, 137]) {
       const cwd = fresh("engine");
-      const r = runBlock(script, { cwd, env: { GROUP: "core", FAIL_CODE: String(code) } });
+      const r = runBlock(script, { cwd, env: { GROUP: "core-1", FAIL_CODE: String(code) } });
       expect(r.status, `exit ${code}`).toBe(code);
       expect(readFileSync(join(cwd, "reports/mutation/exit.txt"), "utf8").trim(), `exit ${code}`).toBe(String(code));
       expect(r.stdout).toContain(`EXIT=${code}`);
@@ -1332,14 +1512,19 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
   const floorStep = stepOf(MJOBS.floors!, "Floor check");
   const floorLine = runLine(MJOBS.floors!, "Floor check");
   const survivorsLine = runLine(MJOBS.mutate!, "Survivors");
-  // two families, three legs: `core` is one leg (3 killed, 1 survived: 75.0%); `draws` is two, 3 of 4 and 1 of 1, which SUM to 4 of 5 =
-  // 80.0% (the mean of the legs' scores is 87.5 and the weaker leg 75.0, so a floor of 80 tells the sum from both)
-  const THREE = "core,draws-bracket,draws-pairing";
-  const ALL = {
-    core: { file: "src/core/clock.ts", mutants: [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] as [string, number][] },
-    "draws-bracket": { file: "src/scheduling/bracket.ts", mutants: [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] as [string, number][] },
-    "draws-pairing": { file: "src/scheduling/swiss.ts", mutants: [["Killed", 1]] as [string, number][] },
+  // two families: `core` is three legs, each (3 killed, 1 survived), so the family is 9 of 12 = 75.0%; `draws` is four, bracket.ts
+  // 3 of 4 and one killed mutant in each of the others, which SUM to 6 of 7 = 85.7% (the mean of the legs' scores is 93.75 and the
+  // weakest leg 75.0, so a floor of 85.7 tells the sum from both)
+  const CORE = STRYKER_FAMILIES.core;
+  const DRAWS = STRYKER_FAMILIES.draws;
+  const CORE_FILES = ["src/core/clock.ts", "src/core/errors.ts", "src/core/rng.ts"];   // a whole file each core leg selects
+  const DRAWS_FILES: Record<string, string> = { "draws-1": "src/scheduling/americano.ts", "draws-2": "src/scheduling/feedgraph.ts", "draws-3": "src/scheduling/bracket.ts", "draws-4": "src/scheduling/swiss.ts" };
+  const LEGS = [...CORE, ...DRAWS].join(",");
+  const ALL: Record<string, { file: string; mutants: [string, number][] }> = {
+    ...Object.fromEntries(CORE.map((leg, i) => [leg, { file: CORE_FILES[i]!, mutants: [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] as [string, number][] }])),
+    ...Object.fromEntries(DRAWS.map((leg) => [leg, { file: DRAWS_FILES[leg]!, mutants: (leg === "draws-3" ? [["Killed", 1], ["Killed", 2], ["Killed", 3], ["Survived", 4]] : [["Killed", 1]]) as [string, number][] }])),
   };
+  const only = (legs: readonly string[]) => Object.fromEntries(legs.map((l) => [l, ALL[l]!]));
 
   it("the floors job reads the legs' artifacts from floors-in, judges them with --check-all over the legs the plan scheduled, and the step can be neither conditional nor advisory", () => {
     expect(MJOBS.floors).toContain("LEGS: ${{ join(fromJSON(needs.plan.outputs.matrix).include.*.group, ',') }}");
@@ -1357,6 +1542,9 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
     expect(MUT).not.toMatch(/run: pnpm install --frozen-lockfile\s*$/m);
     // the artifacts the job unpacks are those of the families it judges: every non-probe leg is in a family
     expect(Object.values(STRYKER_FAMILIES).flat().sort()).toEqual(Object.keys(STRYKER_GROUPS).filter((g) => g !== "probe").sort());
+    // the fixtures below name legs of the real families (a re-cut that moved them reds here, not in a refusal that reads like a verdict)
+    expect(Object.keys(DRAWS_FILES), "the fixture's draws legs are the family's").toEqual([...DRAWS]);
+    expect(CORE).toHaveLength(CORE_FILES.length);
   });
 
   it("against the real plan, for every dispatch group and the weekly and the PR: floors runs exactly when the plan holds a leg with a floor, LEGS is those legs, and the probe is never in it (N1)", () => {
@@ -1383,7 +1571,7 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
     // (the probe dispatched alone and the pull request, the two probe-only plans, are the rest, each checked above)
     expect(plans.length).toBe(keys.length + 3);
     expect(ran).toBe(keys.length - 1 + 2);
-  }, spawnBudget(31));
+  }, spawnBudget(Object.keys(STRYKER_GROUPS).length + 3));   // one plan spawn per dispatch group, plus all, the weekly and the PR
 
   it("what the skip prevents: a probe-only dispatch's LEGS is `probe`, and the real CLI refuses it (exit 2, names the probe), so a floors job that ran would go red on a documented option", () => {
     const legsExpr = /^ {6}LEGS: \$\{\{\s*(.+?)\s*\}\}/m.exec(MJOBS.floors!)![1]!;
@@ -1392,44 +1580,44 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
     const r = runBlock(floorLine, { cwd: floorsRepo({}, {}), env: { LEGS: legs } });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain("--legs names the probe");
-    // and the same wiring on a real one-leg plan: the LEGS the expression gives is judged by the CLI
-    const core = String(evalExpr(legsExpr, ctxOf({ event: "workflow_dispatch", matrix: planMatrix("workflow_dispatch", "core") })));
-    expect(core).toBe("core");
-    const ok = runBlock(floorLine, { cwd: floorsRepo({}, { core: ALL.core }), env: { LEGS: core } });
+    // and the same wiring on a real one-leg plan: the LEGS the expression gives is read by the CLI (one leg of a family is not the family)
+    const core = String(evalExpr(legsExpr, ctxOf({ event: "workflow_dispatch", matrix: planMatrix("workflow_dispatch", "core-1") })));
+    expect(core).toBe("core-1");
+    const ok = runBlock(floorLine, { cwd: floorsRepo({}, only(["core-1"])), env: { LEGS: core } });
     expect({ status: ok.status, stderr: ok.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(ok.stdout).toContain("core: score 75.0%");
+    expect(ok.stdout).toContain(`core: not judged, only 1 of its ${CORE.length} legs were planned`);
   }, spawnBudget(4));
 
   it("PR-A's state (the committed floor file is empty): it prints `no floor yet: PR-B sets it` for each family and passes, for the legs' real reports", () => {
-    const r = runBlock(floorLine, { cwd: floorsRepo({}, ALL), env: { LEGS: THREE } });
+    const r = runBlock(floorLine, { cwd: floorsRepo({}, ALL), env: { LEGS } });
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
     expect(r.stdout.match(/no floor yet: PR-B sets it/g)).toHaveLength(2);
-    expect(r.stdout).toContain("core: score 75.0%");
-    expect(r.stdout).toContain("draws: score 80.0% (4 of 5 detected");   // the SUM of the two legs
-    expect(r.record).toEqual([`mutation:floor --check-all ../../floors-in --legs ${THREE} --skip-if-no-floors`]);
+    expect(r.stdout).toContain("core: score 75.0% (9 of 12 detected");
+    expect(r.stdout).toContain("draws: score 85.7% (6 of 7 detected");   // the SUM of the four legs
+    expect(r.record).toEqual([`mutation:floor --check-all ../../floors-in --legs ${LEGS} --skip-if-no-floors`]);
   }, spawnBudget(1));
 
   it("once PR-B commits floors: a family with no entry is a failure, met floors pass and a missed one fails", () => {
-    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75 }, ALL), env: { LEGS: THREE } }).status, "no entry for draws").toBe(2);
-    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 80 }, ALL), env: { LEGS: THREE } }).status).toBe(0);                  // 3 of 4 = 75.0, 4 of 5 = 80.0
-    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 80.1 }, ALL), env: { LEGS: THREE } }).status).toBe(1);                // one tenth over the sum
-    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75.1, draws: 80 }, ALL), env: { LEGS: THREE } }).status).toBe(1);
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75 }, ALL), env: { LEGS } }).status, "no entry for draws").toBe(2);
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 85.7 }, ALL), env: { LEGS } }).status).toBe(0);                  // 9 of 12 = 75.0, 6 of 7 = 85.7
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75, draws: 85.8 }, ALL), env: { LEGS } }).status).toBe(1);                // one tenth over the sum
+    expect(runBlock(floorLine, { cwd: floorsRepo({ core: 75.1, draws: 85.7 }, ALL), env: { LEGS } }).status).toBe(1);
   }, spawnBudget(4));
 
   it("a planned leg that left no report is a failure even while no floor exists (a leg that died is never a skip), and the other families are still judged", () => {
-    const withoutPairing = { core: ALL.core, "draws-bracket": ALL["draws-bracket"] };   // draws-pairing's job died before it wrote a report
-    const r = runBlock(floorLine, { cwd: floorsRepo({}, withoutPairing), env: { LEGS: THREE } });
+    const withoutSwiss = only(LEGS.split(",").filter((l) => l !== "draws-4"));   // draws-4's job died before it wrote a report
+    const r = runBlock(floorLine, { cwd: floorsRepo({}, withoutSwiss), env: { LEGS } });
     expect(r.status).toBe(2);
-    expect(r.stderr).toContain('draws: no report for leg "draws-pairing"');
+    expect(r.stderr).toContain('draws: no report for leg "draws-4"');
     expect(r.stdout).toContain("core: score 75.0%");
   }, spawnBudget(1));
 
-  it("a dispatch of ONE leg of a two-leg family does not judge the family (it is not the sum of its legs) and still passes; a leg of a one-leg family is judged", () => {
-    const partial = runBlock(floorLine, { cwd: floorsRepo({ draws: 99 }, { "draws-bracket": ALL["draws-bracket"] }), env: { LEGS: "draws-bracket" } });
+  it("a dispatch of ONE leg of a family does not judge the family (it is not the sum of its legs) and still passes; every leg of a family is judged", () => {
+    const partial = runBlock(floorLine, { cwd: floorsRepo({ draws: 99 }, only(["draws-3"])), env: { LEGS: "draws-3" } });
     expect({ status: partial.status, stderr: partial.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(partial.stdout).toContain("draws: not judged, only 1 of its 2 legs were planned");
-    const whole = runBlock(floorLine, { cwd: floorsRepo({ core: 99 }, { core: ALL.core }), env: { LEGS: "core" } });
-    expect(whole.status, "core is judged on its one leg, and 75.0 is under 99").toBe(1);
+    expect(partial.stdout).toContain(`draws: not judged, only 1 of its ${DRAWS.length} legs were planned`);
+    const whole = runBlock(floorLine, { cwd: floorsRepo({ core: 99 }, only(CORE)), env: { LEGS: CORE.join(",") } });
+    expect(whole.status, "core is judged on its three legs, and 75.0 is under 99").toBe(1);
   }, spawnBudget(2));
 
   it("an empty LEGS (the expression evaluating to nothing) is a refusal, never a pass over zero families", () => {
@@ -1441,7 +1629,7 @@ describe("mutation.yml: the floors job judges each family on all its legs, run t
   it("the survivors step writes SURVIVORS.md next to the group's report, listing the one survivor", () => {
     expect(stepOf(MJOBS.mutate!, "Survivors").body).toContain("working-directory: packages/engine");
     const cwd = engineDir({});
-    const r = runBlock(survivorsLine, { cwd, env: { GROUP: "draws-bracket" } });
+    const r = runBlock(survivorsLine, { cwd, env: { GROUP: "draws-3" } });
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
     const md = readFileSync(join(cwd, "SURVIVORS.md"), "utf8");
     expect(md.split("\n").filter((l) => l.startsWith("src/"))).toEqual(["src/scheduling/bracket.ts:4:1 ConditionalExpression → true"]);

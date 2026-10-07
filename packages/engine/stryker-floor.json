@@ -1,4 +1,57 @@
 {
-  "note": "Per-family Stryker mutation-score floors (W1d D14; rulings 66, 67; T15-CUT): a family is ruling 66's group, the SUM of its legs, never a leg, so cutting a file again or adding a leg never removes a key. The score is Stryker's TOTAL score: (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage), so an uncovered line counts as a survivor; Ignored, CompileError and RuntimeError are outside the denominator, and the mutants recorded in stryker-equivalent.json are taken out of it. A floor is floor(score, 1 dp), set by `pnpm mutation:floor --set-floor <family> <dir>` (PR-B, after the first measured run) and the floor never falls: ci.yml's gates job runs `--check-file-against HEAD^1`. Empty until PR-B (W1d Task 20); mutation.yml's floors job prints `no floor yet` while it is empty, and once any floor exists a family without one is a failure.",
-  "families": {}
+  "note": "Per-family Stryker mutation-score floors (W1d D14; rulings 66, 67; T15-CUT): a family is ruling 66's group, the SUM of its legs, never a leg, so cutting a file again or adding a leg never removes a key. The score is Stryker's TOTAL score: (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage), so an uncovered line counts as a survivor; Ignored, CompileError and RuntimeError are outside the denominator, and the mutants recorded in stryker-equivalent.json are taken out of it. A floor is floor(score - margin, 1 dp), set by `pnpm mutation:floor --set-floor <family> <dir> --margin <points>` (PR-B, after the first measured run) and the floor never falls: ci.yml's gates job runs `--check-file-against HEAD^1`, which compares the floors only. Ruling T20-FLOOR-MARGIN: every floor sits 0.5 points under its measured score, above the run-to-run noise (Timeout mutants flip with the runner's speed: of 1,523 mutants run twice, 12 changed status, all to or from Timeout, and one of them crossed between detected and undetected), so an unchanged tree does not red the weekly run. `derivation` records, per family, the measured score (to two decimals) and the margin the floor was set from, so the derivation is visible and a later raise re-applies the margin; a raise is a deliberate step, never automatic. Set by W1d Task 20 from the first measured run (the run and artifact ids are in truth-runs/w1d-baseline/MUTATION.md); once any floor exists a family without one is a failure (mutation.yml's floors job prints `no floor yet` only while the file is empty).",
+  "families": {
+    "competition": 77.9,
+    "core": 88.7,
+    "modules": 65.2,
+    "draws": 70.9,
+    "sports-cricket": 71.1,
+    "sports-football": 71.3,
+    "sports-setbased": 74.5,
+    "sports-nested": 73.7,
+    "sports-other": 73.3,
+    "sports-period": 68.6
+  },
+  "derivation": {
+    "competition": {
+      "measured": 78.48,
+      "margin": 0.5
+    },
+    "core": {
+      "measured": 89.22,
+      "margin": 0.5
+    },
+    "modules": {
+      "measured": 65.76,
+      "margin": 0.5
+    },
+    "draws": {
+      "measured": 71.43,
+      "margin": 0.5
+    },
+    "sports-cricket": {
+      "measured": 71.69,
+      "margin": 0.5
+    },
+    "sports-football": {
+      "measured": 71.83,
+      "margin": 0.5
+    },
+    "sports-setbased": {
+      "measured": 75.09,
+      "margin": 0.5
+    },
+    "sports-nested": {
+      "measured": 74.21,
+      "margin": 0.5
+    },
+    "sports-other": {
+      "measured": 73.87,
+      "margin": 0.5
+    },
+    "sports-period": {
+      "measured": 69.18,
+      "margin": 0.5
+    }
+  }
 }

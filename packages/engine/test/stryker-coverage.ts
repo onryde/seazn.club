@@ -64,22 +64,24 @@ function loadInstrumenter(cwd: string): Promise<Instrumenter> {
 
 /** A mutant's place in its file, as Stryker reports it: LINES COUNT FROM 0 here (the JSON report counts from 1). */
 export interface Place { start: { line: number; column: number }; end: { line: number; column: number } }
+/** A mutant as Stryker's instrumenter reports it: its place, the mutator that made it, and the text it puts there. */
+export interface Found extends Place { mutator: string; replacement: string }
 
-const found = new Map<string, Place[]>();
+const found = new Map<string, Found[]>();
 
 /** The mutants Stryker's instrumenter finds in `content` (named `name`, so it is read as TypeScript), or in just its `lines`
  *  (1-based and inclusive, as `file:a-b` writes them), with the default mutator settings the engine's stryker.config.mjs
  *  runs. Not cached: a scratch edit of a file is a different text under the same name. */
-export async function mutantsOfText(name: string, content: string, lines: Selected): Promise<Place[]> {
+export async function mutantsOfText(name: string, content: string, lines: Selected): Promise<Found[]> {
   // Stryker's ranges are 0-based lines; an end column of MAX_SAFE_INTEGER is a range of whole lines.
   const mutate = lines === "all" ? true : lines.map(([a, b]) => ({ start: { line: a - 1, column: 0 }, end: { line: b - 1, column: Number.MAX_SAFE_INTEGER } }));
   const inst = await loadInstrumenter(ENGINE);
   const r = await inst.instrument([{ name, mutate, content }], { ignorers: [], plugins: null, excludedMutations: [] });
-  return (r.mutants as { location: Place }[]).map((m) => m.location);
+  return (r.mutants as { location: Place; mutatorName: string; replacement: string }[]).map((m) => ({ ...m.location, mutator: m.mutatorName, replacement: m.replacement }));
 }
 
 /** The mutants Stryker's instrumenter finds in `file` of the working tree (or in just its `lines`). */
-export async function mutantsOf(cwd: string, file: string, lines: Selected): Promise<Place[]> {
+export async function mutantsOf(cwd: string, file: string, lines: Selected): Promise<Found[]> {
   const key = `${file}|${lines === "all" ? "all" : lines.map((l) => l.join("-")).join(",")}`;
   const hit = found.get(key);
   if (hit !== undefined) return hit;

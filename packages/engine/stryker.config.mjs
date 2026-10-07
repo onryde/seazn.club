@@ -28,9 +28,12 @@ export default {
   // (stryker-timeouts.json) still bounds the whole run; this only decides when a HUNG dry run is given up on.
   dryRunTimeoutMinutes: Math.ceil((DRY_RUN_FLOOR_SECONDS * CI_SLOWDOWN) / 60),
   // Stryker's default, stated: the dry run runs only the test files related (by import) to the mutated files, which is what the
-  // measured 42 s dry run and 26 runner-seconds per mutant were taken with. The dry run's own warning ("Vitest failed to find
-  // test files related to mutated files") is what a leg whose files no test imports would print.
-  vitest: { related: true },
+  // measured dry runs (153 s hosted for the probe, run 37330725739; every leg's, run 37371368951) and the legs' walls were taken with.
+  // The dry run's own warning ("Vitest failed to find test files related to mutated files") is what a leg whose files no test
+  // imports would print.
+  // `configFile` is the engine's vitest config with its reporters named (vitest.stryker.config.ts): without them vitest adds its
+  // github-actions reporter on CI, and a crashed runner child's stdout becomes `##[error]` annotations on a green job.
+  vitest: { related: true, configFile: "vitest.stryker.config.ts" },
   // The vitest runner ignores this and always uses perTest; the config states what it gets.
   coverageAnalysis: "perTest",
   incremental: true,
@@ -44,4 +47,10 @@ export default {
   // within vitest.config.ts's own bound; a fixed 4 would OOM a 16 GB runner (I11b, R2-I4).
   concurrency: strykerConcurrency({ cores: availableParallelism(), memBytes: totalmem(), workersPerSandbox: STRYKER_VITEST_WORKERS }),
   tempDirName: ".stryker-tmp",
+  // A mutant that turns a counter into a runaway loop is killed by the heap, not by anything quicker: the hosted probe lost about
+  // 14 runner-minutes to three of them (run 37330725739), each retried twice. The cap is on the heap of the runner child's test
+  // worker (it overrides the thread's own resource limit). MEASURED (test/stryker-runner.test.ts): the whole-engine dry run, the
+  // largest there is, passes at 256 MB and fails at 128; a runaway allocating loop in a worker thread died in 13.9 s at 1024 MB
+  // and 42.3 s at 4096. 1024 is 4x the least that passes, and 3 children at it are a fifth of a 16 GB runner.
+  testRunnerNodeArgs: ["--max-old-space-size=1024"],
 };
