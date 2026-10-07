@@ -250,8 +250,9 @@ export async function resolveStreamCode(
 /**
  * The fixture's stream settings (§6.7.3 and §8.1): the destination pre-pick and the automatic-streaming switch, either or
  * both in ONE transaction, each written only when the body names it. `targetId: null` clears the pick. Another org's target,
- * an archived one and an unknown id are all 404 — the same sentence, no oracle — and a refused pick rolls the switch back with
- * it. The organiser's Go live writes the pick through `writeStreamSettings` too. The answer's `targetId` is the SAVED choice
+ * an archived one and an unknown id are all 404 — the same sentence, no oracle — and a refused pick writes nothing. The pick
+ * is written first, so the other direction is the one the transaction exists for: a failing switch write rolls the pick back.
+ * The organiser's Go live writes the pick through `writeStreamSettings` too. The answer's `targetId` is the SAVED choice
  * (`target_chosen ? target_id : null`): a row the switch made alone has chosen nothing, even though the fixture still streams
  * to the org's default destination.
  */
@@ -335,15 +336,19 @@ export async function writeAutoStream(
            auto_start_refusal = case when excluded.auto_stream then fixture_stream_settings.auto_start_refusal else null end`;
 }
 
-/** A12: an organiser Stop turns auto START off for the match. Stamps `auto_start_blocked_at` once — the FIRST stamp wins, a
- *  later one is a no-op — in the same kind of upsert as `writeAutoStream`: it creates a row that chose nothing when the
- *  switch was never touched, and never writes `target_id`/`target_chosen` (plan R-1, FP1). The caller has already proved the
- *  fixture is `orgId`'s. */
-export async function markAutoStartBlocked(orgId: string, fixtureId: string, at: Date, updatedBy: string | null): Promise<void> {
-  await sql`
+/** A12: an organiser Stop turns auto START off for the match. Stamps `auto_start_blocked_at` once — the FIRST stamp wins and a
+ *  later one is a true no-op (the update is skipped, so `updated_by`/`updated_at` stay the first Stop's too) — in the same kind
+ *  of upsert as `writeAutoStream`: it creates a row that chose nothing when the switch was never touched, and never writes
+ *  `target_id`/`target_chosen` (plan R-1, FP1). The caller has already proved the fixture is `orgId`'s. `exec` is the pool by
+ *  default; pass the transaction (as `fixtureStreamTarget` accepts one) to stamp inside a caller's own, so the stamp commits or
+ *  rolls back with it. */
+export async function markAutoStartBlocked(
+  orgId: string, fixtureId: string, at: Date, updatedBy: string | null, exec: Tx | typeof sql = sql,
+): Promise<void> {
+  await exec`
     insert into fixture_stream_settings (fixture_id, org_id, auto_start_blocked_at, updated_by, updated_at)
     values (${fixtureId}, ${orgId}, ${at}, ${updatedBy}, now())
     on conflict (fixture_id) do update
-       set auto_start_blocked_at = coalesce(fixture_stream_settings.auto_start_blocked_at, excluded.auto_start_blocked_at),
-           updated_by = excluded.updated_by, updated_at = now()`;
+       set auto_start_blocked_at = excluded.auto_start_blocked_at, updated_by = excluded.updated_by, updated_at = now()
+     where fixture_stream_settings.auto_start_blocked_at is null`;
 }

@@ -774,18 +774,62 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
       expect(await rowCount(r.fixtureId), "one row throughout").toBe(1);
     });
 
-    it("a body naming BOTH fields writes both in ONE transaction: a refused pick (another org's target) leaves NO row and the switch untouched — and the accepted pair writes both", async () => {
+    it("a body naming BOTH fields: a refused pick (another org's target) writes nothing — no row, an existing switch untouched — and the accepted pair writes both", async () => {
       const r = await rig();
       const { fresh } = await twoDestinations(r);
       const foreign = await rig();
       const theirs = await dest(foreign, "Theirs");
       expect(await refusalOf(put(r, { targetId: theirs.id, autoStream: true })), "a refused destination").toMatchObject({ status: 404 });
-      expect(await switchRowOf(r.fixtureId), "the switch was not written either — one transaction").toBeNull();
+      // The pick is written FIRST, so a refused pick throws before the switch write is reached: this case does not witness the
+      // transaction (the tripwire case below does).
+      expect(await switchRowOf(r.fixtureId), "the refused pick wrote nothing, the switch included").toBeNull();
       expect(await put(r, { targetId: fresh.id, autoStream: true })).toEqual({ targetId: fresh.id, autoStream: true });
       expect(await switchRowOf(r.fixtureId)).toMatchObject({ auto_stream: true, target_chosen: true, target_id: fresh.id });
       // And on an existing row: a refused pick does not flip an existing switch.
       expect(await refusalOf(put(r, { targetId: theirs.id, autoStream: false }))).toMatchObject({ status: 404 });
       expect(await switchRowOf(r.fixtureId)).toMatchObject({ auto_stream: true, target_id: fresh.id });
+    });
+
+    /** Runs `body` with a trigger that makes ANY write turning the switch on for THIS fixture fail, then drops it. Scoped to one
+     *  fixture id (a uuid the rig just made, so it is safe to inline) so a parallel suite's rows never trip it. */
+    async function withSwitchTripwire<T>(fixtureId: string, body: () => Promise<T>): Promise<T> {
+      const name = `tripwire_${fixtureId.replace(/-/g, "")}`;
+      await sql.unsafe(`create function ${name}() returns trigger language plpgsql as $$ begin raise exception 'switch write refused (test tripwire)'; end $$`);
+      await sql.unsafe(`create trigger ${name} before insert or update on fixture_stream_settings for each row when (new.auto_stream and new.fixture_id = '${fixtureId}') execute function ${name}()`);
+      try {
+        return await body();
+      } finally {
+        await sql.unsafe(`drop trigger if exists ${name} on fixture_stream_settings`);
+        await sql.unsafe(`drop function if exists ${name}()`);
+      }
+    }
+    const triggerCount = async (fixtureId: string) =>
+      (await sql<{ n: number }[]>`select count(*)::int as n from pg_trigger where tgname = ${`tripwire_${fixtureId.replace(/-/g, "")}`}`)[0]!.n;
+
+    // I-1 (B2 review): the transaction's witness is the SECOND write failing. The pick is written first, so the pick is already
+    // in the row when the switch write is refused; one transaction takes it back, two would leave it committed.
+    it("a FAILING switch write rolls the pick back: nothing is saved when the second write is refused, and a prior pick stays as it was", async () => {
+      const r = await rig();
+      const { old, fresh } = await twoDestinations(r);
+      await withSwitchTripwire(r.fixtureId, async () => {
+        expect(await triggerCount(r.fixtureId), "PREMISE: the tripwire is armed").toBe(1);
+        // No prior row: the pick would be the row's first write.
+        const refused = await refusalOf(put(r, { targetId: fresh.id, autoStream: true }));
+        expect(refused, "PREMISE: it is the tripwire that refused, not a 404").toBeInstanceOf(Error);
+        expect((refused as Error).message).toMatch(/switch write refused \(test tripwire\)/);
+        expect(await switchRowOf(r.fixtureId), "the pick was rolled back with the failed switch write: no row at all").toBeNull();
+        expect(await pickOf(r), "and the fixture still resolves the default").toMatchObject({ id: old.id, source: "default" });
+        // Positive pair: the SAME trigger lets the pick through when the switch is not being turned on.
+        expect(await put(r, { targetId: fresh.id, autoStream: false })).toEqual({ targetId: fresh.id, autoStream: false });
+        // A prior pick: a refused pair leaves it, and the switch, exactly as they were.
+        const again = await refusalOf(put(r, { targetId: old.id, autoStream: true }));
+        expect((again as Error).message).toMatch(/test tripwire/);
+        expect(await switchRowOf(r.fixtureId)).toMatchObject({ auto_stream: false, target_chosen: true, target_id: fresh.id });
+        expect(await pickOf(r)).toMatchObject({ id: fresh.id, source: "saved" });
+      });
+      expect(await triggerCount(r.fixtureId), "the tripwire is gone").toBe(0);
+      // With it gone the very same body goes through: the refusal above was the trigger's, nothing else.
+      expect(await put(r, { targetId: old.id, autoStream: true })).toEqual({ targetId: old.id, autoStream: true });
     });
 
     it("turning the switch OFF clears auto_start_refusal and ONLY that: auto_started_at, auto_start_blocked_at, auto_start_attempted_at and the pick survive (R-3: the Stop stamp outlives a toggle); turning it ON clears nothing", async () => {
@@ -891,6 +935,45 @@ describe.skipIf(!HAS_DB)("stream settings — a row records whether the organise
         await put(r, { autoStream: true });
         expect((await blockedOf(r.fixtureId))!.auto_start_blocked_at, "a switch toggle never clears the stamp").toEqual(first);
         expect(await rowCount(r.fixtureId)).toBe(1);
+      });
+
+      const editorOf = async (fixtureId: string) =>
+        (await sql<{ updated_by: string | null; updated_at: Date }[]>`
+          select updated_by, updated_at from fixture_stream_settings where fixture_id = ${fixtureId}`)[0]!;
+
+      it("a LATER stamp is a true no-op (M-3): the stamp, updated_by and updated_at all stay the first Stop's, even when another editor stamps", async () => {
+        const r = await rig();
+        await twoDestinations(r);
+        const first = new Date("2026-10-02T09:00:00.000Z");
+        await stamp(r, first);
+        const afterFirst = await editorOf(r.fixtureId);
+        expect(afterFirst.updated_by, "PREMISE: the first Stop's editor").toBe(r.auth.userId);
+        const other = (await makeUser("later stopper")).id;
+        expect(other, "PREMISE: a different user").not.toBe(r.auth.userId);
+        await markAutoStartBlocked(r.auth.orgId, r.fixtureId, new Date("2026-10-02T09:30:00.000Z"), other);
+        expect((await blockedOf(r.fixtureId))!.auto_start_blocked_at).toEqual(first);
+        expect(await editorOf(r.fixtureId), "nothing about the row moved").toEqual(afterFirst);
+      });
+
+      // Item 5 (B2 review): T4 stamps inside stopSession's `apply` closure, on its own transaction.
+      it("the transaction form (exec): the stamp commits and rolls back WITH the caller's transaction, and is invisible to the pool until it commits", async () => {
+        const r = await rig();
+        await twoDestinations(r);
+        const at = new Date("2026-10-02T09:00:00.000Z");
+        let invisibleBeforeCommit = 0;
+        const rolledBack = await refusalOf(sql.begin(async (tx) => {
+          await markAutoStartBlocked(r.auth.orgId, r.fixtureId, at, r.auth.userId, tx);
+          const inside = await tx<{ auto_start_blocked_at: Date | null }[]>`select auto_start_blocked_at from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+          expect(inside.map((x) => x.auto_start_blocked_at), "visible inside the transaction").toEqual([at]);
+          expect(await blockedOf(r.fixtureId), "NOT visible to the pool before commit").toBeNull();
+          invisibleBeforeCommit++;
+          throw new Error("roll the caller's transaction back");
+        }));
+        expect((rolledBack as Error).message).toBe("roll the caller's transaction back");
+        expect(invisibleBeforeCommit, "the in-transaction checks ran").toBe(1);
+        expect(await blockedOf(r.fixtureId), "rolled back with the caller's transaction: no row").toBeNull();
+        await sql.begin((tx) => markAutoStartBlocked(r.auth.orgId, r.fixtureId, at, r.auth.userId, tx));
+        expect(await blockedOf(r.fixtureId)).toEqual({ auto_start_blocked_at: at, auto_stream: false, target_chosen: false, target_id: null });
       });
     });
   });

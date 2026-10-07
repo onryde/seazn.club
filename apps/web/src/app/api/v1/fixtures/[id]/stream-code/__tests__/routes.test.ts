@@ -204,8 +204,9 @@ describe.skipIf(!HAS_DB)("PUT …/stream-settings over HTTP", () => {
     let checked = 0;
     for (const body of [{}, { autoStream: "yes" }, { targetId: "not-a-uuid" }, { autoStream: true, extra: 1 }]) {
       const r = await read(await settingsRaw(o.fixtureId, body));
-      expect(r.status, JSON.stringify(body)).toBeGreaterThanOrEqual(400);
-      expect(r.status, JSON.stringify(body)).toBeLessThan(500);
+      // v1's ZodError branch: 400 VALIDATION with the issues (the house shape for a body the schema refuses).
+      expect(r.status, JSON.stringify(body)).toBe(400);
+      expect(r.body.error?.code, JSON.stringify(body)).toBe("VALIDATION");
       // The refine's own sentence rides the 400's `issues` (v1's ZodError branch): the one thing that tells the refine from any other layer.
       if (Object.keys(body).length === 0) expect(JSON.stringify(r.body.error?.issues), "{} is refused by the schema's own sentence").toContain("targetId or autoStream is required");
       checked++;
