@@ -6,28 +6,32 @@ per-leg table) or from a job log; nothing is projected except where a row says s
 **State of this file: 81 of 81 legs have a report; every family is scored.**
 
 Score = Stryker's total score: (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage). An uncovered line counts as a survivor. Ignored, CompileError and
-RuntimeError mutants are outside the denominator; the mutants of `stryker-equivalent.json` (none yet) are taken out of it. A floor is floor(score, 1 dp) of the
-SUM of a family's legs, never of one leg. A leg is one CI job (one `mutation.yml` matrix entry); a family is ruling 66's group of legs.
+RuntimeError mutants are outside the denominator; the mutants of `stryker-equivalent.json` (none yet) are taken out of it. A floor is floor(score - margin, 1 dp) of the
+SUM of a family's legs, never of one leg (ruling T20-FLOOR-MARGIN: the margin is 0.5 points, section 1). A leg is one CI job (one `mutation.yml` matrix entry); a family is ruling 66's group of legs.
 
 ## 1. Family scores and floors
 
-| family | legs (with report) | mutants (all statuses) | killed | timeout | survived | NoCov | out of score | detected / denominator | score % | floor % | mutants that must flip to fall under it |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| competition | 7 | 2556 | 1986 | 20 | 470 | 80 | 0 | 2006 / 2556 | 78.482 | 78.4 | 3 |
-| core | 3 | 1002 | 892 | 2 | 107 | 1 | 0 | 894 / 1002 | 89.222 | 89.2 | 1 |
-| modules | 7 | 2523 | 1656 | 2 | 686 | 177 | 2 | 1658 / 2521 | 65.768 | 65.7 | 2 |
-| draws | 4 | 1486 | 1018 | 35 | 371 | 50 | 12 | 1053 / 1474 | 71.438 | 71.4 | 1 |
-| sports-cricket | 16 | 5120 | 3666 | 5 | 1298 | 151 | 0 | 3671 / 5120 | 71.699 | 71.6 | 6 |
-| sports-football | 9 | 2595 | 1861 | 3 | 657 | 74 | 0 | 1864 / 2595 | 71.830 | 71.8 | 1 |
-| sports-period | 14 | 3037 | 2092 | 9 | 862 | 74 | 0 | 2101 / 3037 | 69.180 | 69.1 | 3 |
-| sports-setbased | 6 | 2208 | 1652 | 6 | 501 | 49 | 0 | 1658 / 2208 | 75.091 | 75 | 3 |
-| sports-nested | 8 | 1710 | 1269 | 0 | 401 | 40 | 0 | 1269 / 1710 | 74.211 | 74.2 | 1 |
-| sports-other | 7 | 2591 | 1914 | 0 | 616 | 61 | 0 | 1914 / 2591 | 73.871 | 73.8 | 2 |
+| family | legs (with report) | mutants (all statuses) | killed | timeout | survived | NoCov | out of score | detected / denominator | score % | measured (2 dp) | margin | floor % | mutants that must flip to fall under it | (at the exact score) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| competition | 7 | 2556 | 1986 | 20 | 470 | 80 | 0 | 2006 / 2556 | 78.482 | 78.48 | 0.5 | 77.9 | 15 | 3 |
+| core | 3 | 1002 | 892 | 2 | 107 | 1 | 0 | 894 / 1002 | 89.222 | 89.22 | 0.5 | 88.7 | 6 | 1 |
+| modules | 7 | 2523 | 1656 | 2 | 686 | 177 | 2 | 1658 / 2521 | 65.768 | 65.76 | 0.5 | 65.2 | 15 | 2 |
+| draws | 4 | 1486 | 1018 | 35 | 371 | 50 | 12 | 1053 / 1474 | 71.438 | 71.43 | 0.5 | 70.9 | 8 | 1 |
+| sports-cricket | 16 | 5120 | 3666 | 5 | 1298 | 151 | 0 | 3671 / 5120 | 71.699 | 71.69 | 0.5 | 71.1 | 31 | 6 |
+| sports-football | 9 | 2595 | 1861 | 3 | 657 | 74 | 0 | 1864 / 2595 | 71.830 | 71.83 | 0.5 | 71.3 | 14 | 1 |
+| sports-period | 14 | 3037 | 2092 | 9 | 862 | 74 | 0 | 2101 / 3037 | 69.180 | 69.18 | 0.5 | 68.6 | 18 | 3 |
+| sports-setbased | 6 | 2208 | 1652 | 6 | 501 | 49 | 0 | 1658 / 2208 | 75.091 | 75.09 | 0.5 | 74.5 | 14 | 3 |
+| sports-nested | 8 | 1710 | 1269 | 0 | 401 | 40 | 0 | 1269 / 1710 | 74.211 | 74.21 | 0.5 | 73.7 | 9 | 1 |
+| sports-other | 7 | 2591 | 1914 | 0 | 616 | 61 | 0 | 1914 / 2591 | 73.871 | 73.87 | 0.5 | 73.3 | 15 | 2 |
 
 "Mutants that must flip" is the smallest number of detected mutants (killed or timed out) that would have to become undetected in a re-run for the family to score under its
-floor. The floors are set at floor(score, 1 dp), so the slack is under 0.1 point: between 1 and 6 mutants a family.
+floor. The floors are set at floor(measured score - 0.5, 1 dp), so the slack is between 0.5 and 0.6 point: between 6 and 31 mutants a family. The last column is what the slack would be with the floor at the exact score (floor(score, 1 dp), the rule before the ruling below): between 1 and 6.
 
-**Controller ruling T20-FLOOR-AT-SCORE: the floor stays at the measured score** (the brief's rule, floor(score, 1 dp)), not a margin below it. Evidence, in two readings of the same measurement (section 10): with the three legs whose parts were in first, 1,295 identical mutants run twice gave 1,293 the same and 2 Timeout -> Killed (detected both times), 0 Killed, Survived or NoCoverage changes, a measured noise of 0.0 points. With the period-9 cut's three parts run (543ee2b53) the compared set is 1,523 mutants: 1,511 the same and 12 changed, every one a change to or from Timeout; 11 stayed detected (3 x Killed -> Timeout, 8 x Timeout -> Killed), 1 x Survived -> Timeout went from undetected to detected, and none went from detected to undetected. So the measured downward noise is 0 in 1,523 and the one upward flip is already in the period floor (the floors are taken from the re-run). The slack above is 1 to 6 detected mutants a family. Cost if the ruling is wrong: one weekly run goes red naming the mutant, and it is fixed by a test that kills it or by an entry in `stryker-equivalent.json`, which is the ratchet's intended signal.
+**Controller ruling T20-FLOOR-MARGIN (replaces T20-FLOOR-AT-SCORE): every floor sits 0.5 points under its measured score.** floor = floor(measured score - 0.5, 1 dp), one decimal, rounded down. `stryker-floor.json` records, for each family, the measured score (two decimals) and the margin beside the floor (`derivation`), so the derivation is visible and a raise can re-apply it; `--check-file-against` compares the floors only and the measured score is information.
+
+Evidence (section 10): 1,523 identical mutants were run twice, 12 changed status, all of them to or from Timeout; 11 stayed detected and 1 crossed between detected and undetected (Survived -> Timeout, sports-period-13, `kernel.ts:2728:24`). That is one flip in 1,523 on a sample of four legs, and Timeout is the one status that follows the runner's speed (draws holds 35 Timeout mutants, competition 20). With the floor at the exact score, core, draws, sports-football and sports-nested had 1 mutant of slack each (last column above): a single Timeout that decided the other way on a slower runner would red the weekly run for nothing but the runner's speed, and a red nobody can fix by a test teaches people to ignore the run. At 0.5 the slack is 6 to 31 mutants a family (the column before it): competition 15, core 6, modules 15, draws 8, sports-cricket 31, sports-football 14, sports-period 18, sports-setbased 14, sports-nested 9, sports-other 15.
+
+What the margin costs: a regression smaller than the slack above goes unflagged by the floor until it is larger (a family can lose one fewer detected mutant than its slack and stay green), which is what a weekly run has to absorb. The survivors list (`SURVIVORS.md`, section 12) is still the per-mutant record. **A raise is a deliberate later step, never automatic**: when a wave kills survivors it runs `--set-floor <family> <dir>`, which re-applies the margin recorded for that family (floor = new measured score - 0.5) and refuses any floor lower than the one in the file; changing the margin itself is a new ruling (`--margin <points>`, 0 or more, one decimal, never larger than the score). None of the floors here was ever on `main`: they were first set at the exact score and are re-set at the margin before the first push.
 
 ## 2. Runs and where every report came from
 
@@ -592,26 +596,26 @@ The changes: 3 x Killed -> Timeout; 1 x Survived -> Timeout; 8 x Timeout -> Kill
 - sports-period-12: `src/sports/period/kernel.ts:2833:11` ConditionalExpression -> `true`: Timeout -> Killed
 - sports-period-12: `src/sports/period/kernel.ts:2833:11` EqualityOperator -> `roll >= 0.33`: Timeout -> Killed
 
-The first run's four whole legs held 11 Timeout mutants; 11 of them have been run again so far: 3 timed out again and 8 came back with another status. Timeout is the one status whose outcome depends on the runner's speed.
+The first run's four whole legs held 11 Timeout mutants; 11 of them have been run again: 3 timed out again and 8 came back with another status. Timeout is the one status whose outcome depends on the runner's speed.
 Of the 12 that changed, 11 stayed detected (3 x Killed -> Timeout, 8 x Timeout -> Killed), 1 went from undetected to detected, and 0 went from detected to undetected. Every status that changed is a change to or from Timeout (12 of 12), the one status whose outcome depends on the runner's speed: 4 mutants timed out on the re-run that had been decided before.
-A change between two detected statuses leaves the score where it was; only a detected mutant turning undetected moves a family's score down (0 in 1523), and a mutant turning detected moves it up (1 in 1523: the floors are taken from the re-run, so that one is in them, and a later run that has it undetected again costs one mutant of the slack in section 1).
+A change between two detected statuses leaves the score where it was; only a detected mutant turning undetected moves a family's score down (0 in 1523), and a mutant turning detected moves it up (1 in 1523: the floors are taken from the re-run, so that one is in them, and a later run that has it undetected again costs one mutant of the slack in section 1, which is why the floors carry a margin).
 
 What a timed-out mutant could cost a floor (the families that have a floor; the numbers are section 1's):
 
 | family | Timeout mutants | of the detected | detected mutants that must turn undetected to fall under the floor |
 |---|---|---|---|
-| competition | 20 | 2006 | 3 |
-| core | 2 | 894 | 1 |
-| modules | 2 | 1658 | 2 |
-| draws | 35 | 1053 | 1 |
-| sports-cricket | 5 | 3671 | 6 |
-| sports-football | 3 | 1864 | 1 |
-| sports-period | 9 | 2101 | 3 |
-| sports-setbased | 6 | 1658 | 3 |
-| sports-nested | 0 | 1269 | 1 |
-| sports-other | 0 | 1914 | 2 |
+| competition | 20 | 2006 | 15 |
+| core | 2 | 894 | 6 |
+| modules | 2 | 1658 | 15 |
+| draws | 35 | 1053 | 8 |
+| sports-cricket | 5 | 3671 | 31 |
+| sports-football | 3 | 1864 | 14 |
+| sports-period | 9 | 2101 | 18 |
+| sports-setbased | 6 | 1658 | 14 |
+| sports-nested | 0 | 1269 | 9 |
+| sports-other | 0 | 1914 | 15 |
 
-So a re-run of an unchanged tree can only move a family under its floor through a mutant that was detected and is now not; none was seen to (section 10), and the statuses that did change are all to or from Timeout.
+So a re-run of an unchanged tree can only move a family under its floor through a mutant that was detected and is now not; none was seen to (section 10), and the statuses that did change are all to or from Timeout; the margin of section 1 is what keeps one such flip from reding a run.
 
 ## 11. Timing history
 
@@ -634,5 +638,5 @@ So a re-run of an unchanged tree can only move a family under its floor through 
 Survivors are killed by a test or recorded as equivalent in `stryker-equivalent.json` (by file:line:col mutator), by the wave that owns the file.
 
 Each leg's job writes `SURVIVORS.md` next to its report (artifact `mutation-<leg>`), one `file:line:col mutator -> replacement` line per survivor and per uncovered mutant. The floors only rise: a wave that kills survivors raises its family's floor with
-`pnpm mutation:floor --set-floor <family> <dir>`, and `ci.yml` refuses a lower one (`--check-file-against`).
+`pnpm mutation:floor --set-floor <family> <dir>` (it re-applies the margin recorded for the family, 0.5; `--margin <points>` replaces it), and `ci.yml` refuses a lower one (`--check-file-against`, which compares the floors only).
 

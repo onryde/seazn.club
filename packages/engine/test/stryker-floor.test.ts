@@ -13,7 +13,7 @@ import { resolveGroup } from "../scripts/stryker-cuts.mjs";
 import { STRYKER_FAMILIES, STRYKER_GROUPS, STRYKER_SPLITS } from "../stryker.groups.mjs";
 import { parseEntry, selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
-import { check, floorDiff, mergeReports, missingFloors, parseEquivalents, parseFloors, parseReport, setFloor, survivorsMarkdown, type LegReports, type Report } from "../scripts/stryker-floor.ts";
+import { check, derivationFaults, derivedFloor, floorDiff, mergeReports, missingFloors, parseDerivations, parseEquivalents, parseFloors, parseReport, setFloor, survivorsMarkdown, type Derivations, type LegReports, type Report } from "../scripts/stryker-floor.ts";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = join(ENGINE, "scripts/stryker-floor.ts");
@@ -455,6 +455,165 @@ describe("the floor never falls: floorDiff, setFloor, missingFloors", () => {
   });
 });
 
+describe("a floor sits a margin under the measured score (ruling T20-FLOOR-MARGIN: half a point, above the run-to-run noise)", () => {
+  // Every expected value below is worked by hand from the rule floor(score - margin, 1 dp) and typed here, never read from the code.
+  // `d` of `v` per leg, the family the same ratio (`one` gives every core leg the same counts). `rounded` is what ROUNDING (not flooring) the same
+  // difference would give: a row where it differs from `at05` is one a round-to-nearest implementation fails.
+  const CASES: { counts: Counts; score: string; measured: number; at0: number; at03: number; at05: number; at1: number; rounded05: number }[] = [
+    { counts: { killed: 2, survived: 1 }, score: "66.666", measured: 66.66, at0: 66.6, at03: 66.3, at05: 66.1, at1: 65.6, rounded05: 66.2 },
+    { counts: { killed: 4, survived: 3 }, score: "57.142", measured: 57.14, at0: 57.1, at03: 56.8, at05: 56.6, at1: 56.1, rounded05: 56.6 },
+    { counts: { killed: 3, survived: 1 }, score: "75", measured: 75, at0: 75, at03: 74.7, at05: 74.5, at1: 74, rounded05: 74.5 },
+    { counts: { killed: 49, survived: 51 }, score: "49", measured: 49, at0: 49, at03: 48.7, at05: 48.5, at1: 48, rounded05: 48.5 },
+    // 101 of 200 is 50.5 EXACTLY: it sits on a tenth, so 50.5 - 0.5 must be 50 and 50.5 - 0.3 must be 50.2, whatever a float would do to either
+    { counts: { killed: 101, survived: 99 }, score: "50.5", measured: 50.5, at0: 50.5, at03: 50.2, at05: 50, at1: 49.5, rounded05: 50 },
+    { counts: { killed: 1, survived: 0 }, score: "100", measured: 100, at0: 100, at03: 99.7, at05: 99.5, at1: 99, rounded05: 99.5 },
+    { counts: { killed: 1, survived: 2 }, score: "33.333", measured: 33.33, at0: 33.3, at03: 33, at05: 32.8, at1: 32.3, rounded05: 32.8 },
+    { counts: { killed: 5, survived: 95 }, score: "5", measured: 5, at0: 5, at03: 4.7, at05: 4.5, at1: 4, rounded05: 4.5 },
+  ];
+  const floorOf = (counts: Counts, margin: number | undefined): number | undefined => {
+    const r = setFloor("core", one(counts), floors({}), [], margin === undefined ? {} : { margin });
+    return r.exit === 0 ? r.floors.core : undefined;
+  };
+
+  it("margin 0 reproduces today's values exactly, and so does giving no margin at all (nothing recorded, nothing to re-apply)", () => {
+    let checked = 0;
+    for (const c of CASES) {
+      expect(floorOf(c.counts, 0), `margin 0 at ${c.score}`).toBe(c.at0);
+      expect(floorOf(c.counts, undefined), `no margin at ${c.score}`).toBe(c.at0);
+      checked++;
+    }
+    expect(checked, "rows checked").toBe(CASES.length);
+    expect(checked).toBeGreaterThan(5);
+  });
+
+  it("margin 0.5 gives the measured score minus half a point, ROUNDED DOWN to one decimal; 0.3 and 1 likewise; 66.666 - 0.5 is 66.1, not the 66.2 rounding would give", () => {
+    let checked = 0;
+    let discriminating = 0;
+    for (const c of CASES) {
+      expect(floorOf(c.counts, 0.5), `margin 0.5 at ${c.score}`).toBe(c.at05);
+      expect(floorOf(c.counts, 0.3), `margin 0.3 at ${c.score}`).toBe(c.at03);
+      expect(floorOf(c.counts, 1), `margin 1 at ${c.score}`).toBe(c.at1);
+      if (c.rounded05 !== c.at05) discriminating++;
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+    expect(discriminating, "rows where rounding would be wrong (the test can tell flooring from rounding)").toBeGreaterThan(0);
+  });
+
+  it("the pure rule: derivedFloor(measured, margin) is floor(measured - margin, 1 dp) on a measured score of two decimals", () => {
+    for (const c of CASES) {
+      expect(derivedFloor(c.measured, 0), `${c.measured} - 0`).toBe(c.at0);
+      expect(derivedFloor(c.measured, 0.5), `${c.measured} - 0.5`).toBe(c.at05);
+    }
+    expect(derivedFloor(69.18, 0.5)).toBe(68.6); // sports-period
+    expect(derivedFloor(75.09, 0.5)).toBe(74.5); // sports-setbased, whose measured score is 75.091
+    expect(derivedFloor(89.22, 0.5)).toBe(88.7); // core
+  });
+
+  it("a negative margin, a margin that is not a number, one with more than one decimal and one larger than the score are each REFUSED, and nothing is written", () => {
+    for (const margin of [-0.5, -0.1, Number.NaN, Number.POSITIVE_INFINITY, 0.25, 0.55, 101]) {
+      const r = setFloor("core", one({ killed: 3, survived: 1 }), floors({}), [], { margin });
+      expect({ margin, exit: r.exit }).toEqual({ margin, exit: 2 });
+      expect(r.exit === 2 ? r.why : "", `margin ${margin}`).toContain("margin");
+      expect("floors" in r, `margin ${margin}: no floors came back to write`).toBe(false);
+    }
+    // 75 - 75.1 would be a floor under zero; 75 - 75 is the zero floor and is allowed
+    expect(setFloor("core", one({ killed: 3, survived: 1 }), floors({}), [], { margin: 75.1 }).exit).toBe(2);
+    expect(setFloor("core", one({ killed: 3, survived: 1 }), floors({}), [], { margin: 75 })).toMatchObject({ exit: 0, floors: { core: 0 } });
+  });
+
+  it("the derivation is recorded beside the floor: the measured score (two decimals, floored) and the margin, and the other families' entries are kept", () => {
+    const kept: Derivations = { draws: { measured: 80, margin: 0.5 } };
+    const r = setFloor("core", one({ killed: 2, survived: 1 }), floors({ draws: 79.5 }), [], { margin: 0.5, derivations: kept });
+    expect(r).toMatchObject({ exit: 0, floors: { draws: 79.5, core: 66.1 }, derivations: { draws: { measured: 80, margin: 0.5 }, core: { measured: 66.66, margin: 0.5 } } });
+    // and what is recorded is what derivedFloor turns back into the floor
+    if (r.exit === 0) for (const f of Object.keys(r.floors)) expect(derivedFloor(r.derivations[f]!.measured, r.derivations[f]!.margin), f).toBe(r.floors[f]);
+  });
+
+  it("a raise RE-APPLIES the recorded margin when none is given, an explicit margin replaces it, and a floor with nothing recorded takes margin 0", () => {
+    const prior: Derivations = { core: { measured: 60, margin: 0.5 } };
+    const reapplied = setFloor("core", one({ killed: 3, survived: 1 }), floors({ core: 59.5 }), [], { derivations: prior });
+    expect(reapplied).toMatchObject({ exit: 0, floors: { core: 74.5 }, derivations: { core: { measured: 75, margin: 0.5 } } });
+    const replaced = setFloor("core", one({ killed: 3, survived: 1 }), floors({ core: 59.5 }), [], { margin: 0, derivations: prior });
+    expect(replaced).toMatchObject({ exit: 0, floors: { core: 75 }, derivations: { core: { measured: 75, margin: 0 } } });
+    const bare = setFloor("core", one({ killed: 3, survived: 1 }), floors({ core: 59.5 }), [], { derivations: {} });
+    expect(bare).toMatchObject({ exit: 0, floors: { core: 75 }, derivations: { core: { measured: 75, margin: 0 } } });
+  });
+
+  it("the floor still only rises under a margin: a worse measurement is refused against the margined floor, a better one raises it, the same one holds it", () => {
+    const prior: Derivations = { core: { measured: 75, margin: 0.5 } };
+    const worse = setFloor("core", one({ killed: 2, survived: 1 }), floors({ core: 74.5 }), [], { derivations: prior });
+    expect(worse.exit).toBe(2);
+    expect(worse.exit === 2 ? worse.why : "").toContain("lower");
+    expect(setFloor("core", one({ killed: 3, survived: 1 }), floors({ core: 74.5 }), [], { derivations: prior })).toMatchObject({ exit: 0, floors: { core: 74.5 } });
+    expect(setFloor("core", one({ killed: 4, survived: 1 }), floors({ core: 74.5 }), [], { derivations: prior })).toMatchObject({ exit: 0, floors: { core: 79.5 } });
+    // 74.9 measured would not LOWER 74.5 either: the margined floor is 74.4 < 74.5, so a dip within the margin is still refused (the floor never falls)
+    expect(setFloor("core", one({ killed: 749, survived: 251 }), floors({ core: 74.5 }), [], { derivations: prior }).exit).toBe(2);
+  });
+
+  it("parseDerivations reads the `derivation` map, none recorded is the pre-margin shape, and a malformed entry is refused (a missing measured score first)", () => {
+    const text = (derivation: unknown, families: Record<string, number> = { core: 66.1 }) => JSON.stringify({ note: "n", families, derivation });
+    expect(parseDerivations(text({ core: { measured: 66.66, margin: 0.5 } }))).toEqual({ core: { measured: 66.66, margin: 0.5 } });
+    expect(parseDerivations(JSON.stringify({ note: "n", families: { core: 66.1 } }))).toEqual({});
+    expect(parseDerivations(text({}))).toEqual({});
+    const bad: [string, unknown][] = [
+      ["the measured score is missing", { core: { margin: 0.5 } }],
+      ["the margin is missing", { core: { measured: 66.66 } }],
+      ["a negative margin", { core: { measured: 66.66, margin: -0.5 } }],
+      ["a margin of two decimals", { core: { measured: 66.66, margin: 0.25 } }],
+      ["a measured score over 100", { core: { measured: 100.5, margin: 0.5 } }],
+      ["a measured score under 0", { core: { measured: -1, margin: 0.5 } }],
+      ["a measured score of three decimals", { core: { measured: 66.666, margin: 0.5 } }],
+      ["a measured score that is a string", { core: { measured: "66.66", margin: 0.5 } }],
+      ["an entry that is a number", { core: 66.66 }],
+      ["an entry that is null", { core: null }],
+      ["a map that is an array", []],
+      ["a map that is a string", "core"],
+    ];
+    for (const [why, derivation] of bad) expect(() => parseDerivations(text(derivation)), why).toThrow(/derivation/);
+    expect(() => parseDerivations(text({ core: { margin: 0.5 } })), "the missing measured score is named").toThrow(/no measured score/);
+    expect(() => parseDerivations(text({ core: { measured: 66.66 } })), "the missing margin is named").toThrow(/no margin/);
+    expect(() => parseDerivations("{"), "not JSON").toThrow();
+    expect(bad.length).toBeGreaterThan(10);
+  });
+
+  it("derivationFaults: a floor with no measured score is a fault, so is one the derivation does not give, and so is a derivation of no floor", () => {
+    const d: Derivations = { core: { measured: 66.66, margin: 0.5 } };
+    expect(derivationFaults({ core: 66.1 }, d)).toEqual([]);
+    expect(derivationFaults({}, {})).toEqual([]);
+    const missing = derivationFaults({ core: 66.1, draws: 50 }, d);
+    expect(missing).toHaveLength(1);
+    expect(missing[0]).toContain('"draws"');
+    expect(missing[0]).toContain("measured score");
+    const stale = derivationFaults({ core: 66.2 }, d);
+    expect(stale).toHaveLength(1);
+    expect(stale[0]).toContain("66.1");
+    expect(derivationFaults({ core: 66 }, d)[0]).toContain("66.1"); // a floor LOWER than its derivation is as wrong as a higher one
+    expect(derivationFaults({}, d)).toHaveLength(1);
+    expect(derivationFaults({ core: 66.1, draws: 50.9 }, { ...d, draws: { measured: 50.99, margin: 0 } })).toEqual([]);
+  });
+
+  it("the committed floors are each derived from a recorded measured score and the ruling's half-point margin (the real-tree case)", () => {
+    const text = readFileSync(join(ENGINE, "stryker-floor.json"), "utf8");
+    const committed = parseFloors(text);
+    const derivations = parseDerivations(text);
+    const families = Object.keys(STRYKER_FAMILIES);
+    expect(derivationFaults(committed, derivations)).toEqual([]);
+    expect(Object.keys(derivations).sort(), "a derivation for every family, and for none else").toEqual([...families].sort());
+    let checked = 0;
+    for (const f of families) {
+      const { measured, margin } = derivations[f]!;
+      // the ruling's value, typed from the ruling and not read from anywhere
+      expect(margin, `${f}: the margin`).toBe(0.5);
+      // floor <= measured - margin < floor + 0.1, written with no helper from the script
+      expect(committed[f]!, `${f}: the floor is no higher than measured - margin`).toBeLessThanOrEqual(measured - margin + 1e-9);
+      expect(committed[f]!, `${f}: and within a tenth of it`).toBeGreaterThan(measured - margin - 0.1 - 1e-9);
+      checked++;
+    }
+    expect(checked, "families checked").toBe(10);
+  });
+});
+
 describe("survivors: file:line:col mutator → replacement, minus the recorded equivalents", () => {
   const rep: Report = {
     files: {
@@ -524,6 +683,8 @@ function git(root: string, ...args: string[]): string {
 
 const FLOOR_PATH = "packages/engine/stryker-floor.json";
 const floorFile = (f: Record<string, number>, note = "test") => `${JSON.stringify({ note, families: f }, null, 2)}\n`;
+/** The same file with the derivation recorded beside the floors (ruling T20-FLOOR-MARGIN). */
+const floorFileWith = (f: Record<string, number>, derivation: unknown, note = "test") => `${JSON.stringify({ note, families: f, derivation }, null, 2)}\n`;
 
 /** A repo whose commit has the engine's floor file with `atRef` content (null: the file is absent at that commit), and whose
  *  working tree then holds `working` (null: the file is deleted). Runs `--check-file-against <ref>` from packages/engine. */
@@ -637,6 +798,25 @@ describe("--check-file-against: the empty cases, driven through git (review 7, R
     expect(againstRef({ atRef: null, working: "{ not json" }).status).toBe(2); // absent at the ref does not excuse a broken working file
     expect(againstRef({ atRef: floorFile({ "draws": 50 }), working: '{"families": []}' }).status).toBe(2);
     expect(againstRef({ atRef: '{"families": {"draws": "fifty"}}', working: floorFile({ "draws": 50 }) }).status).toBe(2);
+  });
+
+  spawnIt(8)("--check-file-against compares the FLOORS only: the recorded measured score and margin are information, whichever way they move (ruling T20-FLOOR-MARGIN)", () => {
+    const at = floorFileWith({ draws: 50, core: 40 }, { draws: { measured: 50.5, margin: 0.5 }, core: { measured: 40.5, margin: 0.5 } });
+    // the measured scores and margins change, the floors do not: nothing fell
+    const info = againstRef({ atRef: at, working: floorFileWith({ draws: 50, core: 40 }, { draws: { measured: 90, margin: 0 }, core: { measured: 99, margin: 0 } }) });
+    expect({ status: info.status, stderr: info.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(info.stdout).toContain("compared 2 floor(s) against HEAD: 0 lowered or removed");
+    // a floor raised along with its measured score
+    const raised = againstRef({ atRef: at, working: floorFileWith({ draws: 60, core: 40 }, { draws: { measured: 60.5, margin: 0.5 }, core: { measured: 40.5, margin: 0.5 } }) });
+    expect(raised.status).toBe(0);
+    // a floor LOWERED while its measured score is higher than ever: still a fall, and named
+    const lowered = againstRef({ atRef: at, working: floorFileWith({ draws: 49.5, core: 40 }, { draws: { measured: 99, margin: 0.5 }, core: { measured: 40.5, margin: 0.5 } }) });
+    expect(lowered.status).toBe(1);
+    expect(lowered.stdout).toContain("draws: 50 -> 49.5");
+    // a ref from before the margin existed (floors only) against a working file with derivations: compared as before
+    const old = againstRef({ atRef: floorFile({ draws: 50, core: 40 }), working: at });
+    expect(old.status).toBe(0);
+    expect(old.stdout).toContain("compared 2 floor(s)");
   });
 
   spawnIt(2)("the file is found relative to the CLI's cwd, not the repo root: a decoy at the root with other floors changes nothing", () => {
@@ -794,8 +974,8 @@ describe("the CLI's other modes and its refusals", () => {
     const w = workdir({ floors: { draws: 12.5 }, reports: coreOnly({ killed: 2, survived: 1 }) });
     const r = run(w.cwd, ["--set-floor", "core", w.dir]);
     expect({ status: r.status, stderr: r.stderr }).toEqual({ status: 0, stderr: "" });
-    const written = JSON.parse(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")) as { note: string; families: Record<string, number> };
-    expect(written).toEqual({ note: "test", families: { draws: 12.5, core: 66.6 } });
+    const written = JSON.parse(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")) as { note: string; families: Record<string, number>; derivation: unknown };
+    expect(written).toEqual({ note: "test", families: { draws: 12.5, core: 66.6 }, derivation: { core: { measured: 66.66, margin: 0 } } });
     expect(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8").endsWith("\n")).toBe(true);
     // lowering: a worse report against the 66.6 just written
     const before = readFileSync(join(w.cwd, "stryker-floor.json"), "utf8");
@@ -821,6 +1001,62 @@ describe("the CLI's other modes and its refusals", () => {
     expect(leg.status).toBe(2);
     expect(leg.stderr).toContain('is a leg of "draws"');
     expect((JSON.parse(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")) as { families: object }).families).toEqual({ draws: drawsScore });
+  });
+
+  spawnIt(4)("--set-floor --margin 0.5 writes the floor half a point under the measured score and records both; with no --margin a later one re-applies the recorded margin; --margin 0 replaces it", () => {
+    const w = workdir({ floors: { draws: 12.5 }, reports: coreOnly({ killed: 2, survived: 1 }) });
+    const read = () => JSON.parse(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")) as unknown;
+    const first = run(w.cwd, ["--set-floor", "core", w.dir, "--margin", "0.5"]);
+    expect({ status: first.status, stderr: first.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(first.stdout).toContain("margin 0.5");
+    // 66.666% - 0.5 = 66.166, rounded down: 66.1 (a floor of 66.6 would be the unmargined value); the measured score is 66.66
+    expect(read()).toEqual({ note: "test", families: { draws: 12.5, core: 66.1 }, derivation: { core: { measured: 66.66, margin: 0.5 } } });
+    // a better run, no --margin: the margin recorded for core is applied again (75 - 0.5)
+    rewriteCore(w, { killed: 3, survived: 1 });
+    const again = run(w.cwd, ["--set-floor", "core", w.dir]);
+    expect({ status: again.status, stderr: again.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(again.stdout).toContain("margin 0.5");
+    expect(read()).toEqual({ note: "test", families: { draws: 12.5, core: 74.5 }, derivation: { core: { measured: 75, margin: 0.5 } } });
+    // an explicit --margin 0 replaces the recorded one and says so in the file
+    const zero = run(w.cwd, ["--set-floor", "core", w.dir, "--margin", "0"]);
+    expect({ status: zero.status, stderr: zero.stderr }).toEqual({ status: 0, stderr: "" });
+    expect(read()).toEqual({ note: "test", families: { draws: 12.5, core: 75 }, derivation: { core: { measured: 75, margin: 0 } } });
+    // and a margin that would lower the floor is refused as lowering is, the file untouched
+    const before = readFileSync(join(w.cwd, "stryker-floor.json"), "utf8");
+    rewriteCore(w, { killed: 2, survived: 1 });
+    const lower = run(w.cwd, ["--set-floor", "core", w.dir, "--margin", "0.5"]);
+    expect(lower.status).toBe(2);
+    expect(lower.stderr).toContain("lower");
+    expect(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8")).toBe(before);
+  });
+
+  spawnIt(8)("--margin is refused when it is negative, empty, not a number, of two decimals, past the score, or given to another mode, and the file is left byte for byte", () => {
+    const w = workdir({ floors: { draws: 12.5 }, reports: coreOnly({ killed: 2, survived: 1 }) });
+    const before = readFileSync(join(w.cwd, "stryker-floor.json"), "utf8");
+    let refused = 0;
+    for (const args of [["--margin=-0.5"], ["--margin", "-0.5"], ["--margin="], ["--margin=abc"], ["--margin=0.25"], ["--margin=0x10"], ["--margin=70"]]) {
+      const r = run(w.cwd, ["--set-floor", "core", w.dir, ...args]);
+      expect({ args, status: r.status }).toEqual({ args, status: 2 });
+      expect(r.stderr, args.join(" ")).toContain("margin");
+      expect(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8"), args.join(" ")).toBe(before);
+      refused++;
+    }
+    const other = run(w.cwd, ["--check", "core", w.dir, "--margin", "0.5"]);
+    expect(other.status).toBe(2);
+    expect(other.stderr).toContain("--margin belongs to --set-floor");
+    expect(refused, "refusals driven").toBe(7);
+  });
+
+  spawnIt(2)("--set-floor refuses a floor file whose recorded derivation is broken (no measured score), before writing anything", () => {
+    const w = workdir({ reports: coreOnly({ killed: 2, survived: 1 }) });
+    const broken = floorFileWith({ draws: 12.5 }, { draws: { margin: 0.5 } });
+    writeFileSync(join(w.cwd, "stryker-floor.json"), broken);
+    for (const family of ["core", "draws"]) {
+      const r = run(w.cwd, ["--set-floor", family, w.dir, "--margin", "0.5"]);
+      expect({ family, status: r.status }).toEqual({ family, status: 2 });
+      expect(r.stderr, family).toContain("measured");
+      expect(readFileSync(join(w.cwd, "stryker-floor.json"), "utf8"), family).toBe(broken);
+    }
   });
 
   describe("--check-all: every family whose legs the run planned, from the directory the artifacts unpacked into", () => {
