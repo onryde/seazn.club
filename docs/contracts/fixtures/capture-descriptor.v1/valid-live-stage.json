@@ -36,6 +36,7 @@
     "code": "QF",
     "role": {
       "kind": "quarter_final"
-    }
+    },
+    "label": "QF"
   }
 }

@@ -11,12 +11,12 @@
   "heartbeatUrl": "https://stg.seazn.club/api/v1/capture/codes/7k3m9p2qx4tz/beats",
   "startUrl": "https://stg.seazn.club/api/v1/capture/codes/7k3m9p2qx4tz/start",
   "stage": {
-    "code": "R1",
+    "code": "R1234",
     "role": {
       "kind": "plain_round",
       "n": 1
     },
     "pool": "A",
-    "label": "Group A · R1"
+    "label": "Group A, second qualifying stage · R1234"
   }
 }

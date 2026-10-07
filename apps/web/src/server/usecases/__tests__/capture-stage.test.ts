@@ -8,7 +8,10 @@
 //    `boardRoundCodes`, else the card's `R{round_no}` (fixture-block.tsx) — plus a literal tally per family from the
 //    rulebook (a knockout of 8 is QF ×4, SF ×2, F, 3rd), so a board that went wrong cannot carry this test with it;
 //  - `role` is the ENGINE's `roundRole` (via `roundRoleFor`) over the FULL row read (`listDivisionFixtures`);
-//  - `pool` is `pools.key`, read here by its own statement.
+//  - `pool` is `pools.key`, read here by its own statement;
+//  - `label` (2026-10-07, #923's pool word) is the RAW `table.poolLabel` of the org locale's `public.json` with the key
+//    put in, then " · ", then the code — or the code alone without a pool. Read off the dictionary files here, never
+//    through `poolLabel` or the builder.
 // Every sweep counts what it checked; zero checked is a failure.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -17,6 +20,10 @@ import { sql } from "@/lib/db";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
+import enPublic from "@/dictionaries/en/public.json";
+import esPublic from "@/dictionaries/es/public.json";
+import frPublic from "@/dictionaries/fr/public.json";
+import nlPublic from "@/dictionaries/nl/public.json";
 import { roundRoleFor } from "@/lib/round-role-label";
 import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -58,6 +65,17 @@ afterAll(async () => {
 
 const msgOf = (locale: Locale) => (key: MessageKey, vars?: Record<string, string | number>) => msgFor(locale, key, vars);
 const en = msgOf("en");
+const PUBLIC: Record<Locale, Record<string, string>> = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic };
+/** The pool word, straight from the locale's `public.json` (the source of truth), the key put in by hand. */
+const poolWordOf = (locale: Locale, key: string): string => {
+  const raw = PUBLIC[locale]["table.poolLabel"];
+  expect(raw, `PREMISE: ${locale} public.json has table.poolLabel with a {key}`).toContain("{key}");
+  return raw!.replace("{key}", key);
+};
+/** The label the brief defines: the pool word + " · " + code, or the code alone. */
+const labelOf = (locale: Locale, code: string, pool: string | null | undefined): string =>
+  pool ? `${poolWordOf(locale, pool)} · ${code}` : code;
+const enPool = (key: string) => poolWordOf("en", key);
 const tally = (xs: string[]) => xs.reduce<Record<string, number>>((acc, x) => ((acc[x] = (acc[x] ?? 0) + 1), acc), {});
 const fakeDeps = (): SessionDeps => {
   const ingest = new FakeIngest({ clock: () => Date.now(), connectAfterMs: 3000 });
@@ -76,14 +94,14 @@ const row = (o: Partial<RoundCodeFixture> & { round_no: number; seq_in_round?: n
 describe("buildCaptureStage — its guards (pure)", () => {
   it("the empty case: a stage of ONE fixture (round 1 of a league) → R1, plain_round 1, no pool", () => {
     const only = row({ round_no: 1 });
-    expect(buildCaptureStage({ fixtureId: only.id, stageKind: "league", poolKey: null, rows: [only] }, en))
-      .toEqual({ code: "R1", role: { kind: "plain_round", n: 1 } });
+    expect(buildCaptureStage({ fixtureId: only.id, stageKind: "league", poolKey: null, rows: [only] }, en, enPool))
+      .toEqual({ code: "R1", role: { kind: "plain_round", n: 1 }, label: "R1" });
   });
 
   it("an assumption made a guard: a fixture that is not among its stage's rows is refused by name, never answered", () => {
-    expect(() => buildCaptureStage({ fixtureId: randomUUID(), stageKind: "league", poolKey: null, rows: [row({ round_no: 1 })] }, en))
+    expect(() => buildCaptureStage({ fixtureId: randomUUID(), stageKind: "league", poolKey: null, rows: [row({ round_no: 1 })] }, en, enPool))
       .toThrow(/not among its stage's rows/);
-    expect(() => buildCaptureStage({ fixtureId: randomUUID(), stageKind: "league", poolKey: null, rows: [] }, en))
+    expect(() => buildCaptureStage({ fixtureId: randomUUID(), stageKind: "league", poolKey: null, rows: [] }, en, enPool))
       .toThrow(/not among its stage's rows/);
   });
 
@@ -93,15 +111,15 @@ describe("buildCaptureStage — its guards (pure)", () => {
     let nine: CaptureStage | null, eight: CaptureStage | null;
     try {
       const long = row({ round_no: 12345678 });
-      nine = buildCaptureStage({ fixtureId: long.id, stageKind: "league", poolKey: "A", rows: [long] }, en);
+      nine = buildCaptureStage({ fixtureId: long.id, stageKind: "league", poolKey: "A", rows: [long] }, en, enPool);
       const edge = row({ round_no: 1234567 });
-      eight = buildCaptureStage({ fixtureId: edge.id, stageKind: "league", poolKey: null, rows: [edge] }, en);
+      eight = buildCaptureStage({ fixtureId: edge.id, stageKind: "league", poolKey: null, rows: [edge] }, en, enPool);
     } finally {
       warned = [...warn.mock.calls];
       warn.mockRestore();
     }
     expect(nine!).toBeNull();
-    expect(eight!).toEqual({ code: "R1234567", role: { kind: "plain_round", n: 1 } });
+    expect(eight!).toEqual({ code: "R1234567", role: { kind: "plain_round", n: 1 }, label: "R1234567" });
     expect(JSON.stringify(warned)).toContain("stage omitted");
   });
 
@@ -111,18 +129,18 @@ describe("buildCaptureStage — its guards (pure)", () => {
     let warned: unknown[][];
     const got: Record<string, CaptureStage | null> = {};
     try {
-      for (const key of ["AA", "a", "", "B"]) got[key] = buildCaptureStage({ fixtureId: f.id, stageKind: "group", poolKey: key, rows: [row({ round_no: 1 }), f] }, en);
+      for (const key of ["AA", "a", "", "B"]) got[key] = buildCaptureStage({ fixtureId: f.id, stageKind: "group", poolKey: key, rows: [row({ round_no: 1 }), f] }, en, enPool);
     } finally {
       warned = [...warn.mock.calls];
       warn.mockRestore();
     }
     let checked = 0;
     for (const key of ["AA", "a", ""]) {
-      expect(got[key], key).toEqual({ code: "R2", role: { kind: "plain_round", n: 2 } });
+      expect(got[key], key).toEqual({ code: "R2", role: { kind: "plain_round", n: 2 }, label: "R2" });
       checked++;
     }
     expect(checked).toBe(3);
-    expect(got.B).toEqual({ code: "R2", role: { kind: "plain_round", n: 2 }, pool: "B" });
+    expect(got.B).toEqual({ code: "R2", role: { kind: "plain_round", n: 2 }, pool: "B", label: labelOf("en", "R2", "B") });
     expect(warned.filter((c) => JSON.stringify(c).includes("pool omitted"))).toHaveLength(3);
   });
 
@@ -133,14 +151,53 @@ describe("buildCaptureStage — its guards (pure)", () => {
     const bronze = legacy[3]!;
     const guess = roundRoleFor(legacy.map((f) => ({ round_no: f.round_no, lane: null })), { round_no: 2, lane: null, is_final: false, third_place: false, conditional: false }, "knockout");
     expect(guess.kind, "PREMISE: the engine would guess 'final' from the defaults").toBe("final");
-    expect(buildCaptureStage({ fixtureId: bronze.id, stageKind: "knockout", poolKey: null, rows: legacy }, en))
-      .toEqual({ code: "R2", role: { kind: "plain_round", n: 2 } });
+    expect(buildCaptureStage({ fixtureId: bronze.id, stageKind: "knockout", poolKey: null, rows: legacy }, en, enPool))
+      .toEqual({ code: "R2", role: { kind: "plain_round", n: 2 }, label: "R2" });
     // The positive pair: the same rows written by today's generator (is_final on the final, the flag on the bronze).
     const today = legacy.map((f, i) => (i === 2 ? { ...f, is_final: true } : i === 3 ? { ...f, third_place: true } : f));
-    expect(buildCaptureStage({ fixtureId: bronze.id, stageKind: "knockout", poolKey: null, rows: today }, en))
-      .toEqual({ code: en("bracket.roundShort.thirdPlace"), role: { kind: "third_place" } });
-    expect(buildCaptureStage({ fixtureId: today[2]!.id, stageKind: "knockout", poolKey: null, rows: today }, en))
-      .toEqual({ code: en("bracket.roundShort.final"), role: { kind: "final" } });
+    expect(buildCaptureStage({ fixtureId: bronze.id, stageKind: "knockout", poolKey: null, rows: today }, en, enPool))
+      .toEqual({ code: en("bracket.roundShort.thirdPlace"), role: { kind: "third_place" }, label: en("bracket.roundShort.thirdPlace") });
+    expect(buildCaptureStage({ fixtureId: today[2]!.id, stageKind: "knockout", poolKey: null, rows: today }, en, enPool))
+      .toEqual({ code: en("bracket.roundShort.final"), role: { kind: "final" }, label: en("bracket.roundShort.final") });
+  });
+
+  it("label (2026-10-07): with a pool, the pool word + \" · \" + code; without one, exactly the code; a pool the contract refuses is no pool", () => {
+    const f = row({ round_no: 3 });
+    const rows = [row({ round_no: 1 }), row({ round_no: 2 }), f];
+    const pooled = buildCaptureStage({ fixtureId: f.id, stageKind: "group", poolKey: "C", rows }, en, enPool);
+    expect(pooled).toEqual({ code: "R3", role: { kind: "plain_round", n: 3 }, pool: "C", label: labelOf("en", "R3", "C") });
+    expect(pooled!.label, "PREMISE: the pool word really is in front").not.toBe("R3");
+    expect(buildCaptureStage({ fixtureId: f.id, stageKind: "league", poolKey: null, rows }, en, enPool)!.label).toBe("R3");
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      expect(buildCaptureStage({ fixtureId: f.id, stageKind: "group", poolKey: "AA", rows }, en, enPool)!.label, "a refused key is no pool").toBe("R3");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("label over 40 characters is OMITTED (logged) and the rest of the stage kept; exactly 40 is carried (the boundary pair); the pool word is only asked for when there is a pool", () => {
+    const f = row({ round_no: 1 });
+    // " · R1" is 5 characters: a pool word of 35 makes 40, of 36 makes 41. Neither is a real dictionary's.
+    const wordOf = (n: number) => (key: string) => `${key}${"w".repeat(n - key.length)}`;
+    const warn = vi.spyOn(log, "warn");
+    let warned: unknown[][];
+    let forty: CaptureStage | null, fortyOne: CaptureStage | null;
+    try {
+      forty = buildCaptureStage({ fixtureId: f.id, stageKind: "group", poolKey: "A", rows: [f] }, en, wordOf(35));
+      fortyOne = buildCaptureStage({ fixtureId: f.id, stageKind: "group", poolKey: "A", rows: [f] }, en, wordOf(36));
+    } finally {
+      warned = [...warn.mock.calls];
+      warn.mockRestore();
+    }
+    expect(forty!.label).toHaveLength(40);
+    expect(fortyOne!).toEqual({ code: "R1", role: { kind: "plain_round", n: 1 }, pool: "A" });
+    expect(Object.hasOwn(fortyOne!, "label"), "absent, never null or cut").toBe(false);
+    const omitted = warned.filter((c) => JSON.stringify(c).includes("label omitted"));
+    expect(omitted, "logged once, for the 41").toHaveLength(1);
+    expect(omitted[0]![0], "the log names the fixture and the length, never more").toEqual({ fixtureId: f.id, length: 41 });
+    const never = (): string => { throw new Error("the pool word was asked for without a pool"); };
+    expect(buildCaptureStage({ fixtureId: f.id, stageKind: "league", poolKey: null, rows: [f] }, en, never)!.label).toBe("R1");
   });
 });
 
@@ -167,7 +224,8 @@ async function expectedFor(auth: AuthCtx, divisionId: string, locale: Locale) {
     }, kindOf.get(f.stage_id)!, f.ext_key ?? null);
     const boardRow = board.find((b) => b.id === f.id)!;
     const pool = pools.get(f.id) ?? null;
-    want.set(f.id, { code: codes.get(f.id)?.code ?? `R${boardRow.round_no}`, role: { ...role }, ...(pool !== null ? { pool } : {}) });
+    const code = codes.get(f.id)?.code ?? `R${boardRow.round_no}`;
+    want.set(f.id, { code, role: { ...role }, ...(pool !== null ? { pool } : {}), label: labelOf(locale, code, pool) });
   }
   return { want, full, codes };
 }
@@ -272,8 +330,23 @@ describe.skipIf(!HAS_DB)("the descriptor's stage over every family (W28)", () =>
     const body = await getCode(shown.qr.code, shown.qr.tok, { slot: 0, phone: null }, fakeDeps(), new Date());
     const before = r.got.get(victim.id)!;
     expect(before.pool, "PREMISE: it carried a pool").toMatch(/^[AB]$/);
-    expect(body.stage).toEqual({ code: before.code, role: before.role });
+    expect(body.stage).toEqual({ code: before.code, role: before.role, label: before.code });
     expect(Object.hasOwn(body.stage!, "pool")).toBe(false);
+  });
+
+  it("label in the org's locale (2026-10-07): a group of 8 in two pools for an `es` org and an `fr` org — every fixture's label is that locale's pool word + \" · \" + its code, never the English one", async () => {
+    let checked = 0;
+    for (const locale of ["es", "fr"] as const) {
+      expect(poolWordOf(locale, "A"), `PREMISE: ${locale}'s pool word differs from en's`).not.toBe(poolWordOf("en", "A"));
+      const r = await family("group", 8, { pools: { count: 2 } }, { locale });
+      for (const s of r.got.values()) {
+        expect(s.pool, `${locale}: pooled`).toMatch(/^[AB]$/);
+        expect(s.label, locale).toBe(`${poolWordOf(locale, s.pool!)} · ${s.code}`);
+        expect(s.label!.startsWith(poolWordOf("en", s.pool!)), `${locale}: never the English pool word`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 12 fixtures in each locale").toBe(24);
   });
 
   it("an `es` org reads the board's Spanish chips: CF ×4 for the quarter-finals (the brief's own example), SF, F, 3.º", async () => {
@@ -298,7 +371,7 @@ describe.skipIf(!HAS_DB)("the descriptor's stage over every family (W28)", () =>
     for (const f of full) {
       const shown = await ensureStreamCode(r.auth, f.id);
       const body = await getCode(shown.qr.code, shown.qr.tok, { slot: 0, phone: null }, fakeDeps(), new Date());
-      expect(body.stage).toEqual({ code: `R${f.round_no}`, role: { kind: "plain_round", n: rounds.indexOf(f.round_no) + 1 } });
+      expect(body.stage).toEqual({ code: `R${f.round_no}`, role: { kind: "plain_round", n: rounds.indexOf(f.round_no) + 1 }, label: `R${f.round_no}` });
       checked++;
     }
     expect(checked).toBe(full.length);
@@ -321,7 +394,7 @@ describe.skipIf(!HAS_DB)("the stage on EVERY descriptor shape (W28)", () => {
     const [{ division_id }] = await sql<{ division_id: string }[]>`select division_id from fixtures where id = ${r.fixtureId}`;
     const { want } = await expectedFor(r.auth, division_id, "en");
     const expected = want.get(r.fixtureId)!;
-    expect(expected, "PREMISE: the rig's league round 1").toEqual({ code: "R1", role: { kind: "plain_round", n: 1 } });
+    expect(expected, "PREMISE: the rig's league round 1").toEqual({ code: "R1", role: { kind: "plain_round", n: 1 }, label: "R1" });
     const get = (phone: string | null) => getCode(r.code, r.tok, { slot: 0, phone }, r.deps, r.now());
     let shapes = 0;
     const seen = new Set<string>();
@@ -352,7 +425,7 @@ describe.skipIf(!HAS_DB)("the stage on EVERY descriptor shape (W28)", () => {
 
     // Recomputed on every read: the fixture's round renumbered, the next read carries it.
     await sql`update fixtures set round_no = 7 where id = ${r.fixtureId}`;
-    expect((await get(mine)).stage).toEqual({ code: "R7", role: { kind: "plain_round", n: 1 } });
+    expect((await get(mine)).stage).toEqual({ code: "R7", role: { kind: "plain_round", n: 1 }, label: "R7" });
     // A code the contract cannot carry: the field is ABSENT — never null — and the descriptor still parses.
     await sql`update fixtures set round_no = 123456789 where id = ${r.fixtureId}`;
     for (const phone of [mine, null]) {
@@ -365,6 +438,37 @@ describe.skipIf(!HAS_DB)("the stage on EVERY descriptor shape (W28)", () => {
   it("another sport (cricket): the stage reads no sport — the same R1 / plain_round 1 on its waiting shape", async () => {
     const r = await captureRig({ sport: "cricket" });
     const body = await getCode(r.code, r.tok, { slot: 0, phone: null }, r.deps, r.now());
-    expect(body.stage).toEqual({ code: "R1", role: { kind: "plain_round", n: 1 } });
+    expect(body.stage).toEqual({ code: "R1", role: { kind: "plain_round", n: 1 }, label: "R1" });
+  });
+
+  it("label on the waiting AND the live descriptor (2026-10-07): the rig's match put in pool A of an `es` org reads the es pool word + \" · R1\" on both, for the session's phone and another", async () => {
+    const r = await captureRig();
+    await sql`update organizations set default_locale = 'es' where id = ${r.auth.orgId}`;
+    const [{ stage_id }] = await sql<{ stage_id: string }[]>`select stage_id from fixtures where id = ${r.fixtureId}`;
+    const [{ id: poolId }] = await sql<{ id: string }[]>`insert into pools (stage_id, key, name) values (${stage_id}, 'A', 'Pool A') returning id`;
+    await sql`update fixtures set pool_id = ${poolId} where id = ${r.fixtureId}`;
+    const want = { code: "R1", role: { kind: "plain_round", n: 1 }, pool: "A", label: labelOf("es", "R1", "A") };
+    expect(want.label, "PREMISE: the Spanish pool word").not.toBe(labelOf("en", "R1", "A"));
+    const get = (phone: string | null) => getCode(r.code, r.tok, { slot: 0, phone }, r.deps, r.now());
+    const mine = phoneId("mine");
+    let checked = 0;
+    for (const phone of [null, mine]) {
+      const body = await get(phone);
+      expect(body.state).toBe("waiting");
+      expect(body.stage, "waiting").toEqual(want);
+      checked++;
+    }
+    const sid = await r.start(mine);
+    await sql`update fixture_stream_sessions set state = 'live', first_ingest_at = now() where id = ${sid}`;
+    for (const phone of [mine, phoneId("other")]) {
+      const body = await get(phone);
+      expect(body.state).toBe("live");
+      expect(body.stage, "live").toEqual(want);
+      // The key ORDER on the wire too (code, role, pool, label): the capture-v2 smoke compares the stage as a string.
+      expect(JSON.stringify(body.stage), "wire order").toBe(JSON.stringify(want));
+      expect(CaptureDescriptor.parse(body)).toEqual(body);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

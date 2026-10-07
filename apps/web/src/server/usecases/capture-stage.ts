@@ -7,20 +7,25 @@ import "server-only";
 //    fallback) — rendered in the org's default_locale, like the descriptor's label (W25): an `es` org reads CF.
 //  - `role`: the engine's `RoundRole` for the fixture (`roundRoleFor`, the board's own call), serialised verbatim.
 //  - `pool`: the fixture's pool KEY (`pools.key`, one capital letter), never its English name.
+//  - `label` (2026-10-07, after #923's pool word): what the phone shows verbatim — the pool's display label
+//    (`poolLabel`, `table.poolLabel` of the org locale's `public` dictionary: "Group A", "Grupo A", "Poule A") + " · " +
+//    `code`, or exactly `code` without a pool. Over 40 characters it is omitted (logged), the rest of the stage kept.
 //
-// ONE builder, `buildCaptureStage`, returns `{code, role, pool?}` (controller, 2026-10-06: a later commit adds `label`
-// there, and nowhere else).
+// ONE builder, `buildCaptureStage`, returns `{code, role, pool?, label?}`.
 import type { RoundRole } from "@seazn/engine/competition";
 import { sql } from "@/lib/db";
-import { toLocale } from "@/lib/i18n";
+import { getDictionary, toLocale } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
+import { poolLabel } from "@/lib/pool-label";
 import { laneRoundRank, roundRoleFor } from "@/lib/round-role-label";
 import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
-import { CAPTURE_POOL_RE, CaptureStage } from "@/server/api-v1/capture-schemas";
+import { CAPTURE_POOL_RE, CAPTURE_STAGE_LABEL_MAX, CaptureStage } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+/** A pool's display label from its key, in the org's locale (`poolLabel` over the `public` dictionary). */
+type PoolText = (key: string) => string;
 
 export type CaptureStageInput = {
   fixtureId: string;
@@ -41,9 +46,11 @@ export type CaptureStageInput = {
  *    positions (a bronze match "final", a 3-lane double elimination one lane) — so it gets the plain round ordinal,
  *    `plain_round` with the round's rank + 1, the role every uncoded round has, and the role never contradicts the chip;
  *  - `pools.key` has no CHECK: a key outside `^[A-Z]$` is omitted (and logged), the rest of the stage kept;
- *  - anything else the contract refuses (a code outside 1–8 characters) omits the whole stage, logged.
+ *  - anything else the contract refuses (a code outside 1–8 characters) omits the whole stage, logged;
+ *  - a `label` over 40 characters (2026-10-07) is omitted, logged, and the rest of the stage kept: the phone shows the
+ *    label verbatim and nothing when it is missing, so it is never cut. `poolText` is asked only when there IS a pool.
  */
-export function buildCaptureStage(input: CaptureStageInput, msg: Msg): CaptureStage | null {
+export function buildCaptureStage(input: CaptureStageInput, msg: Msg, poolText: PoolText): CaptureStage | null {
   const { fixtureId, stageKind, poolKey, rows } = input;
   const self = rows.find((r) => r.id === fixtureId);
   // An assumption made a guard: the rows are read THROUGH the fixture's own stage, so it is always among them.
@@ -69,7 +76,13 @@ export function buildCaptureStage(input: CaptureStageInput, msg: Msg): CaptureSt
     if (CAPTURE_POOL_RE.test(poolKey)) pool = poolKey;
     else log.warn({ fixtureId, poolKey }, "capture stage: the pool's key is not one capital letter; pool omitted");
   }
-  const stage = { code: rc?.code ?? `R${self.round_no}`, role: { ...role }, ...(pool !== undefined ? { pool } : {}) };
+  const code = rc?.code ?? `R${self.round_no}`;
+  let label: string | undefined = pool !== undefined ? `${poolText(pool)} · ${code}` : code;
+  if (label.length > CAPTURE_STAGE_LABEL_MAX) {
+    log.warn({ fixtureId, length: label.length }, "capture stage: the label is over 40 characters; label omitted");
+    label = undefined;
+  }
+  const stage = { code, role: { ...role }, ...(pool !== undefined ? { pool } : {}), ...(label !== undefined ? { label } : {}) };
   const parsed = CaptureStage.safeParse(stage);
   if (!parsed.success) {
     log.warn(
@@ -87,6 +100,8 @@ type StageRow = RoundCodeFixture & { kind: string; pool_key: string | null; defa
  * The descriptor's `stage` for `fixtureId` (W28): ONE statement — the fixture's stage's fixtures (the board's columns,
  * through `fixtures_stage_idx`), the stage's kind, the fixture's pool key and the org's locale — then the builder.
  * Non-tenant `sql`, bounded by `orgId` (the code row's org), like every read in capture-phone.ts. null = omit.
+ * The pool word comes from the `public` dictionary (`getDictionary`, the public pages' own loader): `msgFor` reads the
+ * `ui` catalogue alone.
  */
 export async function captureStageOf(orgId: string, fixtureId: string): Promise<CaptureStage | null> {
   const rows = await sql<StageRow[]>`
@@ -102,5 +117,10 @@ export async function captureStageOf(orgId: string, fixtureId: string): Promise<
   if (rows.length === 0) return null;   // the fixture went with its code (T35); the descriptor's own read answers that
   const { kind, pool_key, default_locale } = rows[0]!;
   const locale = toLocale(default_locale);
-  return buildCaptureStage({ fixtureId, stageKind: kind, poolKey: pool_key, rows }, (key, vars) => msgFor(locale, key, vars));
+  const publicDict = await getDictionary(locale, "public");
+  return buildCaptureStage(
+    { fixtureId, stageKind: kind, poolKey: pool_key, rows },
+    (key, vars) => msgFor(locale, key, vars),
+    (key) => poolLabel(publicDict, key),
+  );
 }

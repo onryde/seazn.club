@@ -46,7 +46,7 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
  *  same commit, and capture re-vendors the file. */
 const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "3292e33f84b693e5def6048012f6653ca7e31e1573fda3901da4fe67a62c5d43",
-  "capture-descriptor.v1.json": "dae5d1f68f6718321f6b917f013f9081dcea2ff60229ec398fdd7ba66f214491",
+  "capture-descriptor.v1.json": "45fc9ad71f763ed0d34e654b729e4103e3d47c82fd6af1e9e46cc3ad5ef5ed55",
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
@@ -238,7 +238,7 @@ const DEFS: Record<string, string[]> = { [QR]: [], [DESCRIPTOR]: ["refusal"], [B
 type Route = [prefix: string, twin: Twin, pointer: "" | "#/$defs/refusal" | "#/$defs/answer" | "#/$defs/ok"];
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
-  "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 49 },
+  "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 52 },
   "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 40 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 17 },
@@ -380,7 +380,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 49 + 40 + 18 + 17);
+    expect(total).toBe(12 + 52 + 40 + 18 + 17);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -799,6 +799,10 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       ["invalid-stage-role-entrants-1", "valid-waiting", false],
       ["invalid-stage-role-no-kind", "valid-waiting", false],
       ["invalid-stage-extra-key", "valid-waiting", false],
+      // `label` (2026-10-07): 1..40 characters, optional.
+      ["valid-waiting-stage-label-40", "valid-waiting", true],
+      ["invalid-stage-label-41", "valid-waiting", false],
+      ["invalid-stage-label-empty", "valid-waiting", false],
     ];
     let checked = 0;
     for (const [name, sibling, admitted] of owed) {
@@ -815,7 +819,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       checked++;
     }
     expect(checked).toBe(owed.length);
-    expect(checked).toBe(12);
+    expect(checked).toBe(15);
     // The brief's own boundary values, read off the fixtures so the premise is visible.
     const stageOf = (name: string) => fixture(dir, name).stage as { code: string; role: Json; pool?: string };
     expect(stageOf("invalid-stage-pool-AA").pool).toBe("AA");
@@ -823,6 +827,44 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(stageOf("valid-waiting-stage-code-8").code).toHaveLength(8);
     expect(Object.keys(ROLE_KINDS), "premise: the fixture's kind is not one the engine declares").not.toContain(stageOf("valid-waiting-stage-unknown-kind").role.kind);
     expect(stageOf("valid-waiting-stage").pool, "a pooled fixture carries its pool").toMatch(/^[A-Z]$/);
+    // label: the boundary pair, the empty case, and a stage WITHOUT one admitted (the phone shows nothing then).
+    const labelOf = (name: string) => (fixture(dir, name).stage as { label?: string }).label;
+    expect(labelOf("valid-waiting-stage-label-40")).toHaveLength(40);
+    expect(labelOf("invalid-stage-label-41")).toHaveLength(41);
+    expect(labelOf("invalid-stage-label-empty")).toBe("");
+    expect(labelOf("valid-waiting-stage"), "a pooled fixture's label: its pool word, then the code").toMatch(/ · R1$/);
+    expect(Object.hasOwn(fixture(dir, "valid-waiting-stage-code-8").stage as object, "label"), "premise: a stage with no label").toBe(false);
+  });
+
+  it("W28 stage.label (2026-10-07): optional and 1..40 on all six states, in the file and the twin; a 41-character label is refused and a missing one admitted on every state", () => {
+    const desc = rootOf(contract(DESCRIPTOR));
+    let nodes = 0;
+    for (const [side, shape] of [["file", desc], ["twin", zodJson(S.CaptureDescriptor, "output")]] as const) {
+      const stages = nodesAt(shape, ["stage"]);
+      expect(stages, `${side}: stage on all six states`).toHaveLength(6);
+      for (const st of stages) {
+        const label = (st.properties as Record<string, Json>).label!;
+        expect(label, `${side}: stage.label exists`).toBeDefined();
+        expect({ type: label.type, minLength: label.minLength, maxLength: label.maxLength }, side).toEqual({ type: "string", minLength: 1, maxLength: 40 });
+        expect((st.required as string[] | undefined) ?? [], `${side}: label is optional`).not.toContain("label");
+        nodes++;
+      }
+    }
+    expect(nodes).toBe(12);
+    // Through the twin, on every state's own valid fixture: a stage with no label parses, one of 41 does not.
+    const fileAdmits = fileValidator();
+    let states = 0;
+    for (const state of ["waiting", "warming", "live", "ending", "completed", "failed"] as const) {
+      const base = fixture("capture-descriptor.v1", `valid-${state}`);
+      const bare = { ...base, stage: { code: "R1", role: { kind: "plain_round", n: 1 } } };
+      const long = { ...base, stage: { code: "R1", role: { kind: "plain_round", n: 1 }, label: "x".repeat(41) } };
+      expect(parses(S.CaptureDescriptor, bare), `${state}: no label`).toBe(true);
+      expect(fileAdmits(DESCRIPTOR, "", bare), `${state}: no label (file)`).toBe(true);
+      expect(parses(S.CaptureDescriptor, long), `${state}: 41`).toBe(false);
+      expect(fileAdmits(DESCRIPTOR, "", long), `${state}: 41 (file)`).toBe(false);
+      states++;
+    }
+    expect(states).toBe(6);
   });
 
   it("W28 role.kind is OPEN: no enum or const in the file or the twin, on every state; its prose lists every kind the engine declares and the rule for an unknown one", () => {

@@ -18739,7 +18739,7 @@ async function captureV2Suite(): Promise<void> {
   // The phone: Bearer tok, no cookie. Every answer's Cache-Control is recorded.
   type Answer = {
     state?: string; sid?: string; startedBy?: string; endReason?: string; cred?: unknown; playbackUrl?: string; code?: string;
-    heartbeatUrl?: string; stage?: { code: string; role: { kind: string; n?: number; entrants?: number }; pool?: string }; url?: string;
+    heartbeatUrl?: string; stage?: { code: string; role: { kind: string; n?: number; entrants?: number }; pool?: string; label?: string }; url?: string;
     message?: string;
   };
   const phoneCall = async (path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; json: Answer | null }> => {
@@ -18815,9 +18815,10 @@ async function captureV2Suite(): Promise<void> {
 
   // 6b. W28 — both descriptors carry the stage: the fixture is round 1 of a league (timedFixture), so the board's chip
   // R1 and the engine's plain round 1.
-  const wantStage = JSON.stringify({ code: "R1", role: { kind: "plain_round", n: 1 } });
+  // label (2026-10-07): the league match has no pool, so its label is exactly the code.
+  const wantStage = JSON.stringify({ code: "R1", role: { kind: "plain_round", n: 1 }, label: "R1" });
   step(
-    `both descriptors carry the stage {code: R1, role: plain_round 1} (got ${JSON.stringify(own.json?.stage)} / ${JSON.stringify(other.json?.stage)})`,
+    `both descriptors carry the stage {code: R1, role: plain_round 1, label: R1} (got ${JSON.stringify(own.json?.stage)} / ${JSON.stringify(other.json?.stage)})`,
     JSON.stringify(own.json?.stage) === wantStage && JSON.stringify(other.json?.stage) === wantStage,
   );
 

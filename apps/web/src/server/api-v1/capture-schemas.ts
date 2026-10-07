@@ -38,11 +38,14 @@ export const CaptureStageRole = z.strictObject({
   n: z.number().int().min(1).optional(),
   entrants: z.number().int().min(2).optional(),
 });
-/** W28: the match's place in its stage — the scheduler board's chip (`code`), its round role, and its pool's key. */
+/** W28: the match's place in its stage — the scheduler board's chip (`code`), its round role, its pool's key, and
+ *  (2026-10-07) the `label` the phone shows verbatim: the pool word + " · " + code in the org's locale, or the code. */
+export const CAPTURE_STAGE_LABEL_MAX = 40;
 export const CaptureStage = z.strictObject({
   code: z.string().min(1).max(8),
   role: CaptureStageRole,
   pool: z.string().regex(CAPTURE_POOL_RE).optional(),
+  label: z.string().min(1).max(CAPTURE_STAGE_LABEL_MAX).optional(),
 });
 export type CaptureStage = z.infer<typeof CaptureStage>;
 
