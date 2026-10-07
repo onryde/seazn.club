@@ -6,9 +6,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as config from "../config";
 import {
-  CODE_GRACE_AFTER_FINISH_MINUTES, DEAD_PHONE_TAKEOVER_SECONDS, FLY_RELAY_APP_RETIRED_DEFAULT, LOCAL_ENV_NAME,
-  PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, TUNABLE_NAMES, buildShaOf, liveRunnerIdentity, relayDriverMode,
-  relayEnvironment, tunable,
+  AUTO_START_RETRY_SECONDS, AUTO_STOP_AFTER_RESULT_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES, DEAD_PHONE_TAKEOVER_SECONDS,
+  FLY_RELAY_APP_RETIRED_DEFAULT, LOCAL_ENV_NAME, PHONE_LOST_LIVE_MINUTES, PHONE_NOT_READY_SHOW_AFTER_SECONDS,
+  PHONE_SILENT_FLOOR_SECONDS, TUNABLE_NAMES, buildShaOf, liveRunnerIdentity, relayDriverMode, relayEnvironment, tunable,
 } from "../config";
 
 describe("buildShaOf (Da)", () => {
@@ -252,15 +252,24 @@ describe("R5: the boot hook refuses a faking deployment", () => {
 // Capture QR v2 §6.15 / AGENTS.md #20: the four timings a walkthrough shortens. An override is honoured ONLY under
 // ENV_NAME local or ci; every guard below pins the DEFAULT constant, never the value a process happens to run with.
 describe("tunable — honoured only when ENV_NAME is local or ci", () => {
-  // The declared defaults, from the spec's own figures (§5.1 C2, §6.5, §6.8.5, §6.9) — never from config.ts.
+  // The declared defaults, from the spec's own figures (§5.1 C2, §6.5, §6.8.5, §6.9, §8.3) — never from config.ts.
   const SPEC_DEFAULTS = {
     DEAD_PHONE_TAKEOVER_SECONDS: 60, PHONE_LOST_LIVE_MINUTES: 15, PHONE_SILENT_FLOOR_SECONDS: 60, CODE_GRACE_AFTER_FINISH_MINUTES: 120,
+    AUTO_STOP_AFTER_RESULT_SECONDS: 180, AUTO_START_RETRY_SECONDS: 60,
   } as const;
-  const DEFAULTS = { DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES };
+  const DEFAULTS = {
+    DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES,
+    AUTO_STOP_AFTER_RESULT_SECONDS, AUTO_START_RETRY_SECONDS,
+  };
 
-  it("the guard pins the DEFAULTS: 60 s takeover, 15 min lost, 60 s silent floor, 120 min grace", () => {
+  it("the guard pins the DEFAULTS: 60 s takeover, 15 min lost, 60 s silent floor, 120 min grace, 180 s auto stop, 60 s auto-start retry", () => {
     expect(DEFAULTS).toEqual(SPEC_DEFAULTS);
     expect([...TUNABLE_NAMES].sort()).toEqual(Object.keys(SPEC_DEFAULTS).sort());
+  });
+
+  it("the not-ready debounce is the owner's 20 s (plan R-2, 2026-10-07) and is NOT tunable — a walkthrough never shortens a display debounce", () => {
+    expect(PHONE_NOT_READY_SHOW_AFTER_SECONDS).toBe(20);
+    expect(TUNABLE_NAMES as readonly string[]).not.toContain("PHONE_NOT_READY_SHOW_AFTER_SECONDS");
   });
 
   it("ENV_NAME=stg with DEAD_PHONE_TAKEOVER_SECONDS=1 → 60: a deployment never runs a shortened timing", () => {
@@ -286,6 +295,7 @@ describe("tunable — honoured only when ENV_NAME is local or ci", () => {
       }
     }
     expect(checked).toBe(TUNABLE_NAMES.length * 9);
+    expect(checked).toBe(54);   // the six tunables the spec declares (anti-vacuity: 36 before AUTO_STOP / AUTO_START_RETRY)
   });
 
   it("under ci, an unset or EMPTY variable is the fallback — never Number(\"\") = 0", () => {
@@ -322,6 +332,7 @@ describe("capture QR v2 constants equal the spec's own figures", () => {
     "CODE_GRACE_AFTER_FINISH_MINUTES", "DEAD_PHONE_TAKEOVER_SECONDS", "PHONE_SILENT_FLOOR_SECONDS", "PHONE_SILENT_SLACK_SECONDS",
     "POLL_STARTING_SECONDS", "POLL_NEAR_SECONDS", "POLL_FAR_SECONDS", "POLL_NEAR_WINDOW_MINUTES", "PHONE_LOST_LIVE_MINUTES",
     "PHONE_BEAT_RETENTION_HOURS", "LOW_BATTERY_PERCENT", "HOT_THERMAL_STATUS", "RECONNECT_QUIET_SECONDS",
+    "AUTO_STOP_AFTER_RESULT_SECONDS", "AUTO_START_RETRY_SECONDS",
   ] as const;
 
   it("each named constant matches the figure the spec writes beside its name (`NAME (n)` or `NAME = n`)", () => {
