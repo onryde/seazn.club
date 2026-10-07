@@ -125,6 +125,11 @@ import {
 
 const LOCALES = ["en", "es", "fr", "nl"] as const;
 
+/** The en captions of pools A and B under `stage`: `table.poolLabel` over the
+ *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
+const enCaptions = (stage: string, keys: string[] = ["A", "B"]) =>
+  keys.map((k) => `${stage} — ${enPublic["table.poolLabel"].replace("{key}", k)}`);
+
 // ---------------------------------------------------------------------------
 // Liveness — one authority, proven over the whole vocabulary
 // ---------------------------------------------------------------------------
@@ -1209,7 +1214,7 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     expect(doc.tables[0]!.rows.every((r) => r.champion === false)).toBe(true);
   });
 
-  it("pools read Pool A above Pool B — never in pool-id order (lib/pool-order.ts)", async () => {
+  it("pool A reads above pool B — never in pool-id order (lib/pool-order.ts)", async () => {
     // Ids chosen to sort OPPOSITE to the names, and the snapshots handed over
     // in id order: an id sort, what this builder used to do, reads B first.
     const POOL_A = "ffffffff-0000-4000-8000-00000000000a";
@@ -1230,7 +1235,7 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
       }),
     );
     const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
-    expect(doc.tables.map((v) => v.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(doc.tables.map((v) => v.caption)).toEqual(enCaptions("Groups"));
     expect(doc.tables.map((v) => v.id)).toEqual([`open-st1-${POOL_A}`, `open-st1-${POOL_B}`]);
   });
 
@@ -1257,7 +1262,7 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
   // Retitled: it said "ordered by pool id", and its ids ("pA" < "pB") sort the
   // same way as its names, so it could not tell the two orders apart. The
   // test above it gives the ids the OPPOSITE order.
-  it("pool tables are captioned with their pool, Pool A first", async () => {
+  it("pool tables are captioned with their pool's en label from its key, pool A first", async () => {
     const pools = [
       { id: "pB", stage_id: "st1", key: "B", name: "Pool B" },
       { id: "pA", stage_id: "st1", key: "A", name: "Pool A" },
@@ -1270,7 +1275,7 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
       divisionDetail({ stages: [{ ...STAGE, kind: "group" }], pools, standings }),
     );
     const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
-    expect(doc.tables.map((t) => t.caption)).toEqual(["League — Pool A", "League — Pool B"]);
+    expect(doc.tables.map((t) => t.caption)).toEqual(enCaptions("League"));
     expect(doc.tables.map((t) => t.id)).toEqual(["open-st1-pA", "open-st1-pB"]);
   });
 

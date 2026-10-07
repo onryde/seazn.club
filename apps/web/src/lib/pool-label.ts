@@ -6,7 +6,7 @@
 // "Pool " + key (`server/usecases/stages.ts`), and nothing renames it, so
 // printing it put English in front of every Spanish, French and Dutch reader
 // (2026-10-06). The label is rebuilt from the pool's KEY through the reader's
-// own `public` dictionary instead: "Pool A", "Grupo A", "Poule A". The stored
+// own `public` dictionary instead: "Group A", "Grupo A", "Poule A". The stored
 // name is left as it is — this is display only.
 //
 // Pure (no `server-only`): the dictionary is passed in, already chosen by the

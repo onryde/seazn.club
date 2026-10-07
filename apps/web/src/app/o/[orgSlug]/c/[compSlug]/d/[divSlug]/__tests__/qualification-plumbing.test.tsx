@@ -122,6 +122,11 @@ import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
 
+/** The en captions of pools A and B under `stage`: `table.poolLabel` over the
+ *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
+const enCaptions = (stage: string, keys: string[] = ["A", "B"]) =>
+  keys.map((k) => `${stage} — ${enPublic["table.poolLabel"].replace("{key}", k)}`);
+
 const PAGE = {
   auth: { orgId: "org-1", userId: "user-1", role: "owner" },
   canEdit: true,
@@ -341,7 +346,7 @@ describe("organiser console — the standings tables get the same qualification 
       new Map([["gr", meta({ qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" })]]),
     );
     const tables = await renderTables();
-    expect(tables.map((x) => x.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(tables.map((x) => x.caption)).toEqual(enCaptions("Groups"));
     for (const { qualification, rowIds, caption } of tables) {
       expect(qualification, `${caption}: no view for a pool with a per-group cut`).toBeTruthy();
       // The view covers exactly the entrants this table draws.
@@ -355,7 +360,7 @@ describe("organiser console — the standings tables get the same qualification 
     expect(b.html).toContain("First place goes through to Finals · 1 round left");
   });
 
-  it("pools read Pool A above Pool B whatever their ids and the query's order (lib/pool-order.ts)", async () => {
+  it("pool A reads above pool B whatever their ids and the query's order (lib/pool-order.ts)", async () => {
     // The two-pool scene with ids that sort OPPOSITE to the names ("f…" is
     // Pool A's), handed back by the tenant read in B, A order: a console that
     // sorts by id, or keeps query order, draws Pool B first.
@@ -381,7 +386,7 @@ describe("organiser console — the standings tables get the same qualification 
       new Map([["gr", meta({ qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" })]]),
     );
     const tables = await renderTables();
-    expect(tables.map((x) => x.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(tables.map((x) => x.caption)).toEqual(enCaptions("Groups"));
     // Each caption over its OWN pool's rows — the tables moved, not the labels.
     expect(tables.map((x) => x.rowIds)).toEqual([["e1", "e2", "e3"], ["e4", "e5", "e6"]]);
   });

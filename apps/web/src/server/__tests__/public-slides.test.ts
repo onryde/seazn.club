@@ -39,7 +39,8 @@ describe("buildPublicDivisionSlides", () => {
     const slides = await buildPublicDivisionSlides(input);
     const kinds = slides.map((s) => s.kind);
     expect(kinds).toEqual(["standings", "fixtures", "fixtures", "bracket"]);
-    expect(slides[0]).toMatchObject({ caption: "Groups — Pool A" });
+    // The en label from the dictionary file, over the KEY — not the stored name.
+    expect(slides[0]).toMatchObject({ caption: `Groups — ${enPublic["table.poolLabel"].replace("{key}", "A")}` });
     expect(slides[1]).toMatchObject({ title: "In play", pinned: true });
     const bracket = slides[3] as { fixtures: { home: string | null }[] };
     expect(bracket.fixtures[0]).toMatchObject({ home: "Mexico", line: "1–0" });

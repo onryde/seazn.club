@@ -34,7 +34,13 @@ import { StandingsTable } from "@/components/public-site/standings-table";
 import type { EmbedPayload } from "@/server/embed-data";
 import type { PublicEntrant, PublicFixture, PublicStage } from "@/server/public-site/data";
 import type { QualificationView } from "@/server/public-site/qualification-view";
+import enPublic from "@/dictionaries/en/public.json";
 import EmbedWidgetPage from "../page";
+
+/** The en captions of pools A and B under `stage`: `table.poolLabel` over the
+ *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
+const enCaptions = (stage: string, keys: string[] = ["A", "B"]) =>
+  keys.map((k) => `${stage} — ${enPublic["table.poolLabel"].replace("{key}", k)}`);
 
 const NAMES: Record<string, string> = {
   A: "Ada Embed", B: "Bo Embed", C: "Cy Embed", D: "Di Embed",
@@ -264,14 +270,15 @@ describe("embed standings widget — the table gets its qualification view", () 
   it("two pools with a per-group cut: each pool's table gets ITS OWN pool's view, line and statuses", async () => {
     const tables = await renderTables(twoPoolPayload());
     const byCaption = new Map(tables.map((x) => [x.caption, x]));
-    expect([...byCaption.keys()].sort()).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    const [captionA, captionB] = enCaptions("Groups");
+    expect([...byCaption.keys()].sort()).toEqual([captionA, captionB]);
     for (const { qualification, rowIds, caption } of tables) {
       expect(qualification, `${caption}: no view for a pool with a per-group cut`).toBeTruthy();
       // The view covers exactly the entrants this table draws — not the other pool's.
       expect(Object.keys(qualification!.rows).sort(), caption).toEqual([...rowIds].sort());
     }
-    const a = byCaption.get("Groups — Pool A")!;
-    const b = byCaption.get("Groups — Pool B")!;
+    const a = byCaption.get(captionA)!;
+    const b = byCaption.get(captionB)!;
     expect(a.qualification!.table.label).toBe("First place goes through to Finals · 2 rounds left");
     expect(b.qualification!.table.label).toBe("First place goes through to Finals · 1 round left");
     expect(Object.fromEntries(Object.entries(b.qualification!.rows).map(([id, r]) => [id, r.status]))).toEqual({

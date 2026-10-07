@@ -152,6 +152,9 @@ const REST = [
   // A draft is unlisted until published (owner decision 2026-09-27): every
   // listing surface, both directions. Begins with "d", so it belongs here.
   "src/server/public-site/__tests__/draft-unlisted-db.test.ts",
+  // Pool captions from the pool KEY in the reader's locale (table.poolLabel,
+  // PR #923). Begins with "p", so it belongs here rather than in C_GLOBBED.
+  "src/server/public-site/__tests__/pool-label-db.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

@@ -537,18 +537,21 @@ test("pools: each pool draws its own line after place 1 and its own legend, with
 
 // ── Pool order ───────────────────────────────────────────────────────────
 //
-// Pools read in the organiser's order — Pool A above Pool B — on every surface
+// Pools read in the organiser's order — pool A above pool B — on every surface
 // that draws one table per pool. They used to be sorted by pool UUID on the
 // public division page and the hub (and left in query order on the embed), so
-// "Pool B" came first whenever B's random id sorted lower. The ids are random
+// pool B came first whenever B's random id sorted lower. The ids are random
 // here, so this run witnesses the old defect only when they happen to sort
 // opposite to the names; it logs which. The deterministic kill is in vitest
 // (`lib/__tests__/pool-order.test.ts` and the surface tests beside it).
 
-/** Which pool each caption names, in DOM order. */
-const poolLetters = (texts: string[]) => texts.map((t) => /Pool ([A-Z])\b/.exec(t)?.[1] ?? `? ${t}`);
+/** Which pool each caption names, in DOM order: the key whose en
+ *  `table.poolLabel` (read from the dictionary file) ends the caption. The
+ *  shared org is English, and the console reads in its viewer's English too. */
+const poolLetters = (texts: string[]) =>
+  texts.map((t) => ["A", "B", "C", "D"].find((key) => t.trim().endsWith(dictString("en", "table.poolLabel", { key }))) ?? `? ${t}`);
 
-test("pools: Pool A reads above Pool B on the division page, the hub Table tab and the console", async ({ page, browser }) => {
+test("pools: pool A reads above pool B on the division page, the hub Table tab and the console", async ({ page, browser }) => {
   const letters = ["A", "B"].slice(0, POOLS);
 
   const pub = await spectator(browser, { width: 1280, height: 900 });
@@ -576,13 +579,13 @@ test("pools: Pool A reads above Pool B on the division page, the hub Table tab a
 // ── Pool label in the org's locale (2026-10-06) ──────────────────────────
 //
 // `pools.name` is only ever stored as the English "Pool " + key
-// (`usecases/stages.ts`), and the public surfaces printed it — so the English
-// org above reads "Pool A" correctly by accident. A Spanish org's division
-// page and hub must name each pool with the public dictionary's
-// `table.poolLabel` over the pool's KEY ("Grupo A"), read here out of the
-// dictionary FILE, never typed. A dedicated org (`mintSpectatorOrg`), so the
-// shared org's locale never moves under a parallel test. Cropped pictures of
-// the pool heading at 1280, 768 and 320 land in this test's output directory.
+// (`usecases/stages.ts`), and the public surfaces printed it, English in every
+// locale. A Spanish org's division page and hub must name each pool with the
+// public dictionary's `table.poolLabel` over the pool's KEY ("Grupo A"), read
+// here out of the dictionary FILE, never typed. A dedicated org
+// (`mintSpectatorOrg`), so the shared org's locale never moves under a
+// parallel test. Cropped pictures of the pool heading at 1280, 768 and 320
+// land in this test's output directory.
 
 const LABEL_WIDTHS = [1280, 768, 320] as const;
 

@@ -235,7 +235,7 @@ describe("buildDrawModel — pooled group stage: independent round-robins, never
       }),
       en,
     );
-    expect(out[0]!.pools.map((p) => p.poolName)).toEqual(["Pool A", "Pool B"]);
+    expect(out[0]!.pools.map((p) => p.poolName)).toEqual(["A", "B"].map((k) => enPublic["table.poolLabel"].replace("{key}", k)));
     expect(out[0]!.pools[0]!.rounds.map((r) => r.label)).toEqual(["Round 1"]);
     expect(out[0]!.pools[0]!.rounds[0]!.fixtures.map((f) => f.id)).toEqual(["a1"]);
     expect(out[0]!.pools[1]!.rounds.map((r) => r.label)).toEqual(["Round 1"]);

@@ -1,4 +1,4 @@
-// Pools read Pool A above Pool B on every surface that draws one standings
+// Pools read pool A above pool B on every surface that draws one standings
 // table per pool — the order is `lib/pool-order.ts`'s, the one authority.
 //
 // The public division page and the embed are driven here with their data
@@ -7,10 +7,10 @@
 // arrive in id order, so a page that sorts by pool id (the division page did)
 // or keeps query order (the embed did) reads B first and reds here.
 //
-// The hub is `competition-hub.test.ts`'s ("pools read Pool A above Pool B").
+// The hub is `competition-hub.test.ts`'s ("pool A reads above pool B — never in pool-id order").
 // The organiser console is rendered through its own harness, where the tenant
 // read of its pools can be answered: `app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/
-// __tests__/qualification-plumbing.test.tsx` ("pools read Pool A above Pool B
+// __tests__/qualification-plumbing.test.tsx` ("pool A reads above pool B
 // whatever their ids…"), and it is driven for real in
 // `e2e/standings-qualification.spec.ts`.
 //
@@ -41,6 +41,11 @@ import nlPublic from "@/dictionaries/nl/public.json";
 import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
 import DivisionHomePage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
 import { StandingsTable } from "../standings-table";
+
+/** The en captions of pools A and B under `stage`: `table.poolLabel` over the
+ *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
+const enCaptions = (stage: string, keys: string[] = ["A", "B"]) =>
+  keys.map((k) => `${stage} — ${enPublic["table.poolLabel"].replace("{key}", k)}`);
 
 // "f…" sorts after "0…": Pool A's id is the LATER one.
 const POOL_A = "ffffffff-0000-4000-8000-00000000000a";
@@ -131,23 +136,23 @@ function tables(node: unknown, out: ReactElement<TableProps>[] = []): ReactEleme
 }
 
 describe("pool order on the pages that draw one standings table per pool", () => {
-  it("public division page: Pool A, then Pool B", async () => {
+  it("public division page: pool A, then pool B", async () => {
     getPublicDivision.mockResolvedValue(payload());
     const root = await DivisionHomePage({
       params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
     });
     const drawn = tables(root);
-    expect(drawn.map((el) => el.props.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(drawn.map((el) => el.props.caption)).toEqual(enCaptions("Groups"));
     // Each caption over its OWN pool's rows — the order moved the tables,
     // not just the labels.
     expect(drawn.map((el) => el.props.rows.map((r) => r.entrantId))).toEqual([["e1", "e2"], ["e3", "e4"]]);
   });
 
-  it("embed standings widget: Pool A, then Pool B", async () => {
+  it("embed standings widget: pool A, then pool B", async () => {
     embedDivisionData.mockResolvedValue({ ok: true, data: { ...payload(), sponsors: [] } });
     const root = await EmbedWidgetPage({ params: Promise.resolve({ id: "d1", widget: "standings" }) });
     const drawn = tables(root);
-    expect(drawn.map((el) => el.props.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(drawn.map((el) => el.props.caption)).toEqual(enCaptions("Groups"));
     expect(drawn.map((el) => el.props.rows.map((r) => r.entrantId))).toEqual([["e1", "e2"], ["e3", "e4"]]);
   });
 

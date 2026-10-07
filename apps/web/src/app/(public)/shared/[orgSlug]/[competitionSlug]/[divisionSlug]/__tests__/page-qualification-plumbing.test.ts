@@ -42,7 +42,13 @@ vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => 
 import { StandingsTable } from "@/components/public-site/standings-table";
 import type { PublicEntrant, PublicFixture, PublicStage } from "@/server/public-site/data";
 import type { QualificationView } from "@/server/public-site/qualification-view";
+import enPublic from "@/dictionaries/en/public.json";
 import DivisionHomePage from "../page";
+
+/** The en captions of pools A and B under `stage`: `table.poolLabel` over the
+ *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
+const enCaptions = (stage: string, keys: string[] = ["A", "B"]) =>
+  keys.map((k) => `${stage} — ${enPublic["table.poolLabel"].replace("{key}", k)}`);
 
 const NAMES: Record<string, string> = {
   A: "Ada Swiss", B: "Bo Swiss", C: "Cy Swiss", D: "Di Swiss",
@@ -283,7 +289,7 @@ describe("public division page — the standings table gets its qualification vi
 
   it("two pools with a per-group cut: each pool's table gets ITS OWN pool's view, line and statuses", async () => {
     const tables = await renderTables(twoPoolData());
-    expect(tables.map((x) => x.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(tables.map((x) => x.caption)).toEqual(enCaptions("Groups"));
     for (const { qualification, rowIds, caption } of tables) {
       expect(qualification, `${caption}: no view for a pool with a per-group cut`).toBeTruthy();
       // The view covers exactly the entrants this table draws — not the other pool's.
