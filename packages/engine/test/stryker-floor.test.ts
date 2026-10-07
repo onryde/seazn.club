@@ -61,6 +61,23 @@ function placeOf(leg: string): { file: string; line: number } {
   const [file, sel] = [...selected(ENGINE, resolveGroup(leg))][0]!;
   return { file, line: sel === "all" ? 1 : sel[0]![0] };
 }
+/** The split-file test's fixture, resolved at collection so its budget can be stated from it: every range of cricket.ts a cricket leg
+ *  holds, read back from the resolved groups, never typed (a leg may hold two), and the number of `check` calls the test makes with them
+ *  (the baseline, two own lines a range, and one call per range of ANOTHER leg). */
+const SPLIT = (() => {
+  const FILE = "src/sports/cricket/cricket.ts";
+  const family = "sports-cricket";
+  const ranges = STRYKER_FAMILIES[family].flatMap((g) =>
+    resolveGroup(g).map(parseEntry).filter((e) => e.glob === FILE && e.lines !== null).map((e) => ({ g, from: (e.lines as readonly [number, number])[0], to: (e.lines as readonly [number, number])[1] })),
+  );
+  const checks = 1 + ranges.length * 2 + ranges.reduce((n, own) => n + ranges.filter((r) => r.g !== own.g).length, 0);
+  return { FILE, family, ranges, checks };
+})();
+/** One in-process `check` re-resolves every leg of its family from disk: about 4 ms a call locally and 20 ms under
+ *  coverage (241 calls: 4.8 s, and over vitest's 5 s default on CI, run 37694590527); the allowance is five times the coverage figure. AGENTS.md class 20: the budget is this allowance times the derived call
+ *  count, so a re-cut that adds cricket legs moves the budget with the work. */
+const CHECK_MS = 100;
+
 /** A valid report set for `family`: every leg gets its own counts (default one Killed mutant) at its own place. */
 function legSet(family: string, per: Record<string, Counts> = {}): LegReports {
   const out: LegReports = {};
@@ -282,12 +299,7 @@ describe("a family is the SUM of its legs: one score over all their mutants, jud
   });
 
   it("the legs of a split file are told apart by LINE: a leg accepts the mutants of its own range and refuses another leg's report of the same file (the file name alone cannot)", () => {
-    const FILE = "src/sports/cricket/cricket.ts";
-    const family = "sports-cricket";
-    // every range of cricket.ts a cricket leg holds, read back from the resolved groups, never typed (a leg may hold two)
-    const ranges = STRYKER_FAMILIES[family].flatMap((g) =>
-      resolveGroup(g).map(parseEntry).filter((e) => e.glob === FILE && e.lines !== null).map((e) => ({ g, from: (e.lines as readonly [number, number])[0], to: (e.lines as readonly [number, number])[1] })),
-    );
+    const { FILE, family, ranges } = SPLIT;
     expect(new Set(ranges.map((r) => r.g)).size, "the cricket module is split across more than one leg").toBeGreaterThan(1);
     // every leg of the family at its own place, one Killed mutant: the baseline that must pass
     const base = legSet(family);
@@ -309,7 +321,8 @@ describe("a family is the SUM of its legs: one score over all their mutants, jud
     }
     expect(accepted).toBe(ranges.length * 2);
     expect(refused, "other legs' lines refused").toBeGreaterThan(ranges.length);
-  });
+    expect(1 + accepted + refused, "the checks the budget was derived from are the checks that ran").toBe(SPLIT.checks);
+  }, SPLIT.checks * CHECK_MS);
 
   it("a leg that negates a file and then ranges it is read in order: the file counts, but only through its range (and its directory's other files whole)", () => {
     const family = "sports-nested";
