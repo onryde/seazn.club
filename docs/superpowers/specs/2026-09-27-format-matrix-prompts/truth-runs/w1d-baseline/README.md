@@ -62,6 +62,7 @@ A further 17 cases differ only in a number inside an otherwise identical reason 
 | `REKEY.md` | the W1-driving P-rule reds, each with the gap it now has |
 | `AUDIT-LEDGER.md` | all 150 audit ids, each with exactly one of five outcomes |
 | `TIMINGS.md` | per layer and per shard: wall clock and per-case p50, p90, max; what the shard budgets derive from them |
+| `MUTATION.md` | the first measured Stryker run of the engine (run 37371368951 and its part re-runs): per-family scores and floors (margin 0.5), the 81-leg table with run and artifact ids, top survivor files, timing history |
 
 `TRIAGE.md`, `REKEY.md` and `AUDIT-LEDGER.md` are written by `pnpm matrix:triage` and `pnpm matrix:ledger` from the three committed layers and `tools/matrix/catalogue/`; a test regenerates them and compares byte for byte, so a catalogue edit that moves a gap is a visible edit of these files too.
 
