@@ -3,7 +3,7 @@
 Data of record for the mutation floors. Every number below is read from a downloaded report artifact (the run and artifact ids are in the
 per-leg table) or from a job log; nothing is projected except where a row says so. The floors it sets are in `packages/engine/stryker-floor.json`.
 
-**State of this file: 78 of 81 legs have a report; the legs without a report are listed as pending and their family has no floor yet.**
+**State of this file: 81 of 81 legs have a report; every family is scored.**
 
 Score = Stryker's total score: (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage). An uncovered line counts as a survivor. Ignored, CompileError and
 RuntimeError mutants are outside the denominator; the mutants of `stryker-equivalent.json` (none yet) are taken out of it. A floor is floor(score, 1 dp) of the
@@ -19,7 +19,7 @@ SUM of a family's legs, never of one leg. A leg is one CI job (one `mutation.yml
 | draws | 4 | 1486 | 1018 | 35 | 371 | 50 | 12 | 1053 / 1474 | 71.438 | 71.4 | 1 |
 | sports-cricket | 16 | 5120 | 3666 | 5 | 1298 | 151 | 0 | 3671 / 5120 | 71.699 | 71.6 | 6 |
 | sports-football | 9 | 2595 | 1861 | 3 | 657 | 74 | 0 | 1864 / 2595 | 71.830 | 71.8 | 1 |
-| sports-period | 14 (11 with a report) | pending | - | - | - | - | - | - | not computable | not set | - |
+| sports-period | 14 | 3037 | 2092 | 9 | 862 | 74 | 0 | 2101 / 3037 | 69.180 | 69.1 | 3 |
 | sports-setbased | 6 | 2208 | 1652 | 6 | 501 | 49 | 0 | 1658 / 2208 | 75.091 | 75 | 3 |
 | sports-nested | 8 | 1710 | 1269 | 0 | 401 | 40 | 0 | 1269 / 1710 | 74.211 | 74.2 | 1 |
 | sports-other | 7 | 2591 | 1914 | 0 | 616 | 61 | 0 | 1914 / 2591 | 73.871 | 73.8 | 2 |
@@ -27,10 +27,12 @@ SUM of a family's legs, never of one leg. A leg is one CI job (one `mutation.yml
 "Mutants that must flip" is the smallest number of detected mutants (killed or timed out) that would have to become undetected in a re-run for the family to score under its
 floor. The floors are set at floor(score, 1 dp), so the slack is under 0.1 point: between 1 and 6 mutants a family.
 
+**Controller ruling T20-FLOOR-AT-SCORE: the floor stays at the measured score** (the brief's rule, floor(score, 1 dp)), not a margin below it. Evidence, in two readings of the same measurement (section 10): with the three legs whose parts were in first, 1,295 identical mutants run twice gave 1,293 the same and 2 Timeout -> Killed (detected both times), 0 Killed, Survived or NoCoverage changes, a measured noise of 0.0 points. With the period-9 cut's three parts run (543ee2b53) the compared set is 1,523 mutants: 1,511 the same and 12 changed, every one a change to or from Timeout; 11 stayed detected (3 x Killed -> Timeout, 8 x Timeout -> Killed), 1 x Survived -> Timeout went from undetected to detected, and none went from detected to undetected. So the measured downward noise is 0 in 1,523 and the one upward flip is already in the period floor (the floors are taken from the re-run). The slack above is 1 to 6 detected mutants a family. Cost if the ruling is wrong: one weekly run goes red naming the mutant, and it is fixed by a test that kills it or by an entry in `stryker-equivalent.json`, which is the ratchet's intended signal.
+
 ## 2. Runs and where every report came from
 
 Every report was downloaded by its run id and artifact id (never by name: duplicate artifact names exist from the contaminated and cancelled runs) and the artifact's own
-metadata (name, run id, not expired) was checked against the table before unzipping. The 78 reports are byte-identical to the copies pre-flighted before the download.
+metadata (name, run id, not expired) was checked against the table before unzipping. The first 78 reports are byte-identical to the copies pre-flighted before the download; the last three (the sports-period-9, -13 and -14 parts) were fetched once by id, and each passed `--check-selection` (every mutant inside the leg's files and line ranges, none Pending).
 
 | run id | what | legs taken from it | count |
 |---|---|---|---|
@@ -44,14 +46,18 @@ metadata (name, run id, not expired) was checked against the table before unzipp
 | 37532565988 | re-run of the cut part (job 112505454296, sha 0920dbf5e) | sports-football-9 | 1 |
 | 37532530767 | re-run of the cut part (job 112505341469, sha 0920dbf5e) | sports-period-1 | 1 |
 | 37539005165 | re-run of the cut part (job 112527241706, sha 34ac56eb7) | sports-period-2 | 1 |
-| none yet | NONE: cut after the cancelled re-run, not run yet | sports-period-9, sports-period-13, sports-period-14 | 3 |
+| 37583585117 | cut part, first run of the new cut (job 112668631253, sha 543ee2b53) | sports-period-9 | 1 |
 | 37532539994 | re-run of the cut part (job 112505368627, sha 0920dbf5e) | sports-period-10 | 1 |
 | 37532657110 | re-run of the cut part (job 112505753247, sha 0920dbf5e) | sports-period-11 | 1 |
 | 37532673771 | re-run of the cut part (job 112505800301, sha 0920dbf5e) | sports-period-12 | 1 |
+| 37583590932 | cut part, first run of the new cut (job 112668660780, sha 543ee2b53) | sports-period-13 | 1 |
+| 37583597153 | cut part, first run of the new cut (job 112668671105, sha 543ee2b53) | sports-period-14 | 1 |
 | 37532575325 | re-run of the cut part (job 112505476305, sha 0920dbf5e) | sports-nested-5 | 1 |
 | 37532585435 | re-run of the cut part (job 112505627466, sha 0920dbf5e) | sports-nested-6 | 1 |
 | 37532594187 | re-run of the cut part (job 112505539241, sha 0920dbf5e) | sports-nested-7 | 1 |
 | 37532603444 | re-run of the cut part (job 112505576837, sha 0920dbf5e) | sports-nested-8 | 1 |
+
+Summary of the report-source table (`report-sources.tsv`, one row per leg): 81 legs, 81 with a report: 62 whole legs from run 37371368951 (core-3 from its attempt 3), 19 cut parts each from its own run (16 at 0920dbf5e or 34ac56eb7, and the three period parts of the last cut, each from its own run at 543ee2b53). Every row names the run id, the artifact id, the leg's mutant count from the table and from the report, the `--check-selection` result (OK: every mutant is inside the leg's files and line ranges, none Pending) and Stryker's exit code (0 on every row).
 
 Runs that produced NO report used by the floors (listed so nobody downloads them by mistake):
 
@@ -63,7 +69,6 @@ Runs that produced NO report used by the floors (listed so nobody downloads them
 | 37532647507 | 0920dbf5e | sports-period-2 | same: 269 of 269 reused, refused |
 | 37532665826 | 0920dbf5e | sports-period-9 | same: 228 of 228 reused, refused |
 | 37539011809 | 34ac56eb7 | sports-period-9 (the 228-mutant part) | CANCELLED at its 216-minute timeout with 227 of 228 mutants tested (no report); re-cut into three parts |
-| 37583585117, 37583590932, 37583597153 | 543ee2b53 | sports-period-9, sports-period-13, sports-period-14 | the three new period parts: dispatched, not finished when this file was written |
 
 ## 3. Per leg
 
@@ -126,12 +131,12 @@ now in `stryker-timeouts.json` (minutes); score = the floor tool's formula, roun
 | sports-period-6 | sports-period | 306 | 214 | 69 | 23 | 0 | 0 | 69.9 | 52.2 | 99 | 79 | 37371368951 | 11387393032 |
 | sports-period-7 | sports-period | 307 | 205 | 96 | 6 | 0 | 0 | 66.7 | 175.9 | 128 | 264 | 37371368951 | 11391270707 |
 | sports-period-8 | sports-period | 318 | 276 | 28 | 14 | 0 | 0 | 86.7 | 82.4 | 172 | 124 | 37371368951 | 11388816760 |
-| sports-period-9 | sports-period | 72 (counted, not run) | - | - | - | - | - | pending | - | - | 159 | not run yet | - |
+| sports-period-9 | sports-period | 72 | 40 | 31 | 0 | 1 | 0 | 56.9 | 37.4 | 178 | 57 | 37583585117 | 11466803215 |
 | sports-period-10 | sports-period | 129 | 112 | 17 | 0 | 0 | 0 | 86.8 | 74.4 | 174 | 112 | 37532539994 | 11448835043 |
 | sports-period-11 | sports-period | 119 | 97 | 22 | 0 | 0 | 0 | 81.5 | 64.0 | 172 | 96 | 37532657110 | 11447843699 |
 | sports-period-12 | sports-period | 181 | 117 | 64 | 0 | 0 | 0 | 64.6 | 115.6 | 151 | 174 | 37532673771 | 11449824392 |
-| sports-period-13 | sports-period | 98 (counted, not run) | - | - | - | - | - | pending | - | - | 215 | not run yet | - |
-| sports-period-14 | sports-period | 58 (counted, not run) | - | - | - | - | - | pending | - | - | 129 | not run yet | - |
+| sports-period-13 | sports-period | 98 | 54 | 38 | 0 | 6 | 0 | 61.2 | 110.6 | 179 | 166 | 37583590932 | 11470870760 |
+| sports-period-14 | sports-period | 58 | 16 | 29 | 13 | 0 | 0 | 27.5 | 62.1 | 171 | 94 | 37583597153 | 11468335635 |
 | sports-setbased-1 | sports-setbased | 304 | 205 | 93 | 5 | 1 | 0 | 67.7 | 116.0 | 102 | 174 | 37371368951 | 11390271697 |
 | sports-setbased-2 | sports-setbased | 398 | 332 | 60 | 5 | 1 | 0 | 83.6 | 113.0 | 165 | 170 | 37371368951 | 11390848496 |
 | sports-setbased-3 | sports-setbased | 394 | 306 | 69 | 19 | 0 | 0 | 77.6 | 63.8 | 168 | 96 | 37371368951 | 11388659793 |
@@ -157,7 +162,6 @@ now in `stryker-timeouts.json` (minutes); score = the floor tool's formula, roun
 ## 4. The ten files with the most survivors, per family
 
 Survivors here = Survived + NoCoverage (both count against the score). Files are the engine-relative paths in the reports.
-A family with a leg still pending is shown from the legs that have a report and says so.
 
 ### competition
 
@@ -237,17 +241,17 @@ All 3 files with a survivor are listed; the family has 1449 survivors in 3 of it
 
 All 1 files with a survivor are listed; the family has 731 survivors in 1 of its 1 files.
 
-### sports-period (partial: 11 of 14 legs)
+### sports-period
 
 | file | survivors | survived | NoCov | killed | timeout | file mutants |
 |---|---|---|---|---|---|---|
-| src/sports/period/kernel.ts | 491 | 430 | 61 | 1446 | 1 | 1938 |
+| src/sports/period/kernel.ts | 602 | 528 | 74 | 1556 | 8 | 2166 |
 | src/sports/icehockey/icehockey.ts | 169 | 169 | 0 | 219 | 0 | 388 |
 | src/sports/hockey/hockey.ts | 155 | 155 | 0 | 166 | 0 | 321 |
 | src/sports/period/suspensions.ts | 9 | 9 | 0 | 90 | 0 | 99 |
 | src/sports/period/shootout.ts | 1 | 1 | 0 | 61 | 1 | 63 |
 
-All 5 files with a survivor are listed; the family has 825 survivors in 5 of its 5 files.
+All 5 files with a survivor are listed; the family has 936 survivors in 5 of its 5 files.
 
 ### sports-setbased
 
@@ -295,13 +299,13 @@ the sum of the legs' walls (what the family costs); "longest" is the slowest leg
 | draws | 1486 | 89 | 134 | 1486 | 4 / 4 | 170 | 95.7 | 1.91x | 2-158 |
 | sports-cricket (two groups: all but cricket.ts 875 + cricket.ts 4,248) | 5123 | 297 | 383 | 5120 | 16 / 16 | 1767 | 171.9 | 5.95x | 94-196 |
 | sports-football | 2597 | 151 | 227 | 2595 | 9 / 9 | 931 | 183.8 | 6.16x | 90-171 |
-| sports-period | 3040 | 175 | 263 | 2809+ | 11 / 14 (partial) | 1138 | 175.9 | 6.50x (partial) | 99-174 |
+| sports-period | 3040 | 175 | 263 | 3037 | 14 / 14 | 1348 | 175.9 | 7.70x | 99-179 |
 | sports-setbased | 2210 | 129 | 194 | 2208 | 6 / 6 | 816 | 199.5 | 6.33x | 102-199 |
 | sports-nested | 1713 | 101 | 152 | 1710 | 8 / 8 | 643 | 184.8 | 6.36x | 94-187 |
 | sports-other | 2591 | 150 | 225 | 2591 | 7 / 7 | 975 | 198.7 | 6.50x | 102-172 |
 
 The probe in Task 15 measured 26.0 runner-seconds a mutant locally; the hosted first run measured the phase (mutation, after the dry run) at 0.3 to 114 runner-seconds a mutant (phase seconds x 3 / mutants),
-cost being set by how many mutants are static, not by the mutant count (section 8). Of the 78 legs that have run, 67 cost more than the D14 figure of 10 runner-seconds a mutant and 11 cost no more; the dearest is 189.
+cost being set by how many mutants are static, not by the mutant count (section 8). Of the 81 legs that have run, 70 cost more than the D14 figure of 10 runner-seconds a mutant and 11 cost no more; the dearest is 197.
 
 Per leg, for every leg that has run (the 62 whole legs of the first run and the parts that have run; est = the D14 formula on the leg's measured mutants, with the 344 s dry-run floor):
 
@@ -361,9 +365,12 @@ Per leg, for every leg that has run (the 62 whole legs of the first run and the 
 | sports-period-6 | 306 | 23 | 52.2 | 2.27x | 99 | 2998 | 29.4 |
 | sports-period-7 | 307 | 23 | 175.9 | 7.65x | 128 | 10394 | 101.6 |
 | sports-period-8 | 318 | 24 | 82.4 | 3.43x | 172 | 4745 | 44.8 |
+| sports-period-9 | 72 | 10 | 37.4 | 3.74x | 178 | 2036 | 84.8 |
 | sports-period-10 | 129 | 13 | 74.4 | 5.72x | 174 | 4255 | 99.0 |
 | sports-period-11 | 119 | 13 | 64.0 | 4.92x | 172 | 3638 | 91.7 |
 | sports-period-12 | 181 | 16 | 115.6 | 7.23x | 151 | 6758 | 112.0 |
+| sports-period-13 | 98 | 12 | 110.6 | 9.21x | 179 | 6420 | 196.5 |
+| sports-period-14 | 58 | 9 | 62.1 | 6.90x | 171 | 3521 | 182.1 |
 | sports-setbased-1 | 304 | 23 | 116.0 | 5.04x | 102 | 6828 | 67.4 |
 | sports-setbased-2 | 398 | 28 | 113.0 | 4.03x | 165 | 6580 | 49.6 |
 | sports-setbased-3 | 394 | 28 | 63.8 | 2.28x | 168 | 3629 | 27.6 |
@@ -386,11 +393,11 @@ Per leg, for every leg that has run (the 62 whole legs of the first run and the 
 | sports-other-6 | 342 | 25 | 70.2 | 2.81x | 102 | 4085 | 35.8 |
 | sports-other-7 | 354 | 26 | 144.9 | 5.57x | 165 | 8500 | 72.0 |
 
-CI dry runs (each leg's own job): 78 legs, 2 to 199 s, median 152 s; 78 of them are under the 344 s the Task 15 formula assumed.
+CI dry runs (each leg's own job): 81 legs, 2 to 199 s, median 152 s; 81 of them are under the 344 s the Task 15 formula assumed.
 
 ## 6. Part dry runs: measured against the dry run the part was timed with before
 
-A part cut from a leg inherits no dry run: before the re-runs, 12 parts carried the original leg's. Their own jobs' dry runs ("Initial test run succeeded ... in X"):
+A part cut from a leg inherits no dry run: each part was first timed with the original leg's. Their own jobs' dry runs ("Initial test run succeeded ... in X"):
 
 | part | original leg | original leg's dry s (first run, or the cancelled attempt) | the part's own dry s | change | the part's run |
 |---|---|---|---|---|---|
@@ -400,9 +407,9 @@ A part cut from a leg inherits no dry run: before the re-runs, 12 parts carried 
 | sports-cricket-16 | sports-cricket-10 | 170 | 179 | +5% | 37532639397 (job 112505671221, 0920dbf5e) |
 | sports-period-2 | sports-period-2 | 167 | 173 | +4% | 37539005165 (job 112527241706, 34ac56eb7) |
 | sports-period-11 | sports-period-2 | 167 | 172 | +3% | 37532657110 (job 112505753247, 0920dbf5e) |
-| sports-period-9 | sports-period-9 | 145 | not run yet | - | - |
-| sports-period-13 | sports-period-9 | 145 | not run yet | - | - |
-| sports-period-14 | sports-period-9 | 145 | not run yet | - | - |
+| sports-period-9 | sports-period-9 | 145 | 178 | +23% | 37583585117 (job 112668631253, 543ee2b53) |
+| sports-period-13 | sports-period-9 | 145 | 179 | +23% | 37583590932 (job 112668660780, 543ee2b53) |
+| sports-period-14 | sports-period-9 | 145 | 171 | +18% | 37583597153 (job 112668671105, 543ee2b53) |
 | sports-period-12 | sports-period-9 | 145 | 151 | +4% | 37532673771 (job 112505800301, 0920dbf5e) |
 | sports-period-1 | sports-period-1 | 167 | 130 | -22% | 37532530767 (job 112505341469, 0920dbf5e) |
 | sports-period-10 | sports-period-1 | 167 | 174 | +4% | 37532539994 (job 112505368627, 0920dbf5e) |
@@ -415,7 +422,7 @@ A part cut from a leg inherits no dry run: before the re-runs, 12 parts carried 
 | sports-nested-8 | sports-nested-5 | 177 | 128 | -28% | 37532603444 (job 112505576837, 0920dbf5e) |
 | sports-period-9 (the cancelled 228-mutant part) | sports-period-9 | 145 | 188 | +30% | 37539011809 (job 112527212464, 34ac56eb7) |
 
-16 parts have run: their own dry runs differ from the original leg's by -43% to +5%, and the cancelled period-9 part's by +30%. A part's dry run is its own, so the figure the original leg recorded is not the part's. Every part is now timed from its own run, never from the leg it was cut from.
+19 parts have run: their own dry runs differ from the original leg's by -43% to +23%, and the cancelled period-9 part's by +30%. A part's dry run is its own, so the figure the original leg recorded is not the part's. Every part is now timed from its own run, never from the leg it was cut from.
 
 ## 7. The 14 mutants no leg runs (unscored)
 
@@ -441,7 +448,7 @@ instrumenter finds. Line numbers are information only.
 | 13 | src/sports/setbased/kernel.ts | 2149 | BlockStatement | `{}` | makeSetBasedModule |
 | 14 | src/sports/setbased/kernel.ts | 2267 | ObjectLiteral | `{}` | makeSetBasedModule |
 
-14 mutants unscored; the legs' total is known once every leg has a report.
+The legs hold 24828 mutants between them; with these 14 the instrumenter finds 24842 (0.06% of them unscored). Every family total above is the sum of its legs' reports.
 
 ## 8. Static mutants (Stryker's WARN) and `ignoreStatic`
 
@@ -456,6 +463,7 @@ executed only while a file is loaded: Stryker must reload the whole environment 
 | sports-cricket-9 | 173 | 100% | 100% |
 | sports-period-10 | 129 | 100% | 100% |
 | sports-period-11 | 119 | 100% | 100% |
+| sports-period-13 | 98 | 100% | 100% |
 | sports-football-5 | 315 | 93% | 100% |
 | sports-nested-7 | 88 | 92% | 99% |
 | sports-nested-8 | 83 | 92% | 100% |
@@ -477,6 +485,7 @@ executed only while a file is loaded: Stryker must reload the whole environment 
 | sports-cricket-6 | 282 | 81% | 100% |
 | sports-football-8 | 102 | 79% | 99% |
 | sports-other-1 | 281 | 78% | 100% |
+| sports-period-14 | 45 | 78% | 100% |
 | sports-setbased-1 | 238 | 78% | 100% |
 | sports-other-5 | 311 | 76% | 100% |
 | sports-cricket-13 | 257 | 74% | 100% |
@@ -504,6 +513,7 @@ executed only while a file is loaded: Stryker must reload the whole environment 
 | sports-cricket-14 | 245 | 60% | 100% |
 | sports-cricket-7 | 185 | 60% | 92% |
 | sports-nested-4 | 221 | 60% | 100% |
+| sports-period-9 | 43 | 60% | 91% |
 | draws-4 | 241 | 59% | 99% |
 | sports-cricket-8 | 218 | 57% | 100% |
 | sports-cricket-5 | 207 | 56% | 100% |
@@ -522,8 +532,8 @@ executed only while a file is loaded: Stryker must reload the whole environment 
 | modules-6 | 11 | 3% | 95% |
 | modules-7 | 13 | 3% | 84% |
 
-WARN on 70 legs. No WARN (static share under Stryker's threshold): 8 legs: competition-3, competition-4, competition-5, modules-1, modules-3, modules-4, draws-2, draws-3. Not read (leg not run yet): sports-period-9, sports-period-13, sports-period-14.
-Across the 70 WARN legs that have a report: 13903 static mutants of 21561 (64%).
+WARN on 73 legs. No WARN (static share under Stryker's threshold): 8 legs: competition-3, competition-4, competition-5, modules-1, modules-3, modules-4, draws-2, draws-3.
+Across the 73 WARN legs that have a report: 14089 static mutants of 21789 (65%).
 
 **FYI for the owner: `ignoreStatic` is a lever, not a recommendation.** Stryker 10.0.0 has the option (`ignoreStatic`, default `false`; its schema text: "Ignore static mutants ... it might make sense
 to ignore static mutants"), and `stryker.config.mjs` does not set it, so every figure in this file, and both the floors and the timeouts, INCLUDE the static mutants. In the table above they are most of the mutants in most sports legs and, by
@@ -540,6 +550,8 @@ four re-cut legs (run 37532612195, job 112505580391, sports-cricket-9, sha 0920d
   same 173 mutants cost 62.5 minutes when run for real: section 3, sports-cricket-9);
 - the Survivors step then refused the report: `the report is not group "sports-cricket-9"'s: it mutated src/sports/cricket/cricket.ts:3135 ... outside the group's files and line ranges`, exit 2.
 
+The GOOD re-run of the same leg is a different run and ran cold: sports-cricket-9 at 34ac56eb7 (run 37538987509, job 112527140683) used the new key, which carries the cut fingerprint, found no cache to restore, logged `No incremental result file found at reports/mutation/sports-cricket-9.incremental.json, a full mutation testing run will be performed`, and tested all 173 mutants in 62.5 minutes. Its report is the one in section 3.
+
 Reuse works (173/173 in about three minutes against about an hour); what it exposed was the cache key following the leg's name rather than its cut. The same happened on the other three:
 
 | run | job | leg | mutants in the restored file | mutants in the leg | reused | outcome |
@@ -550,7 +562,7 @@ Reuse works (173/173 in about three minutes against about an hour); what it expo
 | 37532665826 | 112505771044 | sports-period-9 | 410 | 228 | 228 of 228 | refused by Survivors, exit 2 |
 
 Fixed before any floor was set (commits 765d3efd4, dfbeff941): the incremental key now carries a 16-hex fingerprint of the leg's cut (its entries, its anchor lines and the files they resolve to) and is restored by prefix only,
-and a file is saved only after `stryker-floor.ts --check-selection` accepts it, so a refused or poisoned report is never cached. Every one of the 17 jobs of the re-cut parts (16 that produced a report in this file, and the cancelled period-9 part) logged `No incremental result file found ... a full mutation testing run will be performed`:
+and a file is saved only after `stryker-floor.ts --check-selection` accepts it, so a refused or poisoned report is never cached. Every one of the 20 jobs of the re-cut parts (19 that produced a report in this file, and the cancelled period-9 part) logged `No incremental result file found ... a full mutation testing run will be performed`:
 every number in section 3 is a real execution, none is a reuse.
 
 ## 10. Measured spread: the same mutants run twice
@@ -563,15 +575,26 @@ mutator and replacement; the "before" side is the first run's whole-leg report, 
 | sports-cricket-9 | 379 | sports-cricket-9 + sports-cricket-15 | 379 | 379 | 0 |
 | sports-cricket-10 | 347 | sports-cricket-10 + sports-cricket-16 | 347 | 347 | 0 |
 | sports-period-2 | 388 | sports-period-2 + sports-period-11 | 388 | 388 | 0 |
-| sports-period-9 | 410 | sports-period-12 (still to come: sports-period-9, sports-period-13, sports-period-14) | 181 | 179 | 2 Timeout -> Killed |
+| sports-period-9 | 410 | sports-period-9 + sports-period-13 + sports-period-14 + sports-period-12 | 409 | 397 | 3 Killed -> Timeout, 1 Survived -> Timeout, 8 Timeout -> Killed |
 
-1295 identical mutants were run twice (with the first run's whole leg and the re-run's parts both reporting them): 1293 kept their status and 2 changed.
-The changes: 2 x Timeout -> Killed.
+1523 identical mutants were run twice (with the first run's whole leg and the re-run's parts both reporting them): 1511 kept their status and 12 changed.
+The changes: 3 x Killed -> Timeout; 1 x Survived -> Timeout; 8 x Timeout -> Killed.
+- sports-period-9: `src/sports/period/kernel.ts:2699:21` ArrowFunction -> `() => undefined`: Killed -> Timeout
+- sports-period-13: `src/sports/period/kernel.ts:2728:24` EqualityOperator -> `rng() >= 0.12`: Survived -> Timeout
+- sports-period-13: `src/sports/period/kernel.ts:2761:11` ConditionalExpression -> `true`: Killed -> Timeout
+- sports-period-13: `src/sports/period/kernel.ts:2761:11` LogicalOperator -> `roll < 0.13 || state.cfg.suspensions !== null`: Killed -> Timeout
+- sports-period-14: `src/sports/period/kernel.ts:2784:11` ConditionalExpression -> `true`: Timeout -> Killed
+- sports-period-14: `src/sports/period/kernel.ts:2784:11` ConditionalExpression -> `true`: Timeout -> Killed
+- sports-period-14: `src/sports/period/kernel.ts:2784:11` LogicalOperator -> `roll < 0.22 || cfgKinds.length > 0`: Timeout -> Killed
+- sports-period-14: `src/sports/period/kernel.ts:2784:11` EqualityOperator -> `roll >= 0.22`: Timeout -> Killed
+- sports-period-14: `src/sports/period/kernel.ts:2817:11` LogicalOperator -> `roll < 0.3 || shotTracking`: Timeout -> Killed
+- sports-period-14: `src/sports/period/kernel.ts:2817:11` ConditionalExpression -> `true`: Timeout -> Killed
 - sports-period-12: `src/sports/period/kernel.ts:2833:11` ConditionalExpression -> `true`: Timeout -> Killed
 - sports-period-12: `src/sports/period/kernel.ts:2833:11` EqualityOperator -> `roll >= 0.33`: Timeout -> Killed
 
-The first run's four whole legs held 11 Timeout mutants; 2 of them have been run again so far: 0 timed out again and 2 came back with another status. Timeout is the one status whose outcome depends on the runner's speed.
-Killed, Survived and NoCoverage mutants never changed status. A Timeout -> Killed change leaves the score where it was (both are detected); only a detected mutant turning undetected would move a family's score.
+The first run's four whole legs held 11 Timeout mutants; 11 of them have been run again so far: 3 timed out again and 8 came back with another status. Timeout is the one status whose outcome depends on the runner's speed.
+Of the 12 that changed, 11 stayed detected (3 x Killed -> Timeout, 8 x Timeout -> Killed), 1 went from undetected to detected, and 0 went from detected to undetected. Every status that changed is a change to or from Timeout (12 of 12), the one status whose outcome depends on the runner's speed: 4 mutants timed out on the re-run that had been decided before.
+A change between two detected statuses leaves the score where it was; only a detected mutant turning undetected moves a family's score down (0 in 1523), and a mutant turning detected moves it up (1 in 1523: the floors are taken from the re-run, so that one is in them, and a later run that has it undetected again costs one mutant of the slack in section 1).
 
 What a timed-out mutant could cost a floor (the families that have a floor; the numbers are section 1's):
 
@@ -583,11 +606,12 @@ What a timed-out mutant could cost a floor (the families that have a floor; the 
 | draws | 35 | 1053 | 1 |
 | sports-cricket | 5 | 3671 | 6 |
 | sports-football | 3 | 1864 | 1 |
+| sports-period | 9 | 2101 | 3 |
 | sports-setbased | 6 | 1658 | 3 |
 | sports-nested | 0 | 1269 | 1 |
 | sports-other | 0 | 1914 | 2 |
 
-So a re-run of an unchanged tree can only move a family under its floor through a mutant that was detected and is now not; the one status seen to change was Timeout -> Killed, which does not move the score.
+So a re-run of an unchanged tree can only move a family under its floor through a mutant that was detected and is now not; none was seen to (section 10), and the statuses that did change are all to or from Timeout.
 
 ## 11. Timing history
 
@@ -601,7 +625,8 @@ So a re-run of an unchanged tree can only move a family under its floor through 
 4. **Projected against measured, the 17 re-runs:** wall error (measured / projected) 0.23x to 1.16x on sixteen parts (the cancelled-leg pace was always over: 0.23x to 0.80x on nine; the
    report-share model 0.54x to 1.16x on seven) and **1.50x or more on the eighth: the 228-mutant period-9 part**, projected 144.8 minutes, cancelled at its 216-minute timeout (1.5 x the projection) with 227 of 228 mutants tested.
    Its last hour tested only 42 mutants (the static mutants run last), a pace of 258 runner-seconds a mutant against 169 for the whole phase. No cut of it into two parts fits the 175-minute line at that pace, so it was cut into three (72, 98 and 58 mutants): 81 legs.
-5. **The rule that follows: measured beats projected.** A leg that ran is timed ceil(1.5 x its measured wall) (10 to 300 minutes); a part is timed from its OWN run, never from the leg it was cut from; only a part with no run of its own is a projection (the pace of the
+5. **The three parts of that cut ran** (543ee2b53, runs 37583585117, 37583590932 and 37583597153, all successful): sports-period-9 37.4 min against 107.3 projected (0.35x), timeout 159 -> 57; sports-period-13 110.6 min against 144.6 projected (0.76x), timeout 215 -> 166; sports-period-14 62.1 min against 87.3 projected (0.71x), timeout 129 -> 94. The pace of the cancelled part was over again, on the safe side. Every one of the 81 legs is now timed from its own job's wall: no projection is left in the data, and a test holds that none is when a branch merges.
+6. **The rule that follows: measured beats projected.** A leg that ran is timed ceil(1.5 x its measured wall) (10 to 300 minutes); a part is timed from its OWN run, never from the leg it was cut from; only a part with no run of its own is a projection (the pace of the
    cancelled part), and a projection is held to 175 minutes (`PROJECTED_LINE_MINUTES`) where a measurement is held to 200 (`SPLIT_LINE_MINUTES`), because the one projection that was tested missed by 1.5x. The cost model fitted on the first run's reports (about 25% error a leg) was deleted once every part had run.
 
 ## 12. What happens to the survivors

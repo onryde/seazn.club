@@ -14,9 +14,9 @@ name: Stryker mutation
 # 37371368951, sha 78c7ef3e6, ubuntu-latest, concurrency 3): packages/engine/stryker-measured.json records what each leg took, and a
 # leg's timeout is 1.5 x that (min 10, max 300 minutes). The run cancelled three legs at their timeouts and four more took over 200
 # minutes, so those seven were cut again into 17 parts (10 more jobs, cut points in packages/engine/stryker.groups.mjs), and T20
-# step 2b RAN every part (16 to the end; sports-period-9's first part was cancelled at its timeout again and is cut into three, 2 more
-# jobs): a part that has run is timed from its own job's wall, 1.5 x it, like a leg that was never cut, and one that has not run
-# yet from the pace of the part it was cut from. A leg's Stryker incremental file is cached under a key that carries the
+# step 2b RAN every part (16 to the end; sports-period-9's first part was cancelled at its timeout again and was cut into three, 2 more
+# jobs, and those ran to the end too): every one of the 81 legs is timed from its own job's wall, 1.5 x it, like a leg that was never
+# cut, and a part that has not run yet (the next cut) would be timed from the pace of the part it was cut from, until it has. A leg's Stryker incremental file is cached under a key that carries the
 # fingerprint of its CUT (`matrix.cut`, which stryker-matrix.mjs derives from the leg's STRYKER_GROUPS entry, the anchors of
 # the parts it takes and the files its globs resolve to), so a leg that is cut again never restores the file another cut wrote (T20:
 # four re-cut legs kept their names, restored the old cut's results and were refused by the Survivors guard, which stays as it
@@ -205,9 +205,9 @@ jobs:
     # One group's timeout or red dry run must never cancel the others (Task 20 expects a timeout and still needs the
     # other groups' wall times).
     # max-parallel (T20-FIX1, ruling T20-FIX1): the org is on GitHub's Free plan, about 20 concurrent hosted jobs account-wide,
-    # and `group=all` queues one job per leg (81, about 1.5 hours each, 121 job-hours at the measured walls). Uncapped, one dispatch
-    # holds every slot for about 7.8 hours and ci.yml's PR runs (13-16 jobs) and e2e.yml's push fan-out (11 jobs) queue behind it.
-    # At 12 a dispatch leaves 8 slots for CI and takes about 11.8 hours (about 16.5 at 8). A literal on purpose: an input or a variable
+    # and `group=all` queues one job per leg (81, about 1.5 hours each, 119 job-hours at the measured walls). Uncapped, one dispatch
+    # holds every slot for about 7.7 hours and ci.yml's PR runs (13-16 jobs) and e2e.yml's push fan-out (11 jobs) queue behind it.
+    # At 12 a dispatch leaves 8 slots for CI and takes about 11.5 hours (about 16.1 at 8). A literal on purpose: an input or a variable
     # would let a dispatch lift it unseen (tools/matrix/__tests__/matrix-workflow.test.ts pins the number; the figures here are
     # derived from stryker-measured.json by test/stryker-sizing.test.ts).
     strategy:

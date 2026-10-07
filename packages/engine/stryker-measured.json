@@ -555,18 +555,39 @@
       "parts": {
         "sports-period-9": {
           "mutants": 72,
-          "basis": "rate",
-          "phaseSeconds": 6192
+          "basis": "measured",
+          "wallSeconds": 2242,
+          "dryRunSeconds": 178,
+          "phaseSeconds": 2036,
+          "run": {
+            "id": 37583585117,
+            "job": 112668631253,
+            "sha": "543ee2b53"
+          }
         },
         "sports-period-13": {
           "mutants": 98,
-          "basis": "rate",
-          "phaseSeconds": 8428
+          "basis": "measured",
+          "wallSeconds": 6634,
+          "dryRunSeconds": 179,
+          "phaseSeconds": 6420,
+          "run": {
+            "id": 37583590932,
+            "job": 112668660780,
+            "sha": "543ee2b53"
+          }
         },
         "sports-period-14": {
           "mutants": 58,
-          "basis": "rate",
-          "phaseSeconds": 4988
+          "basis": "measured",
+          "wallSeconds": 3726,
+          "dryRunSeconds": 171,
+          "phaseSeconds": 3521,
+          "run": {
+            "id": 37583597153,
+            "job": 112668671105,
+            "sha": "543ee2b53"
+          }
         },
         "sports-period-12": {
           "mutants": 181,
@@ -599,7 +620,12 @@
           "id": 37539011809,
           "job": 112527212464,
           "sha": "34ac56eb7"
-        }
+        },
+        "replacedBy": [
+          "sports-period-9",
+          "sports-period-13",
+          "sports-period-14"
+        ]
       }
     },
     "sports-period-1": {

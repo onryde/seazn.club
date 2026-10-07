@@ -63,9 +63,10 @@ export const STRYKER_SPLITS = {
  *  cut again with `pnpm --filter @seazn/engine mutation:recut <file> <parts> [--open <Host,...>]`, and the part is RUN: the 17 parts
  *  the first run produced were each run (T20 step 2b) and their own wall, dry run and phase are in stryker-measured.json, because a
  *  projection is not a measurement (the share-of-phase model and the cancelled leg's pace were each off, in both directions, by up to
- *  4x; the note on PROJECTED_LINE_MINUTES in test/stryker-sizing.test.ts has the figures). Only a part that has not run is projected,
- *  from the pace of the part it was cut from (the dearer of its average and its last hour, times the part's mutants): that is
- *  sports-period-9, whose first part was cancelled at its timeout again and is cut into three. Every leg's timeout is 1.5 times its
+ *  4x; the note on PROJECTED_LINE_MINUTES in test/stryker-sizing.test.ts has the figures). The one part that was cancelled at its
+ *  timeout again (sports-period-9's first) was cut into three and those were run too, so no part is a projection now, and a test holds
+ *  that none is when a branch merges. A part that has not run yet (the next cut) is projected until it has, from the pace of the part it
+ *  was cut from (the dearer of its average and its last hour, times the part's mutants). Every leg's timeout is 1.5 times its
  *  wall (a part that has not run: 1.5 times its projected phase plus its dry run and the setup), whole minutes, at least 10 and at
  *  most 300. test/stryker-sizing.test.ts derives them from stryker-measured.json, holds every leg to the
  *  line and every count to the one its time was measured with (a leg that grows 10% is measured again), and when a leg is over it

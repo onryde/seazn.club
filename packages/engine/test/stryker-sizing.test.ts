@@ -12,8 +12,10 @@
 // timeout is now 1.5 times what it measured. A leg cut AFTER that run was first timed by a projection (a share of the measured phase,
 // or the pace of a cancelled leg); T20 step 2b RAN all 17 parts, the projections were off by 0.23x to 1.5x (the note on
 // PROJECTED_LINE_MINUTES below), and every part that has run is now timed from its own measured wall, like
-// a leg that was never cut. A projection survives only for a part that has not run: the three halves of the one part the re-run
-// cancelled at its timeout again (sports-period-9), timed from that part's pace under the cancelled-leg rule.
+// a leg that was never cut. The last projections went the same way: the one part the re-run cancelled at its timeout again
+// (sports-period-9) was cut into three, those three were RUN, and every one of the 81 legs is now timed from its own job's wall. The
+// pace rule stays in this file for the next cut, which needs a timeout before it can be dispatched at all (a part has to run once to be
+// measured), and a test holds that no part is left on it when a branch merges.
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -155,7 +157,7 @@ interface MeasuredPart extends MeasuredLeg { basis: "measured"; run: Source }
 interface RatedPart { mutants: number; basis: "rate"; phaseSeconds: number }
 type SplitPart = MeasuredPart | RatedPart;
 /** A part that RAN and was cancelled at its timeout because it was over the line, then cut again: its pace, as a cancelled leg's. */
-interface CancelledPart extends CancelledLeg { leg: string; cut: string; wallSeconds: number; run: Source }
+interface CancelledPart extends CancelledLeg { leg: string; cut: string; wallSeconds: number; run: Source; replacedBy: string[] }
 interface SplitLeg { mutants: number; lost: number; parts: Record<string, SplitPart>; cancelledPart?: CancelledPart }
 interface Measured {
   run: { id: number; sha: string; attempts: number; runner: string; concurrency: number; maxParallel: number };
@@ -181,8 +183,8 @@ function cancelledRate(c: CancelledLeg): number {
 /** How a leg is timed: "measured" (its own job ran to the end: a leg of the first run, or a part that has been run since), or
  *  "rate" (a part that has not run: the pace of the part it was cut from, times its mutants). */
 interface Plan { kind: "measured" | "rate"; wallMinutes: number; phaseMinutes: number; rawTimeout: number }
-function planOf(leg: string): Plan {
-  for (const split of Object.values(MEASURED.split)) {
+function planOf(leg: string, data: Measured = MEASURED): Plan {
+  for (const split of Object.values(data.split)) {
     const part = split.parts[leg];
     if (part === undefined) continue;
     if (part.basis === "measured") return { kind: "measured", wallMinutes: part.wallSeconds / 60, phaseMinutes: part.phaseSeconds / 60, rawTimeout: rawMeasuredTimeout(part.wallSeconds) };
@@ -191,10 +193,13 @@ function planOf(leg: string): Plan {
     const phase = (from.rate * part.mutants) / HOSTED_CONCURRENCY;
     return { kind: "rate", wallMinutes: (SETUP_SECONDS + from.dryRunSeconds + phase) / 60, phaseMinutes: phase / 60, rawTimeout: rawPartTimeout(phase, from.dryRunSeconds) };
   }
-  const m = MEASURED.measured[leg];
+  const m = data.measured[leg];
   if (m === undefined) throw new Error(`${leg}: neither measured nor a part of a leg that was`);
   return { kind: "measured", wallMinutes: m.wallSeconds / 60, phaseMinutes: m.phaseSeconds / 60, rawTimeout: rawMeasuredTimeout(m.wallSeconds) };
 }
+/** The parts that have not run, by name: each is timed from a pace, a projection (the bootstrap of a new cut). The rule is that a branch
+ *  merges with none. A pure function of the data so the rule is tested on a fixture that breaks it, not only on the data that keeps it. */
+const partsOnAPace = (data: Measured): string[] => Object.values(data.split).flatMap((s) => Object.entries(s.parts).filter(([, p]) => p.basis !== "measured").map(([leg]) => leg));
 /** The probe's timeout, by D14's rule from its own hosted sample: ceil(1.5 x its estimate). */
 const probeTimeout = (): number => clampTimeout(Math.ceil(estimateMinutes(PROBE_MUTANTS) * TIMEOUT_FACTOR));
 /** The timeouts file the rule produces: each leg from its plan, the probe from its own run. */
@@ -277,6 +282,43 @@ describe("the probe's hosted sample, and the timeout rule on hand-worked numbers
     expect(rawPartTimeout(3600, 120)).toBe(93);
     // one second over a minute rounds up: 5,581 s -> 94
     expect(rawPartTimeout(3600, 121)).toBe(94);
+  });
+
+  it("the bootstrap of a NEW cut, on a leg that is not in the data: a part that has not run is planned from the pace of the part it replaced, a part that has is planned from its own wall, and neither is guessed (worked by hand)", () => {
+    // no real part is on a pace any more (all 81 legs ran), so this path is reached only by a fixture, and it must stay right: a cut needs
+    // a timeout before it can be dispatched, and the dispatch is what measures it
+    const run: Source = { id: 1, job: 2, sha: "abcdef012" };
+    const data: Measured = {
+      run: MEASURED.run,
+      measured: { "demo-whole": { mutants: 50, wallSeconds: 1800, dryRunSeconds: 100, phaseSeconds: 1700 } },
+      cancelled: {},
+      split: {
+        "demo-1": {
+          mutants: 300,
+          lost: 0,
+          parts: {
+            "demo-1": { mutants: 100, basis: "measured", wallSeconds: 3600, dryRunSeconds: 120, phaseSeconds: 3400, run },
+            "demo-2": { mutants: 150, basis: "rate", phaseSeconds: 12_000 },
+          },
+          cancelledPart: { leg: "demo-2", cut: "src/x.ts:1-2", mutants: 150, wallSeconds: 18_000, dryRunSeconds: 180, attempts: { attempt1: { tested: 100, phaseSeconds: 12_000, lastHourTested: 45 } }, rate: 240, run, replacedBy: ["demo-2"] },
+        },
+      },
+    };
+    // a part that ran: 3,600 s -> 60 min, 1.5 x = 5,400 s = 90 min
+    expect(planOf("demo-1", data)).toEqual({ kind: "measured", wallMinutes: 60, phaseMinutes: 3400 / 60, rawTimeout: 90 });
+    // a leg that was never cut: 1,800 s -> 30 min, 1.5 x = 45
+    expect(planOf("demo-whole", data)).toEqual({ kind: "measured", wallMinutes: 30, phaseMinutes: 1700 / 60, rawTimeout: 45 });
+    // a part that has not run: pace 240 x 150 mutants / 3 sandboxes = 12,000 s of phase; wall = 60 s setup + 180 s dry + 12,000 s = 204 min;
+    // timeout = ceil((1.5 x 12,000 + 180 + 60) / 60) = ceil(18,240 / 60) = 304
+    expect(planOf("demo-2", data)).toEqual({ kind: "rate", wallMinutes: 204, phaseMinutes: 200, rawTimeout: 304 });
+    // the merge rule sees it: demo-2 is the one part that has not run, and a leg whose every part ran has none
+    expect(partsOnAPace(data)).toEqual(["demo-2"]);
+    expect(partsOnAPace({ ...data, split: { "demo-1": { ...(data.split["demo-1"] as SplitLeg), parts: { "demo-1": (data.split["demo-1"] as SplitLeg).parts["demo-1"] as SplitPart } } } })).toEqual([]);
+    expect(partsOnAPace({ ...data, split: {} }), "no cut leg, no part on a pace").toEqual([]);
+    // and the two ways to be wrong are refusals, not defaults
+    expect(() => planOf("demo-9", data)).toThrow(/neither measured nor a part of a leg that was/);
+    const noPace = { ...data, split: { "demo-1": { ...(data.split["demo-1"] as SplitLeg), cancelledPart: undefined } } };
+    expect(() => planOf("demo-2", noPace)).toThrow(/records no cancelled part to take the pace from/);
   });
 
   it("a cancelled leg's pace is the dearer of its average and its last hour, over both attempts, up to a whole second (worked by hand)", () => {
@@ -434,13 +476,12 @@ describe("every leg is under the 200-minute split line, from what the full run m
     expect(older.length + lost, "the list is the older entries and the re-split legs' own, nothing else").toBe(UNSCORED.length);
   }, INSTRUMENT_BUDGET_MS);
 
-  it("every part is timed from its own run, or, if it has not run, from the pace of the part it was cut from, and nothing else (T20 step 2b)", () => {
+  it("every part is timed from its own run, and the part cut again records which parts took its place (T20 step 2b and the last three parts)", () => {
     let measured = 0;
     let rated = 0;
     let recut = 0;
     for (const [g, s] of Object.entries(MEASURED.split)) {
-      const parts = Object.entries(s.parts);
-      for (const [leg, p] of parts) {
+      for (const [leg, p] of Object.entries(s.parts)) {
         if (p.basis === "measured") {
           // a part that ran has its own job: the run, the job and the sha say where the figures can be read again
           expect(Number.isInteger(p.run.id) && p.run.id > 0, `${leg}: a run id`).toBe(true);
@@ -454,26 +495,24 @@ describe("every leg is under the 200-minute split line, from what the full run m
           expect(around, `${leg}: setup and upload around the dry run and the phase`).toBeLessThan(SETUP_SECONDS);
           measured++;
         } else {
-          // a part that has not run: its phase is the pace of the part it was cut from times its mutants (to the second), and the pace is its attempts'
+          // a part that has not run (the bootstrap of a new cut): its phase is the pace of the part it was cut from times its mutants (to the second)
           const from = s.cancelledPart;
           expect(from, `${leg} is timed from a pace, so ${g} records the part it was cut from`).toBeDefined();
           const c = from as CancelledPart;
-          expect(c.rate, `${g}: the recorded pace is the one its attempts give`).toBe(cancelledRate(c));
           expect(Math.abs(p.phaseSeconds - (c.rate * p.mutants) / HOSTED_CONCURRENCY), `${leg}: phase against pace x mutants`).toBeLessThanOrEqual(1);
           rated++;
         }
       }
-      const rates = parts.filter(([, p]) => p.basis === "rate");
-      if (s.cancelledPart === undefined) {
-        // a leg none of whose parts is cancelled has every part run: no projection times a leg that has been measured
-        expect(rates.map(([leg]) => leg), `${g}: no part is a projection when no part was cancelled`).toEqual([]);
-      } else {
+      if (s.cancelledPart !== undefined) {
         const c = s.cancelledPart;
-        expect(rates.length, `${g}: the part cut again became at least two`).toBeGreaterThan(1);
-        // the part cut again was over the line, ran, and was cancelled: it is no part of the leg now, and its mutants are the parts' that took its place
-        expect(s.parts[c.leg]?.basis, `${g}: ${c.leg} now names a part that has not run`).toBe("rate");
-        expect(rates.reduce((n, [, p]) => n + p.mutants, 0), `${g}: the parts that took the place of ${c.leg} hold its ${c.mutants} mutants, none lost and none twice`).toBe(c.mutants);
+        // the part cut again was over the line, ran, and was cancelled: it is no part of the leg now, and the parts named here took its place
+        expect(c.replacedBy.length, `${g}: the part cut again became at least two`).toBeGreaterThan(1);
+        expect(new Set(c.replacedBy).size, `${g}: no part named twice`).toBe(c.replacedBy.length);
+        expect(c.replacedBy, `${g}: the first part keeps the cancelled part's name`).toContain(c.leg);
+        for (const leg of c.replacedBy) expect(s.parts[leg], `${g}: ${leg} is a part of the leg`).toBeDefined();
+        expect(c.replacedBy.reduce((n, leg) => n + (s.parts[leg] as SplitPart).mutants, 0), `${g}: the parts that took the place of ${c.leg} hold its ${c.mutants} mutants, none lost and none twice`).toBe(c.mutants);
         // its pace is from the last attempt's own figures: the dearer of the average and the last hour, and it has a dry run, a wall and a commit
+        expect(c.rate, `${g}: the recorded pace is the one its attempts give`).toBe(cancelledRate(c));
         expect(c.dryRunSeconds, `${g}: the cancelled part's dry run`).toBeGreaterThan(0);
         expect(c.wallSeconds - c.dryRunSeconds - Math.max(...Object.values(c.attempts).map((a) => a.phaseSeconds)), `${g}: setup around the cancelled part's dry run and phase`).toBeGreaterThan(0);
         expect(c.run.sha).toMatch(/^[0-9a-f]{9}$/);
@@ -481,10 +520,13 @@ describe("every leg is under the 200-minute split line, from what the full run m
         recut++;
       }
     }
+    expect(measured + rated, "every part was classified, as run or as a pace").toBe(Object.values(MEASURED.split).reduce((n, s) => n + Object.keys(s.parts).length, 0));
     expect(measured, "parts that ran").toBeGreaterThan(10);
-    expect(rated, "parts timed from a pace").toBeGreaterThan(1);
     expect(recut, "parts cut again").toBe(Object.values(MEASURED.split).filter((s) => s.cancelledPart !== undefined).length);
     expect(recut).toBeGreaterThan(0);
+    // THE RULE: when a branch merges, no part is a projection. A part on a pace was never run: dispatch it (mutation.yml, group=<leg>) and record its run
+    // in stryker-measured.json as `basis: measured`. A projection missed by up to 1.5x, in the dangerous direction, the one time it was tested.
+    expect(partsOnAPace(MEASURED), `${rated} part(s) timed from a projection: run each and record its wall, dry run and phase`).toEqual([]);
   });
 
   it("a part that has been measured is timed from its own wall, never from a projection: the plan of every one is `measured`, 1.5 x its job's wall, and no `rate` part carries a measurement (T20 step 2b)", () => {
@@ -712,9 +754,9 @@ describe("a failing timeouts file tells its author what to write (FINAL-FIX M3)"
     const ok = regeneratedTimeouts(names);
     // by hand from the measurements: competition-1 took 45.5 min -> 69; modules-3 took 1 minute -> the floor, 10; the first half of
     // sports-cricket-10 RAN, 6,430 s -> 9,645 s = 160.75 min -> 161; sports-period-1's first part RAN, 6,660 s -> 9,990 s = 166.5 min -> 167;
-    // sports-period-13 has not run: 98 mutants at the 258 runner-seconds of the part it was cut from -> 8,428 s of phase, a 188 s dry run
-    // -> (12,642 + 188 + 60) / 60 = 214.8 -> 215; the probe 96
-    expect(ok).toEqual({ "competition-1": 69, "modules-3": 10, "sports-cricket-10": 161, "sports-period-1": 167, "sports-period-13": 215, probe: 96 });
+    // sports-period-13 RAN (job 112668660780: 06:49:06 to 08:39:40, 6,634 s) -> 9,951 s = 165.85 min -> 166; the probe 96
+    // (a part that has not run is worked by hand in "the bootstrap of a NEW cut" above)
+    expect(ok).toEqual({ "competition-1": 69, "modules-3": 10, "sports-cricket-10": 161, "sports-period-1": 167, "sports-period-13": 166, probe: 96 });
     const doctored = { ...ok, "competition-1": (ok["competition-1"] as number) + 120, "sports-cricket-10": (ok["sports-cricket-10"] as number) - 1 };
     const faults = Object.entries(doctored).flatMap(([g, t]) => timeoutFault(g, t, ok[g] as number) ?? []);
     expect(faults.map((f) => f.split(":")[0])).toEqual(["competition-1", "sports-cricket-10"]);
