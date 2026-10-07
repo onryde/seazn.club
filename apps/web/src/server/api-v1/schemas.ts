@@ -1457,10 +1457,16 @@ export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
  *  is when this code was minted, so a re-show answers the same instant. Served `private, no-store`: the tok is live. */
 export const StreamCodeShown = z.object({ qr: CaptureQrV2, issuedAt: z.string() }).strict();
 export type StreamCodeShown = z.infer<typeof StreamCodeShown>;
-/** §6.7.3: the destination pre-pick. PR-1 carries `targetId` only (PR-2 adds `autoStream`); `null` clears it. */
-export const PutStreamSettings = z.object({ targetId: z.string().uuid().nullable() }).strict();
+/** §6.7.3 / §8.1 (plan T3): the fixture's stream settings. `targetId` is the destination pre-pick (PR-1; `null` clears it) and
+ *  `autoStream` is the automatic-streaming switch (PR-2, W7). Either or both, at least one: a PUT writes only the fields it
+ *  names, so the panel's PR-1 body `{ targetId }` still leaves the switch alone and `{ autoStream }` leaves the pick alone. */
+export const PutStreamSettings = z
+  .object({ targetId: z.string().uuid().nullable().optional(), autoStream: z.boolean().optional() })
+  .strict()
+  .refine((b) => b.targetId !== undefined || b.autoStream !== undefined, { message: "targetId or autoStream is required" });
 export type PutStreamSettings = z.infer<typeof PutStreamSettings>;
-export const StreamSettings = z.object({ targetId: z.string().uuid().nullable() }).strict();
+/** The answer: `targetId` is the SAVED choice (`null` when none was chosen or it was cleared); `autoStream` the switch. */
+export const StreamSettings = z.object({ targetId: z.string().uuid().nullable(), autoStream: z.boolean() }).strict();
 export type StreamSettings = z.infer<typeof StreamSettings>;
 
 /** Capture QR v2 §9 / §6.12 (T9): the phone's latest beat as the panel reads it — each field picked by name from the

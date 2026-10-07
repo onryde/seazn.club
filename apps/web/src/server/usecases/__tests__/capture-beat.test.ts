@@ -580,6 +580,59 @@ describe.skipIf(!HAS_DB)("postBeat — the answer (§6.3.3, R5)", () => {
     expect((await pairingOf(r, A)).answered_poll_seconds).toBe(POLL_NEAR_SECONDS);
   });
 
+  // Plan T3 (W7, A4): `autoAllowed` is the fixture's switch on EVERY 2xx beat answer (the common fields are sent on all six
+  // states), set through the REAL PUT. One scripted run walks a rig through every answer state; it is run with the switch ON,
+  // OFF after having been on, and with no settings row at all.
+  async function everyAnswerState(r: CaptureRig): Promise<Answer[]> {
+    const [A, B] = [phoneId("a"), phoneId("b")];
+    const out: Answer[] = [];
+    out.push(await claimNew(r, A));                                                          // waiting
+    const S = await r.start(A);
+    out.push(await beat(r, A, { sid: S, state: "armed" }));                                  // go-live (this beat's tick read the ingest once)
+    r.tick(CONNECT_MS + POLL_NEAR_SECONDS * SEC);   // past the fake's connect delay AND the poll interval, or the next read is coalesced
+    out.push(await beat(r, A, { sid: S, state: "publishing", transport: "srt" }));           // live
+    r.tick(5 * SEC);
+    out.push(await claimNew(r, B));                                                          // taken (A is live and beating)
+    out.push(await beat(r, A, { sid: S, state: "ended", endReason: "operator-stopped" }));   // over (T21)
+    r.tick(5 * SEC);
+    out.push(await beat(r, A, { sid: S, state: "ended", endReason: "operator-stopped" }));   // replaced (A's pairing ended)
+    return out;
+  }
+  const ALL_STATES = ["waiting", "go-live", "live", "taken", "over", "replaced"];
+
+  it("autoAllowed on EVERY answer state — waiting, go-live, live, taken, over, replaced — is the fixture's switch: true when on, false when off and with no row", async () => {
+    const wires = CaptureBeatAnswer.options.map((o) => o.shape.state.value).sort();
+    expect([...ALL_STATES].sort(), "PREMISE: the script covers every wire state").toEqual(wires);
+    let checked = 0;
+    for (const [label, setup, want] of [
+      ["on", async (r: CaptureRig) => { await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true }); }, true],
+      ["off after on", async (r: CaptureRig) => { await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true }); await saveStreamSettings(r.auth, r.fixtureId, { autoStream: false }); }, false],
+      ["no settings row", async () => {}, false],
+    ] as const) {
+      const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+      await setup(r);
+      const answers = await everyAnswerState(r);
+      expect(answers.map((a) => a.state), `${label}: the script reached every state`).toEqual(ALL_STATES);
+      for (const a of answers) {
+        expect(a.autoAllowed, `${label}: ${a.state}`).toBe(want);
+        checked++;
+      }
+    }
+    expect(checked, "6 states x 3 settings").toBe(18);
+  });
+
+  it("autoAllowed follows the switch ACROSS beats: an organiser flip is seen on the very next beat's answer, in both directions", async () => {
+    const r = await captureRig({ connectAfterMs: NEVER });
+    const A = phoneId("a");
+    expect((await claimNew(r, A)).autoAllowed).toBe(false);
+    r.tick(SEC);
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
+    expect((await beat(r, A)).autoAllowed, "flipped on").toBe(true);
+    r.tick(SEC);
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: false });
+    expect((await beat(r, A)).autoAllowed, "flipped off").toBe(false);
+  });
+
   it("another sport (cricket) — and the generic one: the beat's common fields are the DESCRIPTOR's own waiting fields (one builder, R7)", async () => {
     let compared = 0;
     for (const sport of ["generic", "cricket"] as const) {

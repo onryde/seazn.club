@@ -12,7 +12,7 @@ import { HttpError } from "@/lib/errors";
 import { resolveStreamTarget, type SavedStreamTarget, type StreamTargetSource } from "@/lib/stream-destinations";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
-import type { StreamCodeShown } from "@/server/api-v1/schemas";
+import type { PutStreamSettings, StreamCodeShown, StreamSettings } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { CODE_GRACE_AFTER_FINISH_MINUTES, tunable } from "@/server/relay/config";
 import { hasValidKek, sealWith } from "@/server/relay/crypto";
@@ -248,15 +248,29 @@ export async function resolveStreamCode(
 // read (A17), so the wire never tells expired, revoked, unknown, wrong-tok and no-Bearer apart.
 
 /**
- * The fixture's destination pre-pick (§6.7.3): `null` clears it. Another org's target, an archived one and an unknown
- * id are all 404 — the same sentence, no oracle. The organiser's Go live writes it through `writeStreamSettings` too.
+ * The fixture's stream settings (§6.7.3 and §8.1): the destination pre-pick and the automatic-streaming switch, either or
+ * both in ONE transaction, each written only when the body names it. `targetId: null` clears the pick. Another org's target,
+ * an archived one and an unknown id are all 404 — the same sentence, no oracle — and a refused pick rolls the switch back with
+ * it. The organiser's Go live writes the pick through `writeStreamSettings` too. The answer's `targetId` is the SAVED choice
+ * (`target_chosen ? target_id : null`): a row the switch made alone has chosen nothing, even though the fixture still streams
+ * to the org's default destination.
  */
-export async function saveStreamSettings(
-  auth: AuthCtx, fixtureId: string, body: { targetId: string | null },
-): Promise<{ targetId: string | null }> {
+export async function saveStreamSettings(auth: AuthCtx, fixtureId: string, body: PutStreamSettings): Promise<StreamSettings> {
   requireSessionEditor(auth);
   await fixtureOf(auth, fixtureId);
-  return sql.begin((tx) => writeStreamSettings(tx, { orgId: auth.orgId, fixtureId, targetId: body.targetId, updatedBy: auth.userId }));
+  return sql.begin(async (tx) => {
+    if (body.targetId !== undefined) {
+      await writeStreamSettings(tx, { orgId: auth.orgId, fixtureId, targetId: body.targetId, updatedBy: auth.userId });
+    }
+    if (body.autoStream !== undefined) {
+      await writeAutoStream(tx, { orgId: auth.orgId, fixtureId, autoStream: body.autoStream, updatedBy: auth.userId });
+    }
+    const [row] = await tx<{ target_id: string | null; target_chosen: boolean; auto_stream: boolean }[]>`
+      select target_id, target_chosen, auto_stream from fixture_stream_settings where fixture_id = ${fixtureId}`;
+    // No row only for a body that named nothing (the route's schema refuses that): the defaults, with nothing written.
+    if (row === undefined) return { targetId: null, autoStream: false };
+    return { targetId: row.target_chosen ? row.target_id : null, autoStream: row.auto_stream };
+  });
 }
 
 /**
@@ -302,4 +316,34 @@ export async function writeStreamSettings(
     on conflict (fixture_id) do update
        set target_id = excluded.target_id, target_chosen = true, updated_by = excluded.updated_by, updated_at = now()`;
   return { targetId: a.targetId };
+}
+
+/** The one writer of `fixture_stream_settings.auto_stream` (W7, A4). An upsert that sets ONLY the switch, `updated_by` and
+ *  `updated_at` — never `target_id` or `target_chosen`: a row it creates has chosen nothing, so the fixture keeps resolving
+ *  the org's default destination (plan R-1), and a pick made earlier survives the toggle. Turning the switch OFF also clears
+ *  `auto_start_refusal` (the refusal belonged to the attempt that is now off); `auto_started_at` and `auto_start_blocked_at`
+ *  are never cleared by a toggle — an organiser Stop still blocks auto start for the match (A12). The caller has already
+ *  proved the fixture is `orgId`'s. */
+export async function writeAutoStream(
+  tx: Tx, a: { orgId: string; fixtureId: string; autoStream: boolean; updatedBy: string | null },
+): Promise<void> {
+  await tx`
+    insert into fixture_stream_settings (fixture_id, org_id, auto_stream, updated_by, updated_at)
+    values (${a.fixtureId}, ${a.orgId}, ${a.autoStream}, ${a.updatedBy}, now())
+    on conflict (fixture_id) do update
+       set auto_stream = excluded.auto_stream, updated_by = excluded.updated_by, updated_at = now(),
+           auto_start_refusal = case when excluded.auto_stream then fixture_stream_settings.auto_start_refusal else null end`;
+}
+
+/** A12: an organiser Stop turns auto START off for the match. Stamps `auto_start_blocked_at` once — the FIRST stamp wins, a
+ *  later one is a no-op — in the same kind of upsert as `writeAutoStream`: it creates a row that chose nothing when the
+ *  switch was never touched, and never writes `target_id`/`target_chosen` (plan R-1, FP1). The caller has already proved the
+ *  fixture is `orgId`'s. */
+export async function markAutoStartBlocked(orgId: string, fixtureId: string, at: Date, updatedBy: string | null): Promise<void> {
+  await sql`
+    insert into fixture_stream_settings (fixture_id, org_id, auto_start_blocked_at, updated_by, updated_at)
+    values (${fixtureId}, ${orgId}, ${at}, ${updatedBy}, now())
+    on conflict (fixture_id) do update
+       set auto_start_blocked_at = coalesce(fixture_stream_settings.auto_start_blocked_at, excluded.auto_start_blocked_at),
+           updated_by = excluded.updated_by, updated_at = now()`;
 }

@@ -45536,7 +45536,7 @@
     },
     "/api/v1/fixtures/{id}/stream-settings": {
       "put": {
-        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it). 404 when the target is not this org's, is archived, or does not exist",
+        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it) and the automatic-streaming switch (`autoStream`). Send either or both; a field left out is left as it is. The answer's `targetId` is the saved choice. 404 when the target is not this org's, is archived, or does not exist",
         "tags": [
           "fixtures"
         ],
@@ -45570,15 +45570,16 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "autoStream": {
+                    "type": "boolean"
                   }
                 },
-                "required": [
-                  "targetId"
-                ],
                 "additionalProperties": false
               },
               "example": {
-                "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                "autoStream": true
               }
             }
           }
@@ -45613,10 +45614,14 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "autoStream": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
-                        "targetId"
+                        "targetId",
+                        "autoStream"
                       ],
                       "additionalProperties": false
                     },
@@ -45629,7 +45634,8 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                    "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "autoStream": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

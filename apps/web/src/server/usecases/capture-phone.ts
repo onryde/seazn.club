@@ -127,6 +127,7 @@ export type CaptureCommon = {
 type FixtureCtx = {
   fixture_no: number; status: string; scheduled_at: Date | null; finished_at: Date | null; competition_id: string;
   sport_key: string; tz: string; default_locale: string | null; home_name: string | null; away_name: string | null;
+  auto_stream: boolean;
 };
 
 /**
@@ -140,18 +141,21 @@ export async function captureCommon(
   now: Date,
 ): Promise<CaptureCommon> {
   // One statement for the fixture's facts: the V305 venue lane (division → org → UTC, the checkin-token.ts query), the
-  // org's locale (W25) and both sides' names. The destination is `fixtureStreamTarget`'s — the one the start opens on
+  // org's locale (W25), both sides' names and the fixture's automatic-streaming switch (W7, `autoAllowed`; false with no
+  // settings row). The destination is `fixtureStreamTarget`'s — the one the start opens on
   // (B8 review I-1), so the phone names exactly what it would stream to.
   const [ctx] = await sql<FixtureCtx[]>`
     select f.fixture_no, f.status, f.scheduled_at, f.finished_at, d.competition_id, d.sport_key,
            coalesce(ss.tz, o.timezone, 'UTC') as tz, o.default_locale,
-           h.display_name as home_name, a.display_name as away_name
+           h.display_name as home_name, a.display_name as away_name,
+           coalesce(st.auto_stream, false) as auto_stream
       from fixtures f
       join divisions d on d.id = f.division_id
       join organizations o on o.id = d.org_id
       left join schedule_settings ss on ss.division_id = d.id
       left join entrants h on h.id = f.home_entrant_id
       left join entrants a on a.id = f.away_entrant_id
+      left join fixture_stream_settings st on st.fixture_id = f.id
      where f.id = ${c.fixtureId} and d.org_id = ${c.orgId}`;
   // The code cascades with its fixture (T35), so a resolved code's fixture is there; one deleted in between reads as an
   // ended code, never a 500.
@@ -181,7 +185,7 @@ export async function captureCommon(
       open: s.open, fixtureStatus: ctx.status, scheduledAt: ctx.scheduled_at === null ? null : new Date(ctx.scheduled_at),
       finished: ctx.finished_at !== null,
     }, now),
-    autoAllowed: false,   // §6.4: PR-1 always false; PR-2 wires the fixture's switch (§7.1)
+    autoAllowed: ctx.auto_stream,   // §6.4 / §7.1: the fixture's switch (W7); the phone's own mode is the other half (A4)
     destinationName: target === null ? null : fitText(target.label, DEST_MAX),
     overlayUrl,
     scoreUpdates: keyed ? "realtime" : "polled",
