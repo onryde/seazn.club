@@ -60,6 +60,8 @@ export declare const STRYKER_GROUPS: Record<
   | "sports-period-10"
   | "sports-period-11"
   | "sports-period-12"
+  | "sports-period-13"
+  | "sports-period-14"
   | "sports-setbased-1"
   | "sports-setbased-2"
   | "sports-setbased-3"

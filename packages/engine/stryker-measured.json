@@ -461,184 +461,272 @@
   "split": {
     "sports-cricket-9": {
       "mutants": 379,
+      "lost": 0,
       "parts": {
         "sports-cricket-9": {
           "mutants": 173,
-          "phaseSeconds": 6664,
-          "basis": "report",
-          "counts": {
-            "staticSurvived": 37,
-            "staticKilled": 136,
-            "staticOther": 0,
-            "other": 0
+          "basis": "measured",
+          "wallSeconds": 3747,
+          "dryRunSeconds": 94,
+          "phaseSeconds": 3627,
+          "run": {
+            "id": 37538987509,
+            "job": 112527140683,
+            "sha": "34ac56eb7"
           }
         },
         "sports-cricket-15": {
           "mutants": 206,
-          "phaseSeconds": 6898,
-          "basis": "report",
-          "counts": {
-            "staticSurvived": 36,
-            "staticKilled": 170,
-            "staticOther": 0,
-            "other": 0
+          "basis": "measured",
+          "wallSeconds": 7519,
+          "dryRunSeconds": 165,
+          "phaseSeconds": 7321,
+          "run": {
+            "id": 37532620624,
+            "job": 112505632112,
+            "sha": "0920dbf5e"
           }
         }
-      },
-      "lost": 0
+      }
     },
     "sports-cricket-10": {
       "mutants": 347,
+      "lost": 0,
       "parts": {
         "sports-cricket-10": {
           "mutants": 99,
-          "phaseSeconds": 6307,
-          "basis": "report",
-          "counts": {
-            "staticSurvived": 50,
-            "staticKilled": 49,
-            "staticOther": 0,
-            "other": 0
+          "basis": "measured",
+          "wallSeconds": 6430,
+          "dryRunSeconds": 165,
+          "phaseSeconds": 6235,
+          "run": {
+            "id": 37538997992,
+            "job": 112527184538,
+            "sha": "34ac56eb7"
           }
         },
         "sports-cricket-16": {
           "mutants": 248,
-          "phaseSeconds": 6530,
-          "basis": "report",
-          "counts": {
-            "staticSurvived": 42,
-            "staticKilled": 170,
-            "staticOther": 0,
-            "other": 36
+          "basis": "measured",
+          "wallSeconds": 6661,
+          "dryRunSeconds": 179,
+          "phaseSeconds": 6457,
+          "run": {
+            "id": 37532639397,
+            "job": 112505671221,
+            "sha": "0920dbf5e"
           }
         }
-      },
-      "lost": 0
+      }
     },
     "sports-period-2": {
       "mutants": 388,
+      "lost": 0,
       "parts": {
         "sports-period-2": {
           "mutants": 269,
-          "phaseSeconds": 9984,
-          "basis": "report",
-          "counts": {
-            "staticSurvived": 87,
-            "staticKilled": 96,
-            "staticOther": 0,
-            "other": 86
+          "basis": "measured",
+          "wallSeconds": 9605,
+          "dryRunSeconds": 173,
+          "phaseSeconds": 9404,
+          "run": {
+            "id": 37539005165,
+            "job": 112527241706,
+            "sha": "34ac56eb7"
           }
         },
         "sports-period-11": {
           "mutants": 119,
-          "phaseSeconds": 3096,
-          "basis": "report",
-          "counts": {
-            "staticSurvived": 22,
-            "staticKilled": 97,
-            "staticOther": 0,
-            "other": 0
+          "basis": "measured",
+          "wallSeconds": 3840,
+          "dryRunSeconds": 172,
+          "phaseSeconds": 3638,
+          "run": {
+            "id": 37532657110,
+            "job": 112505753247,
+            "sha": "0920dbf5e"
           }
         }
-      },
-      "lost": 0
+      }
     },
     "sports-period-9": {
       "mutants": 410,
+      "lost": 1,
       "parts": {
         "sports-period-9": {
-          "mutants": 228,
-          "phaseSeconds": 8486,
-          "basis": "report",
-          "counts": {
-            "staticSurvived": 74,
-            "staticKilled": 113,
-            "staticOther": 0,
-            "other": 42
-          }
+          "mutants": 72,
+          "basis": "rate",
+          "phaseSeconds": 6192
+        },
+        "sports-period-13": {
+          "mutants": 98,
+          "basis": "rate",
+          "phaseSeconds": 8428
+        },
+        "sports-period-14": {
+          "mutants": 58,
+          "basis": "rate",
+          "phaseSeconds": 4988
         },
         "sports-period-12": {
           "mutants": 181,
-          "phaseSeconds": 7125,
-          "basis": "report",
-          "counts": {
-            "staticSurvived": 62,
-            "staticKilled": 99,
-            "staticOther": 0,
-            "other": 20
+          "basis": "measured",
+          "wallSeconds": 6937,
+          "dryRunSeconds": 151,
+          "phaseSeconds": 6758,
+          "run": {
+            "id": 37532673771,
+            "job": 112505800301,
+            "sha": "0920dbf5e"
           }
         }
       },
-      "lost": 1
+      "cancelledPart": {
+        "leg": "sports-period-9",
+        "cut": "src/sports/period/kernel.ts:2648-2832 (makePeriodModule.declaredPointsSets up to makePeriodModule.arbitraryEvent.if#10)",
+        "mutants": 228,
+        "wallSeconds": 13004,
+        "dryRunSeconds": 188,
+        "attempts": {
+          "attempt1": {
+            "tested": 227,
+            "phaseSeconds": 12788,
+            "lastHourTested": 42
+          }
+        },
+        "rate": 258,
+        "run": {
+          "id": 37539011809,
+          "job": 112527212464,
+          "sha": "34ac56eb7"
+        }
+      }
     },
     "sports-period-1": {
       "mutants": 321,
+      "lost": 0,
       "parts": {
         "sports-period-1": {
           "mutants": 192,
-          "phaseSeconds": 8128,
-          "basis": "rate"
+          "basis": "measured",
+          "wallSeconds": 6660,
+          "dryRunSeconds": 130,
+          "phaseSeconds": 6504,
+          "run": {
+            "id": 37532530767,
+            "job": 112505341469,
+            "sha": "0920dbf5e"
+          }
         },
         "sports-period-10": {
           "mutants": 129,
-          "phaseSeconds": 5461,
-          "basis": "rate"
+          "basis": "measured",
+          "wallSeconds": 4464,
+          "dryRunSeconds": 174,
+          "phaseSeconds": 4255,
+          "run": {
+            "id": 37532539994,
+            "job": 112505368627,
+            "sha": "0920dbf5e"
+          }
         }
-      },
-      "lost": 0
+      }
     },
     "sports-football-7": {
       "mutants": 369,
+      "lost": 1,
       "parts": {
         "sports-football-7": {
           "mutants": 113,
-          "phaseSeconds": 8663,
-          "basis": "rate"
+          "basis": "measured",
+          "wallSeconds": 4495,
+          "dryRunSeconds": 167,
+          "phaseSeconds": 4305,
+          "run": {
+            "id": 37532548091,
+            "job": 112505377568,
+            "sha": "0920dbf5e"
+          }
         },
         "sports-football-8": {
           "mutants": 129,
-          "phaseSeconds": 9890,
-          "basis": "rate"
+          "basis": "measured",
+          "wallSeconds": 6898,
+          "dryRunSeconds": 170,
+          "phaseSeconds": 6705,
+          "run": {
+            "id": 37532557075,
+            "job": 112505439220,
+            "sha": "0920dbf5e"
+          }
         },
         "sports-football-9": {
           "mutants": 126,
-          "phaseSeconds": 9660,
-          "basis": "rate"
+          "basis": "measured",
+          "wallSeconds": 5078,
+          "dryRunSeconds": 135,
+          "phaseSeconds": 4913,
+          "run": {
+            "id": 37532565988,
+            "job": 112505454296,
+            "sha": "0920dbf5e"
+          }
         }
-      },
-      "lost": 1
+      }
     },
     "sports-nested-5": {
       "mutants": 372,
+      "lost": 3,
       "parts": {
         "sports-nested-5": {
           "mutants": 90,
-          "phaseSeconds": 6120,
-          "basis": "rate"
+          "basis": "measured",
+          "wallSeconds": 2266,
+          "dryRunSeconds": 132,
+          "phaseSeconds": 2102,
+          "run": {
+            "id": 37532575325,
+            "job": 112505476305,
+            "sha": "0920dbf5e"
+          }
         },
         "sports-nested-6": {
           "mutants": 93,
-          "phaseSeconds": 6324,
-          "basis": "rate"
+          "basis": "measured",
+          "wallSeconds": 1518,
+          "dryRunSeconds": 102,
+          "phaseSeconds": 1389,
+          "run": {
+            "id": 37532585435,
+            "job": 112505627466,
+            "sha": "0920dbf5e"
+          }
         },
         "sports-nested-7": {
           "mutants": 96,
-          "phaseSeconds": 6528,
-          "basis": "rate"
+          "basis": "measured",
+          "wallSeconds": 5390,
+          "dryRunSeconds": 173,
+          "phaseSeconds": 5190,
+          "run": {
+            "id": 37532594187,
+            "job": 112505539241,
+            "sha": "0920dbf5e"
+          }
         },
         "sports-nested-8": {
           "mutants": 90,
-          "phaseSeconds": 6120,
-          "basis": "rate"
+          "basis": "measured",
+          "wallSeconds": 3801,
+          "dryRunSeconds": 128,
+          "phaseSeconds": 3644,
+          "run": {
+            "id": 37532603444,
+            "job": 112505576837,
+            "sha": "0920dbf5e"
+          }
         }
-      },
-      "lost": 3
+      }
     }
-  },
-  "costModel": {
-    "note": "How a report-basis part's phaseSeconds is the leg's measured phase divided between its parts (test/stryker-sizing.test.ts reproduces each from these figures alone): a part's share is its cost over the sum of the parts' costs, where cost = dryRunSeconds x (staticSurvivedDryFactor x staticSurvived + staticKilledDryFactor x staticKilled) + otherRunnerSeconds x (staticOther + other). `counts` are the part's mutants in the leg's own report by Stryker's `static` flag and final status (static survivors run against every test, so they cost the dry run's order; the rest are cheap). The three factors were fitted on the 66 reports of the run; the counts come from the 4 legs' reports.",
-    "staticSurvivedDryFactor": 2.1,
-    "staticKilledDryFactor": 0.165,
-    "otherRunnerSeconds": 4.0
   }
 }

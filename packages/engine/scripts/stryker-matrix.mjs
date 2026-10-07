@@ -8,9 +8,9 @@
 //   workflow_dispatch  -> --group all: every key except the probe; --group <key>: that key alone, the probe included
 //   anything else      -> refused
 // A group's timeout comes from stryker-timeouts.json (minutes; whole, at most 300): a selected group without one is refused,
-// and so is an empty matrix. Each timeout is 1.5 times what the leg took on a hosted runner (a part cut after the run: 1.5 times its
+// and so is an empty matrix. Each timeout is 1.5 times what the leg took on a hosted runner (a part that has not run yet: 1.5 times its
 // projected phase plus its dry run), from packages/engine/stryker-measured.json, the figures of GitHub run 37371368951 (sha
-// 78c7ef3e6, ubuntu-latest, 4 vCPU), whole minutes, at least 10 and at most 300; the probe's is from its own sample, run 37330725739
+// 78c7ef3e6, ubuntu-latest, 4 vCPU) and of the runs of the parts cut after it, whole minutes, at least 10 and at most 300; the probe's is from its own sample, run 37330725739
 // (T20 step 2; test/stryker-sizing.test.ts derives every one from the data). A different runner is a different wall: every
 // timeout is re-derived whenever a hosted run disagrees with it, and whenever MATRIX_RUNNER changes.
 // A group's `cut` is a fingerprint of WHAT THE LEG MUTATES, and the incremental cache is keyed on it (mutation.yml): the files its

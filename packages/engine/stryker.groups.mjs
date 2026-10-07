@@ -44,7 +44,7 @@ export const STRYKER_SPLITS = {
   "src/sports/hockey/hockey.ts": ["hockey"],
   "src/sports/icehockey/icehockey.ts": ["icehockey"],
   "src/sports/nested/kernel.ts": ["setGamesWinner", "applySetSummary", "PLAUSIBLE_INTERRUPTION_SECONDS", "makeNestedModule", "makeNestedModule.summary", "makeNestedModule.standingsDelta", "makeNestedModule.arbitraryEvent.breakRoll"],
-  "src/sports/period/kernel.ts": ["sweepThroughPhase", "applyAdvance", "applyShot", "PeriodPreset", "makePeriodModule.officialScore", "makePeriodModule.declaredPointsSets", "makePeriodModule.arbitraryEvent.if#10"],
+  "src/sports/period/kernel.ts": ["sweepThroughPhase", "applyAdvance", "applyShot", "PeriodPreset", "makePeriodModule.officialScore", "makePeriodModule.declaredPointsSets", "makePeriodModule.arbitraryEvent.if#2", "makePeriodModule.arbitraryEvent.if#7", "makePeriodModule.arbitraryEvent.if#10"],
   "src/sports/setbased/kernel.ts": ["applyTimeout", "sideFieldsTheRotation", "setBasedPosition", "makeSetBasedModule.onLineup"],
 };
 
@@ -53,18 +53,21 @@ export const STRYKER_SPLITS = {
  *  turns into Stryker's `file:a-b` (the lines a..b, 1-based, inclusive). A directory leg lists the test-file negations LAST
  *  (`...NO_TESTS`).
  *
- *  SIZING (T15-SIZE, T20-PRE, T20 step 2; rulings 66, 67, D14). A leg's wall time is what a hosted runner measured for it. The first
+ *  SIZING (T15-SIZE, T20-PRE, T20 steps 2 and 2b; rulings 66, 67, D14). A leg's wall time is what a hosted runner measured for it. The first
  *  full dispatch (GitHub run 37371368951, sha 78c7ef3e6, ubuntu-latest, 4 vCPU, Stryker concurrency 3) ran 66 of the 69 legs to the
  *  end (a third attempt re-ran core-3, which had failed to start) and cancelled three at their timeouts, and packages/engine/
  *  stryker-measured.json records, per leg, its mutant count, job wall, dry run and mutation phase, and the pace of the three
  *  cancelled ones. The cost of a mutant is NOT one number: 0.3 runner-seconds for a leg whose mutants a test kills at once, 114 for a
  *  leg whose mutants are mostly "static" (Stryker runs every static mutant against every test, after the others), so a leg is held to
  *  the 200-minute split line by its measured wall, never by its mutant count. A leg that was over 200 minutes, or was cancelled, is
- *  cut again with `pnpm --filter @seazn/engine mutation:recut <file> <parts> [--open <Host,...>]`; each part keeps the leg's measured
- *  dry run and is timed from its share of the leg's measured phase (a leg that ran: by the fitted cost of the mutants it holds, a
- *  static survivor runs every test) or from the pace of the cancelled leg (the dearer of its average and its last hour, times the
- *  part's mutants). Every leg's timeout is 1.5 times its wall (a part's: 1.5 times its phase plus its dry run and the setup), whole
- *  minutes, at least 10 and at most 300. test/stryker-sizing.test.ts derives them from stryker-measured.json, holds every leg to the
+ *  cut again with `pnpm --filter @seazn/engine mutation:recut <file> <parts> [--open <Host,...>]`, and the part is RUN: the 17 parts
+ *  the first run produced were each run (T20 step 2b) and their own wall, dry run and phase are in stryker-measured.json, because a
+ *  projection is not a measurement (the share-of-phase model and the cancelled leg's pace were each off, in both directions, by up to
+ *  4x; the note on PROJECTED_LINE_MINUTES in test/stryker-sizing.test.ts has the figures). Only a part that has not run is projected,
+ *  from the pace of the part it was cut from (the dearer of its average and its last hour, times the part's mutants): that is
+ *  sports-period-9, whose first part was cancelled at its timeout again and is cut into three. Every leg's timeout is 1.5 times its
+ *  wall (a part that has not run: 1.5 times its projected phase plus its dry run and the setup), whole minutes, at least 10 and at
+ *  most 300. test/stryker-sizing.test.ts derives them from stryker-measured.json, holds every leg to the
  *  line and every count to the one its time was measured with (a leg that grows 10% is measured again), and when a leg is over it
  *  says which command re-cuts the file.
  *
@@ -176,26 +179,30 @@ export const STRYKER_GROUPS = {
   "sports-period-1": ["src/sports/hockey/hockey.ts#1"],
   // sports/icehockey/icehockey.ts part 1/2 269
   "sports-period-2": ["src/sports/icehockey/icehockey.ts#1"],
-  // sports/period/kernel.ts part 1/8 324, sports/period/shootout.ts 63
+  // sports/period/kernel.ts part 1/10 324, sports/period/shootout.ts 63
   "sports-period-3": ["src/sports/period/kernel.ts#1", "src/sports/period/shootout.ts"],
-  // sports/period/kernel.ts part 2/8 321
+  // sports/period/kernel.ts part 2/10 321
   "sports-period-4": ["src/sports/period/kernel.ts#2"],
-  // sports/period/kernel.ts part 3/8 280; plus every other file under src/sports/period/, src/sports/hockey/, src/sports/icehockey/ (new files land here)
+  // sports/period/kernel.ts part 3/10 280; plus every other file under src/sports/period/, src/sports/hockey/, src/sports/icehockey/ (new files land here)
   "sports-period-5": ["src/sports/period/**/*.ts", "src/sports/hockey/**/*.ts", "src/sports/icehockey/**/*.ts", "!src/sports/hockey/hockey.ts", "!src/sports/icehockey/icehockey.ts", "!src/sports/period/kernel.ts", "!src/sports/period/shootout.ts", "!src/sports/period/suspensions.ts", "src/sports/period/kernel.ts#3", ...NO_TESTS],
-  // sports/period/kernel.ts part 4/8 306
+  // sports/period/kernel.ts part 4/10 306
   "sports-period-6": ["src/sports/period/kernel.ts#4"],
-  // sports/period/kernel.ts part 5/8 307
+  // sports/period/kernel.ts part 5/10 307
   "sports-period-7": ["src/sports/period/kernel.ts#5"],
-  // sports/period/kernel.ts part 6/8 318
+  // sports/period/kernel.ts part 6/10 318
   "sports-period-8": ["src/sports/period/kernel.ts#6"],
-  // sports/period/kernel.ts part 7/8 228
+  // sports/period/kernel.ts part 7/10 72 (T20 step 2b: the part of 228 the re-run cancelled at its timeout, cut again into three)
   "sports-period-9": ["src/sports/period/kernel.ts#7"],
   // sports/hockey/hockey.ts part 2/2 129
   "sports-period-10": ["src/sports/hockey/hockey.ts#2"],
   // sports/icehockey/icehockey.ts part 2/2 119
   "sports-period-11": ["src/sports/icehockey/icehockey.ts#2"],
-  // sports/period/kernel.ts part 8/8 82, sports/period/suspensions.ts 99
-  "sports-period-12": ["src/sports/period/kernel.ts#8", "src/sports/period/suspensions.ts"],
+  // sports/period/kernel.ts part 10/10 82, sports/period/suspensions.ts 99
+  "sports-period-12": ["src/sports/period/kernel.ts#10", "src/sports/period/suspensions.ts"],
+  // sports/period/kernel.ts part 8/10 98
+  "sports-period-13": ["src/sports/period/kernel.ts#8"],
+  // sports/period/kernel.ts part 9/10 58
+  "sports-period-14": ["src/sports/period/kernel.ts#9"],
   // ---- sports-setbased ----
   // sports/setbased/badminton.ts 66, sports/setbased/tabletennis.ts 67, sports/setbased/volleyball.ts 171; plus every other file under src/sports/setbased/, src/sports/tennis/ (new files land here)
   "sports-setbased-1": ["src/sports/setbased/**/*.ts", "src/sports/tennis/**/*.ts", "!src/sports/setbased/kernel.ts", "!src/sports/tennis/tennis.ts", ...NO_TESTS],
@@ -258,7 +265,7 @@ export const STRYKER_FAMILIES = {
   draws: ["draws-1", "draws-2", "draws-3", "draws-4"],
   "sports-cricket": ["sports-cricket-1", "sports-cricket-2", "sports-cricket-3", "sports-cricket-4", "sports-cricket-5", "sports-cricket-6", "sports-cricket-7", "sports-cricket-8", "sports-cricket-9", "sports-cricket-10", "sports-cricket-11", "sports-cricket-12", "sports-cricket-13", "sports-cricket-14", "sports-cricket-15", "sports-cricket-16"],
   "sports-football": ["sports-football-1", "sports-football-2", "sports-football-3", "sports-football-4", "sports-football-5", "sports-football-6", "sports-football-7", "sports-football-8", "sports-football-9"],
-  "sports-period": ["sports-period-1", "sports-period-2", "sports-period-3", "sports-period-4", "sports-period-5", "sports-period-6", "sports-period-7", "sports-period-8", "sports-period-9", "sports-period-10", "sports-period-11", "sports-period-12"],
+  "sports-period": ["sports-period-1", "sports-period-2", "sports-period-3", "sports-period-4", "sports-period-5", "sports-period-6", "sports-period-7", "sports-period-8", "sports-period-9", "sports-period-10", "sports-period-11", "sports-period-12", "sports-period-13", "sports-period-14"],
   "sports-setbased": ["sports-setbased-1", "sports-setbased-2", "sports-setbased-3", "sports-setbased-4", "sports-setbased-5", "sports-setbased-6"],
   "sports-nested": ["sports-nested-1", "sports-nested-2", "sports-nested-3", "sports-nested-4", "sports-nested-5", "sports-nested-6", "sports-nested-7", "sports-nested-8"],
   "sports-other": ["sports-other-1", "sports-other-2", "sports-other-3", "sports-other-4", "sports-other-5", "sports-other-6", "sports-other-7"],
