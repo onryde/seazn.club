@@ -356,8 +356,9 @@ function rawOf(b: Beat, atUtc: string): Record<string, unknown> {
   };
 }
 
-/** §6.10's derived flags — `domain/phone-health.ts`'s ONE derivation, the panel's amber line reads the same (PR-2 T2). `notResponding` is §6.9's W8 condition, judged on the
- *  pairing's PREVIOUS beat: this beat ends a stretch the panel must still see. */
+/** §6.10's derived flags — `domain/phone-health.ts`'s ONE derivation, the panel's amber line reads the same (PR-2 T2).
+ *  `notResponding` is §6.9's W8 condition, judged on the pairing's PREVIOUS beat: this beat ends a stretch the panel must
+ *  still see. */
 function flagsOf(b: Beat, notResponding: boolean): string[] {
   return phoneFlagsOf({
     notResponding, delivery: b.delivery, thermal: b.thermal,

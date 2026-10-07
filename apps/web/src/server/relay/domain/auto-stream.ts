@@ -1,12 +1,15 @@
 // Capture QR v2 PR-2 (spec §7.2 auto start, §7.3 auto stop; W7, A4, A12, A15, A16). Pure: no I/O, `now` passed in. The
-// seconds that tunable() may shorten (§6.15) are REQUIRED trailing parameters with no default, so tsc forces every
-// use-case call site to pass `tunable(…)` and this file never reads the environment.
+// seconds that tunable() may shorten (§6.15) are REQUIRED trailing parameters with no default, so this file never reads the
+// environment. tsc only forces a NUMBER there, not `tunable(…)`: the call sites (T4 auto start, T5 auto stop) must pass
+// `tunable("AUTO_START_RETRY_SECONDS", …)` / `tunable("AUTO_STOP_AFTER_RESULT_SECONDS", …)`, and T4 and T5 own the source
+// guard that proves they do (a literal or the bare default there would silently ignore the walkthrough's override).
 //
 // Each predicate is a strategy TABLE: one `{ name, holds }` per conjunct of the spec's `autoStartDue` / `autoStopDue`, so a
 // verdict names every conjunct that failed (a log line, a panel reason) and a test can falsify each one alone. A conjunct
 // judges ONE fact; a conjunct that reads a fact another conjunct also guards would let each cover for the other.
 
-/** §7.2: the codes a refused auto start stores in `auto_start_refusal` (V431's CHECK list is derived from this by v431-migration.test.ts). */
+/** §7.2: the codes a refused auto start stores in `auto_start_refusal`. V431's CHECK list is compared with this by
+ *  v431-migration.test.ts. */
 export const AUTO_START_REFUSALS = ["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable"] as const;
 export type AutoStartRefusal = (typeof AUTO_START_REFUSALS)[number];
 

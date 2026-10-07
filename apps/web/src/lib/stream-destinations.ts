@@ -41,9 +41,11 @@ export const STREAM_KEY_EMPTY = "STREAM_KEY_EMPTY";
 export const DESTINATION_LABEL_EMPTY = "DESTINATION_LABEL_EMPTY";
 
 /**
- * The fixture's saved destination row (`fixture_stream_settings`), as the ONE server reader reads it: no row at all, or a
- * row whose target is null (cleared), or names a target. Whether that target is still the org's and live is answered by
- * ONE guard — its membership in the org's live list (B8 re-review n-1: a second `live` bit duplicated it in every state).
+ * The fixture's saved destination CHOICE (`fixture_stream_settings.target_chosen`, V431 / plan R-1), as the ONE server reader
+ * reads it. `row: false` means "no choice made": no settings row at all, or a row the auto switch or the A12 Stop stamp made
+ * that chose nothing. `row: true` is a destination write: a target that is null (cleared), or names one. Whether that
+ * target is still the org's and live is answered by ONE guard — its membership in the org's live list (B8 re-review n-1: a
+ * second `live` bit duplicated it in every state).
  */
 export type SavedStreamTarget =
   | { readonly row: false }
@@ -55,10 +57,10 @@ export type StreamTargetSource = "saved" | "default";
  * view). The phone's own start opens on it, the phone's descriptor names it, and the organiser's panel shows it — so
  * what the organiser sees is what streams (§17.13). Client-safe like the rest of this file. The rules, empty case first:
  *  - no live destination → none;
- *  - no saved row (nobody has chosen) → the OLDEST live one (`default`) — `liveOldestFirst` is ordered by
- *    `created_at, id`, the order the destination list is served in;
- *  - a saved row whose target is live → that target (`saved`);
- *  - a saved row that was cleared, archived, or is not one of the org's → NONE (n1/T36: a choice that is gone is never
+ *  - no choice made (`row: false`: no settings row, or one that chose nothing) → the OLDEST live one (`default`) —
+ *    `liveOldestFirst` is ordered by `created_at, id`, the order the destination list is served in;
+ *  - a chosen target that is live → that target (`saved`);
+ *  - a chosen target that was cleared, archived, or is not one of the org's → NONE (n1/T36: a choice that is gone is never
  *    swapped for another destination). Archived and another org's are one case: the target is not in the org's live
  *    list, which is the only guard (the list is the org's own, archived excluded).
  * The answer is the LISTED entry (its label with it) plus why.

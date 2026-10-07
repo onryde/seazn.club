@@ -71,8 +71,12 @@ describe("autoStartVerdict (§7.2)", () => {
       expect(v, row.conjunct + JSON.stringify(row.patch)).toEqual({ due: false, failed: [row.conjunct] });
       checked++;
     }
-    expect(checked).toBe(START_FALSIFY.length);
-    expect(checked).toBeGreaterThan(0);
+    // Anti-vacuity against the SPEC's own list, not the table's length: every clause of `autoStartDue` owns at least one row
+    // (two own two), so the rows run are at least the clauses read and the conjuncts they name are exactly the table's.
+    const clauses = specClauses("autoStartDue =").length;
+    expect(clauses).toBe(9);
+    expect(new Set(START_FALSIFY.map((r) => r.conjunct)).size).toBe(clauses);
+    expect(checked).toBeGreaterThanOrEqual(clauses);
     expect(new Set(START_FALSIFY.map((r) => r.conjunct))).toEqual(new Set(AUTO_START_CONJUNCTS.map((c) => c.name)));
   });
 
@@ -89,7 +93,7 @@ describe("autoStartVerdict (§7.2)", () => {
     expect(checked).toBe(6);
   });
 
-  it("EMPTY: a fixture with no settings row and no phone (switch off, mode null) is never due and names both conjuncts", () => {
+  it("EMPTY: a fixture with no settings row and no phone (switch off, mode null, not present) is never due and names exactly those three conjuncts", () => {
     const v = autoStartVerdict({ ...START_BASE, autoStream: false, phoneMode: null, phonePresent: false }, NOW, AUTO_START_RETRY_SECONDS);
     expect(v.due).toBe(false);
     expect(v.failed).toEqual(["switch_on", "phone_automatic", "phone_present"]);
@@ -169,8 +173,10 @@ describe("autoStopVerdict (§7.3)", () => {
       expect(v, row.conjunct + JSON.stringify(row.patch)).toEqual({ due: false, failed: [row.conjunct] });
       checked++;
     }
-    expect(checked).toBe(STOP_FALSIFY.length);
-    expect(checked).toBeGreaterThan(0);
+    const clauses = specClauses("autoStopDue(session) =").length;
+    expect(clauses).toBe(5);
+    expect(new Set(STOP_FALSIFY.map((r) => r.conjunct)).size).toBe(clauses);
+    expect(checked).toBeGreaterThanOrEqual(clauses);
     expect(new Set(STOP_FALSIFY.map((r) => r.conjunct))).toEqual(new Set(AUTO_STOP_CONJUNCTS.map((c) => c.name)));
   });
 
