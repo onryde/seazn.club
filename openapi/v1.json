@@ -40881,6 +40881,11 @@
                             "pool": {
                               "type": "string",
                               "pattern": "^[A-Z]$"
+                            },
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 40
                             }
                           },
                           "required": [
@@ -41056,6 +41061,11 @@
                             "pool": {
                               "type": "string",
                               "pattern": "^[A-Z]$"
+                            },
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 40
                             }
                           },
                           "required": [
@@ -41302,6 +41312,11 @@
                             "pool": {
                               "type": "string",
                               "pattern": "^[A-Z]$"
+                            },
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 40
                             }
                           },
                           "required": [
@@ -41548,6 +41563,11 @@
                             "pool": {
                               "type": "string",
                               "pattern": "^[A-Z]$"
+                            },
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 40
                             }
                           },
                           "required": [
@@ -41807,6 +41827,11 @@
                             "pool": {
                               "type": "string",
                               "pattern": "^[A-Z]$"
+                            },
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 40
                             }
                           },
                           "required": [
@@ -42002,6 +42027,11 @@
                             "pool": {
                               "type": "string",
                               "pattern": "^[A-Z]$"
+                            },
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 40
                             }
                           },
                           "required": [

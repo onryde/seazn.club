@@ -63,13 +63,14 @@ const ROLE_KINDS = [
   "grand_final_reset", "third_place", "qualifier1", "eliminator", "qualifier2", "rung", "plain_round",
 ];
 const STAGE_PROSE: Record<string, string> = {
-  stage: "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+  stage: "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
   "stage.code": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
   "stage.role": "The engine's round role for this match, serialised verbatim: kind, plus n or entrants where the role has one (W28).",
   "stage.role.kind": `The role's kind. An OPEN string: today's values are ${ROLE_KINDS.map((k) => `\`${k}\``).join(", ")}. Consumers show nothing for an unknown kind — a newer server may send one (W28).`,
   "stage.role.n": "The round number the role carries (losers_round, rung, plain_round), from 1 (W28).",
   "stage.role.entrants": "round_of only: how many entrants the round starts with, from 2 (W28).",
   "stage.pool": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
+  "stage.label": "What the phone shows for the stage, verbatim, 1 to 40 characters, in the org's locale (W28, added 2026-10-07): the pool's word and key, \" · \", then the code (\"Group A · R1\", \"Grupo A · R1\") for a pooled match, else exactly the code. Omitted, never cut, when it would not fit; show nothing then.",
 };
 
 const contracts: Contract[] = [

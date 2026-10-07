@@ -81,7 +81,7 @@
           "format": "uri"
         },
         "stage": {
-          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
           "type": "object",
           "properties": {
             "code": {
@@ -121,6 +121,12 @@
               "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
               "type": "string",
               "pattern": "^[A-Z]$"
+            },
+            "label": {
+              "description": "What the phone shows for the stage, verbatim, 1 to 40 characters, in the org's locale (W28, added 2026-10-07): the pool's word and key, \" · \", then the code (\"Group A · R1\", \"Grupo A · R1\") for a pooled match, else exactly the code. Omitted, never cut, when it would not fit; show nothing then.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
             }
           },
           "required": [
@@ -281,7 +287,7 @@
           "format": "uri"
         },
         "stage": {
-          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
           "type": "object",
           "properties": {
             "code": {
@@ -321,6 +327,12 @@
               "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
               "type": "string",
               "pattern": "^[A-Z]$"
+            },
+            "label": {
+              "description": "What the phone shows for the stage, verbatim, 1 to 40 characters, in the org's locale (W28, added 2026-10-07): the pool's word and key, \" · \", then the code (\"Group A · R1\", \"Grupo A · R1\") for a pooled match, else exactly the code. Omitted, never cut, when it would not fit; show nothing then.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
             }
           },
           "required": [
@@ -557,7 +569,7 @@
           "format": "uri"
         },
         "stage": {
-          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
           "type": "object",
           "properties": {
             "code": {
@@ -597,6 +609,12 @@
               "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
               "type": "string",
               "pattern": "^[A-Z]$"
+            },
+            "label": {
+              "description": "What the phone shows for the stage, verbatim, 1 to 40 characters, in the org's locale (W28, added 2026-10-07): the pool's word and key, \" · \", then the code (\"Group A · R1\", \"Grupo A · R1\") for a pooled match, else exactly the code. Omitted, never cut, when it would not fit; show nothing then.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
             }
           },
           "required": [
@@ -833,7 +851,7 @@
           "format": "uri"
         },
         "stage": {
-          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
           "type": "object",
           "properties": {
             "code": {
@@ -873,6 +891,12 @@
               "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
               "type": "string",
               "pattern": "^[A-Z]$"
+            },
+            "label": {
+              "description": "What the phone shows for the stage, verbatim, 1 to 40 characters, in the org's locale (W28, added 2026-10-07): the pool's word and key, \" · \", then the code (\"Group A · R1\", \"Grupo A · R1\") for a pooled match, else exactly the code. Omitted, never cut, when it would not fit; show nothing then.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
             }
           },
           "required": [
@@ -1123,7 +1147,7 @@
           "format": "uri"
         },
         "stage": {
-          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
           "type": "object",
           "properties": {
             "code": {
@@ -1163,6 +1187,12 @@
               "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
               "type": "string",
               "pattern": "^[A-Z]$"
+            },
+            "label": {
+              "description": "What the phone shows for the stage, verbatim, 1 to 40 characters, in the org's locale (W28, added 2026-10-07): the pool's word and key, \" · \", then the code (\"Group A · R1\", \"Grupo A · R1\") for a pooled match, else exactly the code. Omitted, never cut, when it would not fit; show nothing then.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
             }
           },
           "required": [
@@ -1344,7 +1374,7 @@
           "format": "uri"
         },
         "stage": {
-          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
           "type": "object",
           "properties": {
             "code": {
@@ -1384,6 +1414,12 @@
               "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
               "type": "string",
               "pattern": "^[A-Z]$"
+            },
+            "label": {
+              "description": "What the phone shows for the stage, verbatim, 1 to 40 characters, in the org's locale (W28, added 2026-10-07): the pool's word and key, \" · \", then the code (\"Group A · R1\", \"Grupo A · R1\") for a pooled match, else exactly the code. Omitted, never cut, when it would not fit; show nothing then.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
             }
           },
           "required": [
