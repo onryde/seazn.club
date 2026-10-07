@@ -13,6 +13,8 @@ import type { MessageKey } from "@/lib/messages";
 import type { SlotLabelLookup } from "@/lib/slot-label";
 import type { PublicFixture } from "@/server/public-site/data";
 import { buildDrawModel, type BuildDrawModelInput } from "@/lib/poster-draw";
+import enPublic from "@/dictionaries/en/public.json";
+import esPublic from "@/dictionaries/es/public.json";
 
 const lookupFor =
   (locale: Locale): SlotLabelLookup =>
@@ -43,11 +45,20 @@ const F = (over: Partial<PublicFixture>): PublicFixture => ({
   ...over,
 });
 
+/** A pool's printed label, straight out of a public dictionary FILE — the
+ *  route hands the builder the org-locale resolver; the builder must call it
+ *  with the pool's KEY (2026-10-06: never the stored English `pools.name`). */
+const poolTextFor =
+  (dict: Record<string, string>) =>
+  (key: string): string =>
+    dict["table.poolLabel"].replace("{key}", key);
+
 const baseInput = (over: Partial<BuildDrawModelInput> = {}): BuildDrawModelInput => ({
   stages: [{ id: "s1", seq: 1, name: "League" }],
   pools: [],
   fixtures: [],
   entrantNames: {},
+  poolText: poolTextFor(enPublic),
   ...over,
 });
 
@@ -213,8 +224,8 @@ describe("buildDrawModel — pooled group stage: independent round-robins, never
     const out = buildDrawModel(
       baseInput({
         pools: [
-          { id: "pa", stage_id: "s1", name: "Pool A" },
-          { id: "pb", stage_id: "s1", name: "Pool B" },
+          { id: "pa", stage_id: "s1", key: "A" },
+          { id: "pb", stage_id: "s1", key: "B" },
         ],
         fixtures: [
           F({ id: "b1", pool_id: "pb", round_no: 1, home_entrant_id: "e3", away_entrant_id: "e4" }),
@@ -224,11 +235,62 @@ describe("buildDrawModel — pooled group stage: independent round-robins, never
       }),
       en,
     );
-    expect(out[0]!.pools.map((p) => p.poolName)).toEqual(["Pool A", "Pool B"]);
+    expect(out[0]!.pools.map((p) => p.poolName)).toEqual(["A", "B"].map((k) => enPublic["table.poolLabel"].replace("{key}", k)));
     expect(out[0]!.pools[0]!.rounds.map((r) => r.label)).toEqual(["Round 1"]);
     expect(out[0]!.pools[0]!.rounds[0]!.fixtures.map((f) => f.id)).toEqual(["a1"]);
     expect(out[0]!.pools[1]!.rounds.map((r) => r.label)).toEqual(["Round 1"]);
     expect(out[0]!.pools[1]!.rounds[0]!.fixtures.map((f) => f.id)).toEqual(["b1"]);
+  });
+});
+
+// Pool label i18n (2026-10-06): the poster is printed in the ORG's locale,
+// and `pools.name` is only ever the stored English "Pool " + key. Each pool
+// heading is the supplied resolver over the pool's KEY. The read below hands
+// over the stored name too (as `public_pools_v` does), so a builder that still
+// printed it would read "Pool A" where the Spanish file says otherwise.
+describe("buildDrawModel — a pool heading is the org-locale label over the pool's key", () => {
+  it("a Spanish poster heads each pool from its key, never from the stored English name", () => {
+    const want = (key: string) => esPublic["table.poolLabel"].replace("{key}", key);
+    expect(want("A"), "premise: Spanish differs from the stored name").not.toBe("Pool A");
+    // The view's row, stored English name and all.
+    const read = [
+      { id: "pa", stage_id: "s1", key: "A", name: "Pool A" },
+      { id: "pb", stage_id: "s1", key: "B", name: "Pool B" },
+    ];
+    const out = buildDrawModel(
+      baseInput({
+        pools: read,
+        poolText: poolTextFor(esPublic),
+        fixtures: [
+          F({ id: "a1", pool_id: "pa", round_no: 1, home_entrant_id: "e1", away_entrant_id: "e2" }),
+          F({ id: "b1", pool_id: "pb", round_no: 1, home_entrant_id: "e3", away_entrant_id: "e4" }),
+        ],
+        entrantNames: { e1: "A", e2: "B", e3: "C", e4: "D" },
+      }),
+      lookupFor("es"),
+    );
+    const headings = out.flatMap((s) => s.pools.map((p) => p.poolName));
+    expect(headings).toEqual([want("A"), want("B")]);
+    // Anti-vacuity: both pools were headed.
+    expect(headings).toHaveLength(2);
+  });
+
+  it("a fixture whose pool the read does not list keeps a stage-only heading (no label, no resolver call)", () => {
+    let calls = 0;
+    const out = buildDrawModel(
+      baseInput({
+        pools: [],
+        poolText: (key) => {
+          calls += 1;
+          return `label ${key}`;
+        },
+        fixtures: [F({ id: "x1", pool_id: "p-unlisted", round_no: 1, home_entrant_id: "e1", away_entrant_id: "e2" })],
+        entrantNames: { e1: "A", e2: "B" },
+      }),
+      en,
+    );
+    expect(out[0]!.pools.map((p) => p.poolName)).toEqual([null]);
+    expect(calls).toBe(0);
   });
 });
 

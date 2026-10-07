@@ -479,9 +479,15 @@ function divisionADetail(mode: HubMode) {
 function divisionBDetail(mode: HubMode) {
   const groups = stage("b-gr", "d-b", 1, "group", "9zqgroups");
   const teams = entrants("d-b", "b", 4);
+  // A page names a pool from its KEY through the locale's `table.poolLabel`
+  // (`lib/pool-label.ts`), so the key is the DATA a reader sees and carries
+  // the marker. The stored name is the generator's only spelling, the English
+  // "Pool " + key (`usecases/stages.ts`): seeded as it really is, so a page
+  // that printed it again would put "Pool …" in front of an es/fr/nl reader
+  // and red this sweep.
   const pools = [
-    { id: "b-p1", stage_id: "b-gr", key: "A", name: "9zqpool 8zqnorth" },
-    { id: "b-p2", stage_id: "b-gr", key: "B", name: "9zqpool 8zqsouth" },
+    { id: "b-p1", stage_id: "b-gr", key: "9zqa", name: "Pool 9zqa" },
+    { id: "b-p2", stage_id: "b-gr", key: "9zqb", name: "Pool 9zqb" },
   ];
   const fixtures: PublicFixture[] = [
     fixture({ id: "b-1", division_id: "d-b", stage_id: "b-gr", pool_id: "b-p1", scheduled_at: "2026-09-02T10:00:00.000Z", ...decided("b1", "b2", 0, 0) }),

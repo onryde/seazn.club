@@ -24,6 +24,7 @@ import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { buildDrawModel, type DrawStageGroup } from "@/lib/poster-draw";
+import { poolLabel } from "@/lib/pool-label";
 
 export const revalidate = 300;
 
@@ -139,6 +140,9 @@ export async function GET(req: Request, { params }: Ctx) {
         fixtures: detail.fixtures,
         entrantNames,
         seatText: (fixtureId, seat, label) => namer.seat(fixtureId, seat, label),
+        // The org-locale pool label from the pool's key, never its stored
+        // English name (`lib/pool-label.ts`).
+        poolText: (key) => poolLabel(dict, key),
       },
       lookup,
     );

@@ -313,6 +313,7 @@
   "table.col.boardRatio": "Ratio de plateaux",
   "table.col.pointRatio": "Ratio de points",
   "table.pool": "Poule",
+  "table.poolLabel": "Poule {key}",
   "table.tieBreak": "Ex æquo avec {with} — départagé par {rule}",
   "table.withdrawn": "Forfait",
   "table.disqualified": "Disqualifié",

@@ -136,7 +136,7 @@ const DIVISION = {
     { id: "sg", kind: "group", name: "Groups" },
     { id: "sk", kind: "knockout", name: "Knockout" },
   ],
-  pools: [{ id: "pA", stage_id: "sg", name: "Pool A" }],
+  pools: [{ id: "pA", stage_id: "sg", key: "A", name: "Pool A" }],
   fixtures: [
     { id: "k1", stage_id: "sk", round_no: 0, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2", status: "in_play", summary: { headline: "1–0" } },
     { id: "k2", stage_id: "sk", round_no: 0, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4", status: "scheduled", summary: null },

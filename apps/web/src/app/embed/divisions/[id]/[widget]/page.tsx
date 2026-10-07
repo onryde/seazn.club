@@ -23,6 +23,7 @@ import { divisionQualification } from "@/server/public-site/division-qualificati
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { byPoolOrder } from "@/lib/pool-order";
+import { poolLabel } from "@/lib/pool-label";
 
 export const revalidate = 30;
 
@@ -94,7 +95,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
       }),
     ]),
   );
-  const poolName = new Map(pools.map((p) => [p.id, p.name]));
+  // A pool is named from its KEY in the org's locale, never by its stored
+  // English name (`lib/pool-label.ts`).
+  const poolKey = new Map(pools.map((p) => [p.id, p.key]));
   const publicPath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
 
   // P6 fix round 1, finding #2 (CRITICAL) — same treatment as the public
@@ -214,7 +217,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
               entrantStatuses={entrantStatuses}
               caption={
                 snap.pool_id
-                  ? `${stage.name} — ${poolName.get(snap.pool_id) ?? t(dict, "table.pool")}`
+                  ? `${stage.name} — ${poolLabel(dict, poolKey.get(snap.pool_id))}`
                   : stage.name
               }
               dict={dict}

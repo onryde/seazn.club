@@ -5,6 +5,10 @@ import type { FixtureSlideItem } from "../slideshow-data";
 import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
 import { msgFor } from "@/lib/messages-i18n";
+import enPublic from "@/dictionaries/en/public.json";
+import esPublic from "@/dictionaries/es/public.json";
+import frPublic from "@/dictionaries/fr/public.json";
+import nlPublic from "@/dictionaries/nl/public.json";
 
 const input = {
   division: { id: "d1", name: "Open" },
@@ -12,7 +16,7 @@ const input = {
     { id: "sg", kind: "group", name: "Groups" },
     { id: "sk", kind: "knockout", name: "Knockout" },
   ],
-  pools: [{ id: "pA", stage_id: "sg", name: "Pool A" }],
+  pools: [{ id: "pA", stage_id: "sg", key: "A", name: "Pool A" }],
   fixtures: [
     { id: "k1", stage_id: "sk", round_no: 0, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2", status: "in_play", summary: { headline: "1–0" } },
     { id: "k2", stage_id: "sk", round_no: 0, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4", status: "scheduled", summary: null },
@@ -35,7 +39,8 @@ describe("buildPublicDivisionSlides", () => {
     const slides = await buildPublicDivisionSlides(input);
     const kinds = slides.map((s) => s.kind);
     expect(kinds).toEqual(["standings", "fixtures", "fixtures", "bracket"]);
-    expect(slides[0]).toMatchObject({ caption: "Groups — Pool A" });
+    // The en label from the dictionary file, over the KEY — not the stored name.
+    expect(slides[0]).toMatchObject({ caption: `Groups — ${enPublic["table.poolLabel"].replace("{key}", "A")}` });
     expect(slides[1]).toMatchObject({ title: "In play", pinned: true });
     const bracket = slides[3] as { fixtures: { home: string | null }[] };
     expect(bracket.fixtures[0]).toMatchObject({ home: "Mexico", line: "1–0" });
@@ -109,6 +114,27 @@ describe("buildPublicDivisionSlides — orgLocale (P6 finding #2)", () => {
     const items = (upcoming as { items: FixtureSlideItem[] }).items;
     const kf = items.find((i) => i.round === 1)!;
     expect(kf.home).toBe("Winner of Group A");
+  });
+});
+
+// Pool label i18n (2026-10-06). The fixture's pool carries the only name the
+// generator ever stores, the English "Pool " + key. A venue screen speaks the
+// ORG's locale, so the standings slide names the pool with that locale's
+// `table.poolLabel` over the pool's KEY — expected text read out of the
+// dictionary FILES, never through the builder.
+describe("buildPublicDivisionSlides — the pool label is the org's locale's, from the key", () => {
+  it("captions the pooled standings slide in every locale from the key — never the stored English name", async () => {
+    const files: Record<string, Record<string, string>> = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic };
+    expect(files.es!["table.poolLabel"]!.replace("{key}", "A"), "premise").not.toBe("Pool A");
+    let checked = 0;
+    for (const locale of Object.keys(files)) {
+      const slides = await buildPublicDivisionSlides({ ...input, orgLocale: locale });
+      const captions = slides.filter((s) => s.kind === "standings").map((s) => (s as { caption: string }).caption);
+      expect(captions, locale).toEqual([`Groups — ${files[locale]!["table.poolLabel"]!.replace("{key}", "A")}`]);
+      checked += captions.length;
+    }
+    // Anti-vacuity: one pooled slide, four locales.
+    expect(checked).toBe(4);
   });
 });
 

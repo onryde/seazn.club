@@ -53,7 +53,9 @@ export interface DrawRoundGroup {
 }
 
 export interface DrawPoolGroup {
-  /** null for a stage with no pools — every fixture shares one group. */
+  /** The pool's print-ready label ("Grupo A" for a Spanish org), from
+   *  `poolText` over the pool's key. null for a stage with no pools — every
+   *  fixture shares one group. */
   poolName: string | null;
   rounds: DrawRoundGroup[];
 }
@@ -65,7 +67,10 @@ export interface DrawStageGroup {
 
 export interface BuildDrawModelInput {
   stages: { id: string; seq: number; name: string }[];
-  pools: { id: string; stage_id: string; name: string }[];
+  /** A pool is labelled from its KEY through `poolText`; the stored English
+   *  `name` ("Pool " + key, the generator's only spelling) is deliberately not
+   *  part of this input (2026-10-06). */
+  pools: { id: string; stage_id: string; key: string }[];
   fixtures: PublicFixture[];
   /** entrant id -> display name. A fixture whose entrant id has no entry
    *  here (data-integrity edge case — same gap calendar.ics's own entrant
@@ -89,6 +94,11 @@ export interface BuildDrawModelInput {
    *
    *  This module stays pure: the resolver is supplied, never imported. */
   seatText?: (fixtureId: string, seat: "home" | "away", label: PublicFixture["home_slot_label"]) => string;
+  /** A pool's printed label, from its key, in the poster's locale — the
+   *  `public` dictionary's `table.poolLabel` (`lib/pool-label.ts`). Supplied,
+   *  never imported, for the same reason as `seatText`: the word belongs to the
+   *  caller's dictionary, and `lookup` below is the organiser one. */
+  poolText: (key: string) => string;
 }
 
 type Lane = PublicFixture["lane"];
@@ -140,7 +150,7 @@ interface RoundBucket {
 }
 
 export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLookup): DrawStageGroup[] {
-  const { stages, pools, fixtures, entrantNames, seatText } = input;
+  const { stages, pools, fixtures, entrantNames, seatText, poolText } = input;
   const stageById = new Map(stages.map((s) => [s.id, s]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
   const poolRank = new Map(pools.map((p, i) => [p.id, i]));
@@ -239,7 +249,10 @@ export function buildDrawModel(input: BuildDrawModelInput, lookup: SlotLabelLook
         groups.push({ label: lookup("bracket.round.thirdPlace"), fixtures: thirdPlaceRows.map(toRow) });
         return groups;
       });
-      return { poolName: poolKey ? (poolById.get(poolKey)?.name ?? null) : null, rounds };
+      // `poolKey` here is the pool's ID ("" for no pool); the label is built
+      // from the pool's own KEY. A pool the read does not list heads nothing.
+      const pool = poolKey ? poolById.get(poolKey) : undefined;
+      return { poolName: pool ? poolText(pool.key) : null, rounds };
     });
 
     return { stageName: stageById.get(stageId)?.name ?? "", pools: poolGroups };

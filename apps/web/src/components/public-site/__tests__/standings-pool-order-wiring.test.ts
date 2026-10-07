@@ -1,4 +1,4 @@
-// Pools read Pool A above Pool B on every surface that draws one standings
+// Pools read pool A above pool B on every surface that draws one standings
 // table per pool — the order is `lib/pool-order.ts`'s, the one authority.
 //
 // The public division page and the embed are driven here with their data
@@ -7,12 +7,15 @@
 // arrive in id order, so a page that sorts by pool id (the division page did)
 // or keeps query order (the embed did) reads B first and reds here.
 //
-// The hub is `competition-hub.test.ts`'s ("pools read Pool A above Pool B").
+// The hub is `competition-hub.test.ts`'s ("pool A reads above pool B — never in pool-id order").
 // The organiser console is rendered through its own harness, where the tenant
 // read of its pools can be answered: `app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/
-// __tests__/qualification-plumbing.test.tsx` ("pools read Pool A above Pool B
+// __tests__/qualification-plumbing.test.tsx` ("pool A reads above pool B
 // whatever their ids…"), and it is driven for real in
 // `e2e/standings-qualification.spec.ts`.
+//
+// The same two pages also NAME each pool: the org-locale `table.poolLabel`
+// over the pool's key, never the stored English `pools.name` (2026-10-06).
 import { describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement } from "react";
 import { readFileSync } from "node:fs";
@@ -31,9 +34,18 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
 vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => [] }));
 
 import type { PublicEntrant, PublicStandings } from "@/server/public-site/data";
+import enPublic from "@/dictionaries/en/public.json";
+import esPublic from "@/dictionaries/es/public.json";
+import frPublic from "@/dictionaries/fr/public.json";
+import nlPublic from "@/dictionaries/nl/public.json";
 import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
 import DivisionHomePage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
 import { StandingsTable } from "../standings-table";
+
+/** The en captions of pools A and B under `stage`: `table.poolLabel` over the
+ *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
+const enCaptions = (stage: string, keys: string[] = ["A", "B"]) =>
+  keys.map((k) => `${stage} — ${enPublic["table.poolLabel"].replace("{key}", k)}`);
 
 // "f…" sorts after "0…": Pool A's id is the LATER one.
 const POOL_A = "ffffffff-0000-4000-8000-00000000000a";
@@ -124,24 +136,60 @@ function tables(node: unknown, out: ReactElement<TableProps>[] = []): ReactEleme
 }
 
 describe("pool order on the pages that draw one standings table per pool", () => {
-  it("public division page: Pool A, then Pool B", async () => {
+  it("public division page: pool A, then pool B", async () => {
     getPublicDivision.mockResolvedValue(payload());
     const root = await DivisionHomePage({
       params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
     });
     const drawn = tables(root);
-    expect(drawn.map((el) => el.props.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(drawn.map((el) => el.props.caption)).toEqual(enCaptions("Groups"));
     // Each caption over its OWN pool's rows — the order moved the tables,
     // not just the labels.
     expect(drawn.map((el) => el.props.rows.map((r) => r.entrantId))).toEqual([["e1", "e2"], ["e3", "e4"]]);
   });
 
-  it("embed standings widget: Pool A, then Pool B", async () => {
+  it("embed standings widget: pool A, then pool B", async () => {
     embedDivisionData.mockResolvedValue({ ok: true, data: { ...payload(), sponsors: [] } });
     const root = await EmbedWidgetPage({ params: Promise.resolve({ id: "d1", widget: "standings" }) });
     const drawn = tables(root);
-    expect(drawn.map((el) => el.props.caption)).toEqual(["Groups — Pool A", "Groups — Pool B"]);
+    expect(drawn.map((el) => el.props.caption)).toEqual(enCaptions("Groups"));
     expect(drawn.map((el) => el.props.rows.map((r) => r.entrantId))).toEqual([["e1", "e2"], ["e3", "e4"]]);
+  });
+
+  // Pool label i18n (2026-10-06). The pools above carry the only name the
+  // generator ever stores — the English "Pool " + key (`usecases/stages.ts`).
+  // Both pages render in the ORG's locale (ISR: never the visitor's), so the
+  // caption must be that locale's `table.poolLabel` over the pool's KEY. The
+  // expected words come out of the dictionary FILES, not the code under test.
+  it("both pages caption each pool in the ORG's locale from its key — never the stored English name", async () => {
+    const files: Record<string, Record<string, string>> = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic };
+    const label = (locale: string, key: string) => files[locale]!["table.poolLabel"]!.replace("{key}", key);
+    // Premise: in Spanish the right answer differs from the stored name.
+    expect(label("es", "A")).not.toBe("Pool A");
+    const withLocale = (locale: string) => {
+      const p = payload();
+      return { ...p, org: { ...p.org, default_locale: locale } };
+    };
+    let checked = 0;
+    for (const locale of Object.keys(files)) {
+      const want = [`Groups — ${label(locale, "A")}`, `Groups — ${label(locale, "B")}`];
+
+      getPublicDivision.mockResolvedValue(withLocale(locale));
+      const page = tables(
+        await DivisionHomePage({
+          params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+        }),
+      );
+      expect(page.map((el) => el.props.caption), `division page (${locale})`).toEqual(want);
+
+      embedDivisionData.mockResolvedValue({ ok: true, data: { ...withLocale(locale), sponsors: [] } });
+      const embed = tables(await EmbedWidgetPage({ params: Promise.resolve({ id: "d1", widget: "standings" }) }));
+      expect(embed.map((el) => el.props.caption), `embed (${locale})`).toEqual(want);
+
+      checked += page.length + embed.length;
+    }
+    // Anti-vacuity: two pools, two pages, four locales.
+    expect(checked).toBe(2 * 2 * 4);
   });
 
   it("no surface sorts pools by id any more", () => {
