@@ -26,13 +26,14 @@ import type { z } from "zod";
 import { log } from "@/server/logger";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import {
-  DEAD_PHONE_TAKEOVER_SECONDS, HOLD_SLACK_SECONDS, HOT_THERMAL_STATUS, INGEST_TIMEOUT_SECONDS, LOW_BATTERY_PERCENT,
+  DEAD_PHONE_TAKEOVER_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
   PHONE_BEAT_RETENTION_HOURS, POLL_FAR_SECONDS, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES,
   srtEnabled, streamIngestHost, streamPlaybackHost, tunable,
 } from "@/server/relay/config";
 import { beatAnswer, wireBeatAnswer } from "@/server/relay/domain/beat-answer";
 import { wireEndReason, type DbEndReason } from "@/server/relay/domain/end-reason";
 import { type ClaimOutcome, deadForTakeover, decideClaim, isNotResponding } from "@/server/relay/domain/pairing";
+import { phoneFlagsOf } from "@/server/relay/domain/phone-health";
 import { pollSecondsFor } from "@/server/relay/domain/poll-seconds";
 import { ACTIVE_STATES, isActive, type FailReason, type SessionState } from "@/server/relay/domain/session";
 import { slotState } from "@/server/relay/domain/slot";
@@ -355,16 +356,14 @@ function rawOf(b: Beat, atUtc: string): Record<string, unknown> {
   };
 }
 
-/** §6.10's derived flags, each from its config.ts threshold. `notResponding` is §6.9's W8 condition, judged on the
+/** §6.10's derived flags — `domain/phone-health.ts`'s ONE derivation, the panel's amber line reads the same (PR-2 T2). `notResponding` is §6.9's W8 condition, judged on the
  *  pairing's PREVIOUS beat: this beat ends a stretch the panel must still see. */
 function flagsOf(b: Beat, notResponding: boolean): string[] {
-  const f: string[] = [];
-  if (b.battery !== null && b.battery.percent < LOW_BATTERY_PERCENT && !b.battery.charging) f.push("battery_low");
-  if (b.thermal !== null && b.thermal >= HOT_THERMAL_STATUS) f.push("hot");
-  if (b.delivery === "stalled") f.push("stalled");
-  if (b.notReady !== null) f.push("not_ready");
-  if (notResponding) f.push("not_responding");
-  return f;
+  return phoneFlagsOf({
+    notResponding, delivery: b.delivery, thermal: b.thermal,
+    battery: b.battery === null ? null : { percent: b.battery.percent, charging: b.battery.charging },
+    notReady: b.notReady !== null,
+  });
 }
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x) => b.includes(x));
 

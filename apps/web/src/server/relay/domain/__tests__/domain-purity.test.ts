@@ -39,10 +39,10 @@ const ENV_READERS: ReadonlySet<string> = (() => {
 const ALLOWED_SOURCE = /^(\.\.\/config|\.\/[\w-]+|@\/server\/api-v1\/capture-schemas)$/;
 
 describe("server/relay/domain is pure", () => {
-  it("has the twelve units (capture QR v2: T4a's stream-code, pairing, slot, poll-seconds; T4b's beat-answer, end-reason, phone-lost)", () => {
+  it("has the fourteen units (capture QR v2: T4a's stream-code, pairing, slot, poll-seconds; T4b's beat-answer, end-reason, phone-lost; PR-2 T2's auto-stream, phone-health)", () => {
     expect(files.map((f) => f.name).sort()).toEqual([
-      "beat-answer.ts", "credits.ts", "end-reason.ts", "expiry.ts", "pairing.ts", "phone-lost.ts", "poll-seconds.ts", "retention.ts",
-      "runner.ts", "session.ts", "slot.ts", "stream-code.ts",
+      "auto-stream.ts", "beat-answer.ts", "credits.ts", "end-reason.ts", "expiry.ts", "pairing.ts", "phone-health.ts", "phone-lost.ts",
+      "poll-seconds.ts", "retention.ts", "runner.ts", "session.ts", "slot.ts", "stream-code.ts",
     ]);
   });
   it("imports nothing impure and never reads the clock", () => {
