@@ -40846,6 +40846,48 @@
                         "startUrl": {
                           "type": "string",
                           "format": "uri"
+                        },
+                        "stage": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 8
+                            },
+                            "role": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "n": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "entrants": {
+                                  "type": "integer",
+                                  "minimum": 2,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "pool": {
+                              "type": "string",
+                              "pattern": "^[A-Z]$"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "role"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -40979,6 +41021,48 @@
                         "startUrl": {
                           "type": "string",
                           "format": "uri"
+                        },
+                        "stage": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 8
+                            },
+                            "role": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "n": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "entrants": {
+                                  "type": "integer",
+                                  "minimum": 2,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "pool": {
+                              "type": "string",
+                              "pattern": "^[A-Z]$"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "role"
+                          ],
+                          "additionalProperties": false
                         },
                         "cred": {
                           "type": "object",
@@ -41184,6 +41268,48 @@
                           "type": "string",
                           "format": "uri"
                         },
+                        "stage": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 8
+                            },
+                            "role": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "n": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "entrants": {
+                                  "type": "integer",
+                                  "minimum": 2,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "pool": {
+                              "type": "string",
+                              "pattern": "^[A-Z]$"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "role"
+                          ],
+                          "additionalProperties": false
+                        },
                         "cred": {
                           "type": "object",
                           "properties": {
@@ -41387,6 +41513,48 @@
                         "startUrl": {
                           "type": "string",
                           "format": "uri"
+                        },
+                        "stage": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 8
+                            },
+                            "role": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "n": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "entrants": {
+                                  "type": "integer",
+                                  "minimum": 2,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "pool": {
+                              "type": "string",
+                              "pattern": "^[A-Z]$"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "role"
+                          ],
+                          "additionalProperties": false
                         },
                         "cred": {
                           "type": "object",
@@ -41605,6 +41773,48 @@
                           "type": "string",
                           "format": "uri"
                         },
+                        "stage": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 8
+                            },
+                            "role": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "n": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "entrants": {
+                                  "type": "integer",
+                                  "minimum": 2,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "pool": {
+                              "type": "string",
+                              "pattern": "^[A-Z]$"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "role"
+                          ],
+                          "additionalProperties": false
+                        },
                         "endReason": {
                           "type": "string",
                           "enum": [
@@ -41758,6 +41968,48 @@
                           "type": "string",
                           "format": "uri"
                         },
+                        "stage": {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 8
+                            },
+                            "role": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "n": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "entrants": {
+                                  "type": "integer",
+                                  "minimum": 2,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "pool": {
+                              "type": "string",
+                              "pattern": "^[A-Z]$"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "role"
+                          ],
+                          "additionalProperties": false
+                        },
                         "endReason": {
                           "type": "string",
                           "enum": [
@@ -41862,7 +42114,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -41932,7 +42185,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -42002,7 +42256,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -42072,7 +42327,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -42142,7 +42398,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43057,7 +43314,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43127,7 +43385,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43197,7 +43456,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43267,7 +43527,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43337,7 +43598,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43482,7 +43744,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43552,7 +43815,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43622,7 +43886,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43692,7 +43957,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43762,7 +44028,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43832,7 +44099,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43902,7 +44170,8 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {
@@ -43972,7 +44241,579 @@
                             "not_entitled",
                             "unavailable",
                             "invalid",
-                            "rate_limited"
+                            "rate_limited",
+                            "match_finished"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "captureTok": []
+          }
+        ]
+      }
+    },
+    "/api/v1/capture/codes/{code}/scoring-link": {
+      "post": {
+        "summary": "The match's Remote scoring link (Bearer: the stream code's tok), body {phone}, for the slot's CURRENT phone, with or without a session (capture QR v2 §6.3.5, W27). Returns the match's live scoring link, or creates one — it never removes or replaces an existing link, so a repeat call returns the same url. 200 {url} (https, /score/, the link's secret: a credential, never logged). 409 replaced (not the current phone), 409 match_finished (the match is finalized or cancelled; nothing written), 402 not_entitled (the plan has no scoring links; an Event Pass on the competition lifts it), 503 unavailable (scoring links not configured on this server). 401 code_ended (an ended code serves nothing here), 404 not_a_stream_code, 422 invalid, 429 rate_limited with Retry-After (the code's budget, then the console's per-IP mint budget). Served private, no-store. Never 410",
+        "tags": [
+          "capture"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "phone"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "phone": "example"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "pattern": "^https:\\/\\/[^/]+\\/score\\/dl_[A-Za-z0-9_-]{43}$"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ],
+                  "additionalProperties": false
+                },
+                "example": {
+                  "url": "example"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited",
+                            "match_finished"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited",
+                            "match_finished"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited",
+                            "match_finished"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited",
+                            "match_finished"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited",
+                            "match_finished"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited",
+                            "match_finished"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited",
+                            "match_finished"
                           ]
                         },
                         "message": {

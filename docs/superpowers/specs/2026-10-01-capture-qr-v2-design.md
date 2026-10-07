@@ -64,6 +64,8 @@ Each row below is the latest word on its subject. Where the log changed its mind
 | W24 | **A reconnecting countdown (2026-10-01).** While live with no video from the phone, the Phone node says "Reconnecting…" instead of "No signal". After a 30 s hold, a sentence counts down to the W19 end: "No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back." Warming ("Waiting for camera…") gets the same countdown to the 10-min warming timeout. Built in PR-1 (§6.12). The PR-1 mockups show these states. |
 | W25 | **The unnamed-match label is localised (2026-10-01).** The "Match {n}" fallback sent to the phone uses the competition's locale, not English (§6.4). |
 | W26 | **No custom ingest host (owner ruling, 2026-10-05). Supersedes W15 and the RTMPS half of W21.** Both credentials use Cloudflare's own host, exactly as Cloudflare issues them: `rtmps://live.cloudflare.com:443/live/` and `srt://live.cloudflare.com:778`, in every environment. `STREAM_INGEST_HOST` stays **unset** in Doppler `stg` and `prd` (removed from `stg` 2026-10-05 19:09:55Z); the code path is unchanged, since unset already serves Cloudflare's host. `live.stg.seazn.club` / `live.seazn.club` are no longer served to phones. **Capture-side consequence:** the capture app's RTMPS host pin admitted only `live.<env>.seazn.club`, so it refused `live.cloudflare.com` for RTMPS (seen on stg 19:11Z). Capture's owner then ruled (2026-10-05) that the app trusts **only** `live.cloudflare.com` for both SRT and RTMPS in every environment. So **setting `STREAM_INGEST_HOST` again would break every phone**: the RTMPS rewrite in `ingestCred` would serve a host the app refuses. |
+| W27 | **The phone fetches the match's Remote scoring link (2026-10-06; owner sign-off 2026-10-06, capture lane agreed — recorded here from the controller's brief of that date).** `POST /api/v1/capture/codes/{code}/scoring-link`, the start's Bearer `tok` and strict body `{phone}`. Only the slot's CURRENT phone (the start's holder check) is answered; any other phone gets `409 replaced`, and an ended code `401 code_ended`. It is allowed whether or not a session exists or is live. The owner's rule, verbatim: "must not remove or replace any existing QR … when phone requests a link/code for qr, just provide or create the new one". So the fixture's NEWEST live link — the one row the console's ensure reads — is returned when it is sealed and its envelope opens AND hashes to its row's `token_hash`; otherwise a new sealed link is inserted beside it, stamped as the newest, and **nothing is revoked** — never the console's revoke-and-mint (amended 2026-10-07, review M1: an older good link is never dug out from under a newer bad one, so the phone and the console always agree on the row). It takes the console's per-fixture link lock, so a concurrent console ensure or print cannot double-mint. `issued_by` is the code's issuer; no label; no expiry. `200 {url}`, the server's base URL plus `/score/<secret>`, matching `^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$`. Refusals: a plan without `scoring.device_links` → `402 not_entitled`; a finalized or cancelled match → **`409 match_finished`** (a new refusal code; the console answers 422, the phone 409 by agreement), no link made; `DEVICE_LINK_KEK` missing → `503 unavailable`; the console's `DEVICE_LINK_MINT_LIMIT` per IP → `429 rate_limited` with `Retry-After`, spent only once the tok and holder checks pass (amended 2026-10-07, review M2); the link insert breaking a foreign key — the code's issuer deleted — → `401 code_ended` (amended 2026-10-07, review M4). The URL is a credential: never logged, never stored anywhere new. G1 owner ruling 2026-10-07: device-link Revoke & reissue does not lock out a paired capture phone; the warning tells the organiser to reissue the streaming QR too. §6.3.5. |
+| W28 | **Every descriptor shape carries the match's `stage` (2026-10-06; owner sign-off 2026-10-06, capture lane agreed — recorded here from the controller's brief of that date).** An optional `stage: {code, role: {kind, n?, entrants?}, pool?}` on the waiting shape and on every session state, recomputed on every read. `code` (1–8 characters) is exactly the scheduler board's chip for the fixture, in the language the label uses (W25); `role` is the engine's `RoundRole`, serialised verbatim; `role.kind` is an OPEN string in the published schema, and a consumer shows nothing for a kind it does not know; `pool` (`^[A-Z]$`) is the key of the fixture's pool, never its English name. Absent when no code can be produced. §6.4. |
 | W17 | **Answers sent to mobile-s1** (their owner approved them): `autoAllowed` sits in both waiting and session; there is one start endpoint, with `409 already_live` meaning take over; the heartbeat answer carries go-live and over; the server drives `pollSeconds`, 60 s and then 10 s from 30 min before the scheduled start; code names are neutral; the waiting answer carries the chosen destination's display name, or `null`; the panel shows the phone's mode. |
 
 ### 1.2 Capture's rulings we build against (their owner's; peer facts, not ours)
@@ -147,7 +149,8 @@ shapes", "The answer table" and "Asks for the web side"), with our replies to it
   `{ok, data}` envelope. Every refusal is the bare object `{ code: "<word>", message, ...extras }`, for example
   `409 {code: "already_live", message, sid, startedBy}`, `409 {code: "replaced", message}`,
   `409 {code: "no_destination", message}`, `402 {code: "no_credit", message}`, `403 {code: "not_entitled", message}`
-  and `401 {code: "code_ended", message}`. **The phone keys its copy on `code`**; `message` is a plain English
+  and `401 {code: "code_ended", message}`; W27 (2026-10-06) adds `409 {code: "match_finished", message}`, answered only
+  by `…/scoring-link` (§6.3.5). **The phone keys its copy on `code`**; `message` is a plain English
   developer string that the phone never shows. The phone routes therefore return their own `NextResponse` through
   `handler()` (it passes a `Response` through unchanged) and never throw a bare `HttpError` for a refusal, because
   `handler()` drops `HttpError.extra` (losing `sid` and `startedBy`) and names the sentence `error`, not `message`.
@@ -411,6 +414,7 @@ unless a status is shown.
 - `GET /api/v1/capture/codes/{code}`
 - `POST /api/v1/capture/codes/{code}/beats`
 - `POST /api/v1/capture/codes/{code}/start`
+- `POST /api/v1/capture/codes/{code}/scoring-link` (W27, added 2026-10-06; §6.3.5)
 
 The QR carries no host: the app's build environment picks the API base. A staging code presented to production is
 unknown there, so it answers 401.
@@ -463,7 +467,8 @@ for the slot:
 
 ```
 { state: "waiting", code, label, venueTimezone, scheduledStart?: epoch-s, pollSeconds,
-  autoAllowed, destinationName: string | null, overlayUrl: string | null, heartbeatUrl, startUrl }
+  autoAllowed, destinationName: string | null, overlayUrl: string | null, heartbeatUrl, startUrl,
+  stage?: { code, role: { kind, n?, entrants? }, pool? } }       // stage: W28, added 2026-10-06
 ```
 
 **Session shape:**
@@ -473,10 +478,12 @@ for the slot:
   cred?: { srt: { url, streamId, passphrase, latencyMs } | null, rtmps: { url, streamKey } }, preferred: "srt" | "rtmps",
   playbackUrl, overlayUrl: string | null, holdWindowSeconds: { srt, rtmps }, maxDurationMinutes,
   warmingDeadline: epoch-s, code, label, venueTimezone, scheduledStart?: epoch-s, pollSeconds,
-  scoreUpdates: "realtime" | "polled", autoAllowed, destinationName: string | null, heartbeatUrl, startUrl }
+  scoreUpdates: "realtime" | "polled", autoAllowed, destinationName: string | null, heartbeatUrl, startUrl,
+  stage?: { code, role: { kind, n?, entrants? }, pool? } }       // stage: W28, added 2026-10-06
 ```
 
-`cred` is present only in `warming`, `live` and `ending`, and only to the current phone. `endReason` is present in
+`cred` is present only in `warming`, `live` and `ending`, and only to the current phone. `stage` (W28) is on every
+shape, the waiting one included, and is omitted — never `null` — when no code can be produced (§6.4). `endReason` is present in
 `ending`, `completed` and `failed`, and omitted otherwise. `cred.srt` is `null`, and `preferred` is `"rtmps"`, while
 `STREAM_SRT_ENABLED` is off (A18; §6.4). `code`, `scheduledStart`, `pollSeconds` and `destinationName` (agreed
 with capture) come from the same sources as on the waiting shape (§6.4, §6.6), so the phone refreshes its waiting
@@ -565,6 +572,63 @@ The body is `{phone}`. The answers are T12–T15 and §6.7.2.
 **Not idempotent by design.** A retry after a lost `200` meets `409 already_live` naming the same sid. The phone
 treats that as success (capture's answer table).
 
+#### 6.3.5 `POST /api/v1/capture/codes/{code}/scoring-link` (W27, added 2026-10-06)
+
+The body is the start's strict `{phone}`. In order:
+
+1. Resolve the code as a `start` call (§5.1 C1): an ended code answers `401 code_ended`, even to its open session's
+   phone.
+2. The caller must be the slot's CURRENT phone — the start's own holder check (§6.3.4 T12, `holderOf`), session or
+   none. Any other phone: `409 replaced`.
+3. The server's origin is https (the answer's pattern), else `503 unavailable` with nothing written (below).
+4. The console's mint budget, `DEVICE_LINK_MINT_LIMIT` per client IP (rate limits, below) → `429 rate_limited`. It is
+   spent HERE, past the tok and holder checks (amended 2026-10-07, review M2): a caller without the tok, or a replaced
+   phone, never drains the bucket the organiser's console shares.
+5. The plan gate, exactly as the console's ensure: `scoring.device_links`, Event Pass included (resolved against the
+   fixture's competition). Lacking: `402 not_entitled`.
+6. Under the fixture's device-link advisory lock (the one the console's ensure and the sheet print take), in one
+   transaction: a finalized or cancelled match answers `409 match_finished` and writes nothing. Otherwise ONLY the
+   fixture's newest live link is read — legacy or sealed, the same row the console's ensure reads (amended 2026-10-07,
+   review M1). Sealed, with an envelope that opens AND hashes to its row's `token_hash`: it is returned unchanged.
+   Anything else — none, a legacy hash-only link, an envelope that hashes elsewhere or will not open — gets a new sealed
+   link inserted beside it (`issued_by` = the code's issuer, no label, no expiry) and **no row is revoked**. The new row
+   is stamped past every link the fixture has (in SQL: `greatest(now(), max(created_at) + 1µs)`), so it IS the newest
+   and the console's next ensure re-shows it rather than revoking and reissuing; an older good link is left live, never
+   dug out. The secret is sealed before the insert, so a missing `DEVICE_LINK_KEK` writes nothing: `503 unavailable`.
+   An insert that breaks a foreign key means the code's world is gone — in practice its issuer deleted
+   (`fixture_stream_codes.issued_by` has no foreign key, `device_links.issued_by` does) — and no retry can succeed: it
+   answers the ONE `401 code_ended` body, so the phone asks for a new QR, with a warning naming the code's id only and
+   no error report (amended 2026-10-07, review M4).
+
+Answers:
+
+- `200 {url}`: `captureOrigin()` (§6.4) + `/score/` + the secret — `^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$` on
+  every deployment. A second call returns the same `url` and inserts nothing. Build decision (2026-10-06, for review):
+  where `captureOrigin()` is not https — no `OAUTH_BASE_URL`/`NEXT_PUBLIC_BASE_URL`, as on a local or CI server — the
+  pattern cannot be met, so the answer is `503 unavailable` before any write, never a url the phone's parser rejects.
+  Its message says scoring links need https and carries the token `origin_not_https` (amended 2026-10-07, review N1),
+  which the smoke keys on so a crash's generic `503 unavailable` cannot pass for it (review M3).
+  Production and staging set both variables to https. Consequence: the `200` path is not reachable over HTTP on a local
+  or CI server; the route test drives it with an https origin, and the capture-v2 smoke asserts the `503` there.
+- `409 {code: "replaced", message}`, `409 {code: "match_finished", message}`, `402 {code: "not_entitled", message}`,
+  `503 {code: "unavailable", message}`, `401 {code: "code_ended", message}`, `404 not_a_stream_code`, `422 invalid`,
+  `429 rate_limited` with `Retry-After`.
+
+Rate limits (§10.4): the code's own budget (`CAPTURE_CODE_LIMIT`, shared with the other phone routes), spent by the
+route before anything else; then, inside the use-case once the tok and holder checks pass (step 4; review M2), the
+console's `DEVICE_LINK_MINT_LIMIT` per client IP. Build decision (2026-10-06, for review): the per-IP bucket is the
+console's own `dlmint:<ip>` — its rule is "a reissue IS a mint: one bucket, one number" — with the IP read by the
+capture routes' `clientIpOf`.
+
+What the console still owns: its ensure and print re-show the newest live sealed link, which after a phone call is the
+phone's link (or the one the phone was given), so no printed or handed-over QR is killed by a phone. **Revoke &
+reissue stays the only path that changes a fixture's QR.** Build decision (2026-10-06, for review): where the console's
+ensure treats an envelope that will not open as a 500, the phone passes over it (a warning naming the link id only)
+and inserts a new link — W27's "whose envelope opens" — leaving that row exactly as it was.
+
+The URL is a credential (§10.2): it is never logged and stored nowhere new — the device link row stores what the
+console's links store, its hash and its sealed envelope.
+
 ### 6.4 Descriptor fields and where each comes from
 
 | Field | Source |
@@ -587,6 +651,7 @@ treats that as success (capture's answer table).
 | `holdWindowSeconds` | `{rtmps, srt}` from the ingest capability. PR-1 sets `srt` to the same `INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS` (183), because the hold is Cloudflare's per-input recording timeout and not a property of the protocol. Staging step S3 measures SRT. A guard asserts both are ≤ 999 (capture request d). |
 | `maxDurationMinutes` | The session's own value. |
 | `warmingDeadline` | `warming_at + WARMING_TIMEOUT_MINUTES`, as epoch seconds (§5.3). |
+| `stage` (W28) | ONE read per descriptor, recomputed on every read: the fixture's stage's fixtures (the board's round-code columns, through `fixtures_stage_idx`), the stage's kind and the key of the fixture's pool. `code` is the scheduler board's chip for the fixture — `boardRoundCodes` over those rows, else `R{round_no}` exactly as the board's card falls back — rendered with the label's dictionary (the org's `default_locale`, W25), so an `es` org reads `CF` for a quarter-final. `role` is `roundRoleFor` over the same rows, serialised verbatim (`kind`, plus `n` or `entrants` where the variant has one). Build decision (2026-10-06, for review): a bracket stage the board itself refuses to code — rows from before V368 with no `is_final` — gets the plain round ordinal (`plain_round`, n = the round's rank + 1), never the role `roundRoleFor` would guess from column defaults, so the role always agrees with the chip. `pool` is `pools.key` for `fixtures.pool_id` (never `pools.name`, which is English); `pools.key` has no CHECK, so a key outside `^[A-Z]$` is omitted and logged. A code outside 1–8 characters cannot be produced: the whole `stage` is omitted and logged. `fixtures.stage_id` is NOT NULL, so every fixture has a stage. |
 
 **Ingest URL rewrite.**
 
@@ -995,6 +1060,7 @@ Every reader is re-pinned in the plan with `grep -a`. Known readers today are `s
 | `capture-descriptor.v1.json` | the GET union (waiting \| session) and its error bodies |
 | `capture-beat.v1.json` | the request and the answer |
 | `capture-start.v1.json` | the request, `200`, and every refusal body |
+| `capture-scoring-link.v1.json` | W27 (2026-10-06): the request (the start's `{phone}`), `200 {url}`, and every refusal body |
 | `fixtures/capture-*/…` | per file: `valid`, one fixture per union member and per refusal, `tampered` (an extra key), `wrong-version`, plus the boundary cases (`slot` 0, `holdWindowSeconds` 999, `pollSeconds` 5 and 300) |
 
 Each file is checksum-pinned and parity-tested against its zod twin in `schemas.ts`, the v1 pattern. **The JSON
@@ -1340,7 +1406,7 @@ alter table fixture_stream_settings
 
 | Rule | Mechanism | Test |
 |---|---|---|
-| no-store | `Cache-Control: private, no-store`, `Pragma: no-cache` on every phone answer | header asserted on all three routes, success and error |
+| no-store | `Cache-Control: private, no-store`, `Pragma: no-cache` on every phone answer | header asserted on every phone route (four with W27's `…/scoring-link`), success and error |
 | never logged | No route logs a header or a body. The pino logger gains `redact` paths: `req.headers.authorization`, `*.tok`, `*.cred`, `*.streamKey`, `*.passphrase`. Sentry capture on these routes drops the request body. | A spy-logger test drives each route, including its error paths, and asserts that no captured line contains the tok, the stream key or the passphrase |
 | constant-time | §10.1 | The compare's call is asserted, and a mutation to `===` must be killed by a structural test that pins `timingSafeEqual` |
 | valid tok only | C1 | wrong tok, ended code, unknown code, a non-current phone, a missing `phone` (G0-d) and an ended session (`completed` / `failed`) all receive **no `cred`** |
@@ -1367,7 +1433,10 @@ At the Cloudflare edge (adopted 2026-09-22), staging step S5 checks that `/api/v
 - **Presets in `rate-limit.ts`:**
   - `CAPTURE_CODE_LIMIT`: 120 requests per 60 s per `code`;
   - `CAPTURE_FAIL_LIMIT`: 30 failed 401s per 60 s per IP, keyed through the existing `ipKey`;
-  - `CAPTURE_START_LIMIT`: 6 per 60 s per `code`.
+  - `CAPTURE_START_LIMIT`: 6 per 60 s per `code`;
+  - W27's `…/scoring-link` (2026-10-06): the code's budget, then the console's `DEVICE_LINK_MINT_LIMIT` (10 per 60 s)
+    per client IP, in the console's own `dlmint:` bucket (§6.3.5) — spent only past the tok and holder checks
+    (amended 2026-10-07, review M2).
 - **Retry-After.** `HttpError` gains an optional `headers` field, and `handler()` and `v1()` set it. The limiter's 429
   carries `Retry-After` = the window's remaining seconds (capture request c; amended, §17.4). Nothing in `apps/web` sets
   `Retry-After` today. This is the first use, and a unit test pins it.

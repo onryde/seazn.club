@@ -79,6 +79,55 @@
           "description": "Where the phone POSTs Go live: {origin}/api/v1/capture/codes/{code}/start (§6.4, §6.3.4).",
           "type": "string",
           "format": "uri"
+        },
+        "stage": {
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8
+            },
+            "role": {
+              "description": "The engine's round role for this match, serialised verbatim: kind, plus n or entrants where the role has one (W28).",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "The role's kind. An OPEN string: today's values are `round_of`, `quarter_final`, `semi_final`, `final`, `winners_final`, `losers_round`, `losers_final`, `grand_final`, `grand_final_reset`, `third_place`, `qualifier1`, `eliminator`, `qualifier2`, `rung`, `plain_round`. Consumers show nothing for an unknown kind — a newer server may send one (W28).",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "n": {
+                  "description": "The round number the role carries (losers_round, rung, plain_round), from 1 (W28).",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "entrants": {
+                  "description": "round_of only: how many entrants the round starts with, from 2 (W28).",
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            "pool": {
+              "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
+              "type": "string",
+              "pattern": "^[A-Z]$"
+            }
+          },
+          "required": [
+            "code",
+            "role"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -230,6 +279,55 @@
           "description": "Where the phone POSTs Go live: {origin}/api/v1/capture/codes/{code}/start (§6.4, §6.3.4).",
           "type": "string",
           "format": "uri"
+        },
+        "stage": {
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8
+            },
+            "role": {
+              "description": "The engine's round role for this match, serialised verbatim: kind, plus n or entrants where the role has one (W28).",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "The role's kind. An OPEN string: today's values are `round_of`, `quarter_final`, `semi_final`, `final`, `winners_final`, `losers_round`, `losers_final`, `grand_final`, `grand_final_reset`, `third_place`, `qualifier1`, `eliminator`, `qualifier2`, `rung`, `plain_round`. Consumers show nothing for an unknown kind — a newer server may send one (W28).",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "n": {
+                  "description": "The round number the role carries (losers_round, rung, plain_round), from 1 (W28).",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "entrants": {
+                  "description": "round_of only: how many entrants the round starts with, from 2 (W28).",
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            "pool": {
+              "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
+              "type": "string",
+              "pattern": "^[A-Z]$"
+            }
+          },
+          "required": [
+            "code",
+            "role"
+          ],
+          "additionalProperties": false
         },
         "cred": {
           "description": "present only to the slot's current phone; absent = claim first (G0-d). Only in warming, live and ending (§6.3.1, §10.2, §17.5).",
@@ -458,6 +556,55 @@
           "type": "string",
           "format": "uri"
         },
+        "stage": {
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8
+            },
+            "role": {
+              "description": "The engine's round role for this match, serialised verbatim: kind, plus n or entrants where the role has one (W28).",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "The role's kind. An OPEN string: today's values are `round_of`, `quarter_final`, `semi_final`, `final`, `winners_final`, `losers_round`, `losers_final`, `grand_final`, `grand_final_reset`, `third_place`, `qualifier1`, `eliminator`, `qualifier2`, `rung`, `plain_round`. Consumers show nothing for an unknown kind — a newer server may send one (W28).",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "n": {
+                  "description": "The round number the role carries (losers_round, rung, plain_round), from 1 (W28).",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "entrants": {
+                  "description": "round_of only: how many entrants the round starts with, from 2 (W28).",
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            "pool": {
+              "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
+              "type": "string",
+              "pattern": "^[A-Z]$"
+            }
+          },
+          "required": [
+            "code",
+            "role"
+          ],
+          "additionalProperties": false
+        },
         "cred": {
           "description": "present only to the slot's current phone; absent = claim first (G0-d). Only in warming, live and ending (§6.3.1, §10.2, §17.5).",
           "type": "object",
@@ -684,6 +831,55 @@
           "description": "Where the phone POSTs Go live: {origin}/api/v1/capture/codes/{code}/start (§6.4, §6.3.4).",
           "type": "string",
           "format": "uri"
+        },
+        "stage": {
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8
+            },
+            "role": {
+              "description": "The engine's round role for this match, serialised verbatim: kind, plus n or entrants where the role has one (W28).",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "The role's kind. An OPEN string: today's values are `round_of`, `quarter_final`, `semi_final`, `final`, `winners_final`, `losers_round`, `losers_final`, `grand_final`, `grand_final_reset`, `third_place`, `qualifier1`, `eliminator`, `qualifier2`, `rung`, `plain_round`. Consumers show nothing for an unknown kind — a newer server may send one (W28).",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "n": {
+                  "description": "The round number the role carries (losers_round, rung, plain_round), from 1 (W28).",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "entrants": {
+                  "description": "round_of only: how many entrants the round starts with, from 2 (W28).",
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            "pool": {
+              "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
+              "type": "string",
+              "pattern": "^[A-Z]$"
+            }
+          },
+          "required": [
+            "code",
+            "role"
+          ],
+          "additionalProperties": false
         },
         "cred": {
           "description": "present only to the slot's current phone; absent = claim first (G0-d). Only in warming, live and ending (§6.3.1, §10.2, §17.5).",
@@ -926,6 +1122,55 @@
           "type": "string",
           "format": "uri"
         },
+        "stage": {
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8
+            },
+            "role": {
+              "description": "The engine's round role for this match, serialised verbatim: kind, plus n or entrants where the role has one (W28).",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "The role's kind. An OPEN string: today's values are `round_of`, `quarter_final`, `semi_final`, `final`, `winners_final`, `losers_round`, `losers_final`, `grand_final`, `grand_final_reset`, `third_place`, `qualifier1`, `eliminator`, `qualifier2`, `rung`, `plain_round`. Consumers show nothing for an unknown kind — a newer server may send one (W28).",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "n": {
+                  "description": "The round number the role carries (losers_round, rung, plain_round), from 1 (W28).",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "entrants": {
+                  "description": "round_of only: how many entrants the round starts with, from 2 (W28).",
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            "pool": {
+              "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
+              "type": "string",
+              "pattern": "^[A-Z]$"
+            }
+          },
+          "required": [
+            "code",
+            "role"
+          ],
+          "additionalProperties": false
+        },
         "endReason": {
           "description": "Why the broadcast ended, on the wire (§6.8.4): every DB end or fail reason maps to exactly one value. `failed` is a server-side end that is neither a stop nor a timeout (G0-f), including a completed session with no recorded end reason (R11).",
           "type": "string",
@@ -1098,6 +1343,55 @@
           "type": "string",
           "format": "uri"
         },
+        "stage": {
+          "description": "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8
+            },
+            "role": {
+              "description": "The engine's round role for this match, serialised verbatim: kind, plus n or entrants where the role has one (W28).",
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "The role's kind. An OPEN string: today's values are `round_of`, `quarter_final`, `semi_final`, `final`, `winners_final`, `losers_round`, `losers_final`, `grand_final`, `grand_final_reset`, `third_place`, `qualifier1`, `eliminator`, `qualifier2`, `rung`, `plain_round`. Consumers show nothing for an unknown kind — a newer server may send one (W28).",
+                  "type": "string",
+                  "minLength": 1
+                },
+                "n": {
+                  "description": "The round number the role carries (losers_round, rung, plain_round), from 1 (W28).",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "entrants": {
+                  "description": "round_of only: how many entrants the round starts with, from 2 (W28).",
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            "pool": {
+              "description": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
+              "type": "string",
+              "pattern": "^[A-Z]$"
+            }
+          },
+          "required": [
+            "code",
+            "role"
+          ],
+          "additionalProperties": false
+        },
         "endReason": {
           "description": "Why the broadcast ended, on the wire (§6.8.4): every DB end or fail reason maps to exactly one value. `failed` is a server-side end that is neither a stop nor a timeout (G0-f), including a completed session with no recorded end reason (R11).",
           "type": "string",
@@ -1190,7 +1484,8 @@
                 "not_entitled",
                 "unavailable",
                 "invalid",
-                "rate_limited"
+                "rate_limited",
+                "match_finished"
               ]
             },
             "message": {

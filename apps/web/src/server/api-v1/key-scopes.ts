@@ -348,6 +348,8 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /capture/codes/:code",
   "POST /capture/codes/:code/beats",
   "POST /capture/codes/:code/start",
+  // W27 (§6.3.5, 2026-10-06): the phone's scoring link hands out a device link — a credential, like the console's mint.
+  "POST /capture/codes/:code/scoring-link",
   "GET /orgs/:id/stream-targets",
   "POST /orgs/:id/stream-targets",
   "PATCH /orgs/:id/stream-targets/:targetId",

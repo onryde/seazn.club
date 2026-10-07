@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
-  CaptureBeat, CaptureBeatAnswer, CaptureDescriptor, CaptureRefusal, CaptureStartBody, CaptureStartOk,
+  CaptureBeat, CaptureBeatAnswer, CaptureDescriptor, CaptureRefusal, CaptureScoringLinkOk, CaptureStartBody, CaptureStartOk,
 } from "../apps/web/src/server/api-v1/capture-schemas.ts";
 import { CaptureQrV2 } from "../apps/web/src/lib/capture-qr.ts";
 
@@ -55,6 +55,22 @@ const COMMON_PROSE = (scheduledStart: string): Record<string, string> => ({
   overlayUrl: "The scorebug overlay page, or null when the org lacks streaming.overlay (§6.4.1, W11, W18).",
   pollSeconds: "How often the phone polls and beats, 5 to 300 seconds (§6.6, §6.9).",
 });
+
+/** W28 (2026-10-06): the descriptor's `stage`, on every state. The kinds are the engine's `RoundRole` kinds as of
+ *  2026-10-06; capture-contract.test.ts pins this list against the engine's own type. */
+const ROLE_KINDS = [
+  "round_of", "quarter_final", "semi_final", "final", "winners_final", "losers_round", "losers_final", "grand_final",
+  "grand_final_reset", "third_place", "qualifier1", "eliminator", "qualifier2", "rung", "plain_round",
+];
+const STAGE_PROSE: Record<string, string> = {
+  stage: "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role and the pool. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
+  "stage.code": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
+  "stage.role": "The engine's round role for this match, serialised verbatim: kind, plus n or entrants where the role has one (W28).",
+  "stage.role.kind": `The role's kind. An OPEN string: today's values are ${ROLE_KINDS.map((k) => `\`${k}\``).join(", ")}. Consumers show nothing for an unknown kind — a newer server may send one (W28).`,
+  "stage.role.n": "The round number the role carries (losers_round, rung, plain_round), from 1 (W28).",
+  "stage.role.entrants": "round_of only: how many entrants the round starts with, from 2 (W28).",
+  "stage.pool": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
+};
 
 const contracts: Contract[] = [
   {
@@ -105,6 +121,7 @@ const contracts: Contract[] = [
         "cred.srt.latencyMs": "SRT_LATENCY_MS, 2000 (§6.4).",
         "cred.rtmps.url": "the environment's live.* host (live.seazn.club / live.stg.seazn.club) (§6.4, W15, G0-i).",
         endReason: END_REASON,
+        ...STAGE_PROSE,
       },
     },
     defs: {
@@ -178,6 +195,29 @@ const contracts: Contract[] = [
       refusal: {
         twin: CaptureRefusal,
         description: "Every refusal: `code` is the machine word the phone keys its copy on; `message` is a developer string, never shown (§4). 409 already_live (with sid and startedBy), 409 replaced, 409 no_destination, 402 no_credit, 403 not_entitled, 503 unavailable, 401 code_ended; 422 invalid and 429 rate_limited (with Retry-After) (§6.3.4, §6.7.2).",
+        props: REFUSAL,
+      },
+    },
+  },
+  {
+    file: "capture-scoring-link.v1.json",
+    title: "Seazn capture scoring link, v1: POST /api/v1/capture/codes/{code}/scoring-link",
+    root: {
+      twin: CaptureStartBody,
+      description: `The match's Remote scoring link, for the slot's current phone (${SPEC} §6.3.5, W27, added 2026-10-06): the request body, the start's own. $defs.ok is the 200 answer and $defs.refusal every refusal body. The server never removes or replaces an existing link: it returns the match's live link, or creates one. A repeat call returns the same url. ${PINNED_BY}`,
+      props: {
+        phone: "The phone's own install id. A phone that is not the slot's current phone gets 409 replaced (§6.3.5).",
+      },
+    },
+    defs: {
+      ok: {
+        twin: CaptureScoringLinkOk,
+        description: "200: the match's Remote scoring link (§6.3.5, W27). The bare shape, never an {ok, data} envelope (§4).",
+        props: { url: "The scoring pad's address: the server's https origin, /score/, and the link's secret (dl_ and 43 base64url characters). It is a credential: open it, show it as a QR, never log it." },
+      },
+      refusal: {
+        twin: CaptureRefusal,
+        description: "Every refusal: `code` is the machine word the phone keys its copy on; `message` is a developer string, never shown (§4). 409 replaced (not the slot's current phone), 409 match_finished (the match is finalized or cancelled), 402 not_entitled (the plan has no scoring links), 503 unavailable, 401 code_ended, 404 not_a_stream_code; 422 invalid and 429 rate_limited (with Retry-After) (§6.3.5, W27).",
         props: REFUSAL,
       },
     },

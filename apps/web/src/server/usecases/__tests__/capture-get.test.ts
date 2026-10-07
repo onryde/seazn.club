@@ -100,6 +100,9 @@ async function expectedWaiting(r: CaptureRig, o: { label: string; pollSeconds: n
     heartbeatUrl: `${ORIGIN}/api/v1/capture/codes/${r.code}/beats`,
     startUrl: `${ORIGIN}/api/v1/capture/codes/${r.code}/start`,
     ...(o.scheduledStart !== undefined ? { scheduledStart: o.scheduledStart } : {}),
+    // W28 (2026-10-06): the rig's fixture is round 1 of a league — the board's chip R1, the engine's plain round 1.
+    // capture-stage.test.ts derives every family's stage from the board and the engine; this is the rig's one value.
+    stage: { code: "R1", role: { kind: "plain_round", n: 1 } },
   };
 }
 

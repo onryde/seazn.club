@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seazn.club/contracts/capture-scoring-link.v1.json",
+  "title": "Seazn capture scoring link, v1: POST /api/v1/capture/codes/{code}/scoring-link",
+  "description": "The match's Remote scoring link, for the slot's current phone (capture QR v2 spec 2026-10-01 §6.3.5, W27, added 2026-10-06): the request body, the start's own. $defs.ok is the 200 answer and $defs.refusal every refusal body. The server never removes or replaces an existing link: it returns the match's live link, or creates one. A repeat call returns the same url. Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "type": "object",
+  "properties": {
+    "phone": {
+      "description": "The phone's own install id. A phone that is not the slot's current phone gets 409 replaced (§6.3.5).",
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "phone"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "ok": {
+      "description": "200: the match's Remote scoring link (§6.3.5, W27). The bare shape, never an {ok, data} envelope (§4).",
+      "type": "object",
+      "properties": {
+        "url": {
+          "description": "The scoring pad's address: the server's https origin, /score/, and the link's secret (dl_ and 43 base64url characters). It is a credential: open it, show it as a QR, never log it.",
+          "type": "string",
+          "pattern": "^https:\\/\\/[^/]+\\/score\\/dl_[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false
+    },
+    "refusal": {
+      "description": "Every refusal: `code` is the machine word the phone keys its copy on; `message` is a developer string, never shown (§4). 409 replaced (not the slot's current phone), 409 match_finished (the match is finalized or cancelled), 402 not_entitled (the plan has no scoring links), 503 unavailable, 401 code_ended, 404 not_a_stream_code; 422 invalid and 429 rate_limited (with Retry-After) (§6.3.5, W27).",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The machine word the phone keys its copy on (§4).",
+              "type": "string",
+              "const": "already_live"
+            },
+            "message": {
+              "description": "A plain English developer string; the phone never shows it (§4).",
+              "type": "string"
+            },
+            "sid": {
+              "description": "already_live only: the session that is already live (§6.3.4, ask 4).",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "startedBy": {
+              "description": "already_live only: who started it (§6.3.4, ask 4).",
+              "type": "string",
+              "enum": [
+                "organiser",
+                "automatic",
+                "operator"
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "sid",
+            "startedBy"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The machine word the phone keys its copy on (§4).",
+              "type": "string",
+              "enum": [
+                "code_ended",
+                "not_a_stream_code",
+                "replaced",
+                "no_destination",
+                "no_credit",
+                "not_entitled",
+                "unavailable",
+                "invalid",
+                "rate_limited",
+                "match_finished"
+              ]
+            },
+            "message": {
+              "description": "A plain English developer string; the phone never shows it (§4).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

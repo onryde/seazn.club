@@ -313,9 +313,9 @@ describe("scrubSentryEvent — the capture phone routes (A18)", () => {
     breadcrumbs: [{ category: "fetch", data: { url: `/api/v1/capture/codes/${CODE}/start` } }],
   });
 
-  it("each phone route (GET, beats, start), either header case: the code in every string, the Bearer and the request body are gone", () => {
+  it("each phone route (GET, beats, start, W27's scoring-link), either header case: the code in every string, the Bearer and the request body are gone", () => {
     let checked = 0;
-    for (const path of ["", "/beats", "/start"]) {
+    for (const path of ["", "/beats", "/start", "/scoring-link"]) {
       for (const headerName of ["authorization", "Authorization"]) {
         const out = scrubSentryEvent(captureEvent(path, headerName));
         const text = JSON.stringify(out);
@@ -329,7 +329,7 @@ describe("scrubSentryEvent — the capture phone routes (A18)", () => {
         checked++;
       }
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(8);
   });
 
   it("an event that names the route in its TRANSACTION alone (no request URL) is a capture event too: Bearer and body gone", () => {

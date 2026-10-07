@@ -1,7 +1,8 @@
 import "server-only";
 // server/usecases/capture-phone.ts — the phone-facing use-cases of capture QR v2 (§6.3): the descriptor (`getCode`,
-// T8a), the beat (`postBeat`, T8b), the phone's own start (`postStart`, T8c), and the waiting-fields builder both
-// answers share, so the two never disagree (R7: ONE owner of the length fit).
+// T8a), the beat (`postBeat`, T8b), the phone's own start (`postStart`, T8c), the match's Remote scoring link
+// (`postScoringLink`, W27), and the waiting-fields builder both answers share, so the two never disagree (R7: ONE owner
+// of the length fit).
 //
 // R1 (§17.1): the V430 tables are FORCE RLS with no policy, so every read here goes through the non-tenant `sql` —
 // never `withTenant` — and the org is the code row's (`resolveStreamCode`). Each answer is built field by field, never
@@ -10,6 +11,7 @@ import "server-only";
 import { sql, type Tx } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { captureError } from "@/lib/sentry";
 import { getDictionary, t, toLocale } from "@/lib/i18n";
@@ -18,7 +20,7 @@ import { defaultThemeFor } from "@/components/overlay/theme-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import {
   CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartBody,
-  type CaptureStartedBy, type CaptureStartOk,
+  CaptureScoringLinkOk, type CaptureStage, type CaptureStartedBy, type CaptureStartOk,
 } from "@/server/api-v1/capture-schemas";
 import type { z } from "zod";
 import { log } from "@/server/logger";
@@ -39,6 +41,8 @@ import { ingestCred } from "@/server/relay/ingest-cred";
 import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
+import { captureStageOf } from "./capture-stage";
+import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
 import { fixtureStreamTarget, resolveStreamCode, type ResolvedCode } from "./stream-codes";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
@@ -185,13 +189,15 @@ export async function captureCommon(
   };
 }
 
-/** The waiting shape's fields, picked by name (the strict wire): `scheduledStart` is OMITTED when null (§6.4). */
-function waitingFieldsOf(w: CaptureCommon) {
+/** The waiting shape's fields, picked by name (the strict wire): `scheduledStart` is OMITTED when null (§6.4), and so
+ *  is W28's `stage` when no code can be produced (`captureStageOf`) — on every shape, since every shape spreads this. */
+function waitingFieldsOf(w: CaptureCommon, stage: CaptureStage | null) {
   return {
     code: w.code, label: w.label, venueTimezone: w.venueTimezone,
     ...(w.scheduledStart !== null ? { scheduledStart: w.scheduledStart } : {}),
     pollSeconds: w.pollSeconds, autoAllowed: w.autoAllowed, destinationName: w.destinationName, overlayUrl: w.overlayUrl,
     heartbeatUrl: w.heartbeatUrl, startUrl: w.startUrl,
+    ...(stage !== null ? { stage } : {}),
   };
 }
 
@@ -212,17 +218,20 @@ export async function getCode(
   const latest = await latestSession(resolved.fixtureId);
   const open = latest !== null && isActive(latest.state) ? latest.state : null;
   const common = await captureCommon({ orgId: resolved.orgId, fixtureId: resolved.fixtureId, code }, { open, themeId: latest?.theme_id ?? null }, deps, now);
+  // W28: the descriptor's own read (the beat answer carries no stage), recomputed on every GET.
+  const stage = await captureStageOf(resolved.orgId, resolved.fixtureId);
 
   const sessionShape = q.phone !== null && latest !== null && (
     latest.state === "warming" || latest.state === "live" || latest.state === "ending"
     || ((latest.state === "completed" || latest.state === "failed") && latest.warming_at !== null)
   );
-  if (!sessionShape) return { state: "waiting", ...waitingFieldsOf(common) };
-  return sessionDescriptor(resolved, latest!, q, common, deps, now);
+  if (!sessionShape) return { state: "waiting", ...waitingFieldsOf(common, stage) };
+  return sessionDescriptor(resolved, latest!, q, common, stage, deps, now);
 }
 
 async function sessionDescriptor(
-  resolved: ResolvedCode, s: LatestSession, q: { slot: number; phone: string | null }, common: CaptureCommon, deps: SessionDeps, now: Date,
+  resolved: ResolvedCode, s: LatestSession, q: { slot: number; phone: string | null }, common: CaptureCommon, stage: CaptureStage | null,
+  deps: SessionDeps, now: Date,
 ): Promise<Descriptor> {
   // A deployment with no relay has no capability to read and no playback to name: the phone waits and retries.
   if (deps.drivers.disabled) throw unavailable("relay_disabled");
@@ -248,7 +257,7 @@ async function sessionDescriptor(
     // A8: the SAME anchor as the warming timeout — warming_at, or created_at for a session opened before V430.
     warmingDeadline: Math.floor((new Date(s.warming_at ?? s.created_at).getTime() + WARMING_TIMEOUT_MINUTES * 60_000) / 1000),
     scoreUpdates: common.scoreUpdates,
-    ...waitingFieldsOf(common),
+    ...waitingFieldsOf(common, stage),
   };
   const withCred = cred !== null ? { cred } : {};
   switch (s.state) {
@@ -687,4 +696,80 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
     // The running session ended between admission and this read: nothing to name — the phone's "try again".
     throw new CaptureRefusalError(503, "unavailable", "a session was running and has just ended; try again");
   }
+}
+
+// ---------------------------------------------------------------------------
+// W27 — the phone's Remote scoring link (§6.3.5, owner sign-off 2026-10-06)
+// ---------------------------------------------------------------------------
+
+/** W27: the origin the URL is built on must be https — the agreed pattern is `^https://[^/]+/score/dl_…`. Checked BEFORE
+ *  the link is provided, so a deployment that would serve a URL the phone's parser rejects writes nothing. */
+const HTTPS_ORIGIN = /^https:\/\/[^/]+$/;
+
+/** T12's holder check exactly as the start runs it (`holderOf`, session or none) — any other phone → 409 replaced —
+ *  returning the code BRANDED as checked (review M5): the only value `provideDeviceLinkForPhone` accepts, and this the
+ *  only place that brands one. */
+async function currentPhoneCode(resolved: ResolvedCode, phone: string): Promise<HolderVerifiedCode> {
+  const open = await openSessionOf(sql, resolved.fixtureId);
+  const current = await holderOf(sql, resolved.codeId, open);
+  if (!current || current.phone !== phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
+  return resolved as HolderVerifiedCode;
+}
+
+/** SQLSTATE 23503, as `postgres` reports it (`code`; lib/billing.ts reads the same shape off a real failure). */
+const isForeignKeyViolation = (err: unknown): boolean =>
+  typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23503";
+
+/**
+ * `POST /capture/codes/{code}/scoring-link` (§6.3.5, W27): the match's Remote scoring link, for the slot's CURRENT phone.
+ * In order:
+ *  - resolve as a `start` call: an ENDED code serves nothing here, even to its open session's phone (C1b) → 401;
+ *  - the start's own holder check (T12, `holderOf`), session or none: any other phone → 409 replaced;
+ *  - the origin is https (the contract's pattern), else 503 unavailable with nothing written;
+ *  - the console's mint budget, `DEVICE_LINK_MINT_LIMIT` per client IP in its own `dlmint:` bucket ("a reissue IS a
+ *    mint: one bucket, one number") → 429 rate_limited. Spent HERE, past the tok and holder checks (review M2): a caller
+ *    without the tok, or a replaced phone, never drains the bucket the organiser's console shares. Every call that
+ *    reaches it spends it, a re-shown link included — as the console's ensure does;
+ *  - `provideDeviceLinkForPhone`: the console's plan gate (→ 402 not_entitled), then under the fixture's link lock a
+ *    finished match (→ 409 match_finished, nothing written), else the live sealed link or a new one — NEVER revoking
+ *    (the owner's rule: "must not remove or replace any existing QR"). A missing DEVICE_LINK_KEK → 503 unavailable;
+ *    the link insert breaking a foreign key (the code's issuer deleted) → 401 code_ended, warned, not reported.
+ * 200 `{url}` = `captureOrigin()` + `/score/` + the secret. The URL is a credential: it is never logged, and it is
+ * stored nowhere new (the row holds the hash and the sealed envelope, as every console link does).
+ */
+export async function postScoringLink(
+  rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date, clientIp: string,
+): Promise<CaptureScoringLinkOk> {
+  const resolved = await resolveStreamCode(rawCode, tok, "start", body.phone, now);
+  const checked = await currentPhoneCode(resolved, body.phone);
+  const origin = captureOrigin(deps);
+  if (!HTTPS_ORIGIN.test(origin)) {
+    log.error({ fixtureId: resolved.fixtureId, origin }, "capture scoring link: the server's origin is not https; no link is served");
+    throw new CaptureRefusalError(503, "unavailable", "scoring links need https, and this server's origin is not https (origin_not_https)");
+  }
+  await rateLimit(`dlmint:${clientIp}`, DEVICE_LINK_MINT_LIMIT);
+  let got: PhoneScoringLink;
+  try {
+    got = await provideDeviceLinkForPhone(checked);
+  } catch (err) {
+    if (err instanceof PaymentRequiredError) throw new CaptureRefusalError(402, "not_entitled", `the plan lacks ${err.featureKey}`);
+    if (err instanceof HttpError && err.code === "DEVICE_LINK_KEK_MISSING") {
+      throw new CaptureRefusalError(503, "unavailable", "scoring links are not configured on this server");
+    }
+    // The only write is the link insert, and a foreign key it breaks means the code's world is gone — in practice its
+    // issuer deleted (`fixture_stream_codes.issued_by` has no foreign key; `device_links.issued_by` does). No retry
+    // can succeed, so it is the code's end (review M4): the ONE 401, which sends the phone back for a new QR. Expected,
+    // not a fault — a warn naming the code's id and nothing else, never Sentry.
+    if (isForeignKeyViolation(err)) {
+      log.warn({ codeId: resolved.codeId }, "capture scoring link: the link insert broke a foreign key (the code's issuer is gone); answered code_ended");
+      throw codeEnded();
+    }
+    throw err;
+  }
+  if (got.kind === "finished") throw new CaptureRefusalError(409, "match_finished", `the match is ${got.status}; it has no scoring link`);
+  const answer = CaptureScoringLinkOk.safeParse({ url: `${origin}/score/${got.secret}` });
+  // An assumption made a guard: every secret is `mintDeviceLinkSecret`'s and the origin was checked above. Refused by
+  // name (a logged 503) rather than served to a parser that rejects it — and never with the URL in the message.
+  if (!answer.success) throw new Error("postScoringLink: the scoring link does not match the contract's url pattern");
+  return answer.data;
 }

@@ -73,8 +73,12 @@ describe("dlink.desc also says the link stops once its result moves the competit
 // Owner ruling (2026-09-23): the plain-Revoke warning says NO replacement is
 // made and points at Revoke & reissue by ITS ON-SCREEN LABEL in that locale —
 // read from the same dictionary, so a relabel moves this test with it. Its first
-// sentence is the reissue warning's, word for word: both doors kill the QR.
+// sentence is the reissue warning's FIRST sentence, word for word: both doors
+// kill the QR. (Since G1, 2026-10-07, the reissue warning has a second sentence
+// of its own, about the streaming phone.)
 const DICTS = { en, es, fr, nl } as Record<string, Record<string, string>>;
+/** A warning's sentences: split after . ! ? followed by whitespace. */
+const sentencesOf = (text: string): string[] => text.split(/(?<=[.!?])\s+/);
 
 describe("dlink.revokeWarn: no replacement, and the way to get one (owner ruling 2026-09-23)", () => {
   it("en is the owner's sentence, verbatim", () => {
@@ -86,9 +90,54 @@ describe("dlink.revokeWarn: no replacement, and the way to get one (owner ruling
   it.each(Object.keys(DICTS))("%s: opens with the reissue warning and names that locale's Revoke & reissue control", (locale) => {
     const d = DICTS[locale]!;
     const warn = d["dlink.revokeWarn"]!;
-    expect(warn.startsWith(d["dlink.reissueWarn"]!), warn).toBe(true);
+    const shared = sentencesOf(d["dlink.reissueWarn"]!)[0]!;
+    expect(warn.startsWith(shared), warn).toBe(true);
     expect(warn).toContain(d["dlink.reissue"]!);
-    expect(warn.length, "a second sentence follows the shared one").toBeGreaterThan(d["dlink.reissueWarn"]!.length + 20);
+    expect(warn.length, "a second sentence follows the shared one").toBeGreaterThan(shared.length + 20);
+  });
+});
+
+// G1 owner ruling (2026-10-07, capture QR v2 W27): device-link Revoke & reissue
+// keeps its behaviour — it does NOT lock out a paired capture phone, which can
+// fetch the new scoring link — so its warning tells the organiser to reissue the
+// match's streaming QR too. The first sentence is unchanged; one short sentence
+// follows. The en text is the owner's meaning, pinned verbatim; the other three
+// are pinned by their own words for the streaming QR (the copy IS the source of
+// truth here) and by the panel's own word for "paired", read from that locale's
+// `stream.code.paired` so the warning speaks the streaming panel's vocabulary.
+const REISSUE_FIRST: Record<string, string> = {
+  en: "The QR already handed out or printed for this match will stop working.",
+  es: "El QR ya entregado o impreso para este partido dejará de funcionar.",
+  fr: "Le QR déjà remis ou imprimé pour ce match ne fonctionnera plus.",
+  nl: "De QR die al is uitgedeeld of geprint voor deze wedstrijd werkt dan niet meer.",
+};
+const STREAMING_QR: Record<string, string> = {
+  en: "streaming QR",
+  es: "QR de transmisión",
+  fr: "QR de diffusion",
+  nl: "stream-QR",
+};
+
+describe("dlink.reissueWarn also says to reissue the streaming QR (G1 owner ruling 2026-10-07)", () => {
+  it("en: the existing sentence, then the streaming phone's — verbatim", () => {
+    expect(en["dlink.reissueWarn"]).toBe(
+      "The QR already handed out or printed for this match will stop working. If a streaming phone is paired to this match, it can fetch the new link — reissue the match's streaming QR too to lock that phone out.",
+    );
+  });
+
+  it("parity: every locale keeps its first sentence and adds ONE sentence naming its streaming QR and its own word for paired", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS)) {
+      const warn = d["dlink.reissueWarn"]!;
+      const sentences = sentencesOf(warn);
+      expect(sentences, `${locale}: two sentences`).toHaveLength(2);
+      expect(sentences[0], `${locale}: the first sentence is unchanged`).toBe(REISSUE_FIRST[locale]);
+      expect(sentences[1], `${locale}: names the streaming QR`).toContain(STREAMING_QR[locale]!);
+      expect(sentences[1]!.toLowerCase(), `${locale}: the streaming panel's word for paired`).toContain(d["stream.code.paired"]!.toLowerCase());
+      expect(sentences[1], `${locale}: a full sentence`).toMatch(/\S.*\.$/);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });
 

@@ -2813,7 +2813,7 @@
   "dlink.showQr": "Afficher le QR",
   "dlink.revoke": "Révoquer",
   "dlink.reissue": "Révoquer et réémettre",
-  "dlink.reissueWarn": "Le QR déjà remis ou imprimé pour ce match ne fonctionnera plus.",
+  "dlink.reissueWarn": "Le QR déjà remis ou imprimé pour ce match ne fonctionnera plus. Si un téléphone de diffusion est associé à ce match, il pourra récupérer le nouveau lien : réémettez aussi le QR de diffusion du match pour bloquer ce téléphone.",
   "dlink.reissueConfirm": "Oui, réémettre",
   "dlink.revokeWarn": "Le QR déjà remis ou imprimé pour ce match ne fonctionnera plus. Aucun remplacement n'est créé — utilisez Révoquer et réémettre s'il vous en faut un nouveau.",
   "dlink.revokeConfirm": "Oui, révoquer",

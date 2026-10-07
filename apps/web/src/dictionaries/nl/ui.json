@@ -2768,7 +2768,7 @@
   "dlink.showQr": "QR tonen",
   "dlink.revoke": "Intrekken",
   "dlink.reissue": "Intrekken en opnieuw uitgeven",
-  "dlink.reissueWarn": "De QR die al is uitgedeeld of geprint voor deze wedstrijd werkt dan niet meer.",
+  "dlink.reissueWarn": "De QR die al is uitgedeeld of geprint voor deze wedstrijd werkt dan niet meer. Is er een streamtelefoon aan deze wedstrijd gekoppeld, dan kan die de nieuwe link ophalen — geef ook de stream-QR van de wedstrijd opnieuw uit om die telefoon buiten te sluiten.",
   "dlink.reissueConfirm": "Ja, opnieuw uitgeven",
   "dlink.revokeWarn": "De QR die al is uitgedeeld of geprint voor deze wedstrijd werkt dan niet meer. Er komt geen vervanging — gebruik Intrekken en opnieuw uitgeven als je een nieuwe nodig hebt.",
   "dlink.revokeConfirm": "Ja, intrekken",

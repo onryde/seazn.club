@@ -87,7 +87,8 @@
                 "not_entitled",
                 "unavailable",
                 "invalid",
-                "rate_limited"
+                "rate_limited",
+                "match_finished"
               ]
             },
             "message": {

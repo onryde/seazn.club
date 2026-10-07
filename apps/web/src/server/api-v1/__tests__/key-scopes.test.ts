@@ -58,12 +58,14 @@ describe("matchKeyRoute", () => {
     expect(matchKeyRoute("POST", "/api/v1/capture/codes/0123456789ab/beats")).toBeNull();
   });
 
-  it("capture QR v2 (T8c, A16): the phone's start is never key-reachable — and an org API key on EACH of the three phone routes finds no key rule", () => {
+  it("capture QR v2 (T8c, A16; W27): the phone's start and its scoring link are never key-reachable — and an org API key on EACH of the four phone routes finds no key rule", () => {
     expect(NEVER_KEY_ROUTES).toContain("POST /capture/codes/:code/start");
+    expect(NEVER_KEY_ROUTES).toContain("POST /capture/codes/:code/scoring-link");
     const phoneRoutes: [string, string][] = [
       ["GET", "/capture/codes/:code"],
       ["POST", "/capture/codes/:code/beats"],
       ["POST", "/capture/codes/:code/start"],
+      ["POST", "/capture/codes/:code/scoring-link"],
     ];
     let checked = 0;
     for (const [method, path] of phoneRoutes) {
@@ -71,7 +73,7 @@ describe("matchKeyRoute", () => {
       expect(matchKeyRoute(method, `/api/v1${path.replace(":code", "0123456789ab")}`), `${method} ${path}`).toBeNull();
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
   });
 
   it("maps the scoring doors to the score scope with a pin", () => {

@@ -354,15 +354,17 @@ const keyForm = (method: string, path: string) => `${method.toUpperCase()} ${pat
 const STREAM_ROUTE = /\/(stream-sessions|stream-targets|stream-code|stream-phone|stream-settings)(\/|$)/;
 const streamRoutes = ROUTES.filter((r) => STREAM_ROUTE.test(r.path));
 
-// The relay pin's sibling for the PHONE's routes (capture QR v2 A16): the internal `capture` tag holds exactly the three
-// operations the capture app calls, each banned from API keys by name, never merely unlisted.
+// The relay pin's sibling for the PHONE's routes (capture QR v2 A16): the internal `capture` tag holds exactly the four
+// operations the capture app calls (W27's scoring link the fourth, 2026-10-06), each banned from API keys by name, never
+// merely unlisted.
 const captureRoutes = ROUTES.filter((r) => r.tag === "capture");
 
 describe("the phone's capture routes are never key-reachable (A16)", () => {
-  it("the `capture` tag holds exactly the THREE phone operations; each is an explicit NEVER_KEY_ROUTES entry AND resolves to no key rule on a concrete path", () => {
+  it("the `capture` tag holds exactly the FOUR phone operations; each is an explicit NEVER_KEY_ROUTES entry AND resolves to no key rule on a concrete path", () => {
     expect(captureRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
       "GET /capture/codes/:code",
       "POST /capture/codes/:code/beats",
+      "POST /capture/codes/:code/scoring-link",
       "POST /capture/codes/:code/start",
     ]);
     let checked = 0;
@@ -373,7 +375,7 @@ describe("the phone's capture routes are never key-reachable (A16)", () => {
       expect(matchKeyRoute(r.method, concrete), `${r.method.toUpperCase()} ${concrete}`).toBeNull();
       checked++;
     }
-    expect(checked, "capture routes checked").toBe(3);
+    expect(checked, "capture routes checked").toBe(4);
   });
 });
 

@@ -1,4 +1,5 @@
-// Capture QR v2 §10.2 (T8c): no phone route ever logs the tok, a stream key or a passphrase.
+// Capture QR v2 §10.2 (T8c): no phone route ever logs the tok, a stream key or a passphrase — nor (W27, 2026-10-06) the
+// scoring link's secret or url, which is a credential.
 //
 // Two halves, each needed:
 //  1. the logger's OWN redaction (server/logger.ts LOGGER_OPTIONS.redact), path by path — a synthetic line carrying the
@@ -14,10 +15,15 @@ import { log, LOGGER_OPTIONS } from "../logger";
 import { CaptureBeat } from "@/server/api-v1/capture-schemas";
 import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { saveStreamSettings } from "@/server/usecases/stream-codes";
+import { sql } from "@/lib/db";
+import { sealWith } from "@/server/relay/crypto";
+import { hashDeviceLinkToken, mintDeviceLinkSecret } from "@/server/usecases/device-links";
+import { override } from "@/server/usecases/__tests__/_capture-rig";
 import { captureRig, phoneId, type CaptureRig } from "@/server/usecases/__tests__/_capture-rig";
 import { GET } from "@/app/api/v1/capture/codes/[code]/route";
 import { POST as BEATS } from "@/app/api/v1/capture/codes/[code]/beats/route";
 import { POST as START } from "@/app/api/v1/capture/codes/[code]/start/route";
+import { POST as SCORING_LINK } from "@/app/api/v1/capture/codes/[code]/scoring-link/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -31,7 +37,7 @@ beforeAll(() => {
 });
 afterAll(() => vi.restoreAllMocks());
 
-const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_INGEST_HOST", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS"] as const;
+const ENV_KEYS = ["RELAY_KEK", "AUTH_SECRET", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_INGEST_HOST", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "DEVICE_LINK_KEK"] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 beforeAll(() => {
   for (const k of ENV_KEYS) delete process.env[k];
@@ -140,6 +146,54 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
     expect(secrets.length).toBeGreaterThanOrEqual(2);
     expect(new Set(statuses)).toEqual(new Set([200, 401, 404, 409, 422, 503]));
     expect(lines.length, "anti-vacuity: the routes logged").toBeGreaterThan(0);
+    let checked = 0;
+    for (const line of lines) {
+      for (const s of secrets) expect(line).not.toContain(s);
+      checked++;
+    }
+    expect(checked).toBe(lines.length);
+  });
+
+  it("W27 scoring-link — 200, the repeat, 409 replaced, 422, 401, 402, 409 match_finished, 503 (no KEK), and a passed-over envelope — no captured line carries the tok, the link's secret or its url; lines were captured", async () => {
+    lines.length = 0;
+    process.env.DEVICE_LINK_KEK = randomBytes(32).toString("hex");
+    process.env.OAUTH_BASE_URL = "https://logger-redact.test";
+    const r = await captureRig();
+    setRelayDriversForTest(r.deps.drivers);
+    await override(r.auth.orgId, "scoring.device_links", true);
+    const A = phoneId("a");
+    const statuses: number[] = [];
+    const link = async (tok: string | null, body: unknown, raw?: string) => {
+      const res = await SCORING_LINK(new Request(`${BASE}/${r.code}/scoring-link`, { method: "POST", headers: headersOf(tok), body: raw ?? JSON.stringify(body) }), params(r.code));
+      statuses.push(res.status);
+      return res;
+    };
+    // A live row whose envelope is ANOTHER secret's: the phone passes over it with a warning (by link id) — a line.
+    const swappedSecret = mintDeviceLinkSecret();
+    const [{ issued_by }] = await sql<{ issued_by: string }[]>`select issued_by from fixture_stream_codes where fixture_id = ${r.fixtureId} and ended_at is null`;
+    await sql`insert into device_links (org_id, fixture_id, token_hash, secret_enc, label, issued_by, expires_at)
+              values (${r.auth.orgId}, ${r.fixtureId}, ${hashDeviceLinkToken(swappedSecret)}, ${sealWith("DEVICE_LINK_KEK", mintDeviceLinkSecret())}, null, ${issued_by}, null)`;
+    const claimed = await BEATS(new Request(`${BASE}/${r.code}/beats`, { method: "POST", headers: headersOf(r.tok), body: JSON.stringify(beatOf(r, A, { claim: "new" })) }), params(r.code));
+    expect(claimed.status, "PREMISE: A claimed the slot").toBe(200);
+    const { url } = (await (await link(r.tok, { phone: A })).json()) as { url: string };   // 200 (passes over the swapped row)
+    await link(r.tok, { phone: A });                                          // 200 the same link
+    await link(r.tok, { phone: phoneId("x") });                               // 409 replaced
+    await link(r.tok, null, "{nope");                                         // 422
+    await link("wrong-tok", { phone: A });                                    // 401
+    await override(r.auth.orgId, "scoring.device_links", false);
+    await link(r.tok, { phone: A });                                          // 402
+    await override(r.auth.orgId, "scoring.device_links", true);
+    delete process.env.DEVICE_LINK_KEK;
+    await link(r.tok, { phone: A });                                          // 503 (the sealed link cannot be re-opened)
+    await sql`update fixtures set status = 'finalized' where id = ${r.fixtureId}`;
+    await link(r.tok, { phone: A });                                          // 409 match_finished (read before any envelope)
+
+    expect(url, "PREMISE: the phone was served its link").toMatch(/\/score\/dl_/);
+    const secret = url.slice(url.lastIndexOf("/") + 1);
+    const secrets = [r.tok, url, secret, swappedSecret];
+    expect(new Set(statuses)).toEqual(new Set([200, 401, 402, 409, 422, 503]));
+    expect(lines.length, "anti-vacuity: the route logged").toBeGreaterThan(0);
+    expect(lines.some((l) => l.includes("passed over")), "the passed-over envelope was logged").toBe(true);
     let checked = 0;
     for (const line of lines) {
       for (const s of secrets) expect(line).not.toContain(s);

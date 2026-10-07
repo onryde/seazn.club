@@ -2813,7 +2813,7 @@
   "dlink.showQr": "Show QR",
   "dlink.revoke": "Revoke",
   "dlink.reissue": "Revoke & reissue",
-  "dlink.reissueWarn": "The QR already handed out or printed for this match will stop working.",
+  "dlink.reissueWarn": "The QR already handed out or printed for this match will stop working. If a streaming phone is paired to this match, it can fetch the new link — reissue the match's streaming QR too to lock that phone out.",
   "dlink.reissueConfirm": "Yes, reissue",
   "dlink.revokeWarn": "The QR already handed out or printed for this match will stop working. No replacement is made — use Revoke & reissue if you need a new one.",
   "dlink.revokeConfirm": "Yes, revoke",

@@ -2768,7 +2768,7 @@
   "dlink.showQr": "Mostrar QR",
   "dlink.revoke": "Revocar",
   "dlink.reissue": "Revocar y volver a emitir",
-  "dlink.reissueWarn": "El QR ya entregado o impreso para este partido dejará de funcionar.",
+  "dlink.reissueWarn": "El QR ya entregado o impreso para este partido dejará de funcionar. Si hay un teléfono de transmisión emparejado con este partido, podrá obtener el nuevo enlace: vuelve a emitir también el QR de transmisión del partido para dejar fuera a ese teléfono.",
   "dlink.reissueConfirm": "Sí, volver a emitir",
   "dlink.revokeWarn": "El QR ya entregado o impreso para este partido dejará de funcionar. No se crea ningún reemplazo — usa Revocar y volver a emitir si necesitas uno nuevo.",
   "dlink.revokeConfirm": "Sí, revocar",
