@@ -465,6 +465,14 @@ describe("an ordinal anchor is pinned to the statement it starts: an `if` added 
     return cutUnits(text, opens).flatMap((u) => u.names.filter((n) => n.startsWith(`${host}.${kind}#`)).map((name) => ({ n: Number(name.slice(name.lastIndexOf("#") + 1)), startLine: u.startLine, endLine: u.endLine })));
   };
   const check = (file: string, edited: string) => checkAnchorRecords({ [file]: STRYKER_SPLITS[file] as string[] }, { [file]: ANCHORS[file] as Record<string, { starts: string }> }, () => edited);
+  /** AGENTS.md class 20: these tests parse real engine files, so each budget is stated from the parses it makes. A `check` of a file
+   *  parses it once per ordinal anchor it holds, and once more per anchor to print the regenerated record when it finds a problem. */
+  const ordinalsIn = (file: string) => (STRYKER_SPLITS[file] as string[]).filter((a) => a.includes("#")).length;
+  /** One parse of a split engine file: up to about 400 ms under coverage (period/kernel.ts; 31 parses took 7.2 s and blew vitest's
+   *  5 s default in CI, PR #926); the allowance is 2.5 times that. */
+  const PARSE_MS = 1_000;
+  const PARSE_SLACK_MS = 5_000;
+  const parseBudget = (perAnchor: (file: string) => number) => PARSE_SLACK_MS + real.reduce((n, { file }) => n + perAnchor(file), 0) * PARSE_MS;
 
   it("the real anchors: there are some, each is pinned, the pins hold today, and the record names exactly the ordinal anchors (nothing owed, nothing stale)", () => {
     expect(real.length, "ordinal anchors in STRYKER_SPLITS").toBeGreaterThan(2);
@@ -475,7 +483,7 @@ describe("an ordinal anchor is pinned to the statement it starts: an `if` added 
     expect(Object.values(ANCHORS).flatMap((byAnchor) => Object.keys(byAnchor)).sort(), "the record is exactly the ordinal anchors").toEqual(real.map((r) => r.anchor).sort());
     // the record is what the files say: regenerating it from the files gives it back
     expect(anchorRecords(STRYKER_SPLITS, read)).toEqual(ANCHORS);
-  });
+  }, parseBudget(() => 2));
 
   it("an `if` ADDED above a cut reds, naming the anchor, saying RE-CUT, and finding the statement again one place down (each real ordinal anchor)", () => {
     let edits = 0;
@@ -494,7 +502,7 @@ describe("an ordinal anchor is pinned to the statement it starts: an `if` added 
       edits++;
     }
     expect(edits).toBe(real.length);
-  });
+  }, parseBudget((file) => 1 + 2 * ordinalsIn(file)));
 
   it("an `if` REMOVED above a cut reds just the same (the case the 10% drift missed 8 times in 9), finding the statement one place up", () => {
     let edits = 0;
@@ -511,7 +519,7 @@ describe("an ordinal anchor is pinned to the statement it starts: an `if` added 
       edits++;
     }
     expect(edits).toBe(real.length);
-  });
+  }, parseBudget((file) => 1 + 2 * ordinalsIn(file)));
 
   it("what moves nothing stays green: a comment at the top, a comment above the cut, an `if` added BELOW every statement of the kind", () => {
     let green = 0;
@@ -532,7 +540,7 @@ describe("an ordinal anchor is pinned to the statement it starts: an `if` added 
       }
     }
     expect(green).toBe(real.length * 3);
-  });
+  }, parseBudget((file) => 2 + 3 * ordinalsIn(file)));
 
   it("a cut with no record, a record with no cut, a statement gone, and a line two statements share are each a fault, and the fault says what to write", () => {
     const records = { "chain.ts": { "chain.if#2": { starts: "if (r > 2) {" } } };

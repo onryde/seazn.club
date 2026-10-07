@@ -55,13 +55,13 @@ describe("carry (a): the Stryker runs' vitest does not turn a crashed child's st
   it("the POSITIVE CONTROL: the engine's own vitest config, under GITHUB_ACTIONS=true, gets the github-actions reporter; without it, it does not", () => {
     expect(names(resolved("vitest.config.ts", true))).toContain("github-actions");
     expect(names(resolved("vitest.config.ts", false))).not.toContain("github-actions");
-  });
+  }, spawnBudget(2));
 
   it("stryker.config.mjs hands the runner vitest.stryker.config.ts, and that file is there", () => {
     const c = strykerConfig();
     expect(c.vitest).toEqual({ related: true, configFile: "vitest.stryker.config.ts" });
     expect(existsSync(join(ENGINE, "vitest.stryker.config.ts")), "the file the runner is told to load").toBe(true);
-  });
+  }, spawnBudget(1));
 
   it("under GITHUB_ACTIONS=true the Stryker config resolves to explicit reporters and no github-actions, and the suite it runs is the engine's own", () => {
     const base = resolved("vitest.config.ts", false);
@@ -76,7 +76,7 @@ describe("carry (a): the Stryker runs' vitest does not turn a crashed child's st
 
   it("the same file under GITHUB_ACTIONS unset names the same reporters (the reporter is not tied to CI)", () => {
     expect(names(resolved("vitest.stryker.config.ts", false))).toEqual(["default"]);
-  });
+  }, spawnBudget(1));
 });
 
 describe("carry (c): the runner child's heap is capped, so a runaway mutant dies in seconds", () => {

@@ -73,10 +73,15 @@ const SPLIT = (() => {
   const checks = 1 + ranges.length * 2 + ranges.reduce((n, own) => n + ranges.filter((r) => r.g !== own.g).length, 0);
   return { FILE, family, ranges, checks };
 })();
-/** One in-process `check` re-resolves every leg of its family from disk: about 4 ms a call locally and 20 ms under
- *  coverage (241 calls: 4.8 s, and over vitest's 5 s default on CI, run 37694590527); the allowance is five times the coverage figure. AGENTS.md class 20: the budget is this allowance times the derived call
- *  count, so a re-cut that adds cricket legs moves the budget with the work. */
-const CHECK_MS = 100;
+/** One in-process `check` (or `setFloor`, or `placeOf`) re-resolves the legs of its family from disk: about 20 ms a call under coverage
+ *  for cricket (241 calls: 4.8 s, and over vitest's 5 s default in CI, PR #926) and up to about 250 ms for sports-nested, whose legs
+ *  glob a directory. AGENTS.md class 20: a test that makes them states its budget from the count, at twice the dearer figure. */
+const CHECK_MS = 500;
+const CHECK_SLACK_MS = 5_000;
+function checkBudget(calls: number): number {
+  if (!Number.isInteger(calls) || calls < 1) throw new Error(`checkBudget: ${calls} is not a call count of at least 1`);
+  return CHECK_SLACK_MS + calls * CHECK_MS;
+}
 
 /** A valid report set for `family`: every leg gets its own counts (default one Killed mutant) at its own place. */
 function legSet(family: string, per: Record<string, Counts> = {}): LegReports {
@@ -218,7 +223,7 @@ describe("check: the verdict (zero mutants is a refusal, never a pass)", () => {
       expect(r.why, leg).toMatch(/unknown family .* is a leg of "[\w-]+": floors are kept per family, never per leg/);
       expect(setFloor(leg, { [leg]: report({ killed: 1 }, placeOf(leg).file, placeOf(leg).line) }, floors({})).exit, `setFloor ${leg}`).toBe(2);
     }
-  });
+  }, checkBudget(1 + 4 * (1 + 1 + 4)));
 });
 
 describe("a family is the SUM of its legs: one score over all their mutants, judged on every leg", () => {
@@ -322,7 +327,7 @@ describe("a family is the SUM of its legs: one score over all their mutants, jud
     expect(accepted).toBe(ranges.length * 2);
     expect(refused, "other legs' lines refused").toBeGreaterThan(ranges.length);
     expect(1 + accepted + refused, "the checks the budget was derived from are the checks that ran").toBe(SPLIT.checks);
-  }, SPLIT.checks * CHECK_MS);
+  }, checkBudget(SPLIT.checks));
 
   it("a leg that negates a file and then ranges it is read in order: the file counts, but only through its range (and its directory's other files whole)", () => {
     const family = "sports-nested";
@@ -345,7 +350,7 @@ describe("a family is the SUM of its legs: one score over all their mutants, jud
     expect(withFirst(report({ killed: 1 }, kernel, 1)).exit, "and the kernel through its range").toBe(0);
     expect(withFirst(report({ killed: 1 }, kernel, secondFrom)).exit, "but not past it: the kernel was negated and then ranged").toBe(2);
     expect(withSecond(report({ killed: 1 }, "src/sports/period/kernel.ts", secondFrom)).exit, "another sport").toBe(2);
-  });
+  }, checkBudget(1 + 7));
 });
 
 describe("the family table is what floors are keyed by: ruling 66's ten, none of them a leg that a re-split could drop", () => {
