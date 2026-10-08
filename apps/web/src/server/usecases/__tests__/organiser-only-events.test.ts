@@ -1,20 +1,25 @@
 // W2a Task 9 (spec §5.4.5, ruling 77 widened by owner ruling D-O1, X-ST-2): settle, forfeit, abandon — and every
 // sport event that records a forfeit or walkover — are organiser-only on the server, per event × per authority.
 //
-// The sport half is DERIVED from the engine's own declarations, never typed here: every module's `eventSchemas`
-// enum values in the forfeit vocabulary are the candidates, and a candidate is organiser-only iff applying it at a
-// live state the module's own `arbitraryEvent` walk reaches DECIDES the match as that forfeit (the outcome names the
-// value as its method, or is an award). The derived list must equal lib/organiser-only-events.ts's table.
+// The sport half is DERIVED from the engine's own declarations, never typed here (fix round 1, review I-1). A
+// vocabulary-free sweep applies every module event type × every enum value it declares — the schema's own enum
+// fields and the enum fields its padSpec actions offer — under every cfg the sport declares (plus the bracket overlay
+// its `bracketDeciders` adds), at the live states its own `arbitraryEvent` walk reaches. Each value is sent the way
+// the pad pairs it (the padSpec action offering it, its side attribution named, then null, then omitted), the way
+// the schema reads (sides named, then null), and inside the walk's own events of that type. Any value whose
+// application ENDS the match without a played result (`award`, `no_result`) is flagged and must be gated or
+// excluded with a named reason. The derived gated list — a value that decides the match as itself (the outcome
+// names it as its method), as an award, or (a forfeit-vocabulary value) as a no_result — must equal
+// lib/organiser-only-events.ts's table.
 //
 // Authorities are the AuthCtx shapes the real doors produce: a device link minted and resolved through
 // `requireFixtureActor` (the dl_ door itself), session officials as `scorers.test.ts` seeds them (an accepted
 // fixture_officials row), and the organiser shapes (owner, admin, a write-scoped API key).
 import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { MatchOutcome } from "@seazn/engine/core";
-import { resolvePositions } from "@seazn/engine/sport";
+import { buildPathObject, resolvePositions, type PadAction } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { buildWalk, defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { buildWalk, declaredCfgs, defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
 import {
   isOrganiserOnlyEvent,
@@ -47,8 +52,9 @@ afterAll(async () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// The derivation (D-O1 item 2).
+// The derivation (D-O1 item 2; fix round 1, review I-1).
 type Def = Record<string, unknown>;
+type Payload = Record<string, unknown>;
 type AnyModule = (typeof builtinModules)[number];
 const defOf = (s: unknown) => (s as { _zod?: { def?: Def } })?._zod?.def;
 const WRAPPERS = new Set(["optional", "nullable", "default", "readonly", "prefault", "catch"]);
@@ -57,18 +63,39 @@ function unwrap(s: unknown): unknown {
   while (WRAPPERS.has(defOf(x)?.type as string)) x = defOf(x)!.innerType;
   return x;
 }
-/** The words a rulebook uses for a match lost without (all of) its play. A candidate filter only — the FOLD decides. */
+/** The words a rulebook uses for a match lost without (all of) its play. It no longer FINDS anything (the sweep is
+ *  vocabulary-free); it only decides whether a `no_result` a value produces is a forfeit (a double forfeit) or not. */
 const FORFEIT_VOCABULARY = /forfeit|walkover|default|disqualif/i;
+/** The side placeholders: the walk's lineups name the entrants "H" and "A" (`defaultLineupPair`); the DB rows swap
+ *  in the seeded fixture's real entrant ids. */
+const HOME = "H";
 
-/** A payload for `type` with `field = value`: the side keys name `side`, every other required key its first legal
- *  value. Built from the schema, so it is a payload the module's own validation accepts. */
-function payloadFrom(schema: unknown, field: string, value: string, side: string): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(defOf(unwrap(schema))!.shape as Def)) {
-    const optional = defOf(v)?.type === "optional";
-    if (k === field) out[k] = value;
-    else if (k === "by" || k === "winner") out[k] = side;
-    else if (optional) continue;
+const clone = (p: unknown) => structuredClone(p) as Payload;
+function setPath(p: Payload, path: string, v: unknown): void {
+  const seg = path.split(".");
+  let c = p;
+  for (const k of seg.slice(0, -1)) {
+    if (typeof c[k] !== "object" || c[k] === null) c[k] = {};
+    c = c[k] as Payload;
+  }
+  c[seg.at(-1)!] = v;
+}
+function dropPath(p: Payload, path: string): void {
+  const seg = path.split(".");
+  let c: Payload | undefined = p;
+  for (const k of seg.slice(0, -1)) c = c?.[k] as Payload | undefined;
+  if (c) delete c[seg.at(-1)!];
+}
+const keyOf = (p: unknown) => JSON.stringify(p, (_k, v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort()) : v));
+
+/** The schema's own reading: side keys (`by`, `winner`) named `side`, every other required key its first legal value. */
+function schemaPayload(schema: unknown, side: string | null): Payload | null {
+  const d = defOf(unwrap(schema));
+  if (d?.type !== "object") return null;
+  const out: Payload = {};
+  for (const [k, v] of Object.entries(d.shape as Def)) {
+    if (k === "by" || k === "winner") out[k] = side;
+    else if (defOf(v)?.type === "optional") continue;
     else {
       const inner = defOf(unwrap(v))!;
       if (inner.type === "enum") out[k] = Object.values(inner.entries as object)[0];
@@ -79,60 +106,197 @@ function payloadFrom(schema: unknown, field: string, value: string, side: string
   }
   return out;
 }
-
-interface Candidate { sport: string; type: string; field: string; value: string; verdict: "forfeit" | "not-a-forfeit" | "unreached" }
-const SEEDS = [1, 2, 3, 4, 5];
-const decidesAsForfeit = (o: MatchOutcome | null, value: string) =>
-  o !== null && (o.kind === "award" || (o as { method?: string }).method === value);
-
-function classify(m: AnyModule, type: string, field: string, value: string): Candidate["verdict"] {
-  const cfg = m.configSchema.parse(Object.values(m.variants)[0] ?? {});
-  const lineups = defaultLineupPair(resolvePositions(m as never, cfg as never));
-  const event = { type, payload: payloadFrom(m.eventSchemas![type], field, value, lineups.home.entrantId) };
-  let reached = false;
-  for (const seed of SEEDS) {
-    const { states } = buildWalk(m as never, cfg as never, lineups, seed, 300);
-    for (const state of states) {
-      if (m.outcome(state as never) !== null) continue; // only a live match can be forfeited
-      let next: unknown;
-      try {
-        next = m.apply(state as never, makeEnvelope(states.length, event) as never);
-      } catch {
-        continue; // not legal in this state; another live state may accept it
-      }
-      reached = true;
-      if (decidesAsForfeit(m.outcome(next as never), value)) return "forfeit";
-    }
+/** The pad's reading of one padSpec action: its required fields at their first legal value, its side attribution
+ *  named (the scorer picked a side), its required people the side's own players. */
+function actionPayload(a: PadAction, lineupPersons: readonly string[]): Payload {
+  const entries: [string, unknown][] = [];
+  for (const f of a.fields) {
+    if (f.optional) continue;
+    entries.push([f.path, f.kind === "enum" ? f.values[0] : f.kind === "number" ? f.min : false]);
   }
-  return reached ? "not-a-forfeit" : "unreached";
+  let person = 0;
+  for (const x of a.attribution) {
+    if (x.kind === "side") entries.push([x.path, HOME]);
+    else if (x.required) entries.push([x.path, lineupPersons[person++ % Math.max(1, lineupPersons.length)]]);
+  }
+  return buildPathObject(entries);
 }
 
-const derivation = (() => {
-  let modules = 0;
-  let enumFields = 0;
-  const candidates: Candidate[] = [];
-  for (const m of builtinModules) {
-    modules++;
-    for (const [type, schema] of Object.entries(m.eventSchemas ?? {})) {
-      const d = defOf(unwrap(schema));
-      if (d?.type !== "object") continue;
-      for (const [field, v] of Object.entries(d.shape as Def)) {
-        const e = defOf(unwrap(v));
-        if (e?.type !== "enum") continue;
-        enumFields++;
-        for (const value of Object.values(e.entries as object) as string[]) {
-          if (FORFEIT_VOCABULARY.test(value)) candidates.push({ sport: m.key, type, field, value, verdict: classify(m, type, field, value) });
+/** One swept item: an event type with one enum leaf at one value (or `#default` for a type with no enum leaf). */
+interface Item {
+  sport: string;
+  type: string;
+  path: string | null;
+  value: string | null;
+  applied: number;
+  /** Payloads whose application ended the match without a played result (award, no_result). */
+  decisive: Map<string, Payload>;
+  /** Payloads whose application decided the match with this value as the outcome's method. */
+  namesMethod: Map<string, Payload>;
+  /** The witnesses (either kind) built the way the pad or the schema reads — the DB matrix posts these. */
+  padWitness: Map<string, Payload>;
+}
+const SEEDS = [1, 2, 3, 4, 5];
+
+const sweep = (() => {
+  const items = new Map<string, Item>();
+  let cfgs = 0;
+  let variants = 0;
+  let applications = 0;
+  for (const m of builtinModules as readonly AnyModule[]) {
+    const mm = m as unknown as {
+      key: string;
+      configSchema: { parse(v: unknown): unknown };
+      bracketDeciders(cfg: unknown): Record<string, unknown>;
+      padSpec?(cfg: unknown): { panels: readonly { actions: readonly PadAction[] }[] };
+      eventSchemas?: Readonly<Record<string, { safeParse(v: unknown): { success: boolean; data?: unknown } }>>;
+      init(cfg: unknown, l: unknown): unknown;
+      apply(s: unknown, e: unknown): unknown;
+      outcome(s: unknown): { kind: string; method?: string } | null;
+    };
+    const cfgList: unknown[] = [];
+    for (const { cfg } of declaredCfgs(m as never)) {
+      cfgList.push(cfg);
+      const overlay = mm.bracketDeciders(cfg);
+      if (Object.keys(overlay).length > 0) cfgList.push(mm.configSchema.parse({ ...(cfg as object), ...overlay }));
+    }
+    for (const cfg of cfgList) {
+      cfgs++;
+      const lineups = defaultLineupPair(resolvePositions(m as never, cfg as never));
+      const persons = lineups.home.slots.map((s) => s.personId);
+      const live: unknown[] = [];
+      const fromWalk = new Map<string, { pre: unknown; payload: unknown }[]>();
+      for (const seed of SEEDS) {
+        const { events, states } = buildWalk(m as never, cfg as never, lineups, seed, 300);
+        const all = [mm.init(cfg, lineups), ...states];
+        for (const s of all) if (mm.outcome(s) === null) live.push(s);
+        events.forEach((e, i) => {
+          const list = fromWalk.get(e.type) ?? [];
+          if (list.length < 8) list.push({ pre: all[i], payload: e.payload });
+          fromWalk.set(e.type, list);
+        });
+      }
+      const actions = mm.padSpec ? mm.padSpec(cfg).panels.flatMap((p) => p.actions) : [];
+      for (const [type, schema] of Object.entries(mm.eventSchemas ?? {})) {
+        const acts = actions.filter((a) => a.type === type);
+        const shape = defOf(unwrap(schema))?.type === "object" ? (defOf(unwrap(schema))!.shape as Def) : {};
+        const sidePaths = new Set(acts.flatMap((a) => a.attribution.filter((x) => x.kind === "side").map((x) => x.path)));
+        for (const k of ["by", "winner"]) if (k in shape) sidePaths.add(k);
+        // The enum leaves: the schema's top-level enum fields, and every enum field a padSpec action offers.
+        const leaves = new Map<string, Set<string>>();
+        for (const [f, v] of Object.entries(shape)) {
+          const e = defOf(unwrap(v));
+          if (e?.type === "enum") leaves.set(f, new Set(Object.values(e.entries as object) as string[]));
         }
+        for (const a of acts) for (const f of a.fields) if (f.kind === "enum") f.values.forEach((x) => (leaves.get(f.path) ?? leaves.set(f.path, new Set()).get(f.path)!).add(x));
+        /** A payload, then the same with every side null, then with every side omitted (a drawn result's shape). */
+        const sides = (p: Payload): Payload[] => {
+          if (sidePaths.size === 0) return [p];
+          const asNull = clone(p);
+          const omitted = clone(p);
+          for (const sp of sidePaths) {
+            setPath(asNull, sp, null);
+            dropPath(omitted, sp);
+          }
+          return [p, asNull, omitted];
+        };
+        const run = (path: string | null, value: string | null) => {
+          const id = `${type}${path === null ? "#default" : `.${path}=${value}`}`;
+          const item = items.get(id) ?? { sport: m.key, type, path, value, applied: 0, decisive: new Map(), namesMethod: new Map(), padWitness: new Map() };
+          items.set(id, item);
+          const tries: { p: Payload; at: unknown[]; pad: boolean }[] = [];
+          // The pad: only the actions that OFFER this value at this path (a decisive action never sends a drawn method).
+          for (const a of acts) {
+            if (path !== null && !a.fields.some((f) => f.kind === "enum" && f.path === path && f.values.includes(value!))) continue;
+            const p = actionPayload(a, persons);
+            if (path !== null) setPath(p, path, value);
+            for (const v of sides(p)) tries.push({ p: v, at: live, pad: true });
+          }
+          const sp = schemaPayload(schema, HOME);
+          if (sp) {
+            if (path !== null) setPath(sp, path, value);
+            for (const v of sides(sp)) tries.push({ p: v, at: live, pad: true });
+          }
+          for (const w of fromWalk.get(type) ?? []) {
+            const p = clone(w.payload);
+            if (path !== null) setPath(p, path, value);
+            for (const v of sides(p)) tries.push({ p: v, at: [w.pre], pad: false });
+          }
+          for (const t of tries) {
+            variants++;
+            const parsed = schema.safeParse(t.p);
+            if (!parsed.success) continue; // the server's validation refuses it before any fold
+            for (const st of t.at) {
+              let next: unknown;
+              try {
+                next = mm.apply(st, makeEnvelope(1000, { type, payload: parsed.data as Payload }));
+              } catch {
+                continue; // not legal in this state; another live state may accept it
+              }
+              applications++;
+              item.applied++;
+              const o = mm.outcome(next);
+              if (o === null) continue;
+              const decisive = o.kind === "award" || o.kind === "no_result";
+              const names = value !== null && o.method === value;
+              if (!decisive && !names) continue;
+              if (decisive) item.decisive.set(keyOf(t.p), t.p);
+              if (names) item.namesMethod.set(keyOf(t.p), t.p);
+              if (t.pad) item.padWitness.set(keyOf(t.p), t.p);
+              break;
+            }
+          }
+        };
+        if (leaves.size === 0) run(null, null);
+        for (const [path, vals] of leaves) for (const v of vals) run(path, v);
       }
     }
   }
-  const table: Record<string, { field: string; values: string[] }> = {};
-  for (const c of candidates.filter((x) => x.verdict === "forfeit")) {
-    (table[c.type] ??= { field: c.field, values: [] }).values.push(c.value);
-  }
-  return { modules, enumFields, candidates, table };
+  return { items: [...items.values()], cfgs, variants, applications };
 })();
-const GATED_SPORT = derivation.candidates.filter((c) => c.verdict === "forfeit");
+const itemId = (i: Pick<Item, "type" | "path" | "value">) => `${i.type}${i.path === null ? "#default" : `.${i.path}=${i.value}`}`;
+
+/** The forfeit-vocabulary values, with the verdict the fold gave them. */
+const candidates = sweep.items
+  .filter((i) => i.value !== null && FORFEIT_VOCABULARY.test(i.value))
+  .map((i) => ({
+    item: i,
+    verdict: i.decisive.size > 0 || i.namesMethod.size > 0 ? ("forfeit" as const) : i.applied > 0 ? ("not-a-forfeit" as const) : ("unreached" as const),
+  }));
+const GATED_SPORT = candidates.filter((c) => c.verdict === "forfeit").map((c) => c.item);
+const derivedTable = (() => {
+  const table: Record<string, { field: string; values: string[] }> = {};
+  for (const i of GATED_SPORT) (table[i.type] ??= { field: i.path!, values: [] }).values.push(i.value!);
+  return table;
+})();
+
+/** A forfeit-vocabulary value the fold does NOT treat as a forfeit, and why (the T9 report's table, kept here). */
+const NOT_A_FORFEIT: Readonly<Record<string, string>> = {
+  "cricket.innings.close.reason=forfeited": "Law 15 innings forfeiture: one innings closes, the match goes on",
+  "volleyball.sanction.level=disqualification": "a sanction is recorded; the module leaves the outcome null",
+  "badminton.sanction.level=disqualification": "a sanction is recorded; the module leaves the outcome null",
+  "tabletennis.sanction.level=disqualification": "a sanction is recorded; the module leaves the outcome null",
+  "tennis.sanction.level=default": "a sanction is recorded; the module leaves the outcome null",
+};
+/** A value the sweep flags (it ends the match as an award or no_result) that is NOT gated, and why. None today. */
+const SWEEP_EXCLUDED: Readonly<Record<string, string>> = {};
+/** An event type the sweep never applied (every payload refused at every reached state), and why — the sweep's own
+ *  blind spots, named so a change in reach is re-read rather than silently absorbed. The refusals are the engine's. */
+const UNREACHED_TYPES: Readonly<Record<string, string>> = {
+  "football.sub": "the incoming player must come off a bench; the testkit lineup fields starters only (\"is already on the field\")",
+  "football.sinbin.end": "needs a running sin bin for the side; no reached state holds one",
+  "football.shootout.kick": "shootout phase only; no walk reaches a shootout",
+  "cricket.superover.ball": "super over only: no walk reaches one, no padSpec action offers it, and the schema-built payload fails validation",
+  "cricket.followon": "only between the 2nd and 3rd innings with the follow-on lead; no walk reaches it",
+  "cricket.player.line": "a scorecard line for a CLOSED innings that agrees with its totals; no reached state pairs them",
+  "volleyball.expedite.start": "the module has no expedite system (refused in every state)",
+  "badminton.timeout": "the module records no timeouts (refused in every state)",
+  "badminton.sub": "the module records no substitutions (refused in every state)",
+  "badminton.expedite.start": "the module has no expedite system (refused in every state)",
+  "tabletennis.sub": "the module records no substitutions (refused in every state)",
+  "icehockey.shootout.attempt": "shootout phase only; no walk reaches a shootout",
+  "hockey.shootout.attempt": "shootout phase only; no walk reaches a shootout",
+};
 
 describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived from the engine", () => {
   it("X-ST-2 empty case first: the core constant is exactly the three ruled types, and the set is that list", () => {
@@ -142,11 +306,14 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
   });
 
   it("D-O1: every module and enum field was walked, every candidate was classified, and at least one sport event is gated", () => {
-    expect(derivation.modules).toBe(builtinModules.length);
-    expect(derivation.modules).toBeGreaterThan(0);
-    expect(derivation.enumFields).toBeGreaterThan(0);
-    expect(derivation.candidates.length).toBeGreaterThan(0);
-    const unreached = derivation.candidates.filter((c) => c.verdict === "unreached").map((c) => `${c.type}.${c.field}=${c.value}`);
+    expect(new Set(sweep.items.map((i) => i.sport)).size, "every module swept").toBe(builtinModules.length);
+    expect(builtinModules.length).toBeGreaterThan(0);
+    expect(sweep.cfgs, "every declared cfg, and a bracket overlay where one exists").toBeGreaterThan(builtinModules.length);
+    expect(sweep.items.length).toBeGreaterThan(0);
+    expect(sweep.variants).toBeGreaterThan(sweep.items.length);
+    expect(sweep.applications).toBeGreaterThan(0);
+    expect(candidates.length).toBeGreaterThan(0);
+    const unreached = candidates.filter((c) => c.verdict === "unreached").map((c) => itemId(c.item));
     expect(unreached, "a candidate no live state accepted cannot be classified").toEqual([]);
     expect(GATED_SPORT.length).toBeGreaterThan(0);
   });
@@ -154,7 +321,11 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
   it("D-O1: lib/organiser-only-events.ts's sport table is EXACTLY the derived list", () => {
     const norm = (t: Readonly<Record<string, { readonly field: string; readonly values: readonly string[] }>>) =>
       Object.fromEntries(Object.entries(t).map(([k, v]) => [k, { field: v.field, values: [...v.values].sort() }]));
-    expect(norm(ORGANISER_ONLY_SPORT_EVENTS)).toEqual(norm(derivation.table));
+    // The lib's table names ONE field per type; a type gated on two would need a new table shape, not a silent pick.
+    for (const type of Object.keys(derivedTable)) {
+      expect(new Set(GATED_SPORT.filter((i) => i.type === type).map((i) => i.path)).size, type).toBe(1);
+    }
+    expect(norm(ORGANISER_ONLY_SPORT_EVENTS)).toEqual(norm(derivedTable));
   });
 
   it("D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not", () => {
@@ -169,11 +340,81 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
       expect(isOrganiserOnlyEvent(t, undefined), t).toBe(true);
       checked++;
     }
-    for (const c of derivation.candidates) {
-      expect(isOrganiserOnlyEvent(c.type, { [c.field]: c.value }), `${c.type}.${c.field}=${c.value}`).toBe(c.verdict === "forfeit");
+    for (const c of candidates) {
+      const p: Payload = {};
+      setPath(p, c.item.path!, c.item.value);
+      expect(isOrganiserOnlyEvent(c.item.type, p), itemId(c.item)).toBe(c.verdict === "forfeit");
       checked++;
     }
-    expect(checked).toBe(ORGANISER_ONLY_EVENT_TYPES.length + derivation.candidates.length);
+    // Review I-1: every payload the fold decided as the forfeit — the pad's, the schema's, the walk's — is gated,
+    // whichever side shape it carries (named, null, omitted).
+    let witnesses = 0;
+    for (const i of GATED_SPORT)
+      for (const p of [...i.decisive.values(), ...i.namesMethod.values()]) {
+        expect(isOrganiserOnlyEvent(i.type, p), `${itemId(i)} ${keyOf(p)}`).toBe(true);
+        witnesses++;
+      }
+    expect(witnesses).toBeGreaterThanOrEqual(GATED_SPORT.length);
+    // Ordinary values: every other value the sweep sent at a gated field (checkmate, agreement, …) is NOT gated.
+    let ordinary = 0;
+    for (const i of sweep.items) {
+      const row = derivedTable[i.type];
+      if (!row || i.path !== row.field || row.values.includes(i.value!)) continue;
+      const p: Payload = {};
+      setPath(p, i.path, i.value);
+      expect(isOrganiserOnlyEvent(i.type, p), itemId(i)).toBe(false);
+      ordinary++;
+    }
+    expect(ordinary, "ordinary values at a gated field").toBeGreaterThan(0);
+    expect(checked).toBe(ORGANISER_ONLY_EVENT_TYPES.length + candidates.length);
+  });
+
+  it("I-1: the vocabulary-free sweep — every value that ends a match as an award or no_result is gated or excluded with a named reason", () => {
+    const flagged = sweep.items.filter((i) => i.decisive.size > 0);
+    expect(flagged.length, "zero flagged = the sweep saw nothing").toBeGreaterThan(0);
+    let checked = 0;
+    for (const i of flagged) {
+      if (Object.hasOwn(SWEEP_EXCLUDED, itemId(i))) {
+        checked++;
+        continue;
+      }
+      for (const p of i.decisive.values()) expect(isOrganiserOnlyEvent(i.type, p), `${itemId(i)} ${keyOf(p)} ends the match unplayed`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(flagged.length);
+    const flaggedIds = new Set(flagged.map(itemId));
+    expect(Object.keys(SWEEP_EXCLUDED).filter((k) => !flaggedIds.has(k)), "a stale exclusion").toEqual([]);
+    // The real double forfeit (the boardgame walk's own shape, and the pad's drawn action) is among them.
+    const df = flagged.find((i) => i.type === "boardgame.result" && i.value === "double_forfeit");
+    expect(df, "boardgame's double forfeit is flagged").toBeDefined();
+    expect([...df!.decisive.values()]).toEqual(expect.arrayContaining([{ winner: null, method: "double_forfeit" }, { method: "double_forfeit" }]));
+  });
+
+  it("I-1: every forfeit-vocabulary value the fold does not treat as a forfeit carries a named reason, and no reason is stale", () => {
+    const notForfeit = candidates.filter((c) => c.verdict === "not-a-forfeit").map((c) => itemId(c.item));
+    expect(notForfeit.length).toBeGreaterThan(0);
+    expect(notForfeit.sort()).toEqual(Object.keys(NOT_A_FORFEIT).sort());
+  });
+
+  it("I-1: every event type the sweep never applied is a named blind spot, and no blind spot is stale", () => {
+    const types = new Map<string, number>();
+    for (const i of sweep.items) types.set(i.type, (types.get(i.type) ?? 0) + i.applied);
+    expect(types.size).toBeGreaterThan(0);
+    const never = [...types].filter(([, n]) => n === 0).map(([t]) => t);
+    expect(never.length, "the reached types outnumber the blind spots").toBeLessThan(types.size - never.length);
+    expect(never.sort()).toEqual(Object.keys(UNREACHED_TYPES).sort());
+  });
+
+  it("I-1: the DB matrix posts every pad- and schema-shaped forfeit, the real double forfeit among them", () => {
+    expect(SPORT_ROWS.length).toBeGreaterThanOrEqual(GATED_SPORT.length);
+    const posted = SPORT_ROWS.map((r) => ({ type: r.type, payload: r.payload({ home: "HOME-ID", away: "AWAY-ID" }) }));
+    expect(posted).toEqual(
+      expect.arrayContaining([
+        { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } },
+        { type: "boardgame.result", payload: { method: "double_forfeit" } },
+        { type: "boardgame.result", payload: { winner: "HOME-ID", method: "forfeit" } },
+      ]),
+    );
   });
 
   it("X-ST-2: the authority shapes split the way the ruling says (the predicate the server reads)", () => {
@@ -267,10 +508,13 @@ const CORE_ROWS: Gated[] = RULED_CORE_TYPES.map((type) => ({
   },
   ...(type === "core.settle" ? { prep: "abandon" as const } : {}),
 }));
-const SPORT_ROWS: Gated[] = GATED_SPORT.map((c) => {
-  const m = builtinModules.find((x) => x.key === c.sport)!;
-  return { label: `${c.type}.${c.field}=${c.value}`, sport: c.sport, type: c.type, payload: (f) => payloadFrom(m.eventSchemas![c.type], c.field, c.value, f.home) };
-});
+/** Review I-1: every distinct witness the pad or the schema would send (named side, null side, omitted side), the
+ *  walk's placeholder entrants swapped for the seeded fixture's. */
+const forFixture = (p: unknown, f: { home: string; away: string }): unknown =>
+  p === "H" ? f.home : p === "A" ? f.away : p && typeof p === "object" ? Object.fromEntries(Object.entries(p).map(([k, v]) => [k, forFixture(v, f)])) : p;
+const SPORT_ROWS: Gated[] = GATED_SPORT.flatMap((i) =>
+  [...i.padWitness.values()].map((w) => ({ label: `${itemId(i)} ${keyOf(w)}`, sport: i.sport, type: i.type, payload: (f: { home: string; away: string }) => forFixture(w, f) })),
+);
 const GATED: Gated[] = [...CORE_ROWS, ...SPORT_ROWS];
 
 /** A started 2-draw knockout of `sport` (its first declared variant); for settle, abandoned first (X-ST-1). */

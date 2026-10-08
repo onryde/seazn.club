@@ -250,5 +250,34 @@
         "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
       }
     ]
+  },
+  {
+    "id": "gate-forfeit-only",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "return typeof value === \"string\" && arm.values.includes(value);",
+    "replace": "return typeof value === \"string\" && value === \"forfeit\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "I-1: the vocabulary-free sweep — every value that ends a match as an award or no_result is gated or excluded with a named reason"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+      }
+    ]
   }
 ]
