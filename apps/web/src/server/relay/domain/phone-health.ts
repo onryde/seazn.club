@@ -5,10 +5,11 @@
 // A null `battery`, `thermal` or `delivery` contributes nothing (FP14): the app sends battery and thermal only from Armed,
 // and a delivery reading only once it has one — absence is "no reading", never zero and never a problem.
 import { HOT_THERMAL_STATUS, LOW_BATTERY_PERCENT } from "../config";
+import { HEALTH_REASONS, type HealthReason } from "./health-reasons";
 
-/** §7.4's amber reasons in PRIORITY order: not responding, stalled, hot, battery low. W8: silence only warns. */
-export const HEALTH_REASONS = ["not_responding", "stalled", "hot", "battery_low"] as const;
-export type HealthReason = (typeof HEALTH_REASONS)[number];
+// The reasons are declared in health-reasons.ts (import-free, so the OpenAPI generator can load them); re-exported here so
+// every reader of the health derivation keeps ONE import.
+export { HEALTH_REASONS, type HealthReason };
 
 export type HealthInput = {
   /** §6.9 (W8): held, with no beat for NOT_RESPONDING_BEATS answered cadences. */

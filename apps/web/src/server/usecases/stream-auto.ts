@@ -50,6 +50,8 @@ export function autoStartRefusalOf(err: unknown): AutoStartRefusal | "already_ru
   return null;
 }
 
+const clearRefusal = (fixtureId: string) => sql`update fixture_stream_settings set auto_start_refusal = null where fixture_id = ${fixtureId}`;
+
 type Facts = {
   auto_stream: boolean; auto_started_at: Date | null; auto_start_blocked_at: Date | null; auto_start_attempted_at: Date | null;
   fixture_status: string; open_session: boolean; any_ingest: boolean;
@@ -66,8 +68,9 @@ type Facts = {
  *  4. `startBroadcast` on the fixture's resolved destination, attributed to the pairing's code issuer (the guard in
  *     `startBroadcast` refuses anyone else);
  *  5. success stamps `auto_started_at` / `auto_start_session_id` and clears the refusal; a mapped refusal stores its code and
- *     NEVER `auto_started_at` (it is retried after AUTO_START_RETRY_SECONDS); `already_running` writes nothing; anything
- *     unmapped rethrows (the beat reports it and answers regardless — the claim already spaces the retry).
+ *     NEVER `auto_started_at` (it is retried after AUTO_START_RETRY_SECONDS); `already_running` stores no code and CLEARS the
+ *     earlier attempt's; anything unmapped clears it too and rethrows (the beat reports it and answers regardless — the claim
+ *     already spaces the retry). A stored code is always the latest attempt's own.
  */
 export async function maybeAutoStart(
   a: { orgId: string; fixtureId: string; pairingId: string; phoneMode: PhoneMode },
@@ -128,8 +131,18 @@ export async function maybeAutoStart(
     return { fired: true, sessionId };
   } catch (err) {
     const mapped = autoStartRefusalOf(err);
-    if (mapped === null) throw err;
-    if (mapped === "already_running") return { fired: false, why: "already_running" };
+    // B4 fix round (ruling 3): this attempt ends WITHOUT a refusal of its own, so an earlier attempt's stored code must not
+    // outlive it beside the newer `auto_start_attempted_at` — cleared here, where the attempt ends, never in the claim (that
+    // would blank the organiser's strip while every retry is still in flight).
+    if (mapped === null) {
+      await clearRefusal(a.fixtureId).catch((clearErr) =>
+        log.error({ err: String(clearErr), orgId: a.orgId, fixtureId: a.fixtureId }, "capture auto start: clearing the earlier refusal failed — the original error is rethrown"));
+      throw err;
+    }
+    if (mapped === "already_running") {
+      await clearRefusal(a.fixtureId);
+      return { fired: false, why: "already_running" };
+    }
     return refuse(mapped);
   }
 }

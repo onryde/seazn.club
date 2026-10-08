@@ -22,6 +22,7 @@ import { AUTO_START_RETRY_SECONDS, WARMING_TIMEOUT_MINUTES } from "@/server/rela
 import { AUTO_START_CONJUNCTS, AUTO_START_REFUSALS, type AutoStartRefusal } from "@/server/relay/domain/auto-stream";
 import { postBeat, postStart } from "../capture-phone";
 import { fixtureStreamTarget, reissueStreamCode, saveStreamSettings } from "../stream-codes";
+import { streamPhone } from "../stream-phone";
 import { grantCredits } from "../stream-credits";
 import { autoStartRefusalOf, maybeAutoStart } from "../stream-auto";
 import { apply, createSession, startBroadcast, stopSession, tickSession } from "../stream-sessions";
@@ -670,6 +671,45 @@ describe.skipIf(!HAS_DB)("automatic start — isolation and the mode flip (tests
     r.tick(AUTO_START_RETRY_SECONDS * SEC);
     await beat(r, phone);
     expect(await autoSessionsOf(r.fixtureId), "the retry at the declared spacing starts").toHaveLength(1);
+  });
+
+  // B4 fix round (controller ruling 3): the stored code belongs to the attempt that wrote it. An attempt that ends WITHOUT a
+  // refusal (an unmapped error, or an organiser's start that won the race) must not leave the earlier attempt's code beside its own
+  // newer `auto_start_attempted_at` — the organiser read would pair a stale code with a fresh time. Cleared where the attempt
+  // ends, never in the claim itself (that would blank the strip while every retry is still in flight).
+  it("an attempt that ends with NO refusal clears the earlier attempt's code — an unmapped error and an already_running alike — and the organiser read serves neither a stale code nor a refusalAt for it", async () => {
+    let checked = 0;
+    for (const how of ["unmapped error", "already_running"] as const) {
+      const { r, phone } = await autoRig({ credits: 0 });
+      await spendMonthlyStreamGrant(r.auth.orgId);
+      await beat(r, phone);
+      expect((await settingsOf(r.fixtureId))!.auto_start_refusal, `${how}: PREMISE — the first attempt stored no_credit`).toBe("no_credit");
+      expect((await streamPhone(r.auth, r.fixtureId, { now: r.now })).auto, `${how}: PREMISE — the read serves it`).toMatchObject({ refusal: "no_credit" });
+      await grantCredits({ orgId: r.auth.orgId, delta: 1, createdBy: await rigUser(), note: "retry", idempotencyKey: randomUUID() });
+      r.tick(AUTO_START_RETRY_SECONDS * SEC);
+      if (how === "unmapped error") {
+        vi.spyOn(r.ingest, "storageUsage").mockRejectedValueOnce(new Error("provider exploded"));
+      } else {
+        const real = r.ingest.storageUsage.bind(r.ingest);
+        let raced = false;
+        vi.spyOn(r.ingest, "storageUsage").mockImplementation(async () => {
+          if (!raced) {
+            raced = true;
+            await createSession(r.auth, r.fixtureId, { mode: "passthrough", targetId: r.target.id }, r.deps);
+          }
+          return real();
+        });
+      }
+      await beat(r, phone);
+      const after = (await settingsOf(r.fixtureId))!;
+      expect(after.auto_start_attempted_at?.getTime(), `${how}: the attempt is stamped`).toBe(r.now().getTime());
+      expect(after.auto_start_refusal, `${how}: the earlier attempt's code is cleared`).toBeNull();
+      expect(after.auto_started_at, `${how}: and nothing was started by it`).toBeNull();
+      const read = (await streamPhone(r.auth, r.fixtureId, { now: r.now })).auto!;
+      expect([read.refusal, read.refusalAt], `${how}: the read pairs no stale code with the newer attempt`).toEqual([null, null]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("FP13: a beat that flips mode to operator stops auto start at once (it reads the arriving beat); flipping back starts on that beat", async () => {

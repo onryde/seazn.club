@@ -140,8 +140,10 @@ function autoOf(
  *    onto a reissued code (B6 I-2) is the same phone moving, never a takeover;
  *  - `auto` (PR-2 T6): the fixture's settings row as the panel's switch and strips read it — null with no row. Its `refusal` is
  *    served only while `autoStartVerdict` could still pass (`autoOf`): the stored code can outlive the attempt it belonged to;
- *  - `phone.health` (PR-2 T6): domain/phone-health.ts's one derivation over the stored beat; `phone.notReadyForMs` /
- *    `notReadyShown` (FP16, owner ruling R-2): the debounce of the flapping `notReady`, from the pairing's `not_ready_since`;
+ *  - `phone.health` (PR-2 T6): domain/phone-health.ts's one derivation over the stored beat — withheld while the phone is silent
+ *    (its readings are stale; `not_responding` still names a held one); `phone.notReadyForMs` / `notReadyShown` (FP16, owner
+ *    ruling R-2): the debounce of the flapping `notReady`, from the pairing's `not_ready_since`, shown only once a BEAT a
+ *    constant after the stretch began still says not ready (and never for a silent phone);
  *  - `legacy` / `finished` (T11): the open session has no pairing (C-1), and the fixture is finished (C5's match-over row);
  *  - `session` (B8 review I-2): the fixture's OPEN session's id, whoever started it — the panel's `current` rests at
  *    Ready, so a session the PHONE started would otherwise stay unseen there.
@@ -190,15 +192,23 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
     const lastBeatAt = new Date(p.last_beat_at);
     const floor = tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS);
     const notResponding = isNotResponding({ held, lastBeatAt, answeredPoll: p.answered_poll_seconds }, now);
+    const silent = isSilent(lastBeatAt, p.answered_poll_seconds, now, floor);
+    // A silent phone's last word is old news: its readings and its not-ready are not judged (I1). `notResponding` is the
+    // silence verdict itself, so a held phone that went quiet is still named.
+    const fresh = !silent;
     const beat = beatOf(p.last_beat);
     // FP16 / R-2: the debounce. `notReady` is the latest reason; the clock is the beat that began the stretch. A reason with no
     // clock (a row from before V431) has no duration, so it is not shown; a clock in the future (skew) reads 0.
     const notReady = word(CaptureNotReady, p.not_ready);
-    const notReadyForMs = notReady === null || p.not_ready_since === null ? null : Math.max(0, now.getTime() - new Date(p.not_ready_since).getTime());
+    const sinceMs = notReady === null || p.not_ready_since === null ? null : new Date(p.not_ready_since).getTime();
+    const notReadyForMs = sinceMs === null ? null : Math.max(0, now.getTime() - sinceMs);
+    // BEAT-CONFIRMED (I2, "about 2 beats"): shown only when a beat at least the constant after the stretch began still says not
+    // ready — the last beat is that evidence, the wall clock between beats is not. One sighting never ages into shown.
+    const notReadyShown = fresh && sinceMs !== null && lastBeatAt.getTime() - sinceMs >= PHONE_NOT_READY_SHOW_AFTER_SECONDS * 1000;
     phoneMode = p.mode === "automatic" || p.mode === "operator" ? p.mode : null;
     phone = {
       present: isPresent({ current: true, lastBeatAt, answeredPoll: p.answered_poll_seconds }, now, floor),
-      silent: isSilent(lastBeatAt, p.answered_poll_seconds, now, floor),
+      silent,
       notResponding,
       model: p.device_model,
       appVersion: p.app_version,
@@ -206,9 +216,13 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
       state: word(CapturePhoneState, p.phone_state),
       notReady,
       notReadyForMs,
-      notReadyShown: notReadyForMs !== null && notReadyForMs >= PHONE_NOT_READY_SHOW_AFTER_SECONDS * 1000,
-      // §7.4: the ONE derivation (the beat history's flags read the same predicates). A null reading contributes nothing.
-      health: phoneHealthOf({ notResponding, delivery: beat.delivery, thermal: beat.thermal, battery: beat.battery }),
+      notReadyShown,
+      // §7.4: the ONE derivation (the beat history's flags read the same predicates). A null reading contributes nothing, and a
+      // silent phone's readings are withheld (I1) — the raw `beat` and `elapsedMs` below still say what it last reported and when.
+      health: phoneHealthOf({
+        notResponding,
+        delivery: fresh ? beat.delivery : null, thermal: fresh ? beat.thermal : null, battery: fresh ? beat.battery : null,
+      }),
       startFailed: word(CaptureStartFailed, p.start_failed),
       lastBeatAt: lastBeatAt.toISOString(),
       elapsedMs: Math.max(0, now.getTime() - lastBeatAt.getTime()),
