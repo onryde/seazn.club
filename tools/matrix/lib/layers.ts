@@ -15,7 +15,7 @@
 //    catalogue cell at 1280 — 231: a builder row and every API-only cell a
 //    catalog template reaches are driven, the rest are 🚫 naming their wave.
 //    L2 (`--layer L2 --scope grid`) is planL2 over every cell, i.e. every run of
-//    l2-pairs.json (1,731), each driven, 🚫 or ░ exactly as the slice's are.
+//    l2-pairs.json (1,729), each driven, 🚫 or ░ exactly as the slice's are.
 //    `--scope slice` (the default, so a bare `--layer L1` is unchanged) is the
 //    two planners above; the grid planners sit in their own table
 //    (LAYER_GRID_PLANNERS) and take no filter.

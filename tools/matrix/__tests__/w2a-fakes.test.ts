@@ -12,7 +12,8 @@ import { offlineBuilderDefault } from "../lib/variants.ts";
 import { Recorder, setUpDivision } from "../lib/scenarios/common.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import { FakeKnockoutDriver, FakeLeagueDriver } from "./fake-driver.ts";
-import { ModelFakeDriver } from "./model-fake-driver.ts";
+import { ModelFakeDriver, RESULT_STATUSES } from "./model-fake-driver.ts";
+import { fixtureResultStatusesText } from "./product-text.ts";
 
 const SPORT = "football"; // single-sport: a level result is reachable here, and the rule is the stage kind's, not the sport's
 const variant = offlineBuilderDefault(SPORT);
@@ -130,6 +131,36 @@ describe("the model fake serves the W2a status and seats (X-BR-1, X-BR-2, X-ST-1
       refusals++;
     }
     expect(refusals, "every refusal case ran").toBe(3);
+  });
+
+  it("the model fake's rebuild guard (fixtureHasResultSql's status clause) counts a HELD match as a played one: a swiss stage with an in_play, decided, finalized or needs_decision fixture refuses STAGE_HAS_RESULTS, a scheduled one does not (X-BR-2)", async () => {
+    // single-sport: the guard reads the fixture's status, not a sport. White-box: a status the fake never writes without ledger events.
+    const refused = async (status: string): Promise<unknown> => {
+      const d = new ModelFakeDriver({});
+      const m = await newModelState({ driver: d, row: "swiss", sport: "generic", variant: "score", entrants: 4, tag: "t" });
+      await commandOf("Start", 0, 0, false).run(m, d);
+      expect(d.fixtures.length, status).toBeGreaterThan(0);
+      expect((d.ledgers.get(d.fixtures[0]!.id) ?? []).length, `${status}: the guard is read off the status alone`).toBe(0);
+      d.fixtures[0]!.status = status;
+      return d.rebuild("s1").then(() => null, (e: unknown) => e);
+    };
+    let judged = 0;
+    for (const status of ["in_play", "decided", "finalized", "needs_decision"]) {
+      const e = await refused(status);
+      expect(e, status).toBeInstanceOf(RefusedCall);
+      expect(e, status).toMatchObject({ status: 409, code: "STAGE_HAS_RESULTS" });
+      judged++;
+    }
+    expect(await refused("scheduled"), "its positive pair: a stage with nothing played rebuilds").toBeNull();
+    expect(judged).toBe(4);
+  });
+
+  it("the fake's RESULT_STATUSES is the product's fixtureHasResultSql status list, read from the product's source: it misses none, and adds only needs_decision (the one status Task 7 puts in the list)", () => {
+    const product = fixtureResultStatusesText();
+    expect(product.length).toBeGreaterThan(0);
+    expect(product.filter((s) => !RESULT_STATUSES.has(s)), "a status the product counts as played that the fake does not").toEqual([]);
+    expect([...RESULT_STATUSES].filter((s) => !product.includes(s) && s !== "needs_decision"), "a status the fake counts that the product does not").toEqual([]);
+    expect(RESULT_STATUSES.has("needs_decision")).toBe(true);
   });
 
   it("the scenario fakes (FakeKnockoutDriver) hold a level knockout result the same way: needs_decision, the next round unseated, then the settle seats", async () => {

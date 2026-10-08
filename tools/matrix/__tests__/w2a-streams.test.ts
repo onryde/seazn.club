@@ -7,7 +7,7 @@
 // parsed by the module's schema — how createDivision does it), not the engine's declaredCfgs: generic has no schema
 // default, so a bare `parse({})` throws for it (preflight C7), and the resolver is the cfg the product folds under.
 // Tests that fold core.settle / boardgame.tiebreak fold through loop D's engine (Tasks 4–5), merged into this lane.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BRACKET_KINDS, SETTLE_METHODS, foldMatchWithStoppage, isLevelOutcome, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { defaultLineupPair, forEachSport } from "@seazn/engine/testkit";
@@ -15,6 +15,7 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { foldStream } from "../lib/fold.ts";
 import { resolveSportCfg, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream, levelReachable, matchesRequest, settleableOutcome } from "../lib/streams/index.ts";
+import { boardgameGenerator } from "../lib/streams/boardgame.ts";
 import { carromGenerator } from "../lib/streams/carrom.ts";
 import { genericGenerator } from "../lib/streams/generic.ts";
 import { ALL_OUTCOMES, OutcomeUnreachable, START, outcomeLabel, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
@@ -40,6 +41,7 @@ const request = (c: Case, cfg: unknown, stageKind: StreamRequest["stageKind"], o
 const bracketCfg = (c: Case, overrides: Record<string, unknown> = {}): unknown => stageCfg(c.key, resolveSportCfg(c.key, c.variant, overrides), "knockout");
 const fold = (c: Case, cfg: unknown, events: readonly StreamEvent[]): Folded => foldMatchWithStoppage(c.module, cfg as never, c.lineups, envelopes(events));
 const outcomeAfter = (c: Case, cfg: unknown, events: readonly StreamEvent[]) => outcomeOf(c.module, fold(c, cfg, events));
+const thrown = (f: () => unknown): unknown => { try { f(); } catch (e) { return e; } throw new Error("expected the call to throw"); };
 const unreachable = (f: () => unknown): boolean => { try { f(); return false; } catch (e) { if (e instanceof OutcomeUnreachable) return true; throw e; } };
 
 describe("W2a generator breadth (spec §5.6.1) — every stream folds through the REAL engine (R15)", () => {
@@ -126,6 +128,55 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     }
     expect(others).toBe(cases().filter((c) => c.key !== "boardgame").length);
     expect(others).toBeGreaterThan(0);
+  });
+
+  it("boardgame level (M7): refused BY NAME, and the reason is the engine's — a drawn game opens the tie-break, and the one level result a chess bracket has is a double forfeit (no_result), which no request builds (W2b, RB2B-15)", () => {
+    const boards = cases().filter((c) => c.key === "boardgame");
+    expect(boards.length).toBeGreaterThan(0);
+    let named = 0;
+    for (const c of boards) {
+      const cfg = bracketCfg(c);
+      // Both requests that would need a level chess game: `level`, and a settle that follows one.
+      for (const outcome of [{ kind: "level" }, { kind: "settle", then: "home", method: SETTLE_METHODS[0], after: "level" }] as const satisfies readonly RequestedOutcome[]) {
+        const e = thrown(() => generateStream(request(c, cfg, "knockout", outcome)));
+        expect(e, `${c.variant} ${outcome.kind}`).toBeInstanceOf(OutcomeUnreachable);
+        expect((e as OutcomeUnreachable).message, `${c.variant} ${outcome.kind}`).toMatch(/double forfeit/);
+        named++;
+      }
+      expect(levelReachable(c.key, cfg, "knockout"), c.variant).toBe(false);
+      // Its positive pair: the refusal is the OVERLAY's (a drawn game opens a tie-break only under it) - a bare cfg draws.
+      const bare = resolveSportCfg(c.key, c.variant);
+      expect((bare as { tiebreak?: boolean }).tiebreak, c.variant).not.toBe(true);
+      expect(isLevelOutcome(outcomeAfter(c, bare, generateStream(request(c, bare, "knockout", { kind: "level" })))), `${c.variant}: a bare cfg draws`).toBe(true);
+      // The reason is true, folded through the REAL engine: a drawn game holds NO outcome (phase tiebreak) ...
+      const drawn = outcomeAfter(c, cfg, [START, { type: "boardgame.result", payload: { winner: null, method: "agreement" } }]);
+      expect(drawn, `${c.variant}: a drawn game opens the tie-break`).toBeNull();
+      // ... and a double forfeit (chess.md §7: both default) folds to no_result, a LEVEL result - held in a bracket.
+      const both = outcomeAfter(c, cfg, [START, { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } }]);
+      expect(both, c.variant).toEqual({ kind: "no_result" });
+      expect(isLevelOutcome(both), c.variant).toBe(true);
+    }
+    expect(named).toBe(2 * boards.length);
+  });
+
+  it("boardgame level (M7): the fold is the SECOND net under chess's named refusal - with that refusal off, `level` is still refused, by the fold finding the decider pending, never built as a level result", () => {
+    const boards = cases().filter((c) => c.key === "boardgame");
+    expect(boards.length).toBeGreaterThan(0);
+    const spy = vi.spyOn(boardgameGenerator, "levelRefusal").mockReturnValue(null);
+    try {
+      let refused = 0;
+      for (const c of boards) {
+        const e = thrown(() => generateStream(request(c, bracketCfg(c), "knockout", { kind: "level" })));
+        expect(e, c.variant).toBeInstanceOf(OutcomeUnreachable);
+        expect((e as OutcomeUnreachable).message, c.variant).toMatch(/decider is pending/);
+        expect((e as OutcomeUnreachable).message, c.variant).not.toMatch(/double forfeit/);
+        refused++;
+      }
+      expect(spy, "the generator's refusal was consulted (and silenced)").toHaveBeenCalled();
+      expect(refused).toBe(boards.length);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("carrom: a bracket win plays level games and the extra board — coins ≠ 9 (a value the old generator never emitted)", () => {

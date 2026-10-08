@@ -14,7 +14,7 @@
 // l2-pairs.json runs, each at its own width — the scripted ones driven, the
 // rest recorded 🚫/░ with no driver, org or check. `--scope grid` (W1d Task 3,
 // ruling 64) widens either layer to the FULL grid — L1: every one of the 231
-// catalogue cells at 1280; L2: all 1,731 runs of l2-pairs.json; `--scope slice`
+// catalogue cells at 1280; L2: all 1,729 runs of l2-pairs.json; `--scope slice`
 // is the default and means what `--layer` always did. `--set width-sweep` and
 // `--set api-only-browser` are layered too. The browser opens at the first
 // driven browser case, so a plan that only records opens none.

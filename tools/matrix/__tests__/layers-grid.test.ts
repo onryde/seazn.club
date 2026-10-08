@@ -1,6 +1,6 @@
 // W1d Task 3 (owner ruling 64, item 2): the FULL grid planners — `--layer L1
 // --scope grid` is one LIFECYCLE case per catalogue cell at 1280 (231), and
-// `--layer L2 --scope grid` is every run of the committed l2-pairs.json (1,731).
+// `--layer L2 --scope grid` is every run of the committed l2-pairs.json (1,729).
 // Every expected value comes from somewhere other than planL1Grid / planL2: the
 // catalogue's row and sport constants, the product's own catalog JSON (read as
 // text through fake-driver.ts's rawCatalogTemplate, never through
@@ -250,7 +250,7 @@ describe("committed-plans.ts reads the scope: --scope grid is the grid, a bare -
     expect(slice.planned.size).toBe(0);
   });
 
-  it("--layer L2 --scope grid is the 1,731 runs; --layer L2 is still the slice's cells only", () => {
+  it("--layer L2 --scope grid is the 1,729 runs; --layer L2 is still the slice's cells only", () => {
     const grid = livePlan("--layer L2 --scope grid");
     expect(grid.driven.size + grid.planned.size).toBe(RAW.length);
     expect(grid.driven.size).toBe(RAW.filter(hasScript).length);

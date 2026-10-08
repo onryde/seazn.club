@@ -80,6 +80,10 @@ export interface SportStreamGenerator {
    *  engine never ends level; a generator may still refuse a cfg whose level
    *  score is played off (OutcomeUnreachable). */
   tied?(req: StreamRequest): StreamEvent[];
+  /** W2a (M7): why `level` is refused for this sport under this cfg when the reason is one no refusal of the draw/tie
+   *  stream could name - null/absent otherwise. Chess: a DRAWN bracket game opens the tie-break, so the one level
+   *  result it has (a double forfeit, no_result) is built by no request. */
+  levelRefusal?(cfg: unknown): string | null;
   /** W2a: a drawn game followed by the scorer's tie-break (BG-KO-1). Absent where the sport has no such phase. */
   tiebreak?(req: StreamRequest & { readonly outcome: Extract<RequestedOutcome, { kind: "tiebreak" }> }): StreamEvent[];
 }

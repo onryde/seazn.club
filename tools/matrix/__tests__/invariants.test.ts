@@ -8,7 +8,7 @@ import { SEEDING_FAILED_AFTER_COMMIT } from "../lib/driver/types.ts";
 import { INVARIANTS, STEP_INVARIANTS, evaluateInvariant, evaluateInvariants, evaluateStepInvariants, type InvariantSpec } from "../lib/invariants.ts";
 import type { CaseFact, CompleteObs, ObservedFixture, ObservedOutcome, ObservedRun, ObservedStage, WithdrawalObs } from "../lib/observed.ts";
 import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
-import { structuralBracketFrom, structuralBracketText } from "./product-text.ts";
+import { fixtureResultStatusesFrom, fixtureStatusesFrom, fixtureStatusesText, structuralBracketFrom, structuralBracketText } from "./product-text.ts";
 import { GENERIC_ERROR_CODES, TERMINAL_STATUSES, isNamedRefusal, isTerminal, sameResult, toObservedOutcome } from "../lib/observed.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -741,19 +741,44 @@ describe("evaluateInvariants + observed helpers", () => {
     expect(out[2]!.reason).toMatch(/has results but no row/);
   });
   it("TERMINAL_STATUSES partitions the product's fixture-status enum (derived, not typed): every status is terminal or live", () => {
-    const src = readFileSync(resolve(REPO, "apps/web/src/server/api-v1/schemas.ts"), "utf8");
-    const enums = [...src.matchAll(/status: z\.enum\(\[([^\]]*"forfeited"[^\]]*)\]\)/g)];
-    expect(enums).toHaveLength(1);
-    const body = enums[0]![1]!;
-    const product = [...body.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
-    expect(product).toHaveLength(body.split(",").length); // an entry the regex cannot read is not silently dropped
-    // W2a: a bracket match held for its settle (needs_decision) is live, not finished. RED UNTIL Task 7 adds needs_decision to
-    // the api-v1 status enum (schemas.ts, the z.enum with "forfeited"): this check is what makes that edit reach the harness's
-    // status vocabulary. Loop D does not touch the enum.
+    // The product's enum, read from its source: the list declared once in lib/fixture-status.ts (loop F, Task 7) with the api-v1
+    // schema reading it by name, or - before Task 7 - inline in the schema. fixtureStatusesText refuses an entry it cannot read.
+    const product = fixtureStatusesText();
+    expect(product.length).toBeGreaterThan(0);
+    // W2a: a bracket match held for its settle (needs_decision) is live, not finished. RED UNTIL Task 7 merges and adds
+    // needs_decision to the status enum: this check is what makes that edit reach the harness's status vocabulary.
     const LIVE = ["scheduled", "in_play", "needs_decision"];
     expect(LIVE.every((s) => product.includes(s))).toBe(true);
     expect([...TERMINAL_STATUSES].sort()).toEqual(product.filter((s) => !LIVE.includes(s)).sort());
     for (const s of product) expect(isTerminal(s), s).toBe(!LIVE.includes(s));
+  });
+  it("fixtureStatusesFrom reads both shapes of the product's status enum - the list declared once and read by name (loop F, Task 7), and the inline list before it - and refuses what it cannot read", () => {
+    const DECL = ["scheduled", "in_play", "decided", "finalized", "abandoned", "forfeited", "cancelled", "needs_decision"];
+    const declaration = `export const FIXTURE_STATUSES = [\n${DECL.map((s) => `  "${s}",`).join("\n")}\n] as const;\nexport type FixtureStatusValue = (typeof FIXTURE_STATUSES)[number];\n`;
+    const byName = "const x = z.object({\n  id: z.string(),\n  status: z.enum(FIXTURE_STATUSES),\n});";
+    expect(fixtureStatusesFrom(byName, declaration)).toEqual(DECL);
+    const INLINE = DECL.filter((s) => s !== "needs_decision");
+    const inline = `const x = z.object({\n  status: z.enum([${INLINE.map((s) => `"${s}"`).join(", ")}]),\n});`;
+    expect(fixtureStatusesFrom(inline, null)).toEqual(INLINE);
+    // Refused by name: a declaration the schema does not read, one it cannot parse, an entry it cannot read, no enum at all, two enums.
+    expect(() => fixtureStatusesFrom(inline, declaration)).toThrow(/does not read it/);
+    expect(() => fixtureStatusesFrom(byName, "export const FIXTURE_STATUSES = someFunction();")).toThrow(/not found in the expected shape/);
+    expect(() => fixtureStatusesFrom(byName, declaration.replace('"in_play",', "IN_PLAY,"))).toThrow(/cannot read/);
+    expect(() => fixtureStatusesFrom("const x = 1;", null)).toThrow(/0 inline fixture status enums/);
+    expect(() => fixtureStatusesFrom(`${inline}\n${inline}`, null)).toThrow(/2 inline fixture status enums/);
+    expect(() => fixtureStatusesFrom(inline.replace('"scheduled"', "SCHEDULED"), null)).toThrow(/cannot read/);
+    // ... and the repo's own files read, whichever shape this tree has (the lane before Task 7 merges, the product after).
+    const live = fixtureStatusesText();
+    expect(live.length).toBeGreaterThanOrEqual(INLINE.length);
+    for (const s of INLINE) expect(live, s).toContain(s);
+  });
+  it("fixtureResultStatusesFrom reads fixtureHasResultSql's status clause, in either list, and refuses a clause it cannot read", () => {
+    const sql = (list: string) => `return tx\`(\n    \${f}.status in (${list})\n    or (\${f}.status = 'abandoned' and \${f}.outcome is not null)\n  )\`;`;
+    expect(fixtureResultStatusesFrom(sql("'in_play', 'decided', 'finalized'"))).toEqual(["in_play", "decided", "finalized"]);
+    expect(fixtureResultStatusesFrom(sql("'in_play', 'decided', 'finalized', 'needs_decision'"))).toEqual(["in_play", "decided", "finalized", "needs_decision"]);
+    expect(() => fixtureResultStatusesFrom(sql(""))).toThrow(/names no status/);
+    expect(() => fixtureResultStatusesFrom("select 1")).toThrow(/expected shape/);
+    expect(fixtureResultStatusesFrom(readFileSync(resolve(REPO, "apps/web/src/server/usecases/fixture-results-sql.ts"), "utf8")).length).toBeGreaterThan(0);
   });
   it("sameResult: status, kind and winner must all match; the method does not", () => {
     const a = { status: "decided", outcome: { kind: "win" as const, winner: "a", method: "regulation" } };

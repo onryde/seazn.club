@@ -107,8 +107,10 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}~${b}` : `${b}~${a}`);
 
 /** stages.ts DECIDED: a swiss board the next round's gate counts as finished. */
 const SWISS_DECIDED = new Set(["decided", "finalized", "forfeited"]);
-/** fixture-results-sql.ts fixtureHasResultSql's status clause: what a rebuild refuses over (with evidence, or abandoned with an outcome). */
-const RESULT_STATUSES = new Set(["in_play", "decided", "finalized"]);
+/** fixture-results-sql.ts fixtureHasResultSql's status clause: what a rebuild refuses over (with evidence, or abandoned with an outcome).
+ *  A HELD bracket match (needs_decision, X-BR-2) is a played match: it carries its level result's events, and loop F's Task 7 adds it
+ *  to the product's list. Held to the product's text by w2a-fakes.test.ts. */
+export const RESULT_STATUSES: ReadonlySet<string> = new Set(["in_play", "decided", "finalized", "needs_decision"]);
 const isAward = (outcome: unknown): boolean => (outcome as { kind?: unknown } | null)?.kind === "award";
 /** swiss-shell.ts isSwissBoardSeated: an award row, or both seats filled. */
 const swissSeated = (f: FakeFixture): boolean => isAward(f.outcome) || (f.home_entrant_id !== null && f.away_entrant_id !== null);

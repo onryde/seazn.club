@@ -83,7 +83,7 @@ export function drawsAllowed(sportKey: string, cfg: unknown, stageKind: StageKin
 }
 
 /** W2a (spec §5.6.1, finding 16): the cfg a fixture is FOLDED under. A bracket stage applies the module's own
- *  `bracketDeciders(cfg)` overlay on top of the resolved cfg (resolveFixtureCfg does the same server-side; the
+ *  `bracketDeciders(cfg)` overlay on top of the resolved cfg (loop F Task 6 will do the same server-side; the
  *  V347 freeze then carries it), so the harness's in-process fold and its stream generation must read the
  *  overlaid cfg or they diverge from the product on every boardgame and carrom bracket. Built from the engine's
  *  own declaration, never a table typed here: a stage that is not a bracket is returned as it came, untouched.

@@ -186,6 +186,7 @@ describe("level kinds — each one reaches the oracle as ITSELF (X-BR-1: draw, t
     let judged = 0;
     let draws = 0;
     let ties = 0;
+    const kindOf = new Map<string, string | null>();
     for (const sport of SPORT_KEYS) {
       const cfg = stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
       if (!levelReachable(sport, cfg, "knockout")) continue;
@@ -193,6 +194,7 @@ describe("level kinds — each one reaches the oracle as ITSELF (X-BR-1: draw, t
       const got = levelKindOf(sport, cfg, "h", "a", { kind: "level" }, events);
       expect(got, sport).toBe(drawsAllowed(sport, cfg, "league") ? "draw" : "tie");
       if (got === "draw") draws++; else ties++;
+      kindOf.set(sport, got);
       // A settle after the level result reads the same kind from the same events (the settle itself is not played).
       const settled = generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "settle", then: "home", method: "lot", after: "level" } });
       expect(levelKindOf(sport, cfg, "h", "a", { kind: "settle", then: "home", method: "lot", after: "level" }, settled), sport).toBe(got);
@@ -200,8 +202,13 @@ describe("level kinds — each one reaches the oracle as ITSELF (X-BR-1: draw, t
     }
     expect(judged).toBeGreaterThan(0);
     expect(draws).toBeGreaterThan(0);
-    expect(ties).toBeGreaterThan(0); // generic and cricket end level as a tie
+    expect(ties).toBeGreaterThan(0);
     expect(draws + ties).toBe(judged);
+    // Per sport (the counts above are totals): generic contributes NOTHING — GN-KO-1 refuses its draw in a bracket and
+    // it has no tie, so it never reaches a level result there — and cricket is the registry's one sport that ends
+    // level as a TIE (single-sport pin: the rulebook's X-BR-1 tie row is cricket's).
+    expect(kindOf.has("generic"), "GN-KO-1: a generic bracket game cannot end level").toBe(false);
+    expect([...kindOf].filter(([, k]) => k === "tie").map(([sport]) => sport)).toEqual(["cricket"]);
     expect(levelKindOf("football", {}, "h", "a", { kind: "draw" }, [])).toBe("draw");
     expect(levelKindOf("football", {}, "h", "a", { kind: "tie" }, [])).toBe("tie");
     for (const asked of [{ kind: "win", winner: "home" }, { kind: "abandon" }, { kind: "settle", then: "home", method: "lot", after: "abandon" }, { kind: "forfeit", by: "home", reason: "walkover" }] as const) {

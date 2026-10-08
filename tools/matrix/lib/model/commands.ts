@@ -396,6 +396,13 @@ class Complete extends Cmd {
   }
 }
 
+/** Settle's `w` carries TWO independent draws (finding M2: one shared bit made a level result settled for the away side,
+ *  and an abandon settled for the home side, unreachable): bit 0 is the winner's side (0 home, 1 away), bit 1 is the hold
+ *  path of an OPEN match (0 a level result where the sport can build one, 1 an abandon at a real score). `w` is 0..3
+ *  for Settle alone (modelCommands), so the default command set's draws, and every committed seed, are untouched. */
+const settlesForAway = (w: number): boolean => (w & 1) === 1;
+const abandonsToHold = (w: number): boolean => (w & 2) === 2;
+
 /** W2a (finding 24, spec §5.6.2), OPT-IN: the organiser's settle in a bracket. The fixtures it can address are
  *  - held: `needs_decision`, or abandoned (a level result or an abandon with nobody advanced) — the settle closes it;
  *  - open: seated and untouched — the command first brings it to a held state (a level result where the sport's
@@ -436,12 +443,12 @@ class Settle extends Cmd {
     const [home, away] = seatsOf(f);
     if (phase === "open") {
       const cfg = stageCfg(m.sport, m.cfg, m.stageKind as StageKind);
-      const level = levelReachable(m.sport, cfg, m.stageKind as StageKind) && this.w % 2 === 0;
+      const level = levelReachable(m.sport, cfg, m.stageKind as StageKind) && !abandonsToHold(this.w);
       await post(m, d, f, generateStream({ sportKey: m.sport, cfg, stageKind: m.stageKind as never, home, away, outcome: level ? { kind: "level" } : { kind: "abandon", atScore: true } }));
       // The held state is judged on its own, before the settle moves it: a held match seats nobody.
       await checkStep(m, d);
     }
-    const winner = this.w % 2 === 0 ? home : away;
+    const winner = settlesForAway(this.w) ? away : home;
     const method = SETTLE_METHODS[this.k % SETTLE_METHODS.length];
     try {
       await post(m, d, f, [{ type: "core.settle", payload: { winner, method } }]);
@@ -475,5 +482,5 @@ export const SWISS_BIAS: Readonly<Partial<Record<CommandKind, number>>> = Object
  *  found on one, generates exactly what it did. */
 export function modelCommands(opts: { fences: boolean; bias?: Readonly<Partial<Record<CommandKind, number>>>; settle?: boolean }): fc.Arbitrary<fc.AsyncCommand<ModelState, OrganiserDriver>>[] {
   const kinds: readonly AnyCommandKind[] = opts.settle === true ? [...COMMAND_KINDS, ...OPT_IN_KINDS] : COMMAND_KINDS;
-  return kinds.flatMap((kind) => Array.from({ length: Math.max(1, kind === "Settle" ? 1 : (opts.bias?.[kind] ?? 1)) }, () => fc.tuple(fc.nat({ max: 63 }), fc.nat({ max: 1 })).map(([k, w]) => commandOf(kind, k, w, opts.fences))));
+  return kinds.flatMap((kind) => Array.from({ length: Math.max(1, kind === "Settle" ? 1 : (opts.bias?.[kind] ?? 1)) }, () => fc.tuple(fc.nat({ max: 63 }), fc.nat({ max: kind === "Settle" ? 3 : 1 })).map(([k, w]) => commandOf(kind, k, w, opts.fences))));
 }

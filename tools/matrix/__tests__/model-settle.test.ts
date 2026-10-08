@@ -104,18 +104,19 @@ describe("Settle in the model (spec §5.6.2; finding 24)", () => {
     }
   });
 
-  it("an OPEN match of a sport that can end level: an even draw of the dice opens it with the level result, an odd one with an abandon at score — both are held, then settled", async () => {
+  it("an OPEN match of a sport that can end level: the hold bit opens it with the level result (0) or an abandon at score (1) — both are held, then settled, for either side", async () => {
     let checked = 0;
-    for (const [w, abandons] of [[0, false], [1, true]] as const) {
+    for (const [w, abandons, side] of [[0, false, "home"], [1, false, "away"], [2, true, "home"], [3, true, "away"]] as const) {
       const { m, d, sf1 } = await bracket("football");
       await settle(m, d, 0, w);
       const types = d.ledgers.get(sf1)!.map((e) => e.type);
       expect(types.includes("core.abandon"), `w=${w}: ${types.join(", ")}`).toBe(abandons);
       expect(types.at(-1), `w=${w}`).toBe("core.settle");
       expect(row(d, sf1).status, `w=${w}`).toBe("decided");
+      expect((row(d, sf1).outcome as { winner: string }).winner === row(d, sf1).home_entrant_id ? "home" : "away", `w=${w}: the side named`).toBe(side);
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(4);
   });
 
   it("a settled FINAL has no later round to seat: it is settled and decided, and X-ST-1 judges the two semis only (the last round is not counted)", async () => {
@@ -222,6 +223,39 @@ describe("Settle in the model (spec §5.6.2; finding 24)", () => {
     expect(m.settles.map((x) => x.status)).toEqual([200, 200]);
   });
 
+  it("the hold path and the settling side are INDEPENDENT draws of the command (w bit 0 = the winner's side, bit 1 = the hold path): a product that mis-seats ONLY an away winner after a LEVEL result is caught on exactly that combination, of all four", async () => {
+    class MisseatsAwayAfterLevel extends ModelFakeDriver {
+      override async postStream(id: string, events: readonly StreamEvent[], prefix = "") {
+        const held = this.ledgers.get(id) ?? [];
+        const out = await super.postStream(id, events, prefix);
+        const f = this.fixtures.find((x) => x.id === id)!;
+        const settle = events.find((e) => e.type === "core.settle");
+        const awayWon = settle !== undefined && (settle.payload as { winner: string }).winner === f.away_entrant_id;
+        if (awayWon && !held.some((e) => e.type === "core.abandon")) for (const g of this.fixtures.filter((x) => x.round_no === 2)) { g.home_entrant_id = null; g.away_entrant_id = null; } // X-ST-1 broken, only here
+        return out;
+      }
+    }
+    // The command's contract, and what the product's own ledger shows each w to have been issued as.
+    const CONTRACT = [[0, "level", "home"], [1, "level", "away"], [2, "abandon", "home"], [3, "abandon", "away"]] as const;
+    const caught: number[] = [];
+    let issued = 0;
+    for (const [w, hold, side] of CONTRACT) {
+      const { m, d, sf1 } = await bracket("football", () => new MisseatsAwayAfterLevel({}));
+      const e = await settle(m, d, 0, w).then(() => null, (x: unknown) => x);
+      const led = d.ledgers.get(sf1)!;
+      const at = led.findIndex((x) => x.type === "core.settle");
+      expect(led.slice(0, at).some((x) => x.type === "core.abandon"), `w=${w}: held by`).toBe(hold === "abandon");
+      expect((led[at]!.payload as { winner: string }).winner === row(d, sf1).home_entrant_id ? "home" : "away", `w=${w}: settled for`).toBe(side);
+      issued++;
+      if (e === null) continue;
+      expect(e, `w=${w}`).toBeInstanceOf(ModelViolation);
+      expect((e as ModelViolation).check, `w=${w}`).toBe(SETTLE_SEATS_CHECK);
+      caught.push(w);
+    }
+    expect(issued).toBe(CONTRACT.length);
+    expect(caught, "only level + away is the faulty combination").toEqual([1]);
+  });
+
   it("the model's bracket invariants red on a faulty product, each on its own (and the correct product above passes): a level result DECIDED, a held match that SEATS, a settle that seats NOBODY", async () => {
     class DecidesLevel extends ModelFakeDriver {
       override async postStream(id: string, events: readonly StreamEvent[], prefix = "") {
@@ -272,7 +306,20 @@ describe("rule 10 — any sequence with Settle keeps the three bracket invariant
   const MOVES = ["Withdraw", "Score", "Walkover", "Void", "Correct", "Complete", "Settle"] as const;
   const ALL = [...COMMAND_KINDS, ...OPT_IN_KINDS];
 
-  it("fast-check over the registry's three bracket shapes (generic abandons, football holds a level result, chess abandons): per-step invariants hold, Settle is accepted and refused by name in the sequences", async () => {
+  /** The sweep's seed: MATRIX_FC_SEED replays a CI red locally (americano-loop.test.ts:334 reads the same variable);
+   *  the default pins the committed run, so a green here is a green on every machine. */
+  const SEED = Number(process.env.MATRIX_FC_SEED ?? 20261008);
+
+  /** Football is the one sport of the three that can open a held match BOTH ways (a level result, an abandon at score),
+   *  so it is where the four (hold path x settling side) combinations are all reachable. */
+  const SPORTS = ["generic", "football", "boardgame"] as const;
+  /** Per sport. Football's four combinations land ~1 in 9 of the settles; 100 runs keep the chance that a random seed
+   *  (MATRIX_FC_SEED) leaves one at zero below 1e-4, where 40 did not. */
+  const RUNS = 100;
+  const HOLDS = ["level", "abandon"] as const;
+  const SIDES = ["home", "away"] as const;
+
+  async function sweep(seed: number) {
     const arbs = modelCommands({ fences: true, settle: true });
     expect(arbs.length).toBe(ALL.length);
     // A withdrawal's cascade posts a BARE core.forfeit (withdrawal.ts applyUpdate): a chess game refuses it before
@@ -281,7 +328,8 @@ describe("rule 10 — any sequence with Settle keeps the three bracket invariant
     expect(movesFor("generic").length).toBe(MOVES.length);
     expect(movesFor("boardgame").length).toBe(MOVES.length - 1);
     const totals = { runs: 0, steps: 0, accepted: 0, expected: 0, held: 0, level: 0, seated: 0 };
-    for (const sport of ["generic", "football", "boardgame"]) {
+    const combos: Record<string, number> = Object.fromEntries(HOLDS.flatMap((h) => SIDES.map((s) => [`${h}/${s}`, 0])));
+    for (const sport of SPORTS) {
       await fc.assert(fc.asyncProperty(fc.commands(movesFor(sport), { maxCommands: 30 }), async (cmds) => {
         const { m, d } = await bracket(sport);
         await fc.asyncModelRun(() => ({ model: m, real: d }), cmds);
@@ -292,10 +340,25 @@ describe("rule 10 — any sequence with Settle keeps the three bracket invariant
         totals.held += m.stepChecks.get(HELD_SEATS_CHECK) ?? 0;
         totals.level += m.stepChecks.get(BRACKET_LEVEL_CHECK) ?? 0;
         totals.seated += m.stepChecks.get(SETTLE_SEATS_CHECK) ?? 0;
-      }), { numRuns: 40 });
+        if (sport !== "football") return;
+        // What each match's FIRST settle was issued as, read from the ledger the product kept (not from the command):
+        // held by an abandon or by a level result, naming the home or the away side.
+        for (const [id, led] of d.ledgers) {
+          const at = led.findIndex((e) => e.type === "core.settle");
+          if (at < 0) continue;
+          const hold = led.slice(0, at).some((e) => e.type === "core.abandon") ? "abandon" : "level";
+          const side = (led[at]!.payload as { winner: string }).winner === row(d, id).home_entrant_id ? "home" : "away";
+          combos[`${hold}/${side}`]!++;
+        }
+      }), { numRuns: RUNS, seed });
     }
+    return { ...totals, combos };
+  }
+
+  it("fast-check over the registry's three bracket shapes (generic abandons, football holds a level result, chess abandons): per-step invariants hold, Settle is accepted and refused by name in the sequences, every hold path settles to either side, and the sweep replays from its seed", async () => {
+    const totals = await sweep(SEED);
     // Anti-vacuity (TEST-STRATEGY): zero of any of these is a failure, never `>= 0`.
-    expect(totals.runs).toBe(120);
+    expect(totals.runs).toBe(SPORTS.length * RUNS);
     expect(totals.steps).toBeGreaterThan(0);
     expect(totals.accepted, "no Settle was ever accepted").toBeGreaterThan(0);
     expect(totals.expected, "no second settle was ever refused").toBeGreaterThan(0);
@@ -303,5 +366,11 @@ describe("rule 10 — any sequence with Settle keeps the three bracket invariant
     expect(totals.level, "no bracket outcome was ever judged").toBeGreaterThan(0);
     expect(totals.seated, "no settled seat was ever judged").toBeGreaterThan(0);
     expect(SETTLE_METHODS.length).toBeGreaterThan(0);
+    // M2: the hold path and the settling side are independent draws — a level result settled for the AWAY side, and an
+    // abandon settled for the HOME side, are issued as often as the two the old shared bit allowed.
+    expect(Object.keys(totals.combos).length).toBe(HOLDS.length * SIDES.length);
+    for (const [combo, n] of Object.entries(totals.combos)) expect(n, `football never issued a ${combo} settle`).toBeGreaterThan(0);
+    // M1: the same seed runs the same sequences — a red replays, and the pins above are not a lottery.
+    expect(await sweep(SEED)).toEqual(totals);
   });
 });

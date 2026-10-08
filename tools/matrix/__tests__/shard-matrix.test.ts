@@ -29,7 +29,7 @@ const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8"))
 const flags = (n: number, driven = n): boolean[] => Array.from({ length: n }, (_, i) => i < driven);
 /** The per-case ceilings the brief derives from the committed evidence: 210 s, 30 s, 30 s. */
 const C: Record<Layer, number> = { L1: 210, L2: 30, L3: 30 };
-/** The plan sizes of the full scope, with their driven counts, as the brief states them. */
+/** The plan sizes of the full scope, with their driven counts, as the brief states them. L2 moved 1,731 -> 1,729 under X-DR-1 (layers-grid.test.ts:183). */
 const FULL = { L1: flags(231, 178), L2: flags(1729, 62), L3: flags(937) };
 const cfg: ShardsConfig = loadShardsConfig();
 /** One scratch root for every temp directory below, removed once at the end (a hook inside an `it` is not a cleanup). */
@@ -63,9 +63,10 @@ describe("shardMatrix (D4; class 20 — derived budgets; review C2)", () => {
     expect([s1.timeout, s2.timeout]).toEqual([58, 38]);
   });
 
-  it("planned cases cost nothing: L2's 1,731-item grid with 62 driven fits, where counting planned items would not", () => {
+  it("planned cases cost nothing: L2's 1,729-item grid with 62 driven fits, where counting planned items would not", () => {
     const m = shardMatrix(cfg, "full", FULL, C);
     for (const j of m.include.filter((x) => x.layer === "L2")) expect(j.timeout).toBeLessThan(60);
+    // L2 is 1,729 runs since X-DR-1 (was 1,731; layers-grid.test.ts:183).
     expect(cfg.setupMinutes + Math.ceil((Math.ceil(1729 / 2) * 30) / 60) + cfg.slackMinutes).toBeGreaterThan(cfg.maxTimeoutMinutes); // the wrong count would refuse
     // The same grid with every item driven IS refused: the budget follows the driven count, not the plan size.
     expect(() => shardMatrix(cfg, "full", { ...FULL, L2: flags(1729) }, C)).toThrow(/exceeds/);
@@ -391,7 +392,7 @@ describe("drivenInPlanOrder (lib/expected-plan.ts): the plan's items in the orde
       checked++;
     }
     expect(checked).toBe(plans.length);
-    // The sizes the brief gives, by plan: 6 / 231 / 68 / 1,731 / 937 / 33.
+    // The sizes the brief gives, by plan: 6 / 231 / 68 / 1,729 / 937 / 33 (L2 was 1,731 before X-DR-1; layers-grid.test.ts:183).
     expect(drivenInPlanOrder("--layer L1").length).toBe(6);
     expect(drivenInPlanOrder("--layer L1 --scope grid").length).toBe(231);
     expect(drivenInPlanOrder("--layer L2").length).toBe(68);
@@ -464,6 +465,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
     for (const j of jobs) {
       const r = runs.get(j.layer)![j.k - 1];
       const workers = j.args.includes("--workers 4") ? 4 : 1;
+      // L2's plan size is the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
       expect(r.shard, `${j.layer} ${j.k}/${j.of}`).toEqual({ index: j.k, of: j.of, planSize: { L1: 231, L2: 1729, L3: 937 }[j.layer] });
       expect(r.cases.length).toBeGreaterThan(0);
       // The budget basis: the cases the stripe DROVE (no `planned` marker), counted from the evidence the runner wrote.
@@ -495,6 +497,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
       const inputs: ShardInput[] = shards.map((r, i) => ({ name: `${l}-${i + 1}`, exit: "0\n", results: r }));
       const m = mergeShards(inputs, `ci-1-1-${l.toLowerCase()}`);
       expect(m.merged.shards, l).toBe(shards.length);
+      // L2 checks the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
       expect(m.checked, l).toBe({ L1: 231, L2: 1729, L3: 937 }[l]);
       expect(matchPlanIds(m.merged).compared, l).toBe(m.checked);
       merged++;

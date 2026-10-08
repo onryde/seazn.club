@@ -79,6 +79,8 @@ function levelStream(req: StreamRequest, gen: SportStreamGenerator): StreamEvent
   if (!forbidsLevelResult(req.stageKind)) {
     throw new OutcomeUnreachable(req.sportKey, label, `'${req.stageKind}' is not a bracket kind: a level result there is a draw or a tie — request that`);
   }
+  const refusal = gen.levelRefusal?.(req.cfg) ?? null;
+  if (refusal !== null) throw new OutcomeUnreachable(req.sportKey, label, refusal);
   let events: StreamEvent[];
   if (drawsAllowed(req.sportKey, req.cfg, "league")) events = gen.decided({ ...req, outcome: { kind: "draw" } });
   else if (gen.tied !== undefined) events = gen.tied(req);

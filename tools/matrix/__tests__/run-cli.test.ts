@@ -2370,6 +2370,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(r.cases).toHaveLength(RAW_RUNS.length);
     expect(r.cases.every((c) => c.layer === "L2" && c.l2 !== undefined)).toBe(true);
     expect(new Set(r.cases.map((c) => c.l2!.n)).size).toBe(RAW_RUNS.length);
+    // X-DR-1 (W2a): 1,731 -> 1,729 runs; driven 62 and 🚫 164 unchanged, ░ 1,503 (layers-grid.test.ts:183).
     expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(62);
     expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(164);
     expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1503);

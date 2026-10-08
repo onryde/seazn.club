@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandTake } from "@seazn/engine/competition";
-import type { StageKind } from "@seazn/engine/core";
+import { StageKind, forbidsLevelResult } from "@seazn/engine/core";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
@@ -22,7 +22,7 @@ import { lineupsPut } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
-import { drawsAllowed, entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
+import { drawsAllowed, entrantKindFor, resolveSportCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeMultiStageDriver } from "./fake-formats-driver.ts";
 
@@ -62,14 +62,15 @@ const takesOfRow = (row: Row) => takesOf(stagesForRow(row)[1]!).map((t) => Strin
 const MULTI = ROW_KEYS.filter((r) => stagesForRow(r).length > 1);
 /** The rows the fake can draw: stage 1 a league or a group (fake-formats-driver.ts). */
 const FAKE_ROWS = MULTI.filter((r) => ["league", "group"].includes(stagesForRow(r)[0]!.kind));
-/** The bracket kinds: a line there needs a winner to feed on (stages.ts BRACKET_WALKOVER_KINDS plus the page playoff). */
-const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
+/** A bracket kind: a line there needs a winner to feed on. The engine's own split (X-DR-1, forbidsLevelResult) and never
+ *  a typed list here - the typed one this replaced left out the ladder. */
+const isBracketKind = (kind: string): boolean => forbidsLevelResult(kind);
 /** Was a finding (W1-driving task report): the engine's deny-list declared a draw reachable on some bracket kinds
  *  (generic on page_playoff; boardgame on every kind), so the default policy posted one and the bracket line fed
  *  nobody. W2a's allow-list (X-DR-1: draws only in league, group, swiss and americano) closes it, so this is now
  *  the question every test below asks and answers NO. Derived from the module's own supportsDraws, never a typed list. */
 const bracketDrawDeclared = (row: Row, sport: string, variant: string) =>
-  stagesForRow(row).slice(1).some((b) => BRACKET_KINDS.has(b.kind) && drawsAllowed(sport, resolveSportCfg(sport, variant), b.kind as never));
+  stagesForRow(row).slice(1).some((b) => isBracketKind(b.kind) && drawsAllowed(sport, resolveSportCfg(sport, variant), b.kind as never));
 
 describe("Step 0 — the product's multi-stage shape, pinned", () => {
   it("every multi-stage row's later bodies are timing 'setup', and declaredTake answers for each — counted", () => {
@@ -251,6 +252,26 @@ describe("playDivision on the fake — the product sequence", () => {
     expect(judged).toBeGreaterThan(0);
     expect(judged).toBe(SPORT_KEYS.length);
   });
+  it("X-DR-1 over EVERY declared stage kind: the bracket kinds are everything but league, group, swiss and americano (the rulebook's draw half), and no sport draws in one at any variant — so no bracket line in any row waits on a draw", () => {
+    // single list, from the rulebook (spec §5.4.1, ruling 78) - not read back from the engine's DRAW_KINDS.
+    const RULEBOOK_DRAW_KINDS = ["league", "group", "swiss", "americano"];
+    let bracketKinds = 0;
+    let checked = 0;
+    for (const kind of StageKind.options) {
+      expect(isBracketKind(kind), kind).toBe(!RULEBOOK_DRAW_KINDS.includes(kind));
+      if (!isBracketKind(kind)) continue;
+      bracketKinds++;
+      for (const sport of SPORT_KEYS) {
+        for (const variant of variantKeys(sport)) {
+          expect(drawsAllowed(sport, resolveSportCfg(sport, variant), kind), `${sport}/${variant} in ${kind}`).toBe(false);
+          checked++;
+        }
+      }
+    }
+    expect(bracketKinds).toBe(StageKind.options.length - RULEBOOK_DRAW_KINDS.length);
+    expect(bracketKinds).toBeGreaterThan(0);
+    expect(checked).toBe(bracketKinds * SPORT_KEYS.reduce((n, sport) => n + variantKeys(sport).length, 0));
+  });
   it("…and generic/score's page_playoff no longer declares a draw (SC-O2, X-DR-1), so group_playoffs' stage 2 plays through instead of sticking", async () => {
     expect(bracketDrawDeclared("group_playoffs", "generic", "score")).toBe(false);
     const { checks, state } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "group_playoffs" });
@@ -265,7 +286,7 @@ describe("playDivision on the fake — the product sequence", () => {
       const played = (fx: readonly { outcome: { kind: string } | null }[]) => fx.filter((f) => f.outcome !== null && f.outcome.kind !== "award").length;
       let before = 0; // decided fixtures in the stages before this one
       for (const st of out.observed.stages) {
-        if (BRACKET_KINDS.has(st.kind)) {
+        if (isBracketKind(st.kind)) {
           const ordered = [...st.fixtures].sort((a, b) => (a.roundNo ?? 0) - (b.roundNo ?? 0));
           const first = ordered.find((f) => f.outcome !== null && f.outcome.kind !== "award");
           expect((first?.outcome as { method?: string } | undefined)?.method ?? "", `${row} seq ${st.seq}: the first played bracket fixture is a decider (${before} decided before it)`).toMatch(/^settled_/);
