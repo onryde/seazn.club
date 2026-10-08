@@ -481,7 +481,7 @@ Ten reviewed loops (A, B, C, D, F, G, H, P1, P2, R) and two unreviewed evidence 
 - Produces (0b):
   - Env `STRYKER_MUTATE="<src path>:<a>-<b>[,…]"` on `pnpm mutation`. When it is set, `STRYKER_GROUP` is not read, the run is `changed` (`reports/mutation/changed.json`, never incremental), and `mutate` is exactly the ranges given.
   - `node scripts/stryker-changed.mjs --base <ref>` prints that value from `git diff -U0 <ref> -- src`.
-  - `node scripts/stryker-changed.mjs --report <changed.json>` prints the verdict table and exits non-zero on any `Survived` or `NoCoverage`.
+  - `node scripts/stryker-changed.mjs --report <changed.json> --expect "<ranges>"` (refuses with exit 2 a report whose `config.mutate` or mutants do not match the ranges) prints the verdict table and exits non-zero on any `Survived` or `NoCoverage`.
   - With `STRYKER_MUTATE` unset, the config is byte-for-byte the committed pre-0b snapshot, for every group. No test reads git history (CI's engine checkout is shallow).
   - `--base` also mutates NEW untracked src files whole (`git diff` cannot see them).
 
