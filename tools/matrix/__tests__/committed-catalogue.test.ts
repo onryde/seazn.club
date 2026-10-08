@@ -26,7 +26,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import type * as TS from "typescript";
-import { EngineError, type StageKind } from "@seazn/engine/core";
+import { EngineError, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { RULES, decide, gapReason, planL3 } from "../lib/applicability.ts";
@@ -130,10 +130,13 @@ function independentClass(vc: VariantCase): VariantClass {
     throw e;
   }
   const stageKind = stagesForRow(vc.row)[0]!.kind as StageKind;
+  // W2a: a bracket fixture folds under the module's own overlay (boardgame's tie-break, carrom's extra board), read
+  // straight from the engine's declaration - not through the harness's stageCfg, which scorable() uses.
+  const foldCfg = forbidsLevelResult(stageKind) ? { ...(cfg as object), ...(sportModule(vc.sport).bracketDeciders(cfg as never) as object) } : cfg;
   for (const winner of ["home", "away"] as const) {
     try {
-      const events = generateStream({ sportKey: vc.sport, cfg, stageKind, home: "H", away: "A", outcome: { kind: "win", winner } });
-      const out = foldStream(sportModule(vc.sport), cfg, "H", "A", events).outcome;
+      const events = generateStream({ sportKey: vc.sport, cfg: foldCfg, stageKind, home: "H", away: "A", outcome: { kind: "win", winner } });
+      const out = foldStream(sportModule(vc.sport), foldCfg, "H", "A", events).outcome;
       expect(out, `${vc.id} win-${winner}`).toMatchObject({ kind: "win", winner: winner === "home" ? "H" : "A" });
     } catch (e) {
       if (e instanceof GeneratorUnsupported) return "generator";
