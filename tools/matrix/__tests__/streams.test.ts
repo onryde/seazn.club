@@ -230,10 +230,14 @@ describe("off-catalogue cfgs — the right answer differs from the catalogue's s
     }
   });
 
-  it("carrom: tieBoard 'draw' is declared drawable in a league, and the generator refuses the draw (W2 owns its shape)", () => {
-    const r = offCatalogue("carrom", "icf", { tieBoard: "draw" }, "league", { kind: "draw" });
-    expect(drawsAllowed("carrom", r.cfg, "league")).toBe(true);
-    expect(() => generateStream(r)).toThrow(GeneratorUnsupported);
+  it("carrom: tieBoard 'draw' is declared drawable in a league, and the generator builds the drawn match (W2a removed the refusal)", () => {
+    // Every game level after maxBoards and drawn under the house rule; bestOf drawn games is a drawn match.
+    for (const overrides of [{ tieBoard: "draw" }, { tieBoard: "draw", maxBoards: 5 }, { tieBoard: "draw", bestOf: 5 }]) {
+      const r = offCatalogue("carrom", "icf", overrides, "league", { kind: "draw" });
+      expect(drawsAllowed("carrom", r.cfg, "league"), JSON.stringify(overrides)).toBe(true);
+      expect(foldsAsRequested(r).match, JSON.stringify(overrides)).toBe("match");
+      expect(foldStream(sportModule("carrom"), r.cfg, "H", "A", generateStream(r)).outcome, JSON.stringify(overrides)).toEqual({ kind: "draw" });
+    }
   });
 });
 
