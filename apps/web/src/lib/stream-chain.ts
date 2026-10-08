@@ -136,8 +136,14 @@ function captureSeazn(view: ChainView | null, row: Chain, capture: CaptureFacts)
  * warming reconnect), it is drawn as live's W19 draws it: `problem`, the amber dashes — beside the node's "!", the strip
  * and the fold's dot, all from the same countdown. The warming timeout's countdown keeps waiting's `connecting` (that
  * phone still checks in). Live already draws `problem` while the phone has no signal, which is when its countdown runs.
+ *
+ * Owner ruling 2026-10-08 (B8): live with the input up, while the SERVER's health verdict says the video is not reaching
+ * Seazn (`stalled`), the link does not draw as flowing beside the Seazn node's "Waiting for video" — it draws `problem`,
+ * the same amber dashes. The same verdict `captureSeazn` reads; never a client reading of `delivery`. Link 2 is the
+ * destination's and does not move.
  */
 function captureLink1(view: ChainView | null, row: Chain, capture: CaptureFacts): LinkStyle {
+  if (view?.state === "live" && !phoneNoSignal(view)) return capture.phone?.health === "stalled" ? "problem" : row.link1;
   if (!view || capture.countdown?.reason !== "phone_lost") return row.link1;
   return view.state === "requested" || view.state === "provisioning" || view.state === "warming" ? "problem" : row.link1;
 }

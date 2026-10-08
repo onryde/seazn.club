@@ -467,6 +467,11 @@ test("T10/T11 live: 'Automatic: stops about N minutes after the result'; the hea
   await expect(strip).toHaveText(healthLinePattern({ percent: 78, charging: true, mbps: "2.4" }), { timeout: BEAT_POLL_MS });
   await expect(strip).toHaveAttribute("data-tone", "slate");
   await expect(body.getByTestId("stream-chain"), "healthy: the phone node is the runner's own 'Connected'").toHaveAttribute("data-phone", "connected");
+  // The phone → Seazn link flows while the video arrives; the destination's link is recorded to prove it never moves below.
+  const chainEl = body.getByTestId("stream-chain");
+  await expect(chainEl, "healthy: link 1 flows").toHaveAttribute("data-link1", "flowing");
+  const link2Healthy = await chainEl.getAttribute("data-link2");
+  expect(link2Healthy, "premise: link 2 is drawn").toBeTruthy();
   // Details (Q-D): the runner's chips, then data used and the app version.
   await body.getByTestId("stream-details").locator("summary").click();
   await expect(body.getByTestId("stream-phone-data-used")).toHaveText(en("stream.phone.dataUsed", { n: 245 }));
@@ -480,12 +485,18 @@ test("T10/T11 live: 'Automatic: stops about N minutes after the result'; the hea
   await expect(strip.getByTestId("stream-phone-line")).toHaveText(healthLinePattern({ percent: LOW_BATTERY_PERCENT - 6, charging: false, mbps: "2.4" }));
   reading = { ...reading, thermal: HOT_THERMAL_STATUS };
   await expect(lead, "hot outranks battery low").toHaveText(en("stream.phone.health.hot"), { timeout: BEAT_POLL_MS });
+  await expect(chainEl, "hot (the phone still sends): link 1 still flows").toHaveAttribute("data-link1", "flowing");
   reading = { ...reading, delivery: "stalled" };
   await expect(lead, "stalled outranks both").toHaveText(en("stream.phone.health.stalled"), { timeout: BEAT_POLL_MS });
   await expect(body.locator('[data-node="phone"] [data-mark="bang"]'), "stalled: the node's '!'").toHaveCount(1);
   // Owner ruling 2026-10-08: the video is not reaching Seazn — the Seazn node says so, from the same server verdict.
   await expect(body.getByTestId("stream-chain"), "stalled: the Seazn node waits for video").toHaveAttribute("data-seazn", "waitingVideo");
   await expect(body.locator('[data-node="seazn"]')).toContainText(en("stream.chain.word.waitingVideo"));
+  // Owner ruling 2026-10-08 (B8): and the phone → Seazn link stops drawing as flowing — the chain's amber dashes, drawn by
+  // the class the component paints. The Seazn → destination link does not move.
+  await expect(chainEl, "stalled: link 1 is the problem style").toHaveAttribute("data-link1", "problem");
+  await expect(chainEl.locator(".stream-link-problem"), "stalled: the dashes are painted (one link)").toHaveCount(1);
+  await expect(chainEl, "stalled: link 2 is unchanged").toHaveAttribute("data-link2", link2Healthy!);
   // The phone at 320: the amber strip and its line fit, and every reading stays on one line (B7 review M-5: "2.4 Mbps"
   // once broke across two).
   await page.setViewportSize({ width: 320, height: 800 });
@@ -496,6 +507,7 @@ test("T10/T11 live: 'Automatic: stops about N minutes after the result'; the hea
   reading = { ...reading, delivery: "ok", thermal: 0, battery: { percent: 78, charging: true, drainPctPerHour: null } };
   await expect(strip, "healthy again").toHaveAttribute("data-tone", "slate", { timeout: BEAT_POLL_MS });
   await expect(body.getByTestId("stream-chain"), "healthy: Seazn receives again").toHaveAttribute("data-seazn", "receiving");
+  await expect(chainEl, "healthy: link 1 flows again").toHaveAttribute("data-link1", "flowing");
   // M-5's own case: the healthy line is the strip's only text (full size) — at 320 it wraps, and "2.4 Mbps" once split.
   await page.setViewportSize({ width: 320, height: 800 });
   await expect(strip).toHaveText(healthLinePattern({ percent: 78, charging: true, mbps: "2.4" }), { timeout: BEAT_POLL_MS });

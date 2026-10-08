@@ -327,6 +327,8 @@ test.describe("capture QR v2 PR-2 — the organiser panel's Option A states", ()
         await expect(strip).toHaveAttribute("data-tone", "amber", { timeout: POLL_WAIT_MS });
         // Owner ruling 2026-10-08: stalled — the Seazn node waits for video; every other amber leaves it Receiving.
         await expect(scope.getByTestId("stream-chain")).toHaveAttribute("data-seazn", over.health === "stalled" ? "waitingVideo" : "receiving");
+        // Owner ruling 2026-10-08 (B8): and the phone → Seazn link draws the amber dashes while stalled, never flowing.
+        await expect(scope.getByTestId("stream-chain")).toHaveAttribute("data-link1", over.health === "stalled" ? "problem" : "flowing");
         await shoot(page, scope, state);
         await undo();
         await expect(strip).toHaveAttribute("data-tone", "slate", { timeout: POLL_WAIT_MS });

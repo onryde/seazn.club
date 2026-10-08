@@ -454,8 +454,8 @@ describe("PR-2 §7.4 — the Phone node reads the server's health verdict, live 
       const capture = { phone: beating({ health }), countdown: null };
       const c = chainFor(liveUp, { capture })!;
       expect(c.phone, health).toEqual(WANT[health]);
-      // Owner ruling 2026-10-08: stalled also moves the SEAZN node (below) — nothing else moves for any reason.
-      expect({ ...c, phone: null, seazn: null }, `${health}: nothing else moves`).toEqual({ ...chainFor(liveUp)!, phone: null, seazn: null });
+      // Owner rulings 2026-10-08: stalled also moves the SEAZN node and LINK 1 (both below) — nothing else moves for any reason.
+      expect({ ...c, phone: null, seazn: null, link1: null }, `${health}: nothing else moves`).toEqual({ ...chainFor(liveUp)!, phone: null, seazn: null, link1: null });
       expect(phoneDot(capture), `${health}: the fold's dot`).toBe(health === "not_responding" ? "amber" : "lime");
       checked++;
     }
@@ -479,12 +479,37 @@ describe("PR-2 §7.4 — the Phone node reads the server's health verdict, live 
     expect(chainFor(liveUp, { capture: { phone: null, countdown: null } })!.seazn, "no phone facts").toEqual(row);
   });
 
-  it("the Seazn node's stalled word is LIVE-with-the-input-up only: waiting, live with no signal and Ending keep the row's word", () => {
+  // Owner ruling 2026-10-08 (B8, relayed by the controller): while the server says the video is not reaching Seazn, the
+  // phone → Seazn link does not draw as flowing (solid lime) beside "Waiting for video" — it draws the chain's existing
+  // `problem` style (the amber dashes live's no-signal row and a lost phone's countdown already use). The SAME verdict
+  // that moves the Seazn node; the Seazn → destination link is the destination's alone and does not move.
+  it("link 1 (phone → Seazn): stalled → problem, the amber dashes; healthy live and every other verdict → the row's flowing; link 2 never moves", () => {
+    const row = chainFor(liveUp)!;
+    expect(row.link1, "PREMISE: healthy live draws link 1 flowing").toBe("flowing");
+    expect(row.link2, "PREMISE: the destination ok draws link 2 flowing").toBe("flowing");
+    let checked = 0;
+    for (const health of [...HEALTH_REASONS, null]) {
+      const c = chainFor(liveUp, { capture: { phone: beating({ health }), countdown: null } })!;
+      expect(c.link1, `${String(health)}: link 1`).toBe(health === "stalled" ? "problem" : "flowing");
+      expect(c.link2, `${String(health)}: link 2`).toBe(row.link2);
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length + 1);
+    // A destination still connecting keeps ITS link 2 under the verdict too: only link 1 is the phone's.
+    const connecting = v("live", "connected", null);
+    const stalledThere = chainFor(connecting, { capture: { phone: beating({ health: "stalled" }), countdown: null } })!;
+    expect(stalledThere.link1, "stalled, destination connecting: link 1").toBe("problem");
+    expect(stalledThere.link2, "stalled, destination connecting: link 2 is the row's").toBe(chainFor(connecting)!.link2);
+    expect(chainFor(liveUp, { capture: { phone: null, countdown: null } })!.link1, "no phone facts: flowing").toBe("flowing");
+  });
+
+  it("the stalled word and dashes are LIVE-with-the-input-up only: waiting, live with no signal and Ending keep the row's Seazn node and link 1", () => {
     const capture = { phone: beating({ health: "stalled" }), countdown: null };
     const rows = [v("warming", "disconnected", null), v("live", "disconnected", "unknown", W), v("ending", "connected", "ok")];
     let checked = 0;
     for (const view of rows) {
       expect(chainFor(view, { capture })!.seazn, view.state + " " + view.ingest?.state).toEqual(chainFor(view)!.seazn);
+      expect(chainFor(view, { capture })!.link1, `${view.state} ${view.ingest?.state}: link 1`).toBe(chainFor(view)!.link1);
       checked++;
     }
     expect(checked).toBe(rows.length);
@@ -494,6 +519,7 @@ describe("PR-2 §7.4 — the Phone node reads the server's health verdict, live 
     const scorching = beating({ health: null, beat: { battery: { percent: 1, charging: false, drainPctPerHour: 50 }, bitrateKbps: 1, delivery: "stalled", thermal: 6, dataUsedMB: 1 } });
     expect(chainFor(liveUp, { capture: { phone: scorching, countdown: null } })!.phone).toEqual(chainFor(liveUp)!.phone);
     expect(chainFor(liveUp, { capture: { phone: scorching, countdown: null } })!.seazn, "delivery stalled, no verdict: Receiving").toEqual(chainFor(liveUp)!.seazn);
+    expect(chainFor(liveUp, { capture: { phone: scorching, countdown: null } })!.link1, "delivery stalled, no verdict: link 1 flowing").toBe("flowing");
     expect(phoneDot({ phone: scorching, countdown: null })).toBe("lime");
   });
 
