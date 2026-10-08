@@ -1,0 +1,4 @@
+import { expect, it } from "vitest";
+import { add, isPositive } from "./sum.ts";
+it("adds", () => { expect(add(2, 3)).toBe(5); });
+it("knows a positive", () => { expect(isPositive(5)).toBe(true); }); // never probes 0: n >= 0 survives
