@@ -1287,4 +1287,145 @@ describe("the stream-slot pool: one helper, one hold limit, one wait", () => {
     expect(budget.holdLimitMs, "the limit admits W23").toBeGreaterThanOrEqual(w23);
     expect(budget.slotWaitMs, "every member's wait outlasts a whole hold at the limit").toBeGreaterThan(budget.holdLimitMs);
   });
+
+  // Final review m-4. The wait was twice the hold limit (660 s in CI). A member whose key never frees (a leaked lease)
+  // waits it out, fails, and CI's retry waits it out AGAIN — 1,320 s, past e2e-parallel's 20-minute job timeout, so the
+  // job was killed with no report at all instead of a red naming the wait. The true worst case for one waiter is ONE
+  // whole hold at the limit, plus slack; and that wait, once per attempt, must fit inside the job.
+  it("final review m-4: the wait is under twice the limit, and the wait × (CI's retries + 1) fits inside e2e-parallel's job timeout", async () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8")
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    const start = yml.indexOf("\n  e2e-parallel:\n");
+    const end = yml.indexOf("\n  e2e-serial:\n");
+    expect(start, "no e2e-parallel job").toBeGreaterThan(-1);
+    expect(end, "no e2e-serial job after it").toBeGreaterThan(start);
+    const job = yml.slice(start, end);
+    const ci = /^\s+FAKE_INGEST_CONNECT_AFTER_MS: *"?(\d+)"?\s*$/m.exec(job)?.[1];
+    expect(ci, "premise: e2e-parallel sets FAKE_INGEST_CONNECT_AFTER_MS").toBeDefined();
+    // The job's own timeout: the one `timeout-minutes` at the job's indent (a step's would sit deeper).
+    const timeouts = [...job.matchAll(/^ {4}timeout-minutes: *(\d+)\s*$/gm)].map((m) => Number(m[1]));
+    expect(timeouts, "e2e-parallel states ONE job timeout").toHaveLength(1);
+    // The retries CI runs: the config read as CI evaluates it (`retries: process.env.CI ? 1 : 0`).
+    vi.stubEnv("CI", "true");
+    let retries: number | undefined;
+    try {
+      retries = ((await configFor(undefined)) as unknown as { retries?: number }).retries;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(retries, "premise: CI retries a failed test, so a wait is paid once per attempt").toBeGreaterThan(0);
+    const { poolBudget } = await import("../../../e2e/helpers/stream-slot-pool");
+    const budget = poolBudget(Number(ci));
+    expect(budget.slotWaitMs, "the wait outlasts one whole hold at the limit").toBeGreaterThan(budget.holdLimitMs);
+    expect(budget.slotWaitMs, "never twice the limit: a waiter sits behind ONE hold, not two").toBeLessThan(2 * budget.holdLimitMs);
+    const jobMs = timeouts[0]! * 60_000;
+    expect(
+      budget.slotWaitMs * (retries! + 1),
+      `a starved member's attempts (${retries! + 1} × ${budget.slotWaitMs} ms) end inside the ${timeouts[0]}-minute job, so it reds by name`,
+    ).toBeLessThan(jobMs);
+  });
+
+  // Final review m-3. The fake ingest's connect delay was read four ways (an inline strict parse in three specs, a
+  // demanding `wholeEnv` copied into two, a lenient `tunedEnv` in one), and the poll and go-live waits were restated
+  // beside `cycleMs` in four. The helper now holds the one read and the one derivation; a hand read or a restated wait
+  // anywhere else in e2e/ is refused by name.
+  it("final review m-3: no e2e file but the helper reads the connect delay or a server tunable by hand, or restates the poll or go-live wait", () => {
+    const NAMES = ["FAKE_INGEST_CONNECT_AFTER_MS", ...TUNABLE_NAMES];
+    const SIGNS: { what: string; re: RegExp }[] = [
+      { what: "a hand read of the env", re: new RegExp(`process\\.env(?:\\.|\\[["'\`])(?:${NAMES.join("|")})\\b`) },
+      { what: "a hand-written env reader", re: /\bfunction (?:wholeEnv|tunedEnv|readWholeEnv)\(/ },
+      { what: "the poll wait restated", re: /(?<!\*\s?)\bSTREAM_POLL_MS \+ 5_000\b/ },
+      { what: "the go-live wait restated", re: /\bfake_?connect_?ms \+ 2 \* STREAM_POLL_MS\b/i },
+    ];
+    // The positive pair: each sign sees the form it replaced (verbatim from the specs before this fix).
+    const REPLACED: Record<string, string> = {
+      "a hand read of the env": "const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;",
+      "a hand-written env reader": "function wholeEnv(name: string, opts: { below?: number } = {}): number | null {",
+      "the poll wait restated": "const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;",
+      "the go-live wait restated": "const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;",
+    };
+    for (const s of SIGNS) expect(REPLACED[s.what], `premise: ${s.what} is seen`).toMatch(s.re);
+    expect("Number(process.env.CODE_GRACE_AFTER_FINISH_MINUTES ?? 0)", "premise: a tunable's hand read is seen").toMatch(SIGNS[0]!.re);
+    // A different wait that merely CONTAINS the poll's arithmetic is not the poll wait (fake-capture-phone's read model).
+    expect("const READ_MODEL_MS = 2 * STREAM_POLL_MS + 5_000;", "premise: a doubled poll is not the poll wait").not.toMatch(SIGNS[2]!.re);
+    // The helper holds the one derivation of each wait — or this scan is looking for words nobody writes any more.
+    const helper = codeOf(HELPER);
+    for (const s of SIGNS.slice(2)) expect(helper, `premise: the helper holds ${s.what.replace(" restated", "")}`).toMatch(s.re);
+    const files = e2eSources().filter((f) => f !== HELPER);
+    expect(files.length, "e2e TypeScript files scanned").toBeGreaterThan(100);
+    const found = files.flatMap((f) => SIGNS.filter((s) => s.re.test(codeOf(f))).map((s) => `${f}: ${s.what}`));
+    expect(found, "read the env and derive the waits through e2e/helpers/stream-slot-pool.ts, never by hand").toEqual([]);
+  });
+
+  it("final review m-3: the one env read parses each name as the SERVER does — the fake's delay as fakes.ts, a tunable as tunable()", async () => {
+    vi.resetModules();
+    const pool = await import("../../../e2e/helpers/stream-slot-pool");
+    const { connectAfterMsFromEnv } = await import("../../server/relay/fakes");
+    type Seen = "unset" | "junk" | number;
+    const SENTINEL = -1;
+    const server = (name: string, raw: string | undefined): Seen => {
+      try {
+        if (name === "FAKE_INGEST_CONNECT_AFTER_MS") return raw === undefined ? "unset" : connectAfterMsFromEnv();
+        const v = tunable(name as (typeof TUNABLE_NAMES)[number], SENTINEL, { ENV_NAME: "local", [name]: raw });
+        return v === SENTINEL ? "unset" : v;
+      } catch {
+        return "junk";
+      }
+    };
+    const RAWS = [undefined, "10000", " 10000 ", "7", "0", "", "  ", "-1", "1.5", "abc"];
+    let checked = 0;
+    const kinds = new Set<string>();
+    try {
+      for (const name of ["FAKE_INGEST_CONNECT_AFTER_MS", "AUTO_START_RETRY_SECONDS"]) {
+        for (const raw of RAWS) {
+          vi.stubEnv(name, raw ?? "");
+          if (raw === undefined) delete process.env[name];
+          const want = server(name, raw);
+          const read = pool.readWholeEnv(name);
+          const got: Seen = read.state === "ok" ? read.value : read.state;
+          expect(got, `${name}=${JSON.stringify(raw)}`).toBe(want);
+          kinds.add(typeof want === "number" ? "ok" : want);
+          checked++;
+        }
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(checked, "rows checked").toBe(2 * RAWS.length);
+    expect([...kinds].sort(), "anti-vacuity: the table reaches all three outcomes").toEqual(["junk", "ok", "unset"]);
+  });
+
+  it("final review m-3: the demanding guard names every gap — unset, junk, not shortened, below a floor — and passes a good value", async () => {
+    vi.resetModules();
+    const pool = await import("../../../e2e/helpers/stream-slot-pool");
+    const NAME = "AUTO_START_RETRY_SECONDS";
+    const cases: { raw: string | undefined; opts: { below?: number; atLeast?: number }; value: number | null; says: RegExp | null }[] = [
+      { raw: undefined, opts: {}, value: null, says: /^AUTO_START_RETRY_SECONDS is not set$/ },
+      { raw: "abc", opts: {}, value: null, says: /is not a positive whole number/ },
+      { raw: "0", opts: {}, value: null, says: /is not a positive whole number/ },
+      { raw: String(AUTO_START_RETRY_SECONDS), opts: { below: AUTO_START_RETRY_SECONDS }, value: AUTO_START_RETRY_SECONDS, says: /is not shortened \(the default is \d+\)/ },
+      { raw: "3", opts: { atLeast: 5 }, value: 3, says: /=3 is below 5, the least this file's "not yet" beats can sit inside/ },
+      { raw: "5", opts: { below: AUTO_START_RETRY_SECONDS, atLeast: 5 }, value: 5, says: null },
+    ];
+    let checked = 0;
+    try {
+      for (const c of cases) {
+        vi.stubEnv(NAME, c.raw ?? "");
+        if (c.raw === undefined) delete process.env[NAME];
+        const problems: string[] = [];
+        expect(pool.envGuard(problems)(NAME, c.opts), `${JSON.stringify(c.raw)}: the value`).toBe(c.value);
+        if (c.says === null) expect(problems, `${JSON.stringify(c.raw)}: no problem`).toEqual([]);
+        else {
+          expect(problems, `${JSON.stringify(c.raw)}: one problem`).toHaveLength(1);
+          expect(problems[0], `${JSON.stringify(c.raw)}: named`).toMatch(c.says);
+        }
+        checked++;
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(checked, "rows checked").toBe(6);
+  });
 });

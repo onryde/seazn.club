@@ -48,12 +48,16 @@ import {
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { FAKE_CONNECT_AFTER_MS_DEFAULT } from "../../src/server/relay/fakes";
 import {
+  POLL_WAIT_MS,
   POOL_SLOT_WAIT_MS,
   STREAM_CAPACITY,
   cycleMs,
+  envGuard,
+  liveWaitMs,
   releaseStreamSlot,
   takeStreamSlot,
   takeWholePool,
+  tunedEnv,
 } from "../helpers/stream-slot-pool";
 import {
   CODE_GRACE_AFTER_FINISH_MINUTES,
@@ -72,23 +76,9 @@ import {
 // ===========================================================================
 
 const ENV_PROBLEMS: string[] = [];
-/** A positive whole number from this process's env, parsed as strictly as the server's `tunable()`; null + a recorded
- *  problem when it is missing or junk, so the beforeEach names every gap at once. */
-function wholeEnv(name: string, opts: { below?: number } = {}): number | null {
-  const raw = process.env[name]?.trim();
-  if (!raw) {
-    ENV_PROBLEMS.push(`${name} is not set`);
-    return null;
-  }
-  if (!/^\d+$/.test(raw) || Number(raw) <= 0) {
-    ENV_PROBLEMS.push(`${name}=${JSON.stringify(raw)} is not a positive whole number`);
-    return null;
-  }
-  if (opts.below !== undefined && Number(raw) >= opts.below) {
-    ENV_PROBLEMS.push(`${name}=${raw} is not shortened (the default is ${opts.below}); the walkthrough budgets assume a tuned server`);
-  }
-  return Number(raw);
-}
+/** A whole number from this process's env, parsed as the SERVER parses that name; null + a recorded problem when it is
+ *  missing or junk, so the beforeEach names every gap at once — the stream-slot pool's one env read (final review m-3). */
+const wholeEnv = envGuard(ENV_PROBLEMS);
 const TAKEOVER_S = wholeEnv("DEAD_PHONE_TAKEOVER_SECONDS", { below: DEAD_PHONE_TAKEOVER_SECONDS }) ?? DEAD_PHONE_TAKEOVER_SECONDS;
 const LOST_LIVE_MIN = wholeEnv("PHONE_LOST_LIVE_MINUTES", { below: PHONE_LOST_LIVE_MINUTES }) ?? PHONE_LOST_LIVE_MINUTES;
 const SILENT_FLOOR_S = wholeEnv("PHONE_SILENT_FLOOR_SECONDS", { below: PHONE_SILENT_FLOOR_SECONDS }) ?? PHONE_SILENT_FLOOR_SECONDS;
@@ -99,9 +89,8 @@ if (!process.env.DATABASE_URL) ENV_PROBLEMS.push("DATABASE_URL is not set");
 // ===========================================================================
 // Clocks — every wait DERIVED from the constants that set its pace (AGENTS.md #20)
 // ===========================================================================
-const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
-/** One poll plus slack — a state the next read must already show. */
-const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
+/** The go-live wait and the poll wait (POLL_WAIT_MS): the stream-slot pool's one derivation (final review m-3). */
+const LIVE_WAIT_MS = liveWaitMs(FAKE_CONNECT_MS);
 const SEED_MS = 60_000;
 const NAV_MS = 30_000;
 const CYCLE_MS = cycleMs(FAKE_CONNECT_MS);
@@ -1114,7 +1103,7 @@ test("finished fixture: the result is in and the grace has passed, but the phone
   await scoreFixture(page.request, f.id, 2, 1);
   // The grace, passed: finished_at backdated (the trigger moves it only on a `status` write). The server's grace is
   // CODE_GRACE_AFTER_FINISH_MINUTES unless this env shortens it; past the longer of the two is past either.
-  const graceMin = Math.max(CODE_GRACE_AFTER_FINISH_MINUTES, Number(process.env.CODE_GRACE_AFTER_FINISH_MINUTES ?? 0) || 0);
+  const graceMin = Math.max(CODE_GRACE_AFTER_FINISH_MINUTES, tunedEnv("CODE_GRACE_AFTER_FINISH_MINUTES", 0));
   const stamped = await withDb((sql) => sql<{ finished_at: Date | null }[]>`
     update fixtures set finished_at = now() - make_interval(mins => ${graceMin + 1}) where id = ${f.id} and finished_at is not null returning finished_at`);
   expect(stamped.length, "premise: the result finished the fixture").toBe(1);

@@ -36,9 +36,14 @@ import Stripe from "stripe";
 import { apiJson, invalidateOrgEntitlements } from "../helpers";
 import { grantRigPackCredits, seedOverlayFixture, setRigPlan, type OverlayRig } from "../overlay-kit";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT } from "../../src/server/relay/fakes";
-import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
-import { CREDITS_SLOT_KEY, releaseStreamSlot, slotKeyFreeElsewhere, takeCreditsSlot } from "../helpers/stream-slot-pool";
+import {
+  CREDITS_SLOT_KEY,
+  FAKE_CONNECT_MS,
+  liveWaitMs,
+  releaseStreamSlot,
+  slotKeyFreeElsewhere,
+  takeCreditsSlot,
+} from "../helpers/stream-slot-pool";
 import { disposeFakePhones, pairPhoneOnFixture } from "../helpers/fake-capture-phone";
 
 /** lib/currency.ts `PASS_KEYS`, restated: that module cannot be imported here — it pulls `@/config/stripe-plans.json`
@@ -67,18 +72,10 @@ const ACT_MS = 5_000;
 const SEED_MS = 45_000;
 /** One signed webhook POST, through runEvent and the ledger writer. */
 const HOOK_MS = 5_000;
-/** The fake ingest reads "connected" this long after its input was created (server/relay/fakes.ts). A server started
- *  with FAKE_INGEST_CONNECT_AFTER_MS overrides it — CI sets it on the server AND this process (e2e.yml), so export the
- *  server's value here too. Parsed as strictly as fakes.ts parses it (stream-relay.spec.ts's pattern), so a junk value
- *  fails here rather than budgeting from NaN. */
-const FAKE_CONNECT_MS = ((): number => {
-  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
-  if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
-  if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be whole milliseconds, got ${JSON.stringify(raw)}`);
-  return Number(raw);
-})();
-/** The fake's connect delay, then two organiser polls (the one in flight and the one that sees it), plus slack (B6). */
-const LIVE_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
+/** The fake's connect delay, then two organiser polls (the one in flight and the one that sees it), plus slack (B6) —
+ *  the stream-slot pool's one read of the delay (FAKE_CONNECT_MS: CI sets it on the server AND this process, e2e.yml)
+ *  and its one derivation of the wait (final review m-3), never restated here. */
+const LIVE_MS = liveWaitMs(FAKE_CONNECT_MS);
 const budget = (c: { seeds: number; navs: number; acts: number; hooks?: number; lives?: number }): number =>
   Math.max(
     60_000,

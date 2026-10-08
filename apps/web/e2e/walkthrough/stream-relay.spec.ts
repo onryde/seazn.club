@@ -54,13 +54,20 @@ import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "../../src/lib/stream-se
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
 import {
-  FAKE_CONNECT_AFTER_MS_DEFAULT,
   FAKE_CONNECTING_KEY_PREFIX,
   FAKE_REJECT_KEY_PREFIX,
   fakeRecoveringKey,
 } from "../../src/server/relay/fakes";
 import { FREE_RESTARTS_PER_WINDOW } from "../../src/server/relay/config";
-import { POOL_SLOT_WAIT_MS, cycleMs, releaseStreamSlot, takeStreamSlot } from "../helpers/stream-slot-pool";
+import {
+  FAKE_CONNECT_MS,
+  POLL_WAIT_MS,
+  POOL_SLOT_WAIT_MS,
+  cycleMs,
+  liveWaitMs,
+  releaseStreamSlot,
+  takeStreamSlot,
+} from "../helpers/stream-slot-pool";
 
 // ===========================================================================
 // Kit (file-local)
@@ -86,18 +93,10 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
 
 // Clocks. Every wait is DERIVED from the constants that set the pace — the fake ingest's connect delay and the Phone
 // tab's poll — never a flat literal (AGENTS.md class 20): a change to either moves every budget with it.
-/** The fake ingest reads "connected" this long after its input was created (server/relay/fakes.ts). A server started
- *  with FAKE_INGEST_CONNECT_AFTER_MS overrides it (CI sets it on the server AND this process, e2e.yml); parsed as
- *  strictly as fakes.ts parses it, so a junk value fails here rather than budgeting from NaN. */
-const FAKE_CONNECT_MS = ((): number => {
-  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
-  if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
-  if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be whole milliseconds, got ${JSON.stringify(raw)}`);
-  return Number(raw);
-})();
-const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
-/** One poll plus slack — a state the next read must already show. */
-const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
+// The fake ingest's connect delay (FAKE_CONNECT_MS — the server's own, CI sets it on the server AND this process,
+// e2e.yml), the poll wait (POLL_WAIT_MS) and the go-live wait are the stream-slot pool's ONE read of the env and its ONE
+// derivation (final review m-3), imported — never restated here.
+const LIVE_WAIT_MS = liveWaitMs(FAKE_CONNECT_MS);
 /** A seed (SQL org + API competition) plus one page load; the floor under every test's budget. */
 const SEED_MS = 60_000;
 /** A whole go-live → stop cycle in the browser. */

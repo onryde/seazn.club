@@ -15,15 +15,24 @@
 // member's hold is a red that has nothing to do with the code. Before this file, each spec sized its own wait from the
 // holds it happened to know about: stream-relay and directory waited 3 cycles (165 s in CI) while capture-phone's W23
 // holds 5 (275 s), stream-relay's own B5 frame about 310 s and capture-panel-pr2's health walk about 170 s. Now the pool
-// has ONE limit, POOL_HOLD_LIMIT_MS, every member waits POOL_SLOT_WAIT_MS (twice the limit, the margin capture-phone
-// chose: a waiter may sit behind one whole hold and the start of the next), and every member DECLARES its own longest
-// hold from its own clocks — `takeStreamSlot` refuses a hold past the limit, naming the file, before it waits for
-// anything. A spec that grows a longer hold therefore reds at its first slot instead of starving a sibling's wait.
+// has ONE limit, POOL_HOLD_LIMIT_MS, every member waits POOL_SLOT_WAIT_MS — the true worst case, ONE whole hold at the
+// limit plus one cycle of slack (final review m-4: twice the limit, with CI's one retry, outlasted e2e-parallel's job
+// timeout, so a leaked lease killed the job with no report; e2e-ci-wiring pins wait × (retries + 1) under that timeout)
+// — and every member DECLARES its own longest hold from its own clocks: `takeStreamSlot` refuses a hold past the limit,
+// naming the file, before it waits for anything. A spec that grows a longer hold therefore reds at its first slot
+// instead of starving a sibling's wait.
+//
+// THE CLOCKS AND THE ENV (final review m-3). The fake ingest's connect delay and the server tunables are read from this
+// process's env by ONE parse, `readWholeEnv`, which applies the SERVER's own rule for each name. Over it, a spec either
+// DEMANDS a value (`envGuard`, the guard e2e-ci-wiring reads to know what CI must set) or takes it with the default
+// (`tunedEnv`; `FAKE_CONNECT_MS` is that, read once — a junk delay is already refused at import by `new FakeIngest()`
+// below, naming the variable). The waits every stream walkthrough derives from the delay (`POLL_WAIT_MS`, `liveWaitMs`,
+// `cycleMs`) live here too, so no spec restates them; e2e-ci-wiring refuses a hand read or a restated wait elsewhere.
 //
 // A hold, as the specs have always counted it, is the STREAMING part of a test's budget — go-live → stop cycles, the
 // polls and the server-timed waits between them — not the seed or the page loads (each test's own timeout carries
 // those). Waits and holds are derived from the constants that set their pace (AGENTS.md #20), never a flat literal.
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
+import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest, connectAfterMsFromEnv } from "../../src/server/relay/fakes";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 
@@ -36,12 +45,78 @@ export const POOL_SLOTS = STREAM_CAPACITY - 1;
 /** stream-credits.spec.ts's key — the one the pool leaves. capture-phone's W22 takes it only for the instant of its tick. */
 export const CREDITS_SLOT_KEY = SLOT_LOCK_BASE + POOL_SLOTS;
 
-/** A whole go-live → stop cycle in the browser: the fake's connect, two polls and slack to see it live (LIVE_WAIT), then
- *  three polls-plus-slack (the Stop and the end landing). The stream walkthroughs' shared CYCLE_MS. */
+// ---------------------------------------------------------------------------------------------------------------------
+// The env: ONE parse, three policies (final review m-3)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The fake ingest's connect delay: not a `tunable()`, parsed by fakes.ts's own constructor read. */
+const FAKE_CONNECT_ENV = "FAKE_INGEST_CONNECT_AFTER_MS";
+/** What this process's env says of one whole-number server setting, parsed EXACTLY as the server parses that name — the
+ *  fake ingest's delay by fakes.ts's own `connectAfterMsFromEnv` (untrimmed; 0 legal, "connect immediately"), every other
+ *  name by `tunable()`'s rule (config.ts: trimmed; empty is unset; a positive whole number). Never throws: the caller's
+ *  policy decides what a junk value means. */
+export type WholeEnvRead = { state: "unset" } | { state: "junk"; raw: string; problem: string } | { state: "ok"; raw: string; value: number };
+export function readWholeEnv(name: string): WholeEnvRead {
+  if (name === FAKE_CONNECT_ENV) {
+    const raw = process.env[name];
+    if (raw === undefined) return { state: "unset" };
+    try {
+      return { state: "ok", raw, value: connectAfterMsFromEnv() };
+    } catch (err) {
+      return { state: "junk", raw, problem: (err as Error).message };
+    }
+  }
+  const raw = process.env[name]?.trim();
+  if (!raw) return { state: "unset" };
+  if (!/^\d+$/.test(raw) || Number(raw) <= 0) return { state: "junk", raw, problem: `${name}=${JSON.stringify(raw)} is not a positive whole number` };
+  return { state: "ok", raw, value: Number(raw) };
+}
+
+/** The DEMANDING policy (capture-phone, capture-auto): a spec's `wholeEnv`, recording every gap in that spec's own
+ *  ENV_PROBLEMS for its beforeEach to name at once (a module-level throw would abort the whole leg). Null when the value
+ *  is missing or junk. `below`: the default it must be shortened from; `atLeast`: the floor the file's own arithmetic
+ *  needs. e2e-ci-wiring reads the guard by its call shape, `wholeEnv("NAME", { … })`, so a spec keeps that name. */
+export function envGuard(problems: string[]): (name: string, opts?: { below?: number; atLeast?: number }) => number | null {
+  return (name, opts = {}) => {
+    const read = readWholeEnv(name);
+    if (read.state === "unset") {
+      problems.push(`${name} is not set`);
+      return null;
+    }
+    if (read.state === "junk") {
+      problems.push(read.problem);
+      return null;
+    }
+    if (opts.below !== undefined && read.value >= opts.below) {
+      problems.push(`${name}=${read.raw} is not shortened (the default is ${opts.below}); the walkthrough budgets assume a tuned server`);
+    }
+    if (opts.atLeast !== undefined && read.value < opts.atLeast) {
+      problems.push(`${name}=${read.raw} is below ${opts.atLeast}, the least this file's "not yet" beats can sit inside`);
+    }
+    return read.value;
+  };
+}
+/** The LENIENT policy: the value, else the fallback — for a spec whose sibling guard already demands the name. */
+export function tunedEnv(name: string, fallback: number): number {
+  const read = readWholeEnv(name);
+  return read.state === "ok" ? read.value : fallback;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The clocks every stream walkthrough derives its waits from (AGENTS.md #20)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** One organiser poll plus slack — a state the next read must already show. */
+export const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
+/** From go-live until the panel shows live: the fake's connect, then two polls (the one in flight and the one that sees
+ *  it), plus slack. */
+export function liveWaitMs(fakeConnectMs: number): number {
+  return fakeConnectMs + 2 * STREAM_POLL_MS + 5_000;
+}
+/** A whole go-live → stop cycle in the browser: live (`liveWaitMs`), then three polls-plus-slack (the Stop and the end
+ *  landing). The stream walkthroughs' shared CYCLE_MS. */
 export function cycleMs(fakeConnectMs: number): number {
-  const liveWaitMs = fakeConnectMs + 2 * STREAM_POLL_MS + 5_000;
-  const pollWaitMs = STREAM_POLL_MS + 5_000;
-  return liveWaitMs + 3 * pollWaitMs;
+  return liveWaitMs(fakeConnectMs) + 3 * POLL_WAIT_MS;
 }
 
 /** How many cycles a member may hold a pool key. Six: the longest declared hold is stream-relay's B5 frame — four
@@ -49,20 +124,21 @@ export function cycleMs(fakeConnectMs: number): number {
  *  45 s, and the warning plus six polls is 90 s) — then capture-phone's W23 at five. */
 export const POOL_HOLD_CYCLES = 6;
 
-/** The pool's budget at a given connect delay: the cycle, the hold limit, and the wait every member owes a key. */
+/** The slack a waiter is owed past one whole hold at the limit, in cycles: the holder's own teardown (its Stop and the end
+ *  landing) and the waiter's next try. */
+export const POOL_WAIT_SLACK_CYCLES = 1;
+/** The pool's budget at a given connect delay: the cycle, the hold limit, and the wait every member owes a key — the
+ *  true worst case for one waiter, ONE whole hold at the limit plus the slack (final review m-4: never twice the limit). */
 export function poolBudget(fakeConnectMs: number): { cycleMs: number; holdLimitMs: number; slotWaitMs: number } {
   const cycle = cycleMs(fakeConnectMs);
   const holdLimitMs = POOL_HOLD_CYCLES * cycle;
-  return { cycleMs: cycle, holdLimitMs, slotWaitMs: 2 * holdLimitMs };
+  return { cycleMs: cycle, holdLimitMs, slotWaitMs: holdLimitMs + POOL_WAIT_SLACK_CYCLES * cycle };
 }
 
-/** The connect delay the SERVER runs (CI sets FAKE_INGEST_CONNECT_AFTER_MS on the server and this process alike). A junk
- *  value falls back here: `new FakeIngest()` above has already refused it at import, naming the variable. */
-const POOL_FAKE_CONNECT_MS = ((): number => {
-  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
-  return raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : FAKE_CONNECT_AFTER_MS_DEFAULT;
-})();
-const BUDGET = poolBudget(POOL_FAKE_CONNECT_MS);
+/** The connect delay the SERVER runs (CI sets FAKE_INGEST_CONNECT_AFTER_MS on the server and this process alike): the
+ *  default when unset; a junk value never reaches here — `new FakeIngest()` above refused it at import. */
+export const FAKE_CONNECT_MS = tunedEnv(FAKE_CONNECT_ENV, FAKE_CONNECT_AFTER_MS_DEFAULT);
+const BUDGET = poolBudget(FAKE_CONNECT_MS);
 /** The most any member may hold a pool key (POOL_HOLD_CYCLES cycles). */
 export const POOL_HOLD_LIMIT_MS = BUDGET.holdLimitMs;
 /** How long every member waits for a pool key — and capture-phone's W22 for the whole pool. */

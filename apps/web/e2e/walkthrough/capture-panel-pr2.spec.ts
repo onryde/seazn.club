@@ -46,8 +46,15 @@ import {
   type FakeCapturePhone,
 } from "../helpers/fake-capture-phone";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT } from "../../src/server/relay/fakes";
-import { POOL_SLOT_WAIT_MS, releaseStreamSlot, takeStreamSlot } from "../helpers/stream-slot-pool";
+import {
+  FAKE_CONNECT_MS,
+  POLL_WAIT_MS,
+  POOL_SLOT_WAIT_MS,
+  liveWaitMs,
+  releaseStreamSlot,
+  takeStreamSlot,
+  tunedEnv,
+} from "../helpers/stream-slot-pool";
 import {
   AUTO_STOP_AFTER_RESULT_SECONDS,
   DEAD_PHONE_TAKEOVER_SECONDS,
@@ -62,12 +69,8 @@ import {
 // The environment, and the clocks — every wait DERIVED from the constant that sets its pace
 // ===========================================================================
 
-/** A positive whole number from this process's env (the server's `tunable()` reads the same name), else the default. */
-function tunedEnv(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  return raw && /^\d+$/.test(raw) && Number(raw) > 0 ? Number(raw) : fallback;
-}
-const FAKE_CONNECT_MS = tunedEnv("FAKE_INGEST_CONNECT_AFTER_MS", FAKE_CONNECT_AFTER_MS_DEFAULT);
+// The env, each value or its default, through the stream-slot pool's one read (`tunedEnv`; FAKE_CONNECT_MS is that read
+// of the fake ingest's delay) — and the poll wait and go-live wait its one derivation (final review m-3).
 const TAKEOVER_S = tunedEnv("DEAD_PHONE_TAKEOVER_SECONDS", DEAD_PHONE_TAKEOVER_SECONDS);
 /** §7.1's figure as the SERVER states it: config.ts's AUTO_STOP_AFTER_RESULT_SECONDS through `tunable`, in whole minutes
  *  (≥ 1) — the constant's own meaning, not the panel's arithmetic read back. */
@@ -75,10 +78,9 @@ const AUTO_STOP_MIN = Math.max(1, Math.round(tunedEnv("AUTO_STOP_AFTER_RESULT_SE
 
 /** How often this file's phone beats: faster than the real cadence, so a reading changes on screen within a poll. */
 const BEAT_MS = 2_500;
-/** One poll plus slack — a state the next read must already show. A beat's change needs one beat AND one poll. */
-const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
+/** A beat's change needs one beat AND one poll (POLL_WAIT_MS: a poll plus slack). */
 const BEAT_POLL_MS = BEAT_MS + POLL_WAIT_MS;
-const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
+const LIVE_WAIT_MS = liveWaitMs(FAKE_CONNECT_MS);
 const SEED_MS = 60_000;
 const NAV_MS = 30_000;
 /** §6.9 (W8): a HELD phone is not responding after NOT_RESPONDING_BEATS answered cadences with no beat; an open session's

@@ -22,11 +22,17 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll } from "../helpers";
 import { setRigPlan, signInAs } from "../overlay-kit";
-import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_PLATFORMS, type StreamPlatform } from "../../src/lib/stream-destinations";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT } from "../../src/server/relay/fakes";
-import { POOL_SLOT_WAIT_MS, cycleMs, releaseStreamSlot, takeStreamSlot } from "../helpers/stream-slot-pool";
+import {
+  FAKE_CONNECT_MS,
+  POLL_WAIT_MS,
+  POOL_SLOT_WAIT_MS,
+  cycleMs,
+  liveWaitMs,
+  releaseStreamSlot,
+  takeStreamSlot,
+} from "../helpers/stream-slot-pool";
 import { disposeFakePhones, pairPhoneOnFixture, pairedPhone } from "../helpers/fake-capture-phone";
 
 // ===========================================================================
@@ -50,15 +56,9 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
   }
 }
 
-// Clocks — copied from stream-relay.spec.ts (:73-88), DERIVED from the constants that set the pace (AGENTS.md class 20).
-const FAKE_CONNECT_MS = ((): number => {
-  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
-  if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
-  if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be whole milliseconds, got ${JSON.stringify(raw)}`);
-  return Number(raw);
-})();
-const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
-const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
+// Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20). The connect delay, the poll wait and the
+// go-live wait are the stream-slot pool's one read and one derivation (final review m-3), imported — never restated.
+const LIVE_WAIT_MS = liveWaitMs(FAKE_CONNECT_MS);
 const SEED_MS = 60_000;
 const CYCLE_MS = cycleMs(FAKE_CONNECT_MS);
 /** One page load (a Directory or fixture page). Each case adds `NAVS * NAV_MS`, NAVS counted by reading the case. */

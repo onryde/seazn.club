@@ -35,9 +35,15 @@ import {
   type FakeCapturePhone,
 } from "../helpers/fake-capture-phone";
 import { StreamPhone, StreamSettings } from "../../src/server/api-v1/schemas";
-import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { FAKE_CONNECT_AFTER_MS_DEFAULT } from "../../src/server/relay/fakes";
-import { POOL_SLOT_WAIT_MS, poolHoldProblem, releaseStreamSlot, takeStreamSlot } from "../helpers/stream-slot-pool";
+import {
+  POLL_WAIT_MS,
+  POOL_SLOT_WAIT_MS,
+  envGuard,
+  poolHoldProblem,
+  releaseStreamSlot,
+  takeStreamSlot,
+} from "../helpers/stream-slot-pool";
 import {
   AUTO_START_RETRY_SECONDS,
   AUTO_STOP_AFTER_RESULT_SECONDS,
@@ -50,27 +56,10 @@ import {
 // ===========================================================================
 
 const ENV_PROBLEMS: string[] = [];
-/** A positive whole number from this process's env, parsed as strictly as the server's `tunable()`; null + a recorded
- *  problem when it is missing or junk, so the beforeEach names every gap at once. `below`: the default it must be
- *  shortened from; `atLeast`: the floor a case's own arithmetic needs. */
-function wholeEnv(name: string, opts: { below?: number; atLeast?: number } = {}): number | null {
-  const raw = process.env[name]?.trim();
-  if (!raw) {
-    ENV_PROBLEMS.push(`${name} is not set`);
-    return null;
-  }
-  if (!/^\d+$/.test(raw) || Number(raw) <= 0) {
-    ENV_PROBLEMS.push(`${name}=${JSON.stringify(raw)} is not a positive whole number`);
-    return null;
-  }
-  if (opts.below !== undefined && Number(raw) >= opts.below) {
-    ENV_PROBLEMS.push(`${name}=${raw} is not shortened (the default is ${opts.below}); the walkthrough budgets assume a tuned server`);
-  }
-  if (opts.atLeast !== undefined && Number(raw) < opts.atLeast) {
-    ENV_PROBLEMS.push(`${name}=${raw} is below ${opts.atLeast}, the least this file's "not yet" beats can sit inside`);
-  }
-  return Number(raw);
-}
+/** A whole number from this process's env, parsed as the SERVER parses that name; null + a recorded problem when it is
+ *  missing or junk, so the beforeEach names every gap at once. `below`: the default it must be shortened from;
+ *  `atLeast`: the floor a case's own arithmetic needs — the stream-slot pool's one env read (final review m-3). */
+const wholeEnv = envGuard(ENV_PROBLEMS);
 /** Each "not yet" assertion below beats ONCE inside a window this long (right after the result, right after a refusal):
  *  shorter than a beat's own round trip on a loaded runner and the "not yet" half could no longer be told from a slow
  *  "already". */
@@ -85,8 +74,6 @@ if (!process.env.DATABASE_URL) ENV_PROBLEMS.push("DATABASE_URL is not set");
 // ===========================================================================
 /** The keep-alive's cadence: a paired phone beats every POLL_STARTING_SECONDS (the helper's own interval). */
 const BEAT_MS = POLL_STARTING_SECONDS * 1_000;
-/** One panel poll plus slack — a state the next read must already show. */
-const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
 /** A beat must OBSERVE the fake ingest's connect: the fake connects FAKE_CONNECT_MS after its input is made, and the
  *  tick's ingest reads are coalesced, at most one per POLL_NEAR_SECONDS — then the next beat that names the sid. */
 const INGEST_SEEN_MS = FAKE_CONNECT_MS + POLL_NEAR_SECONDS * 1_000 + 2 * BEAT_MS + 5_000;
