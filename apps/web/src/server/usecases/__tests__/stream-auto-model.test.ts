@@ -259,6 +259,8 @@ const COUNT_KEYS = [
   "warmingTimeouts", "phoneLostEnds", "organiserStopsStamped", "organiserStopsRepeated", "organiserStopsOfAutoStarted",
   // the organiser read: a stored refusal that every OTHER conjunct would still serve, withheld because a Stop blocked the start
   "storedRefusalHiddenAfterStop",
+  // the organiser read's stopApplies (B7 review M-3), both ways: §7.3 will stop the open session, and it never will
+  "organiserReadStopApplies", "organiserReadStopWithheld",
   // the inputs
   "modeFlips", "twoBeatRaces", "switchOns", "switchOffs", "manualGoLives", "manualRefusals", "ingests", "pickedRuns",
   "organiserReadChecks", "answersChecked",
@@ -554,12 +556,20 @@ async function checkOrganiserRead(m: Readonly<Model>, x: Real): Promise<void> {
       && m.startedAt === null && !m.sessions.some((s) => s.ingestAt !== null);
     const could = restHold && m.blockedAt === null;
     if (restHold && m.blockedAt !== null) x.tally.count("storedRefusalHiddenAfterStop");
+    // B7 review M-3: will §7.3 EVER stop the open session — the model's own §7.3 conjuncts (`stopVector`), every one but the two
+    // that wait for the result to stand and age (that ruling, restated). Null with no open session.
+    const open = openOf(m);
+    const stopApplies = open === null
+      ? null
+      : stopVector(m, open, m.now()).every((c) => c.holds || c.name === "fixture_finished" || c.name === "delay_elapsed");
+    if (stopApplies !== null) x.tally.count(stopApplies ? "organiserReadStopApplies" : "organiserReadStopWithheld");
     expect(read.auto, "the organiser read").toEqual({
       enabled: m.autoOn,
       startedAt: m.startedAt === null ? null : new Date(m.startedAt).toISOString(),
       blocked: m.blockedAt !== null,
       refusal: could ? m.refusal : null,
       refusalAt: could && m.attemptedAt !== null ? new Date(m.attemptedAt).toISOString() : null,
+      stopApplies,
     });
   }
   x.tally.count("organiserReadChecks");
