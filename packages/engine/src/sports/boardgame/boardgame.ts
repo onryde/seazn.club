@@ -13,6 +13,7 @@ import { EngineError } from "../../core/errors.ts";
 import { forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
+  DRAW_KINDS,
   EntrantId,
   type LineupPair,
   type MatchOutcome,
@@ -765,10 +766,10 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   ],
   defaultTiebreakers: BOARDGAME_TIEBREAKERS,
 
-  // spec 04 §6 / chess.md §2 — draws always allowed, even in knockout (KO chess
-  // resolves ties via multi-game mini-matches, modelled at the fixture layer).
-  supportsDraws(_cfg, _stage: StageKind) {
-    return true;
+  // X-DR-1 (ruling 78): draws only where nobody must advance. A drawn bracket
+  // game goes to the tie-break (BG-KO-1), never to a decided draw.
+  supportsDraws(_cfg, stage: StageKind) {
+    return DRAW_KINDS.has(stage);
   },
 
   // §9.3 — {win+loss, 2·draw, 0 (double forfeit)}.

@@ -9,7 +9,6 @@ import { ID, REPO, ROW_HEADER, RULES_DIR, STATUS, allRows, fileExists, hasToken,
  *  the proof deletes its id here in the same commit; Task 16 Step 5 requires
  *  this map to be EMPTY. A row not named here must already be proved. */
 const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
-  ["X-DR-1", "Task 3"],
   ["X-ST-1", "Task 4"],
   ["BG-KO-1", "Task 5"],
   ["BG-KO-2", "Task 12"],

@@ -7,6 +7,7 @@ import { EngineError } from "../../core/errors.ts";
 import { foldMatch, forfeitOf, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
+  DRAW_KINDS,
   EntrantId,
   type LineupPair,
   type MatchOutcome,
@@ -646,11 +647,10 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   ],
   defaultTiebreakers: ["points", "diff", "for", "h2h_points", "lots"],
 
-  // Draws only where the format can absorb them — never in eliminations.
+  // X-DR-1 (ruling 78): an allow-list — draws only where nobody must advance,
+  // and only when the organiser declared them (cfg.allowDraws).
   supportsDraws(cfg, stage: StageKind) {
-    return (
-      cfg.allowDraws && stage !== "knockout" && stage !== "double_elim" && stage !== "stepladder"
-    );
+    return cfg.allowDraws && DRAW_KINDS.has(stage);
   },
 
   // §9.3 — decisive total w+l; shared total 2d (draw/tie/no_result — abandon

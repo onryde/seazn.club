@@ -1,7 +1,7 @@
 // Board-game goldens + conformance — spec 04 §6, PROMPT-07.
 import { describe, expect, it } from "vitest";
 import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts";
-import type { LineupPair, StageCtx } from "../../core/types.ts";
+import { DRAW_KINDS, StageKind, type LineupPair, type StageCtx } from "../../core/types.ts";
 import {
   aggregatePlayerStats,
   playerStatsKeyCollisions,
@@ -156,10 +156,13 @@ describe("boardgame: a competition-layer award (bye / walkover)", () => {
 });
 
 describe("boardgame contract declarations", () => {
-  it("always allows draws, even in knockout (KO ties resolve via mini-matches)", () => {
-    for (const stage of ["league", "group", "swiss", "knockout", "double_elim"] as const) {
-      expect(boardgame.supportsDraws(cfg, stage)).toBe(true);
+  it("X-DR-1: draws only in DRAW_KINDS — a drawn bracket game goes to the tie-break (BG-KO-1)", () => {
+    let checked = 0;
+    for (const stage of StageKind.options) {
+      expect(boardgame.supportsDraws(cfg, stage), stage).toBe(DRAW_KINDS.has(stage));
+      checked++;
     }
+    expect(checked).toBe(StageKind.options.length);
   });
 
   it("declares the FIDE cascade and {2, 0} point totals", () => {

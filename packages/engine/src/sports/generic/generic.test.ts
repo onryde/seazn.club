@@ -1,7 +1,7 @@
 // Generic module goldens + conformance — spec 04 §8, PROMPT-03 §3/§5.
 import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
-import type { LineupPair, StageCtx } from "../../core/types.ts";
+import { DRAW_KINDS, StageKind, type LineupPair, type StageCtx } from "../../core/types.ts";
 import { evalPadGate } from "../../sport/module.ts";
 import {
   aggregatePlayerStats,
@@ -138,12 +138,14 @@ describe("generic — contract declarations", () => {
     expect(generic.declaredPointsSets({ ...winLossCfg, points: { w: 2, d: 1, l: 0 } })).toEqual([2]);
   });
 
-  it("supports draws only in non-elimination stages", () => {
-    expect(generic.supportsDraws(scoreCfg, "league")).toBe(true);
-    expect(generic.supportsDraws(scoreCfg, "group")).toBe(true);
-    expect(generic.supportsDraws(scoreCfg, "knockout")).toBe(false);
-    expect(generic.supportsDraws(scoreCfg, "stepladder")).toBe(false);
-    expect(generic.supportsDraws(winLossCfg, "league")).toBe(false);
+  it("X-DR-1: supports draws only in DRAW_KINDS, and only with allowDraws", () => {
+    let checked = 0;
+    for (const stage of StageKind.options) {
+      expect(generic.supportsDraws(scoreCfg, stage), `score ${stage}`).toBe(DRAW_KINDS.has(stage));
+      expect(generic.supportsDraws(winLossCfg, stage), `win_loss ${stage}`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(StageKind.options.length);
   });
 });
 

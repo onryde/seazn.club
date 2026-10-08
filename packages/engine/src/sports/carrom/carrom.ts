@@ -18,6 +18,7 @@ import {
 import type { Rng } from "../../core/rng.ts";
 import { currentUnit, unitNumber, unitSegment, type MatchPosition } from "../../core/position.ts";
 import {
+  DRAW_KINDS,
   EntrantId,
   type DisciplineCard,
   type LineupPair,
@@ -979,12 +980,9 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
   defaultTiebreakers: CARROM_TIEBREAKERS,
 
   // Drawn matches exist only under the tieBoard 'draw' house rule, and only in
-  // table stages — ICF play ('extra') always produces a winner.
+  // DRAW_KINDS (X-DR-1, ruling 78) — ICF play ('extra') always produces a winner.
   supportsDraws(cfg, stage: StageKind) {
-    return (
-      cfg.tieBoard === "draw" &&
-      (stage === "league" || stage === "group" || stage === "swiss")
-    );
+    return cfg.tieBoard === "draw" && DRAW_KINDS.has(stage);
   },
 
   // §9.3 — {win+loss (win & walkover), 2·draw (drawn match & no_result)}.

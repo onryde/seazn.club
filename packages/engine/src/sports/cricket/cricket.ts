@@ -15,6 +15,7 @@ import {
   type MatchPosition,
 } from "../../core/position.ts";
 import {
+  DRAW_KINDS,
   EntrantId,
   type LineupPair,
   type MatchOutcome,
@@ -3960,9 +3961,10 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   // by the competition engine at rank time (cross-multiplication).
   defaultTiebreakers: ["points", "wins", "nrr", "h2h_points", "seed"],
 
-  // Draw exists only in 2-innings cricket and only survives league/group play.
+  // Draw exists only in 2-innings cricket and only survives table play
+  // (X-DR-1, ruling 78; americano offered per W2a plan finding 15).
   supportsDraws(cfg, stage: StageKind) {
-    return cfg.inningsPerSide === 2 && (stage === "league" || stage === "group" || stage === "swiss");
+    return cfg.inningsPerSide === 2 && DRAW_KINDS.has(stage);
   },
 
   // §9.3 — {win+loss, 2·tie, 2·noResult, 2·draw}.

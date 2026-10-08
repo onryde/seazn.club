@@ -34,6 +34,7 @@ import {
 } from "../../core/lineup.ts";
 import {
   AttemptOutcome,
+  DRAW_KINDS,
   EntrantId,
   type DisciplineCard,
   type LineupPair,
@@ -2662,9 +2663,10 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   // organiser via FOOTBALL_TIEBREAKERS.
   defaultTiebreakers: FOOTBALL_TIEBREAKERS.fifa2026,
 
-  // spec 04 §1.3 — draws are league/group results only.
+  // spec 04 §1.3 — draws are table results only. X-DR-1 (ruling 78; W2a plan
+  // finding 15): americano is offered for football (offered-matrix.md:26).
   supportsDraws(_cfg, stage: StageKind) {
-    return stage === "league" || stage === "group" || stage === "swiss";
+    return DRAW_KINDS.has(stage);
   },
 
   // §9.3 — {win+loss, 2·draw} plus the optional shootout split total.
