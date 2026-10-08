@@ -1,0 +1,212 @@
+[
+  {
+    "id": "empty-list",
+    "file": "scripts/mutate.ts",
+    "find": "if (mutants.length === 0)",
+    "replace": "if (mutants.length < 0)",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "exactly-one",
+    "file": "scripts/mutate.ts",
+    "find": "if (n !== 1)",
+    "replace": "if (n === 0)",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "duplicate-id",
+    "file": "scripts/mutate.ts",
+    "find": "if (ids.has(m.id)) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "empty-files",
+    "file": "scripts/mutate.ts",
+    "find": "if (k.files.length === 0) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "baseline",
+    "file": "scripts/mutate.ts",
+    "find": "if (r.numFailedTests > 0 || r.numFailedTestSuites > 0) throw new Refused(`killer baseline",
+    "replace": "if (false) throw new Refused(`killer baseline",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "report-missing",
+    "file": "scripts/mutate.ts",
+    "find": "if (!existsSync(file)) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "baseline-none",
+    "file": "scripts/mutate.ts",
+    "find": "if (r.numPassedTests === 0) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "mutant-none",
+    "file": "scripts/mutate.ts",
+    "find": "if (r.numPassedTests === 0 && r.numFailedTests === 0 && r.numFailedTestSuites === 0) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "restore",
+    "file": "scripts/mutate.ts",
+    "find": "writeFileSync(path, original);",
+    "replace": "void original;",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "survivor-exit",
+    "file": "scripts/mutate.ts",
+    "find": "verdicts.every((v) => v.state === \"KILLED\") ? 0 : 1",
+    "replace": "0",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "sigterm-handler",
+    "file": "scripts/mutate.ts",
+    "find": "process.once(\"SIGTERM\", onSignal);",
+    "replace": "void onSignal;",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "sigint-handler",
+    "file": "scripts/mutate.ts",
+    "find": "process.once(\"SIGINT\", onSignal);",
+    "replace": "void onSignal;",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "stop-killer",
+    "file": "scripts/mutate.ts",
+    "find": "{ stopInFlight(); try { restore(); }",
+    "replace": "{ try { restore(); }",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "group-kill",
+    "file": "scripts/mutate.ts",
+    "find": "process.kill(-pid, \"SIGTERM\")",
+    "replace": "process.kill(pid, \"SIGTERM\")",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "detached",
+    "file": "scripts/mutate.ts",
+    "find": "{ cwd, stdio: \"ignore\", detached: true }",
+    "replace": "{ cwd, stdio: \"ignore\" }",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ]
+      }
+    ]
+  }
+]
