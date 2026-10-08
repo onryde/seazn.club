@@ -78,6 +78,7 @@ standalone PR then.
 | RB2A-30: joint winners in a cricket final | W4 | Two champions break the single-champion model (`finalRanks`). |
 | Chess `double_forfeit` as a loss for both (RB2B-15) | W2b | Until then it folds to `no_result` and lands in `needs_decision` (§5.4). |
 | Tennis tie-break guard reads cfg only (checklist §7) | W2e | Tennis. |
+| Auto-walkover of a held (`needs_decision`) bracket fixture when one side withdraws | W2b | Preflight ruling C17 (controller, 2026-10-08): in W2a a withdrawal leaves the held fixture `needs_decision` (the bracket withdrawal cascade skips it), a settle naming the withdrawn entrant is refused, and the organiser settles for the remaining entrant. Walkover credit is W2b's. |
 | Recording armageddon colours on the tie-break (`black: EntrantId`) and enforcing BG-KO-2 in the engine | W2c | Ruling 82: W2a drops the "Drawn — Black advances" choice. The scorer always taps the winner, and the armageddon step shows a hint that a draw means Black advances. |
 
 ## 3. Rulings this spec implements
@@ -144,16 +145,23 @@ scorer/pad ──append──▶ append-event.ts ──resolveFixtureCfg(+bracke
   - The **kernel** owns it, like `void`, `suspend`, `resume` and `lineup` (`events.ts:742`), not the 8 sport
     handlers.
   - It is in `POST_DECISION_CORE`, so it is accepted after a result.
-- **Precondition** (otherwise a named refusal, `SETTLE_NOT_APPLICABLE`): the current fold outcome is `draw`, `tie` or
-  `no_result`, **or** the stream holds an active `core.abandon` and the outcome is `null`.
+- **Precondition** (otherwise a named refusal, `SETTLE_NOT_APPLICABLE`) — ONE engine predicate,
+  `settleApplies(module, { outcome, abandoned, state })`, which both the kernel and the console (§5.5) call
+  (preflight ruling C12, controller, 2026-10-08). It is true when the fold's effective outcome (`outcomeOf`) is
+  `draw`, `tie` or `no_result`; **or** the outcome is `null` and either the stream holds an active `core.abandon`
+  or the sport module declares a decider pending (`awaitingDecider(state)`: boardgame phase `tiebreak`, where lots
+  is the organiser's settle, ruling 73). The fixture's status stays `in_play` during the tie-break phase.
+  - A settle naming a **withdrawn** entrant is refused `SETTLE_NOT_APPLICABLE` (reason `withdrawn`); the organiser
+    settles for the remaining entrant (preflight ruling C17). The engine does not know entrant status, so the
+    server's write guard checks it (§5.4).
   - A second settle is refused: after the first one the outcome is `win`.
   - A settle on a fixture that already has a winner is refused.
   - A `void` of the settle restores the prior state (the existing void semantics; tested).
 - **Result:** `win{ winner, method: "settled_lot" | "settled_higher_seed" | "settled_organiser" }`. The score is left
   untouched. It is a `win`, not an `award`, so `bracketWinnerLoser` and `advancingSides` seat **both** winner and
   loser: the double-elim losers' bracket and the third-place match need the loser.
-- **Not stage-aware:** the stage-kind restriction lives on the server (§5.4). The engine only checks the outcome
-  shape.
+- **Not stage-aware:** the stage-kind restriction lives on the server (§5.4). The engine checks only the outcome
+  shape, the active abandon, and the module's pending-decider hook.
 
 ### 5.2 Engine: sport modules
 
@@ -223,6 +231,8 @@ See §6.
    - `core.finalize` on a held fixture (status `needs_decision`, or a level outcome in a bracket kind) is refused
      with `LEVEL_RESULT_IN_BRACKET`. The fixture is settled first. The console hides Finalize while the fixture is
      held (§5.5; plan finding 27).
+   - A `core.settle` whose `winner` is an entrant with status `withdrawn` is refused `SETTLE_NOT_APPLICABLE`
+     (reason `withdrawn`), and nothing is written (preflight ruling C17; the auto-walkover is W2b's, §2.3).
 4. **Seating guard.** The comment at `engine-db/competition.ts:144-150` becomes an assertion.
    - A `draw`, `tie` or `no_result` reaching `bracketWinnerLoser` or `advancingSides` throws `LEVEL_RESULT_SEATED`.
      It is reached only through a bug, so it is tested by forcing the case.
@@ -261,8 +271,12 @@ dialog pattern (`TextPromptDialog`), the pad's v3 skins and the phone-compositio
 with the frontend-design skill.
 
 - **Fixture console** (`components/v2/fixture-console.tsx`):
-  - When the status is `needs_decision`, or `abandoned` with no outcome or a level outcome (`draw`, `tie`,
-    `no_result`) in a bracket kind (plan finding 19), a **"Needs a decision"** block shows above the action row. Its copy reads "A knockout match can't end level. Choose who advances." and it
+  - A **"Needs a decision"** block shows above the action row iff the stage is a bracket kind **and** the engine's
+    `settleApplies` (§5.1) is true for the fixture — the same predicate the kernel's settle precondition calls, fed
+    the effective outcome, whether an abandon is active in the ledger, and the module's pending-decider hook
+    (preflight ruling C12; it supersedes plan finding 19's status-based condition). So it shows for
+    `needs_decision`, for an active scorer abandon with no outcome or a level one, and for a chess game in phase
+    `tiebreak` (status `in_play`); never for a generator's event-less void. Its copy reads "A knockout match can't end level. Choose who advances." and it
     has a **Settle the match** button.
   - The dialog asks:
     - who advances: two entrant buttons;
@@ -352,7 +366,7 @@ Rule texts (seeded rows):
 |---|---|
 | X-BR-1 | In a bracket kind, a fixture is decided only by a win (from play, a decider, a forfeit or settle). `draw`, `tie` and `no_result` are never a decided result. |
 | X-BR-2 | A play-produced level result in a bracket kind is held as `needs_decision`: not decided, nobody seated. |
-| X-ST-1 | `core.settle` applies only to a level outcome or an abandon with no outcome. It records the winner and the method (lot, higher seed, organiser), invents no score, and seats winner and loser. |
+| X-ST-1 | `core.settle` applies only to a level outcome, an abandon with no outcome, or a chess bracket game awaiting its tie-break (lots is the organiser's settle), and never names a withdrawn entrant (preflight rulings C12, C17). It records the winner and the method (lot, higher seed, organiser), invents no score, and seats winner and loser. |
 | X-ST-2 | `core.settle`, `core.forfeit` and `core.abandon` are organiser-only on the server. |
 | X-DR-1 | Draws are allowed only in league, group, swiss and americano, and only where the sport allows them. |
 | BG-KO-1 | In a bracket, a drawn chess game goes to a tie-break (rapid, blitz, armageddon), recorded by the scorer; lots is the organiser's settle. Status `signed 73 2026-10-08`; citation "product rule following FIDE knockout practice (World Cup regulations, secondary source — re-read before citing it as federation text)". |
@@ -366,7 +380,7 @@ Rule texts (seeded rows):
 | Code | When | Surface |
 |---|---|---|
 | `LEVEL_RESULT_IN_BRACKET` (409) | A generic draw in a bracket kind; or `core.finalize` on a held fixture (plan finding 27) | Pad: "Enter the winner — a knockout match can't end level." |
-| `SETTLE_NOT_APPLICABLE` (409) | Settle on a non-level, non-abandoned, or already settled fixture | Console dialog closes and shows the reason. |
+| `SETTLE_NOT_APPLICABLE` (409) | Settle where `settleApplies` is false (not level, not an active abandon with no outcome, no pending tie-break), on an already settled fixture, or naming a withdrawn entrant (ruling C17) | Console dialog closes and shows the reason. |
 | The code `scoring.ts` already returns for finalize/void (no new code; the plan names it) | Scorer or device sends settle, forfeit or abandon | No pad path reaches it; API callers get the code. |
 | `TIEBREAK_NOT_APPLICABLE` (409) | `boardgame.tiebreak` outside phase `tiebreak` | Pad never offers it. |
 | `LEVEL_RESULT_SEATED` (500, assertion) | A level result reaches seating | Sentry; only reachable through a bug. |

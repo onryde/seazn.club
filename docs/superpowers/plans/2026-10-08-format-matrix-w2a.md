@@ -46,13 +46,14 @@ These were found while planning, by reading the tree at `c0416dea6`. None is dec
 1. **Settle cannot "fold to win" inside module state.** `foldMatchWithStoppage` returns module state only (`packages/engine/src/core/events.ts:518-526`, return at `:768`). Every consumer reads the outcome as `module.outcome(state)`. The non-test readers are:
    - `apps/web/src/server/engine-db/fold.ts:168`;
    - `apps/web/src/server/engine-db/append-event.ts:329`;
-   - `apps/web/src/server/overlay/recent.ts:321`, `:355`;
    - `apps/web/src/server/usecases/event-import.ts:324`;
    - `packages/engine/src/sports/cricket/scorecard.ts:1155`;
    - `tools/matrix/lib/fold.ts:62`;
    - `tools/matrix/lib/model/ledger-fold.ts:38`.
 
-   The plan therefore returns a kernel `settlement` beside the state and adds `outcomeOf(module, folded)`. Task 4 moves every reader above to it, and a source-scan test pins the list (class 1, the inert seam).
+   `apps/web/src/server/overlay/recent.ts:321`, `:355` also calls `module.outcome(state)`, but on a point-state PROBE over a stored module state, not on a fold result. A settlement is never part of module state, so it cannot move to `outcomeOf`; it stays bare and listed in the scan's allowed list with that reason (preflight C8).
+
+   The plan therefore returns a kernel `settlement` beside the state and adds `outcomeOf(module, folded)`. Task 4 moves the six fold readers above to it, and a source-scan test pins exactly those six by name (class 1, the inert seam).
 2. **The spec says to add `core.settle` to `CoreEv`** (§5.1). `CoreEv` is documented as "the payload set modules see in apply()", with every kernel-owned event deliberately absent (`events.ts:130-149`). Settle is kernel-owned (§5.1, second bullet), so it stays out of `CoreEv`, and a test asserts that `module.apply` never receives it.
 3. **The spec's payload says `winner: SideId`.** No `SideId` type exists in the engine (`grep -a "SideId" packages/engine/src` finds none). The kernel's existing entrant reference is `EntrantId` (`core/types.ts:10`), as used by `CoreForfeit.by` (`events.ts:52`). The plan uses `EntrantId`. The kernel derives the loser from `lineups.home/away.entrantId` (`types.ts:240`) and refuses a winner who is neither side. The same applies to `boardgame.tiebreak.winner` (the module's own `sideOf`, `boardgame.ts:228-232`).
 4. **`core.settle` must also be in `DURING_STOPPAGE`** (`events.ts:469-490`). A setbased abandon during a suspension leaves the outcome null (`setbased/kernel.ts:818-823`), so the kernel never clears the stoppage (`events.ts:744-749`). A settle would then be refused `WRONG_PHASE` by `:599-605`, and the fixture could never be closed.
@@ -117,6 +118,7 @@ These were found while planning, by reading the tree at `c0416dea6`. None is dec
     - Football and the period kernel fold a level abandon to `no_result` (`football.ts:1653`, `period/kernel.ts:1446`).
     - Each of those leaves status `abandoned` **with** an outcome in a bracket. Settle's precondition already admits them (a level outcome), but the console block condition in spec §5.5 ("abandoned with no outcome") would hide the button.
     - The plan shows the block for a bracket fixture that is `needs_decision`, or `abandoned` with an outcome that is null or level. It is derived from X-ST-1. **Folded into spec §5.5** with the plan's approval (ruling 82).
+    - Superseded in its mechanism by controller ruling C12 (preflight): the block shows iff the stage is a bracket kind AND the kernel's own `settleApplies` is true — fed the effective outcome, whether an abandon is ACTIVE in the ledger (so a generator's event-less void does not show it), and the module's pending-decider hook (chess phase `tiebreak`). Spec §5.1 and §5.5 say so.
 20. **OWNER (resolved, ruling 82) — whose colours an armageddon uses.** BG-KO-2 says "a drawn armageddon game is won by Black". The engine knows one colour fact per fixture, `colorOfHome` (`boardgame.ts:197`, set by the pairing card at `:282+`). In FIDE practice the armageddon colours are drawn afresh, so Black in the armageddon need not be Black in the drawn game.
     - Spec §5.2 says "the side recorded as Black for that game", and the payload has no field to record it.
     - **RESOLVED — ruling 82 (owner, 2026-10-08): drop the "Drawn — Black advances" choice in W2a.** The `boardgame.tiebreak` payload has no draw field, and no error code exists for it. The scorer always taps the winner. The pad's armageddon step shows the hint "In Armageddon a draw means Black advances." (4 locales), which is BG-KO-2's W2a enforcement; its proving test asserts the hint renders on the armageddon step and not on rapid or blitz. Recording armageddon colours (`black: EntrantId`) moves to W2c (spec §2.3).
@@ -337,7 +339,7 @@ Five inputs the spec implies but no requirement names. Each line's test is writt
 2. **Double submit of the settle dialog, or two organisers settling at once.** Exactly one settle is accepted. The second is refused `SETTLE_NOT_APPLICABLE` (or `SEQ_CONFLICT` when it raced), the dialog shows the reason, and nobody is seated twice. Tests: Task 4 Step 1 "a second settle is refused"; Task 11 Step 4 e2e "double submit".
 3. **Finalizing a settled abandon.** The organiser expects Finalize to lock it like any decided fixture. Test: Task 4 Step 1 "finalize after settling an abandon", for every sport (finding 21).
 4. **A chess knockout fixture scored before deploy** has a frozen cfg without `tiebreak`, and its drawn game arrives after deploy. It must land in `needs_decision` and be settleable, never refused and never a stall. Test: Task 6 Step 1 "a frozen snapshot without deciders keeps them out" plus Task 8 Step 1 "frozen chess draw holds then settles".
-5. **One side of a `needs_decision` fixture withdraws.** The fixture must not stay stuck with no action: the block stays, and a settle to the remaining entrant seats them. Test: Task 8 Step 1 "withdrawal of one side of a held fixture".
+5. **One side of a `needs_decision` fixture withdraws.** The fixture must not stay stuck with no action. Controller ruling C17: it stays `needs_decision` (the bracket cascade skips it), the block stays, a settle naming the withdrawn entrant is refused `SETTLE_NOT_APPLICABLE` (reason `withdrawn`), and a settle to the remaining entrant seats them. Auto-walkover of a held fixture is W2b's. Test: Task 8 Step 1 "Review Focus 5 (ruling C17) …".
 
 ---
 
@@ -377,15 +379,15 @@ Ten reviewed loops (A, B, C, D, F, G, H, P1, P2, R) and two unreviewed evidence 
 
 | Loop / lane | Where | File set (disjoint by construction) | Waits on |
 |---|---|---|---|
-| A | worktree `format-matrix-w2a-mutate` | `scripts/mutate.ts`, `scripts/__tests__/mutate.test.ts`, `scripts/__tests__/fixtures/mutate/**`, root `package.json` (`mutate` script only), `.gitignore` (one line) | nothing; starts at once |
-| B | worktree `format-matrix-w2a-stryker` | `packages/engine/stryker.config.mjs`, `packages/engine/scripts/stryker-changed.mjs`, `packages/engine/scripts/stryker-changed.d.mts`, `packages/engine/test/stryker-changed-lines.test.ts` | nothing; starts at once, parallel with A |
+| A | worktree `format-matrix-w2a-mutate` | `scripts/mutate.ts`, `scripts/__tests__/mutate.test.ts`, `scripts/__tests__/fixtures/mutate/**`, root `package.json` (`mutate` script only), `.gitignore` (one line), `MUT/t0a.json` | nothing; starts at once |
+| B | worktree `format-matrix-w2a-stryker` | `packages/engine/stryker.config.mjs`, `packages/engine/scripts/stryker-changed.mjs`, `packages/engine/scripts/stryker-changed.d.mts`, `packages/engine/test/stryker-changed-lines.test.ts`, `packages/engine/test/stryker-config-groups.snap.json`, `MUT/t0b.json` | nothing; starts at once, parallel with A |
 | E1 | main W2a worktree | `TR/w2a-repro/**`, `TR/w2a-local-selection.json`, `TR/plans.lock.json`, `apps/web/e2e/bracket-new-h1.spec.ts`, `IDX` | nothing; parallel with A and B, and before ANY product change |
 | C | main W2a worktree | `packages/engine/rules/**`, `packages/engine/test/rules-reference{,.test}.ts`, `MUT/t2.json` | A merged (its mutation step needs the runner) |
-| D | main W2a worktree | Task 3–5 files | A, B and C merged |
-| **P2** | worktree `format-matrix-w2a-reference`, a **different agent** (R8) | `packages/reference/**` only | C merged: the rule rows are its only input besides the spec. Starts parallel with D |
-| **P1** | worktree `format-matrix-w2a-harness` | `tools/matrix/**`, plus `newScenarios` in `TR/w2a-local-selection.json` (written by the orchestrator from P1's report) | Writing code: the names in D's, F's and H's **Interfaces** blocks, which this plan freezes (`core.settle`, `SETTLE_METHODS`, `boardgame.tiebreak`, `TIEBREAK_RUNGS`, status `needs_decision`, the five error codes, the testids in Task 11). Its gate: D merged (unit tests fold through the real engine); its page-object drive: H merged. Starts parallel with D |
+| D | main W2a worktree | Task 3–5 files, which include `tools/matrix/lib/fold.ts` and `tools/matrix/lib/model/ledger-fold.ts` (Task 4's `outcomeOf` readers; preflight C9), and `MUT/t3.json`–`t5.json` | A, B and C merged |
+| **P2** | worktree `format-matrix-w2a-reference`, a **different agent** (R8) | `packages/reference/**`, `MUT/t15.json` | C merged: the rule rows are its only input besides the spec. Starts parallel with D. Its Step 4 (the `BRACKET_KINDS` cross-check) waits on D merged and merged into the lane (preflight C28) |
+| **P1** | worktree `format-matrix-w2a-harness` | `tools/matrix/**` EXCEPT `tools/matrix/lib/fold.ts` and `tools/matrix/lib/model/ledger-fold.ts` (loop D's until D merges into the lane; preflight C9), `MUT/t14.json`, plus `newScenarios` in `TR/w2a-local-selection.json` (written by the orchestrator from P1's report) | Writing code: the names in D's, F's and H's **Interfaces** blocks, which this plan freezes (`core.settle`, `SETTLE_METHODS`, `boardgame.tiebreak`, `TIEBREAK_RUNGS`, status `needs_decision`, the four error codes, the testids in Task 11). Its gate: D merged (unit tests fold through the real engine); its page-object drive: H merged. Starts parallel with D |
 | F | main W2a worktree | Task 6–9 files | D merged |
-| G | main W2a worktree | `apps/web/src/server/usecases/stages.ts` (`feederIsDead` only), `apps/web/e2e/bracket-new-h1.spec.ts` (comment only) | F merged (shares `stages.ts`) and E1's verdict |
+| G | main W2a worktree | `apps/web/src/server/usecases/stages.ts` (`feederIsDead` and the `SeatRow` select only), `apps/web/src/server/usecases/__tests__/dead-feeder-cascade.test.ts`, `apps/web/e2e/bracket-new-h1.spec.ts` (comment only), `MUT/t10.json` | F merged (shares `stages.ts`) and E1's verdict |
 | H | main W2a worktree | Task 11–13 files | F merged (and D) |
 | E2 | main W2a worktree | `TR/w2a-*`, `MATRIX.md`, `IDX`, screenshots | every loop merged |
 | R | read-only | the whole branch | E2's CI dispatches green |
@@ -453,7 +455,7 @@ Ten reviewed loops (A, B, C, D, F, G, H, P1, P2, R) and two unreviewed evidence 
 - Modify: root `package.json` (`"mutate"` script), `.gitignore` (`scripts/.mutate-selftest-*/`)
 
 **Files (0b):**
-- Create: `packages/engine/scripts/stryker-changed.mjs`, `packages/engine/scripts/stryker-changed.d.mts`, `packages/engine/test/stryker-changed-lines.test.ts`
+- Create: `packages/engine/scripts/stryker-changed.mjs`, `packages/engine/scripts/stryker-changed.d.mts`, `packages/engine/test/stryker-changed-lines.test.ts`, `packages/engine/test/stryker-config-groups.snap.json` (the pre-0b group configs; preflight C4)
 - Modify: `packages/engine/stryker.config.mjs`
 
 **Interfaces:**
@@ -469,14 +471,17 @@ Ten reviewed loops (A, B, C, D, F, G, H, P1, P2, R) and two unreviewed evidence 
   - `2`: a refused list:
     - zero mutants, or a duplicate mutant id;
     - a `find` matching 0 or more than 1 times;
+    - a killer with no `files` (it would run the whole suite);
     - a killer baseline that is red before any mutation;
-    - a killer that collected no test;
+    - a killer that wrote no JSON report, passed no test on the baseline, or ran no test under the mutant (three guards, three messages);
     - a file not restored byte-identical.
+  - The runner runs **vitest killers only**. A guard whose only witness is an e2e or smoke run gets a pure helper with a unit killer instead (Tasks 11 and 17); e2e and smoke never appear in a `MUT/*.json`.
 - Produces (0b):
   - Env `STRYKER_MUTATE="<src path>:<a>-<b>[,…]"` on `pnpm mutation`. When it is set, `STRYKER_GROUP` is not read, the run is `changed` (`reports/mutation/changed.json`, never incremental), and `mutate` is exactly the ranges given.
   - `node scripts/stryker-changed.mjs --base <ref>` prints that value from `git diff -U0 <ref> -- src`.
   - `node scripts/stryker-changed.mjs --report <changed.json>` prints the verdict table and exits non-zero on any `Survived` or `NoCoverage`.
-  - With `STRYKER_MUTATE` unset, the config is byte-for-byte the config at the merge base, for every group.
+  - With `STRYKER_MUTATE` unset, the config is byte-for-byte the committed pre-0b snapshot, for every group. No test reads git history (CI's engine checkout is shallow).
+  - `--base` also mutates NEW untracked src files whole (`git diff` cannot see them).
 
 - [ ] **Step 0 (orchestrator, before dispatch): record the owner's W2a rulings in `IDX`.** The orchestrator records them as rulings 80 (execution model, finding 26a), 81 (the tooling, batching and CI additions) and 82 (plan approval with the answers to findings 7 and 20 and to Task 11's layouts), so the dispatches cite a ruling, not a relay. No dispatch edits `_INDEX.md` for these.
 
@@ -506,7 +511,7 @@ The `.txt` suffixes keep CI's `vitest run scripts/__tests__` from collecting the
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runMutants, type Mutant } from "../mutate.ts";
+import { runMutants, validateMutants, type Mutant } from "../mutate.ts";
 
 const REPO = resolve(import.meta.dirname, "..", "..");
 // Outside scripts/__tests__ on purpose: CI's `vitest run scripts/__tests__` positional is a substring filter,
@@ -514,6 +519,7 @@ const REPO = resolve(import.meta.dirname, "..", "..");
 let dir = "";
 let rel = "";
 const SRC = "export const add = (a: number, b: number): number => a + b;\nexport const isPositive = (n: number): boolean => n > 0;\n";
+let SPEC = ""; // sum.test.ts as copied, for the restore check on a mutant of the test file itself
 // Each case spawns vitest once for the baseline and once per mutant; a cold vitest start is about 2 s locally,
 // and CI with coverage is about 5x slower (TEST-STRATEGY budget rule).
 const SPAWNS = 3;
@@ -524,6 +530,7 @@ beforeAll(() => {
   rel = relative(REPO, dir);
   cpSync(join(REPO, "scripts/__tests__/fixtures/mutate/sum.src.txt"), join(dir, "sum.ts"));
   cpSync(join(REPO, "scripts/__tests__/fixtures/mutate/sum.spec.txt"), join(dir, "sum.test.ts"));
+  SPEC = readFileSync(join(dir, "sum.test.ts"), "utf8");
 });
 afterAll(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
 
@@ -575,10 +582,28 @@ describe("scripts/mutate.ts — one mutant at a time, restored, killers named", 
     } finally { writeFileSync(join(dir, "sum.ts"), SRC); }
   }, BUDGET_MS);
 
-  it("a killer that collects no test is refused (a typo'd path is not a kill)", async () => {
+  it("a killer with NO files is refused before any spawn: it would run the whole suite (AGENTS.md: never)", () => {
+    expect(() => validateMutants([{ ...mutant("plus-to-minus", "a + b", "a - b"), killers: [{ cwd: ".", files: [] }] }], REPO)).toThrow(/would run the WHOLE suite/);
+  });
+
+  // Three guards, three distinct messages, three cases: one shared message would let each guard hide the others.
+  it("a killer whose file does not exist is refused: vitest wrote no report (a typo'd path is not a kill)", async () => {
     const r = await runMutants([{ ...mutant("plus-to-minus", "a + b", "a - b"), killers: [{ cwd: ".", files: [`${rel}/no-such.test.ts`] }] }], { repo: REPO });
     expect(r.exitCode).toBe(2);
-    expect(r.error).toMatch(/collected no test/);
+    expect(r.error).toMatch(/wrote no JSON report/);
+  }, BUDGET_MS);
+
+  it("a killer whose -t name matches nothing is refused at the baseline (skipped tests count in numTotalTests, so the guard reads numPassedTests)", async () => {
+    const r = await runMutants([{ ...mutant("plus-to-minus", "a + b", "a - b"), killers: [{ cwd: ".", files: [`${rel}/sum.test.ts`], name: "no such test name" }] }], { repo: REPO });
+    expect(r.exitCode).toBe(2);
+    expect(r.error).toMatch(/passed no test on the baseline/);
+  }, BUDGET_MS);
+
+  it("a killer that runs no test UNDER the mutant is refused, never read as a survivor", async () => {
+    const r = await runMutants([{ id: "skip-adds", file: `${rel}/sum.test.ts`, find: 'it("adds"', replace: 'it.skip("adds"', killers: [{ cwd: ".", files: [`${rel}/sum.test.ts`], name: "adds" }] }], { repo: REPO });
+    expect(r.exitCode).toBe(2);
+    expect(r.error).toMatch(/ran no test under the mutant/);
+    expect(readFileSync(join(dir, "sum.test.ts"), "utf8")).toBe(SPEC);
   }, BUDGET_MS);
 });
 ```
@@ -612,11 +637,11 @@ export type Verdict = { id: string; state: "KILLED"; killedBy: string[] } | { id
 export interface RunResult { exitCode: 0 | 1 | 2; verdicts: Verdict[]; error?: string }
 
 interface VitestJson {
-  numTotalTests: number; numFailedTests: number; numFailedTestSuites: number;
+  numTotalTests: number; numPassedTests: number; numFailedTests: number; numFailedTestSuites: number;
   testResults: { name: string; assertionResults: { title: string; fullName: string; status: string }[] }[];
 }
 
-class Refused extends Error {}
+export class Refused extends Error {}
 
 function occurrences(text: string, find: string): number {
   return find === "" ? 0 : text.split(find).length - 1;
@@ -632,7 +657,7 @@ function runKiller(repo: string, k: Killer): VitestJson {
     const args = ["run", ...k.files, ...(k.name === undefined ? [] : ["-t", k.name]), "--reporter=json", `--outputFile=${file}`, "--testTimeout=30000"];
     const [cmd, argv] = k.cwd === "." ? [join(repo, "packages/engine/node_modules/.bin/vitest"), args] : ["pnpm", ["exec", "vitest", ...args]];
     spawnSync(cmd, argv, { cwd, encoding: "utf8", stdio: ["ignore", "ignore", "ignore"], timeout: 15 * 60_000 });
-    if (!existsSync(file)) throw new Refused(`killer ${k.cwd}:${k.files.join(",")} collected no test (vitest wrote no JSON report: a missing file, or a refused config)`);
+    if (!existsSync(file)) throw new Refused(`killer ${k.cwd}:${k.files.join(",")} wrote no JSON report (a missing file, or a refused config)`);
     return JSON.parse(readFileSync(file, "utf8")) as VitestJson;
   } finally { rmSync(out, { recursive: true, force: true }); }
 }
@@ -641,19 +666,26 @@ function failedNames(r: VitestJson): string[] {
   return r.testResults.flatMap((f) => f.assertionResults.filter((a) => a.status === "failed").map((a) => a.fullName));
 }
 
+/** Every check that needs no spawn, before anything is touched. Exported so its refusals are tested without a vitest run. */
+export function validateMutants(mutants: readonly Mutant[], repo: string): void {
+  if (mutants.length === 0) throw new Refused("zero mutants: an empty list proves nothing (anti-vacuity)");
+  const ids = new Set<string>();
+  for (const m of mutants) {
+    if (ids.has(m.id)) throw new Refused(`duplicate mutant id ${m.id}`);
+    ids.add(m.id);
+    if (m.killers.length === 0) throw new Refused(`${m.id}: names no killer`);
+    for (const k of m.killers) {
+      if (k.files.length === 0) throw new Refused(`${m.id}: a killer with no files would run the WHOLE suite (never; AGENTS.md) — name the test files`);
+    }
+    const n = occurrences(readFileSync(resolve(repo, m.file), "utf8"), m.find);
+    if (n !== 1) throw new Refused(`${m.id}: find ${JSON.stringify(m.find)} matches ${n} times in ${m.file} (exactly 1 required)`);
+  }
+}
+
 export async function runMutants(mutants: readonly Mutant[], opts: { repo: string }): Promise<RunResult> {
   const verdicts: Verdict[] = [];
   try {
-    if (mutants.length === 0) throw new Refused("zero mutants: an empty list proves nothing (anti-vacuity)");
-    // Validate every mutant before touching anything.
-    const ids = new Set<string>();
-    for (const m of mutants) {
-      if (ids.has(m.id)) throw new Refused(`duplicate mutant id ${m.id}`);
-      ids.add(m.id);
-      if (m.killers.length === 0) throw new Refused(`${m.id}: names no killer`);
-      const n = occurrences(readFileSync(resolve(opts.repo, m.file), "utf8"), m.find);
-      if (n !== 1) throw new Refused(`${m.id}: find ${JSON.stringify(m.find)} matches ${n} times in ${m.file} (exactly 1 required)`);
-    }
+    validateMutants(mutants, opts.repo);
     // Baseline: every killer green and non-empty on the UNMUTATED tree, or every mutant would read KILLED.
     const seen = new Set<string>();
     for (const k of mutants.flatMap((m) => m.killers)) {
@@ -661,7 +693,7 @@ export async function runMutants(mutants: readonly Mutant[], opts: { repo: strin
       if (seen.has(key)) continue;
       seen.add(key);
       const r = runKiller(opts.repo, k);
-      if (r.numTotalTests === 0) throw new Refused(`killer ${k.cwd}:${k.files.join(",")}${k.name ? ` -t ${k.name}` : ""} collected no test`);
+      if (r.numPassedTests === 0) throw new Refused(`killer ${k.cwd}:${k.files.join(",")}${k.name ? ` -t ${k.name}` : ""} passed no test on the baseline (a typo'd path or -t name)`);
       if (r.numFailedTests > 0 || r.numFailedTestSuites > 0) throw new Refused(`killer baseline is red before any mutation: ${failedNames(r).join("; ") || "a suite failed to collect"}`);
     }
     for (const m of mutants) {
@@ -679,7 +711,7 @@ export async function runMutants(mutants: readonly Mutant[], opts: { repo: strin
         const killedBy: string[] = [];
         for (const k of m.killers) {
           const r = runKiller(opts.repo, k);
-          if (r.numTotalTests === 0 && r.numFailedTestSuites === 0) throw new Refused(`${m.id}: killer collected no test under the mutant`);
+          if (r.numPassedTests === 0 && r.numFailedTests === 0 && r.numFailedTestSuites === 0) throw new Refused(`${m.id}: killer ran no test under the mutant`);
           killedBy.push(...failedNames(r), ...(r.numFailedTestSuites > 0 && failedNames(r).length === 0 ? ["<suite failed to collect>"] : []));
         }
         verdicts.push(killedBy.length > 0 ? { id: m.id, state: "KILLED", killedBy } : { id: m.id, state: "SURVIVED" });
@@ -721,13 +753,13 @@ Root `package.json`, `scripts`: `"mutate": "node --experimental-strip-types --im
 
 - [ ] **Step 4 (0a): run the self-test green, plus the CLI's empty case**
 
-The Step 2 command. Expected: `EXIT=0`; the judge shows `total: 6`, `failed: 0`, `files: 1`. Then:
+The Step 2 command. Expected: `EXIT=0`; the judge shows `total: 9`, `failed: 0`, `files: 1`. Then:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-mutate && echo '[]' > "$TMPDIR/w2a-empty.json" && pnpm mutate --list "$TMPDIR/w2a-empty.json"; echo EXIT=$?; git status --porcelain
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-mutate && echo '[]' > "$TMPDIR/w2a-empty.json" && pnpm mutate --list "$TMPDIR/w2a-empty.json"; echo EXIT=$?; echo "LEFTOVER=$(find scripts -maxdepth 1 -name '.mutate-selftest-*' | wc -l | tr -d ' ')"
 ```
 
-Expected: `REFUSED: zero mutants …` and `EXIT=2`. `git status` lists only the Task 0a files: no `.mutate-selftest-*` directory is left behind.
+Expected: `REFUSED: zero mutants …`, `EXIT=2`, and `LEFTOVER=0`. The directory is gitignored, so `git status` could never show it; `find` reads the disk.
 
 - [ ] **Step 5 (0a): mutate the runner's own guards, through itself.** Write `MUT/t0a.json`. The killer for each is `{ "cwd": ".", "files": ["scripts/__tests__/mutate.test.ts"] }`.
 
@@ -736,22 +768,29 @@ Expected: `REFUSED: zero mutants …` and `EXIT=2`. `git status` lists only the 
 | `empty-list` | `if (mutants.length === 0)` → `if (mutants.length < 0)` | "empty case first: a zero-mutant list is refused" |
 | `exactly-one` | `if (n !== 1)` → `if (n === 0)` | "a find that matches 0 or 2+ times, or a duplicate id, is refused" |
 | `duplicate-id` | `if (ids.has(m.id)) throw` → `if (false) throw` | "a find that matches 0 or 2+ times, or a duplicate id, is refused" |
+| `empty-files` | `if (k.files.length === 0) throw` → `if (false) throw` | "a killer with NO files is refused before any spawn" |
 | `baseline` | `if (r.numFailedTests > 0 \|\| r.numFailedTestSuites > 0) throw new Refused(\`killer baseline` → `if (false) throw new Refused(\`killer baseline` (in the JSON the pipes are plain `||`) | "a red baseline is refused" |
-| `collected-none` | `if (r.numTotalTests === 0) throw` → `if (false) throw` | "a killer that collects no test is refused" |
+| `report-missing` | `if (!existsSync(file)) throw` → `if (false) throw` | "a killer whose file does not exist is refused" (the run then throws ENOENT, not a Refused) |
+| `baseline-none` | `if (r.numPassedTests === 0) throw` → `if (false) throw` | "a killer whose -t name matches nothing is refused at the baseline" (the mutation-phase guard fires instead, with the other message) |
+| `mutant-none` | `if (r.numPassedTests === 0 && r.numFailedTests === 0 && r.numFailedTestSuites === 0) throw` → `if (false) throw` | "a killer that runs no test UNDER the mutant is refused" (reads SURVIVED, exit 1) |
 | `restore` | `writeFileSync(path, original);` → `void original;` | "reports a killed mutant … restores the file byte-identical" |
 | `survivor-exit` | `verdicts.every((v) => v.state === "KILLED") ? 0 : 1` → `0` | "reports a killed mutant …" (`exitCode` 1) |
 
-Run `pnpm mutate --list docs/superpowers/specs/2026-09-27-format-matrix-prompts/mutants/w2a/t0a.json`. The runner mutating its own source is safe: each killer spawn is a fresh process that imports the file from disk. Expected: `EXIT=0`, seven rows `KILLED by …`, each naming the test listed above.
+Run `pnpm mutate --list docs/superpowers/specs/2026-09-27-format-matrix-prompts/mutants/w2a/t0a.json`. The runner mutating its own source is safe: each killer spawn is a fresh process that imports the file from disk. Expected: `EXIT=0`, ten rows `KILLED by …`, each naming the test listed above.
 
 - [ ] **Step 6 (0b): the failing test** — `packages/engine/test/stryker-changed-lines.test.ts`
 
 ```ts
-import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseMutateRanges, rangesFromDiff, verdictsFromReport } from "../scripts/stryker-changed.mjs";
+import { parseMutateRanges, rangesFromDiff, rangesFromUntracked, verdictsFromReport } from "../scripts/stryker-changed.mjs";
 import { STRYKER_GROUPS } from "../stryker.groups.mjs";
+// The group configs as they were BEFORE Task 0b's edit, written once by `--snapshot` (Step 8a) and committed. No git
+// history is read at test time: CI's engine job is a shallow clone with no origin/main, and after the merge the merge
+// base would be HEAD itself, comparing the file with itself (preflight C4).
+const SNAPSHOT = JSON.parse(readFileSync(resolve(import.meta.dirname, "stryker-config-groups.snap.json"), "utf8")) as Record<string, string>;
 
 const ENGINE = resolve(import.meta.dirname, "..");
 const SPAWN_MS = 60_000;
@@ -778,28 +817,35 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
     expect(() => parseMutateRanges("src/core/events.test.ts:1-2", ENGINE)).toThrow(/test file/);
   });
 
-  it("with STRYKER_MUTATE the run is 'changed': exactly those ranges, not incremental, its own report", () => {
-    const c = JSON.parse(configUnder("stryker.config.mjs", { STRYKER_MUTATE: "src/core/events.ts:10-20" }));
-    expect(c.mutate).toEqual(["src/core/events.ts:10-20"]);
-    expect(c.incremental).toBe(false);
-    expect(c.jsonReporter).toEqual({ fileName: "reports/mutation/changed.json" });
-    expect(c.coverageAnalysis).toBe("perTest");
-  }, SPAWN_MS);
-
-  it("with STRYKER_MUTATE unset the config is byte-identical to the merge base's, for EVERY group", () => {
-    const base = execFileSync("git", ["merge-base", "HEAD", "origin/main"], { cwd: ENGINE, encoding: "utf8" }).trim();
-    const baseFile = `.stryker-config-base-${process.pid}.mjs`;
-    writeFileSync(join(ENGINE, baseFile), execFileSync("git", ["show", `${base}:packages/engine/stryker.config.mjs`], { cwd: ENGINE, encoding: "utf8" }));
+  it("with STRYKER_MUTATE the run is 'changed': exactly those ranges, not incremental, its own report — even with STRYKER_GROUP also set", () => {
     let checked = 0;
-    try {
-      for (const g of Object.keys(STRYKER_GROUPS)) {
-        expect(configUnder("stryker.config.mjs", { STRYKER_GROUP: g }), g).toBe(configUnder(baseFile, { STRYKER_GROUP: g }));
-        checked++;
-      }
-    } finally { rmSync(join(ENGINE, baseFile), { force: true }); }
-    expect(checked).toBe(Object.keys(STRYKER_GROUPS).length);
+    for (const env of [{ STRYKER_MUTATE: "src/core/events.ts:10-20" }, { STRYKER_MUTATE: "src/core/events.ts:10-20", STRYKER_GROUP: "core-1" }]) {
+      const c = JSON.parse(configUnder("stryker.config.mjs", env));
+      expect(c.mutate, JSON.stringify(env)).toEqual(["src/core/events.ts:10-20"]);
+      expect(c.incremental).toBe(false);
+      expect(c.jsonReporter).toEqual({ fileName: "reports/mutation/changed.json" });
+      expect(c.coverageAnalysis).toBe("perTest");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  }, 2 * SPAWN_MS);
+
+  it("with STRYKER_MUTATE unset the config equals the pre-0b snapshot, for EVERY group", () => {
+    const groups = Object.keys(STRYKER_GROUPS);
+    expect(Object.keys(SNAPSHOT).sort()).toEqual([...groups].sort()); // a group added or dropped since the snapshot is a finding
+    let checked = 0;
+    for (const g of groups) {
+      expect(configUnder("stryker.config.mjs", { STRYKER_GROUP: g }), g).toBe(SNAPSHOT[g]);
+      checked++;
+    }
+    expect(checked).toBe(groups.length);
     expect(checked).toBeGreaterThan(0);
-  }, Math.max(60_000, Object.keys(STRYKER_GROUPS).length * 2 * 3_000 * 5));
+  }, Math.max(60_000, Object.keys(STRYKER_GROUPS).length * 3_000 * 5));
+
+  it("rangesFromUntracked: a NEW src file (untracked, so absent from git diff) is mutated whole; test files never", () => {
+    expect(rangesFromUntracked([{ path: "src/core/level.ts", lines: 12 }, { path: "src/core/level.test.ts", lines: 40 }])).toEqual(["src/core/level.ts:1-12"]);
+    expect(rangesFromUntracked([])).toEqual([]);
+  });
 
   it("rangesFromDiff: added and changed lines of non-test src files only; a deletion-only hunk adds nothing", () => {
     const diff = [
@@ -854,9 +900,10 @@ Expected: `EXIT=1`; the suite fails to collect (`../scripts/stryker-changed.mjs`
 // exactly those (perTest coverage, never incremental, report reports/mutation/changed.json). Unset, nothing changes:
 // test/stryker-changed-lines.test.ts holds the config byte-identical to the merge base for every group.
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
+import { STRYKER_GROUPS } from "../stryker.groups.mjs";
 
 /** @param {string} value @param {string} engine @returns {string[]} */
 export function parseMutateRanges(value, engine) {
@@ -892,6 +939,23 @@ export function rangesFromDiff(diff) {
   return out;
 }
 
+/** Untracked src files (new in the working tree, so `git diff <ref>` cannot see them) → whole-file ranges.
+ *  @param {{ path: string; lines: number }[]} files */
+export function rangesFromUntracked(files) {
+  return files.filter((f) => !/\.test\.tsx?$/.test(f.path) && f.lines > 0).map((f) => `${f.path}:1-${f.lines}`);
+}
+
+/** The group configs as the config produces them now, one child process per group (the config reads env at import). */
+function snapshotGroups(engine) {
+  const out = {};
+  for (const g of Object.keys(STRYKER_GROUPS)) {
+    out[g] = execFileSync(process.execPath, ["--input-type=module", "-e", "const c = (await import('./stryker.config.mjs')).default; process.stdout.write(JSON.stringify(c));"], {
+      cwd: engine, encoding: "utf8", env: { ...process.env, STRYKER_GROUP: g, STRYKER_MUTATE: undefined },
+    });
+  }
+  return out;
+}
+
 /** Stryker's mutation-testing-report JSON → one row per mutant, killers by NAME. */
 export function verdictsFromReport(report) {
   const names = new Map();
@@ -906,9 +970,15 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   const at = (flag) => { const i = process.argv.indexOf(flag); return i === -1 ? undefined : process.argv[i + 1]; };
   const base = at("--base");
   const report = at("--report");
-  if (base !== undefined) {
-    const diff = execFileSync("git", ["diff", "-U0", base, "--", "src"], { cwd: join(import.meta.dirname, ".."), encoding: "utf8" });
-    const ranges = rangesFromDiff(diff);
+  const snapshot = at("--snapshot");
+  const engine = join(import.meta.dirname, "..");
+  if (snapshot !== undefined) {
+    writeFileSync(snapshot, JSON.stringify(snapshotGroups(engine), null, 2) + "\n");
+  } else if (base !== undefined) {
+    const diff = execFileSync("git", ["diff", "-U0", base, "--", "src"], { cwd: engine, encoding: "utf8" });
+    const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "--", "src"], { cwd: engine, encoding: "utf8" })
+      .split("\n").filter((p) => p !== "").map((p) => ({ path: p, lines: readFileSync(join(engine, p), "utf8").split("\n").length }));
+    const ranges = [...rangesFromDiff(diff), ...rangesFromUntracked(untracked)];
     if (ranges.length === 0) { console.error("no changed engine src lines against " + base); process.exit(2); }
     process.stdout.write(ranges.join(","));
   } else if (report !== undefined) {
@@ -918,7 +988,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     const count = (s) => v.rows.filter((r) => r.status === s).length;
     console.log(JSON.stringify({ mutants: v.rows.length, killed: count("Killed"), timeout: count("Timeout"), survived: count("Survived"), noCoverage: count("NoCoverage") }));
     process.exit(v.failures === 0 ? 0 : 1);
-  } else { console.error("usage: stryker-changed.mjs --base <ref> | --report <changed.json>"); process.exit(2); }
+  } else { console.error("usage: stryker-changed.mjs --base <ref> | --report <changed.json> | --snapshot <out.json>"); process.exit(2); }
 }
 ```
 
@@ -927,9 +997,18 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
 ```ts
 export function parseMutateRanges(value: string, engine: string): string[];
 export function rangesFromDiff(diff: string): string[];
+export function rangesFromUntracked(files: { path: string; lines: number }[]): string[];
 export interface ChangedRow { file: string; line: number; mutator: string; status: string; killedBy: string[] }
 export function verdictsFromReport(report: unknown): { rows: ChangedRow[]; failures: number };
 ```
+
+**Step 8a, before the config edit below:** write the snapshot from the UNEDITED config, and commit it with the task. It is the pre-0b truth the byte-equivalence test compares with; it is never regenerated after the edit except as a reviewed, deliberate config change (the commit says so).
+
+```bash
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-stryker/packages/engine && git diff --quiet -- stryker.config.mjs && node scripts/stryker-changed.mjs --snapshot test/stryker-config-groups.snap.json; echo EXIT=$?; grep -c "/Users/" test/stryker-config-groups.snap.json
+```
+
+Expected: `EXIT=0` (the `git diff --quiet` guard proves the config is still unedited), and the `grep -c` prints `0`: the snapshot holds no machine-absolute path, so it compares equal on CI. If it prints more than 0, `snapshotGroups` relativises those values against `engine` before writing, and the test does the same to `configUnder`'s output.
 
 In `packages/engine/stryker.config.mjs`, replace the group lines and the four group-derived keys:
 
@@ -954,7 +1033,7 @@ Then, in the exported object:
 - [ ] **Step 9 (0b): run green, plus the existing tests that read the config**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-stryker/packages/engine && git fetch origin main -q && rm -f "$TMPDIR/w2a-t0b.json" && pnpm vitest run test/stryker-changed-lines.test.ts test/stryker-groups.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t0b.json"; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-stryker/packages/engine && rm -f "$TMPDIR/w2a-t0b.json" && pnpm vitest run test/stryker-changed-lines.test.ts test/stryker-groups.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t0b.json"; echo EXIT=$?
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-stryker/packages/engine && rm -f "$TMPDIR/w2a-t0b2.json" && pnpm vitest run test/stryker-sizing.test.ts -t "the comments that quote the sizing" --reporter=json --outputFile="$TMPDIR/w2a-t0b2.json"; echo EXIT=$?
 ```
 
@@ -984,11 +1063,12 @@ The range is `StageKind`. Record the wall time: it is the per-task cost every la
 | `test-file` | `if (/\.test\.tsx?$/.test(file)) throw` → `if (false) throw` | "parses ranges exactly …" |
 | `reversed` | `Number(b) < Number(a)` → `false` | "parses ranges exactly …" |
 | `not-incremental` | `incremental: changed === undefined,` → `incremental: true,` | "with STRYKER_MUTATE the run is 'changed'" |
-| `env-wins` | `const group = changed === undefined ? process.env.STRYKER_GROUP : "changed";` → `const group = process.env.STRYKER_GROUP ?? "changed";` | "with STRYKER_MUTATE the run is 'changed'" (report name) |
+| `env-wins` | `const group = changed === undefined ? process.env.STRYKER_GROUP : "changed";` → `const group = process.env.STRYKER_GROUP ?? "changed";` | "with STRYKER_MUTATE the run is 'changed' … even with STRYKER_GROUP also set" (report name, the `core-1` env) |
 | `deletion-hunk` | `if (count > 0) out.push` → `out.push` | "rangesFromDiff …" |
+| `untracked-tests` | `!/\.test\.tsx?$/.test(f.path) && f.lines > 0` → `f.lines > 0` | "rangesFromUntracked …" |
 | `nocoverage` | `r.status === "Survived" \|\| r.status === "NoCoverage"` → `r.status === "Survived"` | "verdictsFromReport …" |
 
-Expected: `EXIT=0`, eight rows killed.
+Expected: `EXIT=0`, nine rows killed.
 
 - [ ] **Step 11: commit each loop on its lane branch, then merge both into `feat/format-matrix-w2a`**
   - 0a: `feat(scripts): hand-mutant runner — one mutant at a time, killers named, restored byte-identical (W2a Task 0a)`.
@@ -1236,7 +1316,7 @@ cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && git add doc
 
 **Files:**
 - Create: `packages/engine/rules/README.md`, `cross-sport.md`, `boardgame.md`, `carrom.md`, `generic.md`, `cricket.md`
-- Create: `packages/engine/test/rules-reference.test.ts`
+- Create: `packages/engine/test/rules-reference.ts` (the parser and the checks), `packages/engine/test/rules-reference.test.ts`, `MUT/t2.json`
 - Modify: `IDX` (rulings 71–79 each gain a one-line pointer to their rule ids; the W2 row)
 
 **Interfaces:**
@@ -1297,6 +1377,19 @@ export function allRows(): RuleRow[] {
 export const isMatrixCase = (p: string): boolean => p.startsWith("matrix:");
 export const fileExists = (p: string): boolean => existsSync(join(REPO, p));
 export const fileNames = (p: string, id: string): boolean => readFileSync(join(REPO, p), "utf8").includes(id);
+
+/** The proving checks for one signed row, as data: exported so a synthetic row exercises them while every real row
+ *  still awaits proof (preflight C5: at Task 2 no real row reaches these branches). */
+export function proofProblems(r: RuleRow): string[] {
+  const tests = r.provedBy.filter((p) => !isMatrixCase(p));
+  if (tests.length === 0) return [`${r.id} names no proving test`];
+  const out: string[] = [];
+  for (const p of tests) {
+    if (!fileExists(p)) out.push(`${r.id}: ${p} does not exist`);
+    else if (!fileNames(p, r.id)) out.push(`${r.id}: ${p} does not contain "${r.id}"`);
+  }
+  return out;
+}
 ```
 
 `packages/engine/test/rules-reference.test.ts`:
@@ -1305,10 +1398,10 @@ export const fileNames = (p: string, id: string): boolean => readFileSync(join(R
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ID, RULES_DIR, STATUS, allRows, fileExists, fileNames, isMatrixCase, parseRuleRows, ruleFiles } from "./rules-reference.ts";
+import { ID, ROW_HEADER, RULES_DIR, STATUS, allRows, fileExists, parseRuleRows, proofProblems, ruleFiles, type RuleRow } from "./rules-reference.ts";
 
 /** Signed rows whose proving test lands in a later W2a task. A task that adds
- *  the proof deletes its id here in the same commit; Task 16 Step 7 requires
+ *  the proof deletes its id here in the same commit; Task 16 Step 5 requires
  *  this map to be EMPTY. A row not named here must already be proved. */
 const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
   ["X-DR-1", "Task 3"],
@@ -1361,15 +1454,26 @@ describe("rules reference (ruling 75, spec §6)", () => {
         checked++;
         continue;
       }
-      const tests = r.provedBy.filter((p) => !isMatrixCase(p));
-      expect(tests.length, `${r.id} names no proving test`).toBeGreaterThan(0);
-      for (const p of tests) {
-        expect(fileExists(p), `${r.id}: ${p} does not exist`).toBe(true);
-        expect(fileNames(p, r.id), `${r.id}: ${p} does not contain "${r.id}"`).toBe(true);
-      }
+      expect(proofProblems(r), r.id).toEqual([]);
       checked++;
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  it("the proof checks catch a row with no test, a missing file and a file that does not name the id (synthetic signed rows)", () => {
+    const row = (provedBy: string[]): RuleRow => ({ id: "X-ZZ-1", rule: "r", citation: "c", status: "signed 1 2026-10-08", enforcedAt: [], provedBy, file: "synthetic.md" });
+    expect(proofProblems(row([]))).toEqual(["X-ZZ-1 names no proving test"]);
+    expect(proofProblems(row(["packages/engine/test/no-such.test.ts"]))).toEqual(["X-ZZ-1: packages/engine/test/no-such.test.ts does not exist"]);
+    expect(proofProblems(row(["packages/engine/vitest.config.ts"]))).toEqual(['X-ZZ-1: packages/engine/vitest.config.ts does not contain "X-ZZ-1"']);
+    expect(proofProblems(row(["packages/engine/test/rules-reference.test.ts"]))).toEqual([]); // the positive pair: this file names X-ZZ-1
+  });
+
+  it("the parser refuses a row that is not 6 cells, and ID refuses a malformed id (synthetic inputs)", () => {
+    expect(() => parseRuleRows(`${ROW_HEADER}\n|---|---|---|---|---|---|\n| X-ZZ-1 | rule | cite | ⬜ open | — |\n`, "bad.md")).toThrow(/5 cells, not 6/);
+    let checked = 0;
+    for (const bad of ["x-br-1", "XBR-1", "X-BR-", "ABCD-BR-1"]) { expect(bad, bad).not.toMatch(ID); checked++; }
+    expect(checked).toBe(4);
+    expect("X-BR-1").toMatch(ID); // the positive pair
   });
 
   it("every AWAITING_PROOF id is a real signed row (a stale entry is a failure)", () => {
@@ -1428,7 +1532,7 @@ directory is the authority from W2a on.
 |---|---|---|---|---|---|
 | X-BR-1 | In a bracket kind, a fixture is decided only by a win (from play, a decider, a forfeit or settle); `draw`, `tie` and `no_result` are never a decided result. | product rule, ruling 72 | signed 72 2026-10-08 | `apps/web/src/server/engine-db/append-event.ts`<br>`apps/web/src/server/usecases/scoring.ts` | — |
 | X-BR-2 | A play-produced level result in a bracket kind is held as `needs_decision`: not decided, nobody seated. | product rule, ruling 79 | signed 79 2026-10-08 | `apps/web/src/server/engine-db/append-event.ts` | — |
-| X-ST-1 | `core.settle` applies only to a level outcome or an abandon with no outcome; it records the winner and the method (lot, higher seed, organiser), invents no score, and seats winner and loser. | product rule, ruling 72 | signed 72 2026-10-08 | `packages/engine/src/core/events.ts` | — |
+| X-ST-1 | `core.settle` applies only to a level outcome, an abandon with no outcome, or a chess bracket game awaiting its tie-break (lots is the organiser's settle); it never names a withdrawn entrant; it records the winner and the method (lot, higher seed, organiser), invents no score, and seats winner and loser. | product rule, ruling 72; preflight rulings C12, C17 (controller, 2026-10-08) | signed 72 2026-10-08 | `packages/engine/src/core/events.ts`<br>`apps/web/src/server/engine-db/append-event.ts` | — |
 | X-ST-2 | `core.settle`, `core.forfeit` and `core.abandon` are organiser-only on the server. | product rule, ruling 77 | signed 77 2026-10-08 | `apps/web/src/server/usecases/scoring.ts` | — |
 | X-DR-1 | Draws are allowed only in league, group, swiss and americano, and only where the sport allows them. | product rule, rulings 72 and 78 | signed 78 2026-10-08 | `packages/engine/src/core/types.ts` | — |
 ```
@@ -1478,18 +1582,23 @@ directory is the authority from W2a on.
 
 The same command as Step 2. Expected:
 - `EXIT=0`;
-- the judge shows `total: 7`, `failed: 0`, `files: 1`, and a name under the worktree.
+- the judge shows `total: 9`, `failed: 0`, `files: 1`, and a name under the worktree.
 
 - [ ] **Step 5: Mutate each check once, through the runner** (`MUT/t2.json`). The mutants are data and test edits; every killer is `packages/engine/test/rules-reference.test.ts`.
 
 | Mutant (in `rules-reference.test.ts` / `rules-reference.ts`, one at a time) | Expected red |
 |---|---|
 | Duplicate the X-BR-1 row into `generic.md` | "every id is well-formed and unique" |
-| Change BG-KO-2's status to `signed 73 08-10-2026` | "every status is …" |
+| BG-KO-2's status: find `ruling 82 \| signed 73 2026-10-08` (unique to the BG-KO-2 row; BG-KO-1 also carries `signed 73 2026-10-08`) → `ruling 82 \| signed 73 08-10-2026` | "every status is …" |
 | Delete `["X-ST-2", "Task 9"]` from `AWAITING_PROOF` | "every signed or deviation row names a proving test" (X-ST-2 names none) |
 | Add `["X-ZZ-9", "Task 99"]` to `AWAITING_PROOF` | "every AWAITING_PROOF id is a real signed row" |
 | `if (start === -1) return [];` → `if (start === -1) return [{ id: "X-ZZ-1", rule: "", citation: "", status: "⬜ open", enforcedAt: [], provedBy: [], file }];` | "empty case first: a file with no rule table parses to no rows" |
 | Change CA-KO-1's enforced-at path to `packages/engine/src/sports/carrom/caron.ts` | "every enforced-at path exists" |
+| `if (!fileExists(p)) out.push` → `if (false) out.push` | "the proof checks catch …" (the missing file then throws ENOENT in `fileNames`) |
+| `else if (!fileNames(p, r.id)) out.push` → `else if (false) out.push` | "the proof checks catch …" (`vitest.config.ts` case) |
+| `if (tests.length === 0) return [` → `if (false) return [` | "the proof checks catch …" (no-test case) |
+| `if (cells.length !== 6) throw` → `if (false) throw` | "the parser refuses a row that is not 6 cells …" |
+| `export const ID = /^[A-Z]{1,3}-[A-Z]{2}-\d+$/;` → `export const ID = /^.+$/;` | "… ID refuses a malformed id" |
 
 Each row above becomes one entry of `MUT/t2.json`:
 - `find` is the exact source text the row names, copied from this task's code blocks, and `replace` is its mutation;
@@ -1506,7 +1615,7 @@ Expected: `EXIT=0`; every row `KILLED by` the named test, 0 survived. Paste the 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && git add packages/engine/rules packages/engine/test/rules-reference.ts packages/engine/test/rules-reference.test.ts docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md && git commit -F "$TMPDIR/w2a-msg.txt"; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && git add packages/engine/rules packages/engine/test/rules-reference.ts packages/engine/test/rules-reference.test.ts docs/superpowers/specs/2026-09-27-format-matrix-prompts/mutants/w2a/t2.json docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md && git commit -F "$TMPDIR/w2a-msg.txt"; echo EXIT=$?
 ```
 
 Message: `feat(engine): rules reference — W2a's ten signed rows and their checker (ruling 75)`, then a blank line and the trailer.
@@ -1527,6 +1636,7 @@ Message: `feat(engine): rules reference — W2a's ten signed rows and their chec
 - Modify: `E/core/types.ts` (after `StageKind`, `:91-101`)
 - Modify: `E/sports/boardgame/boardgame.ts:768-772`, `E/sports/generic/generic.ts:650-654`, `E/sports/carrom/carrom.ts:983-988`, `E/sports/football/football.ts:2665-2668`, `E/sports/cricket/cricket.ts:3964-3966`, `E/sports/period/kernel.ts:2644-2647`
 - Create: `E/sport/supports-draws.test.ts`, `E/core/stage-kind-sets.test.ts`
+- Create: `E/testkit/declared-cfgs.ts`, `E/testkit/declared-cfgs.test.ts`; Modify: `E/testkit/index.ts` (export it). One helper for every sport sweep in W2a (Tasks 3, 4, 5, 14; preflight C7): generic's schema has no default for `resultMode`/`allowDraws`, so `configSchema.parse({})` THROWS for it.
 - Modify: `E/sports/boardgame/boardgame.test.ts:158-163`, `E/sports/generic/generic.test.ts:142-148` (the pinning tests, rewritten from X-DR-1)
 - Modify: `packages/engine/test/rules-reference.test.ts` (drop `X-DR-1` from `AWAITING_PROOF`), `packages/engine/rules/cross-sport.md` (X-DR-1 proved by)
 
@@ -1537,6 +1647,12 @@ Message: `feat(engine): rules reference — W2a's ten signed rows and their chec
   export const DRAW_KINDS: ReadonlySet<StageKind>;    // league, group, swiss, americano
   export function forbidsLevelResult(kind: string | null | undefined): boolean;
   export function isLevelOutcome(outcome: MatchOutcome | null | undefined): boolean; // draw | tie | no_result
+  ```
+- Produces (from `@seazn/engine/testkit`):
+  ```ts
+  /** Every config a sport DECLARES: each `module.variants` entry parsed, plus the bare schema default only when the
+   *  schema accepts `{}`. Throws when a sport declares none. */
+  export function declaredCfgs<Cfg>(m: { configSchema: { safeParse(v: unknown): { success: boolean; data?: unknown }; parse(v: unknown): unknown }; variants: Record<string, Partial<Cfg>> }): { name: string; cfg: Cfg }[];
   ```
 - The americano decision (finding 15): football, cricket (two innings) and the period kernel gain `americano`; setbased and nested stay false.
 
@@ -1582,17 +1698,83 @@ describe("X-DR-1 stage-kind sets (spec §5.4.1, ruling 78)", () => {
 });
 ```
 
+`E/testkit/declared-cfgs.ts`:
+
+```ts
+// W2a (preflight C7). The configs a sport DECLARES — never `configSchema.parse({})` blind: generic's resultMode and
+// allowDraws have no default, so that throws and every sweep reds at generic.
+export function declaredCfgs<Cfg>(m: {
+  configSchema: { safeParse(v: unknown): { success: boolean; data?: unknown }; parse(v: unknown): unknown };
+  variants: Record<string, Partial<Cfg>>;
+}): { name: string; cfg: Cfg }[] {
+  const out = Object.entries(m.variants).map(([name, v]) => ({ name, cfg: m.configSchema.parse(v) as Cfg }));
+  const bare = m.configSchema.safeParse({});
+  if (bare.success) out.unshift({ name: "(schema default)", cfg: bare.data as Cfg });
+  if (out.length === 0) throw new Error("a sport declares no config: nothing to sweep");
+  return out;
+}
+```
+
+`E/testkit/declared-cfgs.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { declaredCfgs } from "./declared-cfgs.ts";
+import { forEachSport } from "./for-each-sport.ts";
+
+describe("declaredCfgs (W2a, preflight C7)", () => {
+  it("empty case first: a module that declares nothing is refused, never an empty sweep", () => {
+    expect(() => declaredCfgs({ configSchema: { safeParse: () => ({ success: false }), parse: (v) => v }, variants: {} })).toThrow(/declares no config/);
+  });
+  it("every sport yields every declared variant by name, and the schema default only where {} parses", () => {
+    let checked = 0;
+    const sports = forEachSport(({ key, module }) => {
+      const got = declaredCfgs(module as never).map((c) => c.name);
+      const bareOk = module.configSchema.safeParse({}).success;
+      expect(got, key).toEqual([...(bareOk ? ["(schema default)"] : []), ...Object.keys(module.variants)]);
+      expect(got.length, key).toBeGreaterThan(0);
+      checked++;
+    });
+    expect(sports).toBe(11);
+    expect(checked).toBe(11);
+  });
+  it("generic has no schema default, so its declared cfgs are exactly its variants (the case that used to throw)", () => {
+    let checked = 0;
+    forEachSport(({ key, module }) => {
+      if (key !== "generic") return; // one-line reason: generic is the one schema with no defaults (preflight C7)
+      expect(module.configSchema.safeParse({}).success).toBe(false);
+      expect(declaredCfgs(module as never).map((c) => c.name)).toEqual(Object.keys(module.variants));
+      checked++;
+    });
+    expect(checked).toBe(1);
+  });
+});
+```
+
 `E/sport/supports-draws.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
 import { DRAW_KINDS, StageKind } from "../core/types.ts";
+import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 
-/** Every config a sport declares: its schema default plus each system variant, parsed. */
-function declaredCfgs(m: { configSchema: { parse(v: unknown): unknown }; variants?: Record<string, unknown> }): unknown[] {
-  return [m.configSchema.parse({}), ...Object.values(m.variants ?? {}).map((v) => m.configSchema.parse(v))];
-}
+/** X-DR-1 inside DRAW_KINDS, per sport, from the sport's rulebook and its DECLARED cfg fields — never from
+ *  `supportsDraws(cfg, "league")`, the code under test (preflight C6; spec §5.2). Every row cites its rule. */
+type C = Record<string, unknown>;
+const LEVEL_RESULT_RULE: Record<string, { rule: string; allows: (cfg: C) => boolean }> = {
+  football: { rule: "IFAB Laws of the Game, Law 10: a league match may end level", allows: () => true },
+  hockey: { rule: "FIH: draws stand where no overtime or shoot-out is configured (hockey/DOMAIN.md:59)", allows: (c) => c.overtime === null && c.shootout === null },
+  icehockey: { rule: "IIHF/recreational: draws stand where no decider is configured (icehockey/DOMAIN.md:74)", allows: (c) => c.overtime === null && c.shootout === null },
+  cricket: { rule: "MCC Laws of Cricket, Law 16: only a match of two innings a side can be drawn", allows: (c) => c.inningsPerSide === 2 },
+  boardgame: { rule: "FIDE Laws of Chess, Art. 5.2: a game may be drawn", allows: () => true },
+  carrom: { rule: "ICF Laws: a tied match plays an extra board; a draw only under the tieBoard 'draw' house rule", allows: (c) => c.tieBoard === "draw" },
+  generic: { rule: "organiser-declared: a draw only with cfg.allowDraws", allows: (c) => c.allowDraws === true },
+  volleyball: { rule: "FIVB: a set-based match always has a winner", allows: () => false },
+  badminton: { rule: "BWF: a set-based match always has a winner", allows: () => false },
+  tabletennis: { rule: "ITTF: a set-based match always has a winner", allows: () => false },
+  tennis: { rule: "ITF: a tennis match always has a winner", allows: () => false },
+};
 
 describe("X-DR-1: supportsDraws is an allow-list over DRAW_KINDS, swept 11 sports × 9 kinds", () => {
   it("empty case first: DRAW_KINDS is not empty and is a strict subset of StageKind", () => {
@@ -1600,25 +1782,30 @@ describe("X-DR-1: supportsDraws is an allow-list over DRAW_KINDS, swept 11 sport
     expect(DRAW_KINDS.size).toBeLessThan(StageKind.options.length);
   });
 
-  it("X-DR-1: outside DRAW_KINDS no sport allows a draw; inside, the answer is the sport's own league answer", () => {
+  it("X-DR-1: outside DRAW_KINDS no sport allows a draw; inside, the sport's own rule over its declared cfg decides", () => {
     let checked = 0;
     let drawable = 0;
+    let refused = 0;
+    const seen: string[] = [];
     const sports = forEachSport(({ key, module }) => {
-      const cfgs = declaredCfgs(module as never);
-      expect(cfgs.length, key).toBeGreaterThan(0);
-      for (const cfg of cfgs) {
-        const sportAllows = module.supportsDraws(cfg as never, "league");
+      const row = LEVEL_RESULT_RULE[key];
+      expect(row, `${key} has no X-DR-1 rule row`).toBeDefined();
+      seen.push(key);
+      for (const { name, cfg } of declaredCfgs(module as never)) {
         for (const kind of StageKind.options) {
-          const expected = DRAW_KINDS.has(kind) ? sportAllows : false;
-          expect(module.supportsDraws(cfg as never, kind), `${key} ${kind}`).toBe(expected);
+          const expected = DRAW_KINDS.has(kind) && row!.allows(cfg as C);
+          expect(module.supportsDraws(cfg as never, kind), `${key}/${name} ${kind} (${row!.rule})`).toBe(expected);
           if (expected) drawable++;
+          else refused++;
           checked++;
         }
       }
     });
     expect(sports).toBe(11);
+    expect(seen.sort()).toEqual(Object.keys(LEVEL_RESULT_RULE).sort()); // no stale or missing rule row
     expect(checked).toBeGreaterThanOrEqual(11 * StageKind.options.length);
     expect(drawable).toBeGreaterThan(0); // a sweep that never sees a true cannot witness the allow-list
+    expect(refused).toBeGreaterThan(0);
   });
 
   it("X-DR-1: the cases the old deny-list got wrong (generic page_playoff/ladder/americano, boardgame knockout)", () => {
@@ -1626,9 +1813,11 @@ describe("X-DR-1: supportsDraws is an allow-list over DRAW_KINDS, swept 11 sport
     let checked = 0;
     forEachSport(({ key, module }) => {
       if (key !== "generic" && key !== "boardgame") return; // one-line reason: the two modules the deny-list / always-true covered
-      const cfg = module.configSchema.parse(key === "generic" ? { allowDraws: true } : {});
-      for (const kind of ["page_playoff", "ladder", "knockout"] as const) { expect(module.supportsDraws(cfg as never, kind), `${key} ${kind}`).toBe(false); checked++; }
-      expect(module.supportsDraws(cfg as never, "americano"), `${key} americano`).toBe(true);
+      // A declared cfg that allows draws: generic's `score` variant (allowDraws true); boardgame's schema default.
+      const drawing = declaredCfgs(module as never).find(({ cfg }) => LEVEL_RESULT_RULE[key]!.allows(cfg as C));
+      expect(drawing, `${key} declares no draw-allowing cfg`).toBeDefined();
+      for (const kind of ["page_playoff", "ladder", "knockout"] as const) { expect(module.supportsDraws(drawing!.cfg as never, kind), `${key} ${kind}`).toBe(false); checked++; }
+      expect(module.supportsDraws(drawing!.cfg as never, "americano"), `${key} americano`).toBe(true);
       checked++;
     });
     expect(checked).toBe(8);
@@ -1741,13 +1930,13 @@ Add `StageKind, DRAW_KINDS` to each file's `../../core/types.ts` import.
 - [ ] **Step 6: Run the scoped engine tests green, then the single-sport ratchet**
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f "$TMPDIR/w2a-t3e.json" && pnpm vitest run src/core/stage-kind-sets.test.ts src/sport/supports-draws.test.ts src/sports/boardgame/boardgame.test.ts src/sports/generic/generic.test.ts src/sports/carrom/carrom.test.ts src/sports/football/football.test.ts src/sports/cricket/cricket.test.ts src/sport/match-points-bounds.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t3e.json"; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && pnpm matrix:single-sport --check --against HEAD; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f "$TMPDIR/w2a-t3e.json" && pnpm vitest run src/core/stage-kind-sets.test.ts src/sport/supports-draws.test.ts src/sports/boardgame/boardgame.test.ts src/sports/generic/generic.test.ts src/sports/carrom/carrom.test.ts src/sports/football/football.test.ts src/sports/cricket/cricket.test.ts src/sports/period/period.test.ts src/sport/match-points-bounds.test.ts src/testkit/declared-cfgs.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t3e.json"; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && pnpm matrix:single-sport --check --against HEAD^1; echo EXIT=$?
 ```
 
 Expected:
 - `EXIT=0`;
-- `files: 8`, `failed: 0`;
+- `files: 10`, `failed: 0`;
 - the ratchet `EXIT=0`: the one sport-filtered test carries its one-line reason.
 
 If `match-points-bounds.test.ts` or a period-kernel test reds on americano, read what it asserts (class 4). A test asserting league-only draws for americano is now wrong against X-DR-1: rewrite it from the rule row, never from the code.
@@ -1760,8 +1949,10 @@ If `match-points-bounds.test.ts` or a period-kernel test reds on americano, read
 | `BRACKET_KINDS` without `"ladder"` | stage-kind-sets "disjoint and together …" and "bracket-shape set plus ladder" |
 | boardgame `supportsDraws` → `return true` | the sweep (boardgame knockout) and the boardgame.test X-DR-1 test |
 | generic: drop `cfg.allowDraws &&` | generic.test "only with allowDraws" (win_loss league) |
-| carrom: drop `cfg.tieBoard === "draw" &&` | the sweep (carrom league under a default `extra` cfg) |
-| period: drop `&& cfg.shootout === null` | the sweep (hockey or icehockey with a shootout variant). If no declared variant has a shootout, the mutant SURVIVES: add a case with `configSchema.parse({ shootout: <the schema's own minimal shootout> })` and re-run |
+| carrom: drop `cfg.tieBoard === "draw" &&` | the sweep: every declared carrom cfg is `tieBoard: "extra"` (`icf`, `club-29`; schema default `"extra"`, carrom.ts:69), so the rule row expects false in league |
+| period: drop `&& cfg.shootout === null` | the sweep: hockey's `fih-shootout` variant declares a shoot-out (hockey.ts:142), so its rule row expects false in league |
+| `declaredCfgs`: `if (bare.success) out.unshift` → `out.unshift` | declared-cfgs "every sport yields every declared variant by name …" (generic gains a bogus default) |
+| `declaredCfgs`: `if (out.length === 0) throw` → `if (false) throw` | declared-cfgs "empty case first …" |
 | `isLevelOutcome` without `"no_result"` | stage-kind-sets "isLevelOutcome is true exactly for …" |
 
 Each row above becomes one entry of `MUT/t3.json`:
@@ -1807,8 +1998,10 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
 - Modify: `E/core/events.ts` (schemas `:96-129`, `POST_DECISION_CORE` `:437`, `DURING_STOPPAGE` `:469-490`, `foldMatchWithStoppage` `:518-768`)
 - Modify: `E/core/errors.ts` (append four codes), `E/core/errors.test.ts` (the order list)
 - Modify: `W/server/api-v1/http.ts` (`ENGINE_HTTP`), `W/lib/scoring-vocab.ts` (`ENGINE_ERROR_KEY`), `W/dictionaries/{en,fr,es,nl}/ui.json` (`engineError.*`)
-- Modify (readers → `outcomeOf`): `W/server/engine-db/fold.ts:163-171`, `W/server/engine-db/append-event.ts:300-329`, `W/server/overlay/recent.ts:321`, `W/server/usecases/event-import.ts:300-324`, `E/sports/cricket/scorecard.ts:1153-1155`, `HM/lib/fold.ts:61-62`, `HM/lib/model/ledger-fold.ts:37-38`
+- Modify: `E/sport/module.ts` (optional `awaitingDecider?(state)` on the module interface; preflight C12)
+- Modify (readers → `outcomeOf`): `W/server/engine-db/fold.ts:163-171`, `W/server/engine-db/append-event.ts:300-329`, `W/server/usecases/event-import.ts:300-324`, `E/sports/cricket/scorecard.ts:1153-1155`, `HM/lib/fold.ts:61-62`, `HM/lib/model/ledger-fold.ts:37-38`
 - Create: `E/core/settle.test.ts`, `W/server/engine-db/__tests__/outcome-readers.test.ts`
+- Modify: `E/sports/cricket/cricket.test.ts` (one case beside "league tie without a super over stands as a tie", `:1140`, inside the describe that owns `tiedMain`, `:1037`; preflight C11)
 
 **Interfaces:**
 - Produces (from `@seazn/engine/core`):
@@ -1820,6 +2013,14 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
   export const settledMethod: (m: SettleMethod) => `settled_${SettleMethod}`;
   // foldMatchWithStoppage now returns { state, stoppage, squads, settlement: Settlement | null }
   export function outcomeOf<Cfg, State>(module: Pick<FoldableModule<Cfg, State>, "outcome">, folded: { state: State; settlement: Settlement | null }): MatchOutcome | null;
+  /** THE settle precondition (controller ruling C12): ONE predicate. The kernel calls it with the fold's EFFECTIVE
+   *  outcome (outcomeOf, so an active settle already reads as a win and a second settle is refused); the server calls
+   *  it on the stored row and serves the answer to the console as `settle_applies` (Task 8). */
+  export interface SettleFacts { readonly outcome: MatchOutcome | null; readonly abandoned: boolean; readonly state: unknown }
+  export function settleApplies(module: { awaitingDecider?(state: never): boolean }, f: SettleFacts): boolean;
+  // true iff isLevelOutcome(f.outcome) || (f.outcome === null && (f.abandoned || module.awaitingDecider?.(f.state) === true))
+  // SportModule gains `awaitingDecider?(state: State): boolean` — a level game held for a decider the scorer records
+  // (boardgame phase "tiebreak", Task 5). Lots is the organiser's settle there too (ruling 73).
   ```
 - New `EngineErrorCode` values, appended in this order: `SETTLE_NOT_APPLICABLE`, `TIEBREAK_NOT_APPLICABLE`, `LEVEL_RESULT_IN_BRACKET`, `LEVEL_RESULT_SEATED`. HTTP codes: 409, 409, 409, 500. (Ruling 82 dropped the fifth code the spec first listed.)
 - Kernel-owned `core.finalize`, when `settlement !== null && module.outcome(state) === null` (finding 21).
@@ -1830,8 +2031,9 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { EngineError } from "./errors.ts";
-import { CORE_EVENT_SCHEMAS, SETTLE_METHODS, foldMatchWithStoppage, outcomeOf, settledMethod, type EventEnvelope } from "./events.ts";
+import { CORE_EVENT_SCHEMAS, SETTLE_METHODS, foldMatchWithStoppage, outcomeOf, settleApplies, settledMethod, type EventEnvelope } from "./events.ts";
 import { isLevelOutcome } from "./types.ts";
+import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
 import { boardgame } from "../sports/boardgame/index.ts";
@@ -1885,6 +2087,49 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
     expect(codeOf(() => fold([...drawn, settle(3, "nobody")]))).toBe("INVALID_EVENT");
   });
 
+  it("C12: settleApplies is THE precondition — level, or nothing decided with an abandon or a pending decider; never a win or an award", () => {
+    const hooked = { awaitingDecider: (st: never) => (st as { phase?: string }).phase === "tiebreak" };
+    const plain = {};
+    const rows: [string, { outcome: unknown; abandoned: boolean; state: unknown }, object, boolean][] = [
+      ["empty: nothing played, no abandon, no decider", { outcome: null, abandoned: false, state: { phase: "live" } }, hooked, false],
+      ["draw", { outcome: { kind: "draw" }, abandoned: false, state: {} }, plain, true],
+      ["tie", { outcome: { kind: "tie" }, abandoned: false, state: {} }, plain, true],
+      ["no_result (a level abandon)", { outcome: { kind: "no_result" }, abandoned: true, state: {} }, plain, true],
+      ["win (also: an active settle, via outcomeOf)", { outcome: { kind: "win", winner: H, loser: A }, abandoned: false, state: {} }, plain, false],
+      ["award", { outcome: { kind: "award", winner: H }, abandoned: false, state: {} }, plain, false],
+      ["abandoned with no outcome", { outcome: null, abandoned: true, state: {} }, plain, true],
+      ["decider pending (hook true)", { outcome: null, abandoned: false, state: { phase: "tiebreak" } }, hooked, true],
+      ["no hook declared: the same state is not settleable", { outcome: null, abandoned: false, state: { phase: "tiebreak" } }, plain, false],
+    ];
+    let checked = 0;
+    for (const [name, facts, module, expected] of rows) { expect(settleApplies(module, facts as never), name).toBe(expected); checked++; }
+    expect(checked).toBe(rows.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("C11: the kernel's precondition per outcome kind — draw, tie and no_result settle; win and award are refused (stub outcomes over the REAL kernel)", () => {
+    const l = defaultLineupPair(generic.positions);
+    const cfg = generic.configSchema.parse(generic.variants.score);
+    const kinds = [{ kind: "draw" }, { kind: "tie" }, { kind: "no_result" }, { kind: "win", winner: l.home.entrantId, loser: l.away.entrantId }, { kind: "award", winner: l.home.entrantId }];
+    let checked = 0;
+    for (const o of kinds) {
+      const stub = { ...generic, outcome: () => o }; // `decided` starts false (events.ts:532) and the settle is the only event, so only the precondition judges it
+      const got = codeOf(() => foldMatchWithStoppage(stub as never, cfg as never, l, [ev(1, "core.settle", { winner: l.home.entrantId, method: "lot" })]));
+      expect(got, o.kind).toBe(isLevelOutcome(o as never) ? null : "SETTLE_NOT_APPLICABLE");
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("C12: a module with a pending decider accepts settle with no outcome and no abandon; without the hook the same stream is refused", () => {
+    const l = defaultLineupPair(generic.positions);
+    const cfg = generic.configSchema.parse(generic.variants.score);
+    const stream = [ev(1, "core.start"), ev(2, "core.settle", { winner: l.away.entrantId, method: "lot" })];
+    const pending = { ...generic, awaitingDecider: () => true };
+    expect(outcomeOf(pending as never, foldMatchWithStoppage(pending as never, cfg as never, l, stream))).toEqual({ kind: "win", winner: l.away.entrantId, loser: l.home.entrantId, method: "settled_lot" });
+    expect(codeOf(() => foldMatchWithStoppage(generic as never, cfg as never, l, stream))).toBe("SETTLE_NOT_APPLICABLE"); // the positive pair's negative
+  });
+
   it("X-ST-1: closes an abandon whose module outcome is null", () => {
     const f = fold([ev(1, "core.start"), ev(2, "core.abandon", { reason: "rain" }), settle(3, H, "higher_seed")]);
     expect(boardgame.outcome(f.state)).toBeNull();
@@ -1907,15 +2152,16 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
   it("Review Focus 3: finalize after settling an abandon succeeds for EVERY sport (the kernel owns it there)", () => {
     let accepted = 0;
     const sports = forEachSport(({ key, module }) => {
-      const cfg = module.configSchema.parse({});
       const lineups = defaultLineupPair(module.positions);
-      const base = [ev(1, "core.start"), ev(2, "core.abandon", { reason: "rain" })];
-      const before = foldMatchWithStoppage(module, cfg as never, lineups, base);
-      const o = outcomeOf(module, before);
-      if (!(o === null || isLevelOutcome(o))) return; // this sport's 0–0 abandon awards a winner: settle is not applicable, by X-ST-1
-      const f = foldMatchWithStoppage(module, cfg as never, lineups, [...base, ev(3, "core.settle", { winner: lineups.home.entrantId, method: "organiser" }), ev(4, "core.finalize")]);
-      expect(outcomeOf(module, f), key).toMatchObject({ kind: "win", winner: lineups.home.entrantId, method: "settled_organiser" });
-      accepted++;
+      for (const { name, cfg } of declaredCfgs(module as never)) { // never parse({}) blind: generic has no default (preflight C7)
+        const base = [ev(1, "core.start"), ev(2, "core.abandon", { reason: "rain" })];
+        const before = foldMatchWithStoppage(module, cfg as never, lineups, base);
+        const o = outcomeOf(module, before);
+        if (!(o === null || isLevelOutcome(o))) continue; // this cfg's 0–0 abandon awards a winner: settle is not applicable, by X-ST-1
+        const f = foldMatchWithStoppage(module, cfg as never, lineups, [...base, ev(3, "core.settle", { winner: lineups.home.entrantId, method: "organiser" }), ev(4, "core.finalize")]);
+        expect(outcomeOf(module, f), `${key}/${name}`).toMatchObject({ kind: "win", winner: lineups.home.entrantId, method: "settled_organiser" });
+        accepted++;
+      }
     });
     expect(sports).toBe(11);
     expect(accepted).toBeGreaterThan(0);
@@ -1939,9 +2185,10 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
   it("rule 10: any sequence of settle / void-last / note on a drawn game keeps the invariants after every step", () => {
     // Invariants: (a) outcomeOf is a settled win iff an active settle exists; (b) a refused step leaves nothing behind.
     const step = fc.constantFrom("settleH", "settleA", "voidLast", "note");
+    let total = 0; // steps checked across ALL runs (anti-vacuity: zero is a failure)
+    let refusedSeen = 0;
     fc.assert(fc.property(fc.array(step, { maxLength: 12 }), (steps) => {
       const events: EventEnvelope[] = [...drawn];
-      let checked = 0;
       for (const s of steps) {
         const seq = events.length + 1;
         const candidate =
@@ -1949,17 +2196,38 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
           : s === "note" ? ev(seq, "core.note", { text: "n" })
           : (() => { const live = events.filter((e) => e.type !== "core.void" && !events.some((v) => v.voids === e.id)); const t = live.at(-1); return t === undefined || t.seq <= 2 ? null : ev(seq, "core.void", {}, t.id); })();
         if (candidate === null) continue;
-        try { fold([...events, candidate]); events.push(candidate); } catch (e) { if (!EngineError.is(e)) throw e; }
+        const before = JSON.stringify(fold(events));
+        try { fold([...events, candidate]); events.push(candidate); } catch (e) {
+          if (!EngineError.is(e)) throw e;
+          expect(JSON.stringify(fold(events))).toBe(before); // (b): the refused step left the fold byte-equal
+          refusedSeen++;
+        }
         const f = fold(events);
         const activeSettle = events.some((e) => e.type === "core.settle" && !events.some((v) => v.voids === e.id));
-        expect(outcomeOf(boardgame, f)?.kind).toBe(activeSettle ? "win" : "draw");
-        checked++;
+        expect(outcomeOf(boardgame, f)?.kind).toBe(activeSettle ? "win" : "draw"); // (a)
+        total++;
       }
-      return checked >= 0;
     }), { numRuns: 200 });
+    expect(total).toBeGreaterThan(0);
+    expect(refusedSeen).toBeGreaterThan(0); // a second settle is generated often enough to witness (b)
   });
 });
 ```
+
+`E/sports/cricket/cricket.test.ts`, added inside the describe that declares `tiedMain` (preflight C11: a REAL tie through the real kernel, not a stub):
+
+```ts
+  it("X-ST-1 (C11): a league tie folds to {kind:'tie'} and an organiser settle turns it into a settled win", () => {
+    const { events } = tiedMain("repeat");
+    const settleEv = makeEnvelope(events.length + 1, { type: "core.settle", payload: { winner: lineups.away.entrantId, method: "lot" } } as never);
+    const before = foldMatchWithStoppage(cricket, t20, lineups, events);
+    expect(outcomeOf(cricket, before)).toEqual({ kind: "tie" }); // the precondition's input is a tie, not a draw
+    const after = foldMatchWithStoppage(cricket, t20, lineups, [...events, settleEv]);
+    expect(outcomeOf(cricket, after)).toEqual({ kind: "win", winner: lineups.away.entrantId, loser: lineups.home.entrantId, method: "settled_lot" });
+  });
+```
+
+It imports `foldMatchWithStoppage, outcomeOf` from `../../core/events.ts` beside the existing `foldMatch` import (`:4`).
 
 If the property shrinks a failure, commit the shrunk `steps` array first, as a named `it("regression <seed>: …")` with that literal array, **before** the fix (R29).
 
@@ -2014,6 +2282,16 @@ export interface Settlement {
   readonly eventId: string;
 }
 
+/** THE settle precondition (spec §5.1 as amended by controller ruling C12). One predicate for the kernel and the
+ *  console (through the server's `settle_applies`): a level outcome, or nothing decided while the match is abandoned
+ *  or a module-declared decider is pending (chess phase "tiebreak": lots is the organiser's settle, ruling 73).
+ *  `outcome` is the EFFECTIVE outcome, so an active settle reads as a win and is not settleable again. */
+export interface SettleFacts { readonly outcome: MatchOutcome | null; readonly abandoned: boolean; readonly state: unknown }
+export function settleApplies(module: { awaitingDecider?(state: never): boolean }, f: SettleFacts): boolean {
+  if (isLevelOutcome(f.outcome)) return true;
+  return f.outcome === null && (f.abandoned || module.awaitingDecider?.(f.state as never) === true);
+}
+
 /** THE outcome of a fold. A settlement outranks the module's own outcome (a
  *  draw it settled, or the null of an abandon); otherwise it is exactly
  *  `module.outcome(state)`. Every reader of a fold's outcome calls this
@@ -2032,7 +2310,8 @@ Then:
 - add `"core.settle": CoreSettle,` to `CORE_EVENT_SCHEMAS`, after `"core.resume"`;
 - change `POST_DECISION_CORE` to `["core.note", "core.finalize", "core.award", "core.settle"]`;
 - add `"core.settle",` to `DURING_STOPPAGE` after `"core.finalize"`, with the comment `// W2a finding 4: a settle closes an abandon that left the stoppage open.`;
-- import `MatchOutcome` from `./types.ts` if it is not already imported.
+- import `MatchOutcome` and `isLevelOutcome` from `./types.ts` if they are not already imported;
+- in `E/sport/module.ts`, add to the module interface (and to `FoldableModule`'s picked keys): `awaitingDecider?(state: State): boolean; // W2a C12: a level game held for a decider the scorer records`.
 
 In `foldMatchWithStoppage`, change the return type to `{ state: State; stoppage: MatchStoppage | null; squads: SquadState; settlement: Settlement | null }`. Declare `let settlement: Settlement | null = null;` and `let abandonActive = false;` beside `let stoppage`. Add these branches **before** `if (event.type === "core.suspend")`:
 
@@ -2041,15 +2320,14 @@ In `foldMatchWithStoppage`, change the return type to `{ state: State; stoppage:
       // X-ST-1 precondition (spec §5.1). Not gated on `strict` (D2): the
       // module outcome it reads is folded against the frozen cfg, and the
       // shape "level, or abandoned with nothing" does not move with cfg.
-      const base = module.outcome(state);
-      const level = base !== null && (base.kind === "draw" || base.kind === "tie" || base.kind === "no_result");
-      if (settlement !== null || !(level || (abandonActive && base === null))) {
+      const effective = outcomeOf(module, { state, settlement });
+      if (!settleApplies(module, { outcome: effective, abandoned: abandonActive, state })) {
         throw new EngineError(
           "SETTLE_NOT_APPLICABLE",
           settlement !== null
             ? "this fixture is already settled — void the settle first"
-            : "settle applies only to a level result or an abandoned match with no result",
-          { eventId: event.id, outcome: base, abandoned: abandonActive },
+            : "settle applies only to a level result, an abandoned match with no result, or a pending tie-break",
+          { eventId: event.id, outcome: effective, abandoned: abandonActive },
         );
       }
       const p = event.payload as z.infer<typeof CoreSettle>;
@@ -2072,7 +2350,7 @@ The existing `if (event.type === "core.suspend")` becomes the `else if` shown. I
 
 - [ ] **Step 5: Run the engine tests green**
 
-The Step 2 command, with `src/core/events.test.ts src/core/events.time.test.ts` added. Expected:
+The Step 2 command, with `src/core/events.test.ts src/core/events.time.test.ts src/sports/cricket/cricket.test.ts` added. Expected:
 - `EXIT=0`;
 - `files: 4`, `failed: 0`;
 - the golden suites untouched: run `src/testkit/golden.test.ts` too. Expected `failed: 0` with no golden file changed (`git status --porcelain packages/engine/src/testkit/golden` is empty).
@@ -2125,7 +2403,7 @@ const ROOTS = ["apps/web/src", "packages/engine/src", "tools/matrix/lib"];
 const BARE = /\b[A-Za-z]+\.outcome\((state|next|folded)\b/g;
 const ALLOWED: Readonly<Record<string, string>> = {
   "packages/engine/src/core/events.ts": "the kernel itself (decided flag, settle precondition, outcomeOf)",
-  "apps/web/src/server/overlay/recent.ts": "reads a STORED match_states.state for the live slab, not a fold; status gates settled fixtures upstream",
+  "apps/web/src/server/overlay/recent.ts": "a point-state PROBE over a stored module state (:321, :355), not a fold result; a settlement is never part of module state, so outcomeOf cannot apply (preflight C8)",
   "packages/engine/src/testkit/stoppages.ts": "testkit: module-level conformance, no settle in its streams",
   "packages/engine/src/testkit/conformance.ts": "testkit: module-level conformance, no settle in its streams",
   "packages/engine/src/testkit/simulation.ts": "testkit: simulation folds without settle",
@@ -2141,20 +2419,28 @@ function walk(dir: string, out: string[]): string[] {
 }
 
 describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
-  it("no bare <module>.outcome(state) outside the allowed list, and outcomeOf has at least 7 readers", () => {
+  it("no bare <module>.outcome(state) outside the allowed list, and outcomeOf's readers are exactly the six moved fold readers", () => {
     const files = ROOTS.flatMap((r) => walk(join(REPO, r), []));
     expect(files.length).toBeGreaterThan(100);
     const bare: string[] = [];
-    let readers = 0;
+    const readers: string[] = [];
     for (const f of files) {
       const rel = relative(REPO, f);
       const text = readFileSync(f, "utf8");
-      if (/\boutcomeOf\(/.test(text) && rel !== "packages/engine/src/core/events.ts") readers++;
+      if (/\boutcomeOf\(/.test(text) && rel !== "packages/engine/src/core/events.ts") readers.push(rel);
       if (ALLOWED[rel] !== undefined) continue;
       for (const m of text.matchAll(BARE)) bare.push(`${rel}: ${m[0]}`);
     }
     expect(bare).toEqual([]);
-    expect(readers).toBeGreaterThanOrEqual(7);
+    // Exactly the six fold readers Step 8 moves (preflight C8). A later task that adds a reader adds it here by name.
+    expect(readers.sort()).toEqual([
+      "apps/web/src/server/engine-db/append-event.ts",
+      "apps/web/src/server/engine-db/fold.ts",
+      "apps/web/src/server/usecases/event-import.ts",
+      "packages/engine/src/sports/cricket/scorecard.ts",
+      "tools/matrix/lib/fold.ts",
+      "tools/matrix/lib/model/ledger-fold.ts",
+    ]);
   });
   it("every allowed file still exists and still holds a bare call (a stale entry is a failure)", () => {
     for (const rel of Object.keys(ALLOWED)) expect(readFileSync(join(REPO, rel), "utf8"), rel).toMatch(BARE);
@@ -2188,13 +2474,13 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
 - `tools/matrix/lib/fold.ts:61-62`: `const folded = foldMatchWithStoppage(...); return { outcome: outcomeOf(module, folded), state: folded.state };`.
 - `tools/matrix/lib/model/ledger-fold.ts:37-38`: `const folded = foldMatchWithStoppage(...); return outcomeOf(m, folded);`.
 
-Each file imports `foldMatchWithStoppage, outcomeOf` from `@seazn/engine/core` (scorecard: `../../core/events.ts`). `overlay/recent.ts` stays bare and is in `ALLOWED` with its reason; the reviewer confirms that reason by reading `:300-360`.
+Each file imports `foldMatchWithStoppage, outcomeOf` from `@seazn/engine/core` (scorecard: `../../core/events.ts`). `overlay/recent.ts` is not touched: it stays bare and is in `ALLOWED` with its reason; the reviewer confirms that reason by reading `:300-360`.
 
 - [ ] **Step 9: Run the scoped app, engine and harness tests**
 
 ```bash
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web && rm -f "$TMPDIR/w2a-t4.json" && pnpm vitest run src/server/engine-db/__tests__/outcome-readers.test.ts src/server/engine-db/__tests__/replay.test.ts src/server/engine-db/__tests__/append-event.test.ts src/server/usecases/__tests__/event-import-dryrun.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t4.json"; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f "$TMPDIR/w2a-t4e.json" && pnpm vitest run src/core/settle.test.ts src/core/errors.test.ts src/core/events.test.ts src/sports/cricket/scorecard.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t4e.json"; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f "$TMPDIR/w2a-t4e.json" && pnpm vitest run src/core/settle.test.ts src/core/errors.test.ts src/core/events.test.ts src/sports/cricket/scorecard.test.ts src/sports/cricket/cricket.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t4e.json"; echo EXIT=$?
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && rm -f "$TMPDIR/w2a-t4m.json" && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w2a-t4m.json" --testTimeout=30000 tools/matrix/__tests__/fold.test.ts tools/matrix/__tests__/model-core.test.ts; echo EXIT=$?
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web && rtk proxy node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json; echo EXIT=$?
 ```
@@ -2205,9 +2491,11 @@ Expected: each `EXIT=0`, and each judge line with `failed: 0` and the right file
 
 | Mutant | Expected red |
 |---|---|
-| Precondition `level \|\| (abandonActive && base === null)` → `true` | "is refused on a live fixture …" |
-| Remove `settlement !== null \|\|` | "a second settle is refused" |
-| `level` without `base.kind === "no_result"` | "finalize after settling an abandon … EVERY sport", for the sports whose abandon folds to `no_result` (football, the period kernel; see finding 19). If none folds to no_result at 0–0, the mutant survives: add a cricket case whose abandon folds to `no_result` |
+| `if (!settleApplies(module, { outcome: effective,` → `if (false && !settleApplies(module, { outcome: effective,` | "is refused on a live fixture …" |
+| `const effective = outcomeOf(module, { state, settlement });` → `const effective = module.outcome(state);` | "a second settle is refused" |
+| `if (isLevelOutcome(f.outcome)) return true;` → `if (f.outcome?.kind === "draw") return true;` | cricket.test.ts "X-ST-1 (C11): a league tie …" (the drop-tie mutant), plus "C11: the kernel's precondition per outcome kind …" |
+| `(f.abandoned \|\| module.awaitingDecider` → `(module.awaitingDecider` | "X-ST-1: closes an abandon whose module outcome is null" |
+| `module.awaitingDecider?.(f.state as never) === true` → `false` | "C12: a module with a pending decider accepts settle …" and the truth table's decider row |
 | Remove `"core.settle"` from `DURING_STOPPAGE` | "finding 4: settle is accepted while play is suspended" |
 | Remove `"core.settle"` from `POST_DECISION_CORE` | "on a draw it gives win …" (`ALREADY_DECIDED`) |
 | Delete the kernel `core.finalize` branch | "Review Focus 3", for boardgame at least |
@@ -2280,6 +2568,8 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
   // BoardgameCfg.tiebreak?: boolean   (absent = false; finding 12)
   // BoardgameState.phase adds "tiebreak"; BoardgameState.tiebreak?: { rung?: TiebreakRung; score?: string }
   // summary(...).detail.tiebreak?: { rung?: TiebreakRung; score?: string }   (pending while in phase tiebreak)
+  // boardgame.awaitingDecider = (s) => s.phase === "tiebreak"   (Task 4's optional hook; controller ruling C12:
+  //   lots is the organiser's settle in phase tiebreak, so settleApplies is true there)
   ```
 
 - [ ] **Step 0: Finding 20 is recorded as ruling 82.** The armageddon "Drawn — Black advances" choice is out of W2a. The payload carries no draw field, the scorer always records the winner, and armageddon colours (`black: EntrantId`) are W2c's. Nothing to ask; build to it.
@@ -2290,6 +2580,7 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
 
 ```ts
 import { describe, expect, it } from "vitest";
+import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 
 /** Spec §5.2's declarations, read from the rule rows: BG-KO-1 (tiebreak),
@@ -2308,8 +2599,7 @@ describe("bracketDeciders, per sport (spec §5.2)", () => {
     let checked = 0;
     let nonEmpty = 0;
     const sports = forEachSport(({ key, module }) => {
-      const cfgs = [module.configSchema.parse({}), ...Object.values(module.variants ?? {}).map((v) => module.configSchema.parse(v))];
-      for (const cfg of cfgs) {
+      for (const { cfg } of declaredCfgs(module as never)) { // preflight C7: generic has no schema default
         const overlay = module.bracketDeciders(cfg as never) as Record<string, unknown>;
         expect(overlay, key).toEqual(RULED[key] ?? {});
         expect(() => module.configSchema.parse({ ...(cfg as object), ...overlay }), key).not.toThrow();
@@ -2339,7 +2629,7 @@ describe("bracketDeciders, per sport (spec §5.2)", () => {
 ```ts
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
-import { foldMatch, type EventEnvelope } from "../../core/events.ts";
+import { foldMatch, foldMatchWithStoppage, outcomeOf, settleApplies, type EventEnvelope } from "../../core/events.ts";
 import { defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
 import { boardgame, CHESS_SCORE, TIEBREAK_RUNGS } from "./boardgame.ts";
 
@@ -2407,6 +2697,16 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     expect(codeOf(() => fold(ko, [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: A, score: "2-0" })]))).toBe("INVALID_EVENT");
     const s = fold(ko, [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: A, score: "1½–½" })]);
     expect((boardgame.summary(s).detail as { tiebreak?: unknown }).tiebreak).toEqual({ rung: "rapid", score: "1½–½" });
+  });
+  it("C12: in phase tiebreak lots is the organiser's settle — settleApplies is true, a settle decides, and a later tiebreak is refused", () => {
+    const pending = fold(ko, drawn);
+    expect(settleApplies(boardgame, { outcome: boardgame.outcome(pending), abandoned: false, state: pending })).toBe(true);
+    const settled = foldMatchWithStoppage(boardgame, ko as never, lineups, [...drawn, ev(3, "core.settle", { winner: A, method: "lot" })]);
+    expect(outcomeOf(boardgame, settled)).toEqual({ kind: "win", winner: A, loser: H, method: "settled_lot" });
+    expect(codeOf(() => foldMatchWithStoppage(boardgame, ko as never, lineups, [...drawn, ev(3, "core.settle", { winner: A, method: "lot" }), ev(4, "boardgame.tiebreak", { rung: "rapid", winner: H })]))).toBe("ALREADY_DECIDED");
+    // The positive pair's negative: in phase "live" (nothing played) the same settle is refused.
+    expect(settleApplies(boardgame, { outcome: null, abandoned: false, state: fold(ko, [ev(1, "core.start")]) })).toBe(false);
+    expect(codeOf(() => foldMatchWithStoppage(boardgame, ko as never, lineups, [ev(1, "core.start"), ev(2, "core.settle", { winner: A, method: "lot" })]))).toBe("SETTLE_NOT_APPLICABLE");
   });
   it("abandon in phase tiebreak is accepted and leaves the outcome null (closed by settle, X-ST-1)", () => {
     const s = fold(ko, [...drawn, ev(3, "core.abandon", { reason: "venue closed" })]);
@@ -2528,6 +2828,8 @@ function applyTiebreak(state: BoardgameState, p: BoardgameTiebreak): BoardgameSt
 }
 ```
 
+On the boardgame module literal, beside `bracketDeciders`: `awaitingDecider: (s: BoardgameState) => s.phase === "tiebreak", // C12: lots is the organiser's settle (ruling 73)`.
+
 In `apply`'s switch, add `case "boardgame.tiebreak": return applyTiebreak(state, parsePayload(BoardgameTiebreak, ev.payload, ev.type));`. In `summary`, compute the level display:
 
 ```ts
@@ -2599,7 +2901,7 @@ The new pad label keys go into all four `ui.json` files under `pad.boardgame`:
   - Regenerate the schema snapshot.
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && EXTEND_GOLDEN=1 pnpm vitest run src/testkit/golden.test.ts > "$TMPDIR/w2a-t5-gold.log" 2>&1; echo EXIT=$?; git -C .. status --porcelain packages/engine/src
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && EXTEND_GOLDEN=1 pnpm vitest run src/testkit/golden.test.ts > "$TMPDIR/w2a-t5-gold.log" 2>&1; echo EXIT=$?; git -C ../.. status --porcelain -- packages/engine/src
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && pnpm --filter @seazn/engine schema:snapshot; echo EXIT=$?; git status --porcelain packages/engine
 ```
 
@@ -2625,7 +2927,8 @@ If `generator-fields.test.ts` requires `boardgame.arbitraryEvent` to emit the ne
 | Mutant | Expected red |
 |---|---|
 | `decideResult`: `state.cfg.tiebreak === true` → `false` | "with tiebreak, a drawn game opens phase 'tiebreak'" |
-| `applyTiebreak`: delete the phase check | "a tiebreak outside phase 'tiebreak' is refused, per rung" (rapid, blitz and armageddon each red) |
+| `phase`: `applyTiebreak`: delete the phase check | "a tiebreak outside phase 'tiebreak' is refused, per rung" (one mutant; the test's per-rung message shows rapid, blitz and armageddon each red) |
+| `awaitingDecider: (s: BoardgameState) => s.phase === "tiebreak"` → `awaitingDecider: (s: BoardgameState) => false` | "C12: in phase tiebreak lots is the organiser's settle …" |
 | method `` `tiebreak_${p.rung}` `` → `"tiebreak_rapid"` | "each rung decides …" for blitz and armageddon |
 | `outcome.winner`: `state.entrants[winnerSide]` → `state.entrants[opponent(winnerSide)]` | "BG-KO-2 (ruling 82): the engine records the armageddon winner the scorer taps …" (and "each rung decides …") |
 | `summary`: drop `if (level) {…}` | "the summary keeps the level score" |
@@ -2643,7 +2946,7 @@ Then run the runner:
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && pnpm mutate --list docs/superpowers/specs/2026-09-27-format-matrix-prompts/mutants/w2a/t5.json --json-out "$TMPDIR/w2a-mut-t5.json"; echo EXIT=$?
 ```
 
-Expected: `EXIT=0`; every row `KILLED by` the named test, 0 survived. Paste the table into the report. The phase-check row is three entries, one per rung, with `name` set to the per-rung refusal test and `find` set to the same phase check: the runner refuses a duplicate `id`, so each is named `phase-<rung>`. The per-rung assertion message in the test (`rung`) shows which rung reddened.
+Expected: `EXIT=0`; every row `KILLED by` the named test, 0 survived. Paste the table into the report. The phase-check row is ONE mutant (`phase`; preflight C13): three entries with one mutation would be one guard counted three times. Its killer's per-rung assertion message (`rung`) shows that each rung reddened.
 
 
 Then run changed-lines Stryker over this task's engine diff (Global Constraints, Mutation):
@@ -2754,8 +3057,21 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { builtinModules } from "@seazn/engine/sports";
+
+/** Preflight C14: a variant key the sport DECLARES in `module.variants` (an engine declaration), never a guessed
+ *  literal — "fide"/"fifa" are not declared keys; boardgame declares classical/rapid/blitz (boardgame.ts:581-583),
+ *  football "11-a-side" (football.ts:2449), generic win_loss/score, carrom icf/"club-29", badminton bwf/short. */
+export function declaredVariant(sport: string, key: string): string {
+  const m = builtinModules.find((x) => x.key === sport);
+  if (m === undefined || !Object.hasOwn(m.variants, key)) {
+    throw new Error(`seedBracket: ${sport} declares no variant "${key}" (declared: ${m === undefined ? "no such sport" : Object.keys(m.variants).join(", ")})`);
+  }
+  return key;
+}
 
 export async function seedBracket(opts: { sport: string; variant: string; stageKind: StageKind; entrants: number; divisionConfig?: Record<string, unknown> }) {
+  declaredVariant(opts.sport, opts.variant);
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`insert into organizations (name, slug) values (${"Bo " + suffix}, ${"bo-" + suffix}) returning id`;
   await setOrgPlan(orgId);
@@ -2851,7 +3167,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
   });
 
   it.skipIf(!HAS_DB)("fold.ts loadFoldInputs", async () => {
-    const s = await seedBracket({ sport: "boardgame", variant: "fide", stageKind: "knockout", entrants: 2 });
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     await insertLegacyEvents(s.fixtureIds[0]!, [{ type: "core.start", payload: {} }]);
     const inputs = await withTenant(s.auth.orgId, (tx) => loadFoldInputs(tx, s.fixtureIds[0]!));
     expect(inputs!.stageKind).toBe("knockout");
@@ -2859,7 +3175,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
   });
 
   it.skipIf(!HAS_DB)("append-event.ts appendEvent: the first event freezes the overlay into config_snapshot", async () => {
-    const s = await seedBracket({ sport: "boardgame", variant: "fide", stageKind: "knockout", entrants: 2 });
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 0, { type: "core.start", payload: {} });
     expectOverlay("knockout");
     const [row] = await sql<{ config_snapshot: Record<string, unknown> }[]>`select config_snapshot from fixtures where id = ${s.fixtureIds[0]!}`;
@@ -2867,7 +3183,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
   });
 
   it.skipIf(!HAS_DB)("competition.ts recomputeStandings: a league passes its kind and gets NO overlay (the negative pair)", async () => {
-    const s = await seedBracket({ sport: "boardgame", variant: "fide", stageKind: "league", entrants: 2 });
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "league", entrants: 2 });
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 0, { type: "core.start", payload: {} });
     await appendEvent(s.auth.orgId, s.fixtureIds[0]!, 1, { type: "boardgame.result", payload: { winner: null, method: "agreement" } });
     spy.mockClear();
@@ -2879,7 +3195,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
   });
 
   it.skipIf(!HAS_DB)("fixtures.ts loadFixturePadCfg (feeds the console pad and the device pad)", async () => {
-    const s = await seedBracket({ sport: "boardgame", variant: "fide", stageKind: "knockout", entrants: 2 });
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     const cfg = (await loadFixturePadCfg(s.auth, s.fixtureIds[0]!)) as { cfg: Record<string, unknown>; stageKind: string | null };
     expect(cfg.cfg.tiebreak).toBe(true); // Task 6 Step 5 changes the return shape to { cfg, stageKind }; Task 12 threads stageKind to the pad
     expect(cfg.stageKind).toBe("knockout");
@@ -2887,7 +3203,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
   });
 
   it.skipIf(!HAS_DB)("player-stats.ts computePlayerStats", async () => {
-    const s = await seedBracket({ sport: "football", variant: "fifa", stageKind: "knockout", entrants: 2 });
+    const s = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "knockout", entrants: 2 });
     await insertLegacyEvents(s.fixtureIds[0]!, [{ type: "core.start", payload: {} }]);
     await withTenant(s.auth.orgId, (tx) => computePlayerStats(tx, s.divisionId));
     // football declares {} (W2a): the observable is the kind reaching the site, with the declared (empty) overlay.
@@ -2896,7 +3212,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
   });
 
   it.skipIf(!HAS_DB)("admin-fixture-config.ts panel and resnapshot", async () => {
-    const s = await seedBracket({ sport: "boardgame", variant: "fide", stageKind: "knockout", entrants: 2 });
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     await fixtureConfigPanel(s.fixtureIds[0]!);
     expectOverlay("knockout");
     spy.mockClear();
@@ -3026,6 +3342,7 @@ Each of the three cases in the existing files gets one `<site>-kind-dropped` mut
 - Modify: `W/server/api-v1/schemas.ts:1658` (the public status enum), `openapi/v1.json`, `openapi/v1.public.json` (regenerated; finding 8)
 - Modify: every status set the sweep classifies as one that must contain `needs_decision` (Step 6)
 - Create: `W/lib/fixture-status.ts`, `W/lib/__tests__/status-set-sweep.test.ts`, `W/lib/__tests__/status-set-ledger.ts`, `W/server/engine-db/__tests__/needs-decision-status.test.ts`, `W/server/__tests__/v431-needs-decision-migration.test.ts`
+- Modify: `W/server/public-site/competition-hub.ts:152-158` (`STATUS_LINE_KEYS` gains `needs_decision`), its schema test `competition-hub-schema.test.ts`, and `W/dictionaries/{en,fr,es,nl}/public.json` (`matchCentre.status.needs_decision`) — moved here from Task 13 (preflight C16)
 
 **Interfaces:**
 - Consumes: `forbidsLevelResult`, `isLevelOutcome` (Task 3); `FoldInputs.stageKind` (Task 6); `outcomeOf` (Task 4).
@@ -3168,13 +3485,35 @@ describe("V431 needs_decision", () => {
     expect(new Set(m![1]!.replace(/\s/g, "").split(",").map((s) => s.replace(/'/g, "")))).toEqual(new Set(FIXTURE_STATUSES));
   });
   it.skipIf(!HAS_DB)("the live DB accepts needs_decision, refuses an unknown status, and clears finished_at for it", async () => {
-    const s = await seedBracket({ sport: "boardgame", variant: "fide", stageKind: "knockout", entrants: 2 });
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     const id = s.fixtureIds[0]!;
     await sql`update fixtures set status = 'decided' where id = ${id}`;
     await sql`update fixtures set status = 'needs_decision' where id = ${id}`;
     const [row] = await sql<{ status: string; finished_at: Date | null }[]>`select status, finished_at from fixtures where id = ${id}`;
     expect(row).toEqual({ status: "needs_decision", finished_at: null });
     await expect(sql`update fixtures set status = 'needs_decisions' where id = ${id}`).rejects.toThrow(/fixtures_status_check/);
+  });
+  it.skipIf(!HAS_DB)("ruling 82 backfill: V431's update moves a decided level KNOCKOUT row to needs_decision and leaves a level LEAGUE row decided", async () => {
+    // Preflight C15. Runs the migration's OWN update statement (read from the file, never retyped), inside a
+    // transaction that is rolled back, so the shared test DB keeps every other row as it was.
+    const update = /update fixtures f set status = 'needs_decision'[\s\S]*?;/.exec(text)?.[0];
+    expect(update, "V431 holds the backfill update").toBeDefined();
+    const ko = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    const lg = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "league", entrants: 2 });
+    const koId = ko.fixtureIds[0]!;
+    const lgId = lg.fixtureIds[0]!;
+    const ROLLBACK = new Error("rollback");
+    let seen: { id: string; status: string }[] = [];
+    await expect(sql.begin(async (tx) => {
+      await tx`update fixtures set status = 'decided', outcome = '{"kind":"draw"}'::jsonb where id in (${koId}, ${lgId})`;
+      await tx.unsafe(update!);
+      seen = await tx<{ id: string; status: string }[]>`select id, status from fixtures where id in (${koId}, ${lgId})`;
+      throw ROLLBACK;
+    })).rejects.toBe(ROLLBACK);
+    const byId = new Map(seen.map((r) => [r.id, r.status]));
+    expect(byId.size).toBe(2); // both rows were read inside the transaction
+    expect(byId.get(koId)).toBe("needs_decision");
+    expect(byId.get(lgId)).toBe("decided"); // the negative pair: a league draw is a result, never held
   });
 });
 ```
@@ -3234,6 +3573,37 @@ function findSets(text: string): { anchor: string; members: Set<string> }[] {
   return out;
 }
 
+/** Preflight C19: two set shapes a bracket span misses. (1) A comparison chain on one line —
+ *  `return s === "decided" || s === "finalized";` — whose literals follow `===`/`!==`. (2) A status-keyed map —
+ *  `{ scheduled: …, in_play: … }` or `Record<FixtureStatus, …>` — whose KEYS are statuses. Same anchor shape. */
+function findChains(text: string): { anchor: string; members: Set<string> }[] {
+  const out: { anchor: string; members: Set<string> }[] = [];
+  const cmp = new RegExp(`[!=]==?\\s*['"](${FIXTURE_STATUSES.join("|")})['"]`, "g");
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    const hits = [...line.matchAll(cmp)];
+    const members = new Set(hits.map((x) => x[1]!));
+    if (members.size >= 2) {
+      const at = offset + hits[0]!.index!;
+      const before = text.slice(Math.max(0, at - 40), at).replace(/\s+/g, " ").trim();
+      out.push({ anchor: `chain ${before.slice(-30)} :: ${[...members].sort().join(",")}`, members });
+    }
+    offset += line.length + 1;
+  }
+  return out;
+}
+function findMaps(text: string): { anchor: string; members: Set<string> }[] {
+  const out: { anchor: string; members: Set<string> }[] = [];
+  const key = new RegExp(`(?:^|[{,\\s])['"]?(${FIXTURE_STATUSES.join("|")})['"]?\\s*:`, "g");
+  for (const m of text.matchAll(/\{([^{}]*)\}/g)) {
+    const members = new Set([...m[1]!.matchAll(key)].map((x) => x[1]!));
+    if (members.size < 2) continue;
+    const before = text.slice(Math.max(0, m.index! - 40), m.index!).replace(/\s+/g, " ").trim();
+    out.push({ anchor: `map ${before.slice(-30)} :: ${[...members].sort().join(",")}`, members });
+  }
+  return out;
+}
+
 function walk(dir: string, out: string[]): string[] {
   for (const e of readdirSync(dir)) {
     const p = join(dir, e);
@@ -3244,10 +3614,19 @@ function walk(dir: string, out: string[]): string[] {
 }
 
 describe("spec §5.4.6: every fixture-status set is found, classified, and agrees with its class", () => {
-  const found = ROOTS.flatMap((r) => walk(join(REPO, r), [])).flatMap((f) => findSets(readFileSync(f, "utf8")).map((s) => ({ ...s, file: relative(REPO, f) })));
+  const found = ROOTS.flatMap((r) => walk(join(REPO, r), [])).flatMap((f) => {
+    const text = readFileSync(f, "utf8");
+    return [...findSets(text), ...findChains(text), ...findMaps(text)].map((s) => ({ ...s, file: relative(REPO, f) }));
+  });
 
-  it("empty case first: a text with no status literal yields no set", () => {
+  it("empty case first: a text with no status literal yields no set, in any of the three shapes", () => {
     expect(findSets("const x = ['a', 'b'];")).toEqual([]);
+    expect(findChains('return s === "a" || s === "b";')).toEqual([]);
+    expect(findMaps("const m = { a: 1, b: 2 };")).toEqual([]);
+  });
+  it("C19: the chain and map shapes are found (the positive pairs)", () => {
+    expect(findChains('return s === "decided" || s === "finalized";').map((x) => [...x.members].sort())).toEqual([["decided", "finalized"]]);
+    expect(findMaps("const TONE: Record<Status, string> = { scheduled: 'x', in_play: 'y' };").map((x) => [...x.members].sort())).toEqual([["in_play", "scheduled"]]);
   });
   it("found at least one set, and every found set is in the ledger", () => {
     expect(found.length).toBeGreaterThan(0);
@@ -3294,7 +3673,7 @@ export const STATUS_SET_LEDGER: readonly StatusSetRow[] = [
   { file: "db/migration/deltas/V431__fixture_status_needs_decision.sql", anchor: "<printed by the first run>", class: "status-domain", why: "the check constraint" },
   { file: "db/migration/deltas/V430__capture_stream_codes.sql", anchor: "<printed by the first run>", class: "played", why: "fixtures_track_finished's finished set: needs_decision is played-not-finished, finished_at null" },
   { file: "apps/web/src/server/engine-db/append-event.ts", anchor: "<printed by the first run>", class: "played", why: "LOCKED_FIXTURE_STATUSES: needs_decision must accept settle and void" },
-  { file: "apps/web/src/lib/table-withdrawal.ts", anchor: "<printed by the first run>", class: "played", why: "WITHDRAWAL_PLAYED_STATUSES … see Step 6 (Review Focus 5) for the ruling on this set" },
+  { file: "apps/web/src/lib/table-withdrawal.ts", anchor: "<printed by the first run>", class: "played", why: "WITHDRAWAL_PLAYED_STATUSES: needs_decision is OUT — table stages never hold it, and the bracket cascade maps a held row to 'void', which withdrawBracketEntrant skips (ruling C17; Step 6)" },
 ];
 ```
 
@@ -3312,10 +3691,14 @@ Classify each printed set into the ledger. Then edit the product sets the "IN/OU
 
 Known decisions, made from the spec's own words:
 - **Run-sheet attention** (`stages-panel.tsx` / `run-sheet-groups.ts`): `needs-attention`. The desk shows the fixture as waiting on the organiser.
-- **`STATUS_LINE_KEYS`** (`competition-hub.ts:152`): `status-domain`. Task 13 adds the "Needs a decision" key.
-- **`WITHDRAWAL_PLAYED_STATUSES`** (`table-withdrawal.ts:16`): `played`, **plus** `needs_decision`. A held fixture HAS a level result, so withdrawing one side must void that result and abandon. That makes it `abandoned` with no outcome, where the block shows and a settle seats the remaining entrant (Review Focus 5). This is the one `played` set that holds `needs_decision`. Give it the class `needs-attention` with that `why`, so the rule reads true.
+- **`STATUS_LINE_KEYS`** (`competition-hub.ts:152`): `status-domain`. Task 7 adds `"needs_decision"` to it HERE, with its line `matchCentre.status.needs_decision` in all four `public.json` files: en "Needs a decision", fr "Décision requise", es "Requiere una decisión", nl "Beslissing nodig" (the same values as Task 11's `score.status.needs_decision`). Run `pnpm i18n:gen-keys && pnpm i18n:check` after. Moving it here (preflight C16) keeps this task's sweep green without an "owed by Task 13" row; Task 13 no longer touches `STATUS_LINE_KEYS`.
+- **`WITHDRAWAL_PLAYED_STATUSES`** (`table-withdrawal.ts:16`): `played`, WITHOUT `needs_decision` (controller ruling C17; the earlier "plus needs_decision, void and abandon" rationale was false). Its `why`: in a table stage `needs_decision` never occurs (it exists only in bracket kinds); in a bracket, `withdrawEntrantCascade` maps a row in neither this set nor `WITHDRAWAL_PENDING_STATUSES` to `"void"` (`withdrawal.ts:195`), and the engine's `withdrawBracketEntrant` skips every `SETTLED` row (`competition/stage.ts:18`, `:459`). So a withdrawal leaves a held fixture `needs_decision`, untouched. The organiser then settles for the remaining entrant; a settle naming the withdrawn one is refused (Task 8). Auto-walkover of a held fixture is W2b's (spec §2.3).
 
-Re-run until green. Expected: `EXIT=0`. Record the counts by class in the task report.
+Re-run until green. Expected: `EXIT=0`. Record the counts by class (and by shape: span, chain, map) in the task report.
+
+**Later loops re-run this sweep (preflight C19).** Its roots include `tools/matrix/lib` (lane P1) and `scripts` (Task 17's `smoke.ts`), which change after loop F. So:
+- lane P1 runs `status-set-sweep.test.ts` in its Step 8 (loop H, and so this loop F, is merged into the lane by then). It may not edit the ledger (not its file set): it lists every unclassified set it introduced, with file, anchor and use site, in its report;
+- Task 17 (main worktree, after every merge) re-runs it, adds each reported row with a `why` read at its use site, and a stale row fails as before. A red sweep blocks the PR.
 
 - [ ] **Step 7: Apply the delta to the w2a DB and run the scoped suites**
 
@@ -3341,10 +3724,15 @@ Expected:
 | `kind-ignored` | `forbidsLevelResult(stageKind) && ` → `` | "X-BR-2 …" (league rows) and "a null stage kind …" |
 | `replay-kind` | `nextStatus(row.type, folded.outcome, folded.active, inputs.stageKind)` → `nextStatus(row.type, folded.outcome, folded.active, null)` | `replay.test.ts` (add the case "replay of a held knockout fixture reports needs_decision", built with `seedBracket` and two `appendEvent` calls) |
 | `engine-status` | `case "needs_decision": return "in_play";` → `` (deleted) | `fixture-engine-status` test (add "needs_decision maps to in_play, and an unknown status throws") |
-| `sweep-stale` | in `findSets`, `members.size < 2` → `members.size < 3` | "every ledger row is still found" |
+| `sweep-stale` | in `findSets`, `matchAll(LIT)].map((x) => x[1]!));\n    if (members.size < 2) continue;` → the same with `members.size < 3` (a two-line find: `members.size < 2` alone also occurs in `findMaps`, so it is not unique) | "every ledger row is still found" |
+| `backfill-kind` | in V431, `and s.kind in ('knockout','double_elim','stepladder','page_playoff','ladder')` → `and s.kind in ('knockout','double_elim','stepladder','page_playoff','ladder','league')` | "ruling 82 backfill: … leaves a level LEAGUE row decided" (and the SQL-literal test) |
+| `backfill-level` | in V431, `and f.outcome->>'kind' in ('draw','tie','no_result')` → `and f.outcome->>'kind' in ('tie','no_result')` | "ruling 82 backfill: V431's update moves a decided level KNOCKOUT row …" (its row is a draw) |
 | `sweep-class` | in `want`, `"not-finished": true` → `"not-finished": false` | "each set holds needs_decision exactly when …" |
+| `sweep-chains` | `if (members.size >= 2) {` (in `findChains`) → `if (members.size >= 3) {` | "C19: the chain and map shapes are found …" |
+| `sweep-maps` | `const members = new Set([...m[1]!.matchAll(key)]` → `const members = new Set([...m[1]!.matchAll(LIT)]` | "C19: the chain and map shapes are found …" (unquoted keys are missed) |
+| `status-line` | `"needs_decision",` (in `STATUS_LINE_KEYS`) → `` | `competition-hub-schema.test.ts` (add the case "a held fixture's status line is 'Needs a decision'"); moved here from Task 13 (preflight C16) |
 
-Expected: `EXIT=0`, 10 rows killed.
+Expected: `EXIT=0`, 15 rows killed (the 10 first listed, plus `backfill-kind`, `backfill-level`, `status-line`, `sweep-chains` and `sweep-maps`).
 
 **Four test types:**
 - Unit and DB: Steps 1–7.
@@ -3421,7 +3809,7 @@ describe("X-BR-1 / X-BR-2: held, never seated; settle seats both", () => {
   });
 
   it.skipIf(!HAS_DB)("X-BR-2: a level football knockout result is held — needs_decision, nobody seated in the final", async () => {
-    const t = await semi("football", "fifa");
+    const t = await semi("football", "11-a-side");
     await post(t.auth, t.sf, "core.start");
     await post(t.auth, t.sf, "football.period.end", {}); // the executor pins the stream that ends a 0–0 match with no decider, from football's own conformance stream
     const r = await row(t.sf);
@@ -3430,7 +3818,7 @@ describe("X-BR-1 / X-BR-2: held, never seated; settle seats both", () => {
   });
 
   it.skipIf(!HAS_DB)("X-ST-1: settle seats the winner in the final AND the loser on its loser line (right answer differs from an award)", async () => {
-    const t = await semi("boardgame", "fide", "double_elim");
+    const t = await semi("boardgame", "classical", "double_elim");
     await appendEvent(t.auth.orgId, t.sf, 0, { type: "core.start", payload: {} });
     // A frozen pre-deploy cfg without tiebreak (Review Focus 4): the drawn game holds instead of opening the tie-break.
     await sql`update fixtures set config_snapshot = config_snapshot - 'tiebreak' where id = ${t.sf}`;
@@ -3458,7 +3846,7 @@ describe("X-BR-1 / X-BR-2: held, never seated; settle seats both", () => {
   });
 
   it.skipIf(!HAS_DB)("Review Focus 1: a void of the settle returns the fixture to needs_decision and empties the seat it filled", async () => {
-    const t = await semi("boardgame", "fide");
+    const t = await semi("boardgame", "classical");
     await appendEvent(t.auth.orgId, t.sf, 0, { type: "core.start", payload: {} });
     await sql`update fixtures set config_snapshot = config_snapshot - 'tiebreak' where id = ${t.sf}`;
     await post(t.auth, t.sf, "boardgame.result", { winner: null, method: "agreement" });
@@ -3470,7 +3858,7 @@ describe("X-BR-1 / X-BR-2: held, never seated; settle seats both", () => {
   });
 
   it.skipIf(!HAS_DB)("Review Focus 1: once the next match has started, the void of the settle is refused NEXT_MATCH_STARTED and nothing changes", async () => {
-    const t = await semi("boardgame", "fide");
+    const t = await semi("boardgame", "classical");
     await appendEvent(t.auth.orgId, t.sf, 0, { type: "core.start", payload: {} });
     await sql`update fixtures set config_snapshot = config_snapshot - 'tiebreak' where id = ${t.sf}`;
     await post(t.auth, t.sf, "boardgame.result", { winner: null, method: "agreement" });
@@ -3500,22 +3888,28 @@ describe("X-BR-1 / X-BR-2: held, never seated; settle seats both", () => {
     expect(await seated(t.final)).toEqual([t.home]);
   });
 
-  it.skipIf(!HAS_DB)("Review Focus 5: one side of a held fixture withdraws — the fixture stays awaiting a decision, and a settle to the other seats them", async () => {
-    const t = await semi("boardgame", "fide");
+  it.skipIf(!HAS_DB)("Review Focus 5 (ruling C17): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused, and a settle for the remaining one seats them", async () => {
+    const t = await semi("boardgame", "classical");
     await appendEvent(t.auth.orgId, t.sf, 0, { type: "core.start", payload: {} });
     await sql`update fixtures set config_snapshot = config_snapshot - 'tiebreak' where id = ${t.sf}`;
     await post(t.auth, t.sf, "boardgame.result", { winner: null, method: "agreement" });
+    expect((await row(t.sf)).status).toBe("needs_decision");
     await withdrawEntrantCascade(t.auth, t.away);
     const r = await row(t.sf);
-    expect(["abandoned", "needs_decision"]).toContain(r.status);
-    expect(r.outcome === null || ["draw", "tie", "no_result"].includes(r.outcome.kind)).toBe(true);
+    expect(r.status).toBe("needs_decision"); // exactly: withdrawBracketEntrant skips it (withdrawal.ts:195 → "void", stage.ts:459)
+    expect(r.outcome).toEqual({ kind: "draw" });
     expect(await seated(t.final)).toEqual([]);
-    await post(t.auth, t.sf, "core.settle", { winner: t.home, method: "organiser" });
+    const before = await seq(t.sf);
+    await expect(post(t.auth, t.sf, "core.settle", { winner: t.away, method: "organiser" })).rejects.toMatchObject({ code: "SETTLE_NOT_APPLICABLE", data: { reason: "withdrawn" } });
+    expect(await seq(t.sf)).toBe(before); // the refusal wrote nothing
+    expect(await seated(t.final)).toEqual([]);
+    await post(t.auth, t.sf, "core.settle", { winner: t.home, method: "organiser" }); // the positive pair
+    expect((await row(t.sf)).status).toBe("decided");
     expect(await seated(t.final)).toEqual([t.home]);
   });
 
   it.skipIf(!HAS_DB)("finding 27: finalize of a level bracket result is refused (held, and abandoned-with-no_result), and accepted once settled", async () => {
-    const t = await semi("football", "fifa");
+    const t = await semi("football", "11-a-side");
     await post(t.auth, t.sf, "core.start");
     await post(t.auth, t.sf, "core.abandon", { reason: "floodlights" }); // football folds a level abandon to no_result (finding 19)
     const before = await seq(t.sf);
@@ -3595,8 +3989,18 @@ There is no report-only read-path form: ruling 82's backfill (V431) removes the 
   }
   // Finding 27: finalizing a level bracket result would store `finalized` + a level outcome — the very shape
   // LEVEL_RESULT_SEATED exists to catch, and a lock no settle could then open. Refused until it is settled.
-  if (candidate.type === "core.finalize" && forbidsLevelResult(stageKind) && isLevelOutcome(outcome) && !active.some((e) => e.type === "core.settle")) {
+  // (No "and not settled" clause: `outcome` is outcomeOf's, so a settled fixture's outcome is a win — preflight C20.)
+  if (candidate.type === "core.finalize" && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) {
     throw new EngineError("LEVEL_RESULT_IN_BRACKET", "settle the match before finalizing — a knockout match can't end level", { fixtureId, stage: stageKind });
+  }
+  // Controller ruling C17: a settle may not advance an entrant who has withdrawn. The organiser settles for the
+  // remaining one; auto-walkover of a held fixture is W2b's (spec §2.3).
+  if (candidate.type === "core.settle") {
+    const winner = (candidate.payload as { winner?: unknown }).winner;
+    const [w] = await tx<{ status: string }[]>`select status from entrants where id = ${String(winner)}`;
+    if (w?.status === "withdrawn") {
+      throw new EngineError("SETTLE_NOT_APPLICABLE", "that entrant has withdrawn — settle for the remaining entrant", { fixtureId, reason: "withdrawn", winner });
+    }
   }
 ```
 
@@ -3634,7 +4038,7 @@ There is no report-only read-path form: ruling 82's backfill (V431) removes the 
 
 - [ ] **Step 5: Run green**
 
-The Step 2 command, plus `src/server/engine-db/__tests__/bracket-fixture.test.ts src/server/usecases/__tests__/dead-feeder-cascade.test.ts src/server/usecases/__tests__/bracket-kinds-sync.test.ts`. Expected: `EXIT=0`, `files: 5`, `failed: 0`, 0 skipped. Then tsc: `EXIT=0`.
+The Step 2 command, plus `src/server/engine-db/__tests__/bracket-fixture.test.ts src/server/usecases/__tests__/dead-feeder-cascade.test.ts src/server/usecases/__tests__/bracket-kinds-sync.test.ts src/server/engine-db/__tests__/append-event.test.ts` (the `first-result-held` killer lives there; preflight C20). Expected: `EXIT=0`, `files: 6`, `failed: 0`, 0 skipped. Then tsc: `EXIT=0`.
 
 - [ ] **Step 6: Mutate each member once (runner)** — `MUT/t8.json`
 
@@ -3647,11 +4051,12 @@ The Step 2 command, plus `src/server/engine-db/__tests__/bracket-fixture.test.ts
 | `seat-assert-draw` | `isLevelOutcome(f.outcome as never)` → `(f.outcome as { kind?: string })?.kind === "tie" \|\| (f.outcome as { kind?: string })?.kind === "no_result"` | "X-BR-1 … per level kind" (the draw rows) |
 | `seat-status-forfeited` | `"decided", "forfeited", "finalized"` → `"decided", "finalized"` | "X-BR-1 … per seating status" (the forfeited rows) |
 | `first-result-held` | `&& status !== "needs_decision"` → `` | add the case "a held fixture does not count as a first result; its settle does" to `append-event.test.ts` |
-| `withdraw-played` | in `table-withdrawal.ts`, the `needs_decision` member → removed | "Review Focus 5 …" |
+| `settle-withdrawn` | `if (w?.status === "withdrawn") {` → `if (false) {` | "Review Focus 5 (ruling C17): … a settle naming the withdrawn entrant is refused …" |
 | `finalize-held` | `if (candidate.type === "core.finalize" && forbidsLevelResult(stageKind)` → `if (false && forbidsLevelResult(stageKind)` | "finding 27: finalize of a level bracket result is refused …" |
-| `finalize-after-settle` | `&& !active.some((e) => e.type === "core.settle")` → `` | the same test's accepted-once-settled half |
 
-Expected: `EXIT=0`, 10 rows killed.
+There is no `finalize-after-settle` row: that clause was equivalent (a settled fixture's `outcomeOf` is a win, so `isLevelOutcome` is already false) and is dropped from the code (preflight C20). There is no `withdraw-played` row: `WITHDRAWAL_PLAYED_STATUSES` does not change (ruling C17, Task 7 Step 6).
+
+Expected: `EXIT=0`, 9 rows killed.
 
 - [ ] **Step 7: Proof bookkeeping**
   - Delete `X-BR-1`, `GN-KO-1` and `CK-KO-1` from `AWAITING_PROOF` (and `X-BR-2`, which Task 7 owns but whose DB proof is here).
@@ -3735,8 +4140,9 @@ describe("X-ST-2: settle, forfeit and abandon are organiser-only on the server (
     }
     expect(checked).toBe(ORGANISER_ONLY_EVENT_TYPES.length * ALLOWED.length);
   });
-  it.skipIf(!HAS_DB)("finalize and void are unchanged for an official (their existing gates still decide)", async () => {
-    // The existing scorer gates (scoring.ts:552-559) keep their own tests; this pins that the new check did not swallow them.
+  it.skipIf(!HAS_DB)("an official can still post an ordinary play event — the organiser-only check did not swallow the scorer path", async () => {
+    // Retitled (preflight C21): this case asserts a play event, not finalize or void. The existing scorer gates for
+    // finalize and void (scoring.ts:552-559) keep their own tests, unchanged.
     const s = await seedBracket({ sport: "generic", variant: "score", stageKind: "knockout", entrants: 2 });
     const id = s.fixtureIds[0]!;
     await scoreEvent(s.auth, id, { expected_seq: 0, type: "core.start", payload: {} } as never);
@@ -3823,7 +4229,7 @@ The three `drop-*` mutants each name the same `find`. They are three entries wit
 
 **Four test types:**
 - Unit and DB: Steps 1–4.
-- E2E: Task 11's console spec "an official sees no Settle, Forfeit or Abandon" (finding 11), and Task 12's pad spec "the pad never offers settle".
+- E2E: Task 11's console spec "finding 11: on a held fixture the organiser sees Settle; an official scorer sees the fixture and its status but no Settle, Forfeit or Abandon" (preflight C21: the trace now names a test that exists). The pad offers no settle tile by construction: `core.settle` is not in any `padSpec` (Task 4 keeps it kernel-owned), which Task 12's `boardgame-tiebreak.test.ts` "the tie-break sheet never offers settle or lots" asserts.
 - Smoke: Task 17 (an official's settle by API is 403).
 - Regression: the matrix test runs on every PR.
 
@@ -3874,15 +4280,23 @@ The three `drop-*` mutants each name the same `find`. They are three entries wit
     const [fin] = await sql<{ status: string }[]>`select status from fixtures where id = ${r2!.winner_to_fixture}`;
     expect(fin!.status).toBe("forfeited");
   });
-  it("NEW-H1: a VOIDED scorer abandon is no longer active — the feeder reads by its status again (voids are not voidable)", async () => {
+  it("NEW-H1: a VOIDED scorer abandon is not active — a feeder the generator later voids is dead and the walkover happens", async () => {
+    // preflight C22: this case asserts the feeder's seat outcome (the final's status), not only the feeder's status.
     const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "knockout", entrants: 4 });
-    const sf1 = s.fixtureIds[0]!;
-    await scoreEvent(s.auth, sf1, { expected_seq: 0, type: "core.start", payload: {} } as never);
-    await scoreEvent(s.auth, sf1, { expected_seq: 1, type: "core.abandon", payload: { reason: "injury" } } as never);
-    const [ab] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${sf1} and type = 'core.abandon'`;
-    await scoreEvent(s.auth, sf1, { expected_seq: 2, type: "core.void", payload: { event_id: ab!.id } } as never);
-    const [r] = await sql<{ status: string }[]>`select status from fixtures where id = ${sf1}`;
-    expect(r!.status).toBe("in_play"); // the abandon is gone; the match is live again, not dead
+    const [sf1, sf2] = s.fixtureIds;
+    await scoreEvent(s.auth, sf1!, { expected_seq: 0, type: "core.start", payload: {} } as never);
+    await scoreEvent(s.auth, sf1!, { expected_seq: 1, type: "core.abandon", payload: { reason: "injury" } } as never);
+    const [ab] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${sf1!} and type = 'core.abandon'`;
+    await scoreEvent(s.auth, sf1!, { expected_seq: 2, type: "core.void", payload: { event_id: ab!.id } } as never);
+    const [live] = await sql<{ status: string }[]>`select status from fixtures where id = ${sf1!}`;
+    expect(live!.status).toBe("in_play"); // the abandon is gone; the match is live again
+    // The generator's void, written without an event (the raw-SQL shape the existing dead-feeder cases use).
+    await sql`update fixtures set status = 'abandoned', outcome = null where id = ${sf1!}`;
+    const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
+    await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "walkover" } } as never);
+    const [fin] = await sql<{ status: string }[]>`select status from fixtures where id = ${r2!.winner_to_fixture}`;
+    expect(fin!.status).toBe("forfeited"); // feederIsDead(sf1) === true: the voided abandon did not count as active
   });
 ```
 
@@ -3938,7 +4352,7 @@ Expected: `EXIT=0` three times. The probe, red at Task 1, is now green (R20: wri
 |---|---|---|
 | `abandon-ignored` | `&& !f.has_active_abandon` → `` | "NEW-H1: a scorer's abandon … NOT a dead feeder" |
 | `abandon-always` | `&& !f.has_active_abandon` → `&& false` | "NEW-H1: the generator's own void … is still dead" |
-| `voids-ignored` | `and not exists (select 1 from score_events v` … `v.voids_event_id = a.id)` → `and true` (the find is the whole `not exists (…)` clause) | the probe path: add the case "a voided scorer abandon, then re-abandoned by the generator's cascade, is dead" if the third case stays green under this mutant. If it then still survives, record why in the report (the cascade never meets a voided abandon whose fixture it also stamps) |
+| `voids-ignored` | `and not exists (select 1 from score_events v` … `v.voids_event_id = a.id)` → `and true` (the find is the whole `not exists (…)` clause) | "NEW-H1: a VOIDED scorer abandon is not active — … the walkover happens" (the voided abandon then counts as active, the feeder is not dead, the final stays `scheduled`) |
 | `cancelled` | `if (f.status === "cancelled") return true;` → `` | the existing "cancelled feeder" case (`dead-feeder-cascade.test.ts`, raw-SQL `cancelled`) |
 
 Expected: `EXIT=0`, every row killed or carrying a recorded reason.
@@ -3970,7 +4384,7 @@ Expected: `EXIT=0`, every row killed or carrying a recorded reason.
 - Create: `W/components/v2/__tests__/needs-decision.test.tsx`
 
 **Interfaces:**
-- Consumes: `SETTLE_METHODS` (Task 4); status `needs_decision` (Task 7); `ORGANISER_ONLY` (Task 9); `forbidsLevelResult`, `isLevelOutcome` (Task 3).
+- Consumes: `SETTLE_METHODS`, `settleApplies` (Task 4); `awaitingDecider` on boardgame (Task 5); status `needs_decision` (Task 7); `ORGANISER_ONLY` (Task 9); `forbidsLevelResult` (Task 3); `resolveModuleClient` (`scorepad/module-client.ts:41`, already imported by the console at `:58`).
 - Produces (the testids lane P1's page object drives; frozen here):
   - `data-testid="needs-decision"`: the block;
   - `data-testid="settle-open"`: its button;
@@ -3979,39 +4393,85 @@ Expected: `EXIT=0`, every row killed or carrying a recorded reason.
   - `data-testid="settle-method-<lot|higher_seed|organiser>"`: radios;
   - `data-testid="settle-note"`;
   - `data-testid="settle-confirm"`;
-  - `data-testid="settle-error"`: the refusal text shown in the dialog.
+  - `data-testid="settle-error"`: the refusal text, shown in the BLOCK after the dialog closes (spec §7: "Console dialog closes and shows the reason").
   ```ts
-  export function needsDecision(f: { status: string; outcome: unknown; stageKind: string | null }): boolean;
-  // true iff forbidsLevelResult(stageKind) && (status === "needs_decision" || (status === "abandoned" && (outcome === null || isLevelOutcome(outcome))))
+  /** Controller ruling C12: the block shows iff the stage is a bracket kind AND the kernel's own settleApplies is
+   *  true — the SAME predicate the kernel's settle precondition calls, fed the same facts. */
+  export function needsDecision(
+    module: { awaitingDecider?(state: never): boolean },
+    f: { outcome: unknown; state: unknown; stageKind: string | null; events: readonly { id: string; type: string; voids_event_id: string | null }[] },
+  ): boolean; // forbidsLevelResult(stageKind) && settleApplies(module, { outcome, abandoned: hasActiveAbandon(events), state })
+  export function hasActiveAbandon(events: readonly { id: string; type: string; voids_event_id: string | null }[]): boolean;
+  export function confirmBlocked(s: { winner: string | null; method: string | null; sending: boolean }): boolean; // preflight C1/C23
+  export function finalizeVisible(s: { decided: boolean; held: boolean }): boolean; // finding 27
   ```
 
 - [ ] **Step 0: The layout is already chosen (ruling 82).** The options were shown in brainstorming: UI-1 option A for the console (a "Needs a decision" block above the match-actions section, `fixture-console.tsx:1390`, with a settle dialog), and UI-2 option B for the pad (Task 12). Build to them in the house design; no new options are shown. Before merge, capture the built house-styled screens at 1280, 768 and 320 (Step 6), and record the owner's per-screen verdict (Task 17 Step 3 collects them).
 
-- [ ] **Step 1: The predicate's failing unit test** — `W/components/v2/__tests__/needs-decision.test.tsx` (node environment, pure)
+- [ ] **Step 1: The predicates' failing unit test** — `W/components/v2/__tests__/needs-decision.test.tsx` (node environment, pure)
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { BRACKET_KINDS, StageKind } from "@seazn/engine/core";
-import { needsDecision } from "../needs-decision";
+import { BRACKET_KINDS, StageKind, foldMatch } from "@seazn/engine/core";
+import { boardgame } from "@seazn/engine/sports/boardgame"; // the "./sports/*" subpath export (engine package.json)
+import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { confirmBlocked, finalizeVisible, hasActiveAbandon, needsDecision } from "../needs-decision";
 
-describe("needsDecision (spec §5.5; finding 19)", () => {
-  it("empty case first: a scheduled fixture with no outcome needs nothing, in any kind", () => {
+const plain = {}; // a module with no pending-decider hook
+const start = { id: "e1", type: "core.start", voids_event_id: null };
+const abandon = { id: "e2", type: "core.abandon", voids_event_id: null };
+const voidOfAbandon = { id: "e3", type: "core.void", voids_event_id: "e2" };
+const WIN = { kind: "win", winner: "a", loser: "b" };
+
+describe("needsDecision = bracket kind AND the kernel's settleApplies (ruling C12; spec §5.5; finding 19)", () => {
+  it("empty case first: nothing played, no events, in any kind, needs nothing", () => {
     let checked = 0;
-    for (const k of StageKind.options) { expect(needsDecision({ status: "scheduled", outcome: null, stageKind: k })).toBe(false); checked++; }
+    for (const k of StageKind.options) { expect(needsDecision(plain, { outcome: null, state: {}, stageKind: k, events: [] }), k).toBe(false); checked++; }
     expect(checked).toBe(StageKind.options.length);
   });
-  it("needs_decision in every bracket kind; never outside brackets", () => {
+  it("a level outcome needs a decision in every bracket kind, and never outside brackets", () => {
     let checked = 0;
-    for (const k of StageKind.options) { expect(needsDecision({ status: "needs_decision", outcome: { kind: "draw" }, stageKind: k }), k).toBe(BRACKET_KINDS.has(k)); checked++; }
-    expect(checked).toBe(StageKind.options.length);
+    for (const outcome of [{ kind: "draw" }, { kind: "tie" }, { kind: "no_result" }]) for (const k of StageKind.options) {
+      expect(needsDecision(plain, { outcome, state: {}, stageKind: k, events: [start] }), `${outcome.kind} ${k}`).toBe(BRACKET_KINDS.has(k));
+      checked++;
+    }
+    expect(checked).toBe(3 * StageKind.options.length);
   });
-  it("finding 19: abandoned with a null OR level outcome in a bracket needs a decision; abandoned with a win does not", () => {
-    expect(needsDecision({ status: "abandoned", outcome: null, stageKind: "knockout" })).toBe(true);
-    expect(needsDecision({ status: "abandoned", outcome: { kind: "no_result" }, stageKind: "knockout" })).toBe(true);
-    expect(needsDecision({ status: "abandoned", outcome: { kind: "win", winner: "a", loser: "b" }, stageKind: "knockout" })).toBe(false);
+  it("finding 19: an ACTIVE scorer abandon with a null or level outcome needs a decision; with a win it does not", () => {
+    expect(needsDecision(plain, { outcome: null, state: {}, stageKind: "knockout", events: [start, abandon] })).toBe(true);
+    expect(needsDecision(plain, { outcome: { kind: "no_result" }, state: {}, stageKind: "knockout", events: [start, abandon] })).toBe(true);
+    expect(needsDecision(plain, { outcome: WIN, state: {}, stageKind: "knockout", events: [start, abandon] })).toBe(false);
+  });
+  it("the generator's void (abandoned, outcome null, NO abandon event) and a voided abandon need nothing — the kernel would refuse the settle", () => {
+    expect(hasActiveAbandon([start])).toBe(false);
+    expect(hasActiveAbandon([start, abandon])).toBe(true); // the positive pair
+    expect(hasActiveAbandon([start, abandon, voidOfAbandon])).toBe(false);
+    expect(needsDecision(plain, { outcome: null, state: {}, stageKind: "knockout", events: [start] })).toBe(false);
+    expect(needsDecision(plain, { outcome: null, state: {}, stageKind: "knockout", events: [start, abandon, voidOfAbandon] })).toBe(false);
+  });
+  it("C12: a chess knockout in phase tiebreak (status in_play, outcome null) needs a decision — lots is the organiser's settle", () => {
+    const lineups = defaultLineupPair(boardgame.positions);
+    const ko = boardgame.configSchema.parse({ ...boardgame.bracketDeciders(boardgame.configSchema.parse({})) });
+    const state = foldMatch(boardgame, ko, lineups, [makeEnvelope(1, { type: "core.start", payload: {} } as never), makeEnvelope(2, { type: "boardgame.result", payload: { winner: null, method: "agreement" } } as never)]);
+    expect((state as { phase: string }).phase).toBe("tiebreak");
+    expect(needsDecision(boardgame, { outcome: boardgame.outcome(state), state, stageKind: "knockout", events: [start] })).toBe(true);
+    expect(needsDecision(plain, { outcome: boardgame.outcome(state), state, stageKind: "knockout", events: [start] })).toBe(false); // without the module's hook
   });
   it("decided (including a settled fixture) needs nothing", () => {
-    expect(needsDecision({ status: "decided", outcome: { kind: "win", winner: "a", loser: "b", method: "settled_lot" }, stageKind: "knockout" })).toBe(false);
+    expect(needsDecision(plain, { outcome: { ...WIN, method: "settled_lot" }, state: {}, stageKind: "knockout", events: [start, abandon] })).toBe(false);
+  });
+  it("confirmBlocked: blocked until a winner AND a method are chosen, and while sending (Review Focus 2)", () => {
+    const rows: [string | null, string | null, boolean, boolean][] = [
+      [null, null, false, true], ["a", null, false, true], [null, "lot", false, true], ["a", "lot", false, false], ["a", "lot", true, true],
+    ];
+    let checked = 0;
+    for (const [winner, method, sending, blocked] of rows) { expect(confirmBlocked({ winner, method, sending }), JSON.stringify([winner, method, sending])).toBe(blocked); checked++; }
+    expect(checked).toBe(5);
+  });
+  it("finalizeVisible: Finalize shows for a decided fixture and never while it is held (finding 27)", () => {
+    expect(finalizeVisible({ decided: true, held: false })).toBe(true);
+    expect(finalizeVisible({ decided: true, held: true })).toBe(false);
+    expect(finalizeVisible({ decided: false, held: false })).toBe(false);
   });
 });
 ```
@@ -4021,14 +4481,29 @@ describe("needsDecision (spec §5.5; finding 19)", () => {
 ```tsx
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { SETTLE_METHODS, forbidsLevelResult, isLevelOutcome, type SettleMethod } from "@seazn/engine/core";
+import { SETTLE_METHODS, forbidsLevelResult, settleApplies, type MatchOutcome, type SettleMethod } from "@seazn/engine/core";
 import type { Msg } from "@/lib/i18n-runtime";
 
-export function needsDecision(f: { status: string; outcome: unknown; stageKind: string | null }): boolean {
-  if (!forbidsLevelResult(f.stageKind)) return false;
-  if (f.status === "needs_decision") return true;
-  return f.status === "abandoned" && (f.outcome === null || isLevelOutcome(f.outcome as never));
+type LedgerRow = { id: string; type: string; voids_event_id: string | null };
+
+/** An abandon no row voids — the kernel's `abandonActive` (voids are not voidable, core/events.ts:176-213). */
+export function hasActiveAbandon(events: readonly LedgerRow[]): boolean {
+  return events.some((e) => e.type === "core.abandon" && !events.some((v) => v.voids_event_id === e.id));
 }
+
+/** Controller ruling C12: bracket kind AND the kernel's own settle precondition, fed the same facts. */
+export function needsDecision(
+  module: { awaitingDecider?(state: never): boolean },
+  f: { outcome: unknown; state: unknown; stageKind: string | null; events: readonly LedgerRow[] },
+): boolean {
+  if (!forbidsLevelResult(f.stageKind)) return false;
+  return settleApplies(module, { outcome: f.outcome as MatchOutcome | null, abandoned: hasActiveAbandon(f.events), state: f.state });
+}
+
+export const confirmBlocked = (s: { winner: string | null; method: string | null; sending: boolean }): boolean =>
+  s.winner === null || s.method === null || s.sending;
+
+export const finalizeVisible = (s: { decided: boolean; held: boolean }): boolean => s.decided && !s.held;
 
 const METHOD_KEY: Record<SettleMethod, string> = {
   lot: "score.needsDecision.method.lot",
@@ -4044,39 +4519,46 @@ export function NeedsDecisionBlock(props: {
   send: (type: string, payload: unknown) => Promise<{ ok: true } | { ok: false; message: string }>;
 }) {
   const [open, setOpen] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null); // spec §7: the dialog closes and the reason shows here
   return (
     <section data-testid="needs-decision" role="status" className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
       <h2 className="text-sm font-semibold text-amber-900">{props.msg("score.needsDecision.title")}</h2>
       <p className="mt-1 text-sm text-amber-900/80">{props.msg("score.needsDecision.body")}</p>
-      <button type="button" data-testid="settle-open" disabled={props.busy} onClick={() => setOpen(true)} className="btn btn-primary mt-3 min-h-11 w-full sm:w-auto">
+      {refusal !== null && <p data-testid="settle-error" role="alert" className="mt-2 text-sm text-red-700">{refusal}</p>}
+      <button type="button" data-testid="settle-open" disabled={props.busy} onClick={() => { setRefusal(null); setOpen(true); }} className="btn btn-primary mt-3 min-h-11 w-full sm:w-auto">
         {props.msg("score.needsDecision.settle")}
       </button>
-      {open && <SettleDialog {...props} onClose={() => setOpen(false)} />}
+      {open && <SettleDialog {...props} onClose={() => setOpen(false)} onRefused={(m) => { setRefusal(m); setOpen(false); }} />}
     </section>
   );
 }
 
-function SettleDialog(props: Parameters<typeof NeedsDecisionBlock>[0] & { onClose: () => void }) {
+function SettleDialog(props: Parameters<typeof NeedsDecisionBlock>[0] & { onClose: () => void; onRefused: (message: string) => void }) {
   const { msg } = props;
   const [winner, setWinner] = useState<string | null>(null);
   const [method, setMethod] = useState<SettleMethod | null>(null);
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false); // Review Focus 2: the confirm disables on the FIRST tap
-  const [error, setError] = useState<string | null>(null);
+  const sendingRef = useRef(false); // the synchronous guard: a dblclick lands before React re-renders `sending`
+  const onCloseRef = useRef(props.onClose);
+  onCloseRef.current = props.onClose;
   const ref = useRef<HTMLDivElement>(null);
+  // Preflight C23: focus ONCE on mount (re-running it on every render stole focus from the note field) …
+  useEffect(() => { ref.current?.querySelector<HTMLElement>("button")?.focus(); }, []);
+  // … and the Escape handler is bound once, reading the live values through refs.
   useEffect(() => {
-    ref.current?.querySelector<HTMLElement>("button")?.focus();
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !sending) { e.stopPropagation(); props.onClose(); } };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !sendingRef.current) { e.stopPropagation(); onCloseRef.current(); } };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [props, sending]);
+  }, []);
   const confirm = async () => {
-    if (winner === null || method === null || sending) return;
+    if (confirmBlocked({ winner, method, sending: sendingRef.current })) return;
+    sendingRef.current = true;
     setSending(true);
-    setError(null);
     const r = await props.send("core.settle", { winner, method, ...(note.trim() ? { note: note.trim() } : {}) });
+    sendingRef.current = false;
     if (r.ok) props.onClose();
-    else { setError(r.message); setSending(false); }
+    else props.onRefused(r.message);
   };
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-purple-950/30 p-0 backdrop-blur-sm sm:items-center sm:p-4" onPointerDown={(e) => { if (e.target === e.currentTarget && !sending) props.onClose(); }}>
@@ -4108,10 +4590,9 @@ function SettleDialog(props: Parameters<typeof NeedsDecisionBlock>[0] & { onClos
           <span className="text-xs font-semibold uppercase tracking-[0.09em] text-slate-600">{msg("score.needsDecision.note")}</span>
           <input data-testid="settle-note" value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} className="input mt-1 w-full" />
         </label>
-        {error !== null && <p data-testid="settle-error" role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
         <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <button type="button" disabled={sending} onClick={props.onClose} className="btn btn-ghost min-h-11">{msg("common.cancel")}</button>
-          <button type="button" data-testid="settle-confirm" disabled={winner === null || method === null || sending} onClick={() => void confirm()} className="btn btn-primary min-h-11">
+          <button type="button" data-testid="settle-confirm" disabled={confirmBlocked({ winner, method, sending })} onClick={() => void confirm()} className="btn btn-primary min-h-11">
             {msg("score.needsDecision.confirm")}
           </button>
         </div>
@@ -4124,9 +4605,10 @@ function SettleDialog(props: Parameters<typeof NeedsDecisionBlock>[0] & { onClos
 The executor confirms that `Msg`'s import path, the `input` class and `common.cancel` exist (`fixture-console.tsx`'s own imports and its `TextPromptDialog` buttons) and conforms to them.
 
 In `fixture-console.tsx`:
-- compute `const held = needsDecision({ status: live.status, outcome: live.outcome, stageKind })`;
+- resolve the module once, defensively, the way `resolvePadSpecForMount` already does (`:436`): `const settleModule = useMemo(() => { try { return resolveModuleClient(sport.key, scorePadV2?.moduleVersion ?? ""); } catch { return {}; } }, [sport.key, scorePadV2?.moduleVersion]);` — an unresolvable pin falls back to "no pending-decider hook", which can only hide the block in phase tiebreak, never show it wrongly;
+- compute `const held = needsDecision(settleModule, { outcome: live.outcome, state: live.state, stageKind, events })` (`events` is the console's ledger, `:507`; `live.outcome` is the server's `outcomeOf`);
 - render `{canOrganise && held && <NeedsDecisionBlock … />}` above `data-role="match-actions"`;
-- change `{decided && (` to `{decided && !held && (` for Finalize and Share;
+- change `{decided && (` to `{finalizeVisible({ decided, held }) && (` for Finalize and Share;
 - wrap `ForfeitButton` and Abandon in `canOrganise &&`.
 
 The console's `send` already returns the refusal. Adapt it to `{ ok, message }` with `ENGINE_ERROR_KEY` (`scoring-vocab.ts:583`), so the dialog shows the localized `engineError.SETTLE_NOT_APPLICABLE`.
@@ -4157,8 +4639,9 @@ Expected: `EXIT=0` from both, and the `i18n-keys.ts` diff is exactly these 12 ke
 - [ ] **Step 4: The e2e spec (console part)** — `apps/web/e2e/bracket-finish.spec.ts`
 
 ```ts
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, fixturePath, screenshotAtWidths, expectNoHorizontalScroll } from "./helpers";
+import { builtinModules } from "@seazn/engine/sports";
 
 // W2a spec §9: settle on the console; generic brackets without Draw; the chess tie-break on the pad (Task 12).
 // Whole file, never a -g slice (R18).
@@ -4168,10 +4651,12 @@ const read = async (r: APIRequestContext, id: string) => (await apiJson<Fx>(r, `
 const tip = async (r: APIRequestContext, id: string) => (await apiJson<{ last_seq: number }>(r, `/api/v1/fixtures/${id}/state`)).data!.last_seq;
 const post = async (r: APIRequestContext, id: string, type: string, payload: unknown = {}) => apiJson(r, `/api/v1/fixtures/${id}/events`, "POST", { expected_seq: await tip(r, id), type, payload });
 
-async function knockout(r: APIRequestContext, sport: string, variant: string) {
+async function knockout(r: APIRequestContext, sport: string, variant: string, names = ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"]) {
+  // Preflight C14: the variant is one the sport declares (module.variants), never a guessed literal.
+  expect(Object.keys(builtinModules.find((m) => m.key === sport)?.variants ?? {}), `${sport} declares ${variant}`).toContain(variant);
   const comp = await apiJson<{ id: string }>(r, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2a ${sport} ${TAG}-${Math.random().toString(36).slice(2, 6)}`, visibility: "private" });
   const div = await apiJson<{ id: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Cup", sport_key: sport, variant_key: variant });
-  await addEntrantsViaApi(r, div.data!.id, ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"]);
+  await addEntrantsViaApi(r, div.data!.id, names);
   const { fixtureIds } = await createStageAndGenerate(r, div.data!.id, { kind: "knockout", name: "Cup" });
   expect((await apiJson(r, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBeLessThan(300);
   const all = await Promise.all(fixtureIds.map((id) => read(r, id)));
@@ -4179,8 +4664,37 @@ async function knockout(r: APIRequestContext, sport: string, variant: string) {
   return { divisionId: div.data!.id, sf };
 }
 
-test("settle on the console: a level football knockout is held, the block shows, settle seats the winner", async ({ page, request }) => {
-  const { sf } = await knockout(request, "football", "fifa");
+/** Settle POSTs the page itself sends (preflight C23: count requests, not ledger rows a retry could merge). */
+function countSettlePosts(page: Page): () => number {
+  let n = 0;
+  page.on("request", (req) => { if (req.method() === "POST" && /\/fixtures\/[^/]+\/events$/.test(new URL(req.url()).pathname) && (req.postData() ?? "").includes('"core.settle"')) n++; });
+  return () => n;
+}
+
+/** The same seeding as `knockout`, with a league stage: the positive pairs for "Draw hidden in brackets". */
+async function league(r: APIRequestContext, sport: string, variant: string) {
+  expect(Object.keys(builtinModules.find((m) => m.key === sport)?.variants ?? {}), `${sport} declares ${variant}`).toContain(variant);
+  const comp = await apiJson<{ id: string }>(r, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2a lg ${sport} ${TAG}-${Math.random().toString(36).slice(2, 6)}`, visibility: "private" });
+  const div = await apiJson<{ id: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "League", sport_key: sport, variant_key: variant });
+  await addEntrantsViaApi(r, div.data!.id, ["W2a Lee", "W2a Max"]);
+  const { fixtureIds } = await createStageAndGenerate(r, div.data!.id, { kind: "league", name: "League" });
+  expect((await apiJson(r, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBeLessThan(300);
+  return { sf: await read(r, fixtureIds[0]!) };
+}
+
+test("X-BR-2 (C18): a level football knockout RESULT (no abandon) is held — needs_decision, and the block shows", async ({ page, request }) => {
+  const { sf } = await knockout(request, "football", "11-a-side");
+  await post(request, sf.id, "core.start");
+  // The same pinned stream as Task 8 Step 1's X-BR-2 case: full time level, no extra time, no shootout.
+  await post(request, sf.id, "football.period.end", {});
+  expect((await read(request, sf.id)).status).toBe("needs_decision");
+  await page.goto(await fixturePath(request, sf.id));
+  await expect(page.getByTestId("needs-decision")).toBeVisible();
+  await expect(page.getByTestId("score-finalize")).toHaveCount(0); // finding 27
+});
+
+test("settle on the console: an ABANDONED level football knockout shows the block, and settle seats the winner", async ({ page, request }) => {
+  const { sf } = await knockout(request, "football", "11-a-side");
   await post(request, sf.id, "core.start");
   await post(request, sf.id, "core.abandon", { reason: "floodlights" }); // a level abandon: no_result (finding 19)
   await page.goto(await fixturePath(request, sf.id));
@@ -4204,52 +4718,85 @@ test("Review Focus 2: a double submit of the settle dialog sends one settle", as
   const { sf } = await knockout(request, "generic", "score");
   await post(request, sf.id, "core.start");
   await post(request, sf.id, "core.abandon", { reason: "rain" });
+  const settlePosts = countSettlePosts(page);
   await page.goto(await fixturePath(request, sf.id));
   await page.getByTestId("settle-open").click();
   await page.getByTestId(`settle-winner-${sf.home_entrant_id}`).click();
   await page.getByTestId("settle-method-organiser").check();
   await page.getByTestId("settle-confirm").dblclick();
   await expect(page.getByTestId("needs-decision")).toHaveCount(0);
+  expect(settlePosts()).toBe(1); // the page SENT one settle, not "the server kept one"
   const events = (await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!;
   expect(events.filter((e) => e.type === "core.settle")).toHaveLength(1);
 });
 
-test("a refused settle shows its reason in the dialog and changes nothing", async ({ page, request }) => {
+test("a refused settle closes the dialog, shows its reason, and changes nothing; the remaining entrant then settles (spec §7; ruling C17)", async ({ page, request }) => {
+  // Deterministic (preflight C23): the refusal is a real server one that cannot race the live poll — the named
+  // winner has withdrawn before the page loads (ruling C17: SETTLE_NOT_APPLICABLE, reason withdrawn).
   const { sf } = await knockout(request, "generic", "score");
   await post(request, sf.id, "core.start");
   await post(request, sf.id, "core.abandon", { reason: "rain" });
+  expect((await apiJson(request, `/api/v1/entrants/${sf.away_entrant_id}/withdraw`, "POST")).status).toBeLessThan(300);
   await page.goto(await fixturePath(request, sf.id));
   await page.getByTestId("settle-open").click();
-  await post(request, sf.id, "core.settle", { winner: sf.home_entrant_id, method: "lot" }); // another organiser got there first
   await page.getByTestId(`settle-winner-${sf.away_entrant_id}`).click();
   await page.getByTestId("settle-method-lot").check();
   await page.getByTestId("settle-confirm").click();
-  await expect(page.getByTestId("settle-error")).toBeVisible();
-  expect((await read(request, sf.id)).outcome?.winner).toBe(sf.home_entrant_id);
+  await expect(page.getByRole("dialog")).toHaveCount(0); // the dialog closed
+  await expect(page.getByTestId("settle-error")).toBeVisible(); // and the reason shows in the block
+  await expect(page.getByTestId("needs-decision")).toBeVisible();
+  const before = await read(request, sf.id);
+  expect(before.status).toBe("abandoned");
+  expect(before.outcome?.kind).not.toBe("win");
+  // The positive pair: a settle for the remaining entrant is accepted and seats them.
+  await page.getByTestId("settle-open").click();
+  await page.getByTestId(`settle-winner-${sf.home_entrant_id}`).click();
+  await page.getByTestId("settle-method-organiser").check();
+  await page.getByTestId("settle-confirm").click();
+  await expect(page.getByTestId("needs-decision")).toHaveCount(0);
+  expect((await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.home_entrant_id, method: "settled_organiser" });
 });
 
-test("finding 11: an official scorer sees no Settle, Forfeit or Abandon", async ({ browser, request }) => {
-  const { sf } = await knockout(request, "generic", "score");
+test("finding 11: on a held fixture the organiser sees Settle; an official scorer sees the fixture and its status but no Settle, Forfeit or Abandon", async ({ browser, page, request }) => {
+  const { sf } = await knockout(request, "football", "11-a-side");
   await post(request, sf.id, "core.start");
-  await post(request, sf.id, "core.abandon", { reason: "rain" });
+  await post(request, sf.id, "football.period.end", {}); // held: the C18 stream
+  const path = await fixturePath(request, sf.id);
+  // Positive pair (preflight C23): the organiser, on the same fixture, does see the block.
+  await page.goto(path);
+  await expect(page.getByTestId("needs-decision")).toBeVisible();
   const official = await browser.newContext({ storageState: "e2e/.auth/official.json" });
   const p = await official.newPage();
-  await p.goto(await fixturePath(request, sf.id));
+  await p.goto(path);
+  await expect(p.getByText("Needs a decision", { exact: true })).toBeVisible(); // the status badge: the official sees the held fixture
   await expect(p.getByTestId("needs-decision")).toHaveCount(0);
+  await expect(p.getByTestId("settle-open")).toHaveCount(0);
+  await expect(p.getByTestId("score-forfeit")).toHaveCount(0);
   await expect(p.getByRole("button", { name: "Abandon" })).toHaveCount(0);
   await official.close();
 });
 
 test("the block at 1280, 768 and 320: no horizontal scroll, long names truncate", async ({ page, request }) => {
-  const { sf } = await knockout(request, "generic", "score");
+  // A realistic 43-character entrant name (AGENTS.md: the truncate defect showed only with one).
+  const LONG = ["W2a Maximiliana Konstantinopoulou-Grunewald", "W2a Bartholomew Featherstonehaugh-Wolfeschl", "W2a Cy", "W2a Di"];
+  expect(LONG.slice(0, 2).map((n) => n.length)).toEqual([43, 43]);
+  const { sf } = await knockout(request, "generic", "score", LONG);
   await post(request, sf.id, "core.start");
   await post(request, sf.id, "core.abandon", { reason: "rain" });
   await page.goto(await fixturePath(request, sf.id));
   await page.getByTestId("settle-open").click();
+  let widths = 0;
   for (const w of [1280, 768, 320]) {
     await page.setViewportSize({ width: w, height: 900 });
     await expectNoHorizontalScroll(page);
+    for (const id of [sf.home_entrant_id!, sf.away_entrant_id!]) {
+      const box = await page.getByTestId(`settle-winner-${id}`).boundingBox();
+      expect(box, `${w} ${id}`).not.toBeNull();
+      expect(box!.x + box!.width, `${w}: the winner button stays inside the viewport`).toBeLessThanOrEqual(w);
+    }
+    widths++;
   }
+  expect(widths).toBe(3);
   await screenshotAtWidths(page, "w2a-settle-dialog", [1280, 768, 320]);
 });
 ```
@@ -4264,7 +4811,7 @@ S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh; cd /Users/ashokhein/git
 S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh; cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web && eval "$($S env --label w2a)" && PLAYWRIGHT_BASE="$SMOKE_BASE" E2E_PROD_TARGET=1 npx playwright test --project=parallel e2e/bracket-finish.spec.ts --reporter=json > "$TMPDIR/w2a-t11-e2e.json" 2>"$TMPDIR/w2a-t11-e2e.err"; echo EXIT=$?; jq -c '.stats' "$TMPDIR/w2a-t11-e2e.json"
 ```
 
-Expected: `EXIT=0` three times; `stats.expected` = 5, `unexpected` 0 and `skipped` 0.
+Expected: `EXIT=0` three times; `stats.expected` = 6, `unexpected` 0 and `skipped` 0.
 
 - [ ] **Step 6: Visual verdict per screen (R24)**
   - Open the screenshots with the Read tool, cropped to the dialog (memory: full-page screenshots dominate context).
@@ -4276,12 +4823,17 @@ Expected: `EXIT=0` three times; `stats.expected` = 5, `unexpected` 0 and `skippe
 
 | id | find → replace | killer |
 |---|---|---|
-| `abandon-level` | `(f.outcome === null \|\| isLevelOutcome(f.outcome as never))` → `f.outcome === null` | `needs-decision.test.tsx` "finding 19 …" |
-| `kind-gate` | `if (!forbidsLevelResult(f.stageKind)) return false;` → `` | "needs_decision in every bracket kind; never outside" |
-| `double-submit` | `if (winner === null \|\| method === null \|\| sending) return;` → `if (winner === null \|\| method === null) return;` | e2e "double submit" — the runner killer is `{ cwd: "apps/web", files: [], … }`. It cannot spawn Playwright, so this row is run by hand with the e2e command above and recorded as such |
-| `finalize-hidden` | `{decided && !held && (` → `{decided && (` | e2e "settle on the console …" (`score-finalize` count 0). The same by-hand e2e record applies |
+Every row is a vitest killer in `needs-decision.test.tsx` (`cwd: "apps/web"`). The e2e specs re-prove the wiring in Step 5, but no e2e or smoke row appears in a `MUT/*.json` (preflight C1; the runner refuses a killer with no `files`).
 
-Expected: the two vitest rows are `KILLED`. The two e2e rows each show the spec red under the mutant, recorded with their `stats.unexpected` line, then restored.
+| id | find → replace | killer |
+|---|---|---|
+| `kind-gate` | `if (!forbidsLevelResult(f.stageKind)) return false;` → `` | "a level outcome needs a decision in every bracket kind, and never outside brackets" |
+| `active-abandon` | `!events.some((v) => v.voids_event_id === e.id)` → `true` | "the generator's void … and a voided abandon need nothing …" |
+| `decider-hook` | `return settleApplies(module, {` → `return settleApplies({}, {` | "C12: a chess knockout in phase tiebreak …" |
+| `double-submit` | `s.winner === null \|\| s.method === null \|\| s.sending;` → `s.winner === null \|\| s.method === null;` | "confirmBlocked: blocked until …" (the sending row) |
+| `finalize-hidden` | `s.decided && !s.held;` → `s.decided;` | "finalizeVisible: Finalize shows …" |
+
+Expected: `EXIT=0`, 5 rows `KILLED`.
 
 **Four test types:**
 - Unit: Step 1.
@@ -4299,7 +4851,7 @@ Expected: the two vitest rows are `KILLED`. The two e2e rows each show the spec 
 - Modify: `W/server/usecases/fidelity.ts:44-70` (`ScorePadBootstrap` gains `stageKind: string | null`), `W/components/v2/scorepad/registry.tsx:183`, `:198`, `:294-296`, `W/components/v2/scorepad/v3/types.ts:1400` (`PadHostView.stageKind`), and the two pages that build the bootstrap (`f/[no]/page.tsx:181`, `score/[token]/page.tsx:331`)
 - Modify: `W/components/v2/scorepad/v3/skins/generic.tsx:176` (`allowsDraws(cfg, stageKind)`) and its four readers
 - Modify: `W/components/v2/scorepad/v3/skins/boardgame.tsx:230-235`, `:361-411`, `:463-465` (the tie-break tile and sheet; Draw and halves inert while `readPhase === "tiebreak"`)
-- Modify: `W/dictionaries/{en,fr,es,nl}/ui.json` (`pad.boardgame.tiebreak.*`, `pad.generic.knockoutNoDraw`)
+- Modify: `W/dictionaries/{en,fr,es,nl}/ui.json` (`pad.boardgame.tiebreak.*`). No `pad.generic.knockoutNoDraw`: the generic pad hides Draw silently, so no string renders (preflight C26 — the key was listed with no value and no reader)
 - Create: `W/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts`, `W/components/v2/scorepad/v3/__tests__/bracket-no-draw.test.ts`
 - Modify: `apps/web/e2e/bracket-finish.spec.ts` (pad part), `apps/web/e2e/mobile.spec.ts` (the boardgame tie-break describe across the width projects)
 
@@ -4309,7 +4861,7 @@ Expected: the two vitest rows are `KILLED`. The two e2e rows each show the spec 
   - `PadHostView.stageKind: string | null`;
   - `TIEBREAK_TILE_ID = "tiebreak"`;
   - sheet steps `rung` → `winner` → `score`, with `when` predicates;
-  - the test ids `pad-tile-tiebreak` and `sheet-step-<id>` (the chassis's own testids; pinned from `guided-sheet.tsx`).
+  - NO new testids (preflight C24). Tests select with the chassis's real attributes: `[data-tile-id="<id>"]` (`tile-grid.tsx:293`) and `[data-choice-option-id="<id>"]` (`guided-sheet.tsx:418`). The only sheet testids are `pad-sheet-number` and `pad-sheet-confirm` (`guided-sheet.tsx:523`, `:549`).
 
 - [ ] **Step 1: The failing skin tests**
 
@@ -4374,6 +4926,15 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     const rung = sheet.steps.find((s) => s.id === "rung")!;
     expect(rung.kind === "choice" && rung.options.map((o) => o.id)).toEqual([...TIEBREAK_RUNGS]);
     expect(rung.kind === "choice" && rung.hintKey).toBe("pad.boardgame.tiebreak.lotsHint");
+  });
+  it("the tie-break sheet never offers settle or lots (X-ST-2: settle is the organiser's, on the console; preflight C21)", () => {
+    const v = tiebreakView();
+    const ids = [
+      ...buildTiles(v, (k) => k).map((t) => t.id),
+      ...Object.values(buildSheets(v, (k) => k)).flatMap((sh) => sh.steps.flatMap((st) => (st.kind === "choice" ? st.options.map((o) => o.id) : []))),
+    ];
+    expect(ids.length).toBeGreaterThan(0);
+    expect(ids.filter((id) => /settle|\blots?\b/i.test(id))).toEqual([]);
   });
   it("BG-KO-2 (ruling 82): every rung shows ONE winner step with exactly the two entrants; the 'draw means Black advances' hint is on armageddon only", () => {
     const sheet = buildSheets(tiebreakView(), (k) => k)[TIEBREAK_TILE_ID]!;
@@ -4526,50 +5087,71 @@ The step-2 title uses no rung name; the spec's "<rung>" interpolation is kept ou
 Append to `bracket-finish.spec.ts`:
 
 ```ts
+const tile = (page: Page, id: string) => page.locator(`[data-tile-id="${id}"]`); // tile-grid.tsx:293 (preflight C24)
+const option = (page: Page, id: string) => page.locator(`[data-choice-option-id="${id}"]`); // guided-sheet.tsx:418
+
 test("chess tie-break on the pad: BG-KO-2's hint shows on Armageddon only, and the tapped winner advances", async ({ page, request }) => {
-  const { sf } = await knockout(request, "boardgame", "fide");
+  const { sf } = await knockout(request, "boardgame", "classical");
   await post(request, sf.id, "core.start");
   await post(request, sf.id, "boardgame.result", { winner: null, method: "agreement" });
   await page.goto(await fixturePath(request, sf.id));
-  await expect(page.getByTestId("pad-tile-draw")).toHaveCount(0);
-  await page.getByTestId("pad-tile-tiebreak").click();
+  await expect(tile(page, "draw")).toHaveCount(0);
+  await tile(page, "tiebreak").click();
   const hint = page.getByText("In Armageddon a draw means Black advances.");
-  await page.getByRole("button", { name: "Rapid" }).click();
-  await expect(page.getByTestId("sheet-step-winner")).toBeVisible();
+  await option(page, "rapid").click();
+  await expect(option(page, "home")).toBeVisible(); // the winner step is open
   await expect(hint).toHaveCount(0); // not on rapid (the positive pair follows)
-  await page.getByRole("button", { name: "Back" }).click();
-  await page.getByRole("button", { name: "Blitz" }).click();
+  await page.getByRole("button", { name: "Back" }).click(); // pad.sheet.back
+  await option(page, "blitz").click();
+  await expect(option(page, "home")).toBeVisible();
   await expect(hint).toHaveCount(0); // not on blitz
   await page.getByRole("button", { name: "Back" }).click();
-  await page.getByRole("button", { name: "Armageddon" }).click();
-  const step = page.getByTestId("sheet-step-winner-armageddon");
+  await option(page, "armageddon").click();
   await expect(hint).toBeVisible();
-  await expect(step.getByRole("button")).toHaveCount(2); // exactly the two entrants; no "drawn" choice (ruling 82)
-  await step.getByRole("button").nth(1).click(); // away
+  await expect(page.locator("[data-choice-option-id]")).toHaveCount(2); // exactly the two entrants; no "drawn" choice (ruling 82)
+  await option(page, "away").click();
   await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.away_entrant_id, method: "tiebreak_armageddon" });
 });
 
+test("the Draw tile's positive pair: a chess LEAGUE game shows Draw", async ({ page, request }) => {
+  // Preflight C24: `draw` count 0 above is meaningful only if the same selector finds the tile where Draw is allowed.
+  const { sf } = await league(request, "boardgame", "classical");
+  await post(request, sf.id, "core.start");
+  await page.goto(await fixturePath(request, sf.id));
+  await expect(tile(page, "draw")).toBeVisible();
+});
+
 test("chess tie-break: Back on step 2 returns to step 1 and keeps nothing", async ({ page, request }) => {
-  const { sf } = await knockout(request, "boardgame", "fide");
+  const { sf } = await knockout(request, "boardgame", "classical");
   await post(request, sf.id, "core.start");
   await post(request, sf.id, "boardgame.result", { winner: null, method: "agreement" });
   await page.goto(await fixturePath(request, sf.id));
-  await page.getByTestId("pad-tile-tiebreak").click();
-  await page.getByRole("button", { name: "Rapid" }).click();
+  await tile(page, "tiebreak").click();
+  await option(page, "rapid").click();
   await page.getByRole("button", { name: "Back" }).click();
-  await expect(page.getByRole("button", { name: "Blitz" })).toBeVisible();
-  expect((await read(request, sf.id)).status).toBe("needs_decision");
+  await expect(option(page, "blitz")).toBeVisible();
+  // Preflight C25 / ruling C12: in phase tiebreak the outcome is null, so the status rule gives in_play (never
+  // needs_decision), and Back wrote nothing.
+  expect((await read(request, sf.id)).status).toBe("in_play");
+  const events = (await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!;
+  expect(events.filter((e) => e.type === "boardgame.tiebreak")).toHaveLength(0);
+  expect(events.length).toBe(2); // core.start and the drawn result, nothing more
 });
 
-test("generic bracket has no Draw on the pad", async ({ page, request }) => {
-  const { sf } = await knockout(request, "generic", "score");
+test("generic bracket has no Draw on the pad; a generic league with allowDraws does (the positive pair)", async ({ page, request }) => {
+  const { sf } = await knockout(request, "generic", "score"); // the `score` variant declares allowDraws: true
   await post(request, sf.id, "core.start");
   await page.goto(await fixturePath(request, sf.id));
-  await expect(page.getByRole("button", { name: /draw/i })).toHaveCount(0);
+  await expect(page.locator("[data-tile-id]").first()).toBeVisible(); // the pad rendered
+  await expect(tile(page, "draw")).toHaveCount(0);
+  const lg = await league(request, "generic", "score");
+  await post(request, lg.sf.id, "core.start");
+  await page.goto(await fixturePath(request, lg.sf.id));
+  await expect(tile(page, "draw")).toBeVisible(); // preflight C26
 });
 ```
 
-In `mobile.spec.ts`, inside the existing per-width describe (serial; R18 / class 21), add a test that drives the drawn-knockout tie-break sheet at each project width. It asserts the sheet's three steps are reachable, that `expectNoHorizontalScroll` holds, and that the Armageddon step's option set at 320 equals the set at 1280 (membership and order).
+In `mobile.spec.ts`, inside the existing per-width describe (serial; R18 / class 21), add a test that drives the drawn-knockout tie-break sheet at each project width. It asserts the sheet's three steps are reachable, that `expectNoHorizontalScroll` holds, and that the Armageddon step's option set at 320 equals the set at 1280 (membership and order). It reads options by `[data-choice-option-id]`, never by a testid (preflight C24).
 
 Run the whole spec files:
 
@@ -4580,7 +5162,7 @@ S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh; cd /Users/ashokhein/git
 ```
 
 Expected:
-- `bracket-finish.spec.ts`: `stats.expected` 8, `unexpected` 0.
+- `bracket-finish.spec.ts`: `stats.expected` 10 (6 from Task 11, 4 here), `unexpected` 0.
 - Each width project: `EXIT=0`, `unexpected: 0`.
 
 `mobile.spec.ts` is serial, so a red count is a floor: re-run after each fix until a full pass completes (class 21). Running seven projects one at a time is the whole spec file per project, not a `-g` slice.
@@ -4626,7 +5208,6 @@ Expected: `EXIT=0`, 10 rows killed.
 **Files:**
 - Modify: `W/lib/scoring-vocab.ts:1298-1303` (`DECIDED_METHOD_KEY` gains six methods, derived from `SETTLE_METHODS` and `TIEBREAK_RUNGS`), `:1400-1430` (`renderDecidedOutcome` threads the tie-break score)
 - Modify: `W/server/public-site/match-centre.ts:175-176` (`WIN_METHODS`), `:722-760` (`resultMsg`: settled and tie-break lines)
-- Modify: `W/server/public-site/competition-hub.ts:152-158` (`STATUS_LINE_KEYS` gains `needs_decision`)
 - Modify: `W/components/public-site/bracket.tsx:121` (a held fixture shows "Needs a decision", never a winner)
 - Modify: `W/dictionaries/{en,fr,es,nl}/ui.json` (`fixture.decidedBy.*`) and `public.json` (`matchCentre.result.*`, the status line)
 - Create: `W/lib/__tests__/w2a-decided-sentences.test.ts`
@@ -4720,7 +5301,7 @@ Every caller of `renderDecidedOutcome` that has a `summary` passes `summary.deta
 
 `match-centre.ts`: `resultMsg`'s `win` branch, for a method in `DECIDED_METHOD_KEY`'s W2a keys, returns `{ key: "matchCentre.result.settled.<m>" | "matchCentre.result.tiebreak.<rung>[Scored]", params: { winner, score? } }`. `RESULT_KINDS` gains the six method names, so the existing exhaustiveness tests cover them.
 
-`competition-hub.ts`: `STATUS_LINE_KEYS` gains `"needs_decision"`, and its line is `matchCentre.status.needs_decision` = "Needs a decision".
+`competition-hub.ts`'s `STATUS_LINE_KEYS` and `matchCentre.status.needs_decision` already landed in Task 7 (preflight C16); this task does not touch them.
 
 `bracket.tsx:121`: a fixture whose status is `needs_decision` renders the status chip, never a winner highlight, and the level score stays.
 
@@ -4739,7 +5320,7 @@ Every caller of `renderDecidedOutcome` that has a `summary` passes `summary.deta
 | `tiebreakScored.rapid` | {winner} won on rapid tie-break ({score}) | {winner} gagne au départage en rapide ({score}) | {winner} ganó el desempate de rápidas ({score}) | {winner} won de rapid-tiebreak ({score}) |
 | `tiebreakScored.blitz` | {winner} won on blitz tie-break ({score}) | {winner} gagne au départage en blitz ({score}) | {winner} ganó el desempate de blitz ({score}) | {winner} won de snelschaak-tiebreak ({score}) |
 
-`public.json`, `matchCentre.result`: the same eight sentences under `settled.*`, `tiebreak.*` and `tiebreakScored.*`, with the same values. `matchCentre.status.needs_decision` is the `score.status.needs_decision` value from Task 11.
+`public.json`, `matchCentre.result`: the same eight sentences under `settled.*`, `tiebreak.*` and `tiebreakScored.*`, with the same values. (`matchCentre.status.needs_decision` landed in Task 7.)
 
 Run `pnpm i18n:gen-keys && pnpm i18n:check`, and expect `EXIT=0`.
 
@@ -4763,9 +5344,8 @@ The executor confirms the exact filenames with `ls` first. Expected: `EXIT=0` an
 | `drop-settled` | `...Object.fromEntries(SETTLE_METHODS.map(` → `...Object.fromEntries([].map(` | "each settle method …" |
 | `drop-tiebreak` | `...Object.fromEntries(TIEBREAK_RUNGS.map(` → `...Object.fromEntries([].map(` | the same (tie-break rows) |
 | `scored-ignored` | `&& tiebreakScore) {` → `&& false) {` | "the tie-break score appears when recorded …" |
-| `status-line` | `"needs_decision",` (in `STATUS_LINE_KEYS`) → `` | `competition-hub-schema.test.ts` (add the case "a held fixture's status line is 'Needs a decision'") |
 
-Expected: `EXIT=0`, 4 rows killed.
+Expected: `EXIT=0`, 3 rows killed (`status-line` moved to Task 7; preflight C16).
 
 - [ ] **Step 9: Loop H commit set.** Make one commit per task, each with its `MUT/t<N>.json`, then run the OpenAPI drift check (expected empty) and loop H's Opus review.
 
@@ -4816,7 +5396,7 @@ Expected: `EXIT=0`, 4 rows killed.
 import { describe, expect, it } from "vitest";
 import { BRACKET_KINDS, SETTLE_METHODS, foldMatchWithStoppage, outcomeOf } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
-import { forEachSport, defaultLineupPair } from "@seazn/engine/testkit";
+import { declaredCfgs, forEachSport, defaultLineupPair } from "@seazn/engine/testkit";
 import { generateStream } from "../lib/streams/index.ts";
 import { stageCfg } from "../lib/sport-cfg.ts";
 
@@ -4829,7 +5409,7 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     let checked = 0;
     const sports = forEachSport(({ key, module }) => {
       const lineups = defaultLineupPair(module.positions);
-      const cfg = stageCfg(key, module.configSchema.parse({}), "knockout");
+      const cfg = stageCfg(key, declaredCfgs(module as never)[0]!.cfg, "knockout"); // preflight C7: generic has no schema default
       for (const method of SETTLE_METHODS) {
         const events = generateStream({ sportKey: key, cfg, stageKind: "knockout", home: lineups.home.entrantId, away: lineups.away.entrantId, outcome: { kind: "settle", then: "away", method, after: "abandon" } });
         const abandonAt = events.findIndex((e) => e.type === "core.abandon");
@@ -4919,7 +5499,7 @@ Expected: `EXIT=1`; `stageCfg` is not exported.
     - `abandon` with `atScore: true`: the first half of the sport's `decided` stream (the prefix before its deciding event, found by folding prefixes until `outcome !== null`, then cutting one event earlier), then `core.abandon`;
     - `settle`: the `level` or `abandon` prefix, then `core.settle { winner, method }`;
     - `tiebreak` (boardgame only): `START`, a drawn `boardgame.result`, then `boardgame.tiebreak { rung, winner }`, with the requested side's entrant as the winner.
-  - `carrom.ts`: delete `TIEBOARD_DRAW` and its refusal. With `tieBoard: "extra"` (the bracket overlay), a level game is the alternating-board stream with coins `c = min(9, floor((gameTo-1)/(maxBoards/2)))`. On an odd `maxBoards` the last board has 0 coins. One extra board then decides, so `c` ≠ 9 whenever `gameTo ≤ 9·maxBoards/2`.
+  - `carrom.ts`: delete `TIEBOARD_DRAW` and its refusal. With `tieBoard: "extra"` (the bracket overlay), a level game is the alternating-board stream with coins `c = Math.min(9, Math.floor((cfg.gameTo - 1) / Math.ceil(cfg.maxBoards / 2)))` — Task 5 Step 5's arithmetic exactly, read from the carrom cfg declaration, never a literal (preflight C27). On an odd `maxBoards` the last board has 0 coins. One extra board then decides, so `c` ≠ 9 whenever `gameTo - 1 < 9·ceil(maxBoards/2)`.
   - `OutcomeUnreachable` reads `drawsAllowed` (now the allow-list) plus `forbidsLevelResult` for `level`.
 
 - [ ] **Step 4: The bracket policy and the counted check** (finding 16)
@@ -4965,33 +5545,47 @@ The `RunInvariant` shape is pinned from the existing life-* invariants in `invar
 ```ts
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { COMMAND_KINDS } from "../lib/model/state.ts";
-import { modelCommands } from "../lib/model/commands.ts";
-import { replayRegressions } from "../lib/model/regressions.ts"; // the existing replay of catalogue/regressions.json (executor pins its name)
-import { initialModel, runModel } from "../lib/model/run.ts";
+import { COMMAND_KINDS, modelCommands, newModelState, type ModelState } from "../lib/model/commands.ts";
+import { ModelFakeDriver } from "./model-fake-driver.ts";
+
+// The real model API (read at c0416dea6, preflight C27): modelCommands({ fences, bias? }) (commands.ts:404) gains an
+// opt-in `settle?: boolean`; commands are fc.AsyncCommand<ModelState, OrganiserDriver>, run over the
+// ModelFakeDriver the way model-core.test.ts's `fresh` (:71) builds it. The row is a SINGLE-stage knockout row
+// (modelRowRefusal admits it; state.ts:330).
+async function freshKnockout(): Promise<{ m: ModelState; d: ModelFakeDriver }> {
+  const d = new ModelFakeDriver({});
+  const m = await newModelState({ driver: d, row: "knockout", sport: "generic", variant: "score", entrants: 4, tag: "t" });
+  return { m, d };
+}
 
 describe("Settle in the model (spec §5.6.2; finding 24)", () => {
   it("empty case first: the default command set is unchanged, so committed seeds replay byte-identical", () => {
     expect(COMMAND_KINDS).not.toContain("Settle");
-    const r = replayRegressions();
-    expect(r.replayed).toBeGreaterThan(0);
-    expect(r.changed).toEqual([]);
+    expect(modelCommands({ fences: true }).length).toBe(COMMAND_KINDS.length); // settle absent: today's array
+    expect(modelCommands({ fences: true, settle: true }).length).toBe(COMMAND_KINDS.length + 1);
   });
-  it("rule 10: any sequence with Settle keeps the three invariants after every step", () => {
-    fc.assert(fc.property(fc.commands(modelCommands({ settle: true }), { maxCommands: 40 }), (cmds) => {
-      const { model, steps } = runModel(initialModel(), cmds, (m) => {
-        // after EVERY step:
-        for (const f of m.fixtures.filter((x) => x.bracket)) {
-          expect(f.status === "decided" && f.outcome !== null && ["draw", "tie", "no_result"].includes(f.outcome.kind)).toBe(false); // no bracket fixture decided level
-          if (f.status === "needs_decision") expect(m.seatedFrom(f.id)).toEqual([]); // held seats nobody
-          if (f.outcome?.method?.startsWith("settled_")) expect(m.seatedFrom(f.id).length).toBe(f.loserTo ? 2 : 1); // settle seats both
-        }
-      });
-      return steps >= 0 && model !== null;
+  it("rule 10: any sequence with Settle keeps the three invariants after every step, and Settle is actually exercised", async () => {
+    let steps = 0; // steps checked across ALL runs
+    let settles = 0; // accepted settles across ALL runs (preflight C27: zero is a failure, never `>= 0`)
+    await fc.assert(fc.asyncProperty(fc.commands(modelCommands({ fences: true, settle: true }), { maxCommands: 40 }), async (cmds) => {
+      const { m, d } = await freshKnockout();
+      await fc.asyncModelRun(() => ({ model: m, real: d }), cmds);
+      // the model's per-step check (checkStep) runs inside each command; these are its three W2a invariants, read after the run:
+      for (const f of [...m.fixtures.values()]) {
+        expect(f.status === "decided" && f.outcome !== null && ["draw", "tie", "no_result"].includes(f.outcome.kind)).toBe(false); // no bracket fixture decided level
+        if (f.status === "needs_decision") expect(m.seatedFrom(f.id)).toEqual([]); // held seats nobody
+        if (f.outcome?.method?.startsWith("settled_")) expect(m.seatedFrom(f.id).length).toBe(f.loserTo ? 2 : 1); // settle seats both
+      }
+      steps += m.steps.length;
+      settles += m.settles.filter((x) => x.status < 300).length;
     }), { numRuns: 100 });
+    expect(steps).toBeGreaterThan(0);
+    expect(settles).toBeGreaterThan(0);
   });
 });
 ```
+
+`ModelState` gains `settles: { status: number; code: string | null }[]` (beside `generates`, `state.ts:94`), recorded by the `Settle` command. `m.seatedFrom(id)` is the model's existing seat read, or is added beside `fixtures` if the executor finds none; the per-step versions of the three invariants join `checkStep` (`state.ts`, exported via `commands.ts:31`).
 
 `Settle` is a `Cmd` (`commands.ts:105`, the `Walkover` example at `:305`):
 - `ready` when the model holds a bracket fixture in `needs_decision`, or one abandoned with a null or level outcome;
@@ -4999,10 +5593,10 @@ describe("Settle in the model (spec §5.6.2; finding 24)", () => {
 - `mustAccept` is true when `ready`;
 - `expectsRefusal` covers a second settle (`SETTLE_NOT_APPLICABLE`).
 
-`modelCommands({ settle: true })` appends it after the existing kinds. The default (`settle` absent) builds exactly today's array. A shrunk failure is committed first as a named case in `catalogue/regressions.json`, with its seed and path (R29).
+`modelCommands({ fences, bias, settle: true })` appends it after the existing kinds. The default (`settle` absent) builds exactly today's array. A shrunk failure is committed first as a named case in `catalogue/regressions.json`, with its seed and path (R29).
 
 - [ ] **Step 6: Pad adapters and page objects; `outcomesFor`; one value-constant route case each**
-  - `pads/boardgame.ts` drives the tie-break: tap `pad-tile-tiebreak`, then the rung button, then the winner (the `winner-armageddon` step on the armageddon rung), then the score or skip. The `TapStep` kinds come from `tools/bench/lib/drivers/scorer.ts:104`.
+  - `pads/boardgame.ts` drives the tie-break: tap `[data-tile-id="tiebreak"]`, then the rung's `[data-choice-option-id="<rung>"]`, then the winner's `[data-choice-option-id="home|away"]` (preflight C24: the chassis's real attributes; there are no `pad-tile-*` testids) (the `winner-armageddon` step on the armageddon rung), then the score or skip. The `TapStep` kinds come from `tools/bench/lib/drivers/scorer.ts:104`.
   - `outcomesFor` (`pad-adapters.test.ts:54-61`) marks `abandon` organiser-only. The pad adapter refuses to emit it, and the console page object emits it.
   - Route cases: a carrom board with `coins: 7` (≠ the generator's old 9), and a boardgame method `resign` (outside checkmate/agreement). Each is driven through the adapter's tap plan and folded through the engine.
   - `HM/lib/browser/pages/needs-decision.ts`:
@@ -5036,6 +5630,12 @@ Expected: `EXIT=0` three times; the judge shows `files: 7`, `failed: 0`. The rat
   - every new-scenario line prints `EXIT=0` or `EXIT=1`;
   - the run's `results.json` holds at least one case per new key;
   - `life-bracket-decider-exercised` has `checked > 0` on every run with a bracket stage.
+
+  Then run Task 7's status-set sweep on the merged lane (preflight C19), and list in the report every set it prints as unclassified that this lane introduced (file, anchor, use site). The lane does not edit the ledger; Task 17 adds the rows.
+
+  ```bash
+  cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-harness/apps/web && rm -f "$TMPDIR/w2a-t14s.json" && pnpm vitest run src/lib/__tests__/status-set-sweep.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t14s.json"; echo EXIT=$?; jq -r '.testResults[].assertionResults[] | select(.status=="failed") | .failureMessages[]' "$TMPDIR/w2a-t14s.json" | head -40
+  ```
 
 - [ ] **Step 9: Mutate (runner)** — `MUT/t14.json`
 
@@ -5091,11 +5691,17 @@ Expected: `EXIT=0`, with every row killed or carrying a recorded reason the revi
     | { kind: "void-last" } | { kind: "finalize" };
   export interface BracketCase { stageKind: StageKind; sport: string; play: PlayResult; actions: readonly Action[]; hasLoserLine: boolean }
   export interface BracketExpect {
-    status: "scheduled" | "decided" | "needs_decision" | "abandoned" | "finalized";
+    status: "scheduled" | "in_play" | "decided" | "needs_decision" | "abandoned" | "finalized"; // in_play: a chess game awaiting its tie-break (ruling C12)
     advances: { winner: "home" | "away"; loser: "home" | "away" | null; method: string } | null;
     refused: readonly { index: number; code: string }[]; // which actions are refused, by rule
   }
   export function expectBracketFinish(c: BracketCase): BracketExpect;
+  /** The family record `FAMILIES` holds (preflight C29). */
+  export const bracketFinish: {
+    readonly stageKinds: readonly StageKind[]; // ["knockout","double_elim","stepladder","page_playoff","ladder"], from X-BR-1's scope
+    readonly sports: "any";
+    expectAll(cases: readonly BracketCase[]): BracketExpect[];
+  };
   ```
 
 - [ ] **Step 1: Write the tests from the rule rows** (`bracket-finish.test.ts`). Each `it` names the rule row it reads. Its first case is the empty bracket.
@@ -5136,6 +5742,12 @@ describe("reference family bracket-finish (rule rows X-BR-1/2, X-ST-1/2, BG-KO-1
       expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung, winner: "home" }] }).advances, rung).toEqual({ winner: "home", loser: null, method: `tiebreak_${rung}` });
     }
   });
+  it("BG-KO-1 + ruling C12: a drawn chess bracket game awaits its tie-break (in_play, nobody seated); lots is the organiser's settle there", () => {
+    expect(expectBracketFinish(base)).toEqual({ status: "in_play", advances: null, refused: [] });
+    expect(expectBracketFinish({ ...base, actions: [{ kind: "settle", winner: "away", method: "lot", by: "organiser" }] })).toEqual({ status: "decided", advances: { winner: "away", loser: null, method: "settled_lot" }, refused: [] });
+    // the positive pair's negative: after the tie-break decided it, a settle is refused
+    expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung: "rapid", winner: "home" }, { kind: "settle", winner: "away", method: "lot", by: "organiser" }] }).refused).toEqual([{ index: 1, code: "SETTLE_NOT_APPLICABLE" }]);
+  });
   it("BG-KO-2 (W2a enforcement per ruling 82): the armageddon winner the scorer records advances, either side — no draw is recorded in W2a", () => {
     for (const winner of ["home", "away"] as const) {
       expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung: "armageddon", winner }] }), winner).toEqual({ status: "decided", advances: { winner, loser: null, method: "tiebreak_armageddon" }, refused: [] });
@@ -5173,6 +5785,14 @@ Expected: `EXIT=1`; the family is missing.
 
 - [ ] **Step 4: Run green, plus the boundary gate**
 
+The cross-check imports `BRACKET_KINDS` as a VALUE at test time, and that export exists only after Task 3. So P2 waits on loop D for THIS step only (preflight C28): once loop D is merged into `feat/format-matrix-w2a`, merge it into the lane first, as P1 does before its gate:
+
+```bash
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-reference && git merge --no-ff feat/format-matrix-w2a -m "Merge W2a engine into the reference lane (BRACKET_KINDS for the cross-check)"; echo EXIT=$?
+```
+
+The merge brings engine source into the lane's tree; the agent still READS none of it (R8), and the boundary gate below proves the family imports none at runtime.
+
 ```bash
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-reference/packages/reference && rm -f "$TMPDIR/w2a-t15r.json" && pnpm vitest run src/families/bracket-finish.test.ts src/index.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t15r.json"; echo EXIT=$?
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-reference && node --experimental-strip-types scripts/reference-boundary.ts; echo EXIT=$?
@@ -5187,9 +5807,10 @@ Expected: `EXIT=0` both; the judge shows `files: 2` and `failed: 0`. The boundar
   - each of BG-KO-1's three rungs' method strings;
   - BG-KO-2's recorded winner (mutated to always "home");
   - GN-KO-1;
-  - the finalize refusal.
+  - the finalize refusal;
+  - ruling C12's tie-break-phase settle (the branch that accepts a settle while the chess tie-break is pending, mutated to refuse).
 
-  Expected: `EXIT=0`, 9 rows killed.
+  Expected: `EXIT=0`, 10 rows killed.
 
 - [ ] **Step 6: Commit on the lane** — `feat(reference): bracket-finish family from the W2a rule rows (R8, independent of the engine fix) (T15)`. Report the `NotRuled` list, then run lane P2's Opus review and merge back.
 
@@ -5233,21 +5854,40 @@ Before believing the run:
 
 Wait with `gh run watch <id> --exit-status` in a background command that writes `EXIT=$?` itself. A run reported "cancelled" is not a pass. A run whose jobs are all red with zero steps in about 3 seconds is billing or a missing runner, not a defect (memory). Either one is re-dispatched, never judged.
 
-- [ ] **Step 3: Download and judge regression against the W1d baseline**
+- [ ] **Step 3: Download, then judge each layer against its W1d baseline** (controller ruling C30)
+
+What `tools/matrix/judge.ts` actually does (read, not assumed):
+- `regression` refuses (exit 2, `UnexpectedCase`) a `--now` that holds any case not in `--expect`, and (`ExpectedAbsent`) one that lacks an expected case (`holdsExactly`, `judge.ts:209-220`). So `--expect` is the run's OWN case-id list, read from `--now` with jq — never `expect-77.json`, which would be refused.
+- It refuses `compared 0` itself (`NoneCompared`, exit 2), so a zero-judged layer cannot pass silently.
+- Its only verdict line is `<run> against the baseline <run>: compared N cases; K regressions`, then one line per regression `  <caseId>: <was> → <now> — <reason>`, then `exit <0|1>: …`. `--json-out` writes the same as `JudgeOut` (`regressed[]`, `compared`, `absent[]`).
+- It prints NO newly-green list. "Newly red" is therefore `K regressions` (`.regressed | length` in the JSON); "the 77 are green" is a separate jq check over the results, below.
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && R=docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs && rm -rf "$R/w2a-final/ci" && gh run download <id> --name merged --dir "$R/w2a-final/ci"; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && R=docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs && pnpm matrix:judge regression --baseline "$R/w1d-baseline/L3/results.json" --now "$R/w2a-final/ci/L3/results.json" --expect "$R/w2a-repro/expect-77.json" > "$R/w2a-final/judge-regression.txt" 2>&1; echo EXIT=$?; tail -20 "$R/w2a-final/judge-regression.txt"
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && R=docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs && rm -rf "$R/w2a-final/ci" && gh run download <id> --name merged --dir "$R/w2a-final/ci"; echo EXIT=$?; ls -R "$R/w2a-final/ci" | head -40
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && R=docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs && for L in L1 L2 L3; do NOW="$R/w2a-final/ci/$L/results.json"; if [ ! -f "$NOW" ]; then echo "$L: NOT IN THE CI ARTIFACT"; continue; fi; jq '[.cases[].caseId]' "$NOW" > "$TMPDIR/w2a-expect-$L.json"; pnpm matrix:judge regression --baseline "$R/w1d-baseline/$L/results.json" --now "$NOW" --expect "$TMPDIR/w2a-expect-$L.json" --json-out "$R/w2a-final/judge-$L.json" > "$R/w2a-final/judge-$L.txt" 2>&1; echo "$L EXIT=$?"; head -1 "$R/w2a-final/judge-$L.txt"; jq -c '{compared, newlyRed: (.regressed|length), absent: (.absent|length)}' "$R/w2a-final/judge-$L.json"; done
 ```
 
-Expected: `EXIT=0`. The judge reports:
-- `newly-red: 0`;
-- all 77 of `expect-77.json` are in `newly-green`, with no expected cell left red;
-- the counted-cases line is not 0 (zero judged is a failure, R25).
+Pin the artifact's internal paths from the `ls -R` first; if a layer's results sit under another name, `NOW` follows the file and the deviation is written into `IDX`.
 
-Pin the merged artifact's internal paths with `ls -R "$R/w2a-final/ci" | head` before the judge line. If the L3 results sit under another name, the judge's `--now` follows the file, and the deviation is written into `IDX`.
+Expected, per layer the artifact holds:
+- `EXIT=0` (exit 1 is a regression, exit 2 a refusal — neither is a pass);
+- the first line's `compared N` with N > 0, and `newlyRed: 0`;
+- `absent` is read and recorded (a case the W1d baseline held and the CI run lacks); a non-zero `absent` goes to the orchestrator.
 
-A newly-red cell stops E2. It goes to the orchestrator as a finding with its cell, scenario and first divergent event. It is never fixed in E2, and it is never re-baselined (R10).
+Then "the 77 are green", per layer. The ids that CI's artifact does not hold (L1/L2 if the full dispatch did not run them) are read from Step 1's local runs, `TR/w2a-final/local/<L>/results.json`:
+
+```bash
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && R=docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs && node -e '
+const fs=require("fs"),p=require("path");const R=process.argv[1];const want=JSON.parse(fs.readFileSync(R+"/w2a-repro/expect-77.json","utf8"));
+const seen=new Map();let read=0;
+for(const L of ["L1","L2","L3"]){for(const src of [R+"/w2a-final/ci/"+L+"/results.json",R+"/w2a-final/local/"+L+"/results.json"]){if(!fs.existsSync(src))continue;
+ for(const c of JSON.parse(fs.readFileSync(src,"utf8")).cases){read++;if(want.includes(c.caseId)&&!seen.has(c.caseId))seen.set(c.caseId,{layer:L,state:c.state,src:p.relative(R,src)});}}}
+const missing=want.filter((id)=>!seen.has(id));const notGreen=[...seen].filter(([,v])=>v.state!=="works");
+console.log(JSON.stringify({expected:want.length,read,found:seen.size,works:seen.size-notGreen.length,missing:missing.slice(0,10),notGreen:notGreen.slice(0,10)}));
+process.exit(want.length>0&&read>0&&missing.length===0&&notGreen.length===0?0:1)' "$R"; echo EXIT=$?
+```
+
+Expected: `EXIT=0`, with `found` = `works` = `expected` (77, or Task 1's recorded count if it removed a non-reproducing id), `missing: []` and `notGreen: []`. `works` is `CASE_STATES`'s ✅ (`tools/matrix/lib/results.ts:44-48`).
 
 - [ ] **Step 4: The swiss_playoff R4 cells, read against the SW-H1 flip note (spec §8 item 3; ruling 70).** Read the swiss_playoff R4 cells from the CI results with `jq` (the field names are pinned from the file first), and print the count read. Zero read is a failure.
 
@@ -5262,12 +5902,17 @@ The classification is written into `IDX`. Anything other than "the note predicts
 
 ```bash
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && pnpm matrix:render; echo EXIT=$?; git diff --stat -- docs/superpowers/specs/2026-09-27-format-matrix-prompts/MATRIX.md
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && jq '[.. | objects | select(has("AWAITING_PROOF"))] | length, ([.. | .AWAITING_PROOF? // empty] | flatten | length)' docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/plans.lock.json
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f "$TMPDIR/w2a-t16r.json" && pnpm vitest run test/rules-reference.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t16r.json"; echo EXIT=$?; jq -c '{passed: .numPassedTests, total: .numTotalTests, failed: .numFailedTests}' "$TMPDIR/w2a-t16r.json"
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && grep -a -c 'const AWAITING_PROOF: ReadonlyMap<string, string> = new Map(\[\]);' packages/engine/test/rules-reference.test.ts; grep -a -A3 'const AWAITING_PROOF' packages/engine/test/rules-reference.test.ts
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && rm -f "$TMPDIR/w2a-t16m.json" && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w2a-t16m.json" --testTimeout=30000 tools/matrix/__tests__/committed-matrix.test.ts; echo EXIT=$?; jq -c '{passed: .numPassedTests, total: .numTotalTests}' "$TMPDIR/w2a-t16m.json"
 ```
+
+(`AWAITING_PROOF` lives in `rules-reference.test.ts`, never in `plans.lock.json`; preflight C31.)
 
 Expected:
 - `matrix:render` `EXIT=0`, and the `MATRIX.md` diff changes only the W2a rows (X-BR, X-ST, X-DR, BG-KO, CA-KO, GN-KO, CK-KO, and the 77 baseline cells);
-- `AWAITING_PROOF` holds 0 entries.
+- `rules-reference.test.ts` `EXIT=0` with `passed` = `total` > 0, and the grep count is `1`: the literal reads `new Map([])` (every rule proved);
+- `committed-matrix.test.ts` `EXIT=0` with `passed` = `total` > 0, after the lock entries below are appended (the evidence-integrity sweep over `TR/w2a-final/**`).
 
 The `plans.lock.json` entries for W2a point at `TR/w2a-final/ci` and its run id. The lock's schema is the one W1d used (the `w1d` entries are the template; read them first).
 
@@ -5285,11 +5930,12 @@ The `plans.lock.json` entries for W2a point at `TR/w2a-final/ci` and its run id.
 
 **Files:**
 - Modify: `scripts/smoke.ts` (`bracketFinishSuite`, after `hubKnockoutSuite` at `:1967`; called beside it at `:1097`)
+- Modify: `apps/web/src/lib/__tests__/status-set-ledger.ts` (rows for sets lane P1 reported and for `smoke.ts`; preflight C19)
 - Modify: `IDX` (W2a status row and the per-screen verdicts)
 - Create: screenshots under `docs/superpowers/specs/2026-09-27-format-matrix-prompts/evidence/w2a/` (cropped PNGs)
 
 - [ ] **Step 1: The smoke suite** — `bracketFinishSuite`, modelled on `hubKnockoutSuite` (read it first; its helpers, its API wrapper and its cleanup are the pattern). The four flows, each through the real API as the organiser:
-  1. A football knockout semi-final abandoned level: the status is `needs_decision`. Settle `lot` for the away side: decided, `settled_lot`, and the final's slot holds the winner. The public match page text contains "advanced on lot".
+  1. A football knockout semi-final played to full time level with no decider (the C18 stream, Task 11): the status is `needs_decision` (an ABANDONED one would read `abandoned`, D3 order 2). Settle `lot` for the away side: decided, `settled_lot`, and the final's slot holds the winner. The public match page text contains "advanced on lot".
   2. A chess knockout game drawn, then `boardgame.tiebreak` armageddon naming the away side as the winner (ruling 82: the scorer records the winner): decided, `tiebreak_armageddon`, the away side seated.
   3. A generic knockout `generic.result` level: refused 409 `LEVEL_RESULT_IN_BRACKET`, and the fixture is unchanged.
   4. A scorer-token `core.settle`: refused 403 `FORBIDDEN`, and the fixture is unchanged (X-ST-2).
@@ -5301,12 +5947,12 @@ S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh; cd /Users/ashokhein/git
 S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh; cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && eval "$($S env --label w2a)" && pnpm smoke > "$TMPDIR/w2a-smoke.log" 2>&1; echo EXIT=$?; grep -a -n "bracketFinish\|PASS\|FAIL" "$TMPDIR/w2a-smoke.log" | tail -20
 ```
 
-Expected: `EXIT=0`, and the log shows the four `bracketFinish` flows passed. Mutate once: replace flow 3's expected code with `SEQ_CONFLICT` by hand through the runner (`MUT/t17.json`, killer `{ cwd: ".", files: [] }` run as the smoke command), and confirm smoke goes red. Record it, then restore.
+Expected: `EXIT=0`, and the log shows the four `bracketFinish` flows passed. There is no `MUT/t17.json`: the runner runs vitest killers only and refuses a killer with no `files` (preflight C1), and the product guards these flows reach are each mutated in their own task's runner list (Tasks 4, 7, 8, 9). Each flow's assertions name the code they expect and count what they read, so a flow that checks nothing fails.
 
 - [ ] **Step 2: Whole e2e spec files touched by the wave, locally** — never a `-g` slice (R18, class 21). The list comes from a grep of the selectors and routes the wave changed, not from filenames (class 16):
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web && grep -a -l "needs-decision\|settle-\|pad-tile-tiebreak\|pad-tile-draw\|score-finalize\|match-actions\|needs_decision\|bracket" e2e/*.spec.ts | sort
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web && grep -a -l "needs-decision\|settle-\|data-tile-id\|data-choice-option-id\|score-finalize\|match-actions\|needs_decision\|bracket" e2e/*.spec.ts | sort
 ```
 
 Run each listed file in full on the project its header names, with the commands of Task 11 Step 5 and Task 12 Step 6, against a rebuilt server. Expected: each file reports `unexpected: 0` and `skipped: 0`. `mobile.spec.ts` runs all seven width projects; a serial red count is a floor, so re-run after each fix until a full pass.
@@ -5336,10 +5982,18 @@ Expected: `EXIT=0`, with the score at or above the floor the probe states. The e
 
 ```bash
 cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && pnpm openapi:gen && git diff --exit-code -- openapi; echo EXIT=$?
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web && rtk proxy pnpm exec tsc --noEmit -p tsconfig.json; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web && rtk proxy node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json; echo EXIT=$?
 ```
 
 Expected: `EXIT=0` both. The drift check is the `ci.yml` step's command (read it from `ci.yml` and use that exact line if it differs).
+
+Then the status-set sweep, on the fully merged branch (preflight C19). Add a ledger row for every set lane P1 reported and every set `smoke.ts` now holds, each with a `why` read at its use site, and re-run until green:
+
+```bash
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web && rm -f "$TMPDIR/w2a-t17s.json" && pnpm vitest run src/lib/__tests__/status-set-sweep.test.ts --reporter=json --outputFile="$TMPDIR/w2a-t17s.json"; echo EXIT=$?; jq -c '{passed: .numPassedTests, total: .numTotalTests}' "$TMPDIR/w2a-t17s.json"
+```
+
+Expected: `EXIT=0`, `passed` = `total` > 0.
 
 - [ ] **Step 6: Open the PR, then the heavy checks once, on CI, in parallel.** The PR body:
   - leads with the matrix rows the wave turns green (R27): each rule row, the 77 cells, and the five new scenarios, with the CI run id from Task 16;
@@ -5406,13 +6060,14 @@ Verdict: "Ready", or "Needs fixes" with each fix routed to the loop that owns th
 | Spec | Requirement | Task |
 |---|---|---|
 | §1 done-when 1 | The 77 cases are green | 16 Step 1 (local), Step 3 (CI) |
-| §1 done-when 2 | Judge regression: no new red anywhere, W3–W7 included | 16 Step 3 |
+| §1 done-when 2 | Judge regression: no new red anywhere, W3–W7 included | 16 Step 3 (per layer, `--expect` = the run's own ids; ruling C30) |
 | §1 done-when 3 | NEW-H1 reproduced and fixed, or a false premise | 1, 10 |
 | §1 done-when 4; §3; §5.3; §6 | Every ruling has a signed row in `packages/engine/rules/` and a test naming it | 2 (rows and checker); each later task names its row |
 | §1 done-when 5; §9 | The gates | Every task's four types; Task 0 tooling; Global Constraints; 17 |
+| §2.3 | Auto-walkover of a held fixture on withdrawal deferred to W2b (C17) | 7 Step 6 (the set stays unchanged), 8 Step 1 (Review Focus 5) |
 | §2.2 | SC-O1, SC-O2, SC-X1, SC-X3, SC-O5 refusal copy, checklist §4/§7 items | 3, 4, 8, 11 (SC-O5 copy via `engineError.LEVEL_RESULT_IN_BRACKET`, 4 locales), 14 |
 | §4 | Approach A: hold, then settle; no new outcome kind | 4, 7, 8 |
-| §5.1 | `core.settle` kernel-owned, precondition, `settled_<m>`, not stage-aware; `outcomeOf` at every reader | 4 |
+| §5.1 | `core.settle` kernel-owned, the ONE precondition `settleApplies` (C12), `settled_<m>`, not stage-aware; `outcomeOf` at every reader; a withdrawn winner refused (C17) | 4 (predicate), 5 (boardgame `awaitingDecider`), 8 (withdrawn guard) |
 | §5.2 | `bracketDeciders`; boardgame tie-break; carrom extra board; `supportsDraws` allow-list (americano kept); stall tests rewritten | 3, 5 |
 | §5.4 item 1 | Deciders by stage kind at every caller; a frozen snapshot wins | 6 |
 | §5.4 items 2, 6 | Status rule; `needs_decision` in every status set | 7 |
@@ -5420,7 +6075,7 @@ Verdict: "Ready", or "Needs fixes" with each fix routed to the loop that owns th
 | §5.4 item 5 | Organiser check | 9 |
 | §5.4 item 7 | NEW-H1 `feederIsDead` | 10 |
 | §5.4 item 8 | API: `openapi:gen` | 7 Step 4 (end), 17 Step 5 |
-| §5.5 UI-1 | Needs-a-decision block, settle dialog, run-sheet chip | 11 |
+| §5.5 UI-1 | Needs-a-decision block (bracket kind AND `settleApplies`, C12), settle dialog, run-sheet chip | 11 |
 | §5.5 UI-2 | Pad stage kind, Draw hidden, chess three steps | 12 |
 | §5.5 public | Sentences, status line, bracket, 4 locales | 13 |
 | §5.6 items 1–3 | Generator breadth, Settle in the model, adapters and page objects | 14 |
@@ -5437,15 +6092,17 @@ No spec requirement is unmapped.
 
 **3. Type consistency.** These names are used identically across tasks:
 - `forbidsLevelResult(kind)` (Tasks 3, 6, 8, 11, 12, 14);
-- `isLevelOutcome` (3, 8, 11, 14);
+- `isLevelOutcome` (3, 4, 8, 14);
 - `outcomeOf(module, folded)` (4, 8, 14);
+- `settleApplies(module, { outcome, abandoned, state })` and the optional `awaitingDecider(state)` hook (4, 5, 11);
+- `declaredCfgs(module)` from `@seazn/engine/testkit` (3, 4, 5, 14);
 - `SETTLE_METHODS` / `settledMethod` (4, 11, 13, 14);
 - `TIEBREAK_RUNGS`, `BOARDGAME_TIEBREAK_TYPE`, `CHESS_SCORE` (5, 12, 13, 14);
 - `resolveFixtureCfg(snapshot, divisionCfg, stage, module)`, 4 arguments (6);
 - `loadFixturePadCfg → { cfg, stageKind }` (6, 11, 12);
 - status `needs_decision` and `FIXTURE_STATUSES` (7, 11, 13, 14);
 - `ORGANISER_ONLY_EVENT_TYPES` (9, 11, 14);
-- the Task 11 testids (11, 14);
+- the Task 11 testids (11, 14); the pad has NO new testids — `[data-tile-id]` / `[data-choice-option-id]` (12, 14, 17);
 - `stageCfg` (14 only; the harness mirror of 6).
 
 **4. Review Focus.** Each of the five lines has its test in its owning task:
@@ -5453,5 +6110,7 @@ No spec requirement is unmapped.
 2. → Task 4 Step 1 plus Task 11 Step 4;
 3. → Task 4 Step 1;
 4. → Task 6 Step 1 plus Task 8 Step 1;
-5. → Task 8 Step 1.
+5. → Task 8 Step 1 (ruling C17), plus Task 11 Step 4's refused-settle test.
+
+**5. Preflight conflicts C1–C34** (`.superpowers/sdd/2026-10-08-format-matrix-w2a/preflight-scan.md`) are applied in the tasks they name; each edit cites its `C<n>`. C12, C17 and C30 follow the controller's rulings; the rest follow the scan's proposed resolutions, with the facts read from the tree.
 
