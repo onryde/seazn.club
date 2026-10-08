@@ -8,7 +8,7 @@ import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node
 import { availableParallelism, tmpdir, totalmem } from "node:os";
 import { join, matchesGlob, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseMutateRanges, rangesFromDiff, rangesFromUntracked, reportScopeProblems, snapshotForm, verdictsFromReport } from "../scripts/stryker-changed.mjs";
+import { parseMutateRanges, rangesFromDiff, rangesFromUntracked, rangesWithoutMutants, reportScopeProblems, snapshotForm, verdictsFromReport } from "../scripts/stryker-changed.mjs";
 import { resolveGroup } from "../scripts/stryker-cuts.mjs";
 import { STRYKER_EXCLUDED, STRYKER_GROUPS, STRYKER_PLACEMENT_OUT_OF_SCOPE, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
@@ -218,11 +218,11 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
   it("reportScopeProblems: a report of exactly the expected ranges has none; another file's report, or a mutant past either end of a range, is named", () => {
     const ranges = ["src/core/types.ts:91-101"];
     expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 91), mutantAt("b", 101)] }, ranges), ranges)).toEqual([]);
-    // a report left by a run of another file: the run's own ranges differ, its mutant lies outside, the expected file is absent
+    // a report left by a run of another file: the run's own ranges differ and its mutant lies outside. The expected file being
+    // absent is NOT a problem of its own (loop D): a fresh run whose range holds no mutable code writes exactly that report.
     expect(reportScopeProblems(reportOf({ "src/core/events.ts": [mutantAt("x", 15)] }, ["src/core/events.ts:10-20"]), ranges)).toEqual([
       'the report\'s config.mutate ["src/core/events.ts:10-20"] is not the expected ["src/core/types.ts:91-101"]',
       "mutant x at src/core/events.ts:15 lies outside every expected range",
-      "expected range src/core/types.ts:91-101: the report holds no entry for src/core/types.ts",
     ]);
     // the right file, the wrong lines: one below the range, one above it
     expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("lo", 90), mutantAt("in", 95), mutantAt("hi", 102)] }, ranges), ranges)).toEqual([
@@ -233,9 +233,29 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
     expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 95)], "src/core/events.ts": [mutantAt("e", 95)] }, ranges), ranges)).toEqual([
       "mutant e at src/core/events.ts:95 lies outside every expected range",
     ]);
-    // two ranges: a mutant inside the second is in scope; a range whose file has an entry but no mutant is not "absent"
+    // two ranges: a mutant inside the second is in scope; a range with no mutant, its file present or absent, is no problem
     const two = ["src/core/types.ts:91-101", "src/core/events.ts:10-20"];
     expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 95)], "src/core/events.ts": [] }, two), two)).toEqual([]);
+    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] }, two), two)).toEqual([]);
+  });
+
+  // Loop D, real use: a --base range over lines with no mutable code (imports, an interface) makes Stryker generate no mutant
+  // there, and a file with none is absent from the report ("Instrumented 2 source file(s)" for 3 ranges, measured). The run's
+  // own config.mutate already binds the report to this run, so such a range is listed, never refused.
+  it("rangesWithoutMutants: a range none of whose lines holds a mutant (its file absent, or present without one there) is listed in --expect order; a range holding one is not", () => {
+    const two = ["src/core/types.ts:91-101", "src/core/events.ts:3-4"];
+    expect(rangesWithoutMutants(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] }, two), two)).toEqual(["src/core/events.ts:3-4"]);
+    expect(rangesWithoutMutants(reportOf({ "src/core/types.ts": [mutantAt("a", 95)], "src/core/events.ts": [] }, two), two)).toEqual(["src/core/events.ts:3-4"]);
+    // a mutant at either end of a range puts it in; one just past either end does not
+    expect(rangesWithoutMutants(reportOf({ "src/core/types.ts": [mutantAt("a", 91)], "src/core/events.ts": [mutantAt("b", 4)] }, two), two)).toEqual([]);
+    expect(rangesWithoutMutants(reportOf({ "src/core/types.ts": [mutantAt("lo", 90), mutantAt("hi", 102)], "src/core/events.ts": [mutantAt("b", 3)] }, two), two)).toEqual(["src/core/types.ts:91-101"]);
+    // the right line of another file does not put a range in, and two ranges of ONE file are judged apart
+    expect(rangesWithoutMutants(reportOf({ "src/core/types.ts": [mutantAt("a", 95), mutantAt("x", 3)] }, two), two)).toEqual(["src/core/events.ts:3-4"]);
+    const same = ["src/core/types.ts:1-5", "src/core/types.ts:91-101"];
+    expect(rangesWithoutMutants(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] }, same), same)).toEqual(["src/core/types.ts:1-5"]);
+    // the empty cases: a report with no file lists every range (the CLI then refuses it for zero mutants); no range lists none
+    expect(rangesWithoutMutants(reportOf({}, two), two)).toEqual(two);
+    expect(rangesWithoutMutants(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] }, []), [])).toEqual([]);
   });
 
   // Re-review N-1: an old report over a STRICT SUBSET of this run's ranges (types.ts:91-95, now 91-101) holds only in-range
@@ -266,8 +286,38 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
       const mine = run("--expect", "src/core/types.ts:91-101");
       expect([mine.status, mine.stderr]).toEqual([0, ""]);
       expect(mine.stdout).toContain('{"mutants":1,"killed":1,"timeout":0,"survived":0,"noCoverage":0}');
+      expect(mine.stdout).not.toContain("no mutants generated");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }, spawnBudget(4));
+
+  it("the --report CLI passes a fresh report whose other range generated no mutant, naming that range; a stale, unbound or out-of-range report, or zero mutants overall, still exits 2 (loop D)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "stryker-changed-report-"));
+    try {
+      const M = "src/core/types.ts:91-101,src/core/events.ts:3-4";
+      const two = M.split(",");
+      const run = (report: unknown) => {
+        const file = join(dir, "changed.json");
+        writeFileSync(file, JSON.stringify(report));
+        return spawnSync(process.execPath, ["scripts/stryker-changed.mjs", "--report", file, "--expect", M], { cwd: ENGINE, encoding: "utf8", timeout: SPAWN_MS, env: childEnv({}) });
+      };
+      const fresh = run(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] }, two));
+      expect([fresh.status, fresh.stderr]).toEqual([0, ""]);
+      expect(fresh.stdout.split("\n").filter((l) => l.includes("no mutants generated"))).toEqual(["src/core/events.ts:3-4: no mutants generated (non-mutable lines)"]);
+      expect(fresh.stdout).toContain('{"mutants":1,"killed":1,"timeout":0,"survived":0,"noCoverage":0}');
+      // the same files from a run of only the first range: an earlier run's report, refused on its config.mutate
+      const stale = run(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] }, [two[0]!]));
+      expect([stale.status, stale.stderr]).toEqual([2, expect.stringMatching(/not this run's report[^]*config\.mutate \["src\/core\/types\.ts:91-101"\] is not the expected/)]);
+      const unbound = run(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] }, null));
+      expect([unbound.status, unbound.stderr]).toEqual([2, expect.stringMatching(/records no config\.mutate/)]);
+      const outside = run(reportOf({ "src/core/types.ts": [mutantAt("a", 95), mutantAt("hi", 102)] }, two));
+      expect([outside.status, outside.stderr]).toEqual([2, expect.stringMatching(/mutant hi at src\/core\/types\.ts:102 lies outside every expected range/)]);
+      // anti-vacuity holds: every range non-mutable is a run that tested nothing, refused whether the files are absent or empty
+      for (const files of [{}, { "src/core/types.ts": [], "src/core/events.ts": [] }] as Record<string, ReturnType<typeof mutantAt>[]>[]) {
+        const none = run(reportOf(files, two));
+        expect([none.status, none.stderr]).toEqual([2, expect.stringMatching(/zero mutants: refusing a vacuous pass/)]);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, spawnBudget(6));
 
   // Re-review N-2: git's empty tree is a fixed object every git has, so diffing against it reads no history (CI's shallow clone
   // is fine) and names every file under src/ as added: megabytes of diff, past execFileSync's 1 MB default buffer.
