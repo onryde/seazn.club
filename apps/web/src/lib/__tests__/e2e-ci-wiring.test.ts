@@ -33,7 +33,16 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { sitemapWindowOverride } from "../sitemap-window";
 import { FakeIngest } from "../../server/relay/fakes";
-import { DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, TUNABLE_NAMES, tunable } from "../../server/relay/config";
+import {
+  AUTO_START_RETRY_SECONDS,
+  AUTO_STOP_AFTER_RESULT_SECONDS,
+  CODE_GRACE_AFTER_FINISH_MINUTES,
+  DEAD_PHONE_TAKEOVER_SECONDS,
+  PHONE_LOST_LIVE_MINUTES,
+  PHONE_SILENT_FLOOR_SECONDS,
+  TUNABLE_NAMES,
+  tunable,
+} from "../../server/relay/config";
 
 /** apps/web — this file lives at apps/web/src/lib/__tests__/. */
 const WEB = resolve(import.meta.dirname, "../../..");
@@ -470,6 +479,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // ask 10 and W19 (on R10's shortened tunables), the cron end, the free restarts, Revoke & reissue, a finished
   // fixture's code, and the panel's states at three widths.
   "capture-phone.spec.ts",
+  // Capture QR v2 PR-2 (plan T8) — automatic streaming: the switch, a match started on a device link starting the
+  // broadcast on the paired phone's next beat (and the switched-off negative), the automatic stop after the tuned delay,
+  // A12's block by the panel's Stop (alone, against the phone's own stop), A15, a refused start's retry, and the
+  // switch's API answers.
+  "capture-auto.spec.ts",
 ];
 
 afterEach(() => {
@@ -974,22 +988,51 @@ describe("the walkthrough's fake phone-connect delay", () => {
 // budgeted from the same variables — so, like FAKE_INGEST_CONNECT_AFTER_MS above, each must reach BOTH e2e-parallel's
 // server and its Playwright runner with one value. Nowhere else: e2e-serial and e2e-mobile run no capture walkthrough,
 // and a shortened timing there would only end their sessions early. The DEFAULTS stay pinned by config.test.ts (class 20);
-// this pins the CI value. The names are read from the walkthrough's own env guard, not typed here.
-describe("the capture walkthrough's shortened timings (R10)", () => {
+// this pins the CI value. The names are read from the walkthroughs' own env guards, not typed here.
+//
+// PR-2 (plan T8, owner OK OG-E 2026-10-07): capture-auto.spec.ts adds the automatic stop's delay and the refused start's
+// retry spacing. Reading the names from the specs alone could not catch a tunable NOBODY demands — a new TUNABLE_NAMES
+// entry with no `wholeEnv(…)` in any walkthrough and no line in e2e.yml would leave both lists agreeing, and CI running
+// the default under a walkthrough budgeted for the short one. So the union the walkthroughs demand is also pinned to
+// TUNABLE_NAMES itself, less the one tunable no walkthrough shortens (named below, with why).
+describe("the capture walkthroughs' shortened timings (R10, PR-2)", () => {
   const strip = (text: string) =>
     text
       .split("\n")
       .map((line) => line.replace(/(^|\s)#.*$/, ""))
       .join("\n");
   const valueOf = (body: string, name: string) => new RegExp(`^\\s+${name}: *"?([^"\\s]*)"?\\s*$`, "m").exec(body)?.[1];
-  const DEFAULTS: Record<string, number> = { DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS };
+  const DEFAULTS: Record<(typeof TUNABLE_NAMES)[number], number> = {
+    DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES,
+    AUTO_STOP_AFTER_RESULT_SECONDS, AUTO_START_RETRY_SECONDS,
+  };
+  /** The capture walkthroughs whose env guards demand server tunables. */
+  const SPECS = ["capture-phone.spec.ts", "capture-auto.spec.ts"];
+  /** The one tunable no walkthrough shortens: capture-phone's finished-fixture case reaches the code's grace by
+   *  BACKDATING `finished_at` in SQL, not by waiting it out, so CI runs the default 120 minutes on purpose. */
+  const NOT_SHORTENED_IN_CI: readonly string[] = ["CODE_GRACE_AFTER_FINISH_MINUTES"];
+  const demanded = (spec: string): string[] => {
+    const text = readFileSync(join(WEB, "e2e/walkthrough", spec), "utf8");
+    return [...text.matchAll(/wholeEnv\("([A-Z_]+)"/g)].map((m) => m[1]!).filter((n) => (TUNABLE_NAMES as readonly string[]).includes(n));
+  };
 
-  it("each tunable the capture walkthrough demands is set, to the SAME shortened value, on e2e-parallel's Start server and Playwright steps — and on no other job", async () => {
-    const spec = readFileSync(join(WEB, "e2e/walkthrough/capture-phone.spec.ts"), "utf8");
-    const names = [...spec.matchAll(/wholeEnv\("([A-Z_]+)"/g)].map((m) => m[1]!).filter((n) => (TUNABLE_NAMES as readonly string[]).includes(n));
-    expect(names, "the walkthrough's env guard names exactly these three server tunables").toEqual(["DEAD_PHONE_TAKEOVER_SECONDS", "PHONE_LOST_LIVE_MINUTES", "PHONE_SILENT_FLOOR_SECONDS"]);
+  it("the walkthroughs together demand EVERY server tunable but the one CI leaves at its default — so a new tunable nobody wires goes red here", () => {
+    const perSpec = SPECS.map((spec) => [spec, demanded(spec)] as const);
+    // Anti-vacuity per file: a guard renamed away from `wholeEnv(` would read as demanding nothing.
+    for (const [spec, names] of perSpec) expect(names.length, `${spec}'s env guard names at least one server tunable`).toBeGreaterThan(0);
+    const union = [...new Set(perSpec.flatMap(([, names]) => names))].sort();
+    const owed = TUNABLE_NAMES.filter((n) => !NOT_SHORTENED_IN_CI.includes(n)).sort();
+    expect(owed.length, "anti-vacuity: TUNABLE_NAMES less the exemption is not empty").toBeGreaterThan(0);
+    expect(union, "every tunable a walkthrough waits on is demanded by one; a tunable missing here runs its DEFAULT in CI").toEqual(owed);
+    for (const n of NOT_SHORTENED_IN_CI) expect(TUNABLE_NAMES as readonly string[], `the exemption ${n} is a real tunable`).toContain(n);
+  });
+
+  it("each tunable a capture walkthrough demands is set, to the SAME shortened value, on e2e-parallel's Start server and Playwright steps — and on no other job", async () => {
+    const names = [...new Set(SPECS.flatMap(demanded))];
     const walkthrough = projectNamed(await configFor(undefined), "walkthrough");
-    expect(selects(walkthrough, "walkthrough/capture-phone.spec.ts"), "premise: the walkthrough project selects capture-phone.spec.ts").toBe(true);
+    for (const spec of SPECS) {
+      expect(selects(walkthrough, `walkthrough/${spec}`), `premise: the walkthrough project selects ${spec}`).toBe(true);
+    }
 
     const yml = strip(readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8"));
     const start = yml.indexOf("\n  e2e-parallel:\n");
@@ -1015,13 +1058,15 @@ describe("the capture walkthrough's shortened timings (R10)", () => {
       expect(runner, `${name}: the runner budgets from a different value than the server runs`).toBe(server);
       // The server's own parse under CI's ENV_NAME: honoured (a junk value throws at the first stream), and SHORTER
       // than the default, which is what the walkthrough's guard demands.
-      const honoured = tunable(name as (typeof TUNABLE_NAMES)[number], DEFAULTS[name]!, { ENV_NAME: "ci", [name]: server });
+      const fallback = DEFAULTS[name as (typeof TUNABLE_NAMES)[number]];
+      const honoured = tunable(name as (typeof TUNABLE_NAMES)[number], fallback, { ENV_NAME: "ci", [name]: server });
       expect(honoured, `${name}=${server} is not what the server runs under ENV_NAME=ci`).toBe(Number(server));
-      expect(honoured, `${name}=${server} is not shorter than its default ${DEFAULTS[name]}`).toBeLessThan(DEFAULTS[name]!);
+      expect(honoured, `${name}=${server} is not shorter than its default ${fallback}`).toBeLessThan(fallback);
       expect(new RegExp(`^\\s+${name}:`, "m").test(elsewhere), `${name} reaches a job other than e2e-parallel`).toBe(false);
       checked++;
     }
-    expect(checked, "tunables checked").toBe(3);
+    // The five the two walkthroughs demand (the first test pins which) — none checked would be a vacuous pass.
+    expect(checked, "tunables checked").toBe(TUNABLE_NAMES.length - NOT_SHORTENED_IN_CI.length);
   });
 });
 
