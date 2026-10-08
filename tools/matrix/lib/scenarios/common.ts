@@ -20,7 +20,7 @@ import {
 import { drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
 import { generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { START, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
-import type { BracketDrive } from "../reference-bracket.ts";
+import { levelKindOf, loserSeatOf, type BracketDrive } from "../reference-bracket.ts";
 import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
@@ -565,7 +565,15 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   if (asked.kind === "settle") rec.settlesPosted++;
   if (asked.kind === "tiebreak") rec.tiebreaksPosted++;
   if (forbidsLevelResult(stage.kind as StageKind)) {
-    rec.bracketDrives.push({ fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked, status: posted.at(-1)?.status ?? null, outcome: productOutcome });
+    // The loser line is read AFTER the post (the product seats it as it decides), from the stage's own rows.
+    const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((r) => r.stage_id === stage.id);
+    const row = rows.find((r) => r.id === f.id);
+    rec.bracketDrives.push({
+      fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked,
+      levelAs: levelKindOf(ctx.spec.sport, cfg, home, away, asked, generated),
+      status: posted.at(-1)?.status ?? null, outcome: productOutcome,
+      loser: row === undefined ? { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } : loserSeatOf(stage.kind, stage.config, row, rows),
+    });
   }
   const foreign = state.last_seq - prior.length;
   if (foreign !== 0) {

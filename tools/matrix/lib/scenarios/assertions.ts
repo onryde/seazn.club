@@ -241,10 +241,15 @@ export function referenceBracketFinish(rec: Recorder, observed: ObservedRun): Ch
   const judgements = rec.bracketDrives.map(judgeDrive);
   const items: Item[] = judgements.flatMap((j) => (j.judged ? [{ ok: j.ok, note: j.note }] : []));
   const skipped = judgements.flatMap((j) => (j.judged ? [] : [j.why]));
+  // A judged drive whose loser line could not be read is judged on everything else: counted and named too.
+  const loserSkipped = judgements.flatMap((j) => (j.judged && j.loserNotJudged !== null ? [j.loserNotJudged] : []));
   const verdict = assertion("life-reference-bracket-finish", items);
-  if (verdict.verdict !== "pass" || skipped.length === 0) return verdict;
-  const why = [...new Set(skipped)].join("; ");
-  return { ...verdict, reason: `${verdict.reason}; ${skipped.length} drive(s) not judged (${why})` };
+  if (verdict.verdict !== "pass" || (skipped.length === 0 && loserSkipped.length === 0)) return verdict;
+  const parts = [
+    ...(skipped.length === 0 ? [] : [`${skipped.length} drive(s) not judged (${[...new Set(skipped)].join("; ")})`]),
+    ...(loserSkipped.length === 0 ? [] : [`loser seat not judged on ${loserSkipped.length} drive(s) (${[...new Set(loserSkipped)].join("; ")})`]),
+  ];
+  return { ...verdict, reason: `${verdict.reason}; ${parts.join("; ")}` };
 }
 
 /** The format lock's answer: usecases/divisions.ts `formatLocked()` throws

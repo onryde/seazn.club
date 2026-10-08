@@ -3,23 +3,31 @@
 // BG-KO-1, CA-KO-1); the products are hand-built or a fake made wrong on purpose. Needs the reference lane merged
 // into this one (the family's exports): red until then.
 import { StageKind } from "@seazn/engine/core";
-import { NoReferenceFamily } from "@seazn/reference";
+import { LEVEL_KINDS, NoReferenceFamily, type LevelKind } from "@seazn/reference";
 import { describe, expect, it } from "vitest";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import type { ObservedFixture, ObservedOutcome, ObservedRun } from "../lib/observed.ts";
-import { Recorder } from "../lib/scenarios/common.ts";
+import { Recorder, decideFixture, setUpDivision } from "../lib/scenarios/common.ts";
 import { referenceBracketFinish } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
-import { bracketCaseOf, judgeDrive, oracleMethod, type BracketDrive } from "../lib/reference-bracket.ts";
-import { resolveSportCfg } from "../lib/sport-cfg.ts";
+import { LevelKindUnread, bracketCaseOf, judgeDrive, levelKindOf, loserSeatOf, oracleMethod, type BracketDrive } from "../lib/reference-bracket.ts";
+import { drawsAllowed, resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
+import { generateStream, levelReachable } from "../lib/streams/index.ts";
+import type { FixtureRow } from "../lib/driver/types.ts";
+import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder } from "@seazn/engine/scheduling";
 import type { RequestedOutcome } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
 
+/** The level kind a hand-built drive plays when a test does not say: its request's own, a drawn game for a `level`
+ *  request, a tie-break and a settle (a chess game and football both END level as a draw). The cases that depend on
+ *  the kind (generic, cricket) say it. */
+const defaultLevel = (a: RequestedOutcome): LevelKind | null =>
+  a.kind === "tie" ? "tie" : a.kind === "draw" || a.kind === "level" || a.kind === "tiebreak" || (a.kind === "settle" && a.after === "level") ? "draw" : null;
 const drive = (over: Partial<BracketDrive> & { asked: RequestedOutcome }): BracketDrive =>
-  ({ fixtureId: "f1", stageKind: "knockout", sport: "football", home: "a", away: "b", status: "decided", outcome: null, ...over });
+  ({ fixtureId: "f1", stageKind: "knockout", sport: "football", home: "a", away: "b", levelAs: defaultLevel(over.asked), status: "decided", outcome: null, loser: { line: "none" }, ...over });
 const win = (winner: string, method?: string): ObservedOutcome => ({ kind: "win", winner, ...(method === undefined ? {} : { method }) });
 
 describe("oracleMethod — the product's method as the oracle names it", () => {
@@ -33,7 +41,7 @@ describe("bracketCaseOf — the harness's drive, in the rulebook's terms", () =>
   it("each request kind maps to its play result and actions, and a walkover has no oracle vocabulary", () => {
     const of = (asked: RequestedOutcome, over: Partial<BracketDrive> = {}) => bracketCaseOf(drive({ asked, ...over }));
     expect(of({ kind: "win", winner: "away" })).toMatchObject({ play: { kind: "win", winner: "away" }, actions: [] });
-    for (const kind of ["level", "draw", "tie"] as const) expect(of({ kind }), kind).toMatchObject({ play: { kind: "level" }, actions: [] });
+    for (const kind of ["level", "draw", "tie"] as const) expect(of({ kind }, { levelAs: kind === "tie" ? "tie" : "draw" }), kind).toMatchObject({ play: { kind: "level" }, actions: [] });
     expect(of({ kind: "settle", then: "home", method: "lot", after: "level" })).toMatchObject({ play: { kind: "level" }, actions: [{ kind: "settle", winner: "home", method: "lot", by: "organiser" }] });
     expect(of({ kind: "settle", then: "away", method: "organiser", after: "abandon" })).toMatchObject({ play: { kind: "none" }, actions: [{ kind: "abandon" }, { kind: "settle", winner: "away", method: "organiser", by: "organiser" }] });
     expect(of({ kind: "tiebreak", rung: "blitz", winner: "home" }, { sport: "boardgame" })).toMatchObject({ play: { kind: "level" }, actions: [{ kind: "tiebreak", rung: "blitz", winner: "home" }] });
@@ -121,6 +129,221 @@ describe("judgeDrive — the product agrees with the oracle on every way a brack
     expect(judged + noFamily).toBe(StageKind.options.length);
     expect(judged).toBeGreaterThan(0);
     expect(noFamily).toBeGreaterThan(0); // league, group, swiss and americano are the draw kinds: no bracket family
+  });
+});
+
+describe("level kinds — each one reaches the oracle as ITSELF (X-BR-1: draw, tie and no_result are different rows)", () => {
+  /** The oracle's answer for a held-or-not result of each kind, from the rule rows (the family's own report table):
+   *  [sport, kind, status the product must show, what the product shows]. GN-KO-1 refuses a generic DRAW (and only a
+   *  draw), BG-KO-1 holds a drawn chess game for its tie-break (in_play), everything else is held (X-BR-2). */
+  const HELD: readonly [string, LevelKind, string][] = [
+    ["generic", "draw", "scheduled"], ["generic", "tie", "needs_decision"], ["generic", "no_result", "needs_decision"],
+    ["boardgame", "draw", "in_play"], ["boardgame", "tie", "needs_decision"], ["boardgame", "no_result", "needs_decision"],
+    ["football", "draw", "needs_decision"], ["football", "tie", "needs_decision"], ["football", "no_result", "needs_decision"],
+    ["cricket", "draw", "needs_decision"], ["cricket", "tie", "needs_decision"], ["cricket", "no_result", "needs_decision"],
+  ];
+
+  it("the drive's level kind is the case's `as`, whichever request played it (level, settle after level, tie-break), counted over every kind", () => {
+    let checked = 0;
+    for (const kind of LEVEL_KINDS) {
+      for (const asked of [{ kind: "level" }, { kind: "settle", then: "home", method: "lot", after: "level" }, { kind: "tiebreak", rung: "rapid", winner: "home" }] as const satisfies readonly RequestedOutcome[]) {
+        const c = bracketCaseOf(drive({ asked, levelAs: kind, sport: asked.kind === "tiebreak" ? "boardgame" : "football" }));
+        expect("notJudged" in c, `${kind}/${asked.kind}`).toBe(false);
+        expect("play" in c && c.play, `${kind}/${asked.kind}`).toEqual({ kind: "level", as: kind });
+        checked++;
+      }
+    }
+    expect(checked).toBe(LEVEL_KINDS.length * 3);
+    expect(LEVEL_KINDS.length).toBeGreaterThan(1);
+  });
+
+  it("a drive that played a level result but recorded no kind is a harness defect, named — never a default", () => {
+    expect(() => bracketCaseOf(drive({ asked: { kind: "level" }, levelAs: null }))).toThrow(LevelKindUnread);
+    expect(() => bracketCaseOf(drive({ asked: { kind: "settle", then: "home", method: "lot", after: "level" }, levelAs: null }))).toThrow(LevelKindUnread);
+    // and a request that plays none needs none: its positive pair
+    expect(bracketCaseOf(drive({ asked: { kind: "win", winner: "home" }, levelAs: null }))).toMatchObject({ play: { kind: "win" } });
+  });
+
+  it("the oracle tells the kinds apart: the SAME held answer agrees for one kind and disagrees for another (generic draw vs tie, chess draw vs tie), over the whole table", () => {
+    let agreed = 0;
+    let disagreed = 0;
+    for (const [sport, kind, status] of HELD) {
+      const held = judgeDrive(drive({ asked: { kind: "level" }, sport, levelAs: kind, status: "needs_decision", outcome: { kind: kind === "no_result" ? "no_result" : kind } as ObservedOutcome }));
+      const ok = status === "needs_decision";
+      expect(held, `${sport}/${kind}`).toMatchObject({ judged: true, ok });
+      if (ok) agreed++; else disagreed++;
+      // The product that shows the status the oracle names agrees (the pair of the line above).
+      const right = judgeDrive(drive({ asked: { kind: "level" }, sport, levelAs: kind, status, outcome: status === "needs_decision" ? { kind: kind === "no_result" ? "no_result" : kind } as ObservedOutcome : null }));
+      // generic draw is refused (index -1): the harness drove it as legal, so the check reds by the refusal either way.
+      expect(right, `${sport}/${kind}`).toMatchObject({ judged: true, ok: sport === "generic" && kind === "draw" ? false : true });
+    }
+    expect(agreed + disagreed).toBe(HELD.length);
+    expect(disagreed).toBe(2); // generic draw (refused) and chess draw (awaits its tie-break): the two rows where a held answer is wrong
+    expect(agreed).toBeGreaterThan(0);
+  });
+
+  it("levelKindOf: a draw or tie request is that kind; a level request is what the ENGINE's fold of its stream says — a draw where the sport ends level as one (drawsAllowed), else a tie — over every sport that reaches a level result; requests that play none are null", () => {
+    let judged = 0;
+    let draws = 0;
+    let ties = 0;
+    for (const sport of SPORT_KEYS) {
+      const cfg = stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
+      if (!levelReachable(sport, cfg, "knockout")) continue;
+      const events = generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "level" } });
+      const got = levelKindOf(sport, cfg, "h", "a", { kind: "level" }, events);
+      expect(got, sport).toBe(drawsAllowed(sport, cfg, "league") ? "draw" : "tie");
+      if (got === "draw") draws++; else ties++;
+      // A settle after the level result reads the same kind from the same events (the settle itself is not played).
+      const settled = generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "settle", then: "home", method: "lot", after: "level" } });
+      expect(levelKindOf(sport, cfg, "h", "a", { kind: "settle", then: "home", method: "lot", after: "level" }, settled), sport).toBe(got);
+      judged++;
+    }
+    expect(judged).toBeGreaterThan(0);
+    expect(draws).toBeGreaterThan(0);
+    expect(ties).toBeGreaterThan(0); // generic and cricket end level as a tie
+    expect(draws + ties).toBe(judged);
+    expect(levelKindOf("football", {}, "h", "a", { kind: "draw" }, [])).toBe("draw");
+    expect(levelKindOf("football", {}, "h", "a", { kind: "tie" }, [])).toBe("tie");
+    for (const asked of [{ kind: "win", winner: "home" }, { kind: "abandon" }, { kind: "settle", then: "home", method: "lot", after: "abandon" }, { kind: "forfeit", by: "home", reason: "walkover" }] as const) {
+      expect(levelKindOf("football", {}, "h", "a", asked, []), asked.kind).toBeNull();
+    }
+  });
+
+  it("levelKindOf reads a chess tie-break as a DRAWN game, from the stream's own result; a stream that folds to a win is refused by name", () => {
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    const tb = generateStream({ sportKey: "boardgame", cfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "tiebreak", rung: "rapid", winner: "home" } });
+    expect(levelKindOf("boardgame", cfg, "h", "a", { kind: "tiebreak", rung: "rapid", winner: "home" }, tb)).toBe("draw");
+    const win = generateStream({ sportKey: "football", cfg: resolveSportCfg("football", offlineBuilderDefault("football")), stageKind: "knockout", home: "h", away: "a", outcome: { kind: "win", winner: "home" } });
+    expect(() => levelKindOf("football", resolveSportCfg("football", offlineBuilderDefault("football")), "h", "a", { kind: "level" }, win)).toThrow(LevelKindUnread);
+    expect(() => levelKindOf("boardgame", cfg, "h", "a", { kind: "tiebreak", rung: "rapid", winner: "home" }, [])).toThrow(LevelKindUnread);
+  });
+});
+
+describe("the loser line — where the ENGINE's bracket wires a loser, and who the product seated there", () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
+  /** Rows of an engine bracket as the product stores them: ext_key = the generator's fixture id, seats from its round 1. */
+  const rowsOf = (gen: { fixtures: readonly { id: string; home?: string; away?: string }[] }, over: Record<string, Partial<FixtureRow>> = {}): FixtureRow[] =>
+    gen.fixtures.map((g, i) => ({ id: `row-${g.id}`, stage_id: "s", pool_id: null, round_no: 1, fixture_no: i + 1, home_entrant_id: g.home ?? null, away_entrant_id: g.away ?? null, status: "scheduled", outcome: null, ext_key: g.id, ...over[g.id] }));
+  const seatOf = (kind: string, rows: readonly FixtureRow[], extKey: string, config: Record<string, unknown> = {}) => loserSeatOf(kind, config, rows.find((r) => r.ext_key === extKey)!, rows);
+
+  it("a page playoff wires ONE loser line: the first qualifier's loser into the second qualifier's home (pp-q1 → pp-q2); no other match has one", () => {
+    const rows = rowsOf(generatePagePlayoff({ entrants: ids(4) }));
+    const lines = rows.map((r) => [r.ext_key, loserSeatOf("page_playoff", {}, r, rows).line] as const);
+    expect(lines.filter(([, l]) => l === "seat").map(([k]) => k)).toEqual(["pp-q1"]);
+    expect(lines.filter(([, l]) => l === "none")).toHaveLength(3);
+    expect(seatOf("page_playoff", rows, "pp-q1")).toEqual({ line: "seat", target: "pp-q2", slot: "home", seated: null });
+    // who sits there is read from the product's row, not assumed
+    const seated = rowsOf(generatePagePlayoff({ entrants: ids(4) }), { "pp-q2": { home_entrant_id: "e2" } });
+    expect(seatOf("page_playoff", seated, "pp-q1")).toMatchObject({ seated: "e2" });
+  });
+
+  it("a stepladder has none, a knockout has one only with a third-place match (the two semis' losers), a four-team double elim has one from each winners'-bracket match", () => {
+    const step = rowsOf(generateStepladder({ entrants: ids(4) }));
+    expect(step.filter((r) => loserSeatOf("stepladder", {}, r, step).line === "seat")).toEqual([]);
+    expect(step).toHaveLength(3);
+    const plain = rowsOf(generateSingleElim({ entrants: ids(4), thirdPlace: false }));
+    expect(plain.filter((r) => loserSeatOf("knockout", {}, r, plain).line === "seat")).toEqual([]);
+    const third = rowsOf(generateSingleElim({ entrants: ids(4), thirdPlace: true }));
+    const semis = third.filter((r) => loserSeatOf("knockout", { thirdPlace: true }, r, third).line === "seat");
+    expect(semis).toHaveLength(2); // the two semi-finals, whoever the engine names them
+    expect(new Set(semis.map((r) => (loserSeatOf("knockout", { thirdPlace: true }, r, third) as { target: string }).target)).size).toBe(1); // one third-place match
+    const de = rowsOf(generateDoubleElim({ entrants: ids(4) }));
+    // Four teams: two WB round-1 matches and the WB final drop their losers into the LB; the LB and the grand final do not.
+    expect(de.filter((r) => loserSeatOf("double_elim", {}, r, de).line === "seat")).toHaveLength(3);
+    expect(de.length).toBeGreaterThan(3);
+  });
+
+  it("unresolved, by name, never guessed: no ext_key, a stage with no generator, an engine layout the product's rows do not match, a size the engine refuses", () => {
+    const rows = rowsOf(generatePagePlayoff({ entrants: ids(4) }));
+    const noKey = rows.map((r) => ({ ...r, ext_key: undefined }));
+    expect(loserSeatOf("page_playoff", {}, noKey[0]!, noKey)).toEqual({ line: "unresolved", why: expect.stringMatching(/carries no ext_key/) });
+    expect(loserSeatOf("league", {}, rows[0]!, rows)).toEqual({ line: "unresolved", why: expect.stringMatching(/no bracket generator for 'league'/) });
+    expect(loserSeatOf("page_playoff", {}, rows[0]!, rows.filter((r) => r.ext_key !== "pp-final"))).toEqual({ line: "unresolved", why: expect.stringMatching(/is not the stage the product stored/) });
+    const five = rowsOf(generateSingleElim({ entrants: ids(5), thirdPlace: false }));
+    expect(loserSeatOf("page_playoff", {}, five[0]!, five)).toEqual({ line: "unresolved", why: expect.stringMatching(/lays out no page_playoff for 5 entrants \(CONFIG_INVALID\)/) });
+  });
+
+  it("an engine that wired two loser lines out of one match, or a loser line into a fixture the product never stored, is unresolved by name (a guard, reached with an injected layout)", () => {
+    const rows = rowsOf(generatePagePlayoff({ entrants: ids(4) }));
+    const doubled = { page_playoff: () => ({ rounds: 3, fixtures: [
+      { id: "pp-q1", round: 0, home: "e1", away: "e2" }, { id: "pp-elim", round: 0, home: "e3", away: "e4" },
+      { id: "pp-q2", round: 1, homeFrom: { fixtureId: "pp-q1", side: "loser" as const }, awayFrom: { fixtureId: "pp-q1", side: "loser" as const } },
+      { id: "pp-final", round: 2, isFinal: true },
+    ] }) } as unknown as Parameters<typeof loserSeatOf>[4];
+    expect(loserSeatOf("page_playoff", {}, rows[0]!, rows, doubled)).toEqual({ line: "unresolved", why: expect.stringMatching(/wires 2 loser lines out of pp-q1/) });
+    // the engine's own layout is the positive pair: one line
+    expect(loserSeatOf("page_playoff", {}, rows[0]!, rows)).toMatchObject({ line: "seat" });
+  });
+
+  /** A drive on a page playoff's first qualifier (4 entrants a b c d: a v b, then the loser into pp-q2 home). */
+  const q1 = (over: Partial<BracketDrive> & { seated: string | null }): BracketDrive => {
+    const { seated, ...rest } = over;
+    return drive({ stageKind: "page_playoff", asked: { kind: "win", winner: "home" }, status: "decided", outcome: win("a"), loser: { line: "seat", target: "pp-q2", slot: "home", seated }, ...rest });
+  };
+
+  it("the loser is judged: the loser seated where the engine wires it agrees; the WINNER there, nobody there, or a stranger there each red on their own", () => {
+    expect(judgeDrive(q1({ seated: "b" }))).toMatchObject({ judged: true, ok: true });
+    const wrong: readonly [string, string | null, RegExp][] = [
+      ["the winner seated on the loser line", "a", /loser: oracle seats away \(b\) in pp-q2 home, product seated a/],
+      ["nobody seated", null, /product seated nobody/],
+      ["a stranger seated", "zz", /product seated zz/],
+    ];
+    let reds = 0;
+    for (const [label, seated, why] of wrong) {
+      const j = judgeDrive(q1({ seated }));
+      expect(j, label).toMatchObject({ judged: true, ok: false });
+      expect(j.judged ? j.note : "", label).toMatch(why);
+      reds++;
+    }
+    expect(reds).toBe(wrong.length);
+  });
+
+  it("a HELD match seats nobody on its loser line either: the loser (or the winner) already there reds, an empty slot agrees; a match with no engine line is not compared", () => {
+    const held = (seated: string | null) => q1({ asked: { kind: "level" }, status: "needs_decision", outcome: { kind: "draw" }, seated });
+    expect(judgeDrive(held(null))).toMatchObject({ judged: true, ok: true });
+    expect(judgeDrive(held("b"))).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/nobody advances, yet the product seated b in pp-q2 home/) });
+    expect(judgeDrive(held("a"))).toMatchObject({ judged: true, ok: false });
+    // line none: whoever sits elsewhere is not this check's business (the bracket invariants own it)
+    expect(judgeDrive(drive({ stageKind: "page_playoff", asked: { kind: "win", winner: "home" }, status: "decided", outcome: win("a"), loser: { line: "none" } }))).toMatchObject({ judged: true, ok: true });
+  });
+
+  it("an unresolved loser line judges everything else, and says it did not judge the loser; the assertion counts and names it", () => {
+    const d = drive({ asked: { kind: "win", winner: "home" }, status: "decided", outcome: win("a"), loser: { line: "unresolved", why: "fixture f1 carries no ext_key" } });
+    expect(judgeDrive(d)).toMatchObject({ judged: true, ok: true, loserNotJudged: "fixture f1 carries no ext_key" });
+    expect(judgeDrive(drive({ asked: { kind: "win", winner: "home" }, status: "decided", outcome: win("a") }))).toMatchObject({ loserNotJudged: null });
+    const rec = new Recorder();
+    rec.bracketDrives.push(d, { ...d, fixtureId: "f2" });
+    const out = referenceBracketFinish(rec, { caseId: "c", facts: [], withdrawal: null, configEdit: null, stages: [{ id: "s1", seq: 1, kind: "knockout", config: {}, field: ["a", "b"], fieldSource: "division", fixtures: [], standings: [], generates: [], pairRounds: [], complete: null }] });
+    expect(out).toMatchObject({ verdict: "pass", checked: 2 });
+    expect(out.reason).toMatch(/loser seat not judged on 2 drive\(s\) \(fixture f1 carries no ext_key\)/);
+  });
+
+  it("through a driver: LIFECYCLE on the page-playoff fake judges the loser line against the engine's wiring (and the plain knockout fake, which keeps no ext_key, says it could not)", async () => {
+    const sport = "football";
+    const variant = offlineBuilderDefault(sport);
+    const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+    const spec: CaseSpec = { caseId: "page_playoff_only|football|LIFECYCLE", row: "page_playoff_only", sport, variant, scenario: "LIFECYCLE", canary: false };
+    const ctx = { driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] };
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 4);
+    await driver.start();
+    const q1Row = driver.fixtures.find((f) => f.ext_key === "pp-q1")!;
+    await decideFixture(ctx, rec, setup, q1Row, { kind: "win", winner: "home" }, setup.stage);
+    expect(rec.bracketDrives).toHaveLength(1);
+    const d = rec.bracketDrives[0]!;
+    const loser = q1Row.away_entrant_id!;
+    expect(d.loser).toEqual({ line: "seat", target: "pp-q2", slot: "home", seated: loser });
+    expect(judgeDrive(d)).toMatchObject({ judged: true, ok: true, loserNotJudged: null });
+    // The same drive with nobody on the loser line reds on exactly the loser.
+    const dropped: BracketDrive = { ...d, loser: { ...(d.loser as Extract<BracketDrive["loser"], { line: "seat" }>), seated: null } };
+    expect(judgeDrive(dropped)).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/product seated nobody/) });
+    const check = (await (async () => {
+      const out = await SCENARIOS.LIFECYCLE.run({ driver: new FakeKnockoutDriver({ pagePlayoff: true }), spec: { ...spec, variant: "win_loss", sport: "generic" }, orgSlug: "o", cfg: resolveSportCfg("generic", "win_loss"), tag: "t", denied: [] });
+      return out.assertions.find((c) => c.id === "life-reference-bracket-finish")!;
+    })());
+    expect(check).toMatchObject({ verdict: "pass" });
+    expect(check.checked).toBeGreaterThan(0);
+    expect(check.reason).not.toMatch(/loser seat not judged/);
   });
 });
 
