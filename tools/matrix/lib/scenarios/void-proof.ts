@@ -28,7 +28,7 @@ import { VOID_EVENT, type FixtureStateOut, type VoidedOut } from "../driver/type
 import { FOLD_OPTIONS, foldStream, lineupsFor } from "../fold.ts";
 import { ledgerEnvelopes, type LedgerEntry } from "../model/ledger-fold.ts";
 import type { CheckResult } from "../results.ts";
-import { sportModule } from "../sport-cfg.ts";
+import { sportModule, stageCfg } from "../sport-cfg.ts";
 import { generateStream } from "../streams/index.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import { assertion, builtAsPosted, foldParity, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
@@ -168,7 +168,8 @@ export async function postThenVoid(ctx: ScenarioContext, rec: Recorder, setup: D
   // because the resumed stream is generated for it, and a policy that moved would be resumed over another stream.
   if (rec.decided !== 0) throw new VoidProofUnfit(sport, `a fixture was already decided (${rec.decided}) — the proof is on the first`);
   const outcome = defaultPolicy(setup, f, stageDrawsOk(ctx, setup.stage), rec.decided);
-  const generated = generateStream({ sportKey: sport, cfg: ctx.cfg, stageKind: setup.stage.kind as StageKind, home, away, outcome });
+  // W2a: the cfg the product folds this stage's fixtures under (a bracket stage's decider overlay on the division's).
+  const generated = generateStream({ sportKey: sport, cfg: stageCfg(sport, ctx.cfg, setup.stage.kind as StageKind), stageKind: setup.stage.kind as StageKind, home, away, outcome });
   assertVoidable(sport, outcome.kind, generated);
   const first = generated.slice(0, 2);
   const posted = await ctx.driver.postStream(f.id, first, `${ctx.tag}:${f.id}`);
@@ -201,7 +202,7 @@ export const voidProof: Scenario = {
     // A team sport scores on rosterless team entrants, as PADPROOF does: no lineup is owed (common.ts SetUpOptions).
     const setup = await setUpDivision(ctx, rec, VOID_PROOF_ENTRANTS, { rosterlessTeams: true });
     const proof = await postThenVoid(ctx, rec, setup);
-    const proofChecks = [voidLedger(proof), voidFold(ctx.spec.sport, ctx.cfg, proof)];
+    const proofChecks = [voidLedger(proof), voidFold(ctx.spec.sport, stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind), proof)];
     let plays: Awaited<ReturnType<typeof playDivision>>;
     try {
       plays = await playDivision(ctx, rec, setup);

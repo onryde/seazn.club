@@ -130,8 +130,9 @@ export interface ObservedRun {
 
 export interface InvariantResult { verdict: Verdict; checked: number; evidence: string[] }
 
-/** The product's fixture statuses minus the two live ones (scheduled, in_play).
- *  Pinned against the api-v1 fixture-status enum by invariants.test.ts. */
+/** The product's fixture statuses minus the live ones: scheduled, in_play, and (W2a, spec §5.4.2) needs_decision — a
+ *  bracket match held for the organiser's settle is NOT finished, and is not "pending" either (PENDING_STATUSES below:
+ *  the withdrawal cascade skips it, ruling C17). Pinned against the api-v1 fixture-status enum by invariants.test.ts. */
 export const TERMINAL_STATUSES: readonly string[] = Object.freeze(["decided", "finalized", "forfeited", "abandoned", "cancelled"]);
 
 export function isTerminal(status: string): boolean {

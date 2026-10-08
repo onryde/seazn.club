@@ -113,7 +113,7 @@ describe("the model fake serves the W2a status and seats (X-BR-1, X-BR-2, X-ST-1
     const spec: CaseSpec = { caseId: "knockout|football|LIFECYCLE", row: "knockout", sport: SPORT, variant, scenario: "LIFECYCLE", canary: false };
     const ctx = { driver, spec, orgSlug: "o", cfg: resolveSportCfg(SPORT, variant), tag: "t", denied: [] };
     const setup = await setUpDivision(ctx, new Recorder(), 4);
-    await driver.start(setup.division.id);
+    await driver.start();
     const first = driver.fixtures.find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null && f.round_no === 1)!;
     const level = stream(driver as never, first.id, "knockout", { kind: "level" });
     await driver.postStream(first.id, level);

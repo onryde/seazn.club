@@ -17,6 +17,7 @@
 // fix round 1, T14-R3) — and a row the model does not drive is refused by
 // family (ModelUnsupported).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
+import { forbidsLevelResult, isLevelOutcome, type StageKind } from "@seazn/engine/core";
 import { nextMatchFixtureId, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
 import { stagesForRow, type RowKey, type StagePostBody } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
@@ -25,11 +26,17 @@ import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture,
 import { NotAWave, WAVE_ID, type Route } from "../routing.ts";
 import { lineupItems, lineupWarningLine, putOwedLineups, type LineupSink } from "../scenarios/lineup-plan.ts";
 import { entrantName, rosterMembers, rosterSize } from "../scenarios/rosters.ts";
-import { entrantKindFor, resolveSportCfg } from "../sport-cfg.ts";
+import { entrantKindFor, resolveSportCfg, stageCfg } from "../sport-cfg.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
 export const COMMAND_KINDS = ["Start", "AddEntrant", "Withdraw", "Score", "Walkover", "Void", "Correct", "Generate", "Rebuild", "Complete"] as const;
 export type CommandKind = (typeof COMMAND_KINDS)[number];
+/** W2a (finding 24): commands a model run asks for BY NAME, never part of the default set — so the default arbitrary
+ *  array, every committed seed and every cell's counts replay byte for byte. `modelCommands({ settle: true })`
+ *  appends them. */
+export const OPT_IN_KINDS = ["Settle"] as const;
+export type OptInKind = (typeof OPT_IN_KINDS)[number];
+export type AnyCommandKind = CommandKind | OptInKind;
 
 /** One fixture as the model knows it. `ledger` is every event the model
  *  posted to it, in order — or null once events the model did not write may
@@ -92,7 +99,9 @@ export interface ModelState {
   posts: number;
   fixtures: Map<string, FixtureModel>;
   generates: GenerateObs[];
-  counts: Record<CommandKind, CommandCounts>;
+  counts: Record<CommandKind, CommandCounts> & Partial<Record<OptInKind, CommandCounts>>;
+  /** W2a: every core.settle the model's Settle command posted, accepted or refused, in order (status 200 when accepted). */
+  settles: { status: number; code: string | null }[];
   /** Items each step check judged, summed over steps (R25: a cell owes > 0). */
   stepChecks: Map<string, number>;
   /** Fixtures whose product outcome matched the engine's fold of the known ledger, summed over steps. */
@@ -141,6 +150,14 @@ export const ROSTER_LOCK_FINDING = "CD-T13b";
  *  candidates instead (W1c Task 2, ruling Q2). */
 export const NEXT_MATCH_UNHELD_FINDING = "model-next-match-unheld";
 export const VACUITY_CHECK = "model-informative-steps";
+/** W2a (X-ST-1): a second settle is refused by name (SETTLE_NOT_APPLICABLE), and a refusal with another code is a defect. */
+export const SETTLE_REFUSAL_CHECK = "model-second-settle-refused-by-name";
+/** W2a (X-BR-1): a bracket fixture is never DECIDED level — a level result is held (needs_decision) until settled. */
+export const BRACKET_LEVEL_CHECK = "model-bracket-never-decided-level";
+/** W2a (X-BR-2): a held match seats nobody — none of its entrants sits in a later-round fixture. */
+export const HELD_SEATS_CHECK = "model-held-seats-nobody";
+/** W2a (X-ST-1): a settled match seats its winner in a later round, when the bracket has one. */
+export const SETTLE_SEATS_CHECK = "model-settle-seats-winner";
 /** T45-R1 (assertions.ts lineupsPut, "life-lineups-put"), on the shared
  *  items (lineup-plan.ts lineupItems): every side of every team fixture the
  *  model posted to had its lineup PUT, one item per side, re-judged after
@@ -379,7 +396,7 @@ export async function newModelState(input: { driver: OrganiserDriver; row: RowKe
     sport: input.sport, variant: input.variant, cfg, kind, stageKind: stage.kind, stageConfig: stage.config,
     divisionId: division.id, stageId: stage.id, tag: input.tag,
     entrants: added.map((e) => e.id), withdrawn: new Set(), started: false, completed: false, lateEntry: false, posts: 0,
-    fixtures: new Map(), generates: [],
+    fixtures: new Map(), generates: [], settles: [],
     counts: Object.fromEntries(COMMAND_KINDS.map((k) => [k, zero()])) as ModelState["counts"],
     stepChecks: new Map(), foldParity: 0, fenced: new Map(), history: [], steps: [], unknowns: [], findings: new Map(),
     rosters, lineupSides: new Map(), teamPosts: new Map(), lineupsPut: 0,
@@ -474,6 +491,44 @@ function orientationCheck(m: ModelState, meetings: readonly FixtureRow[]): { che
   return { checked: pairs.size, fails: fails.slice(0, 12) };
 }
 
+/** W2a: the three bracket rules a step can judge from what the product shows, on a bracket stage only (a league keeps
+ *  its draws, and a draw is not held). Each returns the items it judged, so a cell that never met the case it guards
+ *  counts zero there (the step totals, R25). Judged on the product's rows, never the model's memory:
+ *   - X-BR-1: no fixture is `decided` with a level outcome (draw, tie, no_result) — judged by the engine's isLevelOutcome;
+ *   - X-BR-2: a held (`needs_decision`, or organiser-abandoned) fixture seats nobody — none of its entrants is seated in a LATER-round fixture of a
+ *     feeding bracket (fedCandidates, the model's own structural seat read);
+ *   - X-ST-1: a settled win (`settled_*`) seats its winner in a later round, where the bracket has one. */
+function bracketChecks(m: ModelState, mine: readonly FixtureRow[]): { id: string; checked: number; fails: string[] }[] {
+  if (!forbidsLevelResult(m.stageKind as StageKind)) return [];
+  const level = { id: BRACKET_LEVEL_CHECK, checked: 0, fails: [] as string[] };
+  const held = { id: HELD_SEATS_CHECK, checked: 0, fails: [] as string[] };
+  const settled = { id: SETTLE_SEATS_CHECK, checked: 0, fails: [] as string[] };
+  const feeds = NEXT_MATCH_LOCK.kinds.includes(m.stageKind);
+  for (const r of mine) {
+    const o = toObservedOutcome(r.outcome);
+    if (o !== null) {
+      level.checked++;
+      if (r.status === "decided" && isLevelOutcome(o as never)) level.fails.push(`fixture ${r.id} is decided with a ${o.kind} outcome in a ${m.stageKind} stage (X-BR-1)`);
+    }
+    const f = m.fixtures.get(r.id);
+    // Held: needs_decision, or abandoned by the organiser (a live core.abandon the model posted — a cascade's abandoned
+    // fixture is another thing: its opponent advances by the bracket's own bye path).
+    const heldNow = r.status === "needs_decision" || (r.status === "abandoned" && f?.ledger != null && liveEntries(f.ledger).some((e) => e.type === "core.abandon"));
+    if (heldNow && f !== undefined) {
+      held.checked++;
+      const seated = fedCandidates(m, f);
+      if (seated.length > 0) held.fails.push(`fixture ${r.id} is held (${r.status}) yet ${seated.map((g) => g.id).join(", ")} seat${seated.length === 1 ? "s" : ""} one of its entrants in a later round (X-BR-2)`);
+    }
+    if (feeds && r.status === "decided" && o !== null && (o.kind === "win" || o.kind === "award") && o.method?.startsWith("settled_") === true && r.round_no !== null) {
+      const later = mine.filter((g) => g.round_no !== null && g.round_no > r.round_no!);
+      if (later.length === 0) continue; // the last round: nobody to seat
+      settled.checked++;
+      if (!later.some((g) => g.home_entrant_id === o.winner || g.away_entrant_id === o.winner)) settled.fails.push(`fixture ${r.id} was settled for ${o.winner}, who sits in no later-round fixture (X-ST-1)`);
+    }
+  }
+  return [level, held, settled];
+}
+
 /** assertions.ts lineupsPut's items (lineup-plan.ts lineupItems) over the
  *  model's posts: one per side posted to, ok iff that side's lineup was PUT. */
 function lineupsCheck(m: ModelState): { checked: number; fails: string[] } {
@@ -484,7 +539,7 @@ function lineupsCheck(m: ModelState): { checked: number; fails: string[] } {
 /** The engine's fold of a known ledger, or why it refused one. */
 function engineOutcome(m: ModelState, home: string, away: string, ledger: readonly LedgerEntry[]): { out: ObservedOutcome | null; refused: string | null } {
   try {
-    return { out: toObservedOutcome(foldLedger(m.sport, m.cfg, home, away, ledger)), refused: null };
+    return { out: toObservedOutcome(foldLedger(m.sport, stageCfg(m.sport, m.cfg, m.stageKind as StageKind), home, away, ledger)), refused: null };
   } catch (e) {
     return { out: null, refused: e instanceof Error ? e.message : String(e) };
   }
@@ -517,6 +572,10 @@ export async function checkStep(m: ModelState, d: OrganiserDriver): Promise<void
   const o = orientationCheck(m, meetings);
   add(m, ORIENTATION_CHECK, o.checked);
   if (o.fails.length > 0) throw new ModelViolation(ORIENTATION_CHECK, o.fails);
+  for (const c of bracketChecks(m, mine)) {
+    add(m, c.id, c.checked);
+    if (c.fails.length > 0) throw new ModelViolation(c.id, c.fails.slice(0, 12));
+  }
   if (m.kind === "team") {
     const l = lineupsCheck(m);
     add(m, LINEUPS_CHECK, l.checked);
