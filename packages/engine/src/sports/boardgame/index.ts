@@ -8,5 +8,6 @@ export {
   BoardgameMethod,
   BoardgameScoring,
   BOARDGAME_TIEBREAKERS,
+  TIEBREAK_RUNGS,
   type BoardgameState,
 } from "./boardgame.ts";
