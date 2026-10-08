@@ -791,6 +791,12 @@ jobs:
           DEAD_PHONE_TAKEOVER_SECONDS: "3"
           PHONE_LOST_LIVE_MINUTES: "1"
           PHONE_SILENT_FLOOR_SECONDS: "5"
+          # Capture QR v2 PR-2 (plan T8, owner OK OG-E 2026-10-07): capture-auto.spec.ts runs the automatic stop and
+          # the refused auto start's retry in seconds — the delay after the result (default 180 s) and the spacing
+          # between refused attempts (default 60 s). Same rule: honoured only under ENV_NAME ci, told to the
+          # Playwright step below, and refused by the spec when unshortened.
+          AUTO_STOP_AFTER_RESULT_SECONDS: "10"
+          AUTO_START_RETRY_SECONDS: "5"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -843,10 +849,12 @@ jobs:
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
           # The same value the server was started with (see "Start server"): the spec's waits derive from it.
           FAKE_INGEST_CONNECT_AFTER_MS: "10000"
-          # Capture QR v2 R10: the server's shortened timings, the same values (see "Start server").
+          # Capture QR v2 R10 + PR-2: the server's shortened timings, the same values (see "Start server").
           DEAD_PHONE_TAKEOVER_SECONDS: "3"
           PHONE_LOST_LIVE_MINUTES: "1"
           PHONE_SILENT_FLOOR_SECONDS: "5"
+          AUTO_STOP_AFTER_RESULT_SECONDS: "10"
+          AUTO_START_RETRY_SECONDS: "5"
 
       # Distinct from "Connect walkthrough not configured" above: that one
       # keys on STRIPE_CONNECT_TEST_ACCOUNT and covers the REGISTRATION money

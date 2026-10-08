@@ -43,6 +43,8 @@ export type BeatAnswer = z.infer<typeof CaptureBeatAnswer>;
 export type Descriptor = z.infer<typeof CaptureDescriptor>;
 export type Refusal = z.infer<typeof CaptureRefusal>;
 export type StartOk = z.infer<typeof CaptureStartOk>;
+/** The phone's Settings switch (capture A4), as every beat's `mode` carries it. PR-1's phone was always `operator`. */
+export type CaptureMode = BeatBody["mode"];
 
 /** One answer from a phone route: the status, the headers the phone reads, and the body parsed by the contract —
  *  `ok` (a 2xx, its contract shape) or `refusal` (`{code, message, ...}`), never both. */
@@ -58,6 +60,8 @@ export interface FakeCapturePhone {
   readonly id: string;
   /** The QR the panel painted, as the paste code carries it. */
   readonly qr: CaptureQr;
+  /** The phone's own Automatic switch (capture A4) — the `mode` every beat carries unless a beat overrides it. */
+  readonly captureMode: CaptureMode;
   /** The broadcast this phone holds — the sid of the last `go-live` / `live` it heard; null after `over`, `waiting`,
    *  `replaced` or `taken`. */
   readonly sid: string | null;
@@ -155,17 +159,20 @@ async function replyOf<T>(res: APIResponse, ok: z.ZodType<T>, route: string): Pr
  * The fake phone, from the QR text the OPEN panel shows (§11.1.5). `request` is the phone's own HTTP client — pass
  * `newPhoneRequest(baseURL)`; one carrying a cookie is refused. `phone` fixes the install id (a second phone, or the
  * same install re-scanning); the default is a fresh 32-hex id. `qrText` is for a phone that scanned EARLIER (an old
- * code kept after a reissue) — the text still came from the panel.
+ * code kept after a reissue) — the text still came from the panel. `captureMode` is the phone's own Automatic switch
+ * (capture A4, PR-2): the `mode` on every beat, the claim and the keep-alives included; the default is PR-1's
+ * `operator`, so every existing caller beats exactly as before.
  */
 export async function fakeCapturePhone(
   page: Page,
   request: APIRequestContext,
-  opts: { phone?: string; qrText?: string } = {},
+  opts: { phone?: string; qrText?: string; captureMode?: CaptureMode } = {},
 ): Promise<FakeCapturePhone> {
   const state = await request.storageState();
   expect(state.cookies, "the phone's HTTP client carries no organiser session (use newPhoneRequest)").toEqual([]);
   const qr = parseCaptureQr(opts.qrText ?? (await readPanelQrText(page)));
   const id = opts.phone ?? randomBytes(16).toString("hex");
+  const captureMode: CaptureMode = opts.captureMode ?? "operator";
   const auth = { Authorization: `Bearer ${qr.tok}` };
   const base = `/api/v1/capture/codes/${qr.code}`;
   let sid: string | null = null;
@@ -177,7 +184,7 @@ export async function fakeCapturePhone(
 
   const body = (partial: Partial<BeatBody>): BeatBody => ({
     code: qr.code, slot: qr.slot, phone: id, claim: null, device: null, sid: null, at: iso(), state: "paired",
-    cause: null, notReady: null, startFailed: null, stopped: null, mode: "operator", transport: null, bitrateKbps: null,
+    cause: null, notReady: null, startFailed: null, stopped: null, mode: captureMode, transport: null, bitrateKbps: null,
     delivery: "unknown", deliveredLagS: null, audioOk: null, battery: { percent: 87, charging: false, drainPctPerHour: null },
     thermal: 0, dataUsedMB: 0, appVersion: "1.4.0",
     ...partial,
@@ -202,6 +209,7 @@ export async function fakeCapturePhone(
   const phone: FakeCapturePhone = {
     id,
     qr,
+    captureMode,
     get sid() { return sid; },
     get lastOver() { return lastOver; },
     get lastPollSeconds() { return lastPollSeconds; },
@@ -250,7 +258,10 @@ export async function fakeCapturePhone(
  * keeps beating (present, ticking nothing) until `disposeFakePhones()`. Asserts the claim was accepted, then waits for
  * the panel to show the phone (its code card folds to "Paired · Show the code again" on the read model's next poll).
  */
-export async function pairedPhone(page: Page, opts: { phone?: string; mode?: "idle" | "publishing"; waitForPanel?: boolean } = {}): Promise<FakeCapturePhone> {
+export async function pairedPhone(
+  page: Page,
+  opts: { phone?: string; mode?: "idle" | "publishing"; waitForPanel?: boolean; captureMode?: CaptureMode } = {},
+): Promise<FakeCapturePhone> {
   const phone = await fakeCapturePhone(page, await newPhoneRequest(new URL(page.url()).origin), opts);
   const claimed = await phone.claim("new");
   expect(claimed.status, `the phone's claim beat was accepted: ${JSON.stringify(claimed.refusal)}`).toBe(200);
@@ -268,7 +279,7 @@ export async function pairedPhone(page: Page, opts: { phone?: string; mode?: "id
  * closes. For the cases that reach a session through the API (`goLiveApi`, `holdWaiting`) and must keep their own page
  * — its poll counts, its state — exactly as it was.
  */
-export async function pairPhoneOnFixture(page: Page, fixturePath: string, opts: { phone?: string } = {}): Promise<FakeCapturePhone> {
+export async function pairPhoneOnFixture(page: Page, fixturePath: string, opts: { phone?: string; captureMode?: CaptureMode } = {}): Promise<FakeCapturePhone> {
   const tab = await page.context().newPage();
   try {
     await tab.goto(fixturePath);

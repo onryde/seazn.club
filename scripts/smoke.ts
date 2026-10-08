@@ -48,6 +48,9 @@ import { pdfLinkUris } from "../apps/web/e2e/pdf-uris.ts";
 // The sitemap check waits out the SAME window the server parses; the module is
 // import-free, so it loads under `--experimental-strip-types`.
 import { sitemapWindowOverride } from "../apps/web/src/lib/sitemap-window.ts";
+// captureV2's automatic stop advances time past the SAME default delay the server runs (the relay's one authority for
+// its numbers). The module is import-free, so it loads under `--experimental-strip-types` (proven before relying on it).
+import { AUTO_STOP_AFTER_RESULT_SECONDS } from "../apps/web/src/server/relay/config.ts";
 
 const BASE = process.env.SMOKE_BASE ?? "http://localhost:3000";
 
@@ -18685,13 +18688,23 @@ async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> 
  * no-store` (§6.3: each one can carry a credential) — counted, and zero counted is a failure. The phone is a bare HTTP
  * client with the QR's Bearer tok and no cookie, as Seazn Capture is. Its own Pro org (a monthly credit to spend),
  * purged by cleanup(). SMOKE_ONLY=captureV2 runs it alone (SELECTABLE_SUITES).
+ *
+ * PR-2 (plan T8) — AUTOMATIC STREAMING on a second fixture (generic, so a device link can post its result): the
+ * organiser's switch on over the API → a phone in Automatic (`mode: "automatic"`) claims its code and hears
+ * `autoAllowed` → the match STARTS ON A DEVICE LINK (`core.start` with the link's Bearer dl_, no cookie — the
+ * courtside surface, never the console) → the phone's beat hears `go-live` startedBy automatic and the one session is
+ * `start_cause = 'automatic'` → the result goes in on the same link → ADVANCE: the result and the session are both
+ * moved back past AUTO_STOP_AFTER_RESULT_SECONDS in SQL (both, by the same interval: the stop is owed only to a session
+ * created BEFORE the result, A15) → the phone's next beat naming its sid hears `over` auto_stopped. A smoke server runs
+ * the default three-minute delay (CI's smoke job tunes nothing), which is why time is advanced rather than waited out.
+ * A beat right after the result, BEFORE the advance, is not yet over — so a stop at the result itself is red too.
  */
 async function captureV2Suite(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     console.log("SKIP  capture-v2 suite (DATABASE_URL not set — the plan change needs SQL)");
     return;
   }
-  const EXPECTED_STEPS = 14;
+  const EXPECTED_STEPS = 21;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
@@ -18742,10 +18755,10 @@ async function captureV2Suite(): Promise<void> {
     heartbeatUrl?: string; stage?: { code: string; role: { kind: string; n?: number; entrants?: number }; pool?: string; label?: string }; url?: string;
     message?: string;
   };
-  const phoneCall = async (path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; json: Answer | null }> => {
-    const res = await fetch(`${BASE}/api/v1/capture/codes/${qr.code}${path}`, {
+  const phoneCallOn = async (q: Qr, path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; json: Answer | null }> => {
+    const res = await fetch(`${BASE}/api/v1/capture/codes/${q.code}${path}`, {
       method,
-      headers: { Authorization: `Bearer ${qr.tok}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+      headers: { Authorization: `Bearer ${q.tok}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     phoneAnswers++;
@@ -18753,22 +18766,24 @@ async function captureV2Suite(): Promise<void> {
     if (cache !== "private, no-store") notPrivate.push(`${method} ${path.split("?")[0] || "/"} → ${res.status} ${String(cache)}`);
     return { status: res.status, json: (await res.json().catch(() => null)) as Answer | null };
   };
+  const phoneCall = (path: string, method: "GET" | "POST", body?: unknown) => phoneCallOn(qr, path, method, body);
   const phoneA = randomBytes(16).toString("hex");
   const phoneB = randomBytes(16).toString("hex");
-  const beat = (phone: string, extra: Record<string, unknown> = {}) =>
-    phoneCall("/beats", "POST", {
-      code: qr.code, slot: qr.slot, phone, claim: null, device: null, sid: null,
+  const beatOn = (q: Qr, phone: string, extra: Record<string, unknown> = {}) =>
+    phoneCallOn(q, "/beats", "POST", {
+      code: q.code, slot: q.slot, phone, claim: null, device: null, sid: null,
       at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), state: "paired", cause: null, notReady: null,
       startFailed: null, stopped: null, mode: "operator", transport: null, bitrateKbps: null, delivery: "unknown",
       deliveredLagS: null, audioOk: null, battery: { percent: 80, charging: false, drainPctPerHour: null }, thermal: 0,
       dataUsedMB: 0, appVersion: "1.4.0", ...extra,
     });
+  const beat = (phone: string, extra: Record<string, unknown> = {}) => beatOn(qr, phone, extra);
   const descriptor = (phone: string) => phoneCall(`?phone=${phone}&slot=${qr.slot}`, "GET");
   /** Beat until the answer's state is `want` (requested/provisioning answer `waiting`; the server ticks on a beat that
    *  names the session). Bounded: 40 beats a second apart. */
-  const beatUntil = async (want: string, extra: () => Record<string, unknown>): Promise<Answer | null> => {
+  const beatUntil = async (want: string, extra: () => Record<string, unknown>, on: { q: Qr; phone: string } = { q: qr, phone: phoneA }): Promise<Answer | null> => {
     for (let i = 0; i < 40; i++) {
-      const r = await beat(phoneA, extra());
+      const r = await beatOn(on.q, on.phone, extra());
       if (r.json?.state === want) return r.json;
       await new Promise((res) => setTimeout(res, 1_000));
     }
@@ -18870,6 +18885,109 @@ async function captureV2Suite(): Promise<void> {
     `phone A's next beat hears over, stopped (got ${JSON.stringify(over.json)})`,
     over.status === 200 && over.json?.state === "over" && over.json?.sid === sid && over.json?.endReason === "stopped",
   );
+
+  // 12–17. PR-2: AUTOMATIC STREAMING on a second fixture of the same org (generic: a device link can post its result).
+  const dbUrl = process.env.DATABASE_URL; // the suite's first line returns without it
+  const db = postgres(dbUrl, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
+    prepare: !dbUrl.includes(":6543"),
+    max: 1,
+  });
+  try {
+    const autoFx = await timedFixture(owner, comp.id, {
+      name: "Capture auto",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      entrants: [
+        { kind: "individual", display_name: `Auto Home ${tag}`, seed: 1 },
+        { kind: "individual", display_name: `Auto Away ${tag}`, seed: 2 },
+      ],
+    });
+
+    // 12. The organiser's switch (§7.1): on, over the API — the answer names it and leaves the destination unchosen.
+    const switched = await v1(owner, `/api/v1/fixtures/${autoFx.fixtureId}/stream-settings`, "PUT", { autoStream: true });
+    step(
+      `PUT stream-settings {autoStream: true} → 200 {targetId: null, autoStream: true} (got ${switched.status} ${JSON.stringify(switched.json.data)})`,
+      switched.status === 200 && JSON.stringify(switched.json.data) === JSON.stringify({ targetId: null, autoStream: true }),
+    );
+
+    // 13. A phone in Automatic claims the fixture's code: waiting, and the switch reaches it (autoAllowed, A4's other half).
+    const autoMinted = await v1(owner, `/api/v1/fixtures/${autoFx.fixtureId}/stream-code`, "POST");
+    const qrAuto = (autoMinted.json.data as { qr?: Qr } | undefined)?.qr;
+    if (!qrAuto) {
+      step(`POST stream-code for the automatic fixture → 200 with a QR (got ${autoMinted.status})`, false);
+      return done();
+    }
+    const phoneC = randomBytes(16).toString("hex");
+    const automatic = { mode: "automatic" };
+    const claimedC = await beatOn(qrAuto, phoneC, { ...automatic, claim: "new", device: { model: "Smoke phone C" } });
+    step(
+      `a phone in Automatic claims the code → 200 waiting, autoAllowed true (got ${claimedC.status} ${claimedC.json?.state} ${String((claimedC.json as { autoAllowed?: unknown } | null)?.autoAllowed)})`,
+      claimedC.status === 200 && claimedC.json?.state === "waiting" && (claimedC.json as { autoAllowed?: unknown }).autoAllowed === true,
+    );
+
+    // 14. The match STARTS ON A DEVICE LINK: the courtside surface's own core.start, its Bearer dl_ and no cookie.
+    const link = await v1(owner, `/api/v1/fixtures/${autoFx.fixtureId}/device-links`, "POST", { label: "Smoke court" });
+    const dl = (link.json.data as { id?: string; secret?: string } | undefined) ?? {};
+    const viaLink = (type: string, payload: Record<string, unknown>, expectedSeq: number) =>
+      v1(newSession(), `/api/v1/fixtures/${autoFx.fixtureId}/events`, "POST", { expected_seq: expectedSeq, type, payload }, { Authorization: `Bearer ${dl.secret ?? ""}` });
+    const started = await viaLink("core.start", {}, 0);
+    const [startRow] = await db<{ device_link_id: string | null }[]>`
+      select device_link_id from score_events where fixture_id = ${autoFx.fixtureId} and type = 'core.start'`;
+    step(
+      `core.start through the device link → 201, written BY the link (link ${link.status}, event ${started.status}, device_link_id ${startRow?.device_link_id === dl.id ? "the link's" : String(startRow?.device_link_id)})`,
+      link.status === 201 && !!dl.secret && started.status === 201 && !!dl.id && startRow?.device_link_id === dl.id,
+    );
+
+    // 15. AUTO START (§7.2): the phone's beat starts the broadcast; it hears go-live, started automatically — one session.
+    const autoLive = await beatUntil("go-live", () => automatic, { q: qrAuto, phone: phoneC });
+    const autoSessions = await db<{ id: string; start_cause: string }[]>`
+      select id, start_cause from fixture_stream_sessions where fixture_id = ${autoFx.fixtureId}`;
+    step(
+      `phone C's beat hears go-live startedBy automatic, and the fixture has ONE session, start_cause automatic (got ${JSON.stringify(autoLive)}, ${JSON.stringify(autoSessions)})`,
+      autoLive?.startedBy === "automatic" && autoSessions.length === 1 && autoSessions[0].start_cause === "automatic" && autoLive.sid === autoSessions[0].id,
+    );
+    const autoSid = autoSessions[0]?.id;
+    if (!autoSid) return done();
+
+    // 16. The RESULT, courtside, through the same link: the fixture is finished (V430's trigger stamps finished_at).
+    const result = await viaLink("generic.result", { p1Score: 2, p2Score: 1 }, 1);
+    const [fin] = await db<{ finished_at: Date | null }[]>`select finished_at from fixtures where id = ${autoFx.fixtureId}`;
+    step(
+      `generic.result through the device link → 201, finished_at stamped (got ${result.status} ${result.json.error?.code ?? ""}, ${fin?.finished_at ? "stamped" : "null"})`,
+      result.status === 201 && !!fin?.finished_at,
+    );
+
+    // 16b. NOT YET: a beat right after the result, naming the sid, ticks the session INSIDE the delay — it is not over.
+    // (Without this, a server that stopped at the result itself would pass step 17 just the same.)
+    const notYet = await beatOn(qrAuto, phoneC, { ...automatic, sid: autoSid, state: "publishing", transport: "srt", delivery: "ok" });
+    const [stillOpen] = await db<{ state: string; end_reason: string | null }[]>`
+      select state, end_reason from fixture_stream_sessions where id = ${autoSid}`;
+    step(
+      `a beat right after the result is NOT over — the stop waits for the delay (got ${JSON.stringify(notYet.json)}, ${JSON.stringify(stillOpen)})`,
+      notYet.status === 200 && !!notYet.json?.state && notYet.json.state !== "over" && notYet.json.sid === autoSid
+        && stillOpen?.end_reason === null && stillOpen.state !== "completed" && stillOpen.state !== "failed",
+    );
+
+    // 17. ADVANCE past the delay: the result AND the session move back by the same interval (the session must stay
+    // older than the result, A15), past the longer of the default and any tuned delay — then the phone's next beat
+    // names its sid, ticks the session, and hears it over, auto_stopped.
+    const delayS = Math.max(AUTO_STOP_AFTER_RESULT_SECONDS, Number(process.env.AUTO_STOP_AFTER_RESULT_SECONDS ?? 0) || 0) + 5;
+    await db`update fixture_stream_sessions set created_at = created_at - make_interval(secs => ${delayS}) where id = ${autoSid}`;
+    await db`update fixtures set finished_at = finished_at - make_interval(secs => ${delayS}) where id = ${autoFx.fixtureId}`;
+    const autoOver = await beatOn(qrAuto, phoneC, { ...automatic, sid: autoSid, state: "publishing", transport: "srt", delivery: "ok" });
+    const [autoEnded] = await db<{ state: string; end_reason: string | null }[]>`
+      select state, end_reason from fixture_stream_sessions where id = ${autoSid}`;
+    step(
+      `after the delay, phone C's beat hears over auto_stopped and the session ended auto_stopped (got ${JSON.stringify(autoOver.json)}, ${JSON.stringify(autoEnded)})`,
+      autoOver.status === 200 && autoOver.json?.state === "over" && autoOver.json?.sid === autoSid && autoOver.json?.endReason === "auto_stopped"
+        && autoEnded?.end_reason === "auto_stopped",
+    );
+  } finally {
+    await db.end();
+  }
 
   // 11. Every phone answer above was private, no-store — and there were answers to judge.
   step(
