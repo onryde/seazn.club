@@ -4,7 +4,31 @@
 // families its signed rulebooks cover, before fixing anything. Imports:
 // relative within src, and `import type { … } from "@seazn/engine/core"`
 // statements only (ruling 27) — scripts/reference-boundary.ts.
+// W2a adds the first family, bracket-finish (packages/engine/rules/*.md).
 import type { StageKind } from "@seazn/engine/core";
+import { bracketFinish } from "./families/bracket-finish.ts";
+
+export {
+  BRACKET_STAGE_KINDS,
+  NOT_RULED,
+  NotRuled,
+  RULED_OUT,
+  RULED_SPORTS,
+  RuledOut,
+  bracketFinish,
+  expectBracketFinish,
+} from "./families/bracket-finish.ts";
+export type {
+  Action,
+  BracketCase,
+  BracketExpect,
+  BracketFinishFamily,
+  NotRuledQuestion,
+  PlayResult,
+  RefusalCode,
+  RuledOutReason,
+  Status,
+} from "./families/bracket-finish.ts";
 
 export type StageKindName = StageKind;
 
@@ -16,7 +40,7 @@ export interface ReferenceFamily {
   readonly sports: readonly string[] | "any";
 }
 
-export const FAMILIES: readonly ReferenceFamily[] = Object.freeze([]);
+export const FAMILIES: readonly ReferenceFamily[] = Object.freeze([bracketFinish]);
 
 export class NoReferenceFamily extends Error {
   constructor(stageKind: string, sport: string) {
