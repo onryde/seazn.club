@@ -7,8 +7,8 @@
     "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap",
     "unscorable-only": "only committed variants the harness cannot score (variants.json scorable ≠ null) would enable the scenario in the cell — it may apply once they can be scored; the reason names them"
   },
-  "total": 4851,
-  "inapplicable": 4851,
+  "total": 4842,
+  "inapplicable": 4842,
   "harnessGap": 0,
   "unscorableOnly": 0,
   "groups": [
@@ -1739,7 +1739,7 @@
       "scenario": "M5",
       "kind": "inapplicable",
       "reason": "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing) — no committed variant enables it",
-      "count": 135,
+      "count": 126,
       "cells": {
         "league": [
           "football",
@@ -1768,29 +1768,24 @@
           "hockey"
         ],
         "league_ko": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "groups_ko": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "group_stepladder": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "group_playoffs": [
-          "boardgame",
-          "generic",
           "volleyball",
           "badminton",
           "tabletennis",
@@ -1810,67 +1805,68 @@
           "hockey"
         ],
         "swiss_playoff": [
-          "boardgame",
-          "generic",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "swiss_knockout": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "knockout": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "ko_plate": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "qualifying_main": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "double_elim": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "americano": [
+          "football",
+          "cricket",
           "boardgame",
+          "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis"
+          "tennis",
+          "icehockey",
+          "hockey"
         ],
         "mexicano": [
+          "football",
+          "cricket",
           "boardgame",
+          "carrom",
           "generic",
           "volleyball",
           "badminton",
           "tabletennis",
-          "tennis"
+          "tennis",
+          "icehockey",
+          "hockey"
         ],
         "ladder": [
-          "boardgame",
-          "generic",
           "volleyball",
           "badminton",
           "tabletennis",
@@ -1890,29 +1886,24 @@
           "hockey"
         ],
         "group_group_ko": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "knockout_third_place": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "page_playoff_only": [
-          "boardgame",
-          "generic",
           "volleyball",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "stepladder_only": [
-          "boardgame",
           "volleyball",
           "badminton",
           "tabletennis",

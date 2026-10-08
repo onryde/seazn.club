@@ -2361,7 +2361,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(opened()).toBe(1);
   }, 120_000);
 
-  it("--layer L2 --scope grid, through the real planner and runner: 1,731 runs at their own widths — 62 driven, 164 🚫, 1,505 ░ — each recording the pair-run it is", async () => {
+  it("--layer L2 --scope grid, through the real planner and runner: 1,729 runs at their own widths — 62 driven, 164 🚫, 1,503 ░ — each recording the pair-run it is", async () => {
     capture();
     const dir = dirFor();
     const { d, reads } = gridDeps();
@@ -2372,8 +2372,8 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(new Set(r.cases.map((c) => c.l2!.n)).size).toBe(RAW_RUNS.length);
     expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(62);
     expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(164);
-    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1505);
-    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(164 + 1505);
+    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1503);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(164 + 1503);
     // Only the driven runs' sports were asked for: a planned run posts nothing.
     expect(reads.length).toBeGreaterThan(0);
     expect(reads.length).toBeLessThan(SPORT_KEYS.length + 1);
