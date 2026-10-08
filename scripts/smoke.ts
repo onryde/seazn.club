@@ -18697,13 +18697,14 @@ async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> 
  * moved back past AUTO_STOP_AFTER_RESULT_SECONDS in SQL (both, by the same interval: the stop is owed only to a session
  * created BEFORE the result, A15) → the phone's next beat naming its sid hears `over` auto_stopped. A smoke server runs
  * the default three-minute delay (CI's smoke job tunes nothing), which is why time is advanced rather than waited out.
+ * A beat right after the result, BEFORE the advance, is not yet over — so a stop at the result itself is red too.
  */
 async function captureV2Suite(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     console.log("SKIP  capture-v2 suite (DATABASE_URL not set — the plan change needs SQL)");
     return;
   }
-  const EXPECTED_STEPS = 20;
+  const EXPECTED_STEPS = 21;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
@@ -18957,6 +18958,17 @@ async function captureV2Suite(): Promise<void> {
     step(
       `generic.result through the device link → 201, finished_at stamped (got ${result.status} ${result.json.error?.code ?? ""}, ${fin?.finished_at ? "stamped" : "null"})`,
       result.status === 201 && !!fin?.finished_at,
+    );
+
+    // 16b. NOT YET: a beat right after the result, naming the sid, ticks the session INSIDE the delay — it is not over.
+    // (Without this, a server that stopped at the result itself would pass step 17 just the same.)
+    const notYet = await beatOn(qrAuto, phoneC, { ...automatic, sid: autoSid, state: "publishing", transport: "srt", delivery: "ok" });
+    const [stillOpen] = await db<{ state: string; end_reason: string | null }[]>`
+      select state, end_reason from fixture_stream_sessions where id = ${autoSid}`;
+    step(
+      `a beat right after the result is NOT over — the stop waits for the delay (got ${JSON.stringify(notYet.json)}, ${JSON.stringify(stillOpen)})`,
+      notYet.status === 200 && !!notYet.json?.state && notYet.json.state !== "over" && notYet.json.sid === autoSid
+        && stillOpen?.end_reason === null && stillOpen.state !== "completed" && stillOpen.state !== "failed",
     );
 
     // 17. ADVANCE past the delay: the result AND the session move back by the same interval (the session must stay

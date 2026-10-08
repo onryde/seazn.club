@@ -502,6 +502,8 @@ test("auto start from the courtside pad: switch on, a phone in Automatic, the ma
   // The surface marker: the match was started on the device link, not the console (plan T8 Step 5's mutation target).
   expect(await surfaceOf(on, "core.start"), "the match start was written by THIS device link").toEqual({ device_link_id: linkOn.id });
   expect(await surfaceOf(off!, "core.start"), "…and the other fixture's by its own").toEqual({ device_link_id: linkOff.id });
+  // The match start alone opens nothing: both phones are silenced, so the beat below is the ONE producer of the session.
+  expect(await sessionsOf(rig.orgId), "no session between the match start and the phone's next beat").toEqual([]);
 
   // ONE beat after the match start: the broadcast exists when it is answered (§7.2 — postBeat starts it before it answers).
   const first = await phoneOn.beat();
@@ -779,6 +781,10 @@ test("refusal: balance 0 → the automatic start is refused, the read serves aut
     refused = (await readPhone(page, f)).auto;
     return refused?.refusal ?? null;
   }, { message: "the read serves the refusal", timeout: BEAT_MS + POLL_WAIT_MS, intervals: [500] }).toBe("no_credit");
+  // From here every beat is an explicit one. The keep-alive beats every POLL_STARTING_SECONDS, which can EQUAL the retry
+  // spacing (it does in CI), so its beats could only ever land after the spacing ran out — and a server that ignored the
+  // spacing would pass on them. The beats below come every second instead.
+  phone.silence();
   expect(refused, "refused: never started, not blocked, the attempt's instant").toMatchObject({ enabled: true, startedAt: null, blocked: false, refusal: "no_credit" });
   const refusedAt = new Date(refused!.refusalAt!).getTime();
   expect(Number.isFinite(refusedAt), "refusalAt is an instant").toBe(true);
@@ -787,10 +793,39 @@ test("refusal: balance 0 → the automatic start is refused, the read serves aut
   expect((await ledger(rig.orgId)).total, "…and the start's own grant check gave nothing back (the month is granted once)").toBe(0);
   expect((await settingsOf(f.id))!.auto_started_at, "a refusal never stamps auto_started_at").toBeNull();
 
+  // The spacing runs from the LATEST attempt's claim (the row's auto_start_attempted_at) — a keep-alive beat may have
+  // made a second refused attempt between the read above and the silence, so the read's refusalAt can be the older one.
+  const attempted = (await settingsOf(f.id))!.auto_start_attempted_at;
+  expect(attempted, "the refused attempt's claim is stamped").not.toBeNull();
+  expect(attempted!.getTime(), "…no earlier than the refusal the read served").toBeGreaterThanOrEqual(refusedAt);
+  const dueAt = attempted!.getTime() + RETRY_MS;
+
+  // Credit to spend, and a beat every second: each one answered INSIDE the spacing is a due start in every way but the
+  // spacing — it must start nothing. The first one after the spacing starts the broadcast.
   await grantRigPackCredits(rig.orgId, 1);
-  const s = await newestSession(rig.orgId, f.id, QUIET_WINDOW_MS + POLL_WAIT_MS);
-  expect(s.start_cause, "the retry starts it automatically").toBe("automatic");
-  expect(s.created_at.getTime() - refusedAt, "the retry waited out AUTO_START_RETRY_SECONDS after the refused attempt").toBeGreaterThanOrEqual(RETRY_MS - CLOCKS_MS);
+  let beats = 0;
+  let inside = 0;
+  let s: SessionRow | undefined;
+  const giveUpAt = dueAt + 2 * BEAT_MS + POLL_WAIT_MS;
+  while (Date.now() < giveUpAt) {
+    await phone.beat();
+    const answeredAt = Date.now();
+    beats++;
+    const rows = await sessionsOf(rig.orgId);
+    if (answeredAt < dueAt - CLOCKS_MS) {
+      expect(rows, `beat ${beats}, answered ${dueAt - answeredAt} ms before the spacing runs out, with credit to spend: starts nothing`).toEqual([]);
+      inside++;
+    }
+    if (rows.length > 0) {
+      s = rows[0];
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  expect(inside, "beats counted inside the spacing after the grant (none would leave the spacing untested)").toBeGreaterThanOrEqual(1);
+  expect(s, `the retry started a session once the spacing ran out (${beats} beats)`).toBeDefined();
+  expect(s!.start_cause, "the retry starts it automatically").toBe("automatic");
+  expect(s!.created_at.getTime() - attempted!.getTime(), "the retry waited out AUTO_START_RETRY_SECONDS after the latest refused attempt").toBeGreaterThanOrEqual(RETRY_MS - CLOCKS_MS);
   const after = (await readPhone(page, f)).auto;
   expect(after, "the read: started, the refusal cleared").toMatchObject({ enabled: true, refusal: null, refusalAt: null, blocked: false });
   expect(after!.startedAt, "…with the start's instant").not.toBeNull();

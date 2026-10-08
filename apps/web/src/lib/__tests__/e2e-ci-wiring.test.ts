@@ -1011,10 +1011,29 @@ describe("the capture walkthroughs' shortened timings (R10, PR-2)", () => {
   /** The one tunable no walkthrough shortens: capture-phone's finished-fixture case reaches the code's grace by
    *  BACKDATING `finished_at` in SQL, not by waiting it out, so CI runs the default 120 minutes on purpose. */
   const NOT_SHORTENED_IN_CI: readonly string[] = ["CODE_GRACE_AFTER_FINISH_MINUTES"];
-  const demanded = (spec: string): string[] => {
-    const text = readFileSync(join(WEB, "e2e/walkthrough", spec), "utf8");
-    return [...text.matchAll(/wholeEnv\("([A-Z_]+)"/g)].map((m) => m[1]!).filter((n) => (TUNABLE_NAMES as readonly string[]).includes(n));
+  /** A spec's CODE: comment lines dropped and a trailing `// …` cut, so a commented-out guard demands nothing. */
+  const codeOf = (spec: string): string =>
+    readFileSync(join(WEB, "e2e/walkthrough", spec), "utf8")
+      .split("\n")
+      .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
+      .map((line) => line.replace(/\s\/\/.*$/, ""))
+      .join("\n");
+  /** Each server tunable a spec's env guard demands, with the guard's own floor (`atLeast`, a literal or a `const` of this
+   *  file) when it states one — the least its arithmetic can run on, so CI's value must not sit below it. */
+  const guardsOf = (spec: string): { name: string; atLeast: number | null }[] => {
+    const code = codeOf(spec);
+    return [...code.matchAll(/wholeEnv\("([A-Z_]+)"(?:,\s*\{([^}]*)\})?/g)]
+      .filter((m) => (TUNABLE_NAMES as readonly string[]).includes(m[1]!))
+      .map((m) => {
+        const raw = /\batLeast:\s*([A-Za-z_][A-Za-z0-9_]*|[\d_]+)/.exec(m[2] ?? "")?.[1];
+        if (raw === undefined) return { name: m[1]!, atLeast: null };
+        const literal = /^[\d_]+$/.test(raw) ? raw : new RegExp(`^const ${raw} = ([\\d_]+);`, "m").exec(code)?.[1];
+        // A floor the guard names but this read cannot resolve is a refusal, never a silent "no floor".
+        expect(literal, `${spec}: ${m[1]}'s floor ${raw} resolves to a number`).toBeDefined();
+        return { name: m[1]!, atLeast: Number(literal!.replaceAll("_", "")) };
+      });
   };
+  const demanded = (spec: string): string[] => guardsOf(spec).map((g) => g.name);
 
   it("the walkthroughs together demand EVERY server tunable but the one CI leaves at its default — so a new tunable nobody wires goes red here", () => {
     const perSpec = SPECS.map((spec) => [spec, demanded(spec)] as const);
@@ -1029,6 +1048,10 @@ describe("the capture walkthroughs' shortened timings (R10, PR-2)", () => {
 
   it("each tunable a capture walkthrough demands is set, to the SAME shortened value, on e2e-parallel's Start server and Playwright steps — and on no other job", async () => {
     const names = [...new Set(SPECS.flatMap(demanded))];
+    // The floor each tunable's guards demand (the highest, where two specs both guard it).
+    const floors = new Map<string, number>();
+    for (const g of SPECS.flatMap(guardsOf)) if (g.atLeast !== null) floors.set(g.name, Math.max(floors.get(g.name) ?? 0, g.atLeast));
+    expect([...floors.keys()].sort(), "premise: capture-auto's two guards state their floors").toEqual(["AUTO_START_RETRY_SECONDS", "AUTO_STOP_AFTER_RESULT_SECONDS"]);
     const walkthrough = projectNamed(await configFor(undefined), "walkthrough");
     for (const spec of SPECS) {
       expect(selects(walkthrough, `walkthrough/${spec}`), `premise: the walkthrough project selects ${spec}`).toBe(true);
@@ -1050,6 +1073,7 @@ describe("the capture walkthroughs' shortened timings (R10, PR-2)", () => {
     expect(runs.length, "e2e-parallel has one Playwright step").toBe(1);
 
     let checked = 0;
+    let floorsChecked = 0;
     for (const name of names) {
       const server = valueOf(servers[0]!, name);
       const runner = valueOf(runs[0]!, name);
@@ -1062,11 +1086,17 @@ describe("the capture walkthroughs' shortened timings (R10, PR-2)", () => {
       const honoured = tunable(name as (typeof TUNABLE_NAMES)[number], fallback, { ENV_NAME: "ci", [name]: server });
       expect(honoured, `${name}=${server} is not what the server runs under ENV_NAME=ci`).toBe(Number(server));
       expect(honoured, `${name}=${server} is not shorter than its default ${fallback}`).toBeLessThan(fallback);
+      const floor = floors.get(name);
+      if (floor !== undefined) {
+        expect(honoured, `${name}=${server} is below ${floor}, the floor the walkthrough's guard demands`).toBeGreaterThanOrEqual(floor);
+        floorsChecked++;
+      }
       expect(new RegExp(`^\\s+${name}:`, "m").test(elsewhere), `${name} reaches a job other than e2e-parallel`).toBe(false);
       checked++;
     }
     // The five the two walkthroughs demand (the first test pins which) — none checked would be a vacuous pass.
     expect(checked, "tunables checked").toBe(TUNABLE_NAMES.length - NOT_SHORTENED_IN_CI.length);
+    expect(floorsChecked, "floors checked").toBe(floors.size);
   });
 });
 
