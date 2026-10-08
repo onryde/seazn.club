@@ -296,6 +296,19 @@ jobs:
             if (stray.length > 0) fail(`the packages/reference filter also ran files outside packages/reference/: ${stray.join(", ")}`);
           '
 
+      # The engine rules reference (W2a ruling 75, packages/engine/rules/). Its rows are proved by tests in apps/web,
+      # e2e and tools, so this checker must run on a PR that touches none of packages/engine/**: the engine job
+      # further down is path-filtered, and this job is not. Same judge discipline as the two steps above, with jq
+      # instead of node: red on zero tests, a failed test or suite, a skip or todo, and a stray second file.
+      # packages/engine/test/rules-reference.test.ts pins this step (its CI-wiring describe).
+      - name: Engine rules reference checker (DB-free)
+        run: |
+          set -euo pipefail
+          rm -f vitest-results-rules.json
+          ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-rules.json --testTimeout=30000 packages/engine/test/rules-reference.test.ts
+          jq -r '"rules reference: \(.numPassedTests)/\(.numTotalTests) tests passed"' vitest-results-rules.json
+          jq -e '.numTotalTests > 0 and .numFailedTests == 0 and .numFailedTestSuites == 0 and .numPendingTests == 0 and .numTodoTests == 0 and (.testResults | length) == 1' vitest-results-rules.json
+
   # -------------------------------------------------------------------------
   # The apps/web unit / property / grid suite, in FOUR shards. It was 216s — 182s
   # of it this one step — and second only to smoke-e2e once #600 landed, so it
