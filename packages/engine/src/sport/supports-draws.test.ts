@@ -52,6 +52,40 @@ describe("X-DR-1: supportsDraws is an allow-list over DRAW_KINDS, swept 11 sport
     expect(refused).toBeGreaterThan(0);
   });
 
+  it("X-DR-1: organiser cfgs no variant declares (carrom's tieBoard 'draw'; a period overtime with no shoot-out) answer by the same rule rows", () => {
+    // The declared variants never turn these conjuncts: every carrom variant plays ICF 'extra', and every period variant
+    // with an overtime also has a shoot-out — so the sweep above cannot see either conjunct (changed-lines Stryker, Task 3).
+    const OT = { kind: "sudden_death", minutes: 5 };
+    const HOUSE: Record<string, { name: string; raw: C }[]> = {
+      carrom: [{ name: "tieBoard draw (house rule)", raw: { tieBoard: "draw" } }],
+      hockey: [{ name: "overtime, no shoot-out", raw: { overtime: OT, shootout: null } }, { name: "no decider", raw: { overtime: null, shootout: null } }],
+      icehockey: [{ name: "overtime, no shoot-out", raw: { overtime: OT, shootout: null } }, { name: "no decider", raw: { overtime: null, shootout: null } }],
+    };
+    let checked = 0;
+    let drawable = 0;
+    let refused = 0;
+    const visited: string[] = [];
+    forEachSport(({ key, module }) => {
+      const cfgs = HOUSE[key];
+      if (cfgs === undefined) return; // one-line reason: only these three sports have a conjunct no declared variant turns
+      visited.push(key);
+      for (const { name, raw } of cfgs) {
+        const cfg = module.configSchema.parse(raw) as C;
+        for (const kind of StageKind.options) {
+          const expected = DRAW_KINDS.has(kind) && LEVEL_RESULT_RULE[key]!.allows(cfg);
+          expect(module.supportsDraws(cfg as never, kind), `${key}/${name} ${kind} (${LEVEL_RESULT_RULE[key]!.rule})`).toBe(expected);
+          if (expected) drawable++;
+          else refused++;
+          checked++;
+        }
+      }
+    });
+    expect(visited.sort()).toEqual(Object.keys(HOUSE).sort());
+    expect(checked).toBe(5 * StageKind.options.length);
+    expect(drawable).toBeGreaterThan(0); // carrom 'draw' and the no-decider period cfgs draw in DRAW_KINDS
+    expect(refused).toBeGreaterThan(drawable); // the overtime-only cfgs refuse everywhere
+  });
+
   it("X-DR-1: the cases the old deny-list got wrong (generic page_playoff/ladder/americano, boardgame knockout)", () => {
     // Right answer differs from the wrong one's constant: the deny-list answered true for all four.
     let checked = 0;

@@ -142,6 +142,51 @@
     ]
   },
   {
+    "id": "carrom-tieboard-check-false",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "return cfg.tieBoard === \"draw\" && DRAW_KINDS.has(stage);",
+    "replace": "return false && DRAW_KINDS.has(stage);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: organiser cfgs no variant declares \\(carrom's tieBoard 'draw'; a period overtime with no shoot-out\\) answer by the same rule rows"
+      }
+    ]
+  },
+  {
+    "id": "carrom-tieboard-literal-empty",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "return cfg.tieBoard === \"draw\" && DRAW_KINDS.has(stage);",
+    "replace": "return cfg.tieBoard === \"\" && DRAW_KINDS.has(stage);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: organiser cfgs no variant declares \\(carrom's tieBoard 'draw'; a period overtime with no shoot-out\\) answer by the same rule rows"
+      }
+    ]
+  },
+  {
+    "id": "period-overtime-check-true",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "return DRAW_KINDS.has(stage) && cfg.overtime === null && cfg.shootout === null;",
+    "replace": "return DRAW_KINDS.has(stage) && true && cfg.shootout === null;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: organiser cfgs no variant declares \\(carrom's tieBoard 'draw'; a period overtime with no shoot-out\\) answer by the same rule rows"
+      }
+    ]
+  },
+  {
     "id": "declared-cfgs-unconditional-default",
     "file": "packages/engine/src/testkit/declared-cfgs.ts",
     "find": "if (bare.success) out.unshift",

@@ -112,7 +112,9 @@ export const DRAW_KINDS: ReadonlySet<StageKind> = new Set<StageKind>([
   "league", "group", "swiss", "americano",
 ]);
 export function forbidsLevelResult(kind: string | null | undefined): boolean {
-  return typeof kind === "string" && (BRACKET_KINDS as ReadonlySet<string>).has(kind);
+  // No `typeof` guard: a set of kind strings answers false for null, undefined
+  // and any unknown string alike (a guard here is an unkillable mutant).
+  return (BRACKET_KINDS as ReadonlySet<unknown>).has(kind);
 }
 export function isLevelOutcome(outcome: MatchOutcome | null | undefined): boolean {
   return outcome != null && (outcome.kind === "draw" || outcome.kind === "tie" || outcome.kind === "no_result");
