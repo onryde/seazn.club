@@ -470,6 +470,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // ask 10 and W19 (on R10's shortened tunables), the cron end, the free restarts, Revoke & reissue, a finished
   // fixture's code, and the panel's states at three widths.
   "capture-phone.spec.ts",
+  // Capture QR v2 PR-2 (T10–T12) — the organiser panel's PR-2 surface through real beats: the automatic-streaming switch
+  // (the DB re-read at three widths, the entitlement denied and granted), the live auto-stop line, the phone-health line
+  // and each amber the server names, the beat-confirmed "Phone not ready", the automatic start's refusal, and the
+  // takeover notice (dismissed across a reload, gone after Revoke & reissue, naming Stop while live).
+  "capture-panel-pr2.spec.ts",
 ];
 
 afterEach(() => {
