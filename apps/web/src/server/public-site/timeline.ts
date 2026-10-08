@@ -59,6 +59,7 @@ import {
   REPLAY_LINEUP_POLICY,
   initSquads,
   isLineupEventType,
+  kernelOwnsEvent,
   reduceLineupEvent,
   resolveVoids,
   type EventEnvelope,
@@ -191,6 +192,7 @@ const STRONG_EMPHASIS = new Set([
   "core.start",
   "core.forfeit",
   "core.abandon",
+  "core.settle",
   "football.card",
   "football.period",
   "tennis.game.award",
@@ -267,6 +269,9 @@ const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
   "core.award": (c) => ({ person: nameOf(c, "person"), key: S(c.payload.key) }),
   "core.suspend": () => ({}),
   "core.resume": () => ({}),
+  // W2a (X-ST-1): `CoreSettle` is `{ winner, method, note? }`; the winner is an
+  // entrant (SIDE_FIELDS reads `winner`), so the line names the side that advances.
+  "core.settle": (c) => ({ side: sideNameOf(c) }),
 
   // A penalty or an own goal is named by its SENTENCE (KEY_OVERRIDE below),
   // not by an English "(pen)" / "(og)" on `detail`: this builder has no
@@ -471,6 +476,12 @@ const KEY_OVERRIDE: Readonly<
   "core.lineup.position": lineupOverride,
   "core.lineup.retirement": lineupOverride,
   "core.lineup.entry": lineupOverride,
+  // W2a (X-ST-1): the settle method is part of the sentence. An unknown method
+  // keeps the table's method-free line rather than inventing how.
+  "core.settle": (payload) =>
+    payload.method === "lot" || payload.method === "higher_seed" || payload.method === "organiser"
+      ? `timeline.core.settle.${payload.method}`
+      : null,
 };
 
 /** Internal only: the ledger order a line was produced in. Two lines can share
@@ -711,17 +722,23 @@ export function buildTimeline(args: TimelineArgs): TimelineResult {
     let squads: SquadState = initSquads(lineups);
     if (module.onLineup !== undefined) state = module.onLineup(state, squads);
     let previous: ScoreSummary | null = module.summary(state);
+    let settled = false;
 
     for (let i = 0; i < active.length; i++) {
       const event = active[i]!;
       failedAt = event.seq;
-      // The three event families `foldMatch` never hands to a module.
-      if (event.type === "core.suspend" || event.type === "core.resume") continue;
-      if (isLineupEventType(event.type)) {
-        const reduced = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
-        if (reduced.ok) {
-          squads = reduced.squads;
-          if (module.onLineup !== undefined) state = module.onLineup(state, squads);
+      // Everything the kernel folds itself and never hands to a module — the
+      // engine's own predicate (W2a I-1), never a list restated here: suspend,
+      // resume, settle, the lineup family, and a settled fixture's finalize.
+      // Of those only a lineup change moves anything this pass reads.
+      if (kernelOwnsEvent(module, event, { state, settled })) {
+        if (event.type === "core.settle") settled = true;
+        if (isLineupEventType(event.type)) {
+          const reduced = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
+          if (reduced.ok) {
+            squads = reduced.squads;
+            if (module.onLineup !== undefined) state = module.onLineup(state, squads);
+          }
         }
         continue;
       }

@@ -13,6 +13,7 @@ import { EngineError } from "../../core/errors.ts";
 import { forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
+  DRAW_KINDS,
   EntrantId,
   type LineupPair,
   type MatchOutcome,
@@ -25,6 +26,7 @@ import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
 import type {
   ModuleEvent,
   PadAction,
+  PadGate,
   PadPanel,
   PadSpec,
   SportModule,
@@ -76,6 +78,10 @@ export const BoardgameCfg = z.object({
   // IS sudden death), so this buys nothing a pad can act on — it only lets a
   // sudden-death or delay-only control say so, instead of writing a zero that
   // reads as a deliberate Fischer setting.
+  // W2a BG-KO-1 — set by bracketDeciders in a bracket stage. OPTIONAL with NO
+  // default (finding 12): cfg is serialised into every frozen golden state.
+  // Absent reads as false (spec §5.2 "default false").
+  tiebreak: z.boolean().optional(),
   clock: z
     .object({
       base: z.number().int().nonnegative(),
@@ -180,9 +186,26 @@ export const BoardgamePairing = z
   });
 export type BoardgamePairing = z.infer<typeof BoardgamePairing>;
 
+// W2a BG-KO-1/BG-KO-2 (ruling 73). Lots is NOT a rung: drawing lots is the
+// organiser's core.settle {method: "lot"}.
+export const TIEBREAK_RUNGS = ["rapid", "blitz", "armageddon"] as const;
+export type TiebreakRung = (typeof TIEBREAK_RUNGS)[number];
+// A chess match score: whole points with an optional half either side of an en dash ("1½–½", "2–0").
+export const CHESS_SCORE = /^(\d+½?|½)–(\d+½?|½)$/;
+export const BOARDGAME_TIEBREAK_TYPE = "boardgame.tiebreak";
+export const BoardgameTiebreak = z.strictObject({
+  rung: z.enum(TIEBREAK_RUNGS),
+  // The entrant who advances — the same schema core.settle names its winner with
+  // (review Minor 4); it was typed PersonId, a different brand of the same string.
+  winner: EntrantId,
+  score: z.string().regex(CHESS_SCORE).optional(),
+});
+export type BoardgameTiebreak = z.infer<typeof BoardgameTiebreak>;
+
 // Branches are told apart structurally (spec 03 §2): a result always carries
 // `winner`, which the strict pairing branch rejects, and vice versa.
-export const BoardgameEv = z.union([BoardgameResult, BoardgamePairing]);
+// W2a: the tie-break is told apart by `rung`, which both other branches reject.
+export const BoardgameEv = z.union([BoardgameResult, BoardgamePairing, BoardgameTiebreak]);
 export type BoardgameEv = z.infer<typeof BoardgameEv>;
 
 // ---------------------------------------------------------------------------
@@ -195,7 +218,7 @@ type Color = "W" | "B";
 export interface BoardgameState {
   cfg: BoardgameCfg;
   entrants: { home: string; away: string };
-  phase: "pre" | "live" | "done" | "final" | "abandoned";
+  phase: "pre" | "live" | "tiebreak" | "done" | "final" | "abandoned";
   colorOfHome: Color | null; // null = colours disabled (go/generic)
   method: BoardgameMethod | null;
   // Forfeits score like a win but are excluded from colour history (chess.md §7).
@@ -210,6 +233,10 @@ export interface BoardgameState {
   // W4 result facts — absent unless the result event carried them.
   moves?: number;
   winnerPerson?: string;
+  // W2a — present from the moment a bracket game is drawn (phase "tiebreak");
+  // `rung`/`score` land when the tie-break is recorded.
+  // Absent on every stream that never reached a tie-break (golden-safe).
+  tiebreak?: { rung?: TiebreakRung; score?: string };
 }
 
 function opponent(side: Side): Side {
@@ -262,8 +289,12 @@ function decideResult(
     ...(extra.winnerPerson === undefined ? {} : { winnerPerson: extra.winnerPerson }),
   };
   if (winner === null) {
-    // Double forfeit ⇒ no result (both default); otherwise an ordinary draw.
+    // Double forfeit ⇒ no result (both default); otherwise an ordinary draw —
+    // unless this is a bracket game (BG-KO-1), which goes to the tie-break.
+    // The double forfeit is checked FIRST: it is not a drawn game, so it never
+    // opens a tie-break (controller ruling T15-R1; held needs_decision, X-BR-2).
     if (method === "double_forfeit") return { ...base, outcome: { kind: "no_result" } };
+    if (state.cfg.tiebreak === true) return { ...base, phase: "tiebreak", outcome: null, tiebreak: {} };
     return { ...base, outcome: { kind: "draw" } };
   }
   const winnerSide = sideOf(state, winner);
@@ -310,6 +341,27 @@ function applyPairing(
     colorOfHome,
     ...(Object.keys(players).length === 0 ? {} : { players }),
     ...(card.board === undefined ? {} : { board: card.board }),
+  };
+}
+
+function tiebreakRefused(message: string, data?: unknown): never {
+  throw new EngineError("TIEBREAK_NOT_APPLICABLE", message, data);
+}
+
+// W2a BG-KO-1. Only in phase "tiebreak". The scorer records the winner on every
+// rung; BG-KO-2 (a drawn armageddon goes to Black) is the pad's hint in W2a, and
+// armageddon colours are W2c's (ruling 82).
+function applyTiebreak(state: BoardgameState, p: BoardgameTiebreak): BoardgameState {
+  if (state.phase !== "tiebreak") tiebreakRefused(`tie-break not allowed in phase "${state.phase}"`);
+  const winnerSide = sideOf(state, p.winner);
+  return {
+    ...state,
+    phase: "done",
+    tiebreak: {
+      rung: p.rung,
+      ...(p.score === undefined ? {} : { score: p.score }),
+    },
+    outcome: { kind: "win", winner: state.entrants[winnerSide], loser: state.entrants[opponent(winnerSide)], method: `tiebreak_${p.rung}` },
   };
 }
 
@@ -378,6 +430,7 @@ function pointsText(halfPoints: number): string {
 export const BOARDGAME_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
   "boardgame.result": BoardgameResult,
   "boardgame.pairing": BoardgamePairing,
+  [BOARDGAME_TIEBREAK_TYPE]: BoardgameTiebreak,
 };
 
 // Sentinels for fields with no cfg knob to derive a bound from (spec 04 §6
@@ -454,6 +507,19 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
   // already has a native path: `boardgame.result` with `method: "forfeit"`
   // (decisive action above) or `"double_forfeit"` (drawn action above).
 
+  // W2a BG-KO-1 — the tie-break, offered only in a bracket cfg and only in
+  // phase "tiebreak"; the result panels are then gated to phase "live", so a
+  // drawn bracket game swaps them for the tie-break. Without `tiebreak` in cfg
+  // no panel carries a gate (the spec is unchanged).
+  const tiebreakAction: PadAction = {
+    type: BOARDGAME_TIEBREAK_TYPE,
+    labelKey: { key: "pad.boardgame.action.tiebreak", label: "Tie-break" },
+    fields: [{ kind: "enum", path: "rung", values: TIEBREAK_RUNGS }],
+    attribution: [{ kind: "side", path: "winner" }],
+  };
+  const inPhase = (value: string): PadGate => ({ op: "path-equals", path: "state.phase", value });
+  const tb = cfg.tiebreak === true;
+
   const panels: PadPanel[] = [
     {
       labelKey: { key: "pad.boardgame.panel.pre", label: "Pre-match" },
@@ -466,13 +532,24 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
       phase: "live",
       layout: "primary",
       actions: [decisiveResultAction],
+      ...(tb ? { gate: inPhase("live") } : {}),
     },
     {
       labelKey: { key: "pad.boardgame.panel.draw", label: "Draw / no result" },
       phase: "live",
       layout: "grid",
       actions: [drawnResultAction],
+      ...(tb ? { gate: inPhase("live") } : {}),
     },
+    ...(tb
+      ? [{
+          labelKey: { key: "pad.boardgame.panel.tiebreak", label: "Tie-break" },
+          phase: "live" as const,
+          layout: "primary" as const,
+          actions: [tiebreakAction],
+          gate: inPhase("tiebreak"),
+        }]
+      : []),
   ];
 
   // R8/WS-B — `required` stamped ONCE, here, from BOARDGAME_EVENT_SCHEMAS
@@ -485,6 +562,7 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
       fidelity: {
         "boardgame.result": 0,
         "boardgame.pairing": 1,
+        [BOARDGAME_TIEBREAK_TYPE]: 0, // W2a: the result family's band
       },
     },
     BOARDGAME_EVENT_SCHEMAS,
@@ -548,6 +626,12 @@ function foldBoardgameStats(
       // way, since attendance is recorded independently of how the game
       // ended. Any OTHER null-winner method is an ordinary draw: every
       // entrant's roster earns it.
+      //
+      // Ruling D-C6 (FIDE practice): that holds in a bracket too. A tie-break
+      // or a settle decides who ADVANCES, not the game, so the classical game
+      // stays a draw here — deliberately read from the result event, never
+      // from the effective outcome (`outcomeOf`), unlike carrom's and
+      // generic's stat folds (D-C3).
       if (method === "double_forfeit") continue;
       for (const entrant of ctx.entrants) creditEach(entrant, "draws");
       continue;
@@ -561,6 +645,14 @@ function foldBoardgameStats(
   }
 
   return [...rows.entries()].map(([personId, stats]) => ({ personId, stats }));
+}
+
+// W2a — the generator's tie-break draws: one uniform pick per choice (`rng` is
+// uniform in [0, 1), so the index is always in range). `null` = no score.
+const SIDES = ["home", "away"] as const;
+const TIEBREAK_SCORES = [null, "1½–½", "2–0"] as const;
+function pickFrom<T>(rng: Rng, items: readonly T[]): T {
+  return items[Math.floor(rng() * items.length)] as T;
 }
 
 // ---------------------------------------------------------------------------
@@ -613,6 +705,8 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
       }
       case "boardgame.pairing":
         return applyPairing(state, parsePayload(BoardgamePairing, ev.payload, ev.type), isStrictFold(ctx));
+      case BOARDGAME_TIEBREAK_TYPE:
+        return applyTiebreak(state, parsePayload(BoardgameTiebreak, ev.payload, ev.type));
       case "core.forfeit": {
         if (state.phase !== "live") wrongPhase(`forfeit not allowed in phase "${state.phase}"`);
         // The REASON is deliberately not carried onto the outcome here, and
@@ -653,7 +747,13 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     let home = 0;
     let away = 0;
     const outcome = state.outcome;
-    if (outcome?.kind === "win") {
+    // W2a: a game that went to the tie-break is level on the board; the
+    // tie-break decides who advances and never rewrites the score.
+    const level = state.tiebreak !== undefined;
+    if (level) {
+      home = draw;
+      away = draw;
+    } else if (outcome?.kind === "win") {
       const winnerHome = outcome.winner === state.entrants.home;
       home = winnerHome ? win : loss;
       away = winnerHome ? loss : win;
@@ -661,7 +761,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
       home = draw;
       away = draw;
     }
-    const decided = outcome !== null;
+    const decided = outcome !== null || level;
     return {
       headline: decided ? `${pointsText(home)} — ${pointsText(away)}` : "vs",
       perSide: [
@@ -678,6 +778,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         ...(state.board === undefined ? {} : { board: state.board }),
         ...(state.moves === undefined ? {} : { moves: state.moves }),
         ...(state.winnerPerson === undefined ? {} : { winnerPerson: state.winnerPerson }),
+        ...(state.tiebreak === undefined ? {} : { tiebreak: state.tiebreak }),
       },
     };
   },
@@ -765,11 +866,19 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   ],
   defaultTiebreakers: BOARDGAME_TIEBREAKERS,
 
-  // spec 04 §6 / chess.md §2 — draws always allowed, even in knockout (KO chess
-  // resolves ties via multi-game mini-matches, modelled at the fixture layer).
-  supportsDraws(_cfg, _stage: StageKind) {
-    return true;
+  // X-DR-1 (ruling 78): draws only where nobody must advance. A drawn bracket
+  // game goes to the tie-break (BG-KO-1), never to a decided draw.
+  supportsDraws(_cfg, stage: StageKind) {
+    return DRAW_KINDS.has(stage);
   },
+
+  // BG-KO-1
+  bracketDeciders: () => ({ tiebreak: true }),
+  // C12: lots is the organiser's settle (ruling 73) — settleApplies is true while
+  // the tie-break is pending. A held double forfeit is phase "done": false (T15-R1).
+  awaitingDecider: (s: BoardgameState) => s.phase === "tiebreak",
+  // D-C7: the kernel refuses a tie-break TIEBREAK_NOT_APPLICABLE unless one is pending.
+  deciderTypes: [BOARDGAME_TIEBREAK_TYPE],
 
   // §9.3 — {win+loss, 2·draw, 0 (double forfeit)}.
   declaredPointsSets(cfg) {
@@ -846,6 +955,17 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         };
       }
       return { type: "core.start", payload: {} };
+    }
+    if (state.phase === "tiebreak") {
+      // W2a BG-KO-1 — a drawn bracket game: one tie-break on any rung, the
+      // winner either side, and the tie-break's match score present or absent.
+      const rung = pickFrom(rng, TIEBREAK_RUNGS);
+      const winner = state.entrants[pickFrom(rng, SIDES)];
+      const score = pickFrom(rng, TIEBREAK_SCORES);
+      return {
+        type: BOARDGAME_TIEBREAK_TYPE,
+        payload: { rung, winner, ...(score === null ? {} : { score }) },
+      };
     }
     if (state.phase !== "live") return null;
     const roll = rng();

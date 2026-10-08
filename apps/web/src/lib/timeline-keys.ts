@@ -78,6 +78,12 @@ export const TIMELINE_OVERRIDE_KEYS: readonly string[] = [
   // renderer can translate.
   "timeline.football.penaltyGoal",
   "timeline.football.ownGoal",
+  // W2a (X-ST-1): a settle's method is part of its sentence ("by lot", "on
+  // higher seed", "by organiser's decision"); `timeline.core.settle` is the
+  // table entry and the method-free fallback.
+  "timeline.core.settle.lot",
+  "timeline.core.settle.higher_seed",
+  "timeline.core.settle.organiser",
 ];
 
 /** The template table: recorded event type -> dictionary key. */
@@ -95,6 +101,8 @@ export const TIMELINE_KEY_FOR: Readonly<Record<string, string>> = {
   "core.award": "timeline.core.award",
   "core.suspend": "timeline.core.suspend",
   "core.resume": "timeline.core.resume",
+  // W2a (X-ST-1): the organiser's settle; KEY_OVERRIDE picks the method's sentence.
+  "core.settle": "timeline.core.settle",
   "core.lineup.substitution": "timeline.core.lineup",
   "core.lineup.replacement": "timeline.core.lineup",
   "core.lineup.position": "timeline.core.lineup",

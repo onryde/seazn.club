@@ -63,7 +63,8 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { log } from "@/server/logger";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import enPublic from "@/dictionaries/en/public.json";
@@ -72,6 +73,10 @@ import {
   CORE_EVENT_SCHEMAS,
   EngineError,
   LINEUP_EVENT_SCHEMAS,
+  SETTLE_METHODS,
+  foldMatchWithStoppage,
+  isLevelOutcome,
+  outcomeOf,
   type EventEnvelope,
   type LineupPair,
   type ScoreSummary,
@@ -500,6 +505,51 @@ describe("buildTimeline", () => {
     expect(clean.derivedComplete).toBe(true);
   });
 
+  it("W2a I-1: a SETTLED fixture replays to the end in every sport — core.settle (and a settled abandon's finalize) is the kernel's, never the module's — with no degrade warning", () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      let sports = 0;
+      let settled = 0;
+      const replays = (sportKey: string, cfg: unknown, events: EventEnvelope[]) => {
+        const a = args({ sportKey, cfg, events });
+        // Legal on the WRITE path first, so a red below is this builder's, never the ledger's.
+        foldMatchWithStoppage(a.module as never, a.cfg as never, a.lineups, events, { strictFromSeq: 0 });
+        return buildTimeline(a).derivedComplete;
+      };
+      for (const { key } of CORPORA) {
+        sports++;
+        const cfg = defaultCfgFor(key);
+        const a = args({ sportKey: key, cfg });
+        const base = [env(0, "core.start", {}), env(1, "core.abandon", { reason: "floodlights" })];
+        const o = outcomeOf(a.module as never, foldMatchWithStoppage(a.module as never, cfg as never, a.lineups, base));
+        if (!(o === null || isLevelOutcome(o))) continue; // this cfg's abandon awards a winner: nothing to settle (X-ST-1)
+        const events = [
+          ...base,
+          env(2, "core.settle", { winner: a.lineups.home.entrantId, method: "organiser" }),
+          env(3, "core.finalize", {}),
+        ];
+        expect(replays(key, cfg, events), key).toBe(true);
+        settled++;
+      }
+      // Chess in a bracket (BG-KO-1): drawn, tie-break pending, settled by lot, finalized by the kernel.
+      const bg = defaultCfgFor("boardgame") as object;
+      const ko = moduleFor("boardgame").configSchema.parse({ ...bg, tiebreak: true });
+      const drawn = [env(0, "core.start", {}), env(1, "boardgame.result", { winner: null, method: "agreement" })];
+      const close = (winner: string) => [env(2, "core.settle", { winner, method: "lot" }), env(3, "core.finalize", {})];
+      expect(replays("boardgame", ko, [...drawn, ...close("A")])).toBe(true);
+      // A settled league DRAW: the module has an outcome, so that finalize is the module's own.
+      expect(replays("boardgame", bg, [...drawn, ...close("H")])).toBe(true);
+      expect(sports).toBe(CORPORA.length);
+      expect(settled, `${settled} of ${sports} sports settled`).toBeGreaterThan(0);
+      expect(warn).not.toHaveBeenCalled();
+      // The positive pair: the spy does see the degrade warning, so its silence above is evidence.
+      expect(buildTimeline(args({ sportKey: "football", events: footballLedger })).derivedComplete).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("emphasis is not decoration: a point line is `score`, a derived set line is `strong`", () => {
     const tennis = linesOf(args({ sportKey: "tennis", events: tennisSetLedger }));
     const setWon = tennis.find((l) => l.text.key === TIMELINE_SET_WON_KEY)!;
@@ -840,8 +890,12 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     expect(CORPORA).toHaveLength(11);
     expect(RECORDED_TYPES.length).toBeGreaterThanOrEqual(60);
     // …and the corpora are NOT the whole ledger vocabulary. They record three
-    // kernel types; the kernel registers fourteen.
-    expect(KERNEL_TYPES.length).toBe(14);
+    // kernel types; the kernel registers every key of CORE_EVENT_SCHEMAS, which
+    // already holds the lineup family — so the union adds nothing to it (a
+    // double-counted or dropped lineup type moves this). Derived from the
+    // engine's registry, not a literal: W2a's core.settle made it fifteen.
+    expect(KERNEL_TYPES.length).toBe(Object.keys(CORE_EVENT_SCHEMAS).length);
+    expect(Object.keys(LINEUP_EVENT_SCHEMAS).length).toBeGreaterThan(0);
     for (const type of ["core.note", "core.finalize", "core.award", "core.lineup.entry"]) {
       expect(RECORDED_TYPES, type).not.toContain(type);
       expect(ALL_TYPES, type).toContain(type);
@@ -926,10 +980,55 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
       emitted.add(line.text.key);
       if (TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
     }
-    // The gate says what it saw: both no-side branches and both goal flags fired.
-    expect(overridden).toBe(4);
+    // W2a (X-ST-1): one settle per engine-declared method, each closing a drawn game.
+    for (const method of SETTLE_METHODS) {
+      const settled = [
+        env(0, "boardgame.result", { method: "agreement" }),
+        env(1, "core.settle", { winner: "H", method }),
+      ];
+      for (const line of linesOf(args({ sportKey: "boardgame", events: settled }))) {
+        emitted.add(line.text.key);
+        // Only the settle line counts: the drawn result before it re-fires boardgame.draw, already counted above.
+        if (line.seq === 1 && TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
+      }
+    }
+    // The gate says what it saw: both no-side branches, both goal flags and
+    // every settle method fired — each override key exactly once.
+    expect(overridden).toBe(4 + SETTLE_METHODS.length);
+    expect(overridden).toBe(TIMELINE_OVERRIDE_KEYS.length);
     const overrides = [...emitted].filter((k) => !Object.values(TIMELINE_KEY_FOR).includes(k));
     expect(overrides.sort()).toEqual([...TIMELINE_OVERRIDE_KEYS].sort());
+  });
+
+  it("X-ST-1: a settle line names the side that advances and the engine's settle method, in all four locales", () => {
+    // Methods from the engine's own SETTLE_METHODS, never a list typed here.
+    expect(SETTLE_METHODS.length).toBeGreaterThan(0);
+    const rendered = new Set<string>();
+    let checked = 0;
+    for (const method of SETTLE_METHODS) {
+      const events = [
+        env(0, "boardgame.result", { method: "agreement" }),
+        env(1, "core.settle", { winner: "A", method }),
+      ];
+      const line = linesOf(args({ sportKey: "boardgame", events })).find((l) => l.seq === 1)!;
+      expect(line, `${method}: no recorded settle line`).toBeTruthy();
+      expect(line.text.key).toBe(`timeline.core.settle.${method}`);
+      expect(line.text.params?.side).toBe(SIDES[1].name);
+      expect(line.emphasis).toBe("strong"); // the forfeit sibling's emphasis
+      for (const locale of LOCALES) {
+        const dict = DICTS[locale] as Dict;
+        const text = t(dict, line.text.key, localiseParams(dict, line.text.params));
+        expect(text, `${locale}/${method}`).toContain(SIDES[1].name);
+        expect(text, `${locale}/${method}`).not.toMatch(/[{}]|timeline\./);
+        rendered.add(`${locale}:${text}`);
+        checked++;
+      }
+    }
+    expect(checked).toBe(SETTLE_METHODS.length * LOCALES.length);
+    expect(rendered.size, "two methods render the same sentence").toBe(checked);
+    // An unknown method keeps the table's method-free line rather than inventing how.
+    const odd = linesOf(args({ sportKey: "boardgame", events: [env(0, "core.settle", { winner: "H", method: "coin" })] }));
+    expect(odd.find((l) => l.seq === 0)!.text.key).toBe(TIMELINE_KEY_FOR["core.settle"]);
   });
 
   it("the client-safe key module imports nothing from the server", () => {

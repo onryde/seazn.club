@@ -4,9 +4,10 @@
 // real module on the contract — proves PROMPT-03.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { foldMatch, forfeitOf, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { foldMatchWithStoppage, forfeitOf, outcomeOf, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
+  DRAW_KINDS,
   EntrantId,
   type LineupPair,
   type MatchOutcome,
@@ -452,8 +453,12 @@ function foldGenericStats(events: readonly EventEnvelope[], ctx: PlayerStatsFold
       away: { entrantId: away.id, slots: [] },
     };
     try {
-      const state = foldMatch(generic, cfgParsed.data, lineups, events);
-      const outcome = state.outcome;
+      // W2a (ruling D-C3): the outcome of a fold is outcomeOf — a settle lives
+      // beside module state, so `state.outcome` would credit a settled level
+      // match as a draw.
+      const folded = foldMatchWithStoppage(generic, cfgParsed.data, lineups, events);
+      const state = folded.state;
+      const outcome = outcomeOf(generic, folded);
       // Once the fixture IS decided, every side is credited explicitly —
       // including a 0 for whoever did not win/draw — since `GenericResult`
       // has no competing explicit-person field for any of these three keys
@@ -646,12 +651,14 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   ],
   defaultTiebreakers: ["points", "diff", "for", "h2h_points", "lots"],
 
-  // Draws only where the format can absorb them — never in eliminations.
+  // X-DR-1 (ruling 78): an allow-list — draws only where nobody must advance,
+  // and only when the organiser declared them (cfg.allowDraws).
   supportsDraws(cfg, stage: StageKind) {
-    return (
-      cfg.allowDraws && stage !== "knockout" && stage !== "double_elim" && stage !== "stepladder"
-    );
+    return cfg.allowDraws && DRAW_KINDS.has(stage);
   },
+
+  // W2a: none (spec §5.2)
+  bracketDeciders: () => ({}),
 
   // §9.3 — decisive total w+l; shared total 2d (draw/tie/no_result — abandon
   // can produce no_result even when allowDraws is false).

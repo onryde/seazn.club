@@ -2470,6 +2470,9 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
       return false;
     },
 
+    // W2a: none — a set-based match always produces a winner (spec §5.2)
+    bracketDeciders: () => ({}),
+
     // §9.3 — every decided fixture pays a pointsMap value-sum (award reuses the
     // clean-sweep pair, whose sum is already present).
     declaredPointsSets(cfg) {

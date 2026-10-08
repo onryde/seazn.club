@@ -1,0 +1,376 @@
+[
+  {
+    "id": "tiebreak-flag-ignored",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\"",
+    "replace": "if (false) return { ...base, phase: \"tiebreak\"",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-1: with tiebreak, a drawn game opens phase 'tiebreak' with no outcome, and the summary keeps the level score"
+      }
+    ]
+  },
+  {
+    "id": "phase",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "  if (state.phase !== \"tiebreak\") tiebreakRefused(`tie-break not allowed in phase \"${state.phase}\"`);\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-1: a tiebreak outside phase 'tiebreak' is refused, per rung"
+      }
+    ]
+  },
+  {
+    "id": "awaiting-decider-never",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "awaitingDecider: (s: BoardgameState) => s.phase === \"tiebreak\",",
+    "replace": "awaitingDecider: (_s: BoardgameState) => false,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "C12: in phase tiebreak lots is the organiser's settle — settleApplies is true, a settle decides, and a later tiebreak is refused"
+      }
+    ]
+  },
+  {
+    "id": "method-always-rapid",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "method: `tiebreak_${p.rung}` },",
+    "replace": "method: \"tiebreak_rapid\" },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-1: each rung decides a win with method tiebreak_<rung>, and the summary still shows the level game"
+      }
+    ]
+  },
+  {
+    "id": "outcome-winner-swapped",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "outcome: { kind: \"win\", winner: state.entrants[winnerSide], loser: state.entrants[opponent(winnerSide)], method: `tiebreak_${p.rung}` },",
+    "replace": "outcome: { kind: \"win\", winner: state.entrants[opponent(winnerSide)], loser: state.entrants[winnerSide], method: `tiebreak_${p.rung}` },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-2 \\(ruling 82\\): the engine records the armageddon winner the scorer taps — either side, with or without colours|BG-KO-1: each rung decides a win with method tiebreak_<rung>, and the summary still shows the level game"
+      }
+    ]
+  },
+  {
+    "id": "summary-level-dropped",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "    if (level) {\n      home = draw;\n      away = draw;\n    } else if (outcome?.kind === \"win\") {",
+    "replace": "    if (outcome?.kind === \"win\") {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-1: with tiebreak, a drawn game opens phase 'tiebreak' with no outcome, and the summary keeps the level score"
+      }
+    ]
+  },
+  {
+    "id": "boardgame-bracket-deciders-empty",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "bracketDeciders: () => ({ tiebreak: true }),",
+    "replace": "bracketDeciders: () => ({}),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/bracket-deciders.test.ts"
+        ],
+        "name": "BG-KO-1 CA-KO-1: every sport declares exactly its ruled overlay, and the overlay parses under its own schema"
+      }
+    ]
+  },
+  {
+    "id": "carrom-bracket-deciders-empty",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "bracketDeciders: () => ({ tieBoard: \"extra\" as const }),",
+    "replace": "bracketDeciders: () => ({}),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/bracket-deciders.test.ts"
+        ],
+        "name": "CA-KO-1: the overlay wins over a division tieBoard 'draw' \\(right answer differs from the division's constant\\)"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/carrom/carrom.test.ts"
+        ],
+        "name": "CA-KO-1: in a bracket the overlay plays the extra board even when the division says tieBoard 'draw'"
+      }
+    ]
+  },
+  {
+    "id": "tiebreak-cfg-defaulted",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "  tiebreak: z.boolean().optional(),",
+    "replace": "  tiebreak: z.boolean().default(false),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "empty case first: without tiebreak in cfg a drawn game is an ordinary draw \\(golden-safe\\)"
+      }
+    ]
+  },
+  {
+    "id": "t15-r1-double-forfeit-enters-tiebreak",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"no_result\" } };\n    if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };",
+    "replace": "    if (state.cfg.tiebreak === true) return { ...base, phase: \"tiebreak\", outcome: null, tiebreak: {} };\n    if (method === \"double_forfeit\") return { ...base, outcome: { kind: \"no_result\" } };",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "T15-R1 BG-KO-1: only a game the league calls DRAWN enters the tie-break — a bracket double forfeit is held no_result, awaitingDecider false, closed by settle"
+      }
+    ]
+  },
+  {
+    "id": "d-c5-decided-short-circuit-dropped",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  if (f.outcome !== null) return false; // decided (D-C5): never re-settled, whatever the phase\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C5: once decided — by a settle in phase tiebreak, or by the tie-break itself — settle no longer applies and finalize is accepted; before it, settle applies and finalize is refused"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "C12: settleApplies is THE precondition — level, or nothing decided with an abandon or a pending decider; never a win or an award"
+      }
+    ]
+  },
+  {
+    "id": "d-c5-decider-pending-ignores-outcome",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "return module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;",
+    "replace": "return module.awaitingDecider?.(folded.state) === true;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C5: once decided — by a settle in phase tiebreak, or by the tie-break itself — settle no longer applies and finalize is accepted; before it, settle applies and finalize is refused"
+      }
+    ]
+  },
+  {
+    "id": "d-c4-pad-label-action-dropped",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "  \"pad.boardgame.action.tiebreak\", // W2a BG-KO-1: bracket cfg only (ruling D-C4)\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/scoring-vocab.test.ts"
+        ],
+        "name": "ruling D-C4: the bracket-only boardgame labels render as each locale's copy, never the engine's English or the raw dotted key"
+      }
+    ]
+  },
+  {
+    "id": "d-c4-pad-label-panel-dropped",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "  \"pad.boardgame.panel.tiebreak\", // W2a BG-KO-1: bracket cfg only (ruling D-C4)\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/scoring-vocab.test.ts"
+        ],
+        "name": "ruling D-C4: the bracket-only boardgame labels render as each locale's copy, never the engine's English or the raw dotted key"
+      }
+    ]
+  },
+  {
+    "id": "d-c4-rung-vocab-dropped",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "  rung: [RUNG_KEY], // W2a — BoardgameTiebreak.rung\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/scoring-vocab.test.ts"
+        ],
+        "name": "labels every enum member the engine declares"
+      }
+    ]
+  },
+  {
+    "id": "d-c4-event-band-dropped",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "  \"boardgame.tiebreak\": 0, // W2a BG-KO-1",
+    "replace": "  // \"boardgame.tiebreak\": 0, // W2a BG-KO-1",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/skins/__tests__/boardgame.test.ts"
+        ],
+        "name": "EVENT_BAND is the module's own fidelity map, not a second scale"
+      }
+    ]
+  },
+  {
+    "id": "d-c7-kernel-guard-dropped",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {",
+    "replace": "    if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending|BG-KO-1: a second tiebreak is refused \\(ruling D-C7: TIEBREAK_NOT_APPLICABLE\\)|C12: in phase tiebreak lots is the organiser's settle|rule 10: any sequence of results, tie-breaks, settles, abandons, finalizes and void-last in a bracket keeps the invariants after every step"
+      }
+    ]
+  },
+  {
+    "id": "d-c7-guard-settlement-blind",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {",
+    "replace": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement: null })) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending|C12: in phase tiebreak lots is the organiser's settle"
+      }
+    ]
+  },
+  {
+    "id": "d-c7-guard-ignores-phase",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {",
+    "replace": "    if (deciderTypes.has(event.type) && outcomeOf(module, { state, settlement }) !== null) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending|BG-KO-1: a tiebreak outside phase 'tiebreak' is refused, per rung"
+      }
+    ]
+  },
+  {
+    "id": "d-c7-guard-below-guarantee-4",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {\n      throw new EngineError(\n        \"TIEBREAK_NOT_APPLICABLE\",\n        `event \"${event.type}\" rejected: no tie-break is pending — it follows only a drawn knockout game that nothing has decided yet`,\n        { eventId: event.id, outcome: outcomeOf(module, { state, settlement }) },\n      );\n    }\n    if (decided && !postDecision.has(event.type)) {\n      throw new EngineError(\n        \"ALREADY_DECIDED\",\n        `event \"${event.type}\" rejected: match outcome already decided`,\n        { eventId: event.id },\n      );\n    }\n",
+    "replace": "    if (decided && !postDecision.has(event.type)) {\n      throw new EngineError(\n        \"ALREADY_DECIDED\",\n        `event \"${event.type}\" rejected: match outcome already decided`,\n        { eventId: event.id },\n      );\n    }\n    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {\n      throw new EngineError(\n        \"TIEBREAK_NOT_APPLICABLE\",\n        `event \"${event.type}\" rejected: no tie-break is pending — it follows only a drawn knockout game that nothing has decided yet`,\n        { eventId: event.id, outcome: outcomeOf(module, { state, settlement }) },\n      );\n    }\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending|BG-KO-1: a second tiebreak is refused \\(ruling D-C7: TIEBREAK_NOT_APPLICABLE\\)|C12: in phase tiebreak lots is the organiser's settle"
+      }
+    ]
+  },
+  {
+    "id": "d-c7-boardgame-declares-no-decider",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "  deciderTypes: [BOARDGAME_TIEBREAK_TYPE],",
+    "replace": "  deciderTypes: [],",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending"
+      }
+    ]
+  },
+  {
+    "id": "d-c6-stats-follow-the-decider",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "      if (method === \"double_forfeit\") continue;\n      for (const entrant of ctx.entrants) creditEach(entrant, \"draws\");",
+    "replace": "      if (method === \"double_forfeit\") continue;\n      const decider = events.find((e) => e.type === \"core.settle\" || e.type === \"boardgame.tiebreak\");\n      if (decider !== undefined) {\n        const w = (decider.payload as { winner: string }).winner;\n        for (const entrant of ctx.entrants) creditEach(entrant, entrant.id === w ? \"wins\" : \"losses\");\n        continue;\n      }\n      for (const entrant of ctx.entrants) creditEach(entrant, \"draws\");",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C6 \\(FIDE practice\\): a drawn bracket game counts as a DRAW in player stats"
+      }
+    ]
+  },
+  {
+    "id": "minor4-tiebreak-winner-person",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "  // (review Minor 4); it was typed PersonId, a different brand of the same string.\n  winner: EntrantId,",
+    "replace": "  // (review Minor 4); it was typed PersonId, a different brand of the same string.\n  winner: PersonId,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "review Minor 4: the tie-break winner is the same entrant-id schema core\\.settle names its winner with"
+      }
+    ]
+  },
+  {
+    "id": "minor6-forfeit-guard-dropped",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "        if (state.phase !== \"live\") wrongPhase(`forfeit not allowed in phase \"${state.phase}\"`);\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-1: a core\\.forfeit while the tie-break is pending is refused WRONG_PHASE"
+      }
+    ]
+  }
+]

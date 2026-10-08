@@ -414,9 +414,10 @@ export interface PayloadSchemaProbe {
  *
  * WHY THE SCHEMA AND NOT A LIST. `at` is `GameTime.optional()` on all nine of
  * football's payloads and on the period kernel's seven, and on seven of the
- * fourteen `CORE_EVENT_SCHEMAS` (`core.suspend`, `core.resume` and all five
- * `core.lineup.*`). The other seven — `core.start`, `core.void`,
- * `core.forfeit`, `core.abandon`, `core.finalize`, `core.note`, `core.award` —
+ * fifteen `CORE_EVENT_SCHEMAS` (`core.suspend`, `core.resume` and all five
+ * `core.lineup.*`). The other eight — `core.start`, `core.void`,
+ * `core.forfeit`, `core.abandon`, `core.finalize`, `core.note`, `core.award`,
+ * `core.settle` (W2a) —
  * are `z.strictObject`s WITHOUT it, so an unexpected `at` is a hard parse
  * failure there, not a harmless extra key. A blanket stamp would break the
  * very events it touched, and a hand-kept list would have to know which half
