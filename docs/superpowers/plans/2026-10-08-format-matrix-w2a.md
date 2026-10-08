@@ -306,6 +306,7 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
     cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && pnpm mutate --list docs/superpowers/specs/2026-09-27-format-matrix-prompts/mutants/w2a/t<N>.json --json-out "$TMPDIR/w2a-mut-t<N>.json"; echo EXIT=$?
     ```
     The expected result is `EXIT=0`: every row reads `KILLED by <test names>`, 0 survived, and the file is restored byte-identical. Paste the table into the task report. RULES.md asks for the killer list, not a count.
+    - **Runner as built (Task 0a review, controller ruling):** a killer that fails to COLLECT (syntax error from the replace, a failed hook) is `COLLECT_FAILED` and fails the run unless the mutant sets `collectFailOk: "<reason>"` — a collect failure is not a kill. `name` is passed to vitest `-t`, which is a **regex**: escape `( ) [ ] . * + ? |` in a verbatim title, or a title that matches 0 tests is refused at the baseline. The killer shape is validated before anything runs (non-empty `files` naming existing files under the killer's `cwd`).
   - The runner applies **one mutant at a time** (grouped mutants hide survivors), runs only that mutant's killers, and restores the saved original bytes. Restoring with `git checkout` would discard the task's own uncommitted work.
   - **Changed-lines Stryker (engine code only)**, as well as the hand mutants:
     ```bash
@@ -1604,7 +1605,7 @@ The same command as Step 2. Expected:
 
 Each row above becomes one entry of `MUT/t2.json`:
 - `find` is the exact source text the row names, copied from this task's code blocks, and `replace` is its mutation;
-- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names> }]`.
+- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names, regex-escaped — `-t` is a regex> }]`.
 
 Then run the runner:
 
@@ -1959,7 +1960,7 @@ If `match-points-bounds.test.ts` or a period-kernel test reds on americano, read
 
 Each row above becomes one entry of `MUT/t3.json`:
 - `find` is the exact source text the row names, copied from this task's code blocks, and `replace` is its mutation;
-- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names> }]`.
+- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names, regex-escaped — `-t` is a regex> }]`.
 
 Then run the runner:
 
@@ -2507,7 +2508,7 @@ Expected: each `EXIT=0`, and each judge line with `failed: 0` and the right file
 
 Each row above becomes one entry of `MUT/t4.json`:
 - `find` is the exact source text the row names, copied from this task's code blocks, and `replace` is its mutation;
-- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names> }]`.
+- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names, regex-escaped — `-t` is a regex> }]`.
 
 Then run the runner:
 
@@ -2940,7 +2941,7 @@ If `generator-fields.test.ts` requires `boardgame.arbitraryEvent` to emit the ne
 
 Each row above becomes one entry of `MUT/t5.json`:
 - `find` is the exact source text the row names, copied from this task's code blocks, and `replace` is its mutation;
-- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names> }]`.
+- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names, regex-escaped — `-t` is a regex> }]`.
 
 Then run the runner:
 
