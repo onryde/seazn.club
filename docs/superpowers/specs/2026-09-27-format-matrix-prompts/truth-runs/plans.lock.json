@@ -10791,6 +10791,969 @@
         "league|cricket|LIFECYCLE|cricket#107"
       ],
       "planned": {}
+    },
+    "w2a-repro/L1/w2a-repro-l1-s16": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "triple_rr|generic|LIFECYCLE@1280",
+        "swiss_playoff|boardgame|LIFECYCLE@1280",
+        "americano|football|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "knockout_third_place|icehockey|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W4: no organiser control builds knockout_third_place"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1-s18": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "triple_rr|badminton|LIFECYCLE@1280",
+        "swiss_playoff|generic|LIFECYCLE@1280",
+        "americano|boardgame|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "page_playoff_only|football|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W4: no organiser control builds page_playoff_only"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1-s25": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "league_ko|boardgame|LIFECYCLE@1280",
+        "swiss_knockout|football|LIFECYCLE@1280",
+        "americano|icehockey|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "page_playoff_only|tabletennis|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W4: no organiser control builds page_playoff_only"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1-s27": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "league_ko|generic|LIFECYCLE@1280",
+        "swiss_knockout|boardgame|LIFECYCLE@1280",
+        "mexicano|football|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "page_playoff_only|icehockey|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W4: no organiser control builds page_playoff_only"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1-s36": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "groups_ko|boardgame|LIFECYCLE@1280",
+        "knockout|football|LIFECYCLE@1280",
+        "mexicano|icehockey|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "stepladder_only|tabletennis|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W4: no organiser control builds stepladder_only"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1-s38": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "groups_ko|generic|LIFECYCLE@1280",
+        "knockout|boardgame|LIFECYCLE@1280",
+        "ladder|football|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "stepladder_only|icehockey|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W4: no organiser control builds stepladder_only"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1-s47": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "group_stepladder|boardgame|LIFECYCLE@1280",
+        "ko_plate|football|LIFECYCLE@1280",
+        "ladder|icehockey|LIFECYCLE@1280"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L1/w2a-repro-l1-s49": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "group_stepladder|generic|LIFECYCLE@1280",
+        "ko_plate|boardgame|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "group_only|football|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W5: no organiser control builds group_only"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1-s58": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "group_playoffs|boardgame|LIFECYCLE@1280",
+        "qualifying_main|football|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "group_only|icehockey|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W5: no organiser control builds group_only"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1-s60": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "group_playoffs|generic|LIFECYCLE@1280",
+        "qualifying_main|boardgame|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "group_group_ko|football|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W5: no organiser control builds group_group_ko"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1-s7": {
+      "plan": "--layer L1 --scope grid",
+      "layered": true,
+      "driven": [
+        "league|badminton|LIFECYCLE@1280",
+        "swiss|generic|LIFECYCLE@1280",
+        "double_elim|boardgame|LIFECYCLE@1280"
+      ],
+      "planned": {
+        "knockout_third_place|football|LIFECYCLE@1280": {
+          "state": "no_path",
+          "reason": "W4: no organiser control builds knockout_third_place"
+        }
+      }
+    },
+    "w2a-repro/L1/w2a-repro-l1": {
+      "plan": "--layer L1",
+      "layered": true,
+      "driven": [
+        "league|generic|LIFECYCLE@1280",
+        "league|badminton|LIFECYCLE@1280",
+        "knockout|generic|LIFECYCLE@1280",
+        "knockout|badminton|LIFECYCLE@1280",
+        "swiss|generic|LIFECYCLE@1280",
+        "swiss|badminton|LIFECYCLE@1280"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L2/w2a-repro-l2-s16": {
+      "plan": "--layer L2 --scope grid",
+      "layered": true,
+      "driven": [
+        "group_only|football|R4a@768",
+        "league_ko|boardgame|F1@834"
+      ],
+      "planned": {
+        "ladder|football|R1@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R1)"
+        },
+        "ko_plate|badminton|R6@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R6)"
+        },
+        "group_group_ko|football|R9a@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R9a)"
+        },
+        "knockout_third_place|football|R11a@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R11a)"
+        },
+        "page_playoff_only|carrom|R12b@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R12b)"
+        },
+        "americano|football|R16@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R16)"
+        },
+        "mexicano|football|M3@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M3)"
+        },
+        "page_playoff_only|football|M5@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M5)"
+        },
+        "stepladder_only|football|M7b@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M7b)"
+        },
+        "league|football|M9b@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M9b)"
+        },
+        "triple_rr|cricket|M12a@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M12a)"
+        },
+        "groups_ko|carrom|F5a@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F5a)"
+        },
+        "stepladder_only|football|F8@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F8)"
+        },
+        "league|football|D4a@768": {
+          "state": "no_path",
+          "reason": "W4: no organiser path, known at design time (design §4): separation: same-club separation"
+        },
+        "triple_rr|cricket|D5b@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D5b)"
+        },
+        "league_ko|boardgame|P1@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P1)"
+        },
+        "americano|football|P4@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P4)"
+        },
+        "groups_ko|carrom|P7@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P7)"
+        },
+        "double_elim|icehockey|Q4a@360": {
+          "state": "no_path",
+          "reason": "W4: no organiser path, known at design time (design §4): final not played: → joint winners"
+        },
+        "group_playoffs|volleyball|X1b@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X1b)"
+        },
+        "americano|football|X4a@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X4a)"
+        },
+        "mexicano|football|C1@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C1)"
+        },
+        "ladder|football|C3b@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C3b)"
+        },
+        "ko_plate|hockey|C6b@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C6b)"
+        },
+        "qualifying_main|volleyball|E3|volleyball#001@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom E3)"
+        }
+      }
+    },
+    "w2a-repro/L2/w2a-repro-l2-s2": {
+      "plan": "--layer L2 --scope grid",
+      "layered": true,
+      "driven": [
+        "league_ko|boardgame|R4a@768"
+      ],
+      "planned": {
+        "triple_rr|cricket|R1@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R1)"
+        },
+        "americano|football|R5@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R5)"
+        },
+        "groups_ko|generic|R9a@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R9a)"
+        },
+        "group_stepladder|generic|R11a@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R11a)"
+        },
+        "group_playoffs|tennis|R12b@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R12b)"
+        },
+        "swiss|hockey|R15@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R15)"
+        },
+        "league|football|M3@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M3)"
+        },
+        "groups_ko|cricket|M5@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M5)"
+        },
+        "swiss|badminton|M7b@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M7b)"
+        },
+        "swiss_playoff|tabletennis|M9a@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M9a)"
+        },
+        "swiss_knockout|tennis|M11@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M11)"
+        },
+        "knockout|cricket|M12c@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M12c)"
+        },
+        "groups_ko|football|F4@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F4)"
+        },
+        "groups_ko|cricket|F8@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F8)"
+        },
+        "swiss_playoff|tabletennis|D3@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D3)"
+        },
+        "swiss_knockout|tennis|D5a@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D5a)"
+        },
+        "knockout|icehockey|D7@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D7)"
+        },
+        "stepladder_only|football|P3@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P3)"
+        },
+        "ko_plate|volleyball|P6@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P6)"
+        },
+        "knockout_third_place|badminton|Q3@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom Q3)"
+        },
+        "double_elim|football|X1a@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X1a)"
+        },
+        "stepladder_only|football|X3@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X3)"
+        },
+        "league|football|C1@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C1)"
+        },
+        "triple_rr|cricket|C3b@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C3b)"
+        },
+        "group_group_ko|football|C6a@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C6a)"
+        },
+        "knockout_third_place|football|E1@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom E1)"
+        },
+        "page_playoff_only|football|E4b@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom E4b)"
+        }
+      }
+    },
+    "w2a-repro/L2/w2a-repro-l2-s26": {
+      "plan": "--layer L2 --scope grid",
+      "layered": true,
+      "driven": [
+        "league_ko|boardgame|M1@834",
+        "double_elim|football|F1@375"
+      ],
+      "planned": {
+        "group_stepladder|generic|R2@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R2)"
+        },
+        "group_playoffs|volleyball|R4b@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R4b)"
+        },
+        "group_playoffs|volleyball|R7@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R7)"
+        },
+        "swiss|football|R9b@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R9b)"
+        },
+        "swiss_playoff|carrom|R11b@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R11b)"
+        },
+        "swiss_knockout|tennis|R13@390": {
+          "state": "no_path",
+          "reason": "W9: no organiser path, known at design time (design §4): entrant moved to another division after the draw"
+        },
+        "groups_ko|carrom|M4a@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M4a)"
+        },
+        "swiss_knockout|football|M6|football#001@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M6)"
+        },
+        "knockout|icehockey|M8a@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M8a)"
+        },
+        "ko_plate|hockey|M9b@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M9b)"
+        },
+        "qualifying_main|football|M12a@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M12a)"
+        },
+        "league|football|F5b@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F5b)"
+        },
+        "knockout|icehockey|D1@430": {
+          "state": "no_path",
+          "reason": "W9: no organiser path, known at design time (design §4): two divisions merged"
+        },
+        "ko_plate|hockey|D4a@360": {
+          "state": "no_path",
+          "reason": "W4: no organiser path, known at design time (design §4): separation: same-club separation"
+        },
+        "qualifying_main|football|D5b@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D5b)"
+        },
+        "double_elim|football|P1@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P1)"
+        },
+        "league_ko|boardgame|P5a@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P5a)"
+        },
+        "group_group_ko|football|P7@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P7)"
+        },
+        "swiss_knockout|volleyball|Q4b@390": {
+          "state": "no_path",
+          "reason": "W4: no organiser path, known at design time (design §4): final not played: → decided by table"
+        },
+        "ladder|football|X1b@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X1b)"
+        },
+        "league_ko|boardgame|X4b@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X4b)"
+        },
+        "groups_ko|carrom|C2@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C2)"
+        },
+        "group_stepladder|generic|C4@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C4)"
+        },
+        "stepladder_only|football|C6b@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C6b)"
+        },
+        "league|football|E4a@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom E4a)"
+        }
+      }
+    },
+    "w2a-repro/L2/w2a-repro-l2": {
+      "plan": "--layer L2",
+      "layered": true,
+      "driven": [
+        "swiss|badminton|R4a@375",
+        "swiss|badminton|M1@390",
+        "swiss|badminton|F1@390"
+      ],
+      "planned": {
+        "swiss|badminton|R1@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R1)"
+        },
+        "swiss|badminton|R2@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R2)"
+        },
+        "swiss|badminton|R3@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R3)"
+        },
+        "swiss|badminton|R4c@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R4c)"
+        },
+        "swiss|badminton|R5@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R5)"
+        },
+        "swiss|badminton|R7@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R7)"
+        },
+        "swiss|badminton|R8@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R8)"
+        },
+        "swiss|badminton|R10@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R10)"
+        },
+        "swiss|badminton|R11a@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R11a)"
+        },
+        "swiss|badminton|R13@360": {
+          "state": "no_path",
+          "reason": "W9: no organiser path, known at design time (design §4): entrant moved to another division after the draw"
+        },
+        "swiss|badminton|R14@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R14)"
+        },
+        "swiss|badminton|R15@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom R15)"
+        },
+        "swiss|badminton|M2@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M2)"
+        },
+        "swiss|badminton|M3@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M3)"
+        },
+        "swiss|badminton|M4a@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M4a)"
+        },
+        "swiss|badminton|M7a@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M7a)"
+        },
+        "swiss|badminton|M7b@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M7b)"
+        },
+        "swiss|badminton|M8a@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M8a)"
+        },
+        "swiss|badminton|M8b@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M8b)"
+        },
+        "swiss|badminton|M9a@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M9a)"
+        },
+        "swiss|badminton|M9b@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M9b)"
+        },
+        "swiss|badminton|M10@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M10)"
+        },
+        "swiss|badminton|M11@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom M11)"
+        },
+        "swiss|badminton|F2@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F2)"
+        },
+        "swiss|badminton|F5a@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F5a)"
+        },
+        "swiss|badminton|F5b@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F5b)"
+        },
+        "swiss|badminton|F6@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F6)"
+        },
+        "swiss|badminton|F7@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F7)"
+        },
+        "swiss|generic|F8@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom F8)"
+        },
+        "swiss|badminton|D1@360": {
+          "state": "no_path",
+          "reason": "W9: no organiser path, known at design time (design §4): two divisions merged"
+        },
+        "swiss|badminton|D2@375": {
+          "state": "no_path",
+          "reason": "W9: no organiser path, known at design time (design §4): one division split"
+        },
+        "swiss|badminton|D3@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D3)"
+        },
+        "swiss|badminton|D4a@430": {
+          "state": "no_path",
+          "reason": "W4: no organiser path, known at design time (design §4): separation: same-club separation"
+        },
+        "swiss|badminton|D4b@768": {
+          "state": "no_path",
+          "reason": "W4: no organiser path, known at design time (design §4): separation: same-country separation"
+        },
+        "swiss|badminton|D5a@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D5a)"
+        },
+        "swiss|badminton|D5b@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D5b)"
+        },
+        "swiss|badminton|D6@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D6)"
+        },
+        "swiss|badminton|D7@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom D7)"
+        },
+        "swiss|badminton|P1@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P1)"
+        },
+        "swiss|badminton|P3@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P3)"
+        },
+        "swiss|badminton|P4@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P4)"
+        },
+        "swiss|badminton|P5a@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P5a)"
+        },
+        "swiss|generic|P5b@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P5b)"
+        },
+        "swiss|badminton|P5b@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P5b)"
+        },
+        "swiss|badminton|P7@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom P7)"
+        },
+        "knockout|badminton|Q4a@768": {
+          "state": "no_path",
+          "reason": "W4: no organiser path, known at design time (design §4): final not played: → joint winners"
+        },
+        "swiss|badminton|X1a@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X1a)"
+        },
+        "swiss|badminton|X1b@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X1b)"
+        },
+        "swiss|badminton|X2@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X2)"
+        },
+        "swiss|badminton|X3@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X3)"
+        },
+        "swiss|badminton|X4a@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X4a)"
+        },
+        "swiss|badminton|X4b@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X4b)"
+        },
+        "swiss|badminton|X4c@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom X4c)"
+        },
+        "swiss|badminton|C1@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C1)"
+        },
+        "swiss|badminton|C2@768": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C2)"
+        },
+        "swiss|badminton|C3a@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C3a)"
+        },
+        "swiss|badminton|C3b@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C3b)"
+        },
+        "swiss|badminton|C4@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C4)"
+        },
+        "swiss|badminton|C5@375": {
+          "state": "no_path",
+          "reason": "W5: no organiser path, known at design time (design §4): points deduction (conduct) applied to the table"
+        },
+        "swiss|badminton|C6a@360": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C6a)"
+        },
+        "swiss|badminton|C6b@375": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C6b)"
+        },
+        "swiss|badminton|C7@390": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom C7)"
+        },
+        "swiss|badminton|E1@430": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom E1)"
+        },
+        "swiss|badminton|E4a@834": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom E4a)"
+        },
+        "swiss|badminton|E4b@320": {
+          "state": "not_run",
+          "reason": "no scenario script yet (atom E4b)"
+        }
+      }
+    },
+    "w2a-repro/L3/w2a-repro-l3-1": {
+      "plan": "--set w1-driving --only double_elim|boardgame",
+      "layered": false,
+      "driven": [
+        "double_elim|boardgame|LIFECYCLE",
+        "double_elim|boardgame|M1",
+        "double_elim|boardgame|R4",
+        "double_elim|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-10": {
+      "plan": "--set w1-driving --only league_ko|boardgame",
+      "layered": false,
+      "driven": [
+        "league_ko|boardgame|LIFECYCLE",
+        "league_ko|boardgame|M1",
+        "league_ko|boardgame|R4",
+        "league_ko|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-11": {
+      "plan": "--set w1-driving --only page_playoff_only|boardgame",
+      "layered": false,
+      "driven": [
+        "page_playoff_only|boardgame|LIFECYCLE",
+        "page_playoff_only|boardgame|M1",
+        "page_playoff_only|boardgame|R4"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-12": {
+      "plan": "--set w1-driving --only page_playoff_only|generic",
+      "layered": false,
+      "driven": [
+        "page_playoff_only|generic|LIFECYCLE",
+        "page_playoff_only|generic|M1",
+        "page_playoff_only|generic|R4"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-13": {
+      "plan": "--set w1-driving --only qualifying_main|boardgame",
+      "layered": false,
+      "driven": [
+        "qualifying_main|boardgame|LIFECYCLE",
+        "qualifying_main|boardgame|M1",
+        "qualifying_main|boardgame|R4",
+        "qualifying_main|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-14": {
+      "plan": "--set w1-driving --only stepladder_only|boardgame",
+      "layered": false,
+      "driven": [
+        "stepladder_only|boardgame|LIFECYCLE",
+        "stepladder_only|boardgame|M1",
+        "stepladder_only|boardgame|R4",
+        "stepladder_only|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-15": {
+      "plan": "--set w1-driving --only swiss_knockout|boardgame",
+      "layered": false,
+      "driven": [
+        "swiss_knockout|boardgame|LIFECYCLE",
+        "swiss_knockout|boardgame|M1",
+        "swiss_knockout|boardgame|R4",
+        "swiss_knockout|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-16": {
+      "plan": "--set w1-driving --only swiss_playoff|boardgame",
+      "layered": false,
+      "driven": [
+        "swiss_playoff|boardgame|LIFECYCLE",
+        "swiss_playoff|boardgame|M1",
+        "swiss_playoff|boardgame|R4",
+        "swiss_playoff|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-17": {
+      "plan": "--set w1-driving --only swiss_playoff|generic",
+      "layered": false,
+      "driven": [
+        "swiss_playoff|generic|LIFECYCLE",
+        "swiss_playoff|generic|M1",
+        "swiss_playoff|generic|R4",
+        "swiss_playoff|generic|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-2": {
+      "plan": "--set w1-driving --only group_group_ko|boardgame",
+      "layered": false,
+      "driven": [
+        "group_group_ko|boardgame|LIFECYCLE",
+        "group_group_ko|boardgame|M1",
+        "group_group_ko|boardgame|R4",
+        "group_group_ko|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-3": {
+      "plan": "--set w1-driving --only group_playoffs|boardgame",
+      "layered": false,
+      "driven": [
+        "group_playoffs|boardgame|LIFECYCLE",
+        "group_playoffs|boardgame|M1",
+        "group_playoffs|boardgame|R4",
+        "group_playoffs|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-4": {
+      "plan": "--set w1-driving --only group_playoffs|generic",
+      "layered": false,
+      "driven": [
+        "group_playoffs|generic|LIFECYCLE",
+        "group_playoffs|generic|M1",
+        "group_playoffs|generic|R4",
+        "group_playoffs|generic|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-5": {
+      "plan": "--set w1-driving --only group_stepladder|boardgame",
+      "layered": false,
+      "driven": [
+        "group_stepladder|boardgame|LIFECYCLE",
+        "group_stepladder|boardgame|M1",
+        "group_stepladder|boardgame|R4",
+        "group_stepladder|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-6": {
+      "plan": "--set w1-driving --only groups_ko|boardgame",
+      "layered": false,
+      "driven": [
+        "groups_ko|boardgame|LIFECYCLE",
+        "groups_ko|boardgame|M1",
+        "groups_ko|boardgame|R4",
+        "groups_ko|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-7": {
+      "plan": "--set w1-driving --only knockout_third_place|boardgame",
+      "layered": false,
+      "driven": [
+        "knockout_third_place|boardgame|LIFECYCLE",
+        "knockout_third_place|boardgame|M1",
+        "knockout_third_place|boardgame|R4",
+        "knockout_third_place|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-8": {
+      "plan": "--set w1-driving --only knockout|boardgame",
+      "layered": false,
+      "driven": [
+        "knockout|boardgame|LIFECYCLE",
+        "knockout|boardgame|M1",
+        "knockout|boardgame|R4",
+        "knockout|boardgame|F1"
+      ],
+      "planned": {}
+    },
+    "w2a-repro/L3/w2a-repro-l3-9": {
+      "plan": "--set w1-driving --only ko_plate|boardgame",
+      "layered": false,
+      "driven": [
+        "ko_plate|boardgame|LIFECYCLE",
+        "ko_plate|boardgame|M1",
+        "ko_plate|boardgame|R4",
+        "ko_plate|boardgame|F1"
+      ],
+      "planned": {}
     }
   }
 }

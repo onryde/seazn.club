@@ -1,0 +1,421 @@
+{
+  "config": {
+    "argv": [
+      "/Users/ashokhein/.nvm/versions/node/v26.8.2/bin/node",
+      "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/node_modules/@playwright/test/cli.js",
+      "test",
+      "--project=parallel",
+      "e2e/bracket-new-h1.spec.ts",
+      "--reporter=json"
+    ],
+    "configFile": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/playwright.config.ts",
+    "rootDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": true,
+    "globalSetup": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e/global-setup.ts",
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 2
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "setup",
+        "name": "setup",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/auth\\.setup\\.ts/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "parallel",
+        "name": "parallel",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [
+          "/(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot|public-dashboards)\\.spec\\.ts/",
+          "/mobile\\.spec\\.ts/",
+          "/[\\\\/]e2e[\\\\/]walkthrough[\\\\/]/"
+        ],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "walkthrough",
+        "name": "walkthrough",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/[\\\\/]e2e[\\\\/]walkthrough[\\\\/]/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "serial",
+        "name": "serial",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot|public-dashboards)\\.spec\\.ts/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "mobile-se",
+        "name": "mobile-se",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/mobile\\.spec\\.ts/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "mobile-14",
+        "name": "mobile-14",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/mobile\\.spec\\.ts/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "mobile-320",
+        "name": "mobile-320",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/mobile\\.spec\\.ts/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "mobile-360",
+        "name": "mobile-360",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/mobile\\.spec\\.ts/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "mobile-430",
+        "name": "mobile-430",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/mobile\\.spec\\.ts/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "tablet-768",
+        "name": "tablet-768",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/mobile\\.spec\\.ts/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "tablet-834",
+        "name": "tablet-834",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/mobile\\.spec\\.ts/"
+        ],
+        "timeout": 60000
+      },
+      {
+        "outputDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "gallery",
+        "name": "gallery",
+        "testDir": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/\\.capture\\.ts$/"
+        ],
+        "timeout": 60000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 4,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "auth.setup.ts",
+      "file": "auth.setup.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "authenticate as a fresh Pro org",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "setup",
+              "projectName": "setup",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 3659,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-08T13:15:00.651Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "17e3fe6f4d9d8bd79c6b-e605d76b7597d06fa7ea",
+          "file": "auth.setup.ts",
+          "line": 76,
+          "column": 1
+        },
+        {
+          "title": "authenticate as a fresh Community org",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "setup",
+              "projectName": "setup",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 1,
+                  "status": "passed",
+                  "duration": 3645,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-08T13:15:00.727Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "17e3fe6f4d9d8bd79c6b-95785ed217cf0be4c832",
+          "file": "auth.setup.ts",
+          "line": 126,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "title": "bracket-new-h1.spec.ts",
+      "file": "bracket-new-h1.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "NEW-H1: an abandoned badminton semi-final leaves the final's seat empty and invents no walkover",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 60000,
+              "annotations": [
+                {
+                  "type": "observed",
+                  "description": "{\"semi1\":{\"status\":\"abandoned\",\"outcome\":null},\"semi2\":{\"status\":\"forfeited\",\"outcome\":{\"kind\":\"award\",\"method\":\"walkover\",\"winner\":\"25b139b2-2945-4f82-aecb-5540f7a4fce9\"}},\"final\":{\"status\":\"forfeited\",\"outcome\":{\"kind\":\"award\",\"winner\":\"25b139b2-2945-4f82-aecb-5540f7a4fce9\"},\"home\":null,\"away\":\"25b139b2-2945-4f82-aecb-5540f7a4fce9\"}}"
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "parallel",
+              "projectName": "parallel",
+              "results": [
+                {
+                  "workerIndex": 2,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 4256,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m\"\u001b[7mschedul\u001b[27med\"\u001b[39m\nReceived: \u001b[31m\"\u001b[7mforfeit\u001b[27med\"\u001b[39m",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m\"\u001b[7mschedul\u001b[27med\"\u001b[39m\nReceived: \u001b[31m\"\u001b[7mforfeit\u001b[27med\"\u001b[39m\n    at /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e/bracket-new-h1.spec.ts:79:24",
+                    "location": {
+                      "file": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e/bracket-new-h1.spec.ts",
+                      "column": 24,
+                      "line": 79
+                    },
+                    "snippet": "  77 |\n  78 |   // The ruling: stuck and visible. The final is NOT turned into a walkover for semi 2's winner.\n> 79 |   expect(after.status).toBe(\"scheduled\");\n     |                        ^\n  80 |   expect(after.outcome).toBeNull();\n  81 | });\n  82 |"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e/bracket-new-h1.spec.ts",
+                        "column": 24,
+                        "line": 79
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m\"\u001b[7mschedul\u001b[27med\"\u001b[39m\nReceived: \u001b[31m\"\u001b[7mforfeit\u001b[27med\"\u001b[39m\n\n  77 |\n  78 |   // The ruling: stuck and visible. The final is NOT turned into a walkover for semi 2's winner.\n> 79 |   expect(after.status).toBe(\"scheduled\");\n     |                        ^\n  80 |   expect(after.outcome).toBeNull();\n  81 | });\n  82 |\n    at /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e/bracket-new-h1.spec.ts:79:24"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-08T13:15:05.876Z",
+                  "annotations": [
+                    {
+                      "type": "observed",
+                      "description": "{\"semi1\":{\"status\":\"abandoned\",\"outcome\":null},\"semi2\":{\"status\":\"forfeited\",\"outcome\":{\"kind\":\"award\",\"method\":\"walkover\",\"winner\":\"25b139b2-2945-4f82-aecb-5540f7a4fce9\"}},\"final\":{\"status\":\"forfeited\",\"outcome\":{\"kind\":\"award\",\"winner\":\"25b139b2-2945-4f82-aecb-5540f7a4fce9\"},\"home\":null,\"away\":\"25b139b2-2945-4f82-aecb-5540f7a4fce9\"}}"
+                    }
+                  ],
+                  "attachments": [
+                    {
+                      "name": "screenshot",
+                      "contentType": "image/png",
+                      "path": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results/bracket-new-h1-NEW-H1-an-a-c581d-pty-and-invents-no-walkover-parallel/test-failed-1.png"
+                    },
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results/bracket-new-h1-NEW-H1-an-a-c581d-pty-and-invents-no-walkover-parallel/error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/test-results/bracket-new-h1-NEW-H1-an-a-c581d-pty-and-invents-no-walkover-parallel/trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/apps/web/e2e/bracket-new-h1.spec.ts",
+                    "column": 24,
+                    "line": 79
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "80da62cd8222d85516a1-d7324f287a6ee388b7ff",
+          "file": "bracket-new-h1.spec.ts",
+          "line": 21,
+          "column": 1
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-08T13:14:58.700Z",
+    "duration": 11891.058,
+    "expected": 2,
+    "skipped": 0,
+    "unexpected": 1,
+    "flaky": 0
+  }
+}
