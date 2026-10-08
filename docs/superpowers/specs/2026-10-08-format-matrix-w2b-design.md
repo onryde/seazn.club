@@ -1,8 +1,8 @@
 # Format matrix W2b — walkover, retirement and double-walkover credit (design)
 
 - **Date:** 2026-10-08 · **Programme:** format × sport matrix, wave W2 (sport scoring fidelity), sub-wave **W2b**
-- **Status:** design approved section by section in chat (session f-w2b, 2026-10-08); this written spec awaits owner
-  review. **No W2b product code until W2a (`feat/format-matrix-w2a`) has merged to main** (ruling 71; plan below §10).
+- **Status:** design approved section by section in chat (session f-w2b, 2026-10-08); written spec **approved by the
+  owner 2026-10-08** ("approve"), including §5.2's chess forfeit unification and boardgame `live` walkover phase. **No W2b product code until W2a (`feat/format-matrix-w2a`) has merged to main** (ruling 71; plan below §10).
 - **Worktree / branch (spec only):** `/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2b-spec`,
   `docs/format-matrix-w2b-spec` (from `origin/main` `f61b12901`). Build branch: fresh `feat/format-matrix-w2b` off main
   after W2a merges.
@@ -192,7 +192,7 @@ like the other ten sports, so the reason, credit, stats skip and public tag work
 history excluded) stays; the dock's forfeit tile sends `core.forfeit` with the reason chips of UI-1; the dock's
 double-forfeit tile sends `core.forfeit{by:"both", reason:"walkover"}`. `boardgame.result{forfeit | double_forfeit}`
 then stays accepted by the schema only for streams written before W2b (none expected — §5.4's count covers it) and
-is no longer emitted. Owner to confirm at review.
+is no longer emitted. Owner confirmed with the spec approval (2026-10-08).
 
 **Schema tightening (f-w2, W2a loop F review).** `BoardgameResult` (`boardgame.ts:140`) does not tie `winner` to
 `method`, so `{winner:"H", method:"double_forfeit"}` parses today. W2b's schema refuses it (`double_forfeit` ⇒ `winner`
