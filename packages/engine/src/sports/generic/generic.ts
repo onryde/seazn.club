@@ -4,7 +4,7 @@
 // real module on the contract — proves PROMPT-03.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { foldMatch, forfeitOf, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { foldMatchWithStoppage, forfeitOf, outcomeOf, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
   DRAW_KINDS,
@@ -453,8 +453,12 @@ function foldGenericStats(events: readonly EventEnvelope[], ctx: PlayerStatsFold
       away: { entrantId: away.id, slots: [] },
     };
     try {
-      const state = foldMatch(generic, cfgParsed.data, lineups, events);
-      const outcome = state.outcome;
+      // W2a (ruling D-C3): the outcome of a fold is outcomeOf — a settle lives
+      // beside module state, so `state.outcome` would credit a settled level
+      // match as a draw.
+      const folded = foldMatchWithStoppage(generic, cfgParsed.data, lineups, events);
+      const state = folded.state;
+      const outcome = outcomeOf(generic, folded);
       // Once the fixture IS decided, every side is credited explicitly —
       // including a 0 for whoever did not win/draw — since `GenericResult`
       // has no competing explicit-person field for any of these three keys

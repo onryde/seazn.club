@@ -323,7 +323,7 @@ describe("stampPayload asks the ENGINE whether a stamp is legal, and never mirro
   // under test, and it was wrong about the lineup family until this ran.
   // Enumerated rather than sampled (AGENTS.md failure class 7).
   const CORE_TAKES_AT = ["core.suspend", "core.resume", "core.lineup.substitution", "core.lineup.replacement", "core.lineup.position", "core.lineup.retirement", "core.lineup.entry"] as const;
-  const CORE_REFUSES_AT = ["core.start", "core.void", "core.forfeit", "core.abandon", "core.finalize", "core.note", "core.award"] as const;
+  const CORE_REFUSES_AT = ["core.start", "core.void", "core.forfeit", "core.abandon", "core.finalize", "core.note", "core.award", "core.settle"] as const;
 
   it("covers every core type — the two arms partition CORE_EVENT_SCHEMAS with nothing left over", () => {
     expect([...CORE_TAKES_AT, ...CORE_REFUSES_AT].sort()).toEqual(Object.keys(CORE_EVENT_SCHEMAS).sort());
@@ -357,6 +357,7 @@ describe("stampPayload asks the ENGINE whether a stamp is legal, and never mirro
       "core.finalize": {},
       "core.note": { text: "n" },
       "core.award": { person: "p1", key: "motm" },
+      "core.settle": { winner: "H", method: "lot" },
     }[type] as Record<string, unknown>;
     expect(stampPayload(body, stamp, CORE_EVENT_SCHEMAS[type])).toBe(body); // by reference
     expect(CORE_EVENT_SCHEMAS[type].safeParse({ ...body, at: stamp }).success).toBe(false);

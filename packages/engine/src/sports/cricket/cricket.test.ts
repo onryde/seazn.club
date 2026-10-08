@@ -1,7 +1,7 @@
 // Cricket goldens + properties + conformance — spec 04 §2, PROMPT-05 §8/§9.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { foldMatch, foldMatchWithStoppage, outcomeOf, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import { shuffle } from "../../core/rng.ts";
 import type { LineupPair, StageCtx, StandingsDelta } from "../../core/types.ts";
 import { evalPadGate, type PadField, type PadSpec } from "../../sport/module.ts";
@@ -1143,6 +1143,15 @@ describe("cricket golden (d): tied T20 super over policies", () => {
     const state = fold(t20, events); // superOver: false
     expect(state.outcome).toEqual({ kind: "tie" });
     expect(state.margin).toBeNull();
+  });
+
+  it("X-ST-1 (C11): a league tie folds to {kind:'tie'} and an organiser settle turns it into a settled win", () => {
+    const { events } = tiedMain("repeat");
+    const settleEv = makeEnvelope(events.length + 1, { type: "core.settle", payload: { winner: lineups.away.entrantId, method: "lot" } });
+    const before = foldMatchWithStoppage(cricket, t20, lineups, events);
+    expect(outcomeOf(cricket, before)).toEqual({ kind: "tie" }); // the precondition's input is a tie, not a draw
+    const after = foldMatchWithStoppage(cricket, t20, lineups, [...events, settleEv]);
+    expect(outcomeOf(cricket, after)).toEqual({ kind: "win", winner: lineups.away.entrantId, loser: lineups.home.entrantId, method: "settled_lot" });
   });
 });
 

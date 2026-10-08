@@ -83,6 +83,8 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "core.finalize": "event.core.finalize", "core.note": "event.core.note",
   "core.award": "event.core.award", "core.suspend": "event.core.suspend",
   "core.resume": "event.core.resume",
+  // W2a (X-ST-1): the organiser's settle of a level bracket result.
+  "core.settle": "event.core.settle",
   // S3/W4b (#426) — the lineup family. `replacement` is the exemptible one
   // (concussion / injury / COVID), which is why fr distinguishes it from a
   // plain `substitution`: both are "remplacement" in football French and a
@@ -614,6 +616,11 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   // closed 13-code allowlist, THIS map has no such ruling — every
   // EngineErrorCode needs an entry here regardless.
   SEEDING_MAP_SOURCE_AMBIGUOUS: "engineError.SEEDING_MAP_SOURCE_AMBIGUOUS",
+  // W2a (spec §7) — brackets always finish.
+  SETTLE_NOT_APPLICABLE: "engineError.SETTLE_NOT_APPLICABLE",
+  TIEBREAK_NOT_APPLICABLE: "engineError.TIEBREAK_NOT_APPLICABLE",
+  LEVEL_RESULT_IN_BRACKET: "engineError.LEVEL_RESULT_IN_BRACKET",
+  LEVEL_RESULT_SEATED: "engineError.LEVEL_RESULT_SEATED",
 };
 
 /**

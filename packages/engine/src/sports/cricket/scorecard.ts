@@ -11,7 +11,7 @@
 // exported `chaseTarget` and never from a second copy of the rule); Task 4
 // the two COARSER bands (`cricket.player.line` at band 2, and a ledger of
 // `cricket.innings.summary` alone at band 0) and the super over as cards.
-import { foldMatch, type EventEnvelope } from "../../core/events.ts";
+import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "../../core/events.ts";
 import { isLineupEventType, memberOf, sideOf, type LineupEventType, type SquadState } from "../../core/lineup.ts";
 import type { LineupPair } from "../../core/types.ts";
 import type { FidelityBand } from "../../sport/module.ts";
@@ -1149,10 +1149,12 @@ export function deriveCricketScorecard({ events, cfg, lineups }: ScorecardInput)
     // and two-innings cases besides.
   }
 
-  const state = foldMatch(cricket, cfg, lineups, events, { onFolded: observe });
+  const folded = foldMatchWithStoppage(cricket, cfg, lineups, events, { onFolded: observe });
+  const state = folded.state;
 
   const summary = cricket.summary(state);
-  const outcome = cricket.outcome(state);
+  // W2a finding 1: a settle lives beside module state (outcomeOf).
+  const outcome = outcomeOf(cricket, folded);
   const winner = outcome !== null && (outcome.kind === "win" || outcome.kind === "award") ? outcome.winner : null;
 
   return {

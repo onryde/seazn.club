@@ -72,6 +72,7 @@ import {
   CORE_EVENT_SCHEMAS,
   EngineError,
   LINEUP_EVENT_SCHEMAS,
+  SETTLE_METHODS,
   type EventEnvelope,
   type LineupPair,
   type ScoreSummary,
@@ -840,8 +841,12 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     expect(CORPORA).toHaveLength(11);
     expect(RECORDED_TYPES.length).toBeGreaterThanOrEqual(60);
     // …and the corpora are NOT the whole ledger vocabulary. They record three
-    // kernel types; the kernel registers fourteen.
-    expect(KERNEL_TYPES.length).toBe(14);
+    // kernel types; the kernel registers every key of CORE_EVENT_SCHEMAS, which
+    // already holds the lineup family — so the union adds nothing to it (a
+    // double-counted or dropped lineup type moves this). Derived from the
+    // engine's registry, not a literal: W2a's core.settle made it fifteen.
+    expect(KERNEL_TYPES.length).toBe(Object.keys(CORE_EVENT_SCHEMAS).length);
+    expect(Object.keys(LINEUP_EVENT_SCHEMAS).length).toBeGreaterThan(0);
     for (const type of ["core.note", "core.finalize", "core.award", "core.lineup.entry"]) {
       expect(RECORDED_TYPES, type).not.toContain(type);
       expect(ALL_TYPES, type).toContain(type);
@@ -926,10 +931,55 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
       emitted.add(line.text.key);
       if (TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
     }
-    // The gate says what it saw: both no-side branches and both goal flags fired.
-    expect(overridden).toBe(4);
+    // W2a (X-ST-1): one settle per engine-declared method, each closing a drawn game.
+    for (const method of SETTLE_METHODS) {
+      const settled = [
+        env(0, "boardgame.result", { method: "agreement" }),
+        env(1, "core.settle", { winner: "H", method }),
+      ];
+      for (const line of linesOf(args({ sportKey: "boardgame", events: settled }))) {
+        emitted.add(line.text.key);
+        // Only the settle line counts: the drawn result before it re-fires boardgame.draw, already counted above.
+        if (line.seq === 1 && TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
+      }
+    }
+    // The gate says what it saw: both no-side branches, both goal flags and
+    // every settle method fired — each override key exactly once.
+    expect(overridden).toBe(4 + SETTLE_METHODS.length);
+    expect(overridden).toBe(TIMELINE_OVERRIDE_KEYS.length);
     const overrides = [...emitted].filter((k) => !Object.values(TIMELINE_KEY_FOR).includes(k));
     expect(overrides.sort()).toEqual([...TIMELINE_OVERRIDE_KEYS].sort());
+  });
+
+  it("X-ST-1: a settle line names the side that advances and the engine's settle method, in all four locales", () => {
+    // Methods from the engine's own SETTLE_METHODS, never a list typed here.
+    expect(SETTLE_METHODS.length).toBeGreaterThan(0);
+    const rendered = new Set<string>();
+    let checked = 0;
+    for (const method of SETTLE_METHODS) {
+      const events = [
+        env(0, "boardgame.result", { method: "agreement" }),
+        env(1, "core.settle", { winner: "A", method }),
+      ];
+      const line = linesOf(args({ sportKey: "boardgame", events })).find((l) => l.seq === 1)!;
+      expect(line, `${method}: no recorded settle line`).toBeTruthy();
+      expect(line.text.key).toBe(`timeline.core.settle.${method}`);
+      expect(line.text.params?.side).toBe(SIDES[1].name);
+      expect(line.emphasis).toBe("strong"); // the forfeit sibling's emphasis
+      for (const locale of LOCALES) {
+        const dict = DICTS[locale] as Dict;
+        const text = t(dict, line.text.key, localiseParams(dict, line.text.params));
+        expect(text, `${locale}/${method}`).toContain(SIDES[1].name);
+        expect(text, `${locale}/${method}`).not.toMatch(/[{}]|timeline\./);
+        rendered.add(`${locale}:${text}`);
+        checked++;
+      }
+    }
+    expect(checked).toBe(SETTLE_METHODS.length * LOCALES.length);
+    expect(rendered.size, "two methods render the same sentence").toBe(checked);
+    // An unknown method keeps the table's method-free line rather than inventing how.
+    const odd = linesOf(args({ sportKey: "boardgame", events: [env(0, "core.settle", { winner: "H", method: "coin" })] }));
+    expect(odd.find((l) => l.seq === 0)!.text.key).toBe(TIMELINE_KEY_FOR["core.settle"]);
   });
 
   it("the client-safe key module imports nothing from the server", () => {

@@ -66,6 +66,15 @@ export const EngineErrorCode = z.enum([
   // apart, so it refuses instead of silently resolving to whichever source's
   // copy it visited last. Appended last, existing order frozen.
   "SEEDING_MAP_SOURCE_AMBIGUOUS",
+  // W2a (spec §7) — brackets always finish. Appended last, existing order frozen.
+  // A settle on a fixture that is not level and not an un-outcomed abandon, or already settled.
+  "SETTLE_NOT_APPLICABLE",
+  // boardgame.tiebreak outside phase "tiebreak".
+  "TIEBREAK_NOT_APPLICABLE",
+  // A generic draw in a bracket kind (GN-KO-1); every other level result is held (X-BR-2).
+  "LEVEL_RESULT_IN_BRACKET",
+  // Assertion: a level result reached bracket seating (X-BR-1). Only a bug reaches it.
+  "LEVEL_RESULT_SEATED",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

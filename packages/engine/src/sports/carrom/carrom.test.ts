@@ -3,7 +3,7 @@
 // carrom.md §1–7 carries the verified text.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
-import { foldMatch, type EventEnvelope } from "../../core/events.ts";
+import { foldMatch, SETTLE_METHODS, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
 import {
   aggregatePlayerStats,
@@ -518,6 +518,30 @@ describe("carrom: boards_won + folded matches/wins, resolved from entrant attrib
     const rows = aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx);
     expect(rows.find((r) => r.personId === "H-p1")?.stats.wins).toBe(0);
     expect(rows.find((r) => r.personId === "A-p1")?.stats.wins).toBe(0);
+  });
+
+  it("X-ST-1 (ruling D-C3): a SETTLED drawn match credits the settle's winner the win — never wins:0 for both", () => {
+    const drawCfg = carrom.configSchema.parse({ gameTo: 100, maxBoards: 1, bestOf: 1, tieBoard: "draw" });
+    const ctx = ctxFor(
+      [
+        { id: "H", persons: ["H-p1"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      drawCfg,
+    );
+    const drawn: Array<[type: string, payload?: unknown]> = [
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 0, queenTo: null }],
+    ];
+    // Positive pair first: unsettled, the drawn match credits nobody a win.
+    const level = aggregatePlayerStats(stream(...drawn), carrom.playerStats!, undefined, ctx);
+    expect([level.find((r) => r.personId === "H-p1")?.stats.wins, level.find((r) => r.personId === "A-p1")?.stats.wins]).toEqual([0, 0]);
+    // Settled for the AWAY side (not home by default), whichever settle method closed it.
+    for (const method of SETTLE_METHODS) {
+      const rows = aggregatePlayerStats(stream(...drawn, ["core.settle", { winner: "A", method }]), carrom.playerStats!, undefined, ctx);
+      expect([rows.find((r) => r.personId === "H-p1")?.stats.wins, rows.find((r) => r.personId === "A-p1")?.stats.wins], method).toEqual([0, 1]);
+      expect(rows.find((r) => r.personId === "A-p1")?.stats.matches, method).toBe(1);
+    }
   });
 
   it("a team entrant is credited no matches or wins either, in a mixed team/individual fixture", () => {

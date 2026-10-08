@@ -69,6 +69,12 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   // what matters independent of that: 422, never the 500 an unmapped code
   // would otherwise risk.
   SEEDING_MAP_SOURCE_AMBIGUOUS: 422,
+  // W2a (spec §7) — brackets always finish.
+  SETTLE_NOT_APPLICABLE: 409,
+  TIEBREAK_NOT_APPLICABLE: 409,
+  LEVEL_RESULT_IN_BRACKET: 409,
+  // An assertion (X-BR-1): reaching it is a server bug, so it surfaces as one.
+  LEVEL_RESULT_SEATED: 500,
 };
 
 // HTTP status → stable machine code for non-engine errors.

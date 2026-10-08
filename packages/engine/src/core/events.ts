@@ -17,7 +17,7 @@ import {
   type SquadState,
 } from "./lineup.ts";
 import { GameTime, compareGameTime, gameTimeOf } from "./time.ts";
-import { EntrantId, type LineupPair, type MatchOutcome } from "./types.ts";
+import { EntrantId, isLevelOutcome, type LineupPair, type MatchOutcome } from "./types.ts";
 
 // spec 03 §2 — ids and time are injected (uuid in prod, `e-${n}` in tests);
 // seq is gapless per fixture, assigned by persistence.
@@ -96,6 +96,51 @@ export const CoreSuspend = z.strictObject({
 });
 export const CoreResume = z.strictObject({ at: GameTime.optional() }); // play restarts
 
+// W2a (spec §5.1, X-ST-1) — the organiser's settle. Kernel-owned like core.void
+// and core.suspend: validated and folded here, NEVER forwarded to module.apply,
+// so every sport gains it at once and no frozen golden moves. Not in CoreEv
+// (plan finding 2): CoreEv is the payload set modules see.
+export const SETTLE_METHODS = ["lot", "higher_seed", "organiser"] as const;
+export const SettleMethod = z.enum(SETTLE_METHODS);
+export type SettleMethod = z.infer<typeof SettleMethod>;
+export const CoreSettle = z.strictObject({
+  winner: EntrantId,
+  method: SettleMethod,
+  note: z.string().trim().min(1).max(500).optional(),
+});
+export const settledMethod = (m: SettleMethod): `settled_${SettleMethod}` => `settled_${m}`;
+
+/** An active settle: who advances, who does not, why, and the event that said so. */
+export interface Settlement {
+  readonly winner: string;
+  readonly loser: string;
+  readonly method: SettleMethod;
+  readonly eventId: string;
+}
+
+/** THE settle precondition (spec §5.1 as amended by controller ruling C12). One predicate for the kernel and the
+ *  console (through the server's `settle_applies`): a level outcome, or nothing decided while the match is abandoned
+ *  or a module-declared decider is pending (chess phase "tiebreak": lots is the organiser's settle, ruling 73).
+ *  `outcome` is the EFFECTIVE outcome, so an active settle reads as a win and is not settleable again. */
+export interface SettleFacts { readonly outcome: MatchOutcome | null; readonly abandoned: boolean; readonly state: unknown }
+export function settleApplies(module: { awaitingDecider?(state: never): boolean }, f: SettleFacts): boolean {
+  if (isLevelOutcome(f.outcome)) return true;
+  return f.outcome === null && (f.abandoned || module.awaitingDecider?.(f.state as never) === true);
+}
+
+/** THE outcome of a fold. A settlement outranks the module's own outcome (a
+ *  draw it settled, or the null of an abandon); otherwise it is exactly
+ *  `module.outcome(state)`. Every reader of a fold's outcome calls this
+ *  (apps/web outcome-readers.test.ts pins the list). */
+export function outcomeOf<Cfg, State>(
+  module: Pick<FoldableModule<Cfg, State>, "outcome">,
+  folded: { readonly state: State; readonly settlement: Settlement | null },
+): MatchOutcome | null {
+  const s = folded.settlement;
+  if (s !== null) return { kind: "win", winner: s.winner, loser: s.loser, method: settledMethod(s.method) };
+  return module.outcome(folded.state);
+}
+
 export const CORE_EVENT_SCHEMAS = {
   "core.start": CoreStart,
   "core.void": CoreVoid,
@@ -106,6 +151,8 @@ export const CORE_EVENT_SCHEMAS = {
   "core.award": CoreAward,
   "core.suspend": CoreSuspend,
   "core.resume": CoreResume,
+  // W2a (spec §5.1) — kernel-owned, folded beside module state (outcomeOf).
+  "core.settle": CoreSettle,
   // S3/W4b (#426) — the lineup family. Kernel-owned on the core.suspend
   // precedent: the kernel validates them here, folds them into SquadState, and
   // never forwards them to module.apply, so one implementation serves all
@@ -129,9 +176,9 @@ export const CORE_EVENT_SCHEMAS = {
 export type CoreEventType = keyof typeof CORE_EVENT_SCHEMAS;
 
 // Payload union modules see in apply(): EventEnvelope<Ev | CoreEv> (spec 03 §3).
-// core.void, core.suspend, core.resume and the whole core.lineup.* family are
-// absent on purpose — the kernel resolves all of them before a module sees
-// anything. A module reads the RESULT of a lineup change (FoldContext.squads,
+// core.void, core.suspend, core.resume, core.settle (W2a) and the whole
+// core.lineup.* family are absent on purpose — the kernel resolves all of them
+// before a module sees anything. A module reads the RESULT of a lineup change (FoldContext.squads,
 // or the onLineup hook), never the event.
 export type CoreEv =
   | z.infer<typeof CoreStart>
@@ -344,6 +391,11 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
   // Sport-declared types still accepted after the outcome is decided
   // (spec 03 §2 guarantee 4).
   postDecisionTypes?: readonly string[];
+  // W2a C12: a level game held for a decider the scorer records (boardgame phase
+  // "tiebreak"). While it is true and the outcome is null, `settleApplies` is
+  // true: lots is the organiser's settle there (ruling 73). Optional; absent
+  // reads as "no decider pending", so no module that does not declare it moves.
+  awaitingDecider?(state: State): boolean;
   // W4a (#425) §7 — every phase in which a STAMPED event may legally occur, in
   // the order they occur, for this cfg. Wider than "the phases where play is
   // running": a card before the opening whistle and a card in the shootout are
@@ -434,7 +486,9 @@ function validateDeclaredPhases(phases: readonly string[]): void {
 
 // Core types always accepted post-decision: annotations and the finalize lock.
 // core.suspend is deliberately absent — a decided match cannot be suspended.
-const POST_DECISION_CORE: readonly string[] = ["core.note", "core.finalize", "core.award"];
+// W2a: core.settle closes a DECIDED level result (a draw, a tie, a no_result);
+// its own precondition (settleApplies) refuses it on a win.
+const POST_DECISION_CORE: readonly string[] = ["core.note", "core.finalize", "core.award", "core.settle"];
 
 // W4 (#407) — the kernel owns core.suspend / core.resume exactly as it owns
 // core.void: it validates them, folds them, and NEVER forwards them to
@@ -473,6 +527,8 @@ const DURING_STOPPAGE: readonly string[] = [
   "core.abandon",
   "core.forfeit",
   "core.finalize",
+  // W2a finding 4: a settle closes an abandon that left the stoppage open.
+  "core.settle",
   // S3/W4b (#426) — a lineup change during a stoppage is not a claim that play
   // happened; it is the commonest thing that happens while play is stopped. An
   // injury stoppage exists precisely so the replacement can be made, and
@@ -521,7 +577,7 @@ export function foldMatchWithStoppage<Cfg, State>(
   lineups: LineupPair,
   events: readonly EventEnvelope[],
   opts?: FoldOptions<State>,
-): { state: State; stoppage: MatchStoppage | null; squads: SquadState } {
+): { state: State; stoppage: MatchStoppage | null; squads: SquadState; settlement: Settlement | null } {
   const active = resolveVoids(events);
   const strictFromSeq = opts?.strictFromSeq;
   const onFolded = opts?.onFolded;
@@ -531,6 +587,10 @@ export function foldMatchWithStoppage<Cfg, State>(
   let state = module.init(cfg, lineups);
   let decided = false;
   let stoppage: MatchStoppage | null = null;
+  // W2a (X-ST-1): the active settle, kept BESIDE module state (outcomeOf reads
+  // it), and whether an accepted core.abandon is in the active ledger.
+  let settlement: Settlement | null = null;
+  let abandonActive = false;
 
   // S3/W4b (#426) — the squads start as the team sheets declared them, with
   // positions intact, and the module is offered the snapshot immediately so its
@@ -678,7 +738,35 @@ export function foldMatchWithStoppage<Cfg, State>(
       // candidate, the one event whose order a scorer can still fix.
       if (!backwards) highWater = at;
     }
-    if (event.type === "core.suspend") {
+    if (event.type === "core.settle") {
+      // X-ST-1 precondition (spec §5.1). Not gated on `strict` (D2): the
+      // module outcome it reads is folded against the frozen cfg, and the
+      // shape "level, or abandoned with nothing" does not move with cfg.
+      const effective = outcomeOf(module, { state, settlement });
+      if (!settleApplies(module, { outcome: effective, abandoned: abandonActive, state })) {
+        throw new EngineError(
+          "SETTLE_NOT_APPLICABLE",
+          settlement !== null
+            ? "this fixture is already settled — void the settle first"
+            : "settle applies only to a level result, an abandoned match with no result, or a pending tie-break",
+          { eventId: event.id, outcome: effective, abandoned: abandonActive },
+        );
+      }
+      const p = event.payload as z.infer<typeof CoreSettle>;
+      const { home, away } = { home: lineups.home.entrantId, away: lineups.away.entrantId };
+      if (p.winner !== home && p.winner !== away) {
+        throw new EngineError("INVALID_EVENT", `core.settle winner "${p.winner}" is neither side of this fixture`, { eventId: event.id });
+      }
+      settlement = { winner: p.winner, loser: p.winner === home ? away : home, method: p.method, eventId: event.id };
+      decided = true;
+      stoppage = null;
+      // kernel-owned: the module never sees it
+    } else if (event.type === "core.finalize" && settlement !== null && module.outcome(state) === null) {
+      // Plan finding 21: a settled ABANDON has no module outcome, and modules
+      // refuse to finalize an undecided state. The kernel owns finalize exactly
+      // here.
+      // kernel-owned: the module never sees it
+    } else if (event.type === "core.suspend") {
       // Guarded by the WRONG_PHASE branch above, so this is the first suspend.
       const reason = (event.payload as z.infer<typeof CoreSuspend>).reason;
       // `at` is the stamp the guard above validated and counted, so the open
@@ -740,6 +828,7 @@ export function foldMatchWithStoppage<Cfg, State>(
       // cfg allowance. Each is the same fixture-bricking shape as the guard
       // above and needs the same signal; the other eight ignore the argument.
       state = module.apply(state, event, { strict, squads });
+      if (event.type === "core.abandon") abandonActive = true;
       if (!decided) {
         decided = module.outcome(state) !== null;
         // A decided match is not awaiting resumption. core.abandon and
@@ -754,5 +843,5 @@ export function foldMatchWithStoppage<Cfg, State>(
     // exactly like a module event — see `FoldOptions.onFolded`.
     onFolded?.(state, event, squads);
   }
-  return { state, stoppage, squads };
+  return { state, stoppage, squads, settlement };
 }

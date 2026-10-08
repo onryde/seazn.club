@@ -8,8 +8,9 @@
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
 import {
-  foldMatch,
+  foldMatchWithStoppage,
   isStrictFold,
+  outcomeOf,
   resolveVoids,
   type CoreEv,
   type EventEnvelope,
@@ -783,8 +784,10 @@ function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldC
       away: { entrantId: away.id, slots: [] },
     };
     try {
-      const state = foldMatch(carrom, cfgParsed.data, lineups, events);
-      const outcome = state.outcome;
+      // W2a (ruling D-C3): the outcome of a fold is outcomeOf — a settle lives
+      // beside module state, so `state.outcome` would credit a settled level
+      // match as a draw.
+      const outcome = outcomeOf(carrom, foldMatchWithStoppage(carrom, cfgParsed.data, lineups, events));
       if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
         const winnerIsHome = outcome.winner === home.id;
         creditEach(home, "wins", winnerIsHome ? 1 : 0);

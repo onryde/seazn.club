@@ -2,7 +2,8 @@ import "server-only";
 import type postgres from "postgres";
 import {
   EngineError,
-  foldMatch,
+  foldMatchWithStoppage,
+  outcomeOf,
   resolveVoids,
   type EventEnvelope,
   type LineupPair,
@@ -159,13 +160,16 @@ export async function loadFoldInputs(tx: Tx, fixtureId: string): Promise<FoldInp
 /** The pure half: the fold itself, over inputs already loaded. */
 export function foldFrom(fixtureId: string, inputs: FoldInputs): FoldedFixture {
   const { module: sportModule, cfg, lineups, envelopes } = inputs;
-  const state = foldMatch(sportModule, cfg, lineups, envelopes);
+  // W2a finding 1: a settle lives beside module state, so the outcome is
+  // outcomeOf over the whole fold, never the module's outcome of its state.
+  const folded = foldMatchWithStoppage(sportModule, cfg, lineups, envelopes);
+  const state = folded.state;
   return {
     fixtureId,
     lastSeq: envelopes[envelopes.length - 1]!.seq,
     state,
     summary: sportModule.summary(state),
-    outcome: sportModule.outcome(state),
+    outcome: outcomeOf(sportModule, folded),
     active: resolveVoids(envelopes),
   };
 }
