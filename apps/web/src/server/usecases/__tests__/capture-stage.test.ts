@@ -13,8 +13,8 @@
 //    statement), the pool word (the RAW `table.poolLabel` of the org locale's `public.json`, the key put in), and the
 //    round's text, joined with " · ", an absent part left out. The round's text: a plain round reads the RAW
 //    `bracket.round.plain` of the org locale's `ui.json` with the number its chip `R{n}` shows; the final, the third-place
-//    match and the grand final read their RAW long names (`bracket.round.final` / `.thirdPlace` / `.grandFinal`, the
-//    coordinator's A1 follow-up); every other round reads its chip. Over 40 characters the pool goes first, then the
+//    match and the grand final read their RAW long names (`bracket.round.final` / `.thirdPlace` / `.grandFinal`,
+//    A1, applied on the owner's "raise PR"); every other round reads its chip. Over 40 characters the pool goes first, then the
 //    division, then the label. Read off the dictionary files here, never through `poolLabel`, `msgFor` or the builder.
 // Every sweep counts what it checked; zero checked is a failure.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
