@@ -1974,7 +1974,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       onToggle={(e) => p.onToggleCode(e.currentTarget.open)}
       className="group min-w-0 rounded-lg bg-white ring-1 ring-purple-100"
     >
-      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm [&::-webkit-details-marker]:hidden">
+      {/* flex-wrap: on a narrow card "Show the code again" drops to its own line before "Paired · Pixel 8" would
+          truncate (a label sized to its content, capped at the row, wraps the next item instead of shrinking). */}
+      <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-1.5 text-sm [&::-webkit-details-marker]:hidden">
         <span
           aria-hidden
           data-tone={dot}
@@ -1984,7 +1986,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         />
         {facts && (
           // PR-2 T12 (§7.5, Option A): "Paired · Pixel 8" — the model the phone named, truncating first on a narrow card.
-          <span className="min-w-0 truncate">
+          <span data-testid="stream-code-paired" className="min-w-0 max-w-[calc(100%-1rem)] truncate">
             <span className="font-medium text-slate-800">{msg("stream.code.paired")}</span>
             {facts.model !== null && (
               <>

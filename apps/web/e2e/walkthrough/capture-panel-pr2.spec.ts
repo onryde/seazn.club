@@ -552,6 +552,18 @@ test("T11 waiting: a not-ready that FLAPS (each stretch shorter than the constan
   expect(samples, "anti-vacuity: the flap was sampled").toBeGreaterThan(10);
   expect(sawCamera, "anti-vacuity: the server DID hear the flap's not-ready").toBeGreaterThan(0);
 
+  // The flap may have ended mid-stretch: clear it, and wait until the SERVER has heard the clear (its stretch clock
+  // reset), so the hold's clock below starts at this test's own instant.
+  notReady = null;
+  await expect
+    .poll(async () => {
+      const facts = (await apiJson<{ phone: { notReady: string | null } | null }>(page.request, `/api/v1/fixtures/${f.id}/stream-phone`, "GET")).data?.phone;
+      return facts ? facts.notReady : "no phone facts";
+    }, {
+      message: "the server heard the clear",
+      timeout: BEAT_POLL_MS,
+    })
+    .toBeNull();
   // The hold: camera, continuously.
   notReady = "camera";
   const holdFrom = Date.now();
@@ -632,6 +644,10 @@ test("T12 Ready: a second phone claims → the amber notice names ITS model and 
   await expect(body.getByTestId("stream-code-disclosure").locator("summary")).toContainText(`${en("stream.code.paired")} · Galaxy S24`);
   await page.setViewportSize({ width: 320, height: 800 });
   await expectNoHorizontalScroll(page);
+  // The fold's label at a phone width: "Paired · Galaxy S24" whole — the link beside it gives way, the label does not.
+  const pairedLabel = body.getByTestId("stream-code-paired");
+  await expect(pairedLabel).toHaveText(`${en("stream.code.paired")} · Galaxy S24`);
+  expect(await pairedLabel.evaluate((el) => el.scrollWidth - el.clientWidth), "320: the fold's 'Paired · model' is not truncated").toBeLessThanOrEqual(0);
   const x = notice.getByTestId("stream-takeover-dismiss");
   const box = await x.boundingBox();
   expect([box!.width, box!.height], "the X is 44 px on a phone").toEqual([44, 44]);
