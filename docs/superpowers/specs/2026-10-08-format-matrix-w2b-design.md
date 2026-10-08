@@ -237,7 +237,8 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
   `"entrant withdrew"`, `withdrawal.ts:42`, goes); `needs_decision` fixtures walk over to the remaining side instead of
   being skipped as settled (`withdrawal.ts:195`); page_playoff and ladder join the walk-over kinds (`stages.ts:880-884`);
   a seat whose opponent is TBD is reproduced first and, if the throw is real, marked dead so the arriving opponent
-  advances by walkover; a fixture whose other side has already withdrawn becomes a double walkover (final: stays open);
+  advances by walkover; (W2a's fix round names `needs_decision` explicitly at `withdrawal.ts:192-201`, reviewer M-7 — build on that, not
+  on today's lines); a fixture whose other side has already withdrawn becomes a double walkover (final: stays open);
   a not-started chess fixture gets a pre-start forfeit.
 - **Migration** (next free version after W2a's V432): re-classify **unsettled** `needs_decision` bracket rows whose
   active result is `boardgame.result{double_forfeit}` to `forfeited` + `double_walkover`, then run the dead-seat
@@ -318,7 +319,8 @@ renumbered. Each signed or deviation row ships with a proving test whose title c
   clauses, no-next-match, the migration selection); Stryker probe + touched families dispatched before merge; floors
   never auto-raised.
 - **Pins to rewrite (from f-w2):** `needs-decision-status.test.ts:43`, the V432 migration test, the reference HELD
-  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7. Each rewrite says why in its commit.
+  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7, and W2a's D-O1 gate derivation test (it assumes
+  `boardgame.result{double_forfeit}` is still written). Each rewrite says why in its commit.
 - **UI:** screenshot verdicts per screen at 1280 / 768 / 320 (console dialog before and after play and the final
   guidance; match centre; results list; bracket tile), no horizontal scroll; the whole `mobile.spec.ts`, never a `-g`
   slice; every e2e asserting the old forfeit testids found with `grep -a` and made to open the new dialog.
@@ -362,8 +364,8 @@ in W2a's build moves. Any further W2a interface change comes only through f-w2's
 
 Raised by f-w2 from W2a's loop F review (2026-10-08): the `BoardgameResult` winner/method tie (§5.2, in W2b); held-
 fixture auto-walkover (W2b-R8, already here); `division_has_results` (V355) and the me-officiating view dropping
-`needs_decision` fixtures — **recommended as W2a's** (readers of W2a's own status; W2b adds no new status), routing put
-to both owners; legacy completed stages whose fixture V432 moves to `needs_decision` — answer pending from W2a.
+`needs_decision` fixtures — **taken by W2a** (f-w2 controller ruling D-F3: readers of W2a's own status, fixed in loop
+F; W2b does not scope them); legacy completed stages whose fixture V432 moves to `needs_decision` — answer pending from W2a.
 
 ## 13. False premises found (W2b) — for `_INDEX.md` at fold
 
