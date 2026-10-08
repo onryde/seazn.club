@@ -58,6 +58,7 @@ describe("reference families (design §7.2; W2a adds bracket-finish, rule rows X
       }
     });
     expect(sports).toBeGreaterThan(0);
+    expect(judged).toBeGreaterThan(0);
     expect(judged).toBe(sports * BRACKET.length);
   });
 });
