@@ -1283,11 +1283,13 @@ describe("boardgame", () => {
 
   it("W2a tie-break: a payload that is not {rung of the engine's, winner an entrant of the fixture} is refused by name — a score key, lots, a stranger, no winner", () => {
     const r = bracketReq("boardgame", stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout"), { kind: "tiebreak", rung: "rapid", winner: "home" });
-    const bad: unknown[] = [null, { rung: "rapid" }, { winner: HOME }, { rung: "lots", winner: HOME }, { rung: "rapid", winner: "stranger" }, { rung: "rapid", winner: HOME, score: "2–0" }, { rung: 1, winner: HOME }];
+    const bad: unknown[] = [null, { rung: "rapid" }, { winner: HOME }, { rung: "lots", winner: HOME }, { rung: "rapid", winner: "stranger" }, { rung: "rapid", winner: HOME, score: "2–0" }, { rung: 1, winner: HOME },
+      // an extra key that sorts AFTER "winner" leaves the first two sorted keys right, so only the key count refuses it
+      { rung: "rapid", winner: HOME, zz: 1 }];
     for (const payload of bad) {
       expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(`is not {rung: one of ${TIEBREAK_RUNGS.join(", ")}, winner: an entrant of the fixture}`);
     }
-    expect(bad).toHaveLength(7);
+    expect(bad).toHaveLength(8);
     // the positive pair: each rung of the engine's, either winner, is accepted
     for (const rung of TIEBREAK_RUNGS) expect(boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung, winner: AWAY } }, ctxOf(r)).length, rung).toBeGreaterThan(0);
   });

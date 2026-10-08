@@ -104,6 +104,20 @@ describe("Settle in the model (spec §5.6.2; finding 24)", () => {
     }
   });
 
+  it("an OPEN match of a sport that can end level: an even draw of the dice opens it with the level result, an odd one with an abandon at score — both are held, then settled", async () => {
+    let checked = 0;
+    for (const [w, abandons] of [[0, false], [1, true]] as const) {
+      const { m, d, sf1 } = await bracket("football");
+      await settle(m, d, 0, w);
+      const types = d.ledgers.get(sf1)!.map((e) => e.type);
+      expect(types.includes("core.abandon"), `w=${w}: ${types.join(", ")}`).toBe(abandons);
+      expect(types.at(-1), `w=${w}`).toBe("core.settle");
+      expect(row(d, sf1).status, `w=${w}`).toBe("decided");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("a settled FINAL has no later round to seat: it is settled and decided, and X-ST-1 judges the two semis only (the last round is not counted)", async () => {
     const { m, d, fin } = await bracket("generic");
     await settle(m, d, 0, 0); // sf1

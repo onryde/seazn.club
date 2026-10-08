@@ -11,7 +11,7 @@ import type { RequestedOutcome } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { Recorder, setUpDivision } from "../lib/scenarios/common.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
-import { FakeKnockoutDriver } from "./fake-driver.ts";
+import { FakeKnockoutDriver, FakeLeagueDriver } from "./fake-driver.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
 
 const SPORT = "football"; // single-sport: a level result is reachable here, and the rule is the stage kind's, not the sport's
@@ -148,5 +148,22 @@ describe("the model fake serves the W2a status and seats (X-BR-1, X-BR-2, X-ST-1
     const leagueGeneric = await bracket("league", "generic");
     await leagueGeneric.d.postStream(leagueGeneric.sf1, stream(leagueGeneric.d, leagueGeneric.sf1, "league", { kind: "draw" }, "generic"));
     expect(row(leagueGeneric.d, leagueGeneric.sf1)).toMatchObject({ status: "decided", outcome: { kind: "draw" } });
+  });
+
+  it("GN-KO-1 is the bracket's alone, on the fake the scenarios drive: the same generic draw in a LEAGUE stage is accepted and decided", async () => {
+    let checked = 0;
+    for (const v of variantKeys("generic")) {
+      const cfg = resolveSportCfg("generic", v);
+      if (!drawsAllowed("generic", cfg, "league")) continue; // no draw stream exists
+      const driver = new FakeLeagueDriver();
+      const spec: CaseSpec = { caseId: `league|generic|${v}|LIFECYCLE`, row: "league", sport: "generic", variant: v, scenario: "LIFECYCLE", canary: false };
+      await setUpDivision({ driver, spec, orgSlug: "o", cfg, tag: "t", denied: [] }, new Recorder(), 4);
+      await driver.start();
+      const first = driver.fixtures.find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)!;
+      await driver.postStream(first.id, generateStream({ sportKey: "generic", cfg, stageKind: "league", home: first.home_entrant_id!, away: first.away_entrant_id!, outcome: { kind: "draw" } }));
+      expect(first, v).toMatchObject({ status: "decided", outcome: { kind: "draw" } });
+      checked++;
+    }
+    expect(checked, "no generic variant draws in a league").toBeGreaterThan(0);
   });
 });
