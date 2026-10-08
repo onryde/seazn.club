@@ -95,16 +95,23 @@ export async function getFixture(auth: AuthCtx, id: string): Promise<FixtureOut>
  * No `rejectDeviceLink` guard: this has no route of its own, and the
  * device-link pad is one of the two surfaces that legitimately needs it.
  */
-export async function loadFixturePadCfg(auth: AuthCtx, fixtureId: string): Promise<unknown> {
+export async function loadFixturePadCfg(
+  auth: AuthCtx,
+  fixtureId: string,
+): Promise<{ cfg: unknown; stageKind: string | null }> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<
       {
         config_snapshot: unknown;
         division_config: unknown;
+        sport_key: string;
+        module_version: string;
         stage_config: Record<string, unknown> | null;
+        stage_kind: string | null;
       }[]
     >`
-      select f.config_snapshot, d.config as division_config, s.config as stage_config
+      select f.config_snapshot, d.config as division_config, d.sport_key, d.module_version,
+             s.config as stage_config, s.kind as stage_kind
         from fixtures f
         join divisions d on d.id = f.division_id
         left join stages s on s.id = f.stage_id
@@ -112,7 +119,15 @@ export async function loadFixturePadCfg(auth: AuthCtx, fixtureId: string): Promi
     // `withTenant` scopes the read to this org, so another tenant's fixture is
     // indistinguishable from a missing one — 404, never 403.
     if (!row) throw new HttpError(404, "fixture not found");
-    return resolveFixtureCfg(row.config_snapshot, row.division_config, row.stage_config);
+    // W2a: the stage KIND too — a bracket fixture's pad must see the sport's deciders (chess's tie-break) the
+    // fold will apply, and the pad itself needs the kind (Task 12 threads `stageKind` on to it).
+    const cfg = resolveFixtureCfg(
+      row.config_snapshot,
+      row.division_config,
+      { kind: row.stage_kind, config: row.stage_config },
+      resolveModule(row.sport_key, row.module_version),
+    );
+    return { cfg, stageKind: row.stage_kind };
   });
 }
 

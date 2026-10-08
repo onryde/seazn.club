@@ -90,6 +90,9 @@ const OTHER_STATUS_KEY: Record<string, string> = {
   forfeited: "matchCentre.status.forfeited",
   postponed: "matchCentre.status.postponed",
   walkover: "matchCentre.status.walkover",
+  // W2a: a held bracket fixture (played level, awaiting the organiser) — else
+  // the RAW token "needs_decision" would reach a spectator.
+  needs_decision: "matchCentre.status.needs_decision",
 };
 
 function statusText(dict: Dict, status: string, inPlay: boolean, decided: boolean): string {

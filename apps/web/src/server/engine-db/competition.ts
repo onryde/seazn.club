@@ -11,6 +11,7 @@ import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 // usecases/stages.ts; the local name is kept so the call sites read as before.
 import { engineFixtureStatus as toEngineStatus } from "@/lib/fixture-engine-status";
 import { log } from "@/server/logger";
+import { assertNoLevelSeat } from "./level-seat";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
   PointsRule,
@@ -145,9 +146,10 @@ export function parseExtKey(extKey: string | null): { bracket?: "WB" | "LB" | "G
 // (spec 03 §3 MatchOutcome). `win` names both directly; `award` (walkover/
 // forfeit, spec 05 §5) names only the winner — the loser is whichever side
 // isn't them, the same derivation testkit/simulation.ts uses for its own
-// award-outcome replay. draw/tie/no_result never reach a bracket fixture (a
-// stage that forbids draws refuses to finalize one, DRAW_NOT_ALLOWED), so
-// they resolve to neither side rather than guessing.
+// award-outcome replay. draw/tie/no_result: a bracket fixture holding one is
+// needs_decision (W2a X-BR-2) and seats nobody, so they resolve to neither side
+// here; a level outcome under a SEATING status is the bug shape, and the
+// callers that know the stage kind assert it (level-seat.ts, X-BR-1).
 export function bracketWinnerLoser(
   outcome: unknown,
   home: string | null,
@@ -176,7 +178,8 @@ export function bracketWinnerLoser(
 // the grand final depending on array order. thirdPlace status is structural
 // (parsed from ext_key, never guessed) and settles it unconditionally: a
 // thirdPlace fixture is never the decider, full stop.
-function toBracketFixture(f: FixtureRow): BracketFixture {
+function toBracketFixture(f: FixtureRow, stageKind: string): BracketFixture {
+  assertNoLevelSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome }); // X-BR-1
   const { bracket, thirdPlace } = parseExtKey(f.ext_key);
   const { winner, loser } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
   return {
@@ -325,7 +328,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         resolveFixtureCfg(
           f.config_snapshot,
           division.config,
-          stage.config as Record<string, unknown> | null,
+          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
+          sportModule,
         ),
         ctx,
         f.state,
@@ -347,7 +351,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         resolveFixtureCfg(
           f.config_snapshot,
           division.config,
-          stage.config as Record<string, unknown> | null,
+          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
+          sportModule,
         ),
         ctx,
         pointsRule,
@@ -629,7 +634,7 @@ export async function completeStageIfReady(
         kind: inputs.kind,
         ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
       };
-      const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f));
+      const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind));
       // Refine: only fixtures with no onward winner feed are finals (a
       // fixture whose winner feeds nowhere is the bracket's deciding game).
       const feeders = await tx<{ id: string }[]>`

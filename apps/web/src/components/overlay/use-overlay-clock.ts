@@ -6,13 +6,15 @@ import { useEffect, useRef, useState } from "react";
 import { formatClockCapped } from "@/lib/overlay-model";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 
-// `["scheduled", "decided", "finalized", ...VOID_STATUSES]` — proven equal to
+// `["scheduled", "decided", "finalized", "needs_decision", ...VOID_STATUSES]` — proven equal to
 // the console's own `VOID_STATUSES` (stages-panel.tsx) by
 // use-overlay-clock.test.ts rather than importing that module here (it would
 // drag the whole competition-desk panel into the overlay's client bundle).
 // Exported so the test can hold the two sets to that equality without
 // retyping this literal a second time.
-export const NO_CLOCK_STATUSES = new Set(["scheduled", "decided", "finalized", "abandoned", "forfeited", "cancelled"]);
+// W2a: `needs_decision` too — a held fixture has no play running, so its
+// overlay must not hold the last clock reading forever.
+export const NO_CLOCK_STATUSES = new Set(["scheduled", "decided", "finalized", "abandoned", "forfeited", "cancelled", "needs_decision"]);
 
 /**
  * @param clock  the endpoint's anchor — present only while a play phase is

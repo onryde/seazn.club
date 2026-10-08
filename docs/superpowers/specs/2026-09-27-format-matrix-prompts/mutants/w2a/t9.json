@@ -1,0 +1,283 @@
+[
+  {
+    "id": "drop-settle",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "[\"core.settle\", \"core.forfeit\", \"core.abandon\"] as const",
+    "replace": "[\"core.forfeit\", \"core.abandon\"] as const",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2 empty case first: the core constant is exactly the three ruled types, and the set is that list"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+      }
+    ]
+  },
+  {
+    "id": "drop-forfeit",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "[\"core.settle\", \"core.forfeit\", \"core.abandon\"] as const",
+    "replace": "[\"core.settle\", \"core.abandon\"] as const",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2 empty case first: the core constant is exactly the three ruled types, and the set is that list"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+      }
+    ]
+  },
+  {
+    "id": "drop-abandon",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "[\"core.settle\", \"core.forfeit\", \"core.abandon\"] as const",
+    "replace": "[\"core.settle\", \"core.forfeit\"] as const",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2 empty case first: the core constant is exactly the three ruled types, and the set is that list"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+      }
+    ]
+  },
+  {
+    "id": "device-allowed",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "(auth.via === \"device_link\" || subjectToScorerCapabilityGates(auth))",
+    "replace": "(subjectToScorerCapabilityGates(auth))",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2 defence in depth: a device-link credential is refused for every gated row even when its AuthCtx carries an organiser role"
+      }
+    ]
+  },
+  {
+    "id": "official-allowed",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "(auth.via === \"device_link\" || subjectToScorerCapabilityGates(auth))",
+    "replace": "(auth.via === \"device_link\")",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+      }
+    ]
+  },
+  {
+    "id": "organiser-refused",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "(auth.via === \"device_link\" || subjectToScorerCapabilityGates(auth))",
+    "replace": "true",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2 positive pair: owner, admin and an API key are accepted for every gated row"
+      }
+    ]
+  },
+  {
+    "id": "pad-copy",
+    "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+    "find": "AUTHORITY_ONLY_EVENT_TYPES: ReadonlySet<string> = ORGANISER_ONLY;",
+    "replace": "AUTHORITY_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set([\"core.settle\", \"core.forfeit\", \"core.abandon\"]);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/authority-only-tiles.test.ts"
+        ],
+        "name": "X-ST-2: names exactly the three organiser-only types, and IS the server's set \\(identity, not a copy\\)"
+      }
+    ]
+  },
+  {
+    "id": "drop-payload-arm",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "return typeof value === \"string\" && arm.values.includes(value);",
+    "replace": "return false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
+      }
+    ]
+  },
+  {
+    "id": "payload-arm-type-wide",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "&& arm.values.includes(value);",
+    "replace": "&& true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2 / D-O1: a chess result with an ORDINARY method still passes for every non-organiser authority \\(the payload arm is not type-wide\\)"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
+      }
+    ]
+  },
+  {
+    "id": "server-type-only",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "isOrganiserOnlyEvent(input.type, input.payload) &&",
+    "replace": "[\"core.settle\", \"core.forfeit\", \"core.abandon\"].includes(input.type) &&",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+      }
+    ]
+  },
+  {
+    "id": "table-drop-double-forfeit",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "values: [\"forfeit\", \"double_forfeit\"]",
+    "replace": "values: [\"forfeit\"]",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "D-O1: lib/organiser-only-events\\.ts's sport table is EXACTLY the derived list"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+      }
+    ]
+  },
+  {
+    "id": "pad-payload-clause",
+    "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+    "find": "    if (\"event\" in tile.action && isOrganiserOnlyEvent(tile.action.event.type, tile.action.event.payload)) return false;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/authority-only-tiles.test.ts"
+        ],
+        "name": "D-O1: drops a direct tile whose PAYLOAD records a sport forfeit \\(the server's predicate\\), and keeps the same type with an ordinary method"
+      }
+    ]
+  },
+  {
+    "id": "own-key-guard",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "  if (!Object.hasOwn(ORGANISER_ONLY_SPORT_EVENTS, type)) return false;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
+      }
+    ]
+  },
+  {
+    "id": "object-payload-guard",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "  if (typeof payload !== \"object\" || payload === null) return false;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
+      }
+    ]
+  },
+  {
+    "id": "gate-forfeit-only",
+    "file": "apps/web/src/lib/organiser-only-events.ts",
+    "find": "return typeof value === \"string\" && arm.values.includes(value);",
+    "replace": "return typeof value === \"string\" && value === \"forfeit\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "D-O1: isOrganiserOnlyEvent — the empty and malformed cases are not organiser-only; every gated pair is; ordinary values are not"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "I-1: the vocabulary-free sweep — every value that ends a match as an award or no_result is gated or excluded with a named reason"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/organiser-only-events.test.ts"
+        ],
+        "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
+      }
+    ]
+  }
+]

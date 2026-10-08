@@ -126,12 +126,15 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
 // overlay's recent window) handed core.settle to module.apply — every sport
 // throws INVALID_EVENT on it, so every settled fixture lost its derived lines and
 // logged a warning on every render. The engine's own fold dispatches on
-// `kernelOwnsEvent`; every OTHER loop that calls `<module>.apply(` must skip on the
+// `kernelOwnsEvent`; every OTHER loop that calls `.apply(` must skip on the
 // same predicate, or be listed here with why it is not a replay of a stored ledger.
+// ANY receiver (review N2): a loop over `sport.apply(` or `m?.apply(` drops a settle
+// exactly like one over `module.apply(` does, so the scan names no receiver at all.
 describe("review I-1: every module.apply replay loop skips what the kernel owns", () => {
-  const APPLY = /\b\w*[Mm]odule\.apply\(/g;
+  const APPLY = /\.apply\(/g;
   const NOT_A_LEDGER_REPLAY: readonly { file: string; call?: string; reason: string }[] = [
     { file: "apps/web/src/server/overlay/recent.ts", call: "next = module.apply(", reason: "the point-state PROBE: one synthetic module event applied to a stored state, never a ledger event" },
+    { file: "packages/engine/src/history/history.ts", call: "REVERSIBLE[e.type]?.apply(", reason: "the DIVISION history ledger (schedule_applied, fixtures_generated, …): `REVERSIBLE[type].apply` folds schedule ops, never a match event — no sport module, no core.* type" },
     { file: "packages/engine/src/testkit/helpers.ts", reason: "testkit: buildStream drives apply with a module's own events" },
     { file: "packages/engine/src/testkit/conformance.ts", reason: "testkit: conformance drives apply with a module's own generated events" },
     { file: "packages/engine/src/testkit/conformance-pad.ts", reason: "testkit: the registry/dispatch drift probe (one call, one message naming it)" },
@@ -158,7 +161,8 @@ describe("review I-1: every module.apply replay loop skips what the kernel owns"
         else unguarded.push(`${rel}: ${line.trim()}`);
       }
     }
-    expect(unguarded, `${sites} module.apply call sites scanned`).toEqual([]);
+    expect(unguarded, `${sites} .apply( call sites scanned`).toEqual([]);
+    expect(sites).toBeGreaterThanOrEqual(guarded + NOT_A_LEDGER_REPLAY.length);
     // The kernel's own fold, the timeline and the overlay's recent replay — and every listed entry is still real.
     expect(guarded).toBeGreaterThanOrEqual(3);
     expect([...listedSeen].sort()).toEqual(NOT_A_LEDGER_REPLAY.map((x) => `${x.file}|${x.call ?? ""}`).sort());

@@ -174,7 +174,9 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     }
   }, [fixtureId, delayMs]);
 
-  const live = data.status === "in_play" || data.status === "scheduled";
+  // W2a: a held fixture (`needs_decision`) still changes — the organiser's
+  // settle decides it — so it keeps its realtime channel and its poll.
+  const live = data.status === "in_play" || data.status === "scheduled" || data.status === "needs_decision";
 
   // Realtime push (entitled orgs; and the OBS stream overlay, which declares
   // its purpose with its signed key — RT). Any failure — no entitlement (403), env missing,

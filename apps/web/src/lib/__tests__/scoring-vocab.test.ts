@@ -14,6 +14,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { CORE_EVENT_SCHEMAS, EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
 import { buildStream, defaultLineupPair } from "@seazn/engine/testkit";
 import uiEn from "@/dictionaries/en/ui.json";
+import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
@@ -924,6 +925,28 @@ describe("scoring-vocab covers what the engine declares", () => {
     for (const code of EngineErrorCode.options) {
       expect(ENGINE_ERROR_KEY, `no copy for EngineErrorCode ${code}`).toHaveProperty([code]);
     }
+  });
+
+  it("M-1: LEVEL_RESULT_IN_BRACKET reads its reason — the finalize refusal asks for a settle, the generic draw for the winner, in every locale", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const m: MsgFn = (k) => dict[k]!;
+      const draw = engineErrorLabel("LEVEL_RESULT_IN_BRACKET", m, LEVEL_RESULT_REASON.genericDraw);
+      const fin = engineErrorLabel("LEVEL_RESULT_IN_BRACKET", m, LEVEL_RESULT_REASON.finalizeUnsettled);
+      expect(draw, `${locale} generic draw`).toBe(dict["engineError.LEVEL_RESULT_IN_BRACKET"]);
+      expect(fin, `${locale} finalize`).toBe(dict["engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled"]);
+      expect(fin, `${locale}: two refusals, two sentences`).not.toBe(draw);
+      expect(typeof fin === "string" && fin.length > 0, locale).toBe(true);
+      // The empty case: no reason (an older server) or an unknown one reads the code's own copy.
+      expect(engineErrorLabel("LEVEL_RESULT_IN_BRACKET", m), locale).toBe(draw);
+      expect(engineErrorLabel("LEVEL_RESULT_IN_BRACKET", m, "made_up"), locale).toBe(draw);
+      // The console and the device pad resolve through scoringErrorText with the envelope's extras.
+      expect(scoringErrorText("LEVEL_RESULT_IN_BRACKET", "raw", m, "score.failed", { reason: "finalize_unsettled" }), locale).toBe(fin);
+      // A reason on another code changes nothing.
+      expect(engineErrorLabel("WRONG_PHASE", m, "finalize_unsettled"), locale).toBe(dict["engineError.WRONG_PHASE"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("resolves the new W4a vocabulary against the real en dictionary", () => {

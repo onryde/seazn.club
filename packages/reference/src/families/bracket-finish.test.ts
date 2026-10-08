@@ -3,7 +3,9 @@
 // questions (2026-10-08; controller rulings, not owner rulings) — never from engine source (R8). The engine is touched
 // only for its DECLARED domain at test time: StageKind.options and the sport registry.
 import { describe, expect, it } from "vitest";
-import { StageKind } from "@seazn/engine/core";
+// The one sanctioned VALUE import of the product (brief Step 4, R8): the core BRACKET_KINDS, for the cross-check
+// below. NOT the 4-kind BRACKET_STAGE_KINDS namesake in competition/progression.ts (review m4).
+import { BRACKET_KINDS, StageKind } from "@seazn/engine/core";
 import { forEachSport } from "@seazn/engine/testkit";
 import {
   LEVEL_KINDS,
@@ -142,6 +144,23 @@ describe("bracket-finish scope, read from the rules directory (X-BR-1, X-DR-1, t
     expect(bracketFinish.sports).toBe("any");
   });
 
+  it("Step 4 cross-check (R8's one meeting point): the engine's core BRACKET_KINDS equals the family's stage kinds AND the rule rows' bracket kinds — a disagreement is a FINDING, never a fix to either side", () => {
+    const engine: string[] = [...BRACKET_KINDS];
+    // empty case: an empty export would make the set-equalities below compare nothing
+    expect(engine.length).toBeGreaterThan(0);
+    // full case: not every declared kind — X-DR-1's draw kinds stay out
+    expect(engine.length).toBeLessThan(KINDS.length);
+    expect(new Set(engine).size, "BRACKET_KINDS lists a kind twice").toBe(engine.length);
+    let declared = 0;
+    for (const k of engine) {
+      expect(KINDS, `${k} is not a declared StageKind`).toContain(k);
+      declared++;
+    }
+    expect(declared).toBe(engine.length);
+    expect([...engine].sort(), "engine BRACKET_KINDS vs the family's stageKinds").toEqual([...bracketFinish.stageKinds].sort());
+    expect([...engine].sort(), "engine BRACKET_KINDS vs the rule rows (declared kinds minus X-DR-1's)").toEqual([...BRACKET_KINDS_FROM_ROWS].sort());
+  });
+
   it("X-DR-1: a draw kind is outside the family — every draw kind × every registered sport is RuledOut, naming the kind", () => {
     let judged = 0;
     const sports = forEachSport(({ key }) => {
@@ -153,6 +172,7 @@ describe("bracket-finish scope, read from the rules directory (X-BR-1, X-DR-1, t
       }
     });
     expect(sports).toBeGreaterThan(0);
+    expect(judged).toBeGreaterThan(0);
     expect(judged).toBe(sports * DRAW_KINDS_FROM_ROWS.length);
   });
 
@@ -174,6 +194,7 @@ describe("bracket-finish scope, read from the rules directory (X-BR-1, X-DR-1, t
       }
     });
     expect(sports).toBeGreaterThan(0);
+    expect(judged).toBeGreaterThan(0);
     expect(judged).toBe(sports * cases.length * bracketFinish.stageKinds.length);
   });
 
@@ -240,6 +261,7 @@ describe("bracket-finish, swept over the registry (X-BR-2 and each sport's own K
       }
     });
     expect(sports).toBeGreaterThan(0);
+    expect(judged).toBeGreaterThan(0);
     expect(judged).toBe(sports * LEVEL_KINDS_FROM_ROWS.length * bracketFinish.stageKinds.length);
     for (const as of LEVEL_KINDS_FROM_ROWS) expect(perKind.get(as) ?? 0, as).toBe(sports * bracketFinish.stageKinds.length);
     // every (row, level kind) answer was reached by a registered sport, and so was X-BR-2 for every level kind (no row,
@@ -273,6 +295,7 @@ describe("bracket-finish, swept over the registry (X-BR-2 and each sport's own K
     });
     expect(sports).toBeGreaterThan(0);
     expect(pairs).toBeGreaterThan(0);
+    expect(judged).toBeGreaterThan(0);
     expect(judged).toBe(pairs * METHODS_.length * 2);
   });
 

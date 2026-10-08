@@ -94,7 +94,7 @@ All of these were signed by the owner in chat on 2026-10-08, and are recorded in
 | 74 | Other sports in brackets: carrom always plays the ICF extra board (RB2B-23); generic refuses a draw and the scorer enters the winner, with no shoot-out advice (RB2B-28); a cricket knockout tie or no-result is closed by settle (RB2A-17); RB2B-1's refusal goes to W2c and RB2A-30 to W4; NEW-H1 is reproduced before it is fixed. | CA-KO-1, GN-KO-1, CK-KO-1 |
 | 75 | **A rules reference lives in the engine:** `packages/engine/rules/`, with a checker test (§6). | — |
 | 76 | **Approach A** (§4): deciders are match-config phases declared per sport and applied by stage kind; settle is owned by the kernel and produces a `win` with a method. | — |
-| 77 | **One server-side organiser check** for `core.settle`, `core.forfeit` and `core.abandon`. Scorers and remote-scoring devices are refused. | X-ST-2 |
+| 77 | **One server-side organiser check** for `core.settle`, `core.forfeit` and `core.abandon`, **and every sport event that records a forfeit or walkover** (chess `boardgame.result` with method `forfeit` or `double_forfeit`; the full list derived from the engine's declarations — owner 2026-10-08, ruling D-O1). Scorers and remote-scoring devices are refused, and the pad hides those controls from them. | X-ST-2 |
 | 78 | The draw allow-list includes **americano**: the rule is "no level result where someone must advance". | X-DR-1 |
 | 79 | **Hold, don't refuse.** A play-produced level result in a bracket is saved with the new fixture status `needs_decision`: not decided, nobody seated. Refusal remains only for a generic draw. | X-BR-1, X-BR-2 |
 
@@ -237,7 +237,9 @@ See §6.
    - A `core.settle` whose `winner` is an entrant with status `withdrawn` is refused `SETTLE_NOT_APPLICABLE`
      (reason `withdrawn`), and nothing is written (preflight ruling C17; the auto-walkover is W2b's, §2.3).
 4. **Seating guard.** The comment at `engine-db/competition.ts:144-150` becomes an assertion.
-   - A `draw`, `tie` or `no_result` reaching `bracketWinnerLoser` or `advancingSides` throws `LEVEL_RESULT_SEATED`.
+   - A `draw`, `tie` or `no_result` reaching a **seating** caller throws `LEVEL_RESULT_SEATED` — asserted where seats are
+     written (`onDecided`, `toBracketFixture`, `loadBracketFixtures`), not in `advancingSides` itself, whose remaining
+     callers release seats (controller ruling D-F2, loop F review).
      It is reached only through a bug, so it is tested by forcing the case.
    - `onDecided` is not called for `needs_decision`. A test proves that nobody is seated, and that settle then seats
      both sides.
@@ -376,7 +378,7 @@ Rule texts (seeded rows):
 | X-BR-1 | In a bracket kind, a fixture is decided only by a win (from play, a decider, a forfeit or settle). `draw`, `tie` and `no_result` are never a decided result. |
 | X-BR-2 | A play-produced level result in a bracket kind is held as `needs_decision`: not decided, nobody seated. |
 | X-ST-1 | `core.settle` applies only to a level outcome, an abandon with no outcome, or a chess bracket game awaiting its tie-break (lots is the organiser's settle), and never names a withdrawn entrant (preflight rulings C12, C17). It records the winner and the method (lot, higher seed, organiser), invents no score, and seats winner and loser. |
-| X-ST-2 | `core.settle`, `core.forfeit` and `core.abandon` are organiser-only on the server. |
+| X-ST-2 | `core.settle`, `core.forfeit`, `core.abandon` and every sport event that records a forfeit or walkover (e.g. chess `boardgame.result{method: forfeit \| double_forfeit}`) are organiser-only on the server. |
 | X-DR-1 | Draws are allowed only in league, group, swiss and americano, and only where the sport allows them. |
 | BG-KO-1 | In a bracket, a drawn chess game goes to a tie-break (rapid, blitz, armageddon), recorded by the scorer; lots is the organiser's settle. Status `signed 73 2026-10-08`; citation "product rule following FIDE knockout practice (World Cup regulations, secondary source — re-read before citing it as federation text)". |
 | BG-KO-2 | A drawn armageddon game is won by Black. |

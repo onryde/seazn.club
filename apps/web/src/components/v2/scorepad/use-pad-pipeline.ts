@@ -441,6 +441,9 @@ export interface RejectionInfo {
   /** NEXT_MATCH_STARTED only: the match to void first (`refusal-copy.ts`
    *  names it). Absent on every other refusal. */
   nextMatch?: NextMatchRef;
+  /** W2a (review M-1): the reason a refusal names (LEVEL_RESULT_IN_BRACKET: a generic draw, or a finalize of a
+   *  fixture that still needs a decision) — it picks the copy. Absent on every other refusal. */
+  reason?: string;
 }
 
 export interface UsePadPipelineResult {
@@ -1712,11 +1715,12 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // Cleared on every resolved outcome, exactly like `offline` — a
           // chip that latches "Catching up" forever lies the other way.
           setThrottled(false);
-          setLastRejection(
-            outcome.nextMatch
-              ? { code: outcome.code, message: outcome.message, nextMatch: outcome.nextMatch }
-              : { code: outcome.code, message: outcome.message },
-          );
+          setLastRejection({
+            code: outcome.code,
+            message: outcome.message,
+            ...(outcome.nextMatch ? { nextMatch: outcome.nextMatch } : {}),
+            ...(outcome.reason ? { reason: outcome.reason } : {}),
+          });
           const remaining = new Map(pendingEnvelopesRef.current);
           remaining.delete(next.idempotencyKey);
           commitPendingEnvelopes(remaining);

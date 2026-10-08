@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
 import * as Sentry from "@sentry/nextjs";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
+import { isLevelResultReason } from "@/lib/level-result-reason";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { log } from "@/server/logger";
@@ -228,6 +229,12 @@ async function v1Inner<T>(
       ) {
         const d = err.data as { stageId: string; previousStageId: string };
         extra = { reason: "previous_stage_incomplete", stageId: d.stageId, previousStageId: d.previousStageId };
+      }
+      // W2a fix round 1 (review M-1): LEVEL_RESULT_IN_BRACKET has two emitters asking for different things (enter
+      // the winner; settle before finalizing), so the copy branches on the reason — forwarded only when named.
+      if (err.code === "LEVEL_RESULT_IN_BRACKET") {
+        const reason = (err.data as { reason?: unknown } | undefined)?.reason;
+        if (isLevelResultReason(reason)) extra = { reason };
       }
       return errorResponse(requestId, status, err.code, err.message, extra);
     }

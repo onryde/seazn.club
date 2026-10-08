@@ -398,7 +398,11 @@ export function localDateKey(iso: string, tz: string): string {
   }).format(ms);
 }
 
-const LIVE = new Set(["scheduled", "in_play"]);
+// W2a: `needs_decision` is LIVE here — a held bracket fixture still owes the
+// organiser's settle, so a division (or a later stage's prompt) must never read
+// "finished" past it. The J2 shape: a knockout stage completes on its final
+// alone, and a held third-place playoff beside it would otherwise vanish.
+const LIVE = new Set(["scheduled", "in_play", "needs_decision"]);
 /** card-stats.ts's own PLAYED set ("a result exists"), mirrored here so a
  *  purely-derived phase check agrees with what the desk's own played/total
  *  count shows — never abandoned/forfeited/cancelled, which are terminal but

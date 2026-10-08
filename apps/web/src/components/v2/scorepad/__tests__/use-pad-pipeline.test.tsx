@@ -558,6 +558,16 @@ describe("usePadPipeline — lastRejection", () => {
     await pad.current.submit("generic.score", { by: "H", points: 1 });
     expect(pad.current.lastRejection).toEqual({ code: "NEXT_MATCH_STARTED", message: "started", nextMatch });
   });
+
+  it("M-1: keeps a LEVEL_RESULT_IN_BRACKET refusal's reason, so the pad's copy can tell a finalize from a generic draw", async () => {
+    const { transport } = fakeTransport({
+      appendResults: [{ kind: "rejected", code: "LEVEL_RESULT_IN_BRACKET", message: "level", reason: "finalize_unsettled" }],
+    });
+    const pad = mountPipeline(baseParams({ transport }));
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(pad.current.lastRejection).toEqual({ code: "LEVEL_RESULT_IN_BRACKET", message: "level", reason: "finalize_unsettled" });
+  });
 });
 
 describe("usePadPipeline — core.void envelope translation", () => {

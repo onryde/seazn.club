@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { EngineError } from "./errors.ts";
-import { CORE_EVENT_SCHEMAS, SETTLE_METHODS, foldMatchWithStoppage, isKernelOwnedEventType, kernelOwnsEvent, outcomeOf, settleApplies, settledMethod, type EventEnvelope } from "./events.ts";
+import { CORE_EVENT_SCHEMAS, KERNEL_OWNED_CORE, SETTLE_METHODS, foldMatchWithStoppage, isKernelOwnedEventType, kernelOwnsEvent, outcomeOf, settleApplies, settledMethod, type EventEnvelope } from "./events.ts";
 import { LINEUP_EVENT_SCHEMAS } from "./lineup.ts";
 import { isLevelOutcome } from "./types.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
@@ -189,8 +189,11 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
     // Elsewhere: every module's own finalize is `if (state.outcome === null) wrongPhase(…); return {…, phase: "final"}`,
     // so a second finalize on a decided fixture is accepted again — except generic (`phase !== "done"` ⇒ WRONG_PHASE).
     // In the product the server locks the ledger at the first finalize (append-event.ts LOCKED_FIXTURE_STATUSES), so
-    // neither answer is reachable there. The kernel's own finalize (a settled abandon the module has not decided)
-    // aligns with the ten: accepted again, nothing moves.
+    // TODAY neither answer is reachable there — but that is not by design: append-event.ts's `fixtureStatusFromFold`
+    // comment describes a staff REOPEN that leaves an active finalize in an appendable stream, and a second finalize
+    // would then reach this fold. No reopen usecase exists in apps/web yet; the day one lands, this is the answer it
+    // meets. The kernel's own finalize (a settled abandon the module has not decided) aligns with the ten: accepted
+    // again, nothing moves.
     let kernelOwned = 0;
     let moduleOwned = 0;
     const moduleRefusesSecond: string[] = [];
@@ -223,6 +226,29 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
     expect(kernelOwned).toBeGreaterThan(0);
     expect(moduleOwned).toBeGreaterThan(0);
     expect(moduleRefusesSecond).toEqual(["generic"]);
+  });
+
+  it("review N1: a type kernelOwnsEvent claims but no kernel branch folds is an invariant failure naming it — a bug, never a silent no-op and never a scorer's refusal", () => {
+    const stream = [ev(1, "core.start"), ev(2, "core.note", { text: "covers on" })];
+    expect(codeOf(() => fold(stream))).toBeNull(); // the positive pair first: the note is the module's, and folds
+    const owned = KERNEL_OWNED_CORE as string[];
+    const before = owned.length;
+    owned.push("core.note"); // injection: a kernel-owned type with no dispatch branch of its own
+    let thrown: unknown = null;
+    try {
+      expect(isKernelOwnedEventType("core.note")).toBe(true); // the injection took
+      try { fold(stream); } catch (e) { thrown = e; }
+    } finally {
+      owned.length = before;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(
+      'foldMatchWithStoppage: kernelOwnsEvent claims "core.note" but no kernel branch folds "core.note" — ' +
+        "a type added to KERNEL_OWNED_CORE owes its branch in the fold's dispatch",
+    ); // the whole message: it is the only pointer a 500's reader gets to the missing branch
+    expect(EngineError.is(thrown)).toBe(false); // not a coded refusal the API would hand a scorer as a 4xx
+    expect(isKernelOwnedEventType("core.note")).toBe(false); // restored
+    expect(codeOf(() => fold(stream))).toBeNull();
   });
 
   it("finding 4: settle is accepted while play is suspended after an abandon that left the stoppage open", () => {

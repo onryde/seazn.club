@@ -62,7 +62,7 @@ export async function replayOutcomeFor(
       outcome: folded.outcome,
       // The candidate's own TYPE, not the fold alone: `fixtureStatusFromFold`
       // can never answer "finalized", and only `nextStatus` knows that rule.
-      status: nextStatus(row.type, folded.outcome, folded.active),
+      status: nextStatus(row.type, folded.outcome, folded.active, inputs.stageKind),
       event_id: row.id,
     };
   });

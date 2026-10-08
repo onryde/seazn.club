@@ -3889,6 +3889,7 @@
   "engineError.SETTLE_NOT_APPLICABLE": "Este partido no se puede resolver: no está empatado o ya se resolvió.",
   "engineError.TIEBREAK_NOT_APPLICABLE": "Un desempate solo puede seguir a una partida eliminatoria en tablas.",
   "engineError.LEVEL_RESULT_IN_BRACKET": "Introduce el ganador: un partido eliminatorio no puede terminar en empate.",
+  "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled": "Resuelve el partido o registra su desempate antes de finalizarlo: un partido eliminatorio no puede terminar en empate.",
   "engineError.LEVEL_RESULT_SEATED": "Algo salió mal al colocar este resultado. Ya hemos sido avisados.",
   "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS": "Estos grupos han jugado un número distinto de partidos, así que sus clasificaciones todavía no se pueden comparar.",
   "scoring.position.set": "Set",

@@ -15,6 +15,7 @@ import { EngineError } from "@seazn/engine/core";
 import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db";
 import { advancingSides } from "@/server/engine-db/fed-seats";
+import { assertNoLevelSeat } from "@/server/engine-db/level-seat";
 import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -32,6 +33,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { subjectToScorerCapabilityGates } from "./scorers";
+import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats } from "./stages";
 import { detectSuspensions, notifyServedSuspensions, type ServedFlip } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
@@ -291,7 +293,8 @@ export async function scoreEvent(
   let advanced: readonly string[] = result.released;
   try {
     // A decision (or a void that may have erased one) moves brackets/standings.
-    if (result.outcome !== null || input.type === "core.void") {
+    // W2a (spec §5.4.4): a HELD fixture (needs_decision) seats nobody, so onDecided is not called for it.
+    if ((result.outcome !== null && result.status !== "needs_decision") || input.type === "core.void") {
       const filled = await onDecided(auth, fixtureId);
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
       await refreshDiscipline(auth, fixtureId);
@@ -496,6 +499,25 @@ async function assertEntitledToScore(
     throw new EngineError("WRONG_PHASE", "division has not started — scoring is closed", {
       divisionStatus: ctx.division_status,
     });
+  }
+
+  // X-ST-2 (ruling 77, widened by owner ruling D-O1): settle, forfeit and abandon — and a sport event that records a
+  // forfeit or walkover (chess `boardgame.result` method forfeit/double_forfeit) — end or decide a match, so only an
+  // organiser may record them: never a device link, never an official scorer (subjectToScorerCapabilityGates: a
+  // session that is not owner/admin). An org API key is an organiser credential and passes, as it does for finalize
+  // and void. Placed before the device and scorer branches so neither can let one through; 403 → FORBIDDEN on the
+  // wire. The pad reads the same predicate (pad-host.tsx), so the two cannot drift. The authority is this request's
+  // AuthCtx, resolved once at the door: a role change lands on the next request.
+  if (isOrganiserOnlyEvent(input.type, input.payload) && (auth.via === "device_link" || subjectToScorerCapabilityGates(auth))) {
+    const verb =
+      input.type === "core.settle"
+        ? "settle"
+        : input.type === "core.forfeit"
+          ? "record a walkover for"
+          : input.type === "core.abandon"
+            ? "abandon"
+            : "record a forfeit in";
+    throw new HttpError(403, `Only an organiser can ${verb} a match`);
   }
 
   // Device-link capabilities (doc 13 §7): strictly ⊂ scorer. Append + void
@@ -705,6 +727,7 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     const [fixture] = await tx<
       {
         outcome: unknown;
+        status: string;
         stage_id: string;
         pool_id: string | null;
         winner_to_fixture: string | null;
@@ -717,12 +740,14 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         division_id: string;
       }[]
     >`
-      select f.outcome, f.stage_id, f.pool_id, f.winner_to_fixture, f.winner_to_slot,
+      select f.outcome, f.status, f.stage_id, f.pool_id, f.winner_to_fixture, f.winner_to_slot,
              f.loser_to_fixture, f.loser_to_slot, s.kind, f.ext_key,
              s.config as stage_config, s.division_id
       from fixtures f join stages s on s.id = f.stage_id
       where f.id = ${fixtureId}`;
     if (!fixture) return null;
+    // X-BR-1: a level outcome under a seating status in a bracket is the bug shape (level-seat.ts).
+    assertNoLevelSeat({ fixtureId, stageKind: fixture.kind, status: fixture.status, outcome: fixture.outcome });
     // One reading of who advances, shared with the un-fill (fed-seats.ts), so
     // the two can never disagree about which name a decision put where.
     const { winner, loser } = advancingSides(fixture.outcome);

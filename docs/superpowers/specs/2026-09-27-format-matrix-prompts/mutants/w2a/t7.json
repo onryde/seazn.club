@@ -1,0 +1,532 @@
+[
+  {
+    "id": "settle-first",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "  if (has(\"core.settle\")) return \"decided\";\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/needs-decision-status.test.ts"
+        ],
+        "name": "D3 order 1: an active settle is decided even over an active abandon"
+      }
+    ]
+  },
+  {
+    "id": "abandon-before-level",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "  if (has(\"core.abandon\")) return \"abandoned\";\n  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided,\n  // nobody seated, closed by the organiser's core.settle.\n  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) return \"needs_decision\";\n",
+    "replace": "  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided,\n  // nobody seated, closed by the organiser's core.settle.\n  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) return \"needs_decision\";\n  if (has(\"core.abandon\")) return \"abandoned\";\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/needs-decision-status.test.ts"
+        ],
+        "name": "D3 order 2: an active abandon stays abandoned, even with a level outcome in a bracket \\(stuck and visible\\)"
+      }
+    ]
+  },
+  {
+    "id": "level-draw",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "isLevelOutcome(outcome)) return \"needs_decision\";",
+    "replace": "(outcome.kind === \"tie\" || outcome.kind === \"no_result\")) return \"needs_decision\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/needs-decision-status.test.ts"
+        ],
+        "name": "X-BR-2: every level outcome kind in every bracket kind is needs_decision; outside brackets it is decided"
+      }
+    ]
+  },
+  {
+    "id": "level-tie",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "isLevelOutcome(outcome)) return \"needs_decision\";",
+    "replace": "(outcome.kind === \"draw\" || outcome.kind === \"no_result\")) return \"needs_decision\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/needs-decision-status.test.ts"
+        ],
+        "name": "X-BR-2: every level outcome kind in every bracket kind is needs_decision; outside brackets it is decided"
+      }
+    ]
+  },
+  {
+    "id": "level-nr",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "isLevelOutcome(outcome)) return \"needs_decision\";",
+    "replace": "(outcome.kind === \"draw\" || outcome.kind === \"tie\")) return \"needs_decision\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/needs-decision-status.test.ts"
+        ],
+        "name": "X-BR-2: every level outcome kind in every bracket kind is needs_decision; outside brackets it is decided"
+      }
+    ]
+  },
+  {
+    "id": "kind-ignored",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "forbidsLevelResult(stageKind) && ",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/needs-decision-status.test.ts"
+        ],
+        "name": "X-BR-2: every level outcome kind in every bracket kind is needs_decision; outside brackets it is decided"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/needs-decision-status.test.ts"
+        ],
+        "name": "a null stage kind \\(a fixture outside any stage\\) behaves as today"
+      }
+    ]
+  },
+  {
+    "id": "replay-kind",
+    "file": "apps/web/src/server/engine-db/replay.ts",
+    "find": "nextStatus(row.type, folded.outcome, folded.active, inputs.stageKind)",
+    "replace": "nextStatus(row.type, folded.outcome, folded.active, null)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/replay.test.ts"
+        ],
+        "name": "X-BR-2: replay of a held knockout fixture reports needs_decision \\(the stage kind reaches the replay\\)"
+      }
+    ]
+  },
+  {
+    "id": "append-kind",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "const status = nextStatus(candidate.type, outcome, active, stageKind);",
+    "replace": "const status = nextStatus(candidate.type, outcome, active, null);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/replay.test.ts"
+        ],
+        "name": "X-BR-2: replay of a held knockout fixture reports needs_decision \\(the stage kind reaches the replay\\)"
+      }
+    ]
+  },
+  {
+    "id": "engine-status",
+    "file": "apps/web/src/lib/fixture-engine-status.ts",
+    "find": "    case \"needs_decision\":\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/fixture-engine-status.test.ts"
+        ],
+        "name": "needs_decision maps to in_play, and an unknown status throws \\(never a silent \"scheduled\"\\)"
+      }
+    ]
+  },
+  {
+    "id": "engine-status-default",
+    "file": "apps/web/src/lib/fixture-engine-status.ts",
+    "find": "      throw new Error(`engineFixtureStatus: unknown fixtures.status \"${dbStatus}\"`);",
+    "replace": "      return \"scheduled\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/fixture-engine-status.test.ts"
+        ],
+        "name": "needs_decision maps to in_play, and an unknown status throws \\(never a silent \"scheduled\"\\)"
+      }
+    ]
+  },
+  {
+    "id": "sweep-stale",
+    "file": "apps/web/src/lib/__tests__/status-set-sweep.test.ts",
+    "find": "matchAll(LIT)].map((x) => x[1]!));\n    if (members.size < 2) continue;",
+    "replace": "matchAll(LIT)].map((x) => x[1]!));\n    if (members.size < 3) continue;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "every ledger row is still found \\(a stale row is a failure\\), and no row is listed twice"
+      }
+    ]
+  },
+  {
+    "id": "backfill-kind",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "and s.kind in ('knockout','double_elim','stepladder','page_playoff','ladder')",
+    "replace": "and s.kind in ('knockout','double_elim','stepladder','page_playoff','ladder','league')",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "ruling 82 backfill: V432's update moves a decided level KNOCKOUT row to needs_decision and leaves a level LEAGUE row decided"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "the SQL bracket-kind literal is exactly the engine's BRACKET_KINDS"
+      }
+    ]
+  },
+  {
+    "id": "backfill-level",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "and f.outcome->>'kind' in ('draw','tie','no_result')",
+    "replace": "and f.outcome->>'kind' in ('tie','no_result')",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "ruling 82 backfill: V432's update moves a decided level KNOCKOUT row to needs_decision and leaves a level LEAGUE row decided"
+      }
+    ]
+  },
+  {
+    "id": "check-constraint",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "'cancelled','needs_decision'));",
+    "replace": "'cancelled'));",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "the check constraint's status list is exactly FIXTURE_STATUSES"
+      }
+    ]
+  },
+  {
+    "id": "sweep-class",
+    "file": "apps/web/src/lib/__tests__/status-set-sweep.test.ts",
+    "find": "\"not-finished\": true,",
+    "replace": "\"not-finished\": false,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "each set holds needs_decision exactly when its class says it must"
+      }
+    ]
+  },
+  {
+    "id": "sweep-chains",
+    "file": "apps/web/src/lib/__tests__/status-set-sweep.test.ts",
+    "find": "if (members.size >= 2) {",
+    "replace": "if (members.size >= 3) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "C19: the chain and map shapes are found \\(the positive pairs\\)"
+      }
+    ]
+  },
+  {
+    "id": "sweep-maps",
+    "file": "apps/web/src/lib/__tests__/status-set-sweep.test.ts",
+    "find": "const members = new Set([...m[1]!.matchAll(key)]",
+    "replace": "const members = new Set([...m[1]!.matchAll(LIT)]",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "C19: the chain and map shapes are found \\(the positive pairs\\)"
+      }
+    ]
+  },
+  {
+    "id": "status-line",
+    "file": "apps/web/src/server/public-site/competition-hub.ts",
+    "find": "  \"needs_decision\",\n]);",
+    "replace": "]);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/competition-hub.test.ts"
+        ],
+        "name": "W2a: a held fixture's status line is 'Needs a decision' \\(never the 'Not played' fallback\\)"
+      }
+    ]
+  },
+  {
+    "id": "phase-live",
+    "file": "apps/web/src/lib/division-phase.ts",
+    "find": "const LIVE = new Set([\"scheduled\", \"in_play\", \"needs_decision\"]);",
+    "replace": "const LIVE = new Set([\"scheduled\", \"in_play\"]);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/division-phase.test.ts"
+        ],
+        "name": "X-BR-2: every stage complete but the third-place playoff is HELD \\(needs_decision\\) — NOT finished \\(J2's shape, W2a\\)"
+      }
+    ]
+  },
+  {
+    "id": "hub-completed",
+    "file": "apps/web/src/lib/matches-hub.ts",
+    "find": "\"cancelled\", \"needs_decision\"]);",
+    "replace": "\"cancelled\"]);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/matches-hub.test.ts"
+        ],
+        "name": "in_play is the ONLY live status; terminal statuses are completed; the rest are upcoming"
+      }
+    ]
+  },
+  {
+    "id": "no-clock",
+    "file": "apps/web/src/components/overlay/use-overlay-clock.ts",
+    "find": "\"cancelled\", \"needs_decision\"]);",
+    "replace": "\"cancelled\"]);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/overlay/__tests__/use-overlay-clock.test.ts"
+        ],
+        "name": "equals scheduled/decided/finalized/needs_decision plus the console's own VOID_STATUSES"
+      }
+    ]
+  },
+  {
+    "id": "hub-dict-key",
+    "file": "apps/web/src/lib/hub-dict.ts",
+    "find": "  \"matchCentre.status.needs_decision\",\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/hub-dict.test.tsx"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "occupying",
+    "file": "apps/web/src/server/usecases/schedule.ts",
+    "find": "\"forfeited\", \"needs_decision\"];",
+    "replace": "\"forfeited\"];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "each set holds needs_decision exactly when its class says it must"
+      }
+    ]
+  },
+  {
+    "id": "delete-stage-guard",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "'finalized', 'needs_decision') limit 1`;",
+    "replace": "'finalized') limit 1`;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "each set holds needs_decision exactly when its class says it must"
+      }
+    ]
+  },
+  {
+    "id": "other-status-key",
+    "file": "apps/web/src/components/public-site/live-score.tsx",
+    "find": "  needs_decision: \"matchCentre.status.needs_decision\",\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "each set holds needs_decision exactly when its class says it must"
+      }
+    ]
+  },
+  {
+    "id": "stats-in-play",
+    "file": "apps/web/src/server/usecases/player-stats.ts",
+    "find": "[\"scheduled\", \"in_play\", \"needs_decision\"];",
+    "replace": "[\"scheduled\", \"in_play\"];",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "each set holds needs_decision exactly when its class says it must"
+      }
+    ]
+  },
+  {
+    "id": "v432-notice-moved",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "  get diagnostics moved = row_count;",
+    "replace": "  moved := 0;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "review M-4: V432's backfill block reports the rows it moved and the complete stages that hold one, and leaves those stages complete"
+      }
+    ]
+  },
+  {
+    "id": "v432-notice-stages",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "  select count(distinct s.id) into complete_stages",
+    "replace": "  select 0 into complete_stages",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "review M-4: V432's backfill block reports the rows it moved and the complete stages that hold one, and leaves those stages complete"
+      }
+    ]
+  },
+  {
+    "id": "has-results-held",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "(f.status in ('abandoned', 'needs_decision')",
+    "replace": "(f.status in ('abandoned')",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/division-slot-held-fixture.test.ts"
+        ],
+        "name": "D-F3: V432's OWN text of the function \\(applied in a rolled-back transaction\\) counts a held draw and not a held no_result"
+      }
+    ]
+  },
+  {
+    "id": "me-officiating-held",
+    "file": "apps/web/src/server/usecases/me-officiating.ts",
+    "find": "and f.status in ('scheduled', 'in_play', 'needs_decision')",
+    "replace": "and f.status in ('scheduled', 'in_play')",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/me-officiating.test.ts"
+        ],
+        "name": "D-F3: a HELD fixture \\(needs_decision\\) stays an outstanding duty — the official can still find a match waiting for a decision"
+      }
+    ]
+  },
+  {
+    "id": "withdrawal-held-named",
+    "file": "apps/web/src/server/usecases/withdrawal.ts",
+    "find": "    case \"needs_decision\":\n      return \"void\";\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-ST-1 \\(ruling C17, Review Focus 5\\): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\), and a settle for the remaining one seats them"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
+        ],
+        "name": "N4: every fixtures\\.status maps as ruled, and the ruling table covers exactly the status domain"
+      }
+    ]
+  },
+  {
+    "id": "withdrawal-ended-named",
+    "file": "apps/web/src/server/usecases/withdrawal.ts",
+    "find": "    case \"abandoned\":\n    case \"cancelled\":\n      return \"void\";\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
+        ],
+        "name": "N4: every fixtures\\.status maps as ruled, and the ruling table covers exactly the status domain"
+      }
+    ]
+  },
+  {
+    "id": "withdrawal-unknown-throws",
+    "file": "apps/web/src/server/usecases/withdrawal.ts",
+    "find": "      throw new Error(`bracketWithdrawalStatus: unknown fixtures.status \"${status}\"`);",
+    "replace": "      return \"void\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
+        ],
+        "name": "N4: an unknown status throws \\(never a silent void\\)"
+      }
+    ]
+  },
+  {
+    "id": "v432-complete-filter",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "   where f.status = 'needs_decision'\n     and s.status = 'complete';",
+    "replace": "   where f.status = 'needs_decision';",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "review M-4: V432's backfill block reports the rows it moved and the complete stages that hold one, and leaves those stages complete"
+      }
+    ]
+  }
+]

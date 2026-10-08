@@ -95,7 +95,7 @@ export default async function CompetitionSettingsPage({
     tx<{ total: number; underway: number; done: number; scheduled: number }[]>`
       select
         count(*)::int as total,
-        count(*) filter (where f.status in ('in_play','decided','finalized'))::int as underway,
+        count(*) filter (where f.status in ('in_play','decided','finalized','needs_decision'))::int as underway,
         count(*) filter (where f.status in ('decided','finalized','cancelled','forfeited','abandoned'))::int as done,
         count(*) filter (where f.scheduled_at is not null)::int as scheduled
       from fixtures f

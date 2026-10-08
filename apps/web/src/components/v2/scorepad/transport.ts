@@ -24,6 +24,7 @@ import { z } from "zod";
 import type { AppendCallResult, AppendEventBody, ScoringTransport } from "./pipeline";
 import type { AppendSuccess, LedgerSlotEvent } from "./types";
 import { NEXT_MATCH_STARTED_CODE, nextMatchRefOf } from "../../../lib/next-match-started";
+import { isLevelResultReason } from "../../../lib/level-result-reason";
 
 // Review finding 1: listEventsSince previously cast the ledger JSON straight
 // to LedgerSlotEvent[] with no runtime validation, so an OMITTED
@@ -253,6 +254,12 @@ export const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
   "UNDO_ALREADY_VOIDED",
   "UNDO_NOT_UNDOABLE",
   NEXT_MATCH_STARTED_CODE,
+  // W2a (review M-1): the engine's 409s about the write's CONTENT — a generic draw or a finalize the bracket refuses
+  // (LEVEL_RESULT_IN_BRACKET), a settle or a tie-break that does not apply. A resend is refused identically; as a
+  // "conflict" they parked at the queue head and the scorer never saw "Enter the winner".
+  "LEVEL_RESULT_IN_BRACKET",
+  "SETTLE_NOT_APPLICABLE",
+  "TIEBREAK_NOT_APPLICABLE",
 ]);
 
 /**
@@ -366,7 +373,15 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
           // The next-match refusal names the match to void first; carried only
           // when well-formed, so the copy never renders a sentence with a hole.
           const nextMatch = nextMatchRefOf(envelope.error);
-          return nextMatch ? { kind: "rejected", code, message, nextMatch } : { kind: "rejected", code, message };
+          // M-1: the reason a LEVEL_RESULT_IN_BRACKET names picks its copy; carried only when it is one we name.
+          const reason = envelope.error?.reason;
+          return {
+            kind: "rejected",
+            code,
+            message,
+            ...(nextMatch ? { nextMatch } : {}),
+            ...(isLevelResultReason(reason) ? { reason } : {}),
+          };
         }
         const currentSeq = typeof envelope.error?.current_seq === "number" ? envelope.error.current_seq : null;
         return { kind: "conflict", currentSeq, message };

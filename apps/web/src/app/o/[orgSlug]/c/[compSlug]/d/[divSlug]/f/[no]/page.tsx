@@ -74,7 +74,8 @@ export default async function FixturePage({
       eventRecorderNames(auth, id),
       listFixtureAvailability(auth, id),
       getScheduleSettings(auth, fixture.division_id),
-      loadFixturePadCfg(auth, id),
+      // W2a: `{ cfg, stageKind }` — the pad reads the cfg here; Task 12 threads the stage kind on to it.
+      loadFixturePadCfg(auth, id).then((loaded) => loaded.cfg),
     ]);
   const [competition, planKey] = await Promise.all([
     getCompetition(auth, division.competition_id),

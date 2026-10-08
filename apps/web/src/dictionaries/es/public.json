@@ -43,6 +43,7 @@
   "matchCentre.status.forfeited": "Forfait",
   "matchCentre.status.postponed": "Aplazado",
   "matchCentre.status.walkover": "Walkover",
+  "matchCentre.status.needs_decision": "Requiere una decisión",
   "matchCentre.status.timeTbd": "Hora por confirmar",
   "matchCentre.status.timeNotRecorded": "Hora no registrada",
   "matchCentre.winner": "Ganador:",

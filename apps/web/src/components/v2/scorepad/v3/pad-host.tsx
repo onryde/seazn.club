@@ -91,6 +91,7 @@ import {
 } from "./activity";
 import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
+import { isOrganiserOnlyEvent, ORGANISER_ONLY } from "@/lib/organiser-only-events";
 
 // ---------------------------------------------------------------------------
 // Pure builders — every decision this file makes, tested directly
@@ -702,9 +703,15 @@ export function tileEventType(
  * one filter, so there is no second wiring step a later wave can forget, and
  * a guard nothing is wired to is not a guard.
  *
- * A CLOSED PAIR, not a ban on `core.*`. `core.note` and `core.award` stay
+ * A CLOSED SET, not a ban on `core.*`. `core.note` and `core.award` stay
  * tile-able — the activity panel's own void allowlist already treats those
  * two as the safe ones for the same reason (no state effect).
+ *
+ * W2a (X-ST-2, ruling 77): it is the SAME set the server refuses for a device
+ * link or an official scorer — `ORGANISER_ONLY` from
+ * `lib/organiser-only-events.ts`, imported by identity, so the pad's filter
+ * and the server's 403 cannot drift. It now holds `core.settle` too (no
+ * padSpec declares it: settle is kernel-owned, Task 4).
  *
  * KNOWN, LATENT BYPASS — the MORE SHEET (R7/C review, item 5). This block
  * lives in `filterTilesByBand` and therefore covers the tile GRID only.
@@ -724,10 +731,7 @@ export function tileEventType(
  * where the exclusion sets are decided (`moreActions`' own two-set contract),
  * not bolted onto a filter whose whole virtue is having a single call site.
  */
-export const AUTHORITY_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set([
-  "core.forfeit",
-  "core.abandon",
-]);
+export const AUTHORITY_ONLY_EVENT_TYPES: ReadonlySet<string> = ORGANISER_ONLY;
 
 /**
  * Sign-off review 2026-08-17: tiles were rendered regardless of the org's
@@ -762,6 +766,9 @@ export function filterTilesByBand(
     const type = tileEventType(tile, sheets, swaps);
     if (type === null) return true;
     if (AUTHORITY_ONLY_EVENT_TYPES.has(type)) return false;
+    // D-O1: a direct tile whose PAYLOAD records a sport forfeit (chess `boardgame.result` method forfeit) is the same
+    // authority action by another door — the server's own predicate, so the grid and the 403 cannot disagree.
+    if ("event" in tile.action && isOrganiserOnlyEvent(tile.action.event.type, tile.action.event.payload)) return false;
     const band = fidelity[type];
     if (band === undefined) return true;
     // A LADDER, not a set (W1 / Task 4). The fifth argument used to be the

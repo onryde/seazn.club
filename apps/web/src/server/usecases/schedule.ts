@@ -163,7 +163,8 @@ export const SCHEDULE_FIXTURE_PUSH_CAP = 50;
 // rain-rescheduling touches remaining fixtures only).
 export const MOVABLE_STATUS = "scheduled";
 // Statuses that still occupy a court (cancelled/abandoned ones do not).
-export const OCCUPYING = ["scheduled", "in_play", "decided", "finalized", "forfeited"];
+// W2a: a held (`needs_decision`) fixture was played in its slot, so it holds it.
+export const OCCUPYING = ["scheduled", "in_play", "decided", "finalized", "forfeited", "needs_decision"];
 /** Court-holding statuses the auto pass will NOT re-place: the fixed board of a
  *  part-played competition (a rain-delay repair over a morning that is already
  *  `decided` is the canonical case).

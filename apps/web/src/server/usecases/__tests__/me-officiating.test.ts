@@ -206,6 +206,30 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
     expect(doneRow.report_status).toBeNull();
   });
 
+  it("D-F3: a HELD fixture (needs_decision) stays an outstanding duty — the official can still find a match waiting for a decision", async () => {
+    // Before W2a fix round 1 the outstanding list read ('scheduled','in_play') and the completed list the five
+    // finished statuses, so a held fixture was in NEITHER: it vanished from the official's lane until settled.
+    const { auth } = await seedOrg();
+    const ref = await makeUser("held-ref");
+    const { fixtures } = await seedFutureDivision(auth);
+    const official = await createOfficial(auth, { display_name: "Ref H", role_keys: ["referee"] });
+    const invited = await inviteOfficial(auth, official.id, ref.email);
+    await claimPerson(invited.secret, ref.id, ref.email);
+    const held = fixtures[0]!.id;
+    const playing = fixtures[1]!.id;
+    for (const id of [held, playing]) {
+      await patchFixtureOfficials(auth, id, { set: [{ official_id: official.id, role_key: "referee", locked: false }] });
+    }
+    await sql`update fixtures set status = 'needs_decision', outcome = '{"kind":"draw"}'::jsonb where id = ${held}`;
+    await sql`update fixtures set status = 'in_play' where id = ${playing}`;
+    const mine = await getMyOfficiating(ref.id);
+    const ids = mine.assignments.map((a) => a.fixture_id);
+    expect(ids, "the positive pair: an in_play duty shows").toContain(playing);
+    expect(ids, "the held duty shows").toContain(held);
+    expect(mine.assignments.find((a) => a.fixture_id === held)!.fixture_status).toBe("needs_decision");
+    expect(mine.completed.map((a) => a.fixture_id), "a held match is not finished").not.toContain(held);
+  });
+
   // F4 fix-wave finding 2: `completed` selected none of the three fields
   // (home_slot_label/away_slot_label/org_default_locale) that
   // MyOfficiatingAssignment makes non-optional — every completed row carried

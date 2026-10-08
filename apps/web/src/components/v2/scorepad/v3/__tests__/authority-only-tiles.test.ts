@@ -24,6 +24,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { AUTHORITY_ONLY_EVENT_TYPES, filterTilesByBand } from "../pad-host";
+import { ORGANISER_ONLY, ORGANISER_ONLY_SPORT_EVENTS } from "@/lib/organiser-only-events";
 import type { GuidedSheetSpec, SwapSlot, TileSpec } from "../types";
 import type { FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -59,8 +60,9 @@ function kept(tiles: readonly TileSpec[]): string[] {
 }
 
 describe("the tile grid cannot represent an authority action (D-12)", () => {
-  it("names exactly the two the console's Match actions band owns", () => {
-    expect([...AUTHORITY_ONLY_EVENT_TYPES].sort()).toEqual(["core.abandon", "core.forfeit"]);
+  it("X-ST-2: names exactly the three organiser-only types, and IS the server's set (identity, not a copy)", () => {
+    expect([...AUTHORITY_ONLY_EVENT_TYPES].sort()).toEqual(["core.abandon", "core.forfeit", "core.settle"]);
+    expect(AUTHORITY_ONLY_EVENT_TYPES).toBe(ORGANISER_ONLY); // one constant for the pad and scoring.ts's 403
   });
 
   it("drops a tile that dispatches core.forfeit or core.abandon directly", () => {
@@ -72,6 +74,23 @@ describe("the tile grid cannot represent an authority action (D-12)", () => {
       ]),
       "the scoring tile stays; the two that end a match never render",
     ).toEqual(["goal"]);
+  });
+
+  it("D-O1: drops a direct tile whose PAYLOAD records a sport forfeit (the server's predicate), and keeps the same type with an ordinary method", () => {
+    let checked = 0;
+    for (const [type, arm] of Object.entries(ORGANISER_ONLY_SPORT_EVENTS)) {
+      for (const value of arm.values) {
+        expect(
+          kept([
+            tile("forfeitChip", { event: { type, payload: { [arm.field]: value } } }),
+            tile("ordinary", { event: { type, payload: { [arm.field]: "checkmate" } } }),
+          ]),
+          `${type}.${arm.field}=${value}`,
+        ).toEqual(["ordinary"]);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 
   it("drops one reached through a guided SHEET, not just a direct event", () => {

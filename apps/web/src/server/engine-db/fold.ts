@@ -39,6 +39,9 @@ export interface FoldInputs {
   cfg: unknown;
   lineups: LineupPair;
   envelopes: EventEnvelope[];
+  /** W2a — the fixture's stage kind (null when it has no stage row): the status rule holds a level result in a
+   *  bracket kind as `needs_decision` (append-event.ts `nextStatus`), and the replay must say what the write said. */
+  stageKind: string | null;
 }
 
 export interface FoldedFixture {
@@ -150,11 +153,12 @@ export async function loadFoldInputs(tx: Tx, fixtureId: string): Promise<FoldInp
   // is why BOTH go through `resolveFixtureCfg` rather than each building cfg
   // for themselves. The stage row is still loaded: it is the fallback input,
   // and every fixture written before V347 shipped takes that path.
-  const [stage] = await tx<{ config: Record<string, unknown> | null }[]>`
-    select config from stages where id = ${fixture.stage_id}
+  // W2a: the kind too — a bracket kind adds the sport's deciders (fixture-cfg.ts) and holds a level result.
+  const [stage] = await tx<{ kind: string; config: Record<string, unknown> | null }[]>`
+    select kind, config from stages where id = ${fixture.stage_id}
   `;
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage?.config);
-  return { sportKey: division.sport_key, module: sportModule, cfg, lineups, envelopes };
+  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
+  return { sportKey: division.sport_key, module: sportModule, cfg, lineups, envelopes, stageKind: stage?.kind ?? null };
 }
 
 /** The pure half: the fold itself, over inputs already loaded. */

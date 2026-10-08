@@ -155,6 +155,10 @@ export const STATUS_LINE_KEYS: ReadonlySet<string> = new Set([
   "forfeited",
   "postponed",
   "walkover",
+  // W2a, spec §5.5 and preflight C16: a held bracket fixture — played level,
+  // its result awaits the organiser. `statusOf` sends it to `other`, so without
+  // this line it would read "Not played", which is false.
+  "needs_decision",
 ]);
 
 // -------------------------------------------------------------------- sides

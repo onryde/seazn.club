@@ -452,6 +452,25 @@ describe("sendOne — the mutation-checked replay contract", () => {
     });
   });
 
+  // W2a fix round 1 (review M-1): the reason picks the pad's copy (a finalize vs a generic draw), so it must survive
+  // the queue the way nextMatch does. A refusal with no reason keeps its old shape (the INVALID_EVENT case above).
+  it("M-1: a LEVEL_RESULT_IN_BRACKET refusal keeps its reason in the outcome", async () => {
+    const store = memoryQueueStore();
+    const pending = event("a", { expectedSeq: 10 });
+    await store.put(pending);
+    const { transport } = fakeTransport({
+      appendScript: { a: [{ kind: "rejected", code: "LEVEL_RESULT_IN_BRACKET", message: "level", reason: "finalize_unsettled" }] },
+    });
+    expect(await sendOne(transport, store, "fx-1", pending, ME)).toEqual({
+      kind: "rejected",
+      localId: "local-a",
+      idempotencyKey: "a",
+      code: "LEVEL_RESULT_IN_BRACKET",
+      message: "level",
+      reason: "finalize_unsettled",
+    });
+  });
+
   it("a network failure leaves the event queued with attempts/lastError recorded, and never resends blindly", async () => {
     const store = memoryQueueStore();
     const pending = event("a", { expectedSeq: 10, attempts: 2 });

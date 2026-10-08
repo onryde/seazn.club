@@ -127,6 +127,16 @@ describe("resolvePhase — rule order", () => {
     const fixtures = [fx({ id: "a", status: "decided" }), fx({ id: "b", status: "in_play" })];
     expect(resolvePhase(input({ divisionStatus: "completed", stages, fixtures }))).toBe("match_day");
   });
+  it("X-BR-2: every stage complete but the third-place playoff is HELD (needs_decision) — NOT finished (J2's shape, W2a)", () => {
+    // A knockout completes on its final alone (isBracketStageComplete), so a held
+    // playoff beside it is the only thing still owed — the organiser's settle.
+    const stages = [stage({ status: "complete" })];
+    const held = [fx({ id: "final", status: "decided" }), fx({ id: "3p", status: "needs_decision" })];
+    expect(resolvePhase(input({ divisionStatus: "completed", stages, fixtures: held }))).not.toBe("finished");
+    // The positive pair: the same row settled IS finished, so the held status is what blocks it.
+    const settled = [fx({ id: "final", status: "decided" }), fx({ id: "3p", status: "decided" })];
+    expect(resolvePhase(input({ divisionStatus: "completed", stages, fixtures: settled }))).toBe("finished");
+  });
   it("2 finished: every stage complete and the remaining fixtures are terminal, not live", () => {
     // The other direction of J2's guard — a fixture that will never be played
     // is TERMINAL (cancelled/abandoned/forfeited/void), not `scheduled`, and
