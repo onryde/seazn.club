@@ -174,7 +174,7 @@ export function loserSeatOf(stageKind: string, config: Record<string, unknown>, 
     .map(([slot]) => ({ target: g.id, slot })));
   if (wired.length === 0) return { line: "none" };
   if (wired.length > 1) return { line: "unresolved", why: `the engine wires ${wired.length} loser lines out of ${row.ext_key}` };
-  const { target, slot } = wired[0]!;
+  const { target, slot } = wired[0];
   const into = rows.find((r) => r.ext_key === target);
   if (into === undefined) return { line: "unresolved", why: `the loser line of ${row.ext_key} points at ${target}, which the product did not store` };
   return { line: "seat", target, slot, seated: slot === "home" ? into.home_entrant_id : into.away_entrant_id };
