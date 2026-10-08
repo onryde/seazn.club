@@ -191,6 +191,7 @@ const STRONG_EMPHASIS = new Set([
   "core.start",
   "core.forfeit",
   "core.abandon",
+  "core.settle",
   "football.card",
   "football.period",
   "tennis.game.award",
@@ -267,6 +268,9 @@ const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
   "core.award": (c) => ({ person: nameOf(c, "person"), key: S(c.payload.key) }),
   "core.suspend": () => ({}),
   "core.resume": () => ({}),
+  // W2a (X-ST-1): `CoreSettle` is `{ winner, method, note? }`; the winner is an
+  // entrant (SIDE_FIELDS reads `winner`), so the line names the side that advances.
+  "core.settle": (c) => ({ side: sideNameOf(c) }),
 
   // A penalty or an own goal is named by its SENTENCE (KEY_OVERRIDE below),
   // not by an English "(pen)" / "(og)" on `detail`: this builder has no
@@ -471,6 +475,12 @@ const KEY_OVERRIDE: Readonly<
   "core.lineup.position": lineupOverride,
   "core.lineup.retirement": lineupOverride,
   "core.lineup.entry": lineupOverride,
+  // W2a (X-ST-1): the settle method is part of the sentence. An unknown method
+  // keeps the table's method-free line rather than inventing how.
+  "core.settle": (payload) =>
+    payload.method === "lot" || payload.method === "higher_seed" || payload.method === "organiser"
+      ? `timeline.core.settle.${payload.method}`
+      : null,
 };
 
 /** Internal only: the ledger order a line was produced in. Two lines can share

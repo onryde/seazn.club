@@ -2224,6 +2224,9 @@ export function makeNestedModule(
       return false; // v6/00 §4 — tennis never draws
     },
 
+    // W2a: none — a tennis match always produces a winner (spec §5.2)
+    bracketDeciders: () => ({}),
+
     declaredPointsSets(cfg) {
       return [cfg.points.win + cfg.points.loss];
     },

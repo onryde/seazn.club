@@ -178,8 +178,10 @@ scorer/pad ──append──▶ append-event.ts ──resolveFixtureCfg(+bracke
     | football, hockey, ice hockey, cricket | `{}` (organiser-configured deciders stay as they are until W2c) |
 - **Boardgame:**
   - cfg gains `tiebreak: boolean` (default `false`).
-  - When it is true, a `boardgame.result` with `winner: null` moves the match to phase `tiebreak` instead of folding
-    an outcome.
+  - When it is true, a **drawn** `boardgame.result` (`winner: null`, a draw method — not `double_forfeit`) moves the
+    match to phase `tiebreak` instead of folding an outcome. A double forfeit (`no_result`) in a bracket is NOT a drawn
+    game (BG-KO-1): it folds as today and is held `needs_decision` (X-BR-2), closed by settle; double-walkover credit
+    is W2b's (controller ruling T15-R1, 2026-10-08).
   - New event `boardgame.tiebreak`
     `{ rung: "rapid" | "blitz" | "armageddon", winner: SideId, score?: string }`:
     - It is accepted only in phase `tiebreak`, and folds to `win{ winner, method: "tiebreak_<rung>" }`.
@@ -228,8 +230,9 @@ See §6.
      winner" guidance and no shoot-out advice.
    - `DRAW_NOT_ALLOWED` remains for non-bracket stages whose sport refuses draws.
    - Every other level result in a bracket is **accepted** and held as `needs_decision` (ruling 79).
-   - `core.finalize` on a held fixture (status `needs_decision`, or a level outcome in a bracket kind) is refused
-     with `LEVEL_RESULT_IN_BRACKET`. The fixture is settled first. The console hides Finalize while the fixture is
+   - `core.finalize` in a bracket kind is refused with `LEVEL_RESULT_IN_BRACKET` whenever `settleApplies` is true
+     (§5.1: a level outcome, an abandon with no outcome, or a chess game awaiting its tie-break) — the same predicate
+     that shows the console block (controller ruling P2-7, 2026-10-08). The fixture is settled first. The console hides Finalize while the fixture is
      held (§5.5; plan finding 27).
    - A `core.settle` whose `winner` is an entrant with status `withdrawn` is refused `SETTLE_NOT_APPLICABLE`
      (reason `withdrawn`), and nothing is written (preflight ruling C17; the auto-walkover is W2b's, §2.3).
@@ -339,8 +342,8 @@ with the frontend-design skill.
 ## 6. The rules reference (`packages/engine/rules/`)
 
 - `README.md` defines a rule row: a stable **id**, the **rule**, its **citation** (federation article or "product
-  rule"), its **status**, **enforced at** (engine and app paths) and **proved by** (test path(s) or matrix case
-  ids). A status is one of:
+  rule"), its **status**, **enforced at** (engine and app paths) and **proved by** (test path(s); matrix case ids
+  are additional evidence only, never sufficient alone). A status is one of:
   - `signed <ruling> <date>`;
   - `deviation <ruling> <date>`;
   - `⬜ open`.
@@ -354,7 +357,10 @@ with the frontend-design skill.
   least one (zero is a failure), and asserts:
   - every id is unique;
   - every `signed` or `deviation` row names at least one proving test;
-  - each named test file exists and contains the id string.
+  - each named test path is a test file (`*.test.ts(x)`, `*.spec.ts`) outside `rules/`, `docs/` and the checker
+    itself, exists, and has the id as a whole token in a test title (`it`/`test`/`describe`);
+  - the ids seeded here are all present (the expectation is this list, not the parsed files);
+  - every row-shaped line in a rules file is parsed (a row the parser skips is a failure).
   - It is mutated once per check.
 - **The wave rulebooks are frozen** as research drafts. `_INDEX.md` rulings get one-line pointers to rule ids. The
   engine-split session must learn that `rules/` moves with the engine: the owner tells it, or this session sends it

@@ -306,11 +306,13 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
     cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && pnpm mutate --list docs/superpowers/specs/2026-09-27-format-matrix-prompts/mutants/w2a/t<N>.json --json-out "$TMPDIR/w2a-mut-t<N>.json"; echo EXIT=$?
     ```
     The expected result is `EXIT=0`: every row reads `KILLED by <test names>`, 0 survived, and the file is restored byte-identical. Paste the table into the task report. RULES.md asks for the killer list, not a count.
+    - **Runner as built (Task 0a review, controller ruling):** a killer that fails to COLLECT (syntax error from the replace, a failed hook) is `COLLECT_FAILED` and fails the run unless the mutant sets `collectFailOk: "<reason>"` — a collect failure is not a kill. `name` is passed to vitest `-t`, which is a **regex**: escape `( ) [ ] . * + ? |` in a verbatim title, or a title that matches 0 tests is refused at the baseline. The killer shape is validated before anything runs (non-empty `files` naming existing files under the killer's `cwd`).
   - The runner applies **one mutant at a time** (grouped mutants hide survivors), runs only that mutant's killers, and restores the saved original bytes. Restoring with `git checkout` would discard the task's own uncommitted work.
   - **Changed-lines Stryker (engine code only)**, as well as the hand mutants:
     ```bash
-    cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && STRYKER_MUTATE="$(node scripts/stryker-changed.mjs --base "$(git merge-base HEAD origin/main)")" pnpm mutation > "$TMPDIR/w2a-stryker-t<N>.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json
+    cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2a-stryker-t<N>.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"
     ```
+    - **Changed-lines Stryker base (controller ruling, Task 0b review ⚠️2):** `TASK_BASE` is the commit the controller recorded before dispatching the loop (given in every dispatch), not the merge base — each task mutates only its own lines. The old report is deleted first and the run is chained with `&&`; `--report … --expect "$M"` refuses a report that is not this run's (I-2). A run whose ranges yield zero mutants (type-only change) exits 2: the task records "no mutable lines" with the `--base` output in its report instead of a verdict table.
     The expected result is `survived: 0, noCoverage: 0`, with a `killedBy` test name for every killed mutant.
     - A survivor gets a killing test, or, if it is truly equivalent, a row in the task report: the mutant, why no input can tell it apart, and the reviewer's agreement.
     - Never `// Stryker disable`. The engine has none today (`grep -arc "Stryker disable" packages/engine/src` returns 0 for every file).
@@ -320,8 +322,9 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
   - The selection is `TR/w2a-local-selection.json`: `{ "cases": [{ "layer", "only", "scenario" }], "newScenarios": [<scenario keys>] }`. Task 1 writes `cases`, from the 77; Task 14 writes `newScenarios`.
   - The command (`<tag>` names the run):
     ```bash
-    S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh; cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && eval "$($S env --label w2a)" && export BENCH_EXPECTED_DATA_DIR="$(psql "$DATABASE_URL" -Atc 'show data_directory')" NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000 && SEL=docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w2a-local-selection.json && OUT="$TMPDIR/w2a-local-<tag>" && rm -rf "$OUT" && i=0 && jq -r '.cases[] | [.layer,.only,.scenario] | @tsv' $SEL | sort -u | while IFS=$'\t' read -r L C K; do i=$((i+1)); if [ "$L" = L3 ]; then pnpm matrix:l3 --set w1-driving --only "$C" --scenario "$K" --workers 4 --run-id "w2a-<tag>-$i" --report-dir "$OUT/L3"; elif [ "$L" = L1 ]; then pnpm matrix:browser --layer L1 --only "$C" --scenario "$K" --run-id "w2a-<tag>-$i" --report-dir "$OUT/L1"; else pnpm matrix:browser --layer L2 --only "$C" --run-id "w2a-<tag>-$i" --report-dir "$OUT/L2"; fi > "$OUT.$i.log" 2>&1; echo "$L $C $K EXIT=$?"; done; jq -r '.newScenarios[]' $SEL | while read -r K; do pnpm matrix:l3 --set w1-driving --scenario "$K" --workers 4 --run-id "w2a-<tag>-new-$K" --report-dir "$OUT/L3" > "$OUT.new-$K.log" 2>&1; echo "new $K EXIT=$?"; done
+    S=~/.claude/skills/seazn-local-env/scripts/seazn-env.sh; cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && eval "$($S env --label w2a)" && export BENCH_EXPECTED_DATA_DIR="$(psql "$DATABASE_URL" -Atc 'show data_directory')" NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000 && SEL=docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w2a-local-selection.json && OUT="$TMPDIR/w2a-local-<tag>" && rm -rf "$OUT" && i=0 && jq -r '.cases[] | select(.layer=="L3") | [.only,.scenario] | @tsv' $SEL | sort -u | while IFS=$'\t' read -r C K; do i=$((i+1)); pnpm matrix:l3 --set w1-driving --only "$C" --scenario "$K" --workers 4 --run-id "w2a-<tag>-$i" --report-dir "$OUT/L3" > "$OUT.$i.log" 2>&1; echo "L3 $C $K EXIT=$?"; done; for L in L1 L2; do jq -r ".browserShards.$L[]" $SEL | while read -r k; do pnpm matrix:browser --layer $L --scope grid --shard "$k/64" --run-id "w2a-<tag>-$L-s$k" --report-dir "$OUT/$L" > "$OUT.$L-s$k.log" 2>&1; echo "$L stripe $k EXIT=$?"; done; done; jq -r '.newScenarios[]' $SEL | while read -r K; do pnpm matrix:l3 --set w1-driving --scenario "$K" --workers 4 --run-id "w2a-<tag>-new-$K" --report-dir "$OUT/L3" > "$OUT.new-$K.log" 2>&1; echo "new $K EXIT=$?"; done
     ```
+    - **L1/L2 cells run by grid stripe (Task 1 finding, ruled 2026-10-08):** `--only` with `--layer L1|L2` is refused outside the 6-cell slice, so L1/L2 cells are reached by their stripe (`browserShards` in the selection; stripe k of 64 holds plan items i with i mod 64 = k-1). A stripe also drives 2-4 non-W2a cases; the judge checks only the expected ids, and a lock entry for a stripe run is restricted to that stripe.
     Every line must print `EXIT=0` or `EXIT=1`. `EXIT=2` (refused) or `EXIT=3` (aborted) is an environment fault (Task 1 Step 3).
   - The judge is the Task 1 Step 5 node check, pointed at `$OUT` with the expectation the task states.
   - The **full** `matrix:judge regression` runs ONCE, at the end, on a CI dispatch of `matrix-truth.yml` (about 20 minutes; Task 16). Never locally.
@@ -479,7 +482,7 @@ Ten reviewed loops (A, B, C, D, F, G, H, P1, P2, R) and two unreviewed evidence 
 - Produces (0b):
   - Env `STRYKER_MUTATE="<src path>:<a>-<b>[,…]"` on `pnpm mutation`. When it is set, `STRYKER_GROUP` is not read, the run is `changed` (`reports/mutation/changed.json`, never incremental), and `mutate` is exactly the ranges given.
   - `node scripts/stryker-changed.mjs --base <ref>` prints that value from `git diff -U0 <ref> -- src`.
-  - `node scripts/stryker-changed.mjs --report <changed.json>` prints the verdict table and exits non-zero on any `Survived` or `NoCoverage`.
+  - `node scripts/stryker-changed.mjs --report <changed.json> --expect "<ranges>"` (refuses with exit 2 a report whose `config.mutate` or mutants do not match the ranges) prints the verdict table and exits non-zero on any `Survived` or `NoCoverage`.
   - With `STRYKER_MUTATE` unset, the config is byte-for-byte the committed pre-0b snapshot, for every group. No test reads git history (CI's engine checkout is shallow).
   - `--base` also mutates NEW untracked src files whole (`git diff` cannot see them).
 
@@ -1044,7 +1047,7 @@ Expected: `EXIT=0` twice. The judge shows `failed: 0` and `files: 2`, then `file
 Then a real changed-lines run on a one-line range proves the seam end to end:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-stryker/packages/engine && STRYKER_MUTATE="src/core/types.ts:91-101" pnpm mutation > "$TMPDIR/w2a-t0b-run.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json; echo REPORT_EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-stryker/packages/engine && STRYKER_MUTATE="src/core/types.ts:91-101" pnpm mutation > "$TMPDIR/w2a-t0b-run.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "src/core/types.ts:91-101"; echo REPORT_EXIT=$?
 ```
 
 Expected:
@@ -1602,7 +1605,7 @@ The same command as Step 2. Expected:
 
 Each row above becomes one entry of `MUT/t2.json`:
 - `find` is the exact source text the row names, copied from this task's code blocks, and `replace` is its mutation;
-- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names> }]`.
+- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names, regex-escaped — `-t` is a regex> }]`.
 
 Then run the runner:
 
@@ -1957,7 +1960,7 @@ If `match-points-bounds.test.ts` or a period-kernel test reds on americano, read
 
 Each row above becomes one entry of `MUT/t3.json`:
 - `find` is the exact source text the row names, copied from this task's code blocks, and `replace` is its mutation;
-- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names> }]`.
+- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names, regex-escaped — `-t` is a regex> }]`.
 
 Then run the runner:
 
@@ -1971,7 +1974,7 @@ Expected: `EXIT=0`; every row `KILLED by` the named test, 0 survived. Paste the 
 Then run changed-lines Stryker over this task's engine diff (Global Constraints, Mutation):
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && STRYKER_MUTATE="$(node scripts/stryker-changed.mjs --base "$(git merge-base HEAD origin/main)")" pnpm mutation > "$TMPDIR/w2a-stryker-t3.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json; echo REPORT_EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2a-stryker-t3.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"; echo REPORT_EXIT=$?
 ```
 
 Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` on every killed row. A survivor gets a killing test, or an equivalence row the reviewer signs. The range covers every earlier loop-D task's lines too, so a later task's run re-proves them.
@@ -2505,7 +2508,7 @@ Expected: each `EXIT=0`, and each judge line with `failed: 0` and the right file
 
 Each row above becomes one entry of `MUT/t4.json`:
 - `find` is the exact source text the row names, copied from this task's code blocks, and `replace` is its mutation;
-- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names> }]`.
+- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names, regex-escaped — `-t` is a regex> }]`.
 
 Then run the runner:
 
@@ -2519,7 +2522,7 @@ Expected: `EXIT=0`; every row `KILLED by` the named test, 0 survived. Paste the 
 Then run changed-lines Stryker over this task's engine diff (Global Constraints, Mutation):
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && STRYKER_MUTATE="$(node scripts/stryker-changed.mjs --base "$(git merge-base HEAD origin/main)")" pnpm mutation > "$TMPDIR/w2a-stryker-t4.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json; echo REPORT_EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2a-stryker-t4.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"; echo REPORT_EXIT=$?
 ```
 
 Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` on every killed row. A survivor gets a killing test, or an equivalence row the reviewer signs. The range covers every earlier loop-D task's lines too, so a later task's run re-proves them.
@@ -2938,7 +2941,7 @@ If `generator-fields.test.ts` requires `boardgame.arbitraryEvent` to emit the ne
 
 Each row above becomes one entry of `MUT/t5.json`:
 - `find` is the exact source text the row names, copied from this task's code blocks, and `replace` is its mutation;
-- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names> }]`.
+- `killers` is `[{ "cwd": "packages/engine", "files": [<the test file the row names>], "name": <the test title the row names, regex-escaped — `-t` is a regex> }]`.
 
 Then run the runner:
 
@@ -2952,7 +2955,7 @@ Expected: `EXIT=0`; every row `KILLED by` the named test, 0 survived. Paste the 
 Then run changed-lines Stryker over this task's engine diff (Global Constraints, Mutation):
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && STRYKER_MUTATE="$(node scripts/stryker-changed.mjs --base "$(git merge-base HEAD origin/main)")" pnpm mutation > "$TMPDIR/w2a-stryker-t5.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json; echo REPORT_EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2a-stryker-t5.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"; echo REPORT_EXIT=$?
 ```
 
 Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` on every killed row. A survivor gets a killing test, or an equivalence row the reviewer signs. The range covers every earlier loop-D task's lines too, so a later task's run re-proves them.
@@ -3990,7 +3993,9 @@ There is no report-only read-path form: ruling 82's backfill (V431) removes the 
   // Finding 27: finalizing a level bracket result would store `finalized` + a level outcome — the very shape
   // LEVEL_RESULT_SEATED exists to catch, and a lock no settle could then open. Refused until it is settled.
   // (No "and not settled" clause: `outcome` is outcomeOf's, so a settled fixture's outcome is a win — preflight C20.)
-  if (candidate.type === "core.finalize" && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) {
+  // Ruling P2-7: settleApplies, not isLevelOutcome — an abandon with no outcome or a pending chess tie-break must
+  // not finalize either (spec §5.4 item 3 = §5.5). Add a test case for each, and a mutant reverting to isLevelOutcome.
+  if (candidate.type === "core.finalize" && forbidsLevelResult(stageKind) && settleApplies(module, { outcome, abandoned, state })) { // controller ruling P2-7: same predicate as the console block
     throw new EngineError("LEVEL_RESULT_IN_BRACKET", "settle the match before finalizing — a knockout match can't end level", { fixtureId, stage: stageKind });
   }
   // Controller ruling C17: a settle may not advance an entrant who has withdrawn. The organiser settles for the

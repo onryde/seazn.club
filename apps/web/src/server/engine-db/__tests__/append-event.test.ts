@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { football } from "@seazn/engine/sports/football";
-import { foldMatch } from "@seazn/engine/core";
+import { foldMatchWithStoppage } from "@seazn/engine/core";
 import { sql, withTenant } from "@/lib/db";
 import { appendEvent } from "../index";
 import { appendEventInTx } from "../append-event";
@@ -23,18 +23,19 @@ import { appendEventInTx } from "../append-event";
 // F10 (R3.5 review) — the fold's catch only instrumented the EngineError
 // (422) case; a TypeError/RangeError from inside a sport module, or a Zod
 // issue surfacing as a plain Error, re-threw with NOTHING logged. Proving
-// that deterministically needs a non-EngineError thrown FROM `foldMatch`
-// itself. Real sport-module internals that happen to crash today are out of
+// that deterministically needs a non-EngineError thrown FROM the fold
+// itself (`foldMatchWithStoppage` since W2a: append-event reads the settle
+// beside module state through `outcomeOf`). Real sport-module internals that happen to crash today are out of
 // this task's lane (packages/engine/**) and would make the test depend on
 // incidental engine behaviour rather than on append-event.ts's own catch, so
-// this wraps the imported `foldMatch` instead. `importActual` keeps every
-// OTHER export (EngineError, resolveVoids, …) real, and `foldMatch` itself
+// this wraps the imported `foldMatchWithStoppage` instead. `importActual` keeps every
+// OTHER export (EngineError, resolveVoids, …) real, and the fold itself
 // defaults to the real implementation — every test in this file still folds
 // for real — except the one call in K8 below that overrides it with
 // `mockImplementationOnce`.
 vi.mock("@seazn/engine/core", async () => {
   const actual = await vi.importActual<typeof import("@seazn/engine/core")>("@seazn/engine/core");
-  return { ...actual, foldMatch: vi.fn(actual.foldMatch) };
+  return { ...actual, foldMatchWithStoppage: vi.fn(actual.foldMatchWithStoppage) };
 });
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -169,7 +170,7 @@ beforeEach(() => {
 afterEach(() => {
   // K8's mockImplementationOnce is self-clearing after one call, but guard
   // against a failed assertion leaving it queued for the NEXT test anyway.
-  vi.mocked(foldMatch).mockClear();
+  vi.mocked(foldMatchWithStoppage).mockClear();
 });
 
 describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
@@ -196,7 +197,7 @@ describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
 
     // A second core.start replays [core.start, core.start] through the fold —
     // every module refuses a double start with WRONG_PHASE, thrown from
-    // INSIDE foldMatch, which is exactly the scope Task K's try/catch covers.
+    // INSIDE the fold, which is exactly the scope Task K's try/catch covers.
     await expect(
       appendEvent(s.orgId, s.fixtureId, 1, { type: "core.start", payload: {} }),
     ).rejects.toMatchObject({ code: "WRONG_PHASE" });
@@ -216,7 +217,7 @@ describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
   it("K8 (F10, R3.5 review): a non-EngineError from the fold is logged with ID-only fields, and re-thrown UNCHANGED", async () => {
     const s = await seed();
     const boom = new TypeError("cannot read properties of undefined (reading 'x')");
-    vi.mocked(foldMatch).mockImplementationOnce(() => {
+    vi.mocked(foldMatchWithStoppage).mockImplementationOnce(() => {
       throw boom;
     });
 

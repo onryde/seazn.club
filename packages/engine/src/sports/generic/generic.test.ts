@@ -1,7 +1,7 @@
 // Generic module goldens + conformance — spec 04 §8, PROMPT-03 §3/§5.
 import { describe, expect, it } from "vitest";
-import { foldMatch, type EventEnvelope } from "../../core/events.ts";
-import type { LineupPair, StageCtx } from "../../core/types.ts";
+import { foldMatch, SETTLE_METHODS, type EventEnvelope } from "../../core/events.ts";
+import { DRAW_KINDS, StageKind, type LineupPair, type StageCtx } from "../../core/types.ts";
 import { evalPadGate } from "../../sport/module.ts";
 import {
   aggregatePlayerStats,
@@ -138,12 +138,14 @@ describe("generic — contract declarations", () => {
     expect(generic.declaredPointsSets({ ...winLossCfg, points: { w: 2, d: 1, l: 0 } })).toEqual([2]);
   });
 
-  it("supports draws only in non-elimination stages", () => {
-    expect(generic.supportsDraws(scoreCfg, "league")).toBe(true);
-    expect(generic.supportsDraws(scoreCfg, "group")).toBe(true);
-    expect(generic.supportsDraws(scoreCfg, "knockout")).toBe(false);
-    expect(generic.supportsDraws(scoreCfg, "stepladder")).toBe(false);
-    expect(generic.supportsDraws(winLossCfg, "league")).toBe(false);
+  it("X-DR-1: supports draws only in DRAW_KINDS, and only with allowDraws", () => {
+    let checked = 0;
+    for (const stage of StageKind.options) {
+      expect(generic.supportsDraws(scoreCfg, stage), `score ${stage}`).toBe(DRAW_KINDS.has(stage));
+      expect(generic.supportsDraws(winLossCfg, stage), `win_loss ${stage}`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(StageKind.options.length);
   });
 });
 
@@ -275,6 +277,29 @@ describe("generic: folded win/draw/loss + points_for, resolved from entrant attr
       { personId: "A-p1", stats: { wins: 0, draws: 0, losses: 1, points_for: 1 } },
       { personId: "H-p1", stats: { wins: 1, draws: 0, losses: 0, points_for: 3 } },
     ]);
+  });
+
+  it("X-ST-1 (ruling D-C3): a SETTLED level result credits the settle's winner a win and the other side a loss — never a draw", () => {
+    // Positive pair first: the same level result, unsettled, is a draw for both.
+    const drawCfg = { ...winLossCfg, allowDraws: true };
+    const level = aggregatePlayerStats(stream(["generic.result", { isDraw: true }]), generic.playerStats!, undefined, twoPlayers(drawCfg));
+    expect(level).toEqual([
+      { personId: "A-p1", stats: { wins: 0, draws: 1, losses: 0 } },
+      { personId: "H-p1", stats: { wins: 0, draws: 1, losses: 0 } },
+    ]);
+    // Settled for the AWAY side: the side that advances is credited the win (not
+    // home by default), whichever settle method closed it.
+    for (const method of SETTLE_METHODS) {
+      const settled = stream(["generic.result", { isDraw: true }], ["core.settle", { winner: "A", method }]);
+      expect(aggregatePlayerStats(settled, generic.playerStats!, undefined, twoPlayers(drawCfg)), method).toEqual([
+        { personId: "A-p1", stats: { wins: 1, draws: 0, losses: 0 } },
+        { personId: "H-p1", stats: { wins: 0, draws: 0, losses: 1 } },
+      ]);
+    }
+    // A void of the settle puts the draw back (the settle is an ordinary ledger event).
+    const voided = stream(["generic.result", { isDraw: true }], ["core.settle", { winner: "A", method: "lot" }], ["core.void", {}]);
+    voided[2] = { ...voided[2]!, voids: voided[1]!.id };
+    expect(aggregatePlayerStats(voided, generic.playerStats!, undefined, twoPlayers(drawCfg))).toEqual(level);
   });
 
   it("a declared draw credits both sides via the roster", () => {

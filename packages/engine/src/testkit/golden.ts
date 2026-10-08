@@ -783,6 +783,10 @@ export function unreachableStatePathsGoneStale(
  *  coverage config is always preferable to an UNREACHABLE_FIELDS line: it makes
  *  the field genuinely recorded rather than exempted. */
 const COVERAGE_CONFIGS: Record<string, Record<string, unknown>> = {
+  // W2a BG-KO-1 — `tiebreak` is set only by bracketDeciders (a bracket stage),
+  // never by a variant, so `boardgame.tiebreak` and its optional `score` were
+  // reachable from no recorded config. The bracket overlay itself, by name.
+  boardgame: { knockoutTiebreak: { tiebreak: true } },
   // W1 (scoring free) golden-gap fix — golden coverage now measures against
   // `padSpec.fidelity`, and the set-based kernel it is shared by declares
   // `expedite.start`/`sub`/`timeout` fidelity bands unconditionally for every

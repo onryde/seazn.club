@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
-import { EngineError, foldMatch, type EventEnvelope } from "@seazn/engine/core";
+import { EngineError, foldMatchWithStoppage, outcomeOf, type EventEnvelope, type Settlement } from "@seazn/engine/core";
 import { resolveModule, resolveFixtureCfg } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { appendEventInTx, type AppendResult, type FirstResult } from "@/server/engine-db/append-event";
@@ -294,16 +294,16 @@ async function runStream(
     recordedBy: auth.userId,
   }));
 
-  let state: unknown;
+  let folded: { readonly state: unknown; readonly settlement: Settlement | null };
   try {
-    state = await withTenant(auth.orgId, async (tx) => {
+    folded = await withTenant(auth.orgId, async (tx) => {
       const lineups = await loadLineupPair(
         tx,
         fixtureId,
         fixture.home_entrant_id!,
         fixture.away_entrant_id!,
       );
-      return foldMatch(sportModule, cfg, lineups, envelopes, { strictFromSeq: 1 });
+      return foldMatchWithStoppage(sportModule, cfg, lineups, envelopes, { strictFromSeq: 1 });
     });
   } catch (err) {
     if (err instanceof EngineError) {
@@ -321,7 +321,8 @@ async function runStream(
     }
     throw err;
   }
-  if (sportModule.outcome(state) === null) {
+  // W2a finding 1: a settle lives beside module state (outcomeOf).
+  if (outcomeOf(sportModule, folded) === null) {
     return {
       fixture: fixtureId,
       status: "rejected",

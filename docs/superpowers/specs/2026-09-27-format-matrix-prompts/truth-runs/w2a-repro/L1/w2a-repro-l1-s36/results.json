@@ -1,0 +1,1082 @@
+{
+  "schemaVersion": 3,
+  "runId": "w2a-repro-l1-s36",
+  "harnessCommit": "805443544",
+  "startedAt": "2026-10-08T13:26:36.944Z",
+  "finishedAt": "2026-10-08T13:28:49.627Z",
+  "grid": {
+    "rows": [
+      "league",
+      "triple_rr",
+      "league_ko",
+      "groups_ko",
+      "group_stepladder",
+      "group_playoffs",
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "knockout",
+      "ko_plate",
+      "qualifying_main",
+      "double_elim",
+      "americano",
+      "mexicano",
+      "ladder",
+      "group_only",
+      "group_group_ko",
+      "knockout_third_place",
+      "page_playoff_only",
+      "stepladder_only"
+    ],
+    "sports": [
+      "football",
+      "cricket",
+      "boardgame",
+      "carrom",
+      "generic",
+      "volleyball",
+      "badminton",
+      "tabletennis",
+      "tennis",
+      "icehockey",
+      "hockey"
+    ]
+  },
+  "layer": "L1",
+  "driver": "browser",
+  "plan": "--layer L1 --scope grid",
+  "scope": "L1 (grid)",
+  "shard": {
+    "index": 36,
+    "of": 64,
+    "planSize": 231
+  },
+  "cases": [
+    {
+      "caseId": "groups_ko|boardgame|blitz|LIFECYCLE@1280",
+      "row": "groups_ko",
+      "sport": "boardgame",
+      "variant": "blitz",
+      "scenario": "LIFECYCLE",
+      "canary": false,
+      "state": "red",
+      "reason": "I2-bracket-one-champion-ranks-permutation: 96016e45-b95e-4e4f-b05a-2a13d17c7b42: bracket fixture ended draw; ui-champion-shown: the banner names nobody; want Matrix Player 3 — still 79026 ms after the case's last write (window 77000 ms: the page's revalidate 30 s + its data cache's 30 s + a navigation), read 35×",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every round-robin pair meets exactly once per leg",
+          "evidence": []
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 5,
+          "reason": "96016e45-b95e-4e4f-b05a-2a13d17c7b42: bracket fixture ended draw",
+          "evidence": [
+            "96016e45-b95e-4e4f-b05a-2a13d17c7b42: bracket fixture ended draw",
+            "2 unbeaten entrants: 7e0a352b-2327-4a1e-b17f-f2531dd5139a,9b8b69e6-183d-47c0-915f-50c6d5cee2b6"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 25,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "a config edit (accepted or refused) never changes a finished fixture's result",
+          "evidence": [
+            "entrants_only: 200"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "no round-robin pair meets more often than the stage's legs — after every step, late entries included",
+          "evidence": []
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 26,
+          "reason": "26 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 15,
+          "reason": "15 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 15,
+          "reason": "15 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "12 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-draw-path-exercised",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-format-edit-refused-named",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "no format field to edit for this sport",
+          "evidence": []
+        },
+        {
+          "id": "life-entrants-edit-accepted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 3,
+          "reason": "3 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "individual entrants carry no lineup",
+          "evidence": []
+        },
+        {
+          "id": "organiser-ui-path",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "builder-posted-as-harness",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 stage(s) built exactly as the harness's bodies",
+          "evidence": []
+        },
+        {
+          "id": "fold-branch",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "ui-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 table(s) drawn as the API ranks them",
+          "evidence": []
+        },
+        {
+          "id": "ui-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 table(s) drawn as the API ranks them, on read 35",
+          "evidence": []
+        },
+        {
+          "id": "ui-champion-shown",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 1,
+          "reason": "the banner names nobody; want Matrix Player 3 — still 79026 ms after the case's last write (window 77000 ms: the page's revalidate 30 s + its data cache's 30 s + a navigation), read 35×",
+          "evidence": [
+            "the banner names nobody; want Matrix Player 3 — still 79026 ms after the case's last write (window 77000 ms: the page's revalidate 30 s + its data cache's 30 s + a navigation), read 35×"
+          ]
+        },
+        {
+          "id": "pad-ledger-as-generated",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "mixed-driver-coverage",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "9 invoked action type(s): 9 ran in the browser, 0 exempt",
+          "evidence": [
+            "generate: the create-fixtures path (stage-rail.ts generateUi) ran in the browser — 1 of 1 browser call(s) created"
+          ]
+        },
+        {
+          "id": "visual-evidence",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 55,
+          "reason": "55 shot(s) written and non-empty; 10 must-differ pair(s) differ",
+          "evidence": [
+            "01-competition-created-before: 243620 bytes, sha256 d9b85b21ed66",
+            "01-competition-created: 178624 bytes, sha256 c3da24ae7815",
+            "02-builder-basics: 227254 bytes, sha256 36c344047e61",
+            "02-builder-format: 403206 bytes, sha256 ebf0e1fbbc30",
+            "02-division-built-before: 228892 bytes, sha256 b1a7b9a7ed3e",
+            "02-division-built: 174626 bytes, sha256 207bed18dcb9",
+            "03-entrants-before: 174626 bytes, sha256 207bed18dcb9",
+            "03-entrants: 249402 bytes, sha256 c2e4821bac2f",
+            "04-started-before: 249402 bytes, sha256 c2e4821bac2f",
+            "04-started: 353183 bytes, sha256 5ad463929170",
+            "run-sheet-all: 353183 bytes, sha256 5ad463929170",
+            "05-generated-before: 353183 bytes, sha256 5ad463929170",
+            "05-generated: 425277 bytes, sha256 d9067bf6da07",
+            "08-pad-before: 188049 bytes, sha256 6c7446fcf8e4",
+            "08-pad-scored: 186249 bytes, sha256 e90b26cc19c3",
+            "07-stage-1-completed-before: 400585 bytes, sha256 be6ee71006e3",
+            "07-stage-1-completed: 443721 bytes, sha256 eca1b4a14849",
+            "08-completed-before: 398237 bytes, sha256 261088304ea7",
+            "08-completed: 404585 bytes, sha256 16feb1fe7d11",
+            "10-standings: 231029 bytes, sha256 d1df08c92cb8",
+            "11-public: 117135 bytes, sha256 605686ce48c9",
+            "11-public-2: 117135 bytes, sha256 605686ce48c9",
+            "11-public-3: 117135 bytes, sha256 605686ce48c9",
+            "11-public-4: 117135 bytes, sha256 605686ce48c9",
+            "11-public-5: 117135 bytes, sha256 605686ce48c9",
+            "11-public-6: 117135 bytes, sha256 605686ce48c9",
+            "11-public-7: 117135 bytes, sha256 605686ce48c9",
+            "11-public-8: 117135 bytes, sha256 605686ce48c9",
+            "11-public-9: 117135 bytes, sha256 605686ce48c9",
+            "11-public-10: 117135 bytes, sha256 605686ce48c9",
+            "11-public-11: 117135 bytes, sha256 605686ce48c9",
+            "11-public-12: 117135 bytes, sha256 605686ce48c9",
+            "11-public-13: 117135 bytes, sha256 605686ce48c9",
+            "11-public-14: 117135 bytes, sha256 605686ce48c9",
+            "11-public-15: 117135 bytes, sha256 605686ce48c9",
+            "11-public-16: 117135 bytes, sha256 605686ce48c9",
+            "11-public-17: 117135 bytes, sha256 605686ce48c9",
+            "11-public-18: 117135 bytes, sha256 605686ce48c9",
+            "11-public-19: 117135 bytes, sha256 605686ce48c9",
+            "11-public-20: 117135 bytes, sha256 605686ce48c9",
+            "11-public-21: 117135 bytes, sha256 605686ce48c9",
+            "11-public-22: 117135 bytes, sha256 605686ce48c9",
+            "11-public-23: 117135 bytes, sha256 605686ce48c9",
+            "11-public-24: 117135 bytes, sha256 605686ce48c9",
+            "11-public-25: 117135 bytes, sha256 605686ce48c9",
+            "11-public-26: 117135 bytes, sha256 605686ce48c9",
+            "11-public-27: 117135 bytes, sha256 605686ce48c9",
+            "11-public-28: 117135 bytes, sha256 605686ce48c9",
+            "11-public-29: 117135 bytes, sha256 605686ce48c9",
+            "11-public-30: 117135 bytes, sha256 605686ce48c9",
+            "11-public-31: 117135 bytes, sha256 605686ce48c9",
+            "11-public-32: 117135 bytes, sha256 605686ce48c9",
+            "11-public-33: 117135 bytes, sha256 605686ce48c9",
+            "11-public-34: 117135 bytes, sha256 605686ce48c9",
+            "11-public-35: 117135 bytes, sha256 605686ce48c9"
+          ]
+        },
+        {
+          "id": "no-horizontal-scroll",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 55,
+          "reason": "55 state(s) probed, none scrolls sideways",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 139,
+        "fixtures": 15,
+        "events": 30
+      },
+      "durationMs": 93135,
+      "notes": [
+        "stage group status after start: active",
+        "config entrants_only: 200"
+      ],
+      "layer": "L1",
+      "driver": "browser",
+      "width": 1280,
+      "fillers": {
+        "confirmSeedProposal": 1
+      }
+    },
+    {
+      "caseId": "knockout|football|11-a-side|LIFECYCLE@1280",
+      "row": "knockout",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "LIFECYCLE",
+      "canary": false,
+      "state": "works",
+      "reason": "20 checks, 162 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
+          "evidence": []
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "a config edit (accepted or refused) never changes a finished fixture's result",
+          "evidence": [
+            "entrants_only: 200"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-draw-path-exercised",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "supportsDraws is false for this stage",
+          "evidence": []
+        },
+        {
+          "id": "life-format-edit-refused-named",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "no format field to edit for this sport",
+          "evidence": []
+        },
+        {
+          "id": "life-entrants-edit-accepted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 14,
+          "reason": "14 ok",
+          "evidence": []
+        },
+        {
+          "id": "organiser-ui-path",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "builder-posted-as-harness",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 stage(s) built exactly as the harness's bodies",
+          "evidence": []
+        },
+        {
+          "id": "fold-branch",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "ui-standings-match",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "no organiser table for knockout",
+          "evidence": []
+        },
+        {
+          "id": "ui-public-standings-match",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "no table to compare: every stage is a bracket (knockout)",
+          "evidence": []
+        },
+        {
+          "id": "ui-champion-shown",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "pad-ledger-as-generated",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "4 ok",
+          "evidence": [
+            "ec176395-a035-463f-90ac-121ae7a153ee event 2 of 4 (football.goal): fallback — football.tsx:769 — the goal tile writes {by} alone; the generated minute has no tap (Step 0 2026-09-30: row keys [by]), so its judge holds `by` to the side credited and any other key the row carries to the event"
+          ]
+        },
+        {
+          "id": "mixed-driver-coverage",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "9 invoked action type(s): 9 ran in the browser, 0 exempt",
+          "evidence": [
+            "generate: the create-fixtures path (stage-rail.ts generateUi) never ran in the browser — 4 browser call(s), none created (a note, not a red)"
+          ]
+        },
+        {
+          "id": "visual-evidence",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 25,
+          "reason": "25 shot(s) written and non-empty; 8 must-differ pair(s) differ",
+          "evidence": [
+            "01-competition-created-before: 243813 bytes, sha256 b988e2862658",
+            "01-competition-created: 177945 bytes, sha256 31bbcfb7b8bc",
+            "02-builder-basics: 263866 bytes, sha256 a3d3d136190c",
+            "02-builder-format: 375747 bytes, sha256 f7dc3634e337",
+            "02-division-built-before: 229618 bytes, sha256 b29929da0e09",
+            "02-division-built: 176118 bytes, sha256 cbf6ac341338",
+            "03-entrants-before: 176118 bytes, sha256 cbf6ac341338",
+            "03-entrants: 247058 bytes, sha256 700ff422a790",
+            "04-started-before: 249875 bytes, sha256 f23db4774f12",
+            "04-started: 301615 bytes, sha256 ea86012493f7",
+            "run-sheet-all: 301615 bytes, sha256 ea86012493f7",
+            "05-generated-before: 301615 bytes, sha256 ea86012493f7",
+            "05-generated: 309817 bytes, sha256 76c6a2e59814",
+            "08-pad-before: 548686 bytes, sha256 7d02e9fa7a67",
+            "08-pad-scored: 243786 bytes, sha256 0338b2b94ccf",
+            "05-generated-before-2: 286440 bytes, sha256 f99e5f3555d5",
+            "05-generated-2: 294248 bytes, sha256 20f90b66f694",
+            "05-generated-before-3: 290414 bytes, sha256 dc6c11a37e09",
+            "05-generated-3: 298250 bytes, sha256 25cf8e64621a",
+            "05-generated-before-4: 283668 bytes, sha256 ee1f5ba08e34",
+            "05-generated-4: 291796 bytes, sha256 d07b1dac8395",
+            "08-completed-before: 283668 bytes, sha256 ee1f5ba08e34",
+            "08-completed: 288786 bytes, sha256 f887daa96f07",
+            "10-standings: 190338 bytes, sha256 e6217d6a7ec7",
+            "11-public: 73229 bytes, sha256 b9c2c77e8829"
+          ]
+        },
+        {
+          "id": "no-horizontal-scroll",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 25,
+          "reason": "25 state(s) probed, none scrolls sideways",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 303,
+        "fixtures": 7,
+        "events": 28
+      },
+      "durationMs": 20270,
+      "notes": [
+        "stage knockout status after start: active",
+        "config entrants_only: 200",
+        "lineups: 14 PUT across 7 team fixture(s) scored"
+      ],
+      "layer": "L1",
+      "driver": "browser",
+      "width": 1280,
+      "fillers": {
+        "setMembers": 8,
+        "entrantMembers": 8,
+        "putLineup": 14
+      }
+    },
+    {
+      "caseId": "mexicano|icehockey|iihf|LIFECYCLE@1280",
+      "row": "mexicano",
+      "sport": "icehockey",
+      "variant": "iihf",
+      "scenario": "LIFECYCLE",
+      "canary": false,
+      "state": "red",
+      "reason": "I4-nothing-ends-stuck: stage 1: generate answered 500 INTERNAL — not a named refusal; I8-generate-named: stage 1: generate → 500 INTERNAL; I10-americano-seats-each-person-once: round 2: 49fa09b1-0bd0-430e-8d66-25914c826a74 seated 2×; life-loop-bounded: play loop exited refused_generate",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 7,
+          "reason": "stage 1: generate answered 500 INTERNAL — not a named refusal",
+          "evidence": [
+            "stage 1: generate answered 500 INTERNAL — not a named refusal"
+          ]
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "a config edit (accepted or refused) never changes a finished fixture's result",
+          "evidence": [
+            "entrants_only: 200"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 2,
+          "reason": "stage 1: generate → 500 INTERNAL",
+          "evidence": [
+            "stage 1: generate → 500 INTERNAL"
+          ]
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 29,
+          "reason": "round 2: 49fa09b1-0bd0-430e-8d66-25914c826a74 seated 2×",
+          "evidence": [
+            "round 2: 49fa09b1-0bd0-430e-8d66-25914c826a74 seated 2×",
+            "round 2: 83f91edc-d88a-492a-8f2c-d82146140e3c seated 2×"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 25,
+          "reason": "25 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "4 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "4 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-draw-path-exercised",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "supportsDraws is false for this stage",
+          "evidence": []
+        },
+        {
+          "id": "life-format-edit-refused-named",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "no format field to edit for this sport",
+          "evidence": []
+        },
+        {
+          "id": "life-entrants-edit-accepted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 2,
+          "reason": "play loop exited refused_generate",
+          "evidence": [
+            "play loop exited refused_generate"
+          ]
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "an americano stage seats product-minted pair entrants, which carry no lineup",
+          "evidence": []
+        },
+        {
+          "id": "organiser-ui-path",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "builder-posted-as-harness",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 stage(s) built exactly as the harness's bodies",
+          "evidence": []
+        },
+        {
+          "id": "fold-branch",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "ui-standings-match",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "no organiser table for americano",
+          "evidence": []
+        },
+        {
+          "id": "ui-public-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 table(s) drawn as the API ranks them, on read 1",
+          "evidence": []
+        },
+        {
+          "id": "ui-champion-shown",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "the decisive stage is a americano — its table is the proof",
+          "evidence": []
+        },
+        {
+          "id": "pad-ledger-as-generated",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": [
+            "a55143dd-f558-4e1b-89b3-9fe0ffe0c136 event 3 of 5 (icehockey.period.advance): fallback — period-shared.ts:961 — the advance tile stamps `at` {period, elapsed} beside `to` (Step 0 2026-09-30: row keys [at, to]); an object is no tolerable id, so its judge holds `to` to the event and `at` to the shape the tile stamps",
+            "a55143dd-f558-4e1b-89b3-9fe0ffe0c136 event 4 of 5 (icehockey.period.advance): fallback — period-shared.ts:961 — the advance tile stamps `at` {period, elapsed} beside `to` (Step 0 2026-09-30: row keys [at, to]); an object is no tolerable id, so its judge holds `to` to the event and `at` to the shape the tile stamps",
+            "a55143dd-f558-4e1b-89b3-9fe0ffe0c136 event 5 of 5 (icehockey.period.advance): fallback — period-shared.ts:961 — the advance tile stamps `at` {period, elapsed} beside `to` (Step 0 2026-09-30: row keys [at, to]); an object is no tolerable id, so its judge holds `to` to the event and `at` to the shape the tile stamps"
+          ]
+        },
+        {
+          "id": "mixed-driver-coverage",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "9 invoked action type(s): 9 ran in the browser, 0 exempt",
+          "evidence": [
+            "generate: the create-fixtures path (stage-rail.ts generateUi) ran in the browser — 1 of 1 browser call(s) created"
+          ]
+        },
+        {
+          "id": "visual-evidence",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 19,
+          "reason": "19 shot(s) written and non-empty; 9 must-differ pair(s) differ",
+          "evidence": [
+            "01-competition-created-before: 243496 bytes, sha256 8f13804c15c5",
+            "01-competition-created: 176515 bytes, sha256 9cb85d6352c8",
+            "02-builder-basics: 233394 bytes, sha256 2bcf630a61e9",
+            "02-builder-format: 376162 bytes, sha256 05e7dab949e9",
+            "02-division-built-before: 229051 bytes, sha256 163eff93cc8e",
+            "02-division-built: 177023 bytes, sha256 4eed2588869b",
+            "03-entrants-before: 177023 bytes, sha256 4eed2588869b",
+            "03-entrants: 247878 bytes, sha256 672142485f13",
+            "04-started-before: 250706 bytes, sha256 a81ebb57c40d",
+            "04-started: 309560 bytes, sha256 5252b9b00e68",
+            "run-sheet-all: 309560 bytes, sha256 5252b9b00e68",
+            "08-pad-before: 267889 bytes, sha256 e5950832c5b0",
+            "08-pad-scored: 262609 bytes, sha256 9f1c8ce63379",
+            "05-generated-before: 304687 bytes, sha256 344f92e969b6",
+            "05-generated: 345192 bytes, sha256 8ba7df27b2b8",
+            "08-completed-before: 353396 bytes, sha256 d7afffc589dd",
+            "08-completed: 356217 bytes, sha256 690ef05d7172",
+            "10-standings: 191138 bytes, sha256 d23678776b3a",
+            "11-public: 103846 bytes, sha256 75c86372a31a"
+          ]
+        },
+        {
+          "id": "no-horizontal-scroll",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 19,
+          "reason": "19 state(s) probed, none scrolls sideways",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 287,
+        "fixtures": 4,
+        "events": 20
+      },
+      "durationMs": 18760,
+      "notes": [
+        "stage americano status after start: active",
+        "lineups: stage 11462c23-aec8-4ab9-9a5a-c92e87eb108b seats a side that is not a division entrant (a product-minted pair entrant) — no lineup PUT for such a side",
+        "mexicano-pair-entrants-counted-as-players: round 3 generate refused 500 INTERNAL (entrant_members_pkey: a person paired with themselves) after rounds 1–2 created pair entrants 2d1cdab6-4677-4732-a0a7-a8d0fae38c2b, f2ffbb52-2aac-4830-8ad9-afdb6a806a10, 3f0b9037-ce42-44bd-bd65-3103d57a1fca, 678ec3fe-a9dd-47c0-b34a-5ae95fb17a20, 365b8b2e-57fe-4c56-89a2-988366d6f34a, 389794e4-413f-4410-8a7f-ab1fbc0f5e53, 8e55f1aa-cc10-4755-93f8-71592a0fe582 → W7",
+        "mexicano-pair-entrants-counted-as-players: round 2 seats 49fa09b1-0bd0-430e-8d66-25914c826a74 twice, in 365b8b2e-57fe-4c56-89a2-988366d6f34a and f2ffbb52-2aac-4830-8ad9-afdb6a806a10; 49fa09b1-0bd0-430e-8d66-25914c826a74 is a member of earlier pair entrant f2ffbb52-2aac-4830-8ad9-afdb6a806a10 → W7",
+        "mexicano-pair-entrants-counted-as-players: round 2 seats 83f91edc-d88a-492a-8f2c-d82146140e3c twice, in 389794e4-413f-4410-8a7f-ab1fbc0f5e53 and 8e55f1aa-cc10-4755-93f8-71592a0fe582; 83f91edc-d88a-492a-8f2c-d82146140e3c is a member of earlier pair entrant 2d1cdab6-4677-4732-a0a7-a8d0fae38c2b → W7",
+        "americano generated on team entrants with one arbitrary roster member each — W7 finding (false premise 10): 2bbea63a-a45b-4c4f-8e11-d788d731e3b0→3886c3c3-8882-49d9-83e0-9bfd350436c7, c23bb18a-0e42-4408-9a8c-a73da14b6f62→c1252d70-9de6-46cb-8a70-35cb0e014ba7, 998d2c3c-8ea6-4b28-8200-b55210a66c20→49fa09b1-0bd0-430e-8d66-25914c826a74, 714122a3-1ae4-4214-8b8e-2fc38645216e→3fefe12a-10c9-43ac-88f0-b1cfbc5e408d, dee5c2f6-4d38-427e-85b0-f01e8a38a4c3→f5ce30e5-1718-4393-96e8-bd508cff0b95, ff30b913-5cb8-48c5-adf6-6797c639a9d2→b5e492ef-e330-4b8b-ac02-3b563676f5c4, 885621e1-0268-447f-93e8-f51b995e0a03→d0fb4475-1957-4e45-9077-d714bf278a58, 03a6966e-4578-4e09-acfa-d451b05adffa→83f91edc-d88a-492a-8f2c-d82146140e3c",
+        "config entrants_only: 200",
+        "americano-minted-pairs-block-kind-edit: organiser cannot narrow entrant kinds on a running americano (minted pairs block) — 7 minted pair entrant(s) active on this mexicano, kinds saved team+pair — predicted product red → W7",
+        "lineups: 0 PUT across 4 team fixture(s) scored"
+      ],
+      "layer": "L1",
+      "driver": "browser",
+      "width": 1280,
+      "fillers": {
+        "setMembers": 8,
+        "entrantMembers": 15,
+        "americanoView": 1
+      }
+    },
+    {
+      "caseId": "stepladder_only|tabletennis|bo5|LIFECYCLE@1280",
+      "row": "stepladder_only",
+      "sport": "tabletennis",
+      "variant": "bo5",
+      "scenario": "LIFECYCLE",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W4: no organiser control builds stepladder_only",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L1",
+      "driver": "browser",
+      "width": 1280,
+      "planned": true
+    }
+  ]
+}

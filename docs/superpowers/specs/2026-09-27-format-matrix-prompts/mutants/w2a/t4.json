@@ -1,0 +1,317 @@
+[
+  {
+    "id": "settle-precondition-skipped",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (!settleApplies(module, { outcome: effective,",
+    "replace": "if (false && !settleApplies(module, { outcome: effective,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: is refused on a live fixture with no outcome and no abandon, and on a decided win"
+      }
+    ]
+  },
+  {
+    "id": "settle-reads-module-outcome",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "const effective = outcomeOf(module, { state, settlement });",
+    "replace": "const effective = module.outcome(state);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: a second settle is refused \\(Review Focus 2\\)"
+      }
+    ]
+  },
+  {
+    "id": "level-outcome-only-draw",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (isLevelOutcome(f.outcome)) return true;",
+    "replace": "if (f.outcome?.kind === \"draw\") return true;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/cricket/cricket.test.ts",
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1 \\(C11\\): a league tie folds to \\{kind:'tie'\\} and an organiser settle turns it into a settled win|C11: the kernel's precondition per outcome kind"
+      }
+    ]
+  },
+  {
+    "id": "abandoned-dropped-from-precondition",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "(f.abandoned || module.awaitingDecider",
+    "replace": "(module.awaitingDecider",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: closes an abandon whose module outcome is null"
+      }
+    ]
+  },
+  {
+    "id": "decider-never-pending",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "module.awaitingDecider?.(f.state as never) === true",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "C12: a module with a pending decider accepts settle|C12: settleApplies is THE precondition"
+      }
+    ]
+  },
+  {
+    "id": "settle-not-during-stoppage",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  // W2a finding 4: a settle closes an abandon that left the stoppage open.\n  \"core.settle\",\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "finding 4: settle is accepted while play is suspended"
+      }
+    ]
+  },
+  {
+    "id": "settle-not-post-decision",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "[\"core.note\", \"core.finalize\", \"core.award\", \"core.settle\"]",
+    "replace": "[\"core.note\", \"core.finalize\", \"core.award\"]",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: on a draw it gives win\\{winner, loser, settled_<method>\\}"
+      }
+    ]
+  },
+  {
+    "id": "kernel-finalize-branch-deleted",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "} else if (event.type === \"core.finalize\" && settlement !== null && module.outcome(state) === null) {",
+    "replace": "} else if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "Review Focus 3: finalize after settling an abandon succeeds for EVERY sport"
+      }
+    ]
+  },
+  {
+    "id": "outcomeof-ignores-settlement",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  if (s !== null) return { kind: \"win\", winner: s.winner, loser: s.loser, method: settledMethod(s.method) };\n  return module.outcome(folded.state);",
+    "replace": "  void s;\n  return module.outcome(folded.state);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: on a draw it gives win\\{winner, loser, settled_<method>\\}"
+      }
+    ]
+  },
+  {
+    "id": "settle-winner-unchecked",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (p.winner !== home && p.winner !== away) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: a winner who is neither side is refused"
+      }
+    ]
+  },
+  {
+    "id": "fold-ts-bare-outcome",
+    "file": "apps/web/src/server/engine-db/fold.ts",
+    "find": "    outcome: outcomeOf(sportModule, folded),",
+    "replace": "    outcome: sportModule.outcome(state),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "no bare <module>\\.outcome\\(state\\) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers"
+      }
+    ]
+  },
+  {
+    "id": "abandon-never-marked-active",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "      if (event.type === \"core.abandon\") abandonActive = true;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: closes an abandon whose module outcome is null"
+      }
+    ]
+  },
+  {
+    "id": "append-event-bare-outcome",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "const outcome = outcomeOf(sportModule, folded);",
+    "replace": "const outcome = sportModule.outcome(state);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "no bare <module>\\.outcome\\(state\\) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers"
+      }
+    ]
+  },
+  {
+    "id": "event-import-bare-outcome",
+    "file": "apps/web/src/server/usecases/event-import.ts",
+    "find": "if (outcomeOf(sportModule, folded) === null) {",
+    "replace": "if (sportModule.outcome(folded.state) === null) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "no bare <module>\\.outcome\\(state\\) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers"
+      }
+    ]
+  },
+  {
+    "id": "carrom-stats-property-read",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "const outcome = outcomeOf(carrom, foldMatchWithStoppage(carrom, cfgParsed.data, lineups, events));",
+    "replace": "const outcome = foldMatchWithStoppage(carrom, cfgParsed.data, lineups, events).state.outcome;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/carrom/carrom.test.ts"
+        ],
+        "name": "X-ST-1 \\(ruling D-C3\\): a SETTLED drawn match credits the settle's winner the win"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "ruling D-C3: no fold result's outcome is read as a PROPERTY"
+      }
+    ]
+  },
+  {
+    "id": "generic-stats-property-read",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "const outcome = outcomeOf(generic, folded);",
+    "replace": "const outcome = folded.state.outcome;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/generic/generic.test.ts"
+        ],
+        "name": "X-ST-1 \\(ruling D-C3\\): a SETTLED level result credits the settle's winner a win"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "ruling D-C3: no fold result's outcome is read as a PROPERTY"
+      }
+    ]
+  },
+  {
+    "id": "timeline-settle-method-ignored",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "      ? `timeline.core.settle.${payload.method}`",
+    "replace": "      ? null",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts"
+        ],
+        "name": "X-ST-1: a settle line names the side that advances and the engine's settle method, in all four locales"
+      }
+    ]
+  },
+  {
+    "id": "timeline-settle-side-dropped",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "\"core.settle\": (c) => ({ side: sideNameOf(c) }),",
+    "replace": "\"core.settle\": () => ({}),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts"
+        ],
+        "name": "X-ST-1: a settle line names the side that advances and the engine's settle method, in all four locales"
+      }
+    ]
+  },
+  {
+    "id": "event-copy-settle-method-ignored",
+    "file": "apps/web/src/lib/event-copy.ts",
+    "find": "const key = (typeof p.method === \"string\" && SETTLED_KEY[p.method]) || \"eventCopy.settled\";",
+    "replace": "const key: MessageKey = \"eventCopy.settled\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/event-copy.test.ts"
+        ],
+        "name": "X-ST-1: core\\.settle says who advances and how, for every engine settle method, in all four locales"
+      }
+    ]
+  },
+  {
+    "id": "event-copy-settle-note-dropped",
+    "file": "apps/web/src/lib/event-copy.ts",
+    "find": "const note = typeof p.note === \"string\" && p.note ? ` — ${p.note}` : \"\";",
+    "replace": "const note = \"\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/event-copy.test.ts"
+        ],
+        "name": "X-ST-1: core\\.settle says who advances and how, for every engine settle method, in all four locales"
+      }
+    ]
+  }
+]

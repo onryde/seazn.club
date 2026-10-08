@@ -29,6 +29,11 @@ export const ENGINE_HTTP_STATUS: Readonly<Record<EngineErrorCode, number>> = Obj
   SEEDING_MAP_SOURCE_INVALID: 422,
   SEEDING_BESTNTH_UNEQUAL_POOLS: 422,
   SEEDING_MAP_SOURCE_AMBIGUOUS: 422,
+  // W2a (spec §7) — brackets always finish; http.ts's own statuses.
+  SETTLE_NOT_APPLICABLE: 409,
+  TIEBREAK_NOT_APPLICABLE: 409,
+  LEVEL_RESULT_IN_BRACKET: 409,
+  LEVEL_RESULT_SEATED: 500,
 });
 
 /** The `?? 422` of http.ts:158 — what the product answers an EngineError whose

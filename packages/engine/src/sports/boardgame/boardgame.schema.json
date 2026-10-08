@@ -63,6 +63,9 @@
         },
         "type": "object"
       },
+      "tiebreak": {
+        "type": "boolean"
+      },
       "variant": {
         "default": "classical",
         "enum": [
@@ -144,6 +147,32 @@
           }
         },
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "rung": {
+            "enum": [
+              "armageddon",
+              "blitz",
+              "rapid"
+            ],
+            "type": "string"
+          },
+          "score": {
+            "pattern": "^(\\d+½?|½)–(\\d+½?|½)$",
+            "type": "string"
+          },
+          "winner": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "rung",
+          "winner"
+        ],
+        "type": "object"
       }
     ]
   },
@@ -201,6 +230,15 @@
       ],
       "replayFlagged": [
         "boolean"
+      ],
+      "tiebreak": [
+        "object"
+      ],
+      "tiebreak.rung": [
+        "string"
+      ],
+      "tiebreak.score": [
+        "string"
       ],
       "winnerPerson": [
         "string"

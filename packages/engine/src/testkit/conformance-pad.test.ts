@@ -116,6 +116,7 @@ function makeFakeModule(over: Partial<SportModule<FakeCfg, FakeEv, FakeState>> =
     metrics: [],
     defaultTiebreakers: ["points"],
     supportsDraws: () => true,
+    bracketDeciders: () => ({}),
     declaredPointsSets: () => [0],
     matchPointsBounds: () => ({ max: 0, min: 0, winFloor: 0, lossCeil: 0, winsOnly: false }),
     officialLabel: { scorer: "Scorer" },

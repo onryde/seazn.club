@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { describeEvent, EVENT_COPY_KEYS } from "../event-copy";
 import { EVENT_KEY, type MsgFn } from "@/lib/scoring-vocab";
 import { builtinModules } from "@seazn/engine/sports";
-import { CORE_EVENT_SCHEMAS } from "@seazn/engine/core";
+import { CORE_EVENT_SCHEMAS, SETTLE_METHODS } from "@seazn/engine/core";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
@@ -228,6 +228,33 @@ describe("the activity feed authors no English of its own", () => {
       expect(e, `${type} rendered no sentence to compare`).not.toBe("");
       expect(f, `${type} sentence still reads as English`).not.toBe(e);
     }
+  });
+
+  it("X-ST-1: core.settle says who advances and how, for every engine settle method, in all four locales", () => {
+    // Methods from the engine's own SETTLE_METHODS; the winner is an entrant id.
+    expect(SETTLE_METHODS.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const m = at(locale as keyof typeof LOCALES);
+      const sentences = new Set<string>();
+      for (const method of SETTLE_METHODS) {
+        const d = describeEvent("core.settle", { winner: "e1", method }, NAMES, m);
+        expect(d.label, `${locale}/${method} badge`).toBe(dict["event.core.settle"]);
+        expect(d.tone, `${locale}/${method} tone`).toBe(describeEvent("core.forfeit", { by: "e1" }, NAMES, m).tone);
+        expect(d.text, `${locale}/${method}`).toContain(NAMES.e1);
+        expect(d.text, `${locale}/${method} left a placeholder`).not.toMatch(/[{}]/);
+        sentences.add(d.text);
+        checked++;
+      }
+      // Each method is said differently: "how" is part of the sentence.
+      expect(sentences.size, `${locale}: two methods share a sentence`).toBe(SETTLE_METHODS.length);
+      // The organiser's note is echoed verbatim; an unknown method falls to the method-free line.
+      expect(describeEvent("core.settle", { winner: "e1", method: "lot", note: "drawn by the referee" }, NAMES, m).text)
+        .toMatch(/ — drawn by the referee$/);
+      expect(describeEvent("core.settle", { winner: "e1", method: "coin" }, NAMES, m).text)
+        .toBe(dict["eventCopy.settled"]!.replace("{name}", NAMES.e1));
+    }
+    expect(checked).toBe(SETTLE_METHODS.length * Object.keys(LOCALES).length);
   });
 
   it("carries no second name for an event type scoring-vocab already owns", () => {

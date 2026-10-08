@@ -1,0 +1,1398 @@
+{
+  "schemaVersion": 3,
+  "runId": "w2a-repro-l2-s16",
+  "harnessCommit": "805443544",
+  "startedAt": "2026-10-08T13:21:29.160Z",
+  "finishedAt": "2026-10-08T13:22:13.867Z",
+  "grid": {
+    "rows": [
+      "league",
+      "triple_rr",
+      "league_ko",
+      "groups_ko",
+      "group_stepladder",
+      "group_playoffs",
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "knockout",
+      "ko_plate",
+      "qualifying_main",
+      "double_elim",
+      "americano",
+      "mexicano",
+      "ladder",
+      "group_only",
+      "group_group_ko",
+      "knockout_third_place",
+      "page_playoff_only",
+      "stepladder_only"
+    ],
+    "sports": [
+      "football",
+      "cricket",
+      "boardgame",
+      "carrom",
+      "generic",
+      "volleyball",
+      "badminton",
+      "tabletennis",
+      "tennis",
+      "icehockey",
+      "hockey"
+    ]
+  },
+  "layer": "L2",
+  "driver": "browser",
+  "plan": "--layer L2 --scope grid",
+  "scope": "L2 (grid)",
+  "shard": {
+    "index": 16,
+    "of": 64,
+    "planSize": 1731
+  },
+  "cases": [
+    {
+      "caseId": "ladder|football|11-a-side|R1@360",
+      "row": "ladder",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "R1",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R1)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360,
+      "planned": true,
+      "l2": {
+        "n": 16,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "group_only|football|11-a-side|R4a@768",
+      "row": "group_only",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "R4",
+      "canary": false,
+      "state": "red",
+      "reason": "organiser-ui-path: no organiser control builds group_only → W5",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn, expunged",
+          "evidence": [
+            "abstain: case fact withdrawn, expunged"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 17,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "no round-robin pair meets more often than the stage's legs — after every step, late entries included",
+          "evidence": []
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 24,
+          "reason": "24 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 10,
+          "reason": "10 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "12 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-policy-reported",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-cascade-consistent",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-paired-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "not a swiss stage",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-challenged-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "ladder only: challenges exist on ladder stages alone",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-seated-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "americano kinds only: a person is seated through minted pair entrants on americano/mexicano stages alone (swiss judges r4-not-paired-later, a ladder r4-not-challenged-later)",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "organiser-ui-path",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 1,
+          "reason": "no organiser control builds group_only → W5",
+          "evidence": [
+            "no organiser control builds group_only → W5"
+          ]
+        },
+        {
+          "id": "fold-branch",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "ui-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 table(s) drawn as the API ranks them",
+          "evidence": []
+        },
+        {
+          "id": "pad-ledger-as-generated",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "4 ok",
+          "evidence": [
+            "a1b52358-2bd5-4667-a9a7-ef1b9bff502f event 2 of 4 (football.goal): fallback — football.tsx:769 — the goal tile writes {by} alone; the generated minute has no tap (Step 0 2026-09-30: row keys [by]), so its judge holds `by` to the side credited and any other key the row carries to the event"
+          ]
+        },
+        {
+          "id": "mixed-driver-coverage",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "9 invoked action type(s): 8 ran in the browser, 1 exempt",
+          "evidence": [
+            "createDivision: exempt — → W5: no builder control for a group stage with no knockout (design §8)",
+            "generate: the create-fixtures path (stage-rail.ts generateUi) never ran in the browser — 4 browser call(s), none created (a note, not a red)"
+          ]
+        },
+        {
+          "id": "visual-evidence",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 shot(s) written and non-empty; 6 must-differ pair(s) differ",
+          "evidence": [
+            "01-competition-created-before: 130646 bytes, sha256 4a4cca971712",
+            "01-competition-created: 115370 bytes, sha256 8a6373789f47",
+            "03-entrants-before: 126508 bytes, sha256 2a0ee50de509",
+            "03-entrants: 185264 bytes, sha256 ce7b57318583",
+            "04-started-before: 190458 bytes, sha256 53cc1eecb615",
+            "04-started: 249093 bytes, sha256 26aa2f4d9d58",
+            "run-sheet-all: 249093 bytes, sha256 26aa2f4d9d58",
+            "05-generated-before: 249093 bytes, sha256 26aa2f4d9d58",
+            "05-generated: 256732 bytes, sha256 dda9a2c7163b",
+            "08-pad-before: 465312 bytes, sha256 1cc7b0ef0c70",
+            "08-pad-scored: 126841 bytes, sha256 fb47b4a6006f",
+            "06-withdrawn-before: 160683 bytes, sha256 ab608ec353e2",
+            "06-withdrawn: 160069 bytes, sha256 166a95bb9752",
+            "05-generated-before-2: 233602 bytes, sha256 6ded088a0aec",
+            "05-generated-2: 242802 bytes, sha256 fbf57043b6ef",
+            "05-generated-before-3: 237575 bytes, sha256 fee66eddaa9a",
+            "05-generated-3: 246105 bytes, sha256 664e692dcfcf",
+            "05-generated-before-4: 230405 bytes, sha256 ce506f61f236",
+            "05-generated-4: 238803 bytes, sha256 0068cb6c89d8",
+            "08-completed-before: 230405 bytes, sha256 ce506f61f236",
+            "08-completed: 235580 bytes, sha256 13bfb455d7a7",
+            "10-standings: 158403 bytes, sha256 a0841adcd678"
+          ]
+        },
+        {
+          "id": "no-horizontal-scroll",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 22,
+          "reason": "22 state(s) probed, none scrolls sideways",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 324,
+        "fixtures": 12,
+        "events": 37
+      },
+      "durationMs": 25155,
+      "notes": [
+        "stage group status after start: active",
+        "lineups: 20 PUT across 10 team fixture(s) scored"
+      ],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768,
+      "l2": {
+        "n": 80,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      },
+      "fillers": {
+        "setMembers": 8,
+        "entrantMembers": 8,
+        "putLineup": 20
+      }
+    },
+    {
+      "caseId": "ko_plate|badminton|bwf|R6@390",
+      "row": "ko_plate",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R6",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R6)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390,
+      "planned": true,
+      "l2": {
+        "n": 144,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "group_group_ko|football|11-a-side|R9a@768",
+      "row": "group_group_ko",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "R9a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R9a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768,
+      "planned": true,
+      "l2": {
+        "n": 208,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "knockout_third_place|football|11-a-side|R11a@375",
+      "row": "knockout_third_place",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "R11a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R11a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375,
+      "planned": true,
+      "l2": {
+        "n": 272,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "page_playoff_only|carrom|club-29|R12b@834",
+      "row": "page_playoff_only",
+      "sport": "carrom",
+      "variant": "club-29",
+      "scenario": "R12b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R12b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834,
+      "planned": true,
+      "l2": {
+        "n": 336,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "americano|football|11-a-side|R16@375",
+      "row": "americano",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "R16",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R16)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375,
+      "planned": true,
+      "l2": {
+        "n": 400,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "mexicano|football|11-a-side|M3@834",
+      "row": "mexicano",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "M3",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M3)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834,
+      "planned": true,
+      "l2": {
+        "n": 464,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "page_playoff_only|football|11-a-side|M5@375",
+      "row": "page_playoff_only",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "M5",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M5)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375,
+      "planned": true,
+      "l2": {
+        "n": 528,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "stepladder_only|football|11-a-side|M7b@834",
+      "row": "stepladder_only",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "M7b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M7b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834,
+      "planned": true,
+      "l2": {
+        "n": 592,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "league|football|11-a-side|M9b@430",
+      "row": "league",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "M9b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M9b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430,
+      "planned": true,
+      "l2": {
+        "n": 656,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "triple_rr|cricket|t20|M12a@360",
+      "row": "triple_rr",
+      "sport": "cricket",
+      "variant": "t20",
+      "scenario": "M12a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M12a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360,
+      "planned": true,
+      "l2": {
+        "n": 720,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "league_ko|boardgame|blitz|F1@834",
+      "row": "league_ko",
+      "sport": "boardgame",
+      "variant": "blitz",
+      "scenario": "F1",
+      "canary": false,
+      "state": "red",
+      "reason": "I2-bracket-one-champion-ranks-permutation: 51ce2658-d3d0-4cb4-bddf-5774f3ad7481: bracket fixture ended draw",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "every round-robin pair meets exactly once per leg",
+          "evidence": []
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 5,
+          "reason": "51ce2658-d3d0-4cb4-bddf-5774f3ad7481: bracket fixture ended draw",
+          "evidence": [
+            "51ce2658-d3d0-4cb4-bddf-5774f3ad7481: bracket fixture ended draw",
+            "2 unbeaten entrants: 64adf913-b717-49c0-b848-38efd9e6bd26,f3e6f55c-0f9f-493c-be5b-2615ad66784d"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 38,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "no round-robin pair meets more often than the stage's legs — after every step, late entries included",
+          "evidence": []
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (americano)",
+          "evidence": [
+            "abstain: no applicable stage (americano)"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 24,
+          "reason": "24 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 24,
+          "reason": "24 ok",
+          "evidence": []
+        },
+        {
+          "id": "f1-everyone-drawn",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "f1-round-size",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "f1-ladder-sweep",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "ladder only: a challenge sweep exists on ladder stages alone",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 3,
+          "reason": "3 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "individual entrants carry no lineup",
+          "evidence": []
+        },
+        {
+          "id": "organiser-ui-path",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "builder-posted-as-harness",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 stage(s) built exactly as the harness's bodies",
+          "evidence": []
+        },
+        {
+          "id": "fold-branch",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "ui-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 table(s) drawn as the API ranks them",
+          "evidence": []
+        },
+        {
+          "id": "pad-ledger-as-generated",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "mixed-driver-coverage",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 invoked action type(s): 8 ran in the browser, 0 exempt",
+          "evidence": [
+            "generate: the create-fixtures path (stage-rail.ts generateUi) ran in the browser — 1 of 1 browser call(s) created"
+          ]
+        },
+        {
+          "id": "visual-evidence",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 shot(s) written and non-empty; 10 must-differ pair(s) differ",
+          "evidence": [
+            "01-competition-created-before: 135094 bytes, sha256 d0032f6c7e26",
+            "01-competition-created: 130601 bytes, sha256 b8dd62b338ea",
+            "02-builder-basics: 142601 bytes, sha256 bd02bfd2edb8",
+            "02-builder-format: 269972 bytes, sha256 22b8ee0e381f",
+            "02-division-built-before: 145271 bytes, sha256 b4dc69d53c1c",
+            "02-division-built: 134389 bytes, sha256 87872af403b2",
+            "03-entrants-before: 134389 bytes, sha256 87872af403b2",
+            "03-entrants: 184695 bytes, sha256 fdfe4e62c920",
+            "04-started-before: 184695 bytes, sha256 fdfe4e62c920",
+            "04-started: 354391 bytes, sha256 12b02eec39fb",
+            "run-sheet-all: 354391 bytes, sha256 12b02eec39fb",
+            "05-generated-before: 354391 bytes, sha256 12b02eec39fb",
+            "05-generated: 407988 bytes, sha256 df108e6cf85b",
+            "08-pad-before: 107501 bytes, sha256 c4d7c78dcb5e",
+            "08-pad-scored: 113197 bytes, sha256 0c99a93fac95",
+            "07-stage-1-completed-before: 394649 bytes, sha256 316b015ad6e5",
+            "07-stage-1-completed: 430972 bytes, sha256 32c92ba1d472",
+            "08-completed-before: 400579 bytes, sha256 43389a62055a",
+            "08-completed: 405849 bytes, sha256 0d64f36e4e8e",
+            "10-standings: 152244 bytes, sha256 b3715312d6c0"
+          ]
+        },
+        {
+          "id": "no-horizontal-scroll",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 state(s) probed, none scrolls sideways",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 136,
+        "fixtures": 24,
+        "events": 48
+      },
+      "durationMs": 18918,
+      "notes": [
+        "stage league status after start: active",
+        "stage 2: 1 seeding tie(s) picked in the product's listed order"
+      ],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834,
+      "l2": {
+        "n": 784,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      },
+      "fillers": {
+        "confirmSeedProposal": 2,
+        "recomputeSeedProposal": 1
+      }
+    },
+    {
+      "caseId": "groups_ko|carrom|club-29|F5a@320",
+      "row": "groups_ko",
+      "sport": "carrom",
+      "variant": "club-29",
+      "scenario": "F5a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom F5a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320,
+      "planned": true,
+      "l2": {
+        "n": 848,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "stepladder_only|football|11-a-side|F8@360",
+      "row": "stepladder_only",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "F8",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom F8)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360,
+      "planned": true,
+      "l2": {
+        "n": 912,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "league|football|11-a-side|D4a@768",
+      "row": "league",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "D4a",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W4: no organiser path, known at design time (design §4): separation: same-club separation",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768,
+      "planned": true,
+      "l2": {
+        "n": 976,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "triple_rr|cricket|t20|D5b@375",
+      "row": "triple_rr",
+      "sport": "cricket",
+      "variant": "t20",
+      "scenario": "D5b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom D5b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375,
+      "planned": true,
+      "l2": {
+        "n": 1040,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "league_ko|boardgame|blitz|P1@834",
+      "row": "league_ko",
+      "sport": "boardgame",
+      "variant": "blitz",
+      "scenario": "P1",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P1)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834,
+      "planned": true,
+      "l2": {
+        "n": 1104,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "americano|football|11-a-side|P4@375",
+      "row": "americano",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "P4",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P4)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375,
+      "planned": true,
+      "l2": {
+        "n": 1168,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "groups_ko|carrom|club-29|P7@834",
+      "row": "groups_ko",
+      "sport": "carrom",
+      "variant": "club-29",
+      "scenario": "P7",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P7)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834,
+      "planned": true,
+      "l2": {
+        "n": 1232,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "double_elim|icehockey|iihf|Q4a@360",
+      "row": "double_elim",
+      "sport": "icehockey",
+      "variant": "iihf",
+      "scenario": "Q4a",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W4: no organiser path, known at design time (design §4): final not played: → joint winners",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360,
+      "planned": true,
+      "l2": {
+        "n": 1296,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "group_playoffs|volleyball|beach|X1b@430",
+      "row": "group_playoffs",
+      "sport": "volleyball",
+      "variant": "beach",
+      "scenario": "X1b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom X1b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430,
+      "planned": true,
+      "l2": {
+        "n": 1360,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "americano|football|11-a-side|X4a@360",
+      "row": "americano",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "X4a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom X4a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360,
+      "planned": true,
+      "l2": {
+        "n": 1424,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "mexicano|football|11-a-side|C1@768",
+      "row": "mexicano",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "C1",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C1)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768,
+      "planned": true,
+      "l2": {
+        "n": 1488,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "ladder|football|11-a-side|C3b@375",
+      "row": "ladder",
+      "sport": "football",
+      "variant": "11-a-side",
+      "scenario": "C3b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C3b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375,
+      "planned": true,
+      "l2": {
+        "n": 1552,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "ko_plate|hockey|fih-outdoor|C6b@834",
+      "row": "ko_plate",
+      "sport": "hockey",
+      "variant": "fih-outdoor",
+      "scenario": "C6b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C6b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834,
+      "planned": true,
+      "l2": {
+        "n": 1616,
+        "covers": [
+          "row",
+          "sport"
+        ],
+        "l3Gap": null
+      }
+    },
+    {
+      "caseId": "qualifying_main|volleyball|beach|E3|volleyball#001@390",
+      "row": "qualifying_main",
+      "sport": "volleyball",
+      "variant": "beach",
+      "scenario": "E3",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom E3)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390,
+      "planned": true,
+      "l2": {
+        "n": 1680,
+        "covers": [
+          "row"
+        ],
+        "l3Gap": null
+      }
+    }
+  ]
+}
