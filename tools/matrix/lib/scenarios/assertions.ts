@@ -1,6 +1,7 @@
 // Scenario assertions. Every one goes through `assertion`, so R25 holds for
 // them exactly as it does for the invariants: zero items checked is a FAIL,
 // and only a stated reason may abstain.
+import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import type { PublicStandingsOut, StageRef } from "../driver/types.ts";
 import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun, type ObservedStage } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
@@ -207,6 +208,25 @@ export function drawPathExercised(rec: Recorder, observed: ObservedRun, drawOk: 
   if (!drawOk) return assertion("life-draw-path-exercised", [], "supportsDraws is false for this stage");
   const draws = observed.stages.flatMap((s) => s.fixtures).filter((f) => f.outcome?.kind === "draw");
   return assertion("life-draw-path-exercised", [{ ok: rec.drawsPosted > 0 && draws.length === rec.drawsPosted, note: `posted ${rec.drawsPosted} draws, product shows ${draws.length}` }]);
+}
+
+/** W2a (finding 16): a run that played a BRACKET stage must have exercised a decider — a chess tie-break or an
+ *  organiser settle (a level result held and closed, or an abandon at a real score closed) — or it proved only the
+ *  straight-win path that never stalled. The count is what the harness POSTED (Recorder), cross-checked against what
+ *  the product shows: every settled fixture reads back with a `settled_*` win, every tie-break with a `tiebreak_*`
+ *  win. Zero deciders in a run with a bracket stage is a FAILURE, never an abstention (R25); a run with no bracket
+ *  stage abstains by name — the rule says nothing about it. */
+export function bracketDeciderExercised(rec: Recorder, observed: ObservedRun): CheckResult {
+  const brackets = observed.stages.filter((s) => forbidsLevelResult(s.kind as StageKind));
+  if (brackets.length === 0) return assertion("life-bracket-decider-exercised", [], "no bracket stage in this run: a level result cannot stall it");
+  const fixtures = brackets.flatMap((s) => s.fixtures);
+  const settled = fixtures.filter((f) => f.outcome?.kind === "win" && f.outcome.method?.startsWith("settled_") === true).length;
+  const tiebroken = fixtures.filter((f) => f.outcome?.kind === "win" && f.outcome.method?.startsWith("tiebreak_") === true).length;
+  return assertion("life-bracket-decider-exercised", [
+    { ok: rec.settlesPosted + rec.tiebreaksPosted > 0, note: `${brackets.length} bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)` },
+    { ok: settled === rec.settlesPosted, note: `posted ${rec.settlesPosted} settle(s), the product shows ${settled} settled win(s)` },
+    { ok: tiebroken === rec.tiebreaksPosted, note: `posted ${rec.tiebreaksPosted} tie-break(s), the product shows ${tiebroken} tie-break win(s)` },
+  ]);
 }
 
 /** The format lock's answer: usecases/divisions.ts `formatLocked()` throws

@@ -3,7 +3,7 @@
 import { fieldSizeFor } from "../field-size.ts";
 import type { ConfigEditObs } from "../observed.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
-import { builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, lineupsPut, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted } from "./assertions.ts";
+import { bracketDeciderExercised, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, lineupsPut, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted } from "./assertions.ts";
 import { Recorder, configProbe, dateFirstRound, drawsDeclaredOnReached, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -42,6 +42,8 @@ export const lifecycle: Scenario = {
         resultsAsPosted(rec, observed),
         publicStandingsMatch(observed, pub),
         drawPathExercised(rec, observed, drawOk),
+        // W2a (finding 16): a bracket stage in this run owes at least one decider (settle or tie-break), counted and read back.
+        bracketDeciderExercised(rec, observed),
         formatEditRefusedNamed(configEdit),
         entrantsEditAccepted(configEdit),
         stageCompleted(observed),

@@ -7,8 +7,10 @@
 // challenge is legal under any challengeRange ≥ 1, and swap vs leapfrog give
 // the same order — so the expected order needs no ladder rulebook (W7's).
 import { RefusedCall, type ChallengeOut, type StageRef } from "../driver/types.ts";
-import type { RequestedOutcome } from "../streams/types.ts";
-import { decideFixture, stageDrawsOk, type DivisionSetup, type Recorder, type RoundHook } from "./common.ts";
+import type { RequestedOutcome, Side } from "../streams/types.ts";
+import { decideFixture, hardPath, type DivisionSetup, type Recorder, type RoundHook } from "./common.ts";
+import { stageCfg } from "../sport-cfg.ts";
+import type { StageKind } from "@seazn/engine/core";
 import type { ScenarioContext } from "./types.ts";
 
 export interface LadderStep {
@@ -28,15 +30,18 @@ export function ladderSchedule(n: number): readonly LadderStep[] {
   });
 }
 
-/** What the harness posts on one step. A step the challenger loses moves
- *  nobody whether it is the opponent's win or a draw (usecases/scoring.ts
- *  swaps only on a decided WIN: fed-seats.ts advancingSides gives a loser
- *  only for `win`), so where the engine declares a draw reachable on this
- *  stage (supportsDraws) the FIRST such step is a draw — life-draw-path-
- *  exercised's R9 path — and the order D8 expects is unchanged by it. */
-function stepOutcome(c: LadderStep, challengerHome: boolean, drawOk: boolean, drawn: boolean): RequestedOutcome {
-  if (!c.challengerWins && drawOk && !drawn) return { kind: "draw" };
-  return { kind: "win", winner: c.challengerWins === challengerHome ? "home" : "away" };
+/** What the harness posts on one step. A step the challenger loses moves nobody whether it is the opponent's win or a
+ *  draw (usecases/scoring.ts swaps only on a decided WIN: fed-seats.ts advancingSides gives a loser only for `win`).
+ *  W2a: a ladder is a BRACKET kind (X-DR-1), so a draw is no longer posted here — a level result is held, and closed by
+ *  an organiser settle. So the FIRST step (a climb: the settle gives the challenger the win, who swaps) and the FIRST
+ *  non-climbing step (the settle gives the opponent the win, so nobody moves) each ask for the hard path
+ *  (common.ts hardPath: a tie-break for chess, else a settle after a level result or an abandon). The order D8 expects is
+ *  unchanged: the winner of each step is the one the plain win would have named. `hard` is how many hard paths this stage
+ *  has asked for so far. */
+function stepOutcome(c: LadderStep, challengerHome: boolean, hard: number, firstLoss: boolean, sport: string, cfg: unknown): RequestedOutcome {
+  const winner: Side = c.challengerWins === challengerHome ? "home" : "away";
+  if (c.step === 1 || firstLoss) return hardPath(sport, cfg, hard, winner);
+  return { kind: "win", winner };
 }
 
 export async function playLadder(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, hooks: { beforeRound?: RoundHook; afterRound?: RoundHook }): Promise<void> {
@@ -47,9 +52,9 @@ export async function playLadder(ctx: ScenarioContext, rec: Recorder, setup: Div
     rec.notes.push("ladder: a field of < 2 has no challenge");
     return;
   }
-  const drawOk = stageDrawsOk(ctx, stage);
-  // A draw this stage POSTED (decideFixture counts it), not one merely asked for: a hook may finish the fixture first.
-  const drawsBefore = rec.drawsPosted;
+  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind); // the cfg the product folds a ladder fixture under
+  let hard = 0; // hard-path requests this stage has made (rotates the settle method / tie-break rung)
+  let lossAsked = false; // the first non-climbing step asks for the hard path once
   // Until the first challenge writes ladder_order: the entrants addEntrants
   // answered, SORTED by seed (the product initialises it by seed; the answer's
   // own row order is not relied on — review m-6).
@@ -73,7 +78,9 @@ export async function playLadder(ctx: ScenarioContext, rec: Recorder, setup: Div
     const f = (await ctx.driver.listFixtures(setup.division.id)).find((x) => x.id === out.fixture_id);
     if (f === undefined) throw new Error(`ladder: challenge answered fixture ${out.fixture_id}, which the division list does not hold`);
     await hooks.beforeRound?.(c.step, [f]);
-    await decideFixture(ctx, rec, setup, f, stepOutcome(c, f.home_entrant_id === challenger, drawOk, rec.drawsPosted > drawsBefore), stage);
+    const outcome = stepOutcome(c, f.home_entrant_id === challenger, hard, !c.challengerWins && !lossAsked, ctx.spec.sport, cfg);
+    if (outcome.kind !== "win") { hard++; if (!c.challengerWins) lossAsked = true; }
+    await decideFixture(ctx, rec, setup, f, outcome, stage);
     await hooks.afterRound?.(c.step, [f]);
     // The live order is the stage's, re-read after the result lands: the
     // challenge's own answer is the order at ISSUE, before this swap.

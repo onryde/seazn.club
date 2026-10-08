@@ -64,10 +64,10 @@ const MULTI = ROW_KEYS.filter((r) => stagesForRow(r).length > 1);
 const FAKE_ROWS = MULTI.filter((r) => ["league", "group"].includes(stagesForRow(r)[0]!.kind));
 /** The bracket kinds: a line there needs a winner to feed on (stages.ts BRACKET_WALKOVER_KINDS plus the page playoff). */
 const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
-/** A finding, not wiring (task report): the engine declares a draw reachable
- *  on some bracket kinds (generic on page_playoff; boardgame on every kind),
- *  so the default policy posts one and the bracket line feeds nobody. Derived
- *  from the module's own supportsDraws, never a typed list. */
+/** Was a finding (W1-driving task report): the engine's deny-list declared a draw reachable on some bracket kinds
+ *  (generic on page_playoff; boardgame on every kind), so the default policy posted one and the bracket line fed
+ *  nobody. W2a's allow-list (X-DR-1: draws only in league, group, swiss and americano) closes it, so this is now
+ *  the question every test below asks and answers NO. Derived from the module's own supportsDraws, never a typed list. */
 const bracketDrawDeclared = (row: Row, sport: string, variant: string) =>
   stagesForRow(row).slice(1).some((b) => BRACKET_KINDS.has(b.kind) && drawsAllowed(sport, resolveSportCfg(sport, variant), b.kind as never));
 
@@ -221,10 +221,9 @@ describe("playDivision on the fake — the product sequence", () => {
   });
   it("every multi-stage row the fake draws plays LIFECYCLE through every stage — counted over the catalogue's rows", async () => {
     expect(FAKE_ROWS.length).toBe(5); // league_ko, groups_ko, group_stepladder, group_playoffs, group_group_ko
-    // generic/score declares draws on page_playoff (generic.ts supportsDraws), so group_playoffs is judged on the
-    // variant without draws; the declared-draw bracket is the finding pinned below.
+    // W2a (X-DR-1): generic/score no longer declares a draw on page_playoff, so no row needs the win_loss variant.
     const variantOf = (row: Row) => (bracketDrawDeclared(row, "generic", "score") ? "win_loss" : "score");
-    expect(FAKE_ROWS.filter((r) => variantOf(r) === "win_loss")).toEqual(["group_playoffs"]);
+    expect(FAKE_ROWS.filter((r) => variantOf(r) === "win_loss")).toEqual([]);
     let stages = 0;
     for (const row of FAKE_ROWS) {
       const { out, checks, state } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row, variant: variantOf(row) });
@@ -240,30 +239,45 @@ describe("playDivision on the fake — the product sequence", () => {
   it("every sport at its builder default plays league_ko LIFECYCLE through both stages — counted over the registry", async () => {
     expect(SPORT_KEYS.length).toBeGreaterThan(0);
     let judged = 0;
-    const declaredDraw: string[] = [];
     for (const sport of SPORT_KEYS) {
       const variant = offlineBuilderDefault(sport);
       const { out, checks, state } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "league_ko", sport, variant });
       expect(out.observed.stages.map((s) => s.fieldSource), sport).toEqual(["division", "seeded"]);
-      if (bracketDrawDeclared("league_ko", sport, variant)) {
-        // The finding stays VISIBLE (class 6): a stuck bracket reds, never reads works.
-        declaredDraw.push(sport);
-        expect(state.state, sport).toBe("red");
-        expect(checks.find((c) => c.id === "life-loop-bounded")?.verdict, sport).toBe("fail");
-        continue;
-      }
+      // W2a (X-DR-1): no sport declares a knockout draw any more, so none sticks the bracket — every one plays through.
+      expect(bracketDrawDeclared("league_ko", sport, variant), sport).toBe(false);
       expect(state, `${sport}: ${failed(checks).join("; ")}`).toMatchObject({ state: "works" });
       judged++;
     }
     expect(judged).toBeGreaterThan(0);
-    expect(judged + declaredDraw.length).toBe(SPORT_KEYS.length);
-    process.stdout.write(`multi-stage registry sweep: ${judged} works, ${declaredDraw.length} declare a knockout draw (${declaredDraw.join(", ")})\n`);
+    expect(judged).toBe(SPORT_KEYS.length);
   });
-  it("…and generic/score's declared page_playoff draw sticks group_playoffs' stage 2, visibly red (the finding, routed in the task report)", async () => {
-    expect(bracketDrawDeclared("group_playoffs", "generic", "score")).toBe(true);
+  it("…and generic/score's page_playoff no longer declares a draw (SC-O2, X-DR-1), so group_playoffs' stage 2 plays through instead of sticking", async () => {
+    expect(bracketDrawDeclared("group_playoffs", "generic", "score")).toBe(false);
     const { checks, state } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "group_playoffs" });
-    expect(state.state).toBe("red");
-    expect(checks.find((c) => c.id === "life-loop-bounded")?.verdict).toBe("fail");
+    expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
+    expect(checks.find((c) => c.id === "life-loop-bounded")?.verdict).toBe("pass");
+  });
+  it("W2a: the bracket policy counts BRACKET fixtures, not the run's decided total — a bracket that follows a table stage whose decided count is not a multiple of three still opens with a decider, in every multi-stage row the fake draws", async () => {
+    let judged = 0;
+    let offset = 0;
+    for (const row of FAKE_ROWS) {
+      const { out } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row, sport: "generic", variant: "score" });
+      const played = (fx: readonly { outcome: { kind: string } | null }[]) => fx.filter((f) => f.outcome !== null && f.outcome.kind !== "award").length;
+      let before = 0; // decided fixtures in the stages before this one
+      for (const st of out.observed.stages) {
+        if (BRACKET_KINDS.has(st.kind)) {
+          const ordered = [...st.fixtures].sort((a, b) => (a.roundNo ?? 0) - (b.roundNo ?? 0));
+          const first = ordered.find((f) => f.outcome !== null && f.outcome.kind !== "award");
+          expect((first?.outcome as { method?: string } | undefined)?.method ?? "", `${row} seq ${st.seq}: the first played bracket fixture is a decider (${before} decided before it)`).toMatch(/^settled_/);
+          if (before % 3 !== 0) offset++;
+          judged++;
+        }
+        before += played(st.fixtures);
+      }
+    }
+    expect(judged).toBeGreaterThan(0);
+    // Anti-vacuity: the offset case this test exists for was actually reached.
+    expect(offset, "no row put a bracket behind a table stage with a decided count off a multiple of three").toBeGreaterThan(0);
   });
   it("T6-R3 (m-12): draws are decided PER STAGE — a sport declaring draws on stage 1's kind and none on stage 2's posts draws in stage 1 and none in stage 2, swept over the registry", async () => {
     const [k1, k2] = stagesForRow("league_ko").map((b) => b.kind as StageKind);
