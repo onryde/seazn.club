@@ -194,6 +194,12 @@ double-forfeit tile sends `core.forfeit{by:"both", reason:"walkover"}`. `boardga
 then stays accepted by the schema only for streams written before W2b (none expected — §5.4's count covers it) and
 is no longer emitted. Owner to confirm at review.
 
+**Schema tightening (f-w2, W2a loop F review).** `BoardgameResult` (`boardgame.ts:140`) does not tie `winner` to
+`method`, so `{winner:"H", method:"double_forfeit"}` parses today. W2b's schema refuses it (`double_forfeit` ⇒ `winner`
+null; `forfeit` ⇒ `winner` present), and the write path refuses both forfeit methods once the dock sends
+`core.forfeit`. W2a is adjusting its D-O1 derivation test so this tightening does not red it; W2a's gate keeps the
+`boardgame.result` entries as a defensive no-op.
+
 Compile-time: football `:2623`, cricket `:3910`, period `:2616`, generic `:624` and `:212` have no `default` — the new
 kind becomes a compile error there, by design. Runtime throws at setbased `:2439`, nested `:2207`, carrom `:941`,
 boardgame `:807` get explicit cases.
@@ -353,6 +359,11 @@ do not add `double_walkover` to `isLevelOutcome` (§5.1); make "nobody advances"
 `advancesNobody` as a separate clause in both dead-seat predicates (§5.3); migrate unsettled held chess double
 forfeits and leave settled rows (§5.4). W2b changes X-BR-1's wording and retires T15-R1 only after W2a merges; nothing
 in W2a's build moves. Any further W2a interface change comes only through f-w2's owner.
+
+Raised by f-w2 from W2a's loop F review (2026-10-08): the `BoardgameResult` winner/method tie (§5.2, in W2b); held-
+fixture auto-walkover (W2b-R8, already here); `division_has_results` (V355) and the me-officiating view dropping
+`needs_decision` fixtures — **recommended as W2a's** (readers of W2a's own status; W2b adds no new status), routing put
+to both owners; legacy completed stages whose fixture V432 moves to `needs_decision` — answer pending from W2a.
 
 ## 13. False premises found (W2b) — for `_INDEX.md` at fold
 
