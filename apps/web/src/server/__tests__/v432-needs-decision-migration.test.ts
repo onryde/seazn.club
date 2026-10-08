@@ -3,9 +3,10 @@
 // neither can drift from the migration unseen. The DB cases run the migration's OWN statements, read from the file.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 import { BRACKET_KINDS } from "@seazn/engine/core";
-import { sql } from "@/lib/db";
+import { connectionOptions, sql } from "@/lib/db";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 
@@ -70,5 +71,49 @@ describe("V432 needs_decision", () => {
     expect(byId.size).toBe(2); // both rows were read inside the transaction
     expect(byId.get(koId)).toBe("needs_decision");
     expect(byId.get(lgId)).toBe("decided"); // the negative pair: a league draw is a result, never held
+  });
+  it.skipIf(!HAS_DB)("review M-4: V432's backfill block reports the rows it moved and the complete stages that hold one, and leaves those stages complete", async () => {
+    // The migration's OWN `do` block (read from the file), on a dedicated one-connection client that records the
+    // NOTICE, inside a rolled-back transaction. The shared test DB holds other suites' rows, so the counts are held
+    // to what the transaction itself saw change, never to a number typed here.
+    const block = /do \$\$[\s\S]*?end \$\$;/.exec(code)?.[0];
+    expect(block, "V432 wraps its backfill in a do block").toBeDefined();
+    const ko = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    const koId = ko.fixtureIds[0]!;
+    const url = process.env.DATABASE_URL!;
+    const notices: string[] = [];
+    const client = postgres(url, {
+      max: 1,
+      ssl: connectionOptions(url).ssl,
+      connection: { search_path: connectionOptions(url).schema },
+      onnotice: (n) => notices.push(String(n.message)),
+    });
+    const ROLLBACK = new Error("rollback");
+    let delta = -1;
+    let stageAfter = "";
+    try {
+      await expect(
+        client.begin(async (tx) => {
+          await tx`update fixtures set status = 'decided', outcome = '{"kind":"draw"}'::jsonb where id = ${koId}`;
+          await tx`update stages set status = 'complete' where id = ${ko.stageId}`;
+          const [b] = await tx<{ n: number }[]>`select count(*)::int as n from fixtures where status = 'needs_decision'`;
+          await tx.unsafe(block!);
+          const [a] = await tx<{ n: number }[]>`select count(*)::int as n from fixtures where status = 'needs_decision'`;
+          delta = a!.n - b!.n;
+          stageAfter = (await tx<{ status: string }[]>`select status from stages where id = ${ko.stageId}`)[0]!.status;
+          throw ROLLBACK;
+        }),
+      ).rejects.toBe(ROLLBACK);
+    } finally {
+      await client.end();
+    }
+    const v432 = notices.filter((n) => n.startsWith("V432"));
+    expect(v432, "exactly one V432 notice").toHaveLength(1);
+    const m = /moved=(\d+).*complete_stages_holding_one=(\d+)/.exec(v432[0]!);
+    expect(m, v432[0]).not.toBeNull();
+    expect(delta).toBeGreaterThanOrEqual(1); // our row moved
+    expect(Number(m![1])).toBe(delta); // the notice counts exactly the rows the block moved
+    expect(Number(m![2])).toBeGreaterThanOrEqual(1); // our complete knockout stage holds one
+    expect(stageAfter, "stages.status is a stored flag: the backfill does not reopen a complete stage").toBe("complete");
   });
 });

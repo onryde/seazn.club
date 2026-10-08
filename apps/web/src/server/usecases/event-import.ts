@@ -420,10 +420,10 @@ async function runStream(
   }
 
   // 8. After commit — never inside it — the same decided side effects
-  // scoreEvent fires, in the same order (scoring.ts:129-133). Unconditional
-  // here: the dry run already proved this stream decides, and import never
-  // carries a core.void, so there is no "outcome erased by an undo" case to
-  // special-case the way scoreEvent's own condition does.
+  // scoreEvent fires, in the same order (scoring.ts:129-133). The dry run
+  // already proved this stream reaches an outcome, and import never carries a
+  // core.void, so there is no "outcome erased by an undo" case to special-case
+  // the way scoreEvent's own condition does — only its held arm (W2a, below).
   //
   // Guarded as a block, and the guard is load-bearing: every line below runs
   // AFTER the transaction committed, so the events and the receipt are already
@@ -435,9 +435,13 @@ async function runStream(
   // that fails is a stale standings table, not a failed import; log it and
   // report the truth.
   try {
-    await onDecided(auth, fixtureId);
-    await refreshDiscipline(auth, fixtureId);
-    await refreshNews(auth, fixtureId);
+    // W2a (spec §5.4.4, review M-2): a HELD fixture (needs_decision) seats nobody — the same skip as scoreEvent's
+    // (scoring.ts): onDecided, discipline and news wait for the organiser's settle.
+    if (last.status !== "needs_decision") {
+      await onDecided(auth, fixtureId);
+      await refreshDiscipline(auth, fixtureId);
+      await refreshNews(auth, fixtureId);
+    }
     if (firstResult) {
       await captureServer({
         event: EVENTS.RESULT_ENTERED,

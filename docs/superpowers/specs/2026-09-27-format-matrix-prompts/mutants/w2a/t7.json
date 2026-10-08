@@ -114,8 +114,8 @@
   {
     "id": "append-kind",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "nextStatus(candidate.type, outcome, active, stage?.kind ?? null)",
-    "replace": "nextStatus(candidate.type, outcome, active, null)",
+    "find": "const status = nextStatus(candidate.type, outcome, active, stageKind);",
+    "replace": "const status = nextStatus(candidate.type, outcome, active, null);",
     "killers": [
       {
         "cwd": "apps/web",
@@ -399,6 +399,81 @@
           "src/lib/__tests__/status-set-sweep.test.ts"
         ],
         "name": "each set holds needs_decision exactly when its class says it must"
+      }
+    ]
+  },
+  {
+    "id": "v432-notice-moved",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "  get diagnostics moved = row_count;",
+    "replace": "  moved := 0;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "review M-4: V432's backfill block reports the rows it moved and the complete stages that hold one, and leaves those stages complete"
+      }
+    ]
+  },
+  {
+    "id": "v432-notice-stages",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "  select count(distinct s.id) into complete_stages",
+    "replace": "  select 0 into complete_stages",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "review M-4: V432's backfill block reports the rows it moved and the complete stages that hold one, and leaves those stages complete"
+      }
+    ]
+  },
+  {
+    "id": "has-results-held",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "(f.status in ('abandoned', 'needs_decision')",
+    "replace": "(f.status in ('abandoned')",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/division-slot-held-fixture.test.ts"
+        ],
+        "name": "D-F3: V432's OWN text of the function \\(applied in a rolled-back transaction\\) counts a held draw and not a held no_result"
+      }
+    ]
+  },
+  {
+    "id": "me-officiating-held",
+    "file": "apps/web/src/server/usecases/me-officiating.ts",
+    "find": "and f.status in ('scheduled', 'in_play', 'needs_decision')",
+    "replace": "and f.status in ('scheduled', 'in_play')",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/me-officiating.test.ts"
+        ],
+        "name": "D-F3: a HELD fixture \\(needs_decision\\) stays an outstanding duty — the official can still find a match waiting for a decision"
+      }
+    ]
+  },
+  {
+    "id": "withdrawal-held-named",
+    "file": "apps/web/src/server/usecases/withdrawal.ts",
+    "find": "  if (status === \"needs_decision\") return \"void\";",
+    "replace": "  if (status === \"needs_decision\") return \"scheduled\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-ST-1 \\(ruling C17, Review Focus 5\\): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\), and a settle for the remaining one seats them"
       }
     ]
   }

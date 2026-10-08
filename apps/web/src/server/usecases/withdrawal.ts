@@ -39,6 +39,17 @@ const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 // builder so the two cannot disagree about who a departure would expunge.
 const SETTLED = WITHDRAWAL_PLAYED_STATUSES;
 const PENDING = WITHDRAWAL_PENDING_STATUSES;
+
+/** A bracket fixture's status as the engine's withdrawal planner reads it. */
+function bracketWithdrawalStatus(status: string): "decided" | "scheduled" | "void" {
+  if (SETTLED.has(status)) return "decided";
+  if (PENDING.has(status)) return "scheduled";
+  // W2a (ruling C17): a HELD fixture is named, not fallen into. It is passed as "void" so the planner walks nobody
+  // over on it: it stays needs_decision, and the organiser settles it for the remaining entrant (a settle naming
+  // the withdrawn one is refused SETTLE_NOT_APPLICABLE). The auto-walkover of a held fixture is W2b's (spec §2.3).
+  if (status === "needs_decision") return "void";
+  return "void"; // abandoned, cancelled
+}
 const REASON = "entrant withdrew";
 
 export interface WithdrawCascadeOut {
@@ -192,10 +203,7 @@ export async function withdrawEntrantCascade(
         const bracketFixtures: BracketFixture[] = mine.map((f) => ({
           id: f.id,
           round: f.round_no,
-          status: (SETTLED.has(f.status) ? "decided" : PENDING.has(f.status) ? "scheduled" : "void") as
-            | "decided"
-            | "scheduled"
-            | "void",
+          status: bracketWithdrawalStatus(f.status),
           home: f.home_entrant_id ?? undefined,
           away: f.away_entrant_id ?? undefined,
         }));
