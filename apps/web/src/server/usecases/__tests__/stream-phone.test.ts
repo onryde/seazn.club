@@ -230,7 +230,8 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     r.tick(1_000);
     const v = await readRig(r);
     expect([v.phone?.model, v.phone?.present, v.phone?.lastBeatAt]).toEqual(["Phone B", true, tookAt.toISOString()]);
-    expect(v.lastTakeover).toEqual({ at: tookAt.toISOString(), model: "Phone B" });
+    // PR-2 T12: `elapsedMs` is the server clock's age of the takeover — the rig ticked 1 000 ms since B took the slot.
+    expect(v.lastTakeover).toEqual({ at: tookAt.toISOString(), model: "Phone B", elapsedMs: 1_000 });
   });
 
   it("T21: the operator's Stop ENDS the phone's pairing — with no other phone the read has none (and no takeover)", async () => {
@@ -1047,6 +1048,54 @@ describe.skipIf(!HAS_DB)("streamPhone — the device model survives the beats th
     r.tick(SEC);
     await beat(r, a, { startFailed: null });
     expect((await readRig(r)).phone?.startFailed).toBeNull();
+  });
+});
+
+// PR-2 T12 (§7.5): the takeover notice shows for 30 min after the takeover, judged on the SERVER's clock (the D3 M6 rule) —
+// the read model serves the takeover's age, `now − at`, so the panel never compares its own clock with a server stamp.
+// Expected values are the rig's own ticks (the declared clock), never read back from stream-phone.ts.
+describe.skipIf(!HAS_DB)("streamPhone — lastTakeover.elapsedMs on the server's clock (PR-2 T12)", () => {
+  const NOTICE_MS = 30 * MIN; // §7.5's "for 30 min"
+  it("EMPTY: one phone, no takeover → null; then a takeover → elapsedMs 0 at once, 29:59 at 30 min − 1 s, 30:00 at 30 min, a second read the same", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    const b = phoneId("b");
+    await beat(r, a, { claim: "new", device: { model: "Phone A" } });
+    expect((await readRig(r)).lastTakeover, "the empty case: no takeover yet").toBeNull();
+    r.tick(SEC);
+    await beat(r, b, { claim: "new", device: { model: "Phone B" } });
+    expect((await pairingOf(r, a)).end_cause, "PREMISE: A was replaced").toBe("replaced");
+    expect((await readRig(r)).lastTakeover?.elapsedMs, "the read at the takeover's own instant").toBe(0);
+    const checks: [number, number][] = [[NOTICE_MS - SEC, NOTICE_MS - SEC], [SEC, NOTICE_MS], [0, NOTICE_MS], [5 * MIN, NOTICE_MS + 5 * MIN]];
+    let checked = 0;
+    for (const [step, want] of checks) {
+      r.tick(step);
+      // B keeps beating (fresh) — the age is the TAKEOVER's, not the last beat's.
+      if (step > 0) await beat(r, b, { device: null });
+      const v = await readRig(r);
+      expect(v.lastTakeover?.elapsedMs, `${want} ms after the takeover`).toBe(want);
+      expect(v.phone?.elapsedMs, "and the beat's own age is its own").toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(checks.length);
+  });
+
+  it("a SECOND takeover restarts the age (the latest one is served); a takeover stamped in the future (skew) reads 0, never negative", async () => {
+    const r = await captureRig();
+    const [a, b, c] = [phoneId("a"), phoneId("b"), phoneId("c")];
+    await beat(r, a, { claim: "new", device: { model: "Phone A" } });
+    r.tick(SEC);
+    await beat(r, b, { claim: "new", device: { model: "Phone B" } });
+    r.tick(10 * MIN);
+    expect((await readRig(r)).lastTakeover?.elapsedMs).toBe(10 * MIN);
+    await beat(r, c, { claim: "new", device: { model: "Phone C" } });
+    r.tick(2 * SEC);
+    const second = await readRig(r);
+    expect([second.lastTakeover?.model, second.lastTakeover?.elapsedMs], "the newest takeover, aged from ITS instant").toEqual(["Phone C", 2 * SEC]);
+    // Skew: the stored instant moved past the server's clock (a clock that stepped back). The age clamps at 0.
+    await sql`update fixture_stream_pairings set ended_at = ${new Date(r.now().getTime() + MIN)}
+               where id = ${(await pairingOf(r, b)).id}`;
+    expect((await readRig(r)).lastTakeover?.elapsedMs, "a future instant reads 0").toBe(0);
   });
 });
 

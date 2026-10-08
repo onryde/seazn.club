@@ -137,7 +137,8 @@ function autoOf(
  *    choice was cleared or archived (T36, n1). Read, never written: opening the panel saves nothing;
  *  - `lastTakeover`: the latest time ANOTHER phone took the slot (§7.5, T2/T4) — read from the pairings, because a
  *    takeover on a slot with no session has no session to carry a `phone_takeover` event. The session's phone re-seated
- *    onto a reissued code (B6 I-2) is the same phone moving, never a takeover;
+ *    onto a reissued code (B6 I-2) is the same phone moving, never a takeover. `elapsedMs` (PR-2 T12) is its age on the
+ *    server's clock, for the panel's 30-minute notice;
  *  - `auto` (PR-2 T6): the fixture's settings row as the panel's switch and strips read it — null with no row. Its `refusal` is
  *    served only while `autoStartVerdict` could still pass (`autoOf`): the stored code can outlive the attempt it belonged to;
  *  - `phone.health` (PR-2 T6): domain/phone-health.ts's one derivation over the stored beat — withheld while the phone is silent
@@ -244,7 +245,8 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
         join fixture_stream_pairings nxt on nxt.id = old.replaced_by
        where c.fixture_id = ${fixtureId} and old.end_cause = 'replaced' and nxt.phone <> old.phone
        order by old.ended_at desc, old.id desc limit 1`;
-    if (t) lastTakeover = { at: new Date(t.at).toISOString(), model: t.model };
+    // PR-2 T12: the notice's age on the server's clock (§7.5's 30 min); a stamp past `now` (skew) reads 0.
+    if (t) lastTakeover = { at: new Date(t.at).toISOString(), model: t.model, elapsedMs: Math.max(0, now.getTime() - new Date(t.at).getTime()) };
   }
 
   return {

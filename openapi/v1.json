@@ -45267,11 +45267,17 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "elapsedMs": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
                                 }
                               },
                               "required": [
                                 "at",
-                                "model"
+                                "model",
+                                "elapsedMs"
                               ],
                               "additionalProperties": false
                             },
@@ -45430,7 +45436,8 @@
                     },
                     "lastTakeover": {
                       "at": "example",
-                      "model": "example"
+                      "model": "example",
+                      "elapsedMs": 0
                     },
                     "auto": {
                       "enabled": true,
