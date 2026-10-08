@@ -67,11 +67,8 @@ These were found while planning, by reading the tree at `c0416dea6`. None is dec
    - `toBracketFixture` calls `bracketWinnerLoser` for every bracket row, held ones included (`engine-db/competition.ts:181`, `:632`; `usecases/stages.ts:4088`).
 
    So `LEVEL_RESULT_SEATED` fires only on the bug shape: a bracket stage kind, a status in `decided | forfeited | finalized`, and a level outcome. It is placed where the stage kind and the status are both known: `onDecided`, `toBracketFixture`, and the `stages.ts:4088` completed-bracket rebuild. Both helpers keep returning `{}` for a level outcome, which stays correct for leagues.
-7. **OWNER — existing rows.** A bracket fixture already stored as `decided`/`finalized` with a level outcome (the 77 reds' shape, possibly in production) would make the read paths in finding 6 throw `LEVEL_RESULT_SEATED`.
-   - **Recommendation:** V431 also moves those rows to `needs_decision`, so the organiser sees the block and can settle them. The owner value is that no live cup is left with an exception page.
-   - **Cost:** one `update` in the delta.
-   - RULES.md "Schema" says greenfield with no backfills to preserve; production exists, so this is put to the owner.
-   - Task 7 Step 0 asks. If the owner declines, Task 7 Step 7 is dropped, and the read-path guards in Task 8 log to Sentry instead of throwing on that legacy shape.
+7. **OWNER (resolved, ruling 82) — existing rows.** A bracket fixture already stored as `decided`/`finalized` with a level outcome (the 77 reds' shape, possibly in production) would make the read paths in finding 6 throw `LEVEL_RESULT_SEATED`.
+   - **RESOLVED — ruling 82 (owner, 2026-10-08): backfill.** V431 also moves those rows to `needs_decision`, so the organiser sees the block and can settle them, and no live cup is left with an exception page. The cost is one `update` in the delta (Task 7 Steps 3, 4 and 7, unconditional). With the shape gone, the read-path guards in Task 8 throw on it like any other bug shape.
 8. **OpenAPI drift is expected, contrary to spec §5.4.8.** The public fixture status enum at `apps/web/src/server/api-v1/schemas.ts:1658` lists every status, so `needs_decision` changes `openapi/v1.json` and `openapi/v1.public.json` (`scripts/openapi-gen.ts:18-23`). Task 7 regenerates and commits both.
 9. **"The V367 courts history" holds no status set.** `db/migration/deltas/V367__venues_and_courts.sql` contains no fixture-status literal. The SQL sets that do are:
    - V214 (the check constraint, `v2-engine/tables/V214__fixtures.sql:21-22`);
@@ -119,11 +116,10 @@ These were found while planning, by reading the tree at `c0416dea6`. None is dec
     - Cricket's abandon folds to `no_result` (or `tie` in a super over).
     - Football and the period kernel fold a level abandon to `no_result` (`football.ts:1653`, `period/kernel.ts:1446`).
     - Each of those leaves status `abandoned` **with** an outcome in a bracket. Settle's precondition already admits them (a level outcome), but the console block condition in spec §5.5 ("abandoned with no outcome") would hide the button.
-    - The plan shows the block for a bracket fixture that is `needs_decision`, or `abandoned` with an outcome that is null or level. It is derived from X-ST-1 and flagged.
-20. **OWNER — whose colours an armageddon uses.** BG-KO-2 says "a drawn armageddon game is won by Black". The engine knows one colour fact per fixture, `colorOfHome` (`boardgame.ts:197`, set by the pairing card at `:282+`). In FIDE practice the armageddon colours are drawn afresh, so Black in the armageddon need not be Black in the drawn game.
+    - The plan shows the block for a bracket fixture that is `needs_decision`, or `abandoned` with an outcome that is null or level. It is derived from X-ST-1. **Folded into spec §5.5** with the plan's approval (ruling 82).
+20. **OWNER (resolved, ruling 82) — whose colours an armageddon uses.** BG-KO-2 says "a drawn armageddon game is won by Black". The engine knows one colour fact per fixture, `colorOfHome` (`boardgame.ts:197`, set by the pairing card at `:282+`). In FIDE practice the armageddon colours are drawn afresh, so Black in the armageddon need not be Black in the drawn game.
     - Spec §5.2 says "the side recorded as Black for that game", and the payload has no field to record it.
-    - The plan implements the spec as written (`colorOfHome`) and puts the question to the owner at Task 5 Step 0.
-    - **Recommendation:** add an optional `black: EntrantId` to `boardgame.tiebreak` in W2c with rung configuration. The cost of being wrong today is a refused "Drawn — Black advances" tap, and the scorer can still pick the winner.
+    - **RESOLVED — ruling 82 (owner, 2026-10-08): drop the "Drawn — Black advances" choice in W2a.** The `boardgame.tiebreak` payload has no draw field, and no error code exists for it. The scorer always taps the winner. The pad's armageddon step shows the hint "In Armageddon a draw means Black advances." (4 locales), which is BG-KO-2's W2a enforcement; its proving test asserts the hint renders on the armageddon step and not on rapid or blitz. Recording armageddon colours (`black: EntrantId`) moves to W2c (spec §2.3).
 21. **Finalize after settling an abandoned match.**
     - The kernel forwards `core.finalize` to the module, and modules refuse it while their own outcome is null. Boardgame does at `boardgame.ts:636` ("cannot finalize an undecided fixture"); the executor greps the other ten.
     - A settled abandon has a null module outcome, so it could never be finalized.
@@ -137,14 +133,14 @@ These were found while planning, by reading the tree at `c0416dea6`. None is dec
     - Settle is therefore opt-in (`modelCommands({ …, settle: true })`), and the default arbitrary set is unchanged.
     - A test replays every committed regression unchanged.
 25. **`fixture-console.tsx` is the R7 component.** The competition-desk index warns that "Fixture Console" in owner vocabulary means the division page's `?tab=fixtures` (`AGENTS.md`, live programmes). Spec §5.5 names `components/v2/fixture-console.tsx` explicitly, and that per-fixture page is where Forfeit and Abandon live (`:1390-1445`). The plan follows the spec. Task 11 also adds a "Needs a decision" chip on the run-sheet row, so the desk shows where the action is.
-26. **Plan additions the orchestrator relayed as owner-approved on 2026-10-08, after the spec was written.** The plan follows them. Where one changes the spec's text, it is listed here.
+26. **Plan additions the orchestrator relayed as owner-approved on 2026-10-08, after the spec was written** — recorded as rulings 80 (execution model) and 81 (tooling, batching and CI additions). The spec's §9 and §10 now cite them; the original wording is quoted below for the record.
     - **(a) Models.** Spec §10 says "Agent models are taken from `.claude/agents/*.md` and never overridden". The owner's W2a ruling ("use Opus and Sonnet wisely") overrides that for this wave only (Execution model). `IDX` must record it as a numbered ruling before the first dispatch (Task 0 Step 0), so no agent acts on it second-hand (class 17).
     - **(b) Local Stryker.** Spec §9 says to run locally "the legs covering the changed engine files". Here, changed-lines Stryker (Task 0b) does that per task, and family legs run only in the end-of-wave dispatched `mutation.yml` (Task 17). The probe still runs locally, once (Task 17).
     - **(c) Local truth runs** cover only the W2a cells. The full regression judge runs once, from a CI dispatch (Task 16). That dispatch counts as a weekly run (finding 17).
     - **(d) Batching.** Eighteen tasks (Task 0 and Tasks 1–17) run as ten reviewed loops plus two unreviewed evidence runs (Loops and lanes).
 27. **Spec gap: Finalize on a held fixture.** The console shows Finalize whenever the fixture has an outcome (`fixture-console.tsx:798`, `decided = live.outcome !== null || live.status === "abandoned"`; Finalize at `:1404`), and the kernel accepts `core.finalize` after any decision (`POST_DECISION_CORE`, `events.ts:437`). A `needs_decision` fixture, or a bracket fixture `abandoned` with a level `no_result`, could therefore be finalized. That stores `finalized` with a level outcome: the exact shape `LEVEL_RESULT_SEATED` catches, behind a lock (`LOCKED_FIXTURE_STATUSES`) that no settle can open.
     - Spec §7 names no code for it. The plan reuses `LEVEL_RESULT_IN_BRACKET`, whose copy ("a knockout match can't end level") fits, so no new code is invented. The refusal sits in the write path (Task 8), and the console hides Finalize for a held fixture (Task 11).
-    - Flagged so the owner can name a dedicated code instead.
+    - **Folded into spec §5.4 item 3, §5.5 and §7** with the plan's approval (ruling 82), reusing `LEVEL_RESULT_IN_BRACKET`.
 ---
 
 ## Decisions
@@ -345,7 +341,7 @@ Five inputs the spec implies but no requirement names. Each line's test is writt
 
 ---
 
-## Execution model (owner ruling, W2a only)
+## Execution model (ruling 80, W2a only)
 
 The orchestrator relayed the owner's ruling on 2026-10-08: "use Opus and Sonnet wisely". Like W1d's ruling 69, it authorises a per-dispatch model override **for W2a only**. Outside this table, `.claude/agents/*.md` decides. The principle:
 - **Opus** where a miss can pass a green suite, or where the judgement is about semantics, security or the oracle.
@@ -416,14 +412,14 @@ Ten reviewed loops (A, B, C, D, F, G, H, P1, P2, R) and two unreviewed evidence 
 | `packages/engine/test/rules-reference.test.ts` | Checker: parses rows, ids unique, every signed row proved by a test that names it | 2 |
 | `E/core/types.ts` | `BRACKET_KINDS`, `DRAW_KINDS`, `forbidsLevelResult`, `isLevelOutcome` | 3 |
 | `E/sport/supports-draws.test.ts` | 11 sports × 9 kinds sweep (X-DR-1) | 3 |
-| `E/core/events.ts`, `E/core/errors.ts` | `core.settle`, `Settlement`, `outcomeOf`, the five new error codes | 4 |
+| `E/core/events.ts`, `E/core/errors.ts` | `core.settle`, `Settlement`, `outcomeOf`, the four new error codes | 4 |
 | `E/core/settle.test.ts` | Settle precondition, void, finalize, stoppage, a per-sport sweep and a rule-10 sequence | 4 |
 | `E/sport/module.ts` + every module | `bracketDeciders(cfg)` | 5 |
 | `E/sports/boardgame/boardgame.ts` | `tiebreak` cfg, phase `tiebreak`, `boardgame.tiebreak` event, padSpec panel | 5 |
 | `E/sports/boardgame/tiebreak.test.ts`, `E/sport/bracket-deciders.test.ts` | BG-KO-1/2, CA-KO-1, per-sport declarations | 5 |
 | `W/server/engine-db/fixture-cfg.ts` | `resolveFixtureCfg(snapshot, divisionCfg, stage, module)`, with the bracket overlay | 6 |
 | `W/server/engine-db/__tests__/bracket-overlay-callers.test.ts` | Per-caller proof that the overlay reaches all 11 sites | 6 |
-| `db/migration/deltas/V431__fixture_status_needs_decision.sql` | Status value, plus the legacy backfill (finding 7) | 7 |
+| `db/migration/deltas/V431__fixture_status_needs_decision.sql` | Status value, plus the legacy backfill (finding 7, ruling 82) | 7 |
 | `W/lib/fixture-status.ts` | `FIXTURE_STATUSES`, `FIXTURE_STATUS_CLASS` (played / not finished / needs attention) | 7 |
 | `W/lib/__tests__/status-set-sweep.test.ts` + `W/lib/__tests__/status-set-ledger.ts` | Counted sweep of every status set in TS and SQL | 7 |
 | `W/server/engine-db/append-event.ts`, `fold.ts`, `replay.ts`, `usecases/admin-fixture-config.ts` | Stage-aware status rule | 7 |
@@ -482,7 +478,7 @@ Ten reviewed loops (A, B, C, D, F, G, H, P1, P2, R) and two unreviewed evidence 
   - `node scripts/stryker-changed.mjs --report <changed.json>` prints the verdict table and exits non-zero on any `Survived` or `NoCoverage`.
   - With `STRYKER_MUTATE` unset, the config is byte-for-byte the config at the merge base, for every group.
 
-- [ ] **Step 0 (orchestrator, before dispatch): record the owner's W2a rulings in `IDX`.** The model ruling (finding 26a) and the 2026-10-08 tooling, batching and CI additions go in as numbered rulings, so the dispatches cite a ruling, not a relay.
+- [ ] **Step 0 (orchestrator, before dispatch): record the owner's W2a rulings in `IDX`.** The orchestrator records them as rulings 80 (execution model, finding 26a), 81 (the tooling, batching and CI additions) and 82 (plan approval with the answers to findings 7 and 20 and to Task 11's layouts), so the dispatches cite a ruling, not a relay. No dispatch edits `_INDEX.md` for these.
 
 - [ ] **Step 1 (0a): the fixture files and the failing self-test**
 
@@ -1318,7 +1314,7 @@ const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
   ["X-DR-1", "Task 3"],
   ["X-ST-1", "Task 4"],
   ["BG-KO-1", "Task 5"],
-  ["BG-KO-2", "Task 5"],
+  ["BG-KO-2", "Task 12"],
   ["CA-KO-1", "Task 5"],
   ["X-BR-2", "Task 7"],
   ["X-BR-1", "Task 8"],
@@ -1445,7 +1441,7 @@ directory is the authority from W2a on.
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
 | BG-KO-1 | In a bracket, a drawn chess game goes to a tie-break (rapid, blitz, armageddon) recorded by the scorer; lots is the organiser's settle. | product rule following FIDE knockout practice (World Cup regulations, secondary source — re-read before citing it as federation text), ruling 73 | signed 73 2026-10-08 | `packages/engine/src/sports/boardgame/boardgame.ts` | — |
-| BG-KO-2 | A drawn armageddon game is won by Black. | FIDE armageddon convention (secondary source), ruling 73 | signed 73 2026-10-08 | `packages/engine/src/sports/boardgame/boardgame.ts` | — |
+| BG-KO-2 | A drawn armageddon game is won by Black. | FIDE armageddon convention (secondary source), ruling 73; W2a enforcement is the pad hint, ruling 82 | signed 73 2026-10-08 | `apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx` | — |
 ```
 
 `packages/engine/rules/carrom.md`:
@@ -1803,13 +1799,13 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
 
 ---
 
-### Task 4: `core.settle`, kernel-owned (X-ST-1), the five error codes, and `outcomeOf` at every reader
+### Task 4: `core.settle`, kernel-owned (X-ST-1), the four error codes, and `outcomeOf` at every reader
 
 **Loop D, continued.**
 
 **Files:**
 - Modify: `E/core/events.ts` (schemas `:96-129`, `POST_DECISION_CORE` `:437`, `DURING_STOPPAGE` `:469-490`, `foldMatchWithStoppage` `:518-768`)
-- Modify: `E/core/errors.ts` (append five codes), `E/core/errors.test.ts` (the order list)
+- Modify: `E/core/errors.ts` (append four codes), `E/core/errors.test.ts` (the order list)
 - Modify: `W/server/api-v1/http.ts` (`ENGINE_HTTP`), `W/lib/scoring-vocab.ts` (`ENGINE_ERROR_KEY`), `W/dictionaries/{en,fr,es,nl}/ui.json` (`engineError.*`)
 - Modify (readers → `outcomeOf`): `W/server/engine-db/fold.ts:163-171`, `W/server/engine-db/append-event.ts:300-329`, `W/server/overlay/recent.ts:321`, `W/server/usecases/event-import.ts:300-324`, `E/sports/cricket/scorecard.ts:1153-1155`, `HM/lib/fold.ts:61-62`, `HM/lib/model/ledger-fold.ts:37-38`
 - Create: `E/core/settle.test.ts`, `W/server/engine-db/__tests__/outcome-readers.test.ts`
@@ -1825,7 +1821,7 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
   // foldMatchWithStoppage now returns { state, stoppage, squads, settlement: Settlement | null }
   export function outcomeOf<Cfg, State>(module: Pick<FoldableModule<Cfg, State>, "outcome">, folded: { state: State; settlement: Settlement | null }): MatchOutcome | null;
   ```
-- New `EngineErrorCode` values, appended in this order: `SETTLE_NOT_APPLICABLE`, `TIEBREAK_NOT_APPLICABLE`, `ARMAGEDDON_DRAW_NOT_BLACK`, `LEVEL_RESULT_IN_BRACKET`, `LEVEL_RESULT_SEATED`. HTTP codes: 409, 409, 409, 409, 500.
+- New `EngineErrorCode` values, appended in this order: `SETTLE_NOT_APPLICABLE`, `TIEBREAK_NOT_APPLICABLE`, `LEVEL_RESULT_IN_BRACKET`, `LEVEL_RESULT_SEATED`. HTTP codes: 409, 409, 409, 500. (Ruling 82 dropped the fifth code the spec first listed.)
 - Kernel-owned `core.finalize`, when `settlement !== null && module.outcome(state) === null` (finding 21).
 
 - [ ] **Step 1: Write the failing engine tests** — `E/core/settle.test.ts`
@@ -1981,17 +1977,15 @@ Expected: `EXIT=1`; `settle.test.ts` fails to collect (no `SETTLE_METHODS`).
   // W2a (spec §7) — brackets always finish. Appended last, existing order frozen.
   // A settle on a fixture that is not level and not an un-outcomed abandon, or already settled.
   "SETTLE_NOT_APPLICABLE",
-  // boardgame.tiebreak outside phase "tiebreak", or armageddonDrawn on a non-armageddon rung.
+  // boardgame.tiebreak outside phase "tiebreak".
   "TIEBREAK_NOT_APPLICABLE",
-  // armageddonDrawn with a winner who is not Black, or with no colours recorded (BG-KO-2).
-  "ARMAGEDDON_DRAW_NOT_BLACK",
   // A generic draw in a bracket kind (GN-KO-1); every other level result is held (X-BR-2).
   "LEVEL_RESULT_IN_BRACKET",
   // Assertion: a level result reached bracket seating (X-BR-1). Only a bug reaches it.
   "LEVEL_RESULT_SEATED",
 ```
 
-Append the same five strings, with the same comment, to the end of the order list in `errors.test.ts`.
+Append the same four strings, with the same comment, to the end of the order list in `errors.test.ts`.
 
 - [ ] **Step 4: Implement settle in the kernel** (`E/core/events.ts`)
 
@@ -2090,7 +2084,6 @@ The Step 2 command, with `src/core/events.test.ts src/core/events.time.test.ts` 
 ```ts
   SETTLE_NOT_APPLICABLE: 409,
   TIEBREAK_NOT_APPLICABLE: 409,
-  ARMAGEDDON_DRAW_NOT_BLACK: 409,
   LEVEL_RESULT_IN_BRACKET: 409,
   // An assertion (X-BR-1): reaching it is a server bug, so it surfaces as one.
   LEVEL_RESULT_SEATED: 500,
@@ -2101,7 +2094,6 @@ The Step 2 command, with `src/core/events.test.ts src/core/events.time.test.ts` 
 ```ts
   SETTLE_NOT_APPLICABLE: "engineError.SETTLE_NOT_APPLICABLE",
   TIEBREAK_NOT_APPLICABLE: "engineError.TIEBREAK_NOT_APPLICABLE",
-  ARMAGEDDON_DRAW_NOT_BLACK: "engineError.ARMAGEDDON_DRAW_NOT_BLACK",
   LEVEL_RESULT_IN_BRACKET: "engineError.LEVEL_RESULT_IN_BRACKET",
   LEVEL_RESULT_SEATED: "engineError.LEVEL_RESULT_SEATED",
 ```
@@ -2112,11 +2104,10 @@ The Step 2 command, with `src/core/events.test.ts src/core/events.time.test.ts` 
 |---|---|---|---|---|
 | `SETTLE_NOT_APPLICABLE` | "This match can't be settled — it isn't level, or it's already settled." | "Ce match ne peut pas être tranché — il n'est pas à égalité, ou il l'est déjà." | "Este partido no se puede resolver: no está empatado o ya se resolvió." | "Deze wedstrijd kan niet beslist worden — hij staat niet gelijk of is al beslist." |
 | `TIEBREAK_NOT_APPLICABLE` | "A tie-break can only follow a drawn knockout game." | "Un départage ne peut suivre qu'une partie nulle à élimination directe." | "Un desempate solo puede seguir a una partida eliminatoria en tablas." | "Een tiebreak kan alleen volgen op een remise in een knock-outpartij." |
-| `ARMAGEDDON_DRAW_NOT_BLACK` | "A drawn Armageddon is won by Black — choose the player who had Black." | "Un Armageddon nul est gagné par les Noirs — choisissez le joueur qui avait les Noirs." | "Un Armagedón en tablas lo gana el negro: elige al jugador que llevaba negras." | "Een remise in armageddon wint zwart — kies de speler met zwart." |
 | `LEVEL_RESULT_IN_BRACKET` | "Enter the winner — a knockout match can't end level." | "Saisissez le vainqueur — un match à élimination directe ne peut pas finir à égalité." | "Introduce el ganador: un partido eliminatorio no puede terminar en empate." | "Voer de winnaar in — een knock-outwedstrijd kan niet gelijk eindigen." |
 | `LEVEL_RESULT_SEATED` | "Something went wrong placing this result. We've been notified." | "Un problème est survenu en plaçant ce résultat. Nous avons été prévenus." | "Algo salió mal al colocar este resultado. Ya hemos sido avisados." | "Er ging iets mis bij het plaatsen van deze uitslag. We zijn op de hoogte." |
 
-Run `cd <wt> && pnpm i18n:gen-keys && pnpm i18n:check; echo EXIT=$?`. Expected: `EXIT=0`, with the generated `i18n-keys.ts` diff listing exactly the five keys.
+Run `cd <wt> && pnpm i18n:gen-keys && pnpm i18n:check; echo EXIT=$?`. Expected: `EXIT=0`, with the generated `i18n-keys.ts` diff listing exactly the four keys.
 
 - [ ] **Step 7: Write the reader-pin test (it fails until Step 8)** — `W/server/engine-db/__tests__/outcome-readers.test.ts`
 
@@ -2248,7 +2239,7 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
 - [ ] **Step 11: Proof bookkeeping, commit**
   - Delete `["X-ST-1", "Task 4"]` from `AWAITING_PROOF`. Set X-ST-1's proved-by to `` `packages/engine/src/core/settle.test.ts` ``.
   - Run `rules-reference.test.ts` green.
-  - Commit: `feat(engine): core.settle owned by the kernel, outcomeOf at every fold reader, five W2a error codes (X-ST-1)`.
+  - Commit: `feat(engine): core.settle owned by the kernel, outcomeOf at every fold reader, four W2a error codes (X-ST-1)`.
 
 **Four test types:**
 - Unit: Steps 1–9.
@@ -2275,7 +2266,7 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
 - Modify: `E/sports/carrom/carrom.test.ts` (add the bracket case beside `:157-170`)
 
 **Interfaces:**
-- Consumes: `BRACKET_KINDS`, `DRAW_KINDS` (Task 3); `EngineErrorCode` `TIEBREAK_NOT_APPLICABLE`, `ARMAGEDDON_DRAW_NOT_BLACK` (Task 4).
+- Consumes: `BRACKET_KINDS`, `DRAW_KINDS` (Task 3); `EngineErrorCode` `TIEBREAK_NOT_APPLICABLE` (Task 4).
 - Produces:
   ```ts
   // SportModule
@@ -2283,15 +2274,15 @@ Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` o
   // boardgame
   export const TIEBREAK_RUNGS: readonly ["rapid", "blitz", "armageddon"];
   export type TiebreakRung = (typeof TIEBREAK_RUNGS)[number];
-  export const BoardgameTiebreak: z.ZodType<{ rung: TiebreakRung; winner: string; armageddonDrawn?: boolean; score?: string }>;
+  export const BoardgameTiebreak: z.ZodType<{ rung: TiebreakRung; winner: string; score?: string }>;
   export const CHESS_SCORE: RegExp; // /^(\d+½?|½)–(\d+½?|½)$/
   export const BOARDGAME_TIEBREAK_TYPE = "boardgame.tiebreak";
   // BoardgameCfg.tiebreak?: boolean   (absent = false; finding 12)
-  // BoardgameState.phase adds "tiebreak"; BoardgameState.tiebreak?: { rung?: TiebreakRung; score?: string; armageddonDrawn?: true }
-  // summary(...).detail.tiebreak?: { rung?: TiebreakRung; score?: string; armageddonDrawn?: true }   (pending while in phase tiebreak)
+  // BoardgameState.phase adds "tiebreak"; BoardgameState.tiebreak?: { rung?: TiebreakRung; score?: string }
+  // summary(...).detail.tiebreak?: { rung?: TiebreakRung; score?: string }   (pending while in phase tiebreak)
   ```
 
-- [ ] **Step 0: Put finding 20 to the owner** (whose colours an armageddon uses) as a recommendation, and record the answer in `IDX`. Build to the spec text (`colorOfHome`) unless the owner rules otherwise. A ruling to add `black` is a W2c item, and does not block this task.
+- [ ] **Step 0: Finding 20 is recorded as ruling 82.** The armageddon "Drawn — Black advances" choice is out of W2a. The payload carries no draw field, the scorer always records the winner, and armageddon colours (`black: EntrantId`) are W2c's. Nothing to ask; build to it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2399,19 +2390,16 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
   it("BG-KO-1: a second tiebreak is refused", () => {
     expect(codeOf(() => fold(ko, [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H }), ev(4, "boardgame.tiebreak", { rung: "blitz", winner: A })]))).toBe("ALREADY_DECIDED");
   });
-  it("BG-KO-2: armageddonDrawn awards Black; home is White by default, so Black is away", () => {
-    const s = fold(ko, [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", winner: A, armageddonDrawn: true })]);
-    expect(boardgame.outcome(s)).toEqual({ kind: "win", winner: A, loser: H, method: "tiebreak_armageddon" });
-  });
-  it("BG-KO-2: armageddonDrawn with White as winner is refused; with a pairing card naming away as White, Black is home", () => {
-    expect(codeOf(() => fold(ko, [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", winner: H, armageddonDrawn: true })]))).toBe("ARMAGEDDON_DRAW_NOT_BLACK");
-    const flipped = [ev(1, "boardgame.pairing", { board: 1, white: A }), ev(2, "core.start"), ev(3, "boardgame.result", { winner: null, method: "agreement" }), ev(4, "boardgame.tiebreak", { rung: "armageddon", winner: H, armageddonDrawn: true })];
-    expect(boardgame.outcome(fold(ko, flipped))).toMatchObject({ winner: H });
-  });
-  it("BG-KO-2: armageddonDrawn without colours, or on another rung, is refused", () => {
+  it("BG-KO-2 (ruling 82): the engine records the armageddon winner the scorer taps — either side, with or without colours", () => {
+    // W2a enforces BG-KO-2 by the pad's hint (Task 12), not here; colours are W2c's (spec §2.3).
     const noColours = boardgame.configSchema.parse({ colors: false, tiebreak: true });
-    expect(codeOf(() => fold(noColours, [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", winner: A, armageddonDrawn: true })]))).toBe("ARMAGEDDON_DRAW_NOT_BLACK");
-    expect(codeOf(() => fold(ko, [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: A, armageddonDrawn: true })]))).toBe("TIEBREAK_NOT_APPLICABLE");
+    let checked = 0;
+    for (const cfg of [ko, noColours]) for (const winner of [H, A]) {
+      const s = fold(cfg, [...drawn, ev(3, "boardgame.tiebreak", { rung: "armageddon", winner })]);
+      expect(boardgame.outcome(s)).toEqual({ kind: "win", winner, loser: winner === H ? A : H, method: "tiebreak_armageddon" });
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
   it("the optional score is validated as a chess score", () => {
     for (const ok of ["1½–½", "2–0", "½–1½", "3–2"]) expect(CHESS_SCORE.test(ok), ok).toBe(true);
@@ -2485,7 +2473,6 @@ export const BOARDGAME_TIEBREAK_TYPE = "boardgame.tiebreak";
 export const BoardgameTiebreak = z.strictObject({
   rung: z.enum(TIEBREAK_RUNGS),
   winner: PersonId,
-  armageddonDrawn: z.boolean().optional(),
   score: z.string().regex(CHESS_SCORE).optional(),
 });
 export type BoardgameTiebreak = z.infer<typeof BoardgameTiebreak>;
@@ -2499,9 +2486,9 @@ In `BoardgameState`: `phase: "pre" | "live" | "tiebreak" | "done" | "final" | "a
 
 ```ts
   // W2a — present from the moment a bracket game is drawn (phase "tiebreak");
-  // `rung`/`score`/`armageddonDrawn` land when the tie-break is recorded.
+  // `rung`/`score` land when the tie-break is recorded.
   // Absent on every stream that never reached a tie-break (golden-safe).
-  tiebreak?: { rung?: TiebreakRung; score?: string; armageddonDrawn?: true };
+  tiebreak?: { rung?: TiebreakRung; score?: string };
 ```
 
 In `decideResult`, replace the `if (winner === null) {…}` block:
@@ -2523,20 +2510,11 @@ function tiebreakRefused(message: string, data?: unknown): never {
   throw new EngineError("TIEBREAK_NOT_APPLICABLE", message, data);
 }
 
-// W2a BG-KO-1/BG-KO-2. Only in phase "tiebreak"; armageddonDrawn only on the
-// armageddon rung, and then the winner must be Black (colorOfHome).
+// W2a BG-KO-1. Only in phase "tiebreak". The scorer records the winner on every
+// rung; BG-KO-2 (a drawn armageddon goes to Black) is the pad's hint in W2a, and
+// armageddon colours are W2c's (ruling 82).
 function applyTiebreak(state: BoardgameState, p: BoardgameTiebreak): BoardgameState {
   if (state.phase !== "tiebreak") tiebreakRefused(`tie-break not allowed in phase "${state.phase}"`);
-  if (p.armageddonDrawn === true) {
-    if (p.rung !== "armageddon") tiebreakRefused("a drawn tie-break game counts only in armageddon", { rung: p.rung });
-    if (state.colorOfHome === null) {
-      throw new EngineError("ARMAGEDDON_DRAW_NOT_BLACK", "no colours are recorded, so Black is unknown — record the winner instead");
-    }
-    const blackSide: Side = state.colorOfHome === "W" ? "away" : "home";
-    if (p.winner !== state.entrants[blackSide]) {
-      throw new EngineError("ARMAGEDDON_DRAW_NOT_BLACK", "a drawn armageddon is won by Black", { winner: p.winner, black: state.entrants[blackSide] });
-    }
-  }
   const winnerSide = sideOf(state, p.winner);
   return {
     ...state,
@@ -2544,7 +2522,6 @@ function applyTiebreak(state: BoardgameState, p: BoardgameTiebreak): BoardgameSt
     tiebreak: {
       rung: p.rung,
       ...(p.score === undefined ? {} : { score: p.score }),
-      ...(p.armageddonDrawn === true ? { armageddonDrawn: true as const } : {}),
     },
     outcome: { kind: "win", winner: state.entrants[winnerSide], loser: state.entrants[opponent(winnerSide)], method: `tiebreak_${p.rung}` },
   };
@@ -2641,7 +2618,7 @@ cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engin
 
 Expected: `EXIT=0`, `files: 6`, `failed: 0`.
 
-If `generator-fields.test.ts` requires `boardgame.arbitraryEvent` to emit the new type with each optional field, extend `arbitraryEvent` so that it sometimes emits `{ type: "boardgame.tiebreak", payload: { rung, winner, armageddonDrawn?, score? } }`. The kernel refuses it outside phase `tiebreak`, as fuzz input should be.
+If `generator-fields.test.ts` requires `boardgame.arbitraryEvent` to emit the new type with each optional field, extend `arbitraryEvent` so that it sometimes emits `{ type: "boardgame.tiebreak", payload: { rung, winner, score? } }`. The kernel refuses it outside phase `tiebreak`, as fuzz input should be.
 
 - [ ] **Step 8: Mutate each member once, per rung and per guard (runner, then changed-lines Stryker)**
 
@@ -2650,9 +2627,7 @@ If `generator-fields.test.ts` requires `boardgame.arbitraryEvent` to emit the ne
 | `decideResult`: `state.cfg.tiebreak === true` → `false` | "with tiebreak, a drawn game opens phase 'tiebreak'" |
 | `applyTiebreak`: delete the phase check | "a tiebreak outside phase 'tiebreak' is refused, per rung" (rapid, blitz and armageddon each red) |
 | method `` `tiebreak_${p.rung}` `` → `"tiebreak_rapid"` | "each rung decides …" for blitz and armageddon |
-| Delete `if (p.rung !== "armageddon")` | "armageddonDrawn … on another rung, is refused" |
-| `blackSide` → `state.colorOfHome === "W" ? "home" : "away"` | "armageddonDrawn awards Black …" |
-| Delete the `colorOfHome === null` refusal | "armageddonDrawn without colours" |
+| `outcome.winner`: `state.entrants[winnerSide]` → `state.entrants[opponent(winnerSide)]` | "BG-KO-2 (ruling 82): the engine records the armageddon winner the scorer taps …" (and "each rung decides …") |
 | `summary`: drop `if (level) {…}` | "the summary keeps the level score" |
 | boardgame `bracketDeciders` → `{}` | bracket-deciders "BG-KO-1 CA-KO-1 …" |
 | carrom `bracketDeciders` → `{}` | "CA-KO-1: the overlay wins …" and the carrom.test CA-KO-1 case |
@@ -2680,11 +2655,11 @@ cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engin
 Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` on every killed row. A survivor gets a killing test, or an equivalence row the reviewer signs. The range covers every earlier loop-D task's lines too, so a later task's run re-proves them.
 
 - [ ] **Step 9: Proof bookkeeping, commits**
-  - Delete BG-KO-1, BG-KO-2 and CA-KO-1 from `AWAITING_PROOF`.
-  - Set proved-by: BG-KO-1 and BG-KO-2 → `` `packages/engine/src/sports/boardgame/tiebreak.test.ts` ``; CA-KO-1 → `` `packages/engine/src/sport/bracket-deciders.test.ts`<br>`packages/engine/src/sports/carrom/carrom.test.ts` ``.
+  - Delete BG-KO-1 and CA-KO-1 from `AWAITING_PROOF`. BG-KO-2 stays there until Task 12, whose pad test proves its W2a enforcement (ruling 82).
+  - Set proved-by: BG-KO-1 → `` `packages/engine/src/sports/boardgame/tiebreak.test.ts` ``; CA-KO-1 → `` `packages/engine/src/sport/bracket-deciders.test.ts`<br>`packages/engine/src/sports/carrom/carrom.test.ts` ``.
   - Run `rules-reference.test.ts` green.
   - Make two commits:
-    1. `feat(engine): bracketDeciders per sport; chess tie-break phase and boardgame.tiebreak (BG-KO-1, BG-KO-2, CA-KO-1)`;
+    1. `feat(engine): bracketDeciders per sport; chess tie-break phase and boardgame.tiebreak (BG-KO-1, CA-KO-1)`;
     2. `test(engine): golden coverage for boardgame.tiebreak (EXTEND_GOLDEN)`, containing only the new golden files and `golden.ts`.
 
 **Four test types:**
@@ -3064,7 +3039,7 @@ Each of the three cases in the existing files gets one `<site>-kind-dropped` mut
   export function nextStatus(candidateType: string, outcome: MatchOutcome | null, active: readonly EventEnvelope[], stageKind: string | null): string;
   ```
 
-- [ ] **Step 0: Put finding 7 to the owner** (backfilling the legacy level rows in brackets) as a recommendation, and record the answer in `IDX` as a numbered ruling. If the owner declines, drop Step 7's `update` and the backfill test case. Task 8 Step 4 then takes its `reportLevelSeat` branch for the read paths.
+- [ ] **Step 0: Finding 7 is recorded as ruling 82: backfill.** The owner approved it on 2026-10-08. The V431 `update` (Step 3), its migration test case (Step 4), and applying it (Step 7) are unconditional. Nothing to ask; build to it.
 
 - [ ] **Step 1: The status rule's failing tests** — `W/server/engine-db/__tests__/needs-decision-status.test.ts` (pure, no DB)
 
@@ -3154,7 +3129,7 @@ alter table fixtures add constraint fixtures_status_check check (status in
 -- V430's fixtures_track_finished needs no change: needs_decision is NOT in its finished set, so the trigger
 -- writes finished_at = null for it — the match is played but not finished (status-set ledger: "not finished").
 
--- Finding 7 (owner ruling recorded in _INDEX.md, Task 7 Step 0): legacy bracket rows stored decided/finalized
+-- Finding 7, ruling 82 (owner, 2026-10-08): legacy bracket rows stored decided/finalized
 -- with a level outcome move to needs_decision, so the organiser sees the block instead of an exception page.
 -- The update names `status`, so fixtures_track_finished fires and clears finished_at for them.
 update fixtures f set status = 'needs_decision'
@@ -3399,7 +3374,6 @@ Expected: `EXIT=0`, 10 rows killed.
   // W/server/engine-db/level-seat.ts
   export const SEATING_STATUSES: ReadonlySet<string>; // decided, forfeited, finalized
   export function assertNoLevelSeat(f: { fixtureId: string; stageKind: string | null; status: string; outcome: unknown }): void; // throws LEVEL_RESULT_SEATED
-  export function reportLevelSeat(f: { fixtureId: string; stageKind: string | null; status: string; outcome: unknown }): void;  // Sentry, never throws (finding 7 declined)
   ```
 
 - [ ] **Step 1: The failing DB tests** — `W/server/engine-db/__tests__/settle-seating.test.ts`
@@ -3583,7 +3557,6 @@ Expected: `EXIT=1`. `level-seat` is missing, and the football case is refused `D
 ```ts
 import "server-only";
 import { EngineError, forbidsLevelResult, isLevelOutcome } from "@seazn/engine/core";
-import * as Sentry from "@sentry/nextjs";
 
 /** The statuses under which a bracket fixture's outcome SEATS someone (onDecided, toBracketFixture, the rebuild). */
 export const SEATING_STATUSES: ReadonlySet<string> = new Set(["decided", "forfeited", "finalized"]);
@@ -3598,14 +3571,9 @@ export function assertNoLevelSeat(f: { fixtureId: string; stageKind: string | nu
     throw new EngineError("LEVEL_RESULT_SEATED", "a level result reached bracket seating", { fixtureId: f.fixtureId, status: f.status, stageKind: f.stageKind });
   }
 }
-
-/** The read-path form, used only if the owner declined finding 7's backfill: legacy rows report, never throw. */
-export function reportLevelSeat(f: { fixtureId: string; stageKind: string | null; status: string; outcome: unknown }): void {
-  if (isBugShape(f)) Sentry.captureMessage("LEVEL_RESULT_SEATED (legacy row)", { level: "error", extra: { fixtureId: f.fixtureId, status: f.status, stageKind: f.stageKind } });
-}
 ```
 
-The executor confirms the Sentry import path against an existing server-side `captureMessage` call (`grep -arn "captureMessage" apps/web/src/server | head -3`).
+There is no report-only read-path form: ruling 82's backfill (V431) removes the legacy shape, so the read paths throw on it like any other bug shape.
 
 - [ ] **Step 4: Wire the guards**
 
@@ -3662,7 +3630,7 @@ The executor confirms the Sentry import path against an existing server-side `ca
 // know the stage kind assert it (level-seat.ts, X-BR-1).
 ```
 
-`toBracketFixture(f, stageKind)` calls `assertNoLevelSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome })` first, or `reportLevelSeat` if finding 7 was declined. Its two callers pass the stage kind they already hold. `stages.ts:4088` does the same in the rebuild map.
+`toBracketFixture(f, stageKind)` calls `assertNoLevelSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome })` first. Its two callers pass the stage kind they already hold. `stages.ts:4088` does the same in the rebuild map.
 
 - [ ] **Step 5: Run green**
 
@@ -4017,11 +3985,7 @@ Expected: `EXIT=0`, every row killed or carrying a recorded reason.
   // true iff forbidsLevelResult(stageKind) && (status === "needs_decision" || (status === "abandoned" && (outcome === null || isLevelOutcome(outcome))))
   ```
 
-- [ ] **Step 0: Show the owner two layouts** before building (R24; RULES.md "≥2 UI options"), each as a 1280 and 320 mock in the house tokens, and record the pick in `IDX`.
-  - **(A)** An amber callout card above the match-actions section, with the two entrants as large buttons inside the dialog.
-  - **(B)** An inline banner in the scorebug strip with a single "Settle the match" button.
-
-  Recommend A: it reuses the match-actions container pattern (`fixture-console.tsx:1390`) and keeps the scorebug free, which matters most on a phone.
+- [ ] **Step 0: The layout is already chosen (ruling 82).** The options were shown in brainstorming: UI-1 option A for the console (a "Needs a decision" block above the match-actions section, `fixture-console.tsx:1390`, with a settle dialog), and UI-2 option B for the pad (Task 12). Build to them in the house design; no new options are shown. Before merge, capture the built house-styled screens at 1280, 768 and 320 (Step 6), and record the owner's per-screen verdict (Task 17 Step 3 collects them).
 
 - [ ] **Step 1: The predicate's failing unit test** — `W/components/v2/__tests__/needs-decision.test.tsx` (node environment, pure)
 
@@ -4306,6 +4270,7 @@ Expected: `EXIT=0` three times; `stats.expected` = 5, `unexpected` 0 and `skippe
   - Open the screenshots with the Read tool, cropped to the dialog (memory: full-page screenshots dominate context).
   - Write one verdict line per width for the block and for the dialog: alignment, text size, tap targets of 44px or more, truncation, and no overflow.
   - Then the control-set diff at 320 against 1280: membership, order and repeats of the dialog's controls. Write it down; never infer it.
+  - These built screens go to the owner for a per-screen verdict before merge (ruling 82; Task 17 Step 3).
 
 - [ ] **Step 7: Mutate (runner)** — `MUT/t11.json`
 
@@ -4391,37 +4356,42 @@ import { foldMatch } from "@seazn/engine/core";
 import { buildScorebug, buildSheets, buildTiles, DRAW_TILE_ID, TIEBREAK_TILE_ID } from "../skins/boardgame";
 import { liveView } from "./helpers/views";
 
-const tiebreakView = (colours: boolean) => liveView("boardgame", { stageKind: "knockout", cfg: { colors: colours, tiebreak: true }, statePatch: { phase: "tiebreak", tiebreak: {}, colorOfHome: colours ? "W" : null } });
+const tiebreakView = () => liveView("boardgame", { stageKind: "knockout", cfg: { tiebreak: true }, statePatch: { phase: "tiebreak", tiebreak: {} } });
+const winnerKey = (rung: string) => (rung === "armageddon" ? "winner-armageddon" : "winner");
 
-describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1/2, D6)", () => {
+describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-2 per ruling 82, D6)", () => {
   it("empty case first: in phase live there is no tie-break tile", () => {
     expect(buildTiles(liveView("boardgame", { stageKind: "knockout", cfg: { tiebreak: true } }), (k) => k).some((t) => t.id === TIEBREAK_TILE_ID)).toBe(false);
   });
   it("in phase tiebreak: only the tie-break tile; Draw is gone and the halves are not tappable", () => {
-    const v = tiebreakView(true);
+    const v = tiebreakView();
     expect(buildTiles(v, (k) => k).map((t) => t.id)).toEqual([TIEBREAK_TILE_ID]);
     expect(buildTiles(v, (k) => k).some((t) => t.id === DRAW_TILE_ID)).toBe(false);
     expect(buildScorebug(v, (k) => k).halves.every((h) => !h.tappable)).toBe(true);
   });
   it("step 1 offers exactly the engine's rungs, and says lots is the organiser's", () => {
-    const sheet = buildSheets(tiebreakView(true), (k) => k)[TIEBREAK_TILE_ID]!;
+    const sheet = buildSheets(tiebreakView(), (k) => k)[TIEBREAK_TILE_ID]!;
     const rung = sheet.steps.find((s) => s.id === "rung")!;
     expect(rung.kind === "choice" && rung.options.map((o) => o.id)).toEqual([...TIEBREAK_RUNGS]);
     expect(rung.kind === "choice" && rung.hintKey).toBe("pad.boardgame.tiebreak.lotsHint");
   });
-  it("BG-KO-2: armageddon offers 'Drawn — Black advances' only when colours are known, and it posts Black as the winner", () => {
-    for (const colours of [true, false]) {
-      const sheet = buildSheets(tiebreakView(colours), (k) => k)[TIEBREAK_TILE_ID]!;
-      const winner = sheet.steps.find((s) => s.id === "winner")!;
-      const ids = winner.kind === "choice" ? winner.options.map((o) => o.id) : [];
-      expect(ids.includes("drawn-black"), String(colours)).toBe(colours);
+  it("BG-KO-2 (ruling 82): every rung shows ONE winner step with exactly the two entrants; the 'draw means Black advances' hint is on armageddon only", () => {
+    const sheet = buildSheets(tiebreakView(), (k) => k)[TIEBREAK_TILE_ID]!;
+    let checked = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      const shown = sheet.steps.filter((s) => s.id.startsWith("winner") && (s.when?.({ rung }) ?? true));
+      expect(shown, rung).toHaveLength(1);
+      const step = shown[0]!;
+      expect(step.kind === "choice" && step.options.map((o) => o.id), rung).toEqual(["home", "away"]); // no third "drawn" choice
+      expect(step.kind === "choice" && step.hintKey === "pad.boardgame.tiebreak.armageddonHint", rung).toBe(rung === "armageddon");
+      checked++;
     }
-    const sheet = buildSheets(tiebreakView(true), (k) => k)[TIEBREAK_TILE_ID]!;
-    const payload = sheet.buildPayload({ rung: "armageddon", winner: "drawn-black" });
-    expect(payload).toEqual({ rung: "armageddon", winner: "A", armageddonDrawn: true }); // home is White ("W"), so Black is away "A"
+    expect(checked).toBe(TIEBREAK_RUNGS.length);
+    expect(sheet.buildPayload({ rung: "armageddon", "winner-armageddon": "away" })).toEqual({ rung: "armageddon", winner: "A" });
+    expect(sheet.buildPayload({ rung: "armageddon", "winner-armageddon": "home" })).toEqual({ rung: "armageddon", winner: "H" });
   });
   it("the score step shows for rapid and blitz only, and each offered score is a valid chess score oriented to the winner", () => {
-    const sheet = buildSheets(tiebreakView(true), (k) => k)[TIEBREAK_TILE_ID]!;
+    const sheet = buildSheets(tiebreakView(), (k) => k)[TIEBREAK_TILE_ID]!;
     const score = sheet.steps.find((s) => s.id === "score")!;
     let checked = 0;
     for (const rung of TIEBREAK_RUNGS) {
@@ -4435,20 +4405,20 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1/2, D6)"
   });
   it("the seam: every payload the sheet can build folds through the REAL engine to a win (class 1)", () => {
     let checked = 0;
-    const sheet = buildSheets(tiebreakView(true), (k) => k)[TIEBREAK_TILE_ID]!;
-    const cfg = boardgame.configSchema.parse({ colors: true, tiebreak: true });
+    const sheet = buildSheets(tiebreakView(), (k) => k)[TIEBREAK_TILE_ID]!;
+    const cfg = boardgame.configSchema.parse({ tiebreak: true });
     const lineups = { home: { entrantId: "H", members: [] }, away: { entrantId: "A", members: [] } } as never;
-    for (const rung of TIEBREAK_RUNGS) for (const winner of ["home", "away", ...(rung === "armageddon" ? ["drawn-black"] : [])]) for (const score of rung === "armageddon" ? [undefined] : ["none", "2–0", "1½–½"]) {
-      const payload = sheet.buildPayload({ rung, winner, ...(score ? { score } : {}) });
+    for (const rung of TIEBREAK_RUNGS) for (const winner of ["home", "away"]) for (const score of rung === "armageddon" ? [undefined] : ["none", "2–0", "1½–½"]) {
+      const payload = sheet.buildPayload({ rung, [winnerKey(rung)]: winner, ...(score ? { score } : {}) });
       const s = foldMatch(boardgame, cfg, lineups, [
         { id: "e1", seq: 1, type: "core.start", payload: {}, recordedAt: "2026-10-08T00:00:00Z", recordedBy: null },
         { id: "e2", seq: 2, type: "boardgame.result", payload: { winner: null, method: "agreement" }, recordedAt: "2026-10-08T00:00:00Z", recordedBy: null },
         { id: "e3", seq: 3, type: "boardgame.tiebreak", payload, recordedAt: "2026-10-08T00:00:00Z", recordedBy: null },
       ] as never);
-      expect(boardgame.outcome(s)?.kind, JSON.stringify(payload)).toBe("win");
+      expect(boardgame.outcome(s), JSON.stringify(payload)).toMatchObject({ kind: "win", winner: winner === "home" ? "H" : "A", method: `tiebreak_${rung}` });
       checked++;
     }
-    expect(checked).toBe(2 * 3 + 2 * 3 + 3); // rapid 6, blitz 6, armageddon 3
+    expect(checked).toBe(2 * 3 + 2 * 3 + 2); // rapid 6, blitz 6, armageddon 2
   });
 });
 ```
@@ -4503,30 +4473,27 @@ const inTiebreak = (view: Pick<PadHostView, "state">) => readPhase(asState(view.
 
 function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
   const state = asState(view.state);
-  const colours = state.colorOfHome === "W" || state.colorOfHome === "B";
-  const black: Side = state.colorOfHome === "W" ? "away" : "home";
   const nameOf = (side: Side) => view.personNames[entrantOf(state, side)] ?? t(SIDE_LABEL[side]);
+  const winnerOptions = SIDES.map((side) => ({ id: side, label: nameOf(side) })); // always the two entrants (ruling 82)
   const SCORES = ["none", "2–0", "1½–½"] as const; // D6: oriented to the winner; the engine validates any CHESS_SCORE
   return {
     event: BOARDGAME_TIEBREAK_TYPE,
     steps: [
       { id: "rung", kind: "choice", title: "pad.boardgame.tiebreak.rung.title", hintKey: "pad.boardgame.tiebreak.lotsHint",
         options: TIEBREAK_RUNGS.map((r) => ({ id: r, label: t(`pad.boardgame.tiebreak.rung.${r}`) })) },
-      { id: "winner", kind: "choice", title: "pad.boardgame.tiebreak.winner.title",
-        options: (answers?: Record<string, string>) => [
-          ...SIDES.map((side) => ({ id: side, label: nameOf(side) })),
-          ...(answers?.rung === "armageddon" && colours ? [{ id: "drawn-black", label: t("pad.boardgame.tiebreak.drawnBlack", { name: nameOf(black) }) }] : []),
-        ] },
+      { id: "winner", kind: "choice", title: "pad.boardgame.tiebreak.winner.title", when: (a) => a.rung !== "armageddon",
+        options: winnerOptions },
+      // BG-KO-2 in W2a (ruling 82): the scorer taps the winner; the hint says a drawn armageddon goes to Black.
+      { id: "winner-armageddon", kind: "choice", title: "pad.boardgame.tiebreak.winner.title", hintKey: "pad.boardgame.tiebreak.armageddonHint", when: (a) => a.rung === "armageddon",
+        options: winnerOptions },
       { id: "score", kind: "choice", title: "pad.boardgame.tiebreak.score.title", when: (a) => a.rung !== "armageddon",
         options: SCORES.map((s) => ({ id: s, label: s === "none" ? t("pad.boardgame.tiebreak.score.none") : s })) },
     ],
     buildPayload: (a) => {
-      const drawnBlack = a.winner === "drawn-black";
-      const side: Side = drawnBlack ? black : a.winner === "away" ? "away" : "home";
+      const side: Side = (a.winner ?? a["winner-armageddon"]) === "away" ? "away" : "home";
       return {
         rung: a.rung,
         winner: entrantOf(state, side),
-        ...(drawnBlack ? { armageddonDrawn: true } : {}),
         ...(a.score && a.score !== "none" ? { score: a.score } : {}),
       };
     },
@@ -4535,13 +4502,7 @@ function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
 // buildSheets returns { [PAIRING_TILE_ID]: pairingSheet(view), [TIEBREAK_TILE_ID]: tiebreakSheet(view, t) }
 ```
 
-`SheetChoiceStep.options` is a static array today (`types.ts:685`). The winner step needs the armageddon option only when step 1 chose armageddon. Make that the smallest change, in `types.ts` and `guided-sheet.tsx`:
-
-```ts
-options: readonly ChoiceOption[] | ((answers: Readonly<Record<string, string>>) => readonly ChoiceOption[])
-```
-
-The guided sheet resolves it with the answers so far, the same way it already evaluates `when`. Back on each step is the chassis's existing `backStep`, so no skin code is needed. `boardgame-tiebreak.test.ts` reads `options` through a `resolveOptions(step, answers)` helper exported from `guided-sheet.tsx`. The test's `winner.options.map` lines call `resolveOptions(winner, { rung: "armageddon" })`.
+Two winner steps, each gated by `when` on the rung, keep `SheetChoiceStep.options` a static array (`types.ts:685`), so the chassis needs no change. Back on each step is the chassis's existing `backStep`, so no skin code is needed for it either.
 
 - [ ] **Step 5: Strings, 4 locales** (`ui.json`, `pad.boardgame.tiebreak.*`)
 
@@ -4554,7 +4515,7 @@ The guided sheet resolves it with the answers so far, the same way it already ev
 | `rung.blitz` | Blitz | Blitz | Blitz | Snelschaak |
 | `rung.armageddon` | Armageddon | Armageddon | Armagedón | Armageddon |
 | `winner.title` | Who won the tie-break? | Qui a gagné le départage ? | ¿Quién ganó el desempate? | Wie won de tiebreak? |
-| `drawnBlack` | Drawn — Black ({name}) advances | Nulle — les Noirs ({name}) se qualifient | Tablas — avanza el negro ({name}) | Remise — zwart ({name}) gaat door |
+| `armageddonHint` | In Armageddon a draw means Black advances. | À l'Armageddon, une nulle qualifie les Noirs. | En el Armagedón, unas tablas clasifican al negro. | Bij armageddon gaat zwart door bij remise. |
 | `score.title` | Tie-break score (optional) | Score du départage (facultatif) | Resultado del desempate (opcional) | Tiebreakstand (optioneel) |
 | `score.none` | No score | Pas de score | Sin resultado | Geen stand |
 
@@ -4565,17 +4526,26 @@ The step-2 title uses no rung name; the spec's "<rung>" interpolation is kept ou
 Append to `bracket-finish.spec.ts`:
 
 ```ts
-test("chess tie-break on the pad: a drawn knockout game, then Armageddon drawn — Black advances", async ({ page, request }) => {
+test("chess tie-break on the pad: BG-KO-2's hint shows on Armageddon only, and the tapped winner advances", async ({ page, request }) => {
   const { sf } = await knockout(request, "boardgame", "fide");
-  await page.goto(await fixturePath(request, sf.id));
   await post(request, sf.id, "core.start");
-  await post(request, sf.id, "boardgame.pairing", { board: 1, white: sf.home_entrant_id });
   await post(request, sf.id, "boardgame.result", { winner: null, method: "agreement" });
-  await page.reload();
+  await page.goto(await fixturePath(request, sf.id));
   await expect(page.getByTestId("pad-tile-draw")).toHaveCount(0);
   await page.getByTestId("pad-tile-tiebreak").click();
+  const hint = page.getByText("In Armageddon a draw means Black advances.");
+  await page.getByRole("button", { name: "Rapid" }).click();
+  await expect(page.getByTestId("sheet-step-winner")).toBeVisible();
+  await expect(hint).toHaveCount(0); // not on rapid (the positive pair follows)
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Blitz" }).click();
+  await expect(hint).toHaveCount(0); // not on blitz
+  await page.getByRole("button", { name: "Back" }).click();
   await page.getByRole("button", { name: "Armageddon" }).click();
-  await page.getByRole("button", { name: /Drawn — Black/ }).click();
+  const step = page.getByTestId("sheet-step-winner-armageddon");
+  await expect(hint).toBeVisible();
+  await expect(step.getByRole("button")).toHaveCount(2); // exactly the two entrants; no "drawn" choice (ruling 82)
+  await step.getByRole("button").nth(1).click(); // away
   await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.away_entrant_id, method: "tiebreak_armageddon" });
 });
 
@@ -4615,12 +4585,12 @@ Expected:
 
 `mobile.spec.ts` is serial, so a red count is a floor: re-run after each fix until a full pass completes (class 21). Running seven projects one at a time is the whole spec file per project, not a `-g` slice.
 
-- [ ] **Step 7: Visual verdicts and the control-set diff** at 1280, 768 and 320 for:
+- [ ] **Step 7: Visual verdicts, the control-set diff, and the owner's verdict** at 1280, 768 and 320 for:
   - the pad in phase tiebreak;
-  - each of the three sheet steps;
+  - each sheet step, including the armageddon winner step with its hint;
   - the generic bracket pad.
 
-  Write one verdict per screen; the phone pad's control-set diff is at 320 against 1280 (phone-composition section of AGENTS.md).
+  Write one verdict per screen; the phone pad's control-set diff is at 320 against 1280 (phone-composition section of AGENTS.md). The layout was chosen in brainstorming (UI-2 option B; ruling 82), so no options are shown. Before merge, the built house-styled screens go to the owner, and the owner's per-screen verdict is recorded (Task 17 Step 3 collects them).
 
 - [ ] **Step 8: Mutate per rung and per guard (runner)** — `MUT/t12.json`
 
@@ -4630,12 +4600,16 @@ Expected:
 | `bg-draw-kind` | the Draw tile's `&& !forbidsLevelResult(view.stageKind)` → `` | "boardgame: Draw shows exactly outside bracket kinds" |
 | `tiebreak-early-return` | `    return tiles;\n  }` (in the `inTiebreak` branch) → `  }` | "in phase tiebreak: only the tie-break tile …" |
 | `halves-tappable` | `&& !inTiebreak(view)` → `` | the same test (halves) |
-| `black-side` | `const black: Side = state.colorOfHome === "W" ? "away" : "home";` → `const black: Side = state.colorOfHome === "W" ? "home" : "away";` | "BG-KO-2: armageddon offers …" (payload winner) |
-| `drawn-black-colours` | `answers?.rung === "armageddon" && colours` → `answers?.rung === "armageddon"` | "BG-KO-2 …" (colours false) |
-| `score-armageddon` | `when: (a) => a.rung !== "armageddon"` → `when: () => true` | "the score step shows for rapid and blitz only …" |
+| `hint-everywhere` | `hintKey: "pad.boardgame.tiebreak.armageddonHint", when: (a) => a.rung === "armageddon"` → `hintKey: "pad.boardgame.tiebreak.armageddonHint", when: () => true` | "BG-KO-2 (ruling 82): every rung shows ONE winner step …" (two winner steps on rapid) |
+| `hint-dropped` | `hintKey: "pad.boardgame.tiebreak.armageddonHint", ` → `` | the same test (armageddon's hint) |
+| `armageddon-winner-dropped` | `(a.winner ?? a["winner-armageddon"])` → `a.winner` | the same test (`"winner-armageddon": "away"` posts H) |
+| `winner-side-flip` | `=== "away" ? "away" : "home";` → `=== "away" ? "home" : "away";` | the seam test (winner) and "the score step …" |
+| `score-armageddon` | `title: "pad.boardgame.tiebreak.score.title", when: (a) => a.rung !== "armageddon"` → `title: "pad.boardgame.tiebreak.score.title", when: () => true` | "the score step shows for rapid and blitz only …" |
 | `score-none` | `a.score && a.score !== "none"` → `a.score` | "… score: 'none'" and the seam test (`score: "none"` fails `CHESS_SCORE` in the real fold) |
 
-Expected: `EXIT=0`, 8 rows killed.
+Expected: `EXIT=0`, 10 rows killed.
+
+- [ ] **Step 9: BG-KO-2 proof bookkeeping (ruling 82).** Delete BG-KO-2 from `AWAITING_PROOF`, set its proved-by to `` `apps/web/src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts` ``, and run `rules-reference.test.ts` green.
 
 **Four test types:**
 - Unit: Steps 1–4.
@@ -4831,7 +4805,7 @@ Expected: `EXIT=0`, 4 rows killed.
 - Produces:
   ```ts
   export type RequestedOutcome = … | { kind: "level" } | { kind: "settle"; then: Side; method: (typeof SETTLE_METHODS)[number]; after: "level" | "abandon" }
-    | { kind: "tiebreak"; rung: (typeof TIEBREAK_RUNGS)[number]; winner: Side | "drawn-black" } | { kind: "abandon"; atScore?: true };
+    | { kind: "tiebreak"; rung: (typeof TIEBREAK_RUNGS)[number]; winner: Side } | { kind: "abandon"; atScore?: true };
   export function bracketPolicy(setup: DivisionSetup, f: FixtureRow, sport: string, ordinal: number): RequestedOutcome;
   export const W2A_SCENARIOS: readonly string[]; // the keys lane P1 reports into w2a-local-selection.json `newScenarios`
   ```
@@ -4869,21 +4843,22 @@ describe("W2a generator breadth (spec §5.6.1) — every stream folds through th
     expect(checked).toBe(11 * SETTLE_METHODS.length);
   });
 
-  it("boardgame: a drawn bracket game followed by each rung, and an armageddon draw where Black advances", () => {
+  it("boardgame: a drawn bracket game followed by each rung, each side winning (ruling 82: the scorer records the winner)", () => {
     let checked = 0;
     forEachSport(({ key, module }) => {
       if (key !== "boardgame") return; // one-line reason: the tie-break is chess's (BG-KO-1)
       const lineups = defaultLineupPair(module.positions);
       const cfg = stageCfg(key, module.configSchema.parse({}), "knockout");
-      for (const rung of TIEBREAK_RUNGS) for (const winner of ["home", "away", ...(rung === "armageddon" ? ["drawn-black"] as const : [])] as const) {
+      for (const rung of TIEBREAK_RUNGS) for (const winner of ["home", "away"] as const) {
         const events = generateStream({ sportKey: key, cfg, stageKind: "knockout", home: lineups.home.entrantId, away: lineups.away.entrantId, outcome: { kind: "tiebreak", rung, winner } });
         const o = outcomeOf(module, foldMatchWithStoppage(module, cfg as never, lineups, envelopes(events) as never));
         expect(o?.kind, `${rung} ${winner}`).toBe("win");
         expect((o as { method?: string }).method).toBe(`tiebreak_${rung}`);
+        expect((o as { winner?: string }).winner).toBe(winner === "home" ? lineups.home.entrantId : lineups.away.entrantId);
         checked++;
       }
     });
-    expect(checked).toBe(7);
+    expect(checked).toBe(TIEBREAK_RUNGS.length * 2);
   });
 
   it("carrom: a level bracket match reaches the extra board — with coins ≠ 9 (a value the old generator never emitted)", () => {
@@ -4943,7 +4918,7 @@ Expected: `EXIT=1`; `stageCfg` is not exported.
     - `level`: the sport's level stream, via its `tied`, or a drawn result where the sport has one;
     - `abandon` with `atScore: true`: the first half of the sport's `decided` stream (the prefix before its deciding event, found by folding prefixes until `outcome !== null`, then cutting one event earlier), then `core.abandon`;
     - `settle`: the `level` or `abandon` prefix, then `core.settle { winner, method }`;
-    - `tiebreak` (boardgame only): `START`, a drawn `boardgame.result`, then `boardgame.tiebreak`. For `drawn-black`, `armageddonDrawn: true` with Black's id, Black being away because the stream posts no pairing and `colorOfHome` defaults to `"W"`.
+    - `tiebreak` (boardgame only): `START`, a drawn `boardgame.result`, then `boardgame.tiebreak { rung, winner }`, with the requested side's entrant as the winner.
   - `carrom.ts`: delete `TIEBOARD_DRAW` and its refusal. With `tieBoard: "extra"` (the bracket overlay), a level game is the alternating-board stream with coins `c = min(9, floor((gameTo-1)/(maxBoards/2)))`. On an odd `maxBoards` the last board has 0 coins. One extra board then decides, so `c` ≠ 9 whenever `gameTo ≤ 9·maxBoards/2`.
   - `OutcomeUnreachable` reads `drawsAllowed` (now the allow-list) plus `forbidsLevelResult` for `level`.
 
@@ -5027,7 +5002,7 @@ describe("Settle in the model (spec §5.6.2; finding 24)", () => {
 `modelCommands({ settle: true })` appends it after the existing kinds. The default (`settle` absent) builds exactly today's array. A shrunk failure is committed first as a named case in `catalogue/regressions.json`, with its seed and path (R29).
 
 - [ ] **Step 6: Pad adapters and page objects; `outcomesFor`; one value-constant route case each**
-  - `pads/boardgame.ts` drives the tie-break: tap `pad-tile-tiebreak`, then the rung button, then the winner or `drawn-black`, then the score or skip. The `TapStep` kinds come from `tools/bench/lib/drivers/scorer.ts:104`.
+  - `pads/boardgame.ts` drives the tie-break: tap `pad-tile-tiebreak`, then the rung button, then the winner (the `winner-armageddon` step on the armageddon rung), then the score or skip. The `TapStep` kinds come from `tools/bench/lib/drivers/scorer.ts:104`.
   - `outcomesFor` (`pad-adapters.test.ts:54-61`) marks `abandon` organiser-only. The pad adapter refuses to emit it, and the console page object emits it.
   - Route cases: a carrom board with `coins: 7` (≠ the generator's old 9), and a boardgame method `resign` (outside checkmate/agreement). Each is driven through the adapter's tap plan and folded through the engine.
   - `HM/lib/browser/pages/needs-decision.ts`:
@@ -5112,9 +5087,9 @@ Expected: `EXIT=0`, with every row killed or carrying a recorded reason the revi
   export type Action =
     | { kind: "abandon" }
     | { kind: "settle"; winner: "home" | "away"; method: "lot" | "higher_seed" | "organiser"; by: "organiser" | "scorer" | "device" }
-    | { kind: "tiebreak"; rung: "rapid" | "blitz" | "armageddon"; winner: "home" | "away"; armageddonDrawn?: boolean }
+    | { kind: "tiebreak"; rung: "rapid" | "blitz" | "armageddon"; winner: "home" | "away" }
     | { kind: "void-last" } | { kind: "finalize" };
-  export interface BracketCase { stageKind: StageKind; sport: string; colours: { black: "home" | "away" } | null; play: PlayResult; actions: readonly Action[]; hasLoserLine: boolean }
+  export interface BracketCase { stageKind: StageKind; sport: string; play: PlayResult; actions: readonly Action[]; hasLoserLine: boolean }
   export interface BracketExpect {
     status: "scheduled" | "decided" | "needs_decision" | "abandoned" | "finalized";
     advances: { winner: "home" | "away"; loser: "home" | "away" | null; method: string } | null;
@@ -5129,7 +5104,7 @@ Expected: `EXIT=0`, with every row killed or carrying a recorded reason the revi
 import { describe, expect, it } from "vitest";
 import { expectBracketFinish, bracketFinish, type BracketCase } from "./bracket-finish.ts";
 
-const base: BracketCase = { stageKind: "knockout", sport: "boardgame", colours: { black: "away" }, play: { kind: "level" }, actions: [], hasLoserLine: false };
+const base: BracketCase = { stageKind: "knockout", sport: "boardgame", play: { kind: "level" }, actions: [], hasLoserLine: false };
 
 describe("reference family bracket-finish (rule rows X-BR-1/2, X-ST-1/2, BG-KO-1/2, CA-KO-1, GN-KO-1, CK-KO-1)", () => {
   it("empty case first: a bracket with zero fixtures has nothing to expect (and a fixture with nothing played is scheduled)", () => {
@@ -5161,10 +5136,10 @@ describe("reference family bracket-finish (rule rows X-BR-1/2, X-ST-1/2, BG-KO-1
       expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung, winner: "home" }] }).advances, rung).toEqual({ winner: "home", loser: null, method: `tiebreak_${rung}` });
     }
   });
-  it("BG-KO-2: a drawn armageddon is won by Black; naming White is refused; unknown colours are refused", () => {
-    expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung: "armageddon", winner: "away", armageddonDrawn: true }] }).advances?.winner).toBe("away");
-    expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung: "armageddon", winner: "home", armageddonDrawn: true }] }).refused).toEqual([{ index: 0, code: "ARMAGEDDON_DRAW_NOT_BLACK" }]);
-    expect(expectBracketFinish({ ...base, colours: null, actions: [{ kind: "tiebreak", rung: "armageddon", winner: "away", armageddonDrawn: true }] }).refused).toEqual([{ index: 0, code: "ARMAGEDDON_DRAW_NOT_BLACK" }]);
+  it("BG-KO-2 (W2a enforcement per ruling 82): the armageddon winner the scorer records advances, either side — no draw is recorded in W2a", () => {
+    for (const winner of ["home", "away"] as const) {
+      expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung: "armageddon", winner }] }), winner).toEqual({ status: "decided", advances: { winner, loser: null, method: "tiebreak_armageddon" }, refused: [] });
+    }
   });
   it("CA-KO-1: a carrom bracket match never ends level — the extra board decides, so 'level' is not a carrom bracket result", () => {
     expect(() => expectBracketFinish({ ...base, sport: "carrom" })).toThrow(/CA-KO-1/);
@@ -5210,11 +5185,11 @@ Expected: `EXIT=0` both; the judge shows `files: 2` and `failed: 0`. The boundar
   - X-ST-1's second-settle refusal;
   - X-ST-2's `by` check;
   - each of BG-KO-1's three rungs' method strings;
-  - BG-KO-2's Black;
+  - BG-KO-2's recorded winner (mutated to always "home");
   - GN-KO-1;
   - the finalize refusal.
 
-  Expected: `EXIT=0`, 10 rows killed.
+  Expected: `EXIT=0`, 9 rows killed.
 
 - [ ] **Step 6: Commit on the lane** — `feat(reference): bracket-finish family from the W2a rule rows (R8, independent of the engine fix) (T15)`. Report the `NotRuled` list, then run lane P2's Opus review and merge back.
 
@@ -5315,7 +5290,7 @@ The `plans.lock.json` entries for W2a point at `TR/w2a-final/ci` and its run id.
 
 - [ ] **Step 1: The smoke suite** — `bracketFinishSuite`, modelled on `hubKnockoutSuite` (read it first; its helpers, its API wrapper and its cleanup are the pattern). The four flows, each through the real API as the organiser:
   1. A football knockout semi-final abandoned level: the status is `needs_decision`. Settle `lot` for the away side: decided, `settled_lot`, and the final's slot holds the winner. The public match page text contains "advanced on lot".
-  2. A chess knockout game drawn, then `boardgame.tiebreak` armageddon with `armageddonDrawn` naming Black: decided, `tiebreak_armageddon`, Black seated.
+  2. A chess knockout game drawn, then `boardgame.tiebreak` armageddon naming the away side as the winner (ruling 82: the scorer records the winner): decided, `tiebreak_armageddon`, the away side seated.
   3. A generic knockout `generic.result` level: refused 409 `LEVEL_RESULT_IN_BRACKET`, and the fixture is unchanged.
   4. A scorer-token `core.settle`: refused 403 `FORBIDDEN`, and the fixture is unchanged (X-ST-2).
 
@@ -5339,13 +5314,15 @@ Run each listed file in full on the project its header names, with the commands 
 - [ ] **Step 3: Per-screen visual verdicts (R24; class 11).** Capture at 1280, 768 and 320, with `screenshotAtWidths`, cropped to the component:
   - the console with the Needs-a-decision block;
   - the settle dialog;
-  - the pad in phase tiebreak, and each of the three tie-break steps;
+  - the pad in phase tiebreak, and each tie-break step (the armageddon winner step with its hint);
   - the generic bracket pad with no Draw;
   - the public match centre for a settled fixture and for a tie-break fixture;
   - the hub bracket with a held fixture;
   - the run-sheet row with its chip.
 
   Confirm the images exist, differ between states, and were taken after the state being proven (class 10). Write one verdict line per screen per width into `IDX`: alignment, text size, tap targets ≥ 44px, truncation, and horizontal scroll. "Looks fine" is not a verdict.
+
+  Then put the same cropped screens to the owner (ruling 82: the layouts were chosen in brainstorming, UI-1 option A and UI-2 option B, and the owner judges the built screens). Record the owner's verdict per screen beside the agent's. A screen the owner rejects goes back to loop H before merge.
 
 - [ ] **Step 4: The Stryker probe, once, locally.** This confirms the changed-lines config still runs the floor:
 
@@ -5448,7 +5425,7 @@ Verdict: "Ready", or "Needs fixes" with each fix routed to the loop that owns th
 | §5.5 public | Sentences, status line, bracket, 4 locales | 13 |
 | §5.6 items 1–3 | Generator breadth, Settle in the model, adapters and page objects | 14 |
 | §5.6 item 4 | Reference family `bracket-finish`, by a different agent | 15 |
-| §7 | Five error codes | 4 (declared), 5 (`TIEBREAK_NOT_APPLICABLE`, `ARMAGEDDON_DRAW_NOT_BLACK`), 8 (`LEVEL_RESULT_*`) |
+| §7 | Four error codes (ruling 82 dropped the armageddon code) | 4 (declared), 5 (`TIEBREAK_NOT_APPLICABLE`), 8 (`LEVEL_RESULT_*`, including finalize on a held fixture) |
 | §8 items 1–2 | Generator breadth first; reproduce before fixing | 14 (breadth, before Task 16's run), 1 |
 | §8 items 3–4 | After the fixes; swiss_playoff R4 against the SW-H1 flip note; evidence and `MATRIX.md` | 16 |
 | §10 | One PR, merge commit, R27 body, separate reference agent, Opus branch review, owner merges, docs as they happen | 15, 17, Loop R; models per the owner's W2a ruling (finding 26) |

@@ -78,6 +78,7 @@ standalone PR then.
 | RB2A-30: joint winners in a cricket final | W4 | Two champions break the single-champion model (`finalRanks`). |
 | Chess `double_forfeit` as a loss for both (RB2B-15) | W2b | Until then it folds to `no_result` and lands in `needs_decision` (§5.4). |
 | Tennis tie-break guard reads cfg only (checklist §7) | W2e | Tennis. |
+| Recording armageddon colours on the tie-break (`black: EntrantId`) and enforcing BG-KO-2 in the engine | W2c | Ruling 82: W2a drops the "Drawn — Black advances" choice. The scorer always taps the winner, and the armageddon step shows a hint that a draw means Black advances. |
 
 ## 3. Rulings this spec implements
 
@@ -101,6 +102,19 @@ UI/UX):
 
 - **UI-1:** settle is reached through a "Needs a decision" block on the fixture console (option A).
 - **UI-2:** the chess tie-break is entered in three steps on the pad (option B, revised).
+
+Rulings recorded after this spec was written (`_INDEX.md`, 2026-10-08):
+
+- **80:** the execution model for W2a: per-dispatch Opus/Sonnet choices, as tabled in the plan.
+- **81:** the plan's tooling, batching and CI additions:
+  - the hand-mutant runner and changed-lines Stryker;
+  - local truth runs on the W2a cells only;
+  - batched loops and parallel lanes;
+  - heavy checks once, on CI.
+- **82:** plan approval, with three answers:
+  - (a) V431 backfills legacy bracket rows stored `decided`/`finalized` with a level outcome to `needs_decision`;
+  - (b) the armageddon "Drawn — Black advances" choice is dropped from W2a (BG-KO-2 is enforced by a pad hint; colours go to W2c, §2.3);
+  - (c) the console and pad layouts are the ones chosen here (UI-1 option A, UI-2 option B), and the owner gives a per-screen verdict on the built screens before merge.
 
 ## 4. Architecture (approach A)
 
@@ -159,12 +173,11 @@ scorer/pad ──append──▶ append-event.ts ──resolveFixtureCfg(+bracke
   - When it is true, a `boardgame.result` with `winner: null` moves the match to phase `tiebreak` instead of folding
     an outcome.
   - New event `boardgame.tiebreak`
-    `{ rung: "rapid" | "blitz" | "armageddon", winner: SideId, armageddonDrawn?: boolean, score?: string }`:
+    `{ rung: "rapid" | "blitz" | "armageddon", winner: SideId, score?: string }`:
     - It is accepted only in phase `tiebreak`, and folds to `win{ winner, method: "tiebreak_<rung>" }`.
-    - `armageddonDrawn` is allowed only with `rung: "armageddon"`. When it is true, the engine requires `winner` to
-      be the side recorded as Black for that game (BG-KO-2), and refuses otherwise (`ARMAGEDDON_DRAW_NOT_BLACK`).
-    - When no colours are recorded, `armageddonDrawn` is refused and the pad does not offer "Drawn" (the scorer
-      picks the winner).
+    - The scorer always records the winner, including after a drawn armageddon game. BG-KO-2 ("a drawn armageddon
+      game is won by Black") is enforced in W2a by the pad's hint on the armageddon step, not by the engine
+      (ruling 82). Recording armageddon colours goes to W2c (§2.3).
     - `score` is optional and validated as a chess score (digits and `½` either side of an en dash).
   - Pad spec: a tie-break panel in phase `tiebreak` only.
   - Fidelity band: unchanged.
@@ -207,6 +220,9 @@ See §6.
      winner" guidance and no shoot-out advice.
    - `DRAW_NOT_ALLOWED` remains for non-bracket stages whose sport refuses draws.
    - Every other level result in a bracket is **accepted** and held as `needs_decision` (ruling 79).
+   - `core.finalize` on a held fixture (status `needs_decision`, or a level outcome in a bracket kind) is refused
+     with `LEVEL_RESULT_IN_BRACKET`. The fixture is settled first. The console hides Finalize while the fixture is
+     held (§5.5; plan finding 27).
 4. **Seating guard.** The comment at `engine-db/competition.ts:144-150` becomes an assertion.
    - A `draw`, `tie` or `no_result` reaching `bracketWinnerLoser` or `advancingSides` throws `LEVEL_RESULT_SEATED`.
      It is reached only through a bug, so it is tested by forcing the case.
@@ -224,6 +240,9 @@ See §6.
      the V354 slot consumption, the V355 results views, the V367 courts history, the desk's attention and phase
      rules, the public status lines and the bracket view.
    - The classification is: played, not finished, needs attention.
+   - **Backfill (ruling 82).** The same delta migration moves legacy bracket rows stored `decided` or `finalized`
+     with a level outcome (`draw`, `tie`, `no_result`) to `needs_decision`. Nobody was seated from them, and they
+     can then be settled.
    - **A list the sweep found but did not classify is a failure** (anti-vacuity: the sweep reports its count).
 7. **NEW-H1** (`usecases/stages.ts:3657` `feederIsDead`): `status === "abandoned" && outcome === null` treats a
    scorer's abandon in the set sports and tennis as a dead feeder, which walks the opponent through.
@@ -242,22 +261,24 @@ dialog pattern (`TextPromptDialog`), the pad's v3 skins and the phone-compositio
 with the frontend-design skill.
 
 - **Fixture console** (`components/v2/fixture-console.tsx`):
-  - When the status is `needs_decision`, or `abandoned` with no outcome in a bracket kind, a **"Needs a decision"**
-    block shows above the action row. Its copy reads "A knockout match can't end level. Choose who advances." and it
+  - When the status is `needs_decision`, or `abandoned` with no outcome or a level outcome (`draw`, `tie`,
+    `no_result`) in a bracket kind (plan finding 19), a **"Needs a decision"** block shows above the action row. Its copy reads "A knockout match can't end level. Choose who advances." and it
     has a **Settle the match** button.
   - The dialog asks:
     - who advances: two entrant buttons;
     - why: radio buttons for drawn by lot, higher seed / higher group finisher, and organiser decision;
     - a note: optional.
   - Confirming sends `core.settle`. The block shows for organisers only.
+  - While the block shows, Finalize is hidden, and the server refuses it with `LEVEL_RESULT_IN_BRACKET` (§5.4 item 3).
 - **Pad** (`components/v2/scorepad/v3/`):
   - The pad receives the stage kind. Today it is stage-blind (`skins/boardgame.tsx:381`, `skins/generic.tsx:176`).
   - Generic and boardgame hide Draw in bracket kinds.
   - The boardgame skin shows the **three-step tie-break** in phase `tiebreak`, with Back on each step:
     1. "Which tie-break decided it?" — Rapid, Blitz or Armageddon. The step also says "Decided by lot? Ask the
        organiser to settle the match."
-    2. "Who won the <rung> tie-break?" — two entrants. For Armageddon, when colours are known, a third choice
-       "Drawn — Black (<name>) advances" sends `armageddonDrawn: true` with Black as the winner.
+    2. "Who won the <rung> tie-break?" — two entrants, always; the scorer taps the winner. On the Armageddon rung,
+       the step shows the hint "In Armageddon a draw means Black advances." It does not show on Rapid or Blitz
+       (ruling 82; BG-KO-2).
     3. An optional score, then Record.
 - **Public surfaces** (`lib/scoring-vocab.ts` `renderDecidedOutcome`, `server/public-site/match-centre.ts`
   `resultMsg`, `competition-hub.ts` status line, `components/public-site/bracket.tsx`):
@@ -272,7 +293,7 @@ with the frontend-design skill.
 ### 5.6 Harness (`tools/matrix/`) and reference model (`packages/reference/`)
 
 1. **Generator breadth, before any truth run** (checklist §4, the W2a part):
-   - `streams/boardgame.ts`: a drawn bracket game followed by each rung, and an armageddon draw where Black advances.
+   - `streams/boardgame.ts`: a drawn bracket game followed by each rung, with each side winning.
    - `streams/generic.ts`: winner-only results in bracket kinds.
    - `streams/carrom.ts`: a level bracket match reaching the extra board. This removes the "deferred to W2" refusal.
    - `streams/cricket.ts`: a knockout tie with super over off, then settle; and a no-result, then settle.
@@ -344,11 +365,10 @@ Rule texts (seeded rows):
 
 | Code | When | Surface |
 |---|---|---|
-| `LEVEL_RESULT_IN_BRACKET` (409) | A generic draw in a bracket kind | Pad: "Enter the winner — a knockout match can't end level." |
+| `LEVEL_RESULT_IN_BRACKET` (409) | A generic draw in a bracket kind; or `core.finalize` on a held fixture (plan finding 27) | Pad: "Enter the winner — a knockout match can't end level." |
 | `SETTLE_NOT_APPLICABLE` (409) | Settle on a non-level, non-abandoned, or already settled fixture | Console dialog closes and shows the reason. |
 | The code `scoring.ts` already returns for finalize/void (no new code; the plan names it) | Scorer or device sends settle, forfeit or abandon | No pad path reaches it; API callers get the code. |
-| `TIEBREAK_NOT_APPLICABLE` (409) | `boardgame.tiebreak` outside phase `tiebreak`, or `armageddonDrawn` on another rung | Pad never offers it. |
-| `ARMAGEDDON_DRAW_NOT_BLACK` (409) | `armageddonDrawn: true` with a winner who is not Black, or with no colours recorded | Pad derives the winner, so it never sends this. |
+| `TIEBREAK_NOT_APPLICABLE` (409) | `boardgame.tiebreak` outside phase `tiebreak` | Pad never offers it. |
 | `LEVEL_RESULT_SEATED` (500, assertion) | A level result reaches seating | Sentry; only reachable through a bug. |
 
 All refusal strings are in all four locales.
@@ -396,8 +416,9 @@ All refusal strings are in all four locales.
   - The reviewer answers the four questions in writing: second call, empty input, after a withdrawal or void,
     another sport.
 - **Stryker:**
-  - Locally: the per-PR probe (`cd packages/engine && STRYKER_GROUP=probe pnpm mutation`) and the legs covering the
-    changed engine files. Never a full run.
+  - Locally: the per-PR probe (`cd packages/engine && STRYKER_GROUP=probe pnpm mutation`), and changed-lines
+    Stryker (`STRYKER_MUTATE`) on the changed engine lines instead of whole legs (ruling 81). Never a full run, and
+    family legs only on CI.
   - Before merge: a dispatched `mutation.yml` run on the branch for the touched families (core, modules,
     sports-other, competition if touched). No family may fall below `stryker-floor.json`.
   - Floors are raised only as a deliberate `--set-floor` step.
@@ -417,7 +438,7 @@ All refusal strings are in all four locales.
   - per task: implementer → reviewer, until the review is clean and the tests are green;
   - the reference family by a separate agent;
   - **Opus for the whole-branch review**;
-  - the owner merges. Agent models are taken from `.claude/agents/*.md` and never overridden.
+  - the owner merges. Agent models are set per dispatch by ruling 80 (W2a only); outside it, `.claude/agents/*.md` decides.
 - **Docs on the branch, written as they happen:**
   - `_INDEX.md`: the W2 row, rulings 71–79, the decision log, and "False premises found" (W2 brainstorm).
   - This spec, and the plan.
