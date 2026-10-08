@@ -173,6 +173,39 @@ export function dynamicPrefixesIn(source: string, ns: string): Set<string> {
   return out;
 }
 
+/**
+ * The keys a `msgPlural("k", n)` call resolves through — the BASE `k`, never a
+ * dictionary key itself. The runtime (`lib/i18n-runtime.ts` `plural`) reads
+ * `k.<Intl.PluralRules category>` and falls back to `k.other`, so a base is
+ * satisfied in a locale by `k.other`, and `k.one` / `k.other` / … are read by it.
+ * Without this the literal scan above reads the base as a missing key and the
+ * forms as orphans (CI red on PR #928: `stream.auto.liveLine`, `.switchHint`).
+ */
+export function pluralBasesIn(source: string, ns: string): Set<string> {
+  const re = new RegExp("msgPlural\\(\\s*[\"'`](" + ns + "\\.[A-Za-z0-9_.]+)[\"'`]", "g");
+  const out = new Set<string>();
+  for (const m of source.matchAll(re)) out.add(m[1]!);
+  return out;
+}
+
+const PLURAL_CATEGORIES = new Set(["zero", "one", "two", "few", "many", "other"]);
+
+function pluralBases(ns: string): Set<string> {
+  const out = new Set<string>();
+  for (const dir of SCAN_DIRS) {
+    for (const file of files(dir)) {
+      for (const b of pluralBasesIn(stripComments(readFileSync(file, "utf8")), ns)) out.add(b);
+    }
+  }
+  return out;
+}
+
+/** A dictionary key a plural base reads: `base.<category>`. */
+function readByPluralBase(key: string, bases: Set<string>): boolean {
+  const cut = key.lastIndexOf(".");
+  return cut > 0 && PLURAL_CATEGORIES.has(key.slice(cut + 1)) && bases.has(key.slice(0, cut));
+}
+
 function dynamicPrefixes(ns: string): Set<string> {
   const out = new Set<string>();
   for (const dir of SCAN_DIRS) {
@@ -197,9 +230,12 @@ function dynamicPrefixes(ns: string): Set<string> {
 function orphanKeys(ns: string, dict: Record<string, string>): string[] {
   const referenced = referencedKeys(ns);
   const prefixes = [...dynamicPrefixes(ns)];
+  const bases = pluralBases(ns);
   return Object.keys(dict)
     .filter((k) => k.startsWith(`${ns}.`))
-    .filter((k) => !referenced.has(k) && !prefixes.some((p) => k.startsWith(p)))
+    .filter(
+      (k) => !referenced.has(k) && !prefixes.some((p) => k.startsWith(p)) && !readByPluralBase(k, bases),
+    )
     .sort();
 }
 
@@ -278,7 +314,11 @@ describe("overlay + panel copy is complete in every locale", () => {
 
     it(`${locale}/ui.json carries every stream.* key the source uses`, () => {
       const dict = dictOf(locale, "ui");
-      const missing = [...referencedKeys("stream")].filter((k) => typeof dict[k] !== "string").sort();
+      const bases = pluralBases("stream");
+      const missing = [...referencedKeys("stream")]
+        .map((k) => (bases.has(k) ? `${k}.other` : k))
+        .filter((k) => typeof dict[k] !== "string")
+        .sort();
       expect(missing, `${locale} is missing these stream keys`).toEqual([]);
     });
   }
@@ -335,6 +375,21 @@ describe("overlay + panel copy is complete in every locale", () => {
     ).toEqual([]);
     expect([...dynamicPrefixesIn('const k = "stream.preview.slate";', "stream")]).toEqual([]);
     expect([...dynamicPrefixesIn("const k = `overlay.status.${s}`;", "stream")]).toEqual([]);
+  });
+
+  it("the plural-base reader is a real parser, and the panel's plural copy is found by it", () => {
+    expect([...pluralBasesIn('msgPlural("stream.auto.liveLine", n, { count: n })', "stream")]).toEqual([
+      "stream.auto.liveLine",
+    ]);
+    expect([...pluralBasesIn('msg("stream.auto.liveLine")', "stream")], "a plain msg() is not a plural read").toEqual([]);
+    expect([...pluralBasesIn('msgPlural("overlay.x", n)', "stream")]).toEqual([]);
+    expect(readByPluralBase("stream.auto.liveLine.one", new Set(["stream.auto.liveLine"]))).toBe(true);
+    expect(
+      readByPluralBase("stream.auto.liveLine.label", new Set(["stream.auto.liveLine"])),
+      "only a CLDR category is read by a base",
+    ).toBe(false);
+    // Anti-vacuity: the panel resolves exactly these two plural bases today.
+    expect([...pluralBases("stream")].sort()).toEqual(["stream.auto.liveLine", "stream.auto.switchHint"]);
   });
 
   it("a key named in a COMMENT is not a reader — documentation cannot wire copy", () => {

@@ -8,7 +8,8 @@ import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { platformName } from "@/components/v2/stream-platform-mark";
 import type { Chain, ChainNode, ChainWord, LinkStyle, NodeTone } from "@/lib/stream-chain";
 import type { MessageKey } from "@/lib/messages";
-import { durationLabel, type D3Box, type PhoneStrip } from "@/lib/stream-session-view";
+import { fmtNumber } from "@/lib/format";
+import { durationLabel, type D3Box, type PhoneLinePart, type PhoneStrip } from "@/lib/stream-session-view";
 import type { StreamTargetKind } from "@/server/api-v1/schemas";
 
 const TONE_RING: Record<NodeTone, string> = {
@@ -45,6 +46,7 @@ const WORD_KEYS: Record<ChainWord, MessageKey> = {
   notAnswering: "stream.chain.word.notAnswering",
   starting: "stream.chain.word.starting",
   reconnecting: "stream.chain.word.reconnecting",
+  waitingVideo: "stream.chain.word.waitingVideo",
 };
 
 const ICON = "h-5 w-5";
@@ -152,18 +154,14 @@ function toLabel(msg: ReturnType<typeof useMsg>, label: string): ReactNode {
 export function SignalChain({
   chain,
   destination,
-  phoneStatus,
   children,
 }: {
   chain: Chain;
   destination: { kind: StreamTargetKind; label: string };
-  /** D9 (spec §3.4): the capture-v2 branch's one-line phone summary under the Phone node's word. */
-  phoneStatus?: string;
-  /** Capture QR v2 (Option B rev 2): the phone strip, drawn inside the card under the chain, its caret on the phone. */
+  /** Capture QR v2 (Option B rev 2): the phone strip, drawn inside the card under the chain, its caret on the phone.
+   *  PR-2 (Option A): D9's reserved one-line phone summary is that strip's line — the chain takes no text of its own. */
   children?: ReactNode;
 }) {
-  // D9: reserved for capture v2's heartbeat summary — this branch renders nothing here.
-  void phoneStatus;
   const msg = useMsg();
   const platform = platformName(msg, destination.kind);
   const word = (n: ChainNode) => msg(WORD_KEYS[n.word]);
@@ -264,14 +262,85 @@ function timedSentence(
   });
 }
 
+/** A message with ONE value set as its own run (PR-2's lead values): seconds that move every poll are `aria-live="off"`
+ *  (m-5 — the region announces a new sentence, not a ticking count); a percent is a plain number; a reason is its own
+ *  sentence in the viewer's locale. Split on a sentinel, so each locale owns the word order around the value. */
+function valueSentence(msg: ReturnType<typeof useMsg>, key: MessageKey, vars: PhoneStrip["leadVars"]): ReactNode {
+  if (!vars) return msg(key);
+  if ("reason" in vars) return msg(key, { reason: msg(vars.reason) });
+  if ("n" in vars) return msg(key, { n: vars.n });
+  const S = String.fromCharCode(1);
+  return msg(key, { s: S }).split(S).map((part, i) =>
+    i === 0 ? part : [<span key={i} aria-live="off" className="tabular-nums">{vars.s}</span>, part],
+  );
+}
+
+/** One part of the strip's line (§7.4 "Phone · 78% charging · 2.4 Mbps · heard 4 s ago"; Option A state 1 "Pixel 8 ·
+ *  Operator"). A null reading has no part to draw (`healthLine` omitted it), so nothing here can print "0 Mbps" or "null".
+ *  The bitrate is the server's kbps in the ACTIVE locale (a decimal comma in es/fr/nl), as the Details chip draws it. */
+/** B7 review M-5: which parts of the phone line may break across lines — free text only; every reading is nowrap. */
+const LINE_PART_WRAPS: Record<PhoneLinePart["kind"], boolean> = {
+  phone: false, model: true, mode: false, battery: false, bitrate: false, heard: false, waiting: true,
+};
+
+function linePart(msg: ReturnType<typeof useMsg>, locale: string, part: PhoneLinePart, muted: boolean): ReactNode {
+  switch (part.kind) {
+    case "phone": return msg("stream.phoneLine.phone");
+    case "model": return part.text;
+    case "mode": {
+      const word = msg(part.mode === "automatic" ? "stream.phone.mode.automatic" : "stream.phone.mode.operator");
+      return muted ? <span className="text-slate-500">{word}</span> : word;
+    }
+    case "battery": return msg(part.charging ? "stream.phoneLine.charging" : "stream.phoneLine.notCharging", { n: part.percent });
+    case "bitrate":
+      return msg("stream.health.bitrate", { n: fmtNumber(locale, part.kbps / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) });
+    case "heard": {
+      const S = String.fromCharCode(1);
+      return msg("stream.phoneLine.heard", { s: S }).split(S).map((txt, i) =>
+        i === 0 ? txt : [<span key={i} className="tabular-nums">{Math.floor(part.elapsedMs / 1000)}</span>, txt],
+      );
+    }
+    case "waiting": return msg("stream.phone.waitingVideo");
+  }
+}
+
+const REMEDY_LINK =
+  "inline-flex min-h-11 items-center font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:decoration-amber-600 md:min-h-0";
+
 /** Capture QR v2 §6.12 (Option B rev 2): the phone's one message under the chain — pair first, not answering, waiting
  *  with the server's countdown, or the O5 reason. A status box; with a chain above it, a caret points at the phone node.
- *  `id` is what Go live's `aria-describedby` names. Decides nothing: `strip` is `phoneStrip`'s answer. */
-export function PhoneStripView({ id, strip, caret }: { id: string; strip: PhoneStrip; caret: boolean }) {
+ *  `id` is what Go live's `aria-describedby` names. Decides nothing: `strip` is `phoneStrip`'s answer.
+ *  PR-2 (Option A): the line under the lead (or the strip's only text), and an auto-start refusal's remedy — Buy credits
+ *  only when the panel hands a handler (`onBuy`), Manage destinations a new-tab link to Directory → Streaming. */
+export function PhoneStripView({ id, strip, caret, onBuy }: { id: string; strip: PhoneStrip; caret: boolean; onBuy?: () => void }) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
   const tone = STRIP_TONE[strip.tone];
   const sentence = strip.body ? timedSentence(msg, locale, strip.body) : null;
+  const main = !strip.lead && !sentence;
+  // B7 review M-4: the line is re-read on every beat (battery, bitrate, heard seconds) — the WHOLE line is aria-live=off,
+  // so the status box announces its lead and sentence, never a ticking reading. M-5: each reading is one unbroken unit
+  // ("2.4 Mbps", "78% charging"); only the model (up to 80 characters) and the waiting sentence may wrap.
+  const line = strip.line && strip.line.length > 0 && (
+    <p data-testid="stream-phone-line" aria-live="off" className={main ? undefined : "mt-0.5 text-xs text-slate-600"}>
+      {strip.line.map((part, i) => [
+        i > 0 && " · ",
+        <span key={i} data-line-part={part.kind} className={LINE_PART_WRAPS[part.kind] ? undefined : "whitespace-nowrap"}>
+          {linePart(msg, locale, part, main)}
+        </span>,
+      ])}
+    </p>
+  );
+  const remedy =
+    strip.remedy === "buy" && onBuy ? (
+      <button type="button" data-testid="stream-auto-remedy-buy" className={REMEDY_LINK} onClick={onBuy}>
+        {msg("stream.auto.buyCredits")}
+      </button>
+    ) : strip.remedy === "manage" ? (
+      <a data-testid="stream-auto-remedy-manage" href="/directory?tab=streaming" target="_blank" rel="noopener" className={REMEDY_LINK}>
+        {msg("stream.dest.manage")}
+      </a>
+    ) : null;
   return (
     <div
       id={id}
@@ -303,12 +372,14 @@ export function PhoneStripView({ id, strip, caret }: { id: string; strip: PhoneS
         <div className="min-w-0">
           {strip.lead ? (
             <>
-              <p className="font-medium">{msg(strip.lead)}</p>
+              <p className="font-medium">{valueSentence(msg, strip.lead, strip.leadVars)}</p>
               {sentence && <p className="mt-0.5">{sentence}</p>}
             </>
           ) : (
             sentence
           )}
+          {line}
+          {remedy && <div className="mt-1 flex flex-wrap gap-x-4">{remedy}</div>}
         </div>
       </div>
     </div>

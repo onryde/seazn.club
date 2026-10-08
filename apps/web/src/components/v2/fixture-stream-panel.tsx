@@ -31,13 +31,13 @@
 import {
   Component, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode,
 } from "react";
-import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, RefreshCw, RotateCcw } from "lucide-react";
+import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, RefreshCw, RotateCcw, TriangleAlert, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { defaultThemeFor, themesForSport, type ThemeId } from "@/components/overlay/theme-registry";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
-import { useDict, useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
+import { useDict, useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { captureQrV2Text, type CaptureQrV2 } from "@/lib/capture-qr";
@@ -70,9 +70,16 @@ import {
   createErrorIsNotFound,
   createErrorText,
   d3Warning,
+  autoRefusalStrip,
+  AUTO_WONT_START_KEY,
+  autoSwitchNote,
+  autoStopLine,
   elapsedLabel,
   healthChips,
+  phoneDetails,
   phoneStrip,
+  takeoverLineKey,
+  takeoverNotice,
   phoneTabState,
   readyStateOf,
   restartLine,
@@ -82,6 +89,7 @@ import {
   type StreamSessionView,
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
+import { fmtNumber, fmtTime } from "@/lib/format";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
 
@@ -236,6 +244,9 @@ export interface StreamPanelContext {
    *  `phone_lost` — config.ts `PHONE_LOST_LIVE_MINUTES` through `tunable`, as the SERVER reads it, the same expression the
    *  tick judges with. The ended chip names it; the panel never computes or defaults it. */
   phoneLostMinutes: number;
+  /** PR-2 T10 (§7.1): the auto stop's delay in whole minutes (≥ 1) — config.ts `AUTO_STOP_AFTER_RESULT_SECONDS` through
+   *  `tunable`, as the SERVER's tick reads it. The switch's caption and Live's read-only line name it; never a typed 3. */
+  autoStopMinutes: number;
 }
 
 /** G5: what the checkout return put on the URL, and nothing else — every other param is kept. (Spec 2026-09-30 §2: the
@@ -696,6 +707,8 @@ export function FixtureStreamPanel({
               monthlyAllowance={stream.monthlyAllowance}
               currency={stream.currency}
               phoneLostMinutes={stream.phoneLostMinutes}
+              autoStopMinutes={stream.autoStopMinutes}
+              tz={tz}
             />
           )}
         </div>
@@ -806,6 +819,8 @@ export function PhoneTab({
   monthlyAllowance,
   currency,
   phoneLostMinutes,
+  autoStopMinutes,
+  tz,
 }: {
   fixtureId: string;
   orgId: string;
@@ -815,6 +830,10 @@ export function PhoneTab({
   currency: Currency;
   /** W19: the server's phone-lost window (StreamPanelContext.phoneLostMinutes), handed to the body untouched. */
   phoneLostMinutes: number;
+  /** PR-2 T10: the auto stop's delay (StreamPanelContext.autoStopMinutes), handed to the body untouched. */
+  autoStopMinutes: number;
+  /** PR-2 T12: the venue zone — the takeover notice's clock, as the row's. */
+  tz: string;
 }) {
   const msg = useMsg();
   // T9b: the page's ONE session (StreamSessionProvider, mounted by the console) — the Stream button's dot reads it too.
@@ -946,6 +965,45 @@ export function PhoneTab({
     const id = setInterval(() => void readPhone(), STREAM_POLL_MS);
     return () => clearInterval(id);
   }, [readPhone]);
+
+  // PR-2 T10 (§7.1): the switch writes `PUT …/stream-settings { autoStream }` — the switch ALONE (the route writes only the
+  // fields a PUT names, so the pick is untouched) — then reads the read model again: its `auto.enabled` is the answer the
+  // switch shows. While the save is in flight the switch shows what was asked (`autoPending`), and is held; a failed save
+  // goes back to the server's answer and says so. The PUT's own answer is never shown (its `targetId` is the SAVED pick,
+  // not the destination the phone would stream to).
+  const [autoPending, setAutoPending] = useState<boolean | null>(null);
+  const [autoFailed, setAutoFailed] = useState(false);
+  const onToggleAuto = async (on: boolean) => {
+    setAutoPending(on);
+    setAutoFailed(false);
+    try {
+      await apiV1(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { autoStream: on } });
+      await readPhone();
+    } catch {
+      setAutoFailed(true);
+    } finally {
+      setAutoPending(null);
+    }
+  };
+
+  // PR-2 T12 (§7.5): the takeover notice's X — remembered per takeover INSTANT for this fixture, in this browser only (a
+  // per-viewer convenience: a storage that refuses, or a private window, just shows the notice again next time).
+  const dismissKey = `seazn.stream.takeoverDismissed.${fixtureId}`;
+  const [takeoverDismissedAt, setTakeoverDismissedAt] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(dismissKey);
+    } catch {
+      return null;
+    }
+  });
+  const onDismissTakeover = (at: string) => {
+    setTakeoverDismissedAt(at);
+    try {
+      localStorage.setItem(dismissKey, at);
+    } catch {
+      // the dismissal holds for this view; nothing else depends on it
+    }
+  };
 
   // I1: "Manage destinations" opens Directory in a NEW tab, so coming back never remounts this one — the return re-reads
   // the list, while the picker is up, and the read model with it: the destination the server would now stream to (one
@@ -1148,6 +1206,13 @@ export function PhoneTab({
         split={streamSplit}
         monthlyAllowance={monthlyAllowance}
         phoneLostMinutes={phoneLostMinutes}
+        autoStopMinutes={autoStopMinutes}
+        autoPending={autoPending}
+        autoFailed={autoFailed}
+        onToggleAuto={(on) => void onToggleAuto(on)}
+        takeoverDismissedAt={takeoverDismissedAt}
+        onDismissTakeover={onDismissTakeover}
+        tz={tz}
         // I-1: off the RAW view, not `shown` — Start another / Try again dismiss the card, and the fixture's reuse window
         // is exactly what the next start is asking about. No session ever → nothing consumed → no window (W23).
         restart={view?.restart ?? null}
@@ -1558,6 +1623,19 @@ export interface PhoneTabBodyProps {
   /** W19: the server's phone-lost window in whole minutes (StreamPanelContext.phoneLostMinutes) — the `phone_lost` end
    *  chip names it. */
   phoneLostMinutes: number;
+  /** PR-2 T10 (§7.1): the auto stop's delay in whole minutes (StreamPanelContext.autoStopMinutes) — the switch's caption
+   *  and Live's read-only line name it. */
+  autoStopMinutes: number;
+  /** PR-2 T10: the switch's flip while its save is in flight (what was asked), else null — the read model answers. */
+  autoPending: boolean | null;
+  /** PR-2 T10: the last flip did not save — the switch shows the server's answer again, and a line says so. */
+  autoFailed: boolean;
+  onToggleAuto: (on: boolean) => void;
+  /** PR-2 T12 (§7.5): the takeover instant this viewer dismissed (null: none) — that takeover's notice stays hidden. */
+  takeoverDismissedAt: string | null;
+  onDismissTakeover: (at: string) => void;
+  /** PR-2 T12: the venue zone — the takeover notice's time is on the row's clock. */
+  tz: string;
   /** The org's destinations (T8): loading, a failed read (Retry), or the list — managed in Directory, picked here. */
   targets: TargetsState;
   busy: boolean;
@@ -1725,6 +1803,7 @@ function stopError(msg: Msg, state: PhoneTabState) {
 /** §8a option A (Stepper) + §8b option A (Three tiles) — values from the sheet. Pure. */
 export function PhoneTabBody(p: PhoneTabBodyProps) {
   const msg = useMsg();
+  const msgPlural = useMsgPlural();
   const locale = useLocaleOrDefault();
   const state = phoneTabState(p.view);
   // The chooser opens either because the org cannot start without credits (FORCED — there is nothing behind it to go
@@ -1766,7 +1845,17 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         }
       : null;
   // Option B rev 2: the phone's one message, in a strip under the chain (caret on the Phone node). Go live names it.
-  const strip = creditsOnly || matchOver ? null : phoneStrip(p.phone, p.view);
+  // PR-2 (§7.4): credits only (B3) still says why an automatic start did not begin — the refusal alone; the tiles are its
+  // remedy, so the strip offers no second Buy credits.
+  const strip = matchOver ? null : creditsOnly ? autoRefusalStrip(p.phone) : phoneStrip(p.phone, p.view);
+  const stripBuy = buyCard ? undefined : p.onShowBuy;
+  // PR-2 T12 (§7.5): the takeover notice — the server's 30 minutes, this viewer's dismissal, the button to press first
+  // (Stop live, Cancel while waiting). Only where Revoke & reissue is in reach (the fold or the code card): not credits
+  // only, a match over, a legacy session, Ending (B7 review M-1: the fold is not drawn there), or the ended and failed cards.
+  const takeover =
+    legacy || creditsOnly || matchOver || state === "ending" || state === "ended" || state === "failed"
+      ? null
+      : takeoverNotice(p.phone, state, p.takeoverDismissedAt);
   const stripId = `stream-why-${p.fixtureId}`;
   // D3: the server-measured 30 s (M6) — a warning under the chain; the stream keeps running. I-1: phone first. §6.12:
   // the phone's sentence gives way to the strip while it shows the countdown or the paused reason.
@@ -1888,7 +1977,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       onToggle={(e) => p.onToggleCode(e.currentTarget.open)}
       className="group min-w-0 rounded-lg bg-white ring-1 ring-purple-100"
     >
-      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm [&::-webkit-details-marker]:hidden">
+      {/* flex-wrap: on a narrow card "Show the code again" drops to its own line before "Paired · Pixel 8" would
+          truncate (a label sized to its content, capped at the row, wraps the next item instead of shrinking). */}
+      <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-1.5 text-sm [&::-webkit-details-marker]:hidden">
         <span
           aria-hidden
           data-tone={dot}
@@ -1897,25 +1988,95 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           }`}
         />
         {facts && (
-          <>
+          // PR-2 T12 (§7.5, Option A): "Paired · Pixel 8" — the model the phone named, truncating first on a narrow card.
+          <span data-testid="stream-code-paired" className="min-w-0 max-w-[calc(100%-1rem)] truncate">
             <span className="font-medium text-slate-800">{msg("stream.code.paired")}</span>
-            <span aria-hidden className="text-slate-400">
-              ·
-            </span>
-          </>
+            {facts.model !== null && (
+              <>
+                <span aria-hidden className="text-slate-400">
+                  {" · "}
+                </span>
+                <span className="text-slate-700">{facts.model}</span>
+              </>
+            )}
+          </span>
         )}
-        <span className="min-w-0 truncate font-medium text-purple-700 underline decoration-purple-300 underline-offset-2">
+        <span className="ml-auto shrink-0 pl-1 font-medium text-purple-700 underline decoration-purple-300 underline-offset-2">
           {msg("stream.code.showAgain")}
         </span>
         <ChevronRight
           aria-hidden
-          className="ml-auto h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-90 motion-reduce:transition-none"
+          className="h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-90 motion-reduce:transition-none"
           strokeWidth={1.8}
         />
       </summary>
       {p.codeOpen && <div className="px-3 pb-3">{codeInner}</div>}
     </details>
   );
+
+  // PR-2 T10 (§7.1, Option A states 1–2): the switch under the picker — the whole row is the control (44 px), its caption
+  // (the server's delay) only while on. Checked is the read model's `auto.enabled`, or the flip in flight.
+  const autoOn = p.autoPending ?? p.phone?.auto?.enabled ?? false;
+  const autoTitleId = `stream-auto-title-${p.fixtureId}`;
+  const autoHintId = `stream-auto-hint-${p.fixtureId}`;
+  // Owner-approved 2026-10-08: the note under the switch while it is on — why it will not start for this match (the server's
+  // latch, final review I-1), else the paired phone in Operator (the beat's mode). One line, the latch first.
+  const autoNote = autoSwitchNote(p.phone, autoOn);
+  const autoNoteId = autoNote?.kind === "wontStart" ? `stream-auto-wont-start-${p.fixtureId}` : `stream-auto-operator-${p.fixtureId}`;
+  const autoSwitch = (
+    <div data-testid="stream-auto" className="mt-3">
+      <button
+        type="button"
+        role="switch"
+        data-testid="stream-auto-switch"
+        aria-checked={autoOn}
+        aria-labelledby={autoTitleId}
+        aria-describedby={autoOn ? (autoNote ? `${autoHintId} ${autoNoteId}` : autoHintId) : undefined}
+        disabled={p.autoPending !== null}
+        onClick={() => p.onToggleAuto(!autoOn)}
+        className="flex min-h-11 w-full items-start gap-3 rounded-lg bg-white p-3 text-left ring-1 ring-purple-100 disabled:cursor-wait"
+      >
+        <span
+          aria-hidden
+          className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors motion-reduce:transition-none ${autoOn ? "bg-[#1a1033]" : "bg-slate-300"}`}
+        >
+          <span
+            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-[left] motion-reduce:transition-none ${autoOn ? "left-[22px]" : "left-0.5"}`}
+          />
+        </span>
+        <span className="min-w-0">
+          <span id={autoTitleId} className="block text-sm font-medium text-slate-800">
+            {msg("stream.auto.switch")}
+          </span>
+          {autoOn && (
+            <span id={autoHintId} data-testid="stream-auto-hint" className="mt-0.5 block text-xs text-slate-600">
+              {msgPlural("stream.auto.switchHint", p.autoStopMinutes, { count: p.autoStopMinutes })}
+            </span>
+          )}
+        </span>
+      </button>
+      {autoNote && (
+        <p
+          id={autoNoteId}
+          data-testid={autoNote.kind === "wontStart" ? "stream-auto-wont-start" : "stream-auto-operator"}
+          data-reason={autoNote.kind === "wontStart" ? autoNote.reason : undefined}
+          className="mt-1 flex gap-1.5 px-1 text-xs text-amber-800"
+        >
+          <TriangleAlert aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-amber-600" strokeWidth={1.8} />
+          <span className="min-w-0">{msg(autoNote.kind === "wontStart" ? AUTO_WONT_START_KEY[autoNote.reason] : "stream.auto.operatorHint")}</span>
+        </p>
+      )}
+      {p.autoFailed && (
+        <p data-testid="stream-auto-error" role="alert" className="mt-1 text-sm text-red-700">
+          {msg("stream.error.failed")}
+        </p>
+      )}
+    </div>
+  );
+  // §7.1: Live's read-only line — only when the server says §7.3 will stop this session (B7 review M-3), the server's delay.
+  const autoLive = state === "live" && autoStopLine(p.phone, state);
+  // §7.4 "behind a tap" (Q-D): the phone's data used and app version, after the runner's chips in Details (Live/Ending).
+  const extraChips = phoneDetails(p.phone);
 
   return (
     // P5: the root marker the chooser's Close looks Buy more up from.
@@ -1929,12 +2090,32 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           moves (under its node at ≥ 768, its own line below). None at all while credits-only (B3). */}
       {drawn?.chain && (
         <SignalChain chain={drawn.chain} destination={{ kind: drawn.to.kind, label: drawn.to.label }}>
-          {strip && <PhoneStripView id={stripId} strip={strip} caret />}
+          {strip && <PhoneStripView id={stripId} strip={strip} caret onBuy={stripBuy} />}
         </SignalChain>
       )}
       {/* No chain to point at (no destination yet): the strip still says what the phone needs, without its caret. */}
-      {!drawn?.chain && strip && <PhoneStripView id={stripId} strip={strip} caret={false} />}
+      {!drawn?.chain && strip && <PhoneStripView id={stripId} strip={strip} caret={false} onBuy={stripBuy} />}
       {warned && p.view && <D3Warning cause={warned} kind={p.view.target.kind} />}
+      {takeover && (
+        // §7.5 (Option A 9a/9b): an inline amber strip with its own X — the time on the venue's clock.
+        <div data-testid="stream-takeover" role="status" className="mt-3 flex gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <TriangleAlert aria-hidden className="mt-px h-4 w-4 shrink-0 text-amber-600" strokeWidth={1.8} />
+          <p data-testid="stream-takeover-text" className="min-w-0 flex-1">
+            {takeover.model !== null
+              ? msg(takeoverLineKey(takeover.act, true), { model: takeover.model, time: fmtTime(p.tz, takeover.at) })
+              : msg(takeoverLineKey(takeover.act, false), { time: fmtTime(p.tz, takeover.at) })}
+          </p>
+          <button
+            type="button"
+            data-testid="stream-takeover-dismiss"
+            aria-label={msg("stream.takeover.dismiss")}
+            onClick={() => p.onDismissTakeover(takeover.at)}
+            className="-my-1 -mr-2 grid h-11 w-11 shrink-0 place-items-center rounded-md text-amber-700 hover:bg-amber-100 md:h-8 md:w-8"
+          >
+            <X aria-hidden className="h-4 w-4" strokeWidth={1.8} />
+          </button>
+        </div>
+      )}
 
       {p.view?.fixtureDecided && (state === "live" || state === "ending") && (
         <p
@@ -2066,6 +2247,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 </p>
               </div>
             )}
+            {autoSwitch}
           </div>
           <div className={ready === "no_phone" ? "min-w-0 md:col-start-2 md:row-start-1 md:row-span-2" : "min-w-0 md:col-start-2 md:row-start-1 md:row-span-2 md:mt-6"}>
             {ready === "no_phone" ? (
@@ -2126,6 +2308,11 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       {(state === "live" || state === "ending") && p.view && (
         // §3.3 Live (mockup state 3): On air and the elapsed time, a full-width Stop, then the closed Details.
         <div className="mt-4 space-y-4">
+          {autoLive && (
+            <p data-testid="stream-auto-live" className="text-xs text-slate-600">
+              {msgPlural("stream.auto.liveLine", p.autoStopMinutes, { count: p.autoStopMinutes })}
+            </p>
+          )}
           {state === "live" ? (
             <div className="grid items-center gap-3 md:grid-cols-[auto_1fr] md:gap-6">
               <div className="flex items-center gap-3 md:flex-col md:items-start md:gap-0.5">
@@ -2163,6 +2350,17 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                   {c.text}
                 </span>
               ))}
+              {extraChips.map((c) =>
+                c.kind === "dataUsed" ? (
+                  <span key="data" data-testid="stream-phone-data-used" className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-700">
+                    {msg("stream.phone.dataUsed", { n: fmtNumber(locale, c.mb, { maximumFractionDigits: 1 }) })}
+                  </span>
+                ) : (
+                  <span key="app" data-testid="stream-phone-app-version" className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-700">
+                    {msg("stream.phone.appVersion", { version: c.version })}
+                  </span>
+                ),
+              )}
             </div>
           </details>
           {!legacy && state === "live" && codeDisclosure}

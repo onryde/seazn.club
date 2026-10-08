@@ -374,10 +374,18 @@ export const RECONNECT_QUIET_SECONDS = 30;
 /** W9 (§7.4): the phone-health line's thresholds. */
 export const LOW_BATTERY_PERCENT = 20;
 export const HOT_THERMAL_STATUS = 3;
+/** W7 (§8.3): auto stop fires this long after the result is saved (`finished_at`), under the same switch. Tunable (T8's walkthrough). */
+export const AUTO_STOP_AFTER_RESULT_SECONDS = 180;
+/** §8.3: a REFUSED auto start is retried no more than once per this long (`auto_start_attempted_at`). Tunable (T8's walkthrough). */
+export const AUTO_START_RETRY_SECONDS = 60;
+/** FP16 / plan R-2 (owner ruling 2026-10-07): the panel shows "Phone not ready" only after the phone has been continuously
+ *  not-ready this long (about two beats) — `notReady` flaps on a real phone. A display debounce: NOT tunable. */
+export const PHONE_NOT_READY_SHOW_AFTER_SECONDS = 20;
 
-/** §6.15 / AGENTS.md #20: the timings a walkthrough may shorten, so A14, ask 10 and W19 run in seconds. */
+/** §6.15 / AGENTS.md #20: the timings a walkthrough may shorten, so A14, ask 10, W19 and W7's auto stop run in seconds. */
 export const TUNABLE_NAMES = [
   "DEAD_PHONE_TAKEOVER_SECONDS", "PHONE_LOST_LIVE_MINUTES", "PHONE_SILENT_FLOOR_SECONDS", "CODE_GRACE_AFTER_FINISH_MINUTES",
+  "AUTO_STOP_AFTER_RESULT_SECONDS", "AUTO_START_RETRY_SECONDS",
 ] as const;
 export type TunableName = (typeof TUNABLE_NAMES)[number];
 /** The ENV_NAMEs an override is honoured under: a developer's machine and CI. Never a deployment, never unset. */

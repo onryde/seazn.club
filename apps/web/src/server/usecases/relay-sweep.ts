@@ -52,6 +52,7 @@ export interface SweepResult {
     crashed: number;                // machine_* failures
     wallClockEnded: number;
     phoneLost: number;              // capture QR v2 T7: ask 10 / W19 ended it phone_lost — never counted as a wall clock
+    autoStopped: number;            // capture QR v2 PR-2 T5: the tick's auto stop (§7.3) ended it after the result — never a wall clock
     terminalRunnersSettled: number; // C27: a terminal session's runner advanced (the session state did not)
     otherFailures: number;          // a failure the backstop's own rules do not produce — a visit that raced another request
   };
@@ -129,6 +130,8 @@ export function backstopOutcome(
   // T7: the tick's phone-lost end (ask 10 from requested/provisioning/warming, W19 from live) — read from the row's own
   // end reason, the one authority for why it ended; before this it fell into the wall-clock bucket below (or none).
   if ((after.state === "ending" || after.state === "completed") && after.endReason === "phone_lost") return "phoneLost";
+  // PR-2 T5 (§7.3): the tick's auto stop, 3 minutes after the result — likewise read from the row's own end reason.
+  if ((after.state === "ending" || after.state === "completed") && after.endReason === "auto_stopped") return "autoStopped";
   if ((after.state === "ending" || after.state === "completed") && (before.state === "live" || before.state === "warming")) return "wallClockEnded";
   return null;
 }
@@ -200,7 +203,7 @@ export async function sweepStreamSessions(
     backstop: {
       candidates: 0, visited: 0, skippedLocked: 0, errored: 0,
       warmingTimedOut: 0, provisionTimedOut: 0, admissionTimedOut: 0, endingTimedOut: 0, graceForced: 0, completedObserved: 0,
-      retried: 0, crashed: 0, wallClockEnded: 0, phoneLost: 0, terminalRunnersSettled: 0, otherFailures: 0,
+      retried: 0, crashed: 0, wallClockEnded: 0, phoneLost: 0, autoStopped: 0, terminalRunnersSettled: 0, otherFailures: 0,
     },
     runnerListing: "not_needed", machinesListed: 0, orphansDestroyed: 0, orphanDestroysFailed: 0, foreignRunnersSkipped: 0,
     runnerGoneConfirmed: 0, runnerGoneDeferred: 0, outputsReleased: 0, outputReleasesFailed: 0,

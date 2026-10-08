@@ -33,7 +33,16 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { sitemapWindowOverride } from "../sitemap-window";
 import { FakeIngest } from "../../server/relay/fakes";
-import { DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, TUNABLE_NAMES, tunable } from "../../server/relay/config";
+import {
+  AUTO_START_RETRY_SECONDS,
+  AUTO_STOP_AFTER_RESULT_SECONDS,
+  CODE_GRACE_AFTER_FINISH_MINUTES,
+  DEAD_PHONE_TAKEOVER_SECONDS,
+  PHONE_LOST_LIVE_MINUTES,
+  PHONE_SILENT_FLOOR_SECONDS,
+  TUNABLE_NAMES,
+  tunable,
+} from "../../server/relay/config";
 
 /** apps/web — this file lives at apps/web/src/lib/__tests__/. */
 const WEB = resolve(import.meta.dirname, "../../..");
@@ -470,6 +479,16 @@ const WALKTHROUGH_SPECS: string[] = [
   // ask 10 and W19 (on R10's shortened tunables), the cron end, the free restarts, Revoke & reissue, a finished
   // fixture's code, and the panel's states at three widths.
   "capture-phone.spec.ts",
+  // Capture QR v2 PR-2 (plan T8) — automatic streaming: the switch, a match started on a device link starting the
+  // broadcast on the paired phone's next beat (and the switched-off negative), the automatic stop after the tuned delay,
+  // A12's block by the panel's Stop (alone, against the phone's own stop), A15, a refused start's retry, and the
+  // switch's API answers.
+  "capture-auto.spec.ts",
+  // Capture QR v2 PR-2 (T10–T12) — the organiser panel's PR-2 surface through real beats: the automatic-streaming switch
+  // (the DB re-read at three widths, the entitlement denied and granted), the live auto-stop line, the phone-health line
+  // and each amber the server names, the beat-confirmed "Phone not ready", the automatic start's refusal, and the
+  // takeover notice (dismissed across a reload, gone after Revoke & reissue, naming Stop while live).
+  "capture-panel-pr2.spec.ts",
 ];
 
 afterEach(() => {
@@ -974,22 +993,107 @@ describe("the walkthrough's fake phone-connect delay", () => {
 // budgeted from the same variables — so, like FAKE_INGEST_CONNECT_AFTER_MS above, each must reach BOTH e2e-parallel's
 // server and its Playwright runner with one value. Nowhere else: e2e-serial and e2e-mobile run no capture walkthrough,
 // and a shortened timing there would only end their sessions early. The DEFAULTS stay pinned by config.test.ts (class 20);
-// this pins the CI value. The names are read from the walkthrough's own env guard, not typed here.
-describe("the capture walkthrough's shortened timings (R10)", () => {
+// this pins the CI value. The names are read from the walkthroughs' own env guards, not typed here.
+//
+// PR-2 (plan T8, owner OK OG-E 2026-10-07): capture-auto.spec.ts adds the automatic stop's delay and the refused start's
+// retry spacing. Reading the names from the specs alone could not catch a tunable NOBODY demands — a new TUNABLE_NAMES
+// entry with no `wholeEnv(…)` in any walkthrough and no line in e2e.yml would leave both lists agreeing, and CI running
+// the default under a walkthrough budgeted for the short one. So the union the walkthroughs demand is also pinned to
+// TUNABLE_NAMES itself, less the one tunable no walkthrough shortens (named below, with why).
+describe("the capture walkthroughs' shortened timings (R10, PR-2)", () => {
   const strip = (text: string) =>
     text
       .split("\n")
       .map((line) => line.replace(/(^|\s)#.*$/, ""))
       .join("\n");
   const valueOf = (body: string, name: string) => new RegExp(`^\\s+${name}: *"?([^"\\s]*)"?\\s*$`, "m").exec(body)?.[1];
-  const DEFAULTS: Record<string, number> = { DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS };
+  const DEFAULTS: Record<(typeof TUNABLE_NAMES)[number], number> = {
+    DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES,
+    AUTO_STOP_AFTER_RESULT_SECONDS, AUTO_START_RETRY_SECONDS,
+  };
+  /** The one tunable no walkthrough shortens: capture-phone's finished-fixture case reaches the code's grace by
+   *  BACKDATING `finished_at` in SQL, not by waiting it out, so CI runs the default 120 minutes on purpose. */
+  const NOT_SHORTENED_IN_CI: readonly string[] = ["CODE_GRACE_AFTER_FINISH_MINUTES"];
+  /** A spec's CODE (its path relative to e2e/): comment lines dropped and a trailing `// …` cut, so a commented-out
+   *  guard demands nothing and prose that names a tunable reads nothing. */
+  const codeOf = (spec: string): string =>
+    readFileSync(join(E2E_DIR, spec), "utf8")
+      .split("\n")
+      .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
+      .map((line) => line.replace(/\s\/\/.*$/, ""))
+      .join("\n");
+  /** Each server tunable a spec's env guard demands, with the guard's own floor (`atLeast`, a literal or a `const` of this
+   *  file) when it states one — the least its arithmetic can run on, so CI's value must not sit below it. */
+  const guardsOf = (spec: string): { name: string; atLeast: number | null }[] => {
+    const code = codeOf(spec);
+    return [...code.matchAll(/wholeEnv\("([A-Z_]+)"(?:,\s*\{([^}]*)\})?/g)]
+      .filter((m) => (TUNABLE_NAMES as readonly string[]).includes(m[1]!))
+      .map((m) => {
+        const raw = /\batLeast:\s*([A-Za-z_][A-Za-z0-9_]*|[\d_]+)/.exec(m[2] ?? "")?.[1];
+        if (raw === undefined) return { name: m[1]!, atLeast: null };
+        const literal = /^[\d_]+$/.test(raw) ? raw : new RegExp(`^const ${raw} = ([\\d_]+);`, "m").exec(code)?.[1];
+        // A floor the guard names but this read cannot resolve is a refusal, never a silent "no floor".
+        expect(literal, `${spec}: ${m[1]}'s floor ${raw} resolves to a number`).toBeDefined();
+        return { name: m[1]!, atLeast: Number(literal!.replaceAll("_", "")) };
+      });
+  };
+  const demanded = (spec: string): string[] => guardsOf(spec).map((g) => g.name);
+  /** Each server tunable a spec READS from this process's env, by any means — a strict guard (`wholeEnv("…")`), a
+   *  lenient one (`tunedEnv("…")`), `process.env["…"]` or `process.env.…`: the name as a string, or as an env member. */
+  const readsOf = (spec: string): string[] => {
+    const code = codeOf(spec);
+    return TUNABLE_NAMES.filter((n) => code.includes(`"${n}"`) || new RegExp(`process\\.env\\.${n}\\b`).test(code));
+  };
+  /** The specs whose budgets read a server tunable — FOUND by what they do, over every e2e spec, never a list typed
+   *  here (AGENTS.md #16: sweep by behaviour, not filename). A list missed capture-panel-pr2.spec.ts, which reads two
+   *  through a lenient `tunedEnv`. Paths are relative to e2e/. */
+  const SPECS = specFiles().filter((spec) => readsOf(spec).length > 0);
 
-  it("each tunable the capture walkthrough demands is set, to the SAME shortened value, on e2e-parallel's Start server and Playwright steps — and on no other job", async () => {
-    const spec = readFileSync(join(WEB, "e2e/walkthrough/capture-phone.spec.ts"), "utf8");
-    const names = [...spec.matchAll(/wholeEnv\("([A-Z_]+)"/g)].map((m) => m[1]!).filter((n) => (TUNABLE_NAMES as readonly string[]).includes(n));
-    expect(names, "the walkthrough's env guard names exactly these three server tunables").toEqual(["DEAD_PHONE_TAKEOVER_SECONDS", "PHONE_LOST_LIVE_MINUTES", "PHONE_SILENT_FLOOR_SECONDS"]);
+  it("finds every spec that reads a server tunable, and each tunable one reads is DEMANDED by a guard — so CI sets it", () => {
+    // Anti-vacuity: the scan found the readers (capture-phone, capture-auto, capture-panel-pr2 today), and both guards.
+    expect(SPECS.length, `specs reading a server tunable: ${SPECS.join(", ")}`).toBeGreaterThanOrEqual(3);
+    expect(SPECS, "premise: the scan finds the two guarded walkthroughs").toEqual(
+      expect.arrayContaining(["walkthrough/capture-phone.spec.ts", "walkthrough/capture-auto.spec.ts"]),
+    );
+    // A tunable a spec budgets from but no guard demands is missing from the union below, so nothing would pin it in
+    // e2e.yml and CI would run its DEFAULT under a budget written for the short value. A guard renamed away from
+    // `wholeEnv(` reads the same way: its file still reads the tunable, and nobody demands it.
+    // The exemption is read too (capture-phone backdates past max(default, env) for the code's grace), and is the one
+    // tunable a reader may budget from without a guard: CI leaves it at its default on purpose.
+    const union = new Set(SPECS.flatMap(demanded));
+    const exemptReads = SPECS.flatMap((spec) => readsOf(spec).filter((n) => NOT_SHORTENED_IN_CI.includes(n)));
+    expect(exemptReads, "premise: the exemption's reader is found (capture-phone's backdate)").toEqual(["CODE_GRACE_AFTER_FINISH_MINUTES"]);
+    const unguarded = SPECS.flatMap((spec) =>
+      readsOf(spec)
+        .filter((n) => !union.has(n) && !NOT_SHORTENED_IN_CI.includes(n))
+        .map((n) => `${spec}: ${n}`),
+    );
+    expect(unguarded, "a spec reads a server tunable that no walkthrough's guard demands").toEqual([]);
+  });
+
+  it("the walkthroughs together demand EVERY server tunable but the one CI leaves at its default — so a new tunable nobody wires goes red here", () => {
+    const perSpec = SPECS.map((spec) => [spec, demanded(spec)] as const).filter(([, names]) => names.length > 0);
+    // Anti-vacuity: the guarded files (capture-phone and capture-auto) are among the readers found.
+    expect(perSpec.length, "specs whose env guard names a server tunable").toBeGreaterThanOrEqual(2);
+    const union = [...new Set(perSpec.flatMap(([, names]) => names))].sort();
+    const owed = TUNABLE_NAMES.filter((n) => !NOT_SHORTENED_IN_CI.includes(n)).sort();
+    expect(owed.length, "anti-vacuity: TUNABLE_NAMES less the exemption is not empty").toBeGreaterThan(0);
+    expect(union, "every tunable a walkthrough waits on is demanded by one; a tunable missing here runs its DEFAULT in CI").toEqual(owed);
+    for (const n of NOT_SHORTENED_IN_CI) expect(TUNABLE_NAMES as readonly string[], `the exemption ${n} is a real tunable`).toContain(n);
+  });
+
+  it("each tunable a capture walkthrough demands is set, to the SAME shortened value, on e2e-parallel's Start server and Playwright steps — and on no other job", async () => {
+    const names = [...new Set(SPECS.flatMap(demanded))];
+    // The floor each tunable's guards demand (the highest, where two specs both guard it).
+    const floors = new Map<string, number>();
+    for (const g of SPECS.flatMap(guardsOf)) if (g.atLeast !== null) floors.set(g.name, Math.max(floors.get(g.name) ?? 0, g.atLeast));
+    expect([...floors.keys()].sort(), "premise: capture-auto's two guards state their floors").toEqual(["AUTO_START_RETRY_SECONDS", "AUTO_STOP_AFTER_RESULT_SECONDS"]);
     const walkthrough = projectNamed(await configFor(undefined), "walkthrough");
-    expect(selects(walkthrough, "walkthrough/capture-phone.spec.ts"), "premise: the walkthrough project selects capture-phone.spec.ts").toBe(true);
+    // Every reader — not only the guarded ones — runs in the job that sets the tunables. A reader in another project
+    // would run CI's defaults, since the next assertions keep the tunables out of every other job.
+    for (const spec of SPECS) {
+      expect(selects(walkthrough, spec), `premise: the walkthrough project selects ${spec}`).toBe(true);
+    }
 
     const yml = strip(readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8"));
     const start = yml.indexOf("\n  e2e-parallel:\n");
@@ -1007,6 +1111,7 @@ describe("the capture walkthrough's shortened timings (R10)", () => {
     expect(runs.length, "e2e-parallel has one Playwright step").toBe(1);
 
     let checked = 0;
+    let floorsChecked = 0;
     for (const name of names) {
       const server = valueOf(servers[0]!, name);
       const runner = valueOf(runs[0]!, name);
@@ -1015,13 +1120,21 @@ describe("the capture walkthrough's shortened timings (R10)", () => {
       expect(runner, `${name}: the runner budgets from a different value than the server runs`).toBe(server);
       // The server's own parse under CI's ENV_NAME: honoured (a junk value throws at the first stream), and SHORTER
       // than the default, which is what the walkthrough's guard demands.
-      const honoured = tunable(name as (typeof TUNABLE_NAMES)[number], DEFAULTS[name]!, { ENV_NAME: "ci", [name]: server });
+      const fallback = DEFAULTS[name as (typeof TUNABLE_NAMES)[number]];
+      const honoured = tunable(name as (typeof TUNABLE_NAMES)[number], fallback, { ENV_NAME: "ci", [name]: server });
       expect(honoured, `${name}=${server} is not what the server runs under ENV_NAME=ci`).toBe(Number(server));
-      expect(honoured, `${name}=${server} is not shorter than its default ${DEFAULTS[name]}`).toBeLessThan(DEFAULTS[name]!);
+      expect(honoured, `${name}=${server} is not shorter than its default ${fallback}`).toBeLessThan(fallback);
+      const floor = floors.get(name);
+      if (floor !== undefined) {
+        expect(honoured, `${name}=${server} is below ${floor}, the floor the walkthrough's guard demands`).toBeGreaterThanOrEqual(floor);
+        floorsChecked++;
+      }
       expect(new RegExp(`^\\s+${name}:`, "m").test(elsewhere), `${name} reaches a job other than e2e-parallel`).toBe(false);
       checked++;
     }
-    expect(checked, "tunables checked").toBe(3);
+    // The five the two walkthroughs demand (the first test pins which) — none checked would be a vacuous pass.
+    expect(checked, "tunables checked").toBe(TUNABLE_NAMES.length - NOT_SHORTENED_IN_CI.length);
+    expect(floorsChecked, "floors checked").toBe(floors.size);
   });
 });
 
@@ -1070,5 +1183,249 @@ describe("RELAY_KEK reaches every fake-relay server, generated per run", () => {
       expect(yml.match(/RELAY_KEK=[0-9a-fA-F]{16,}/g) ?? [], `${wf}: a literal RELAY_KEK value`).toEqual([]);
     }
     expect(scanned).toBe(WORKFLOW_FILES.length);
+  });
+});
+
+// Capture QR v2 PR-2 B8 (the B6/B7 reviews' deferred item): the stream-slot pool was restated in six specs, and each sized
+// its wait for a key from the holds IT knew about — stream-relay and directory waited 3 cycles (165 s in CI) while
+// capture-phone's W23 holds 5. It now lives in ONE helper with one hold limit and one wait. Two guards keep it that way:
+// no other e2e file restates the pool (the key base, the capacity derivation, a try-lock on a slot key), and every member
+// that takes a key declares its own hold under its own name — which the helper judges against the limit at its first
+// take. The limit's guard itself is unit-tested here, without a browser or a database. (`pg_try_advisory_lock` is the
+// pool's alone: the staff-borrow and Connect locks in helpers.ts and rs007-money-kit.ts block on `pg_advisory_lock`.)
+describe("the stream-slot pool: one helper, one hold limit, one wait", () => {
+  const HELPER = "helpers/stream-slot-pool.ts";
+  /** Every TypeScript file under e2e/, relative to it (the specs, the kits, the harnesses). */
+  const e2eSources = (): string[] => {
+    const walk = (dir: string, prefix: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? walk(join(dir, entry.name), `${prefix}${entry.name}/`) : entry.name.endsWith(".ts") ? [`${prefix}${entry.name}`] : [],
+      );
+    return walk(E2E_DIR, "").sort();
+  };
+  /** A file's CODE: comment lines dropped and a trailing `// …` cut, so prose that NAMES the pool restates nothing. */
+  const codeOf = (rel: string): string =>
+    readFileSync(join(E2E_DIR, rel), "utf8")
+      .split("\n")
+      .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
+      .map((line) => line.replace(/\s\/\/.*$/, ""))
+      .join("\n");
+  const RESTATEMENTS: { what: string; re: RegExp }[] = [
+    { what: "the key base", re: /7_?301_?130_?000/ },
+    { what: "the capacity derivation", re: /totalStorageMinutesLimit/ },
+    // The pool's own way of taking a key. The other e2e locks (the staff borrow, the Connect account) BLOCK on
+    // `pg_advisory_lock` and are not this pool's.
+    { what: "a slot try-lock", re: /pg_try_advisory_lock\(/ },
+  ];
+
+  it("no e2e file but the helper restates the pool", () => {
+    const files = e2eSources();
+    expect(files, "premise: the helper exists").toContain(HELPER);
+    // The helper itself must still carry every signature, or this scan is looking for words nobody writes any more.
+    const helper = codeOf(HELPER);
+    for (const r of RESTATEMENTS) expect(helper, `premise: the helper holds ${r.what}`).toMatch(r.re);
+    const restated = files
+      .filter((f) => f !== HELPER)
+      .flatMap((f) => RESTATEMENTS.filter((r) => r.re.test(codeOf(f))).map((r) => `${f}: ${r.what}`));
+    // Anti-vacuity: the scan read the whole e2e tree, not a corner of it.
+    expect(files.length, "e2e TypeScript files scanned").toBeGreaterThan(100);
+    expect(restated, "restate the stream-slot pool outside its helper — import it from e2e/helpers/stream-slot-pool.ts").toEqual([]);
+  });
+
+  it("every member that takes a pool key declares its own hold, under its own name", () => {
+    const members = e2eSources().filter((f) => f !== HELPER && /from "[./]*\/?helpers\/stream-slot-pool"/.test(codeOf(f)));
+    const takers = members.filter((f) => /\btake(StreamSlot|WholePool)\(/.test(codeOf(f)));
+    const misnamed = takers.flatMap((f) => {
+      const named = [...codeOf(f).matchAll(/\bfile:\s*"([^"]+)"/g)].map((m) => m[1]!);
+      const own = f.split("/").pop()!;
+      return named.length === 1 && named[0] === own ? [] : [`${f} declares ${JSON.stringify(named)}`];
+    });
+    // The five pool members (stream-relay, directory, capture-phone, capture-auto, capture-panel-pr2) take pool keys;
+    // stream-credits imports the helper for its OWN key. None found would be a vacuous pass.
+    expect(takers.length, `pool members found: ${takers.join(", ")}`).toBeGreaterThanOrEqual(5);
+    expect(members.length, "files importing the pool helper").toBeGreaterThan(takers.length);
+    expect(misnamed, "a member's PoolHolder names exactly one file, and it is its own").toEqual([]);
+  });
+
+  it("the guard admits a hold at the limit and refuses one past it, an absent one, and a broken one — before any wait", async () => {
+    vi.resetModules();
+    const pool = await import("../../../e2e/helpers/stream-slot-pool");
+    expect(pool.POOL_HOLD_LIMIT_MS, "premise: a positive limit").toBeGreaterThan(0);
+    expect(pool.poolHoldProblem({ file: "at.spec.ts", holdMs: pool.POOL_HOLD_LIMIT_MS })).toBeNull();
+    const cases: { holdMs: number; says: RegExp }[] = [
+      { holdMs: pool.POOL_HOLD_LIMIT_MS + 1, says: /past\.spec\.ts holds a stream slot up to \d+ ms, past the pool's \d+ ms limit/ },
+      { holdMs: 0, says: /declares no stream-slot hold/ },
+      { holdMs: Number.NaN, says: /declares no stream-slot hold/ },
+      { holdMs: -1, says: /declares no stream-slot hold/ },
+    ];
+    for (const c of cases) expect(pool.poolHoldProblem({ file: "past.spec.ts", holdMs: c.holdMs }), `${c.holdMs} ms`).toMatch(c.says);
+    expect(cases.length, "refusals checked").toBe(4);
+    // The take judges the hold FIRST: refused with the guard's words, without a database or a wait.
+    vi.stubEnv("DATABASE_URL", "");
+    try {
+      await expect(pool.takeStreamSlot({ file: "past.spec.ts", holdMs: pool.POOL_HOLD_LIMIT_MS + 1 })).rejects.toThrow(/past the pool's/);
+      await expect(
+        pool.takeWholePool({ file: "past.spec.ts", holdMs: pool.POOL_HOLD_LIMIT_MS + 1 }, { creditsKeyWaitMs: 1 }),
+      ).rejects.toThrow(/past the pool's/);
+      expect(pool.holdsStreamSlot(), "a refused take holds nothing").toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("at CI's connect delay every member's wait outlasts the hold limit, and the limit outlasts capture-phone's W23 — which the old 3-cycle wait (165 s) did not", async () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
+    const job = yml.slice(yml.indexOf("\n  e2e-parallel:\n"), yml.indexOf("\n  e2e-serial:\n"));
+    const ci = /^\s+FAKE_INGEST_CONNECT_AFTER_MS: *"?(\d+)"?\s*$/m.exec(job)?.[1];
+    expect(ci, "premise: e2e-parallel sets FAKE_INGEST_CONNECT_AFTER_MS").toBeDefined();
+    const { FREE_RESTARTS_PER_WINDOW } = await import("../../server/relay/config");
+    const { poolBudget } = await import("../../../e2e/helpers/stream-slot-pool");
+    const budget = poolBudget(Number(ci));
+    // capture-phone's W23 from the rulebook: the first run, the free restarts in a window, and the paid one.
+    const w23 = (FREE_RESTARTS_PER_WINDOW + 2) * budget.cycleMs;
+    expect(3 * budget.cycleMs, "the differential: the relay/directory wait this replaces was shorter than W23").toBeLessThan(w23);
+    expect(budget.holdLimitMs, "the limit admits W23").toBeGreaterThanOrEqual(w23);
+    expect(budget.slotWaitMs, "every member's wait outlasts a whole hold at the limit").toBeGreaterThan(budget.holdLimitMs);
+  });
+
+  // Final review m-4. The wait was twice the hold limit (660 s in CI). A member whose key never frees (a leaked lease)
+  // waits it out, fails, and CI's retry waits it out AGAIN — 1,320 s, past e2e-parallel's 20-minute job timeout, so the
+  // job was killed with no report at all instead of a red naming the wait. The true worst case for one waiter is ONE
+  // whole hold at the limit, plus slack; and that wait, once per attempt, must fit inside the job.
+  it("final review m-4: the wait is under twice the limit, and the wait × (CI's retries + 1) fits inside e2e-parallel's job timeout", async () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8")
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    const start = yml.indexOf("\n  e2e-parallel:\n");
+    const end = yml.indexOf("\n  e2e-serial:\n");
+    expect(start, "no e2e-parallel job").toBeGreaterThan(-1);
+    expect(end, "no e2e-serial job after it").toBeGreaterThan(start);
+    const job = yml.slice(start, end);
+    const ci = /^\s+FAKE_INGEST_CONNECT_AFTER_MS: *"?(\d+)"?\s*$/m.exec(job)?.[1];
+    expect(ci, "premise: e2e-parallel sets FAKE_INGEST_CONNECT_AFTER_MS").toBeDefined();
+    // The job's own timeout: the one `timeout-minutes` at the job's indent (a step's would sit deeper).
+    const timeouts = [...job.matchAll(/^ {4}timeout-minutes: *(\d+)\s*$/gm)].map((m) => Number(m[1]));
+    expect(timeouts, "e2e-parallel states ONE job timeout").toHaveLength(1);
+    // The retries CI runs: the config read as CI evaluates it (`retries: process.env.CI ? 1 : 0`).
+    vi.stubEnv("CI", "true");
+    let retries: number | undefined;
+    try {
+      retries = ((await configFor(undefined)) as unknown as { retries?: number }).retries;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(retries, "premise: CI retries a failed test, so a wait is paid once per attempt").toBeGreaterThan(0);
+    const { poolBudget } = await import("../../../e2e/helpers/stream-slot-pool");
+    const budget = poolBudget(Number(ci));
+    expect(budget.slotWaitMs, "the wait outlasts one whole hold at the limit").toBeGreaterThan(budget.holdLimitMs);
+    expect(budget.slotWaitMs, "never twice the limit: a waiter sits behind ONE hold, not two").toBeLessThan(2 * budget.holdLimitMs);
+    const jobMs = timeouts[0]! * 60_000;
+    expect(
+      budget.slotWaitMs * (retries! + 1),
+      `a starved member's attempts (${retries! + 1} × ${budget.slotWaitMs} ms) end inside the ${timeouts[0]}-minute job, so it reds by name`,
+    ).toBeLessThan(jobMs);
+  });
+
+  // Final review m-3. The fake ingest's connect delay was read four ways (an inline strict parse in three specs, a
+  // demanding `wholeEnv` copied into two, a lenient `tunedEnv` in one), and the poll and go-live waits were restated
+  // beside `cycleMs` in four. The helper now holds the one read and the one derivation; a hand read or a restated wait
+  // anywhere else in e2e/ is refused by name.
+  it("final review m-3: no e2e file but the helper reads the connect delay or a server tunable by hand, or restates the poll or go-live wait", () => {
+    const NAMES = ["FAKE_INGEST_CONNECT_AFTER_MS", ...TUNABLE_NAMES];
+    const SIGNS: { what: string; re: RegExp }[] = [
+      { what: "a hand read of the env", re: new RegExp(`process\\.env(?:\\.|\\[["'\`])(?:${NAMES.join("|")})\\b`) },
+      { what: "a hand-written env reader", re: /\bfunction (?:wholeEnv|tunedEnv|readWholeEnv)\(/ },
+      { what: "the poll wait restated", re: /(?<!\*\s?)\bSTREAM_POLL_MS \+ 5_000\b/ },
+      { what: "the go-live wait restated", re: /\bfake_?connect_?ms \+ 2 \* STREAM_POLL_MS\b/i },
+    ];
+    // The positive pair: each sign sees the form it replaced (verbatim from the specs before this fix).
+    const REPLACED: Record<string, string> = {
+      "a hand read of the env": "const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;",
+      "a hand-written env reader": "function wholeEnv(name: string, opts: { below?: number } = {}): number | null {",
+      "the poll wait restated": "const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;",
+      "the go-live wait restated": "const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;",
+    };
+    for (const s of SIGNS) expect(REPLACED[s.what], `premise: ${s.what} is seen`).toMatch(s.re);
+    expect("Number(process.env.CODE_GRACE_AFTER_FINISH_MINUTES ?? 0)", "premise: a tunable's hand read is seen").toMatch(SIGNS[0]!.re);
+    // A different wait that merely CONTAINS the poll's arithmetic is not the poll wait (fake-capture-phone's read model).
+    expect("const READ_MODEL_MS = 2 * STREAM_POLL_MS + 5_000;", "premise: a doubled poll is not the poll wait").not.toMatch(SIGNS[2]!.re);
+    // The helper holds the one derivation of each wait — or this scan is looking for words nobody writes any more.
+    const helper = codeOf(HELPER);
+    for (const s of SIGNS.slice(2)) expect(helper, `premise: the helper holds ${s.what.replace(" restated", "")}`).toMatch(s.re);
+    const files = e2eSources().filter((f) => f !== HELPER);
+    expect(files.length, "e2e TypeScript files scanned").toBeGreaterThan(100);
+    const found = files.flatMap((f) => SIGNS.filter((s) => s.re.test(codeOf(f))).map((s) => `${f}: ${s.what}`));
+    expect(found, "read the env and derive the waits through e2e/helpers/stream-slot-pool.ts, never by hand").toEqual([]);
+  });
+
+  it("final review m-3: the one env read parses each name as the SERVER does — the fake's delay as fakes.ts, a tunable as tunable()", async () => {
+    vi.resetModules();
+    const pool = await import("../../../e2e/helpers/stream-slot-pool");
+    const { connectAfterMsFromEnv } = await import("../../server/relay/fakes");
+    type Seen = "unset" | "junk" | number;
+    const SENTINEL = -1;
+    const server = (name: string, raw: string | undefined): Seen => {
+      try {
+        if (name === "FAKE_INGEST_CONNECT_AFTER_MS") return raw === undefined ? "unset" : connectAfterMsFromEnv();
+        const v = tunable(name as (typeof TUNABLE_NAMES)[number], SENTINEL, { ENV_NAME: "local", [name]: raw });
+        return v === SENTINEL ? "unset" : v;
+      } catch {
+        return "junk";
+      }
+    };
+    const RAWS = [undefined, "10000", " 10000 ", "7", "0", "", "  ", "-1", "1.5", "abc"];
+    let checked = 0;
+    const kinds = new Set<string>();
+    try {
+      for (const name of ["FAKE_INGEST_CONNECT_AFTER_MS", "AUTO_START_RETRY_SECONDS"]) {
+        for (const raw of RAWS) {
+          vi.stubEnv(name, raw ?? "");
+          if (raw === undefined) delete process.env[name];
+          const want = server(name, raw);
+          const read = pool.readWholeEnv(name);
+          const got: Seen = read.state === "ok" ? read.value : read.state;
+          expect(got, `${name}=${JSON.stringify(raw)}`).toBe(want);
+          kinds.add(typeof want === "number" ? "ok" : want);
+          checked++;
+        }
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(checked, "rows checked").toBe(2 * RAWS.length);
+    expect([...kinds].sort(), "anti-vacuity: the table reaches all three outcomes").toEqual(["junk", "ok", "unset"]);
+  });
+
+  it("final review m-3: the demanding guard names every gap — unset, junk, not shortened, below a floor — and passes a good value", async () => {
+    vi.resetModules();
+    const pool = await import("../../../e2e/helpers/stream-slot-pool");
+    const NAME = "AUTO_START_RETRY_SECONDS";
+    const cases: { raw: string | undefined; opts: { below?: number; atLeast?: number }; value: number | null; says: RegExp | null }[] = [
+      { raw: undefined, opts: {}, value: null, says: /^AUTO_START_RETRY_SECONDS is not set$/ },
+      { raw: "abc", opts: {}, value: null, says: /is not a positive whole number/ },
+      { raw: "0", opts: {}, value: null, says: /is not a positive whole number/ },
+      { raw: String(AUTO_START_RETRY_SECONDS), opts: { below: AUTO_START_RETRY_SECONDS }, value: AUTO_START_RETRY_SECONDS, says: /is not shortened \(the default is \d+\)/ },
+      { raw: "3", opts: { atLeast: 5 }, value: 3, says: /=3 is below 5, the least this file's "not yet" beats can sit inside/ },
+      { raw: "5", opts: { below: AUTO_START_RETRY_SECONDS, atLeast: 5 }, value: 5, says: null },
+    ];
+    let checked = 0;
+    try {
+      for (const c of cases) {
+        vi.stubEnv(NAME, c.raw ?? "");
+        if (c.raw === undefined) delete process.env[NAME];
+        const problems: string[] = [];
+        expect(pool.envGuard(problems)(NAME, c.opts), `${JSON.stringify(c.raw)}: the value`).toBe(c.value);
+        if (c.says === null) expect(problems, `${JSON.stringify(c.raw)}: no problem`).toEqual([]);
+        else {
+          expect(problems, `${JSON.stringify(c.raw)}: one problem`).toHaveLength(1);
+          expect(problems[0], `${JSON.stringify(c.raw)}: named`).toMatch(c.says);
+        }
+        checked++;
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(checked, "rows checked").toBe(6);
   });
 });

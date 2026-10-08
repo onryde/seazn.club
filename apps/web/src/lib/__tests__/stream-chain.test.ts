@@ -10,6 +10,7 @@ import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
 import { StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone, type StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { OUTPUT_WARNING_AFTER_MS, phoneStrip } from "@/lib/stream-session-view";
 import { chainFor, phoneDot, type Chain, type ChainNode, type LinkStyle, type PhoneDot } from "../stream-chain";
+import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
 
 type State = (typeof StreamSessionState.options)[number];
 type IngestWord = (typeof StreamIngest.shape.state.options)[number];
@@ -228,7 +229,7 @@ describe("chainFor — the whole input space against the table", () => {
 type CapturePhone = NonNullable<Parameters<typeof chainFor>[1]>["capture"];
 const beating = (over: Record<string, unknown> = {}) => ({
   present: true, silent: false, notResponding: false, model: null, appVersion: null, mode: null, state: "publishing",
-  notReady: null, startFailed: null, lastBeatAt: "2026-09-30T12:00:00.000Z", elapsedMs: 5_000,
+  notReady: null, notReadyShown: false, health: null, startFailed: null, lastBeatAt: "2026-09-30T12:00:00.000Z", elapsedMs: 5_000,
   beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
 }) as NonNullable<NonNullable<CapturePhone>["phone"]>;
 const LIVE_CD = { kind: "live" as const, reason: "phone_lost" as const, elapsedMs: 160_000, remainingMs: 740_000 };
@@ -429,5 +430,109 @@ describe("W24 — the Phone node, link 1, the strip and the fold's dot agree for
       checked++;
     }
     expect(checked).toBe(WIRE.length);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// PR-2 (§7.4, Option A states 5 and 8): live with the input UP, the SERVER's `phone.health` moves the Phone node — not
+// responding is "Not answering" with the "!" (and the fold's dot amber with it: one statement, as W24's voices are), stalled
+// keeps the row's word with the "!". Hot and battery low are the strip's alone (the phone still sends). Never a reading
+// against a client threshold: a scorching phone the server has not named moves nothing.
+// ---------------------------------------------------------------------------------------------------------------------
+describe("PR-2 §7.4 — the Phone node reads the server's health verdict, live with the input up", () => {
+  const liveUp = v("live", "connected", "ok");
+  it("each reason the domain declares: not responding → amber Not answering '!'; stalled → amber, the row's word, '!'; hot and battery low → the row's node", () => {
+    const row = chainFor(liveUp)!.phone;
+    const WANT: Record<string, ChainNode> = {
+      not_responding: n("amber", "notAnswering", "bang"),
+      stalled: n("amber", row.word, "bang"),
+      hot: row,
+      battery_low: row,
+    };
+    let checked = 0;
+    for (const health of HEALTH_REASONS) {
+      const capture = { phone: beating({ health }), countdown: null };
+      const c = chainFor(liveUp, { capture })!;
+      expect(c.phone, health).toEqual(WANT[health]);
+      // Owner rulings 2026-10-08: stalled also moves the SEAZN node and LINK 1 (both below) — nothing else moves for any reason.
+      expect({ ...c, phone: null, seazn: null, link1: null }, `${health}: nothing else moves`).toEqual({ ...chainFor(liveUp)!, phone: null, seazn: null, link1: null });
+      expect(phoneDot(capture), `${health}: the fold's dot`).toBe(health === "not_responding" ? "amber" : "lime");
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length);
+  });
+
+  // Owner ruling 2026-10-08 (B7 fix round 1, B): while the server says the video is not reaching Seazn, the Seazn node does
+  // not claim "Receiving" — it says "Waiting for video" (amber, as every waiting word on the chain is). The SAME verdict,
+  // never a client reading: `delivery: "stalled"` with health null moves nothing (the empty case below).
+  it("the Seazn node: stalled → amber 'Waiting for video', no mark; every other verdict (and none) → the row's lime Receiving", () => {
+    const row = chainFor(liveUp)!.seazn;
+    expect(row, "PREMISE: the row's live Seazn node").toEqual(n("lime", "receiving"));
+    let checked = 0;
+    for (const health of [...HEALTH_REASONS, null]) {
+      const c = chainFor(liveUp, { capture: { phone: beating({ health }), countdown: null } })!;
+      expect(c.seazn, String(health)).toEqual(health === "stalled" ? n("amber", "waitingVideo") : row);
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length + 1);
+    expect(HEALTH_REASONS, "PREMISE: the domain declares stalled").toContain("stalled");
+    expect(chainFor(liveUp, { capture: { phone: null, countdown: null } })!.seazn, "no phone facts").toEqual(row);
+  });
+
+  // Owner ruling 2026-10-08 (B8, relayed by the controller): while the server says the video is not reaching Seazn, the
+  // phone → Seazn link does not draw as flowing (solid lime) beside "Waiting for video" — it draws the chain's existing
+  // `problem` style (the amber dashes live's no-signal row and a lost phone's countdown already use). The SAME verdict
+  // that moves the Seazn node; the Seazn → destination link is the destination's alone and does not move.
+  it("link 1 (phone → Seazn): stalled → problem, the amber dashes; healthy live and every other verdict → the row's flowing; link 2 never moves", () => {
+    const row = chainFor(liveUp)!;
+    expect(row.link1, "PREMISE: healthy live draws link 1 flowing").toBe("flowing");
+    expect(row.link2, "PREMISE: the destination ok draws link 2 flowing").toBe("flowing");
+    let checked = 0;
+    for (const health of [...HEALTH_REASONS, null]) {
+      const c = chainFor(liveUp, { capture: { phone: beating({ health }), countdown: null } })!;
+      expect(c.link1, `${String(health)}: link 1`).toBe(health === "stalled" ? "problem" : "flowing");
+      expect(c.link2, `${String(health)}: link 2`).toBe(row.link2);
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length + 1);
+    // A destination still connecting keeps ITS link 2 under the verdict too: only link 1 is the phone's.
+    const connecting = v("live", "connected", null);
+    const stalledThere = chainFor(connecting, { capture: { phone: beating({ health: "stalled" }), countdown: null } })!;
+    expect(stalledThere.link1, "stalled, destination connecting: link 1").toBe("problem");
+    expect(stalledThere.link2, "stalled, destination connecting: link 2 is the row's").toBe(chainFor(connecting)!.link2);
+    expect(chainFor(liveUp, { capture: { phone: null, countdown: null } })!.link1, "no phone facts: flowing").toBe("flowing");
+  });
+
+  it("the stalled word and dashes are LIVE-with-the-input-up only: waiting, live with no signal and Ending keep the row's Seazn node and link 1", () => {
+    const capture = { phone: beating({ health: "stalled" }), countdown: null };
+    const rows = [v("warming", "disconnected", null), v("live", "disconnected", "unknown", W), v("ending", "connected", "ok")];
+    let checked = 0;
+    for (const view of rows) {
+      expect(chainFor(view, { capture })!.seazn, view.state + " " + view.ingest?.state).toEqual(chainFor(view)!.seazn);
+      expect(chainFor(view, { capture })!.link1, `${view.state} ${view.ingest?.state}: link 1`).toBe(chainFor(view)!.link1);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("the EMPTY case and the client-threshold mutant: health null with readings past every W9 limit → the row's lime node, the dot lime", () => {
+    const scorching = beating({ health: null, beat: { battery: { percent: 1, charging: false, drainPctPerHour: 50 }, bitrateKbps: 1, delivery: "stalled", thermal: 6, dataUsedMB: 1 } });
+    expect(chainFor(liveUp, { capture: { phone: scorching, countdown: null } })!.phone).toEqual(chainFor(liveUp)!.phone);
+    expect(chainFor(liveUp, { capture: { phone: scorching, countdown: null } })!.seazn, "delivery stalled, no verdict: Receiving").toEqual(chainFor(liveUp)!.seazn);
+    expect(chainFor(liveUp, { capture: { phone: scorching, countdown: null } })!.link1, "delivery stalled, no verdict: link 1 flowing").toBe("flowing");
+    expect(phoneDot({ phone: scorching, countdown: null })).toBe("lime");
+  });
+
+  it("pre-live and with the input DOWN the verdict moves nothing here: Ready, waiting and live-no-signal keep their T11 nodes", () => {
+    let checked = 0;
+    for (const health of HEALTH_REASONS) {
+      const capture = { phone: beating({ health }), countdown: null };
+      expect(chainFor(null, { capture })!.phone, `ready ${health}`).toEqual(chainFor(null, { capture: { phone: beating(), countdown: null } })!.phone);
+      expect(chainFor(v("warming", "disconnected", null), { capture })!.phone, `warming ${health}`).toEqual(n("amber", "starting"));
+      const down = v("live", "disconnected", "unknown", W);
+      expect(chainFor(down, { capture })!.phone, `live down ${health}`).toEqual(chainFor(down, { capture: { phone: beating(), countdown: null } })!.phone);
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length);
   });
 });

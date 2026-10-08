@@ -49,7 +49,7 @@ import { hasFeature } from "@/lib/entitlements";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { verifyOverlayKey } from "@/server/overlay/overlay-key";
 import { SUPPORTED_CURRENCIES } from "@/lib/currency";
-import { PHONE_LOST_LIVE_MINUTES } from "@/server/relay/config";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES } from "@/server/relay/config";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 const AUTH = { orgId: "org-1", userId: "user-1", role: "owner", via: "session", keyId: null } as unknown as AuthCtx;
@@ -469,5 +469,41 @@ describe("W19: the panel is handed the phone-lost window the tick judges by", ()
     expect(off?.phoneLostMinutes).toBe(7);
     checked++;
     expect(checked).toBe(5);
+  });
+});
+
+// PR-2 T10 (§7.1): the switch's caption and Live's read-only line say "stops about 3 minutes after the result". The figure is
+// the auto stop's own delay — config.ts's AUTO_STOP_AFTER_RESULT_SECONDS through `tunable`, the expression the tick judges
+// with — in whole minutes, never a `3` typed into the panel. An override the tick honours (the walkthrough's seconds) is the
+// figure shown, rounded, and never below 1: "about 0 minutes" is not a sentence.
+describe("§7.1: the panel is handed the auto stop's delay the tick judges by, in whole minutes", () => {
+  it("the declared default; ci/local overrides rounded (never below 1); never an override on a named deployment; with the relay off too", async () => {
+    expect(AUTO_STOP_AFTER_RESULT_SECONDS % 60, "premise: the declaration is a whole number of minutes").toBe(0);
+    expect((await load())?.autoStopMinutes, "no override: the declaration in minutes").toBe(AUTO_STOP_AFTER_RESULT_SECONDS / 60);
+    // [override seconds, the figure]: whole minutes; a part-minute rounds; seconds under a half-minute still say "about 1".
+    const rows: [string, number][] = [["300", 5], ["150", 3], ["20", 1], ["1", 1]];
+    let checked = 0;
+    for (const envName of ["ci", "local"]) {
+      for (const [raw, want] of rows) {
+        vi.stubEnv("ENV_NAME", envName);
+        vi.stubEnv("AUTO_STOP_AFTER_RESULT_SECONDS", raw);
+        expect((await load())?.autoStopMinutes, `ENV_NAME=${envName} AUTO_STOP_AFTER_RESULT_SECONDS=${raw}`).toBe(want);
+        checked++;
+      }
+    }
+    for (const envName of ["stg", "prod"]) {
+      vi.stubEnv("ENV_NAME", envName);
+      vi.stubEnv("AUTO_STOP_AFTER_RESULT_SECONDS", "300");
+      expect((await load())?.autoStopMinutes, `ENV_NAME=${envName} ignores it`).toBe(AUTO_STOP_AFTER_RESULT_SECONDS / 60);
+      checked++;
+    }
+    vi.stubEnv("ENV_NAME", "ci");
+    vi.stubEnv("AUTO_STOP_AFTER_RESULT_SECONDS", "300");
+    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.relay");
+    const off = await load();
+    expect(off?.relayEntitled, "premise: the relay is off").toBe(false);
+    expect(off?.autoStopMinutes).toBe(5);
+    checked++;
+    expect(checked).toBe(2 * rows.length + 3);
   });
 });

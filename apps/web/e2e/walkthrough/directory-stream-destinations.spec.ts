@@ -12,9 +12,9 @@
 // Every rig is a FRESH org: destinations and sessions are org-wide, and the walkthrough leg runs fully parallel.
 //
 // Stream capacity (plan premise 11): a held destination needs a session, and every active session holds a share of the
-// fake ingest's ONE storage pool. This file takes its slots from stream-relay.spec.ts's keys through the SAME advisory
-// lock scheme (`SLOT_LOCK_BASE`, the first `STREAM_CAPACITY − 1` keys), so the two files share the relay file's slots
-// and never the credits walkthrough's last key. Every test stops its streams in teardown.
+// fake ingest's ONE storage pool. This file takes its slots from the stream-slot pool (e2e/helpers/stream-slot-pool.ts,
+// the first `STREAM_CAPACITY − 1` keys), shared with the relay and capture walkthroughs and never the credits
+// walkthrough's last key. Every test stops its streams in teardown.
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -22,11 +22,17 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll } from "../helpers";
 import { setRigPlan, signInAs } from "../overlay-kit";
-import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_PLATFORMS, type StreamPlatform } from "../../src/lib/stream-destinations";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
-import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
+import {
+  FAKE_CONNECT_MS,
+  POLL_WAIT_MS,
+  POOL_SLOT_WAIT_MS,
+  cycleMs,
+  liveWaitMs,
+  releaseStreamSlot,
+  takeStreamSlot,
+} from "../helpers/stream-slot-pool";
 import { disposeFakePhones, pairPhoneOnFixture, pairedPhone } from "../helpers/fake-capture-phone";
 
 // ===========================================================================
@@ -50,58 +56,25 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
   }
 }
 
-// Clocks — copied from stream-relay.spec.ts (:73-88), DERIVED from the constants that set the pace (AGENTS.md class 20).
-const FAKE_CONNECT_MS = ((): number => {
-  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
-  if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
-  if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be whole milliseconds, got ${JSON.stringify(raw)}`);
-  return Number(raw);
-})();
-const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
-const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
+// Clocks — DERIVED from the constants that set the pace (AGENTS.md class 20). The connect delay, the poll wait and the
+// go-live wait are the stream-slot pool's one read and one derivation (final review m-3), imported — never restated.
+const LIVE_WAIT_MS = liveWaitMs(FAKE_CONNECT_MS);
 const SEED_MS = 60_000;
-const CYCLE_MS = LIVE_WAIT_MS + 3 * POLL_WAIT_MS;
+const CYCLE_MS = cycleMs(FAKE_CONNECT_MS);
 /** One page load (a Directory or fixture page). Each case adds `NAVS * NAV_MS`, NAVS counted by reading the case. */
 const NAV_MS = 30_000;
 /** One mutation round trip: the request and the `router.refresh()` that re-reads the list. */
 const SAVE_MS = POLL_WAIT_MS;
 
-const STREAM_CAPACITY = Math.floor(new FakeIngest().storage.totalStorageMinutesLimit / MAX_DURATION_MINUTES);
-const FILE_SLOTS = STREAM_CAPACITY - 1;
-const SLOT_LOCK_BASE = 7_301_130_000;
-const SLOT_WAIT_MS = 3 * CYCLE_MS;
+/** This file's longest hold: one go-live → stop cycle with the held destination's eight round trips (case E). */
+const POOL_HOLD = { file: "directory-stream-destinations.spec.ts", holdMs: CYCLE_MS + 8 * SAVE_MS } as const;
+/** The pool's one wait for a key (it was 3 cycles here — shorter than capture-phone's W23 hold). */
+const SLOT_WAIT_MS = POOL_SLOT_WAIT_MS;
 
-let lease: (() => Promise<void>) | null = null;
 const rigsThisTest: { request: APIRequestContext; orgId: string }[] = [];
 
-/** One of the relay file's FILE_SLOTS keys, held until teardown (premise 11). */
-async function streamSlot(): Promise<void> {
-  if (lease) return;
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(dbUrl, {
-    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
-    prepare: !dbUrl.includes(":6543"),
-    max: 1,
-    idle_timeout: 0,
-  });
-  const deadline = Date.now() + SLOT_WAIT_MS;
-  for (;;) {
-    for (let i = 0; i < FILE_SLOTS; i++) {
-      const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${SLOT_LOCK_BASE + i}::bigint) as ok`;
-      if (row?.ok) {
-        lease = () => sql.end();
-        return;
-      }
-    }
-    if (Date.now() > deadline) {
-      await sql.end();
-      throw new Error(`none of the relay file's ${FILE_SLOTS} stream slot(s) free after ${SLOT_WAIT_MS} ms`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-}
+/** One pool key, held until teardown (premise 11); a second call in the same test reuses it. */
+const streamSlot = (): Promise<void> => takeStreamSlot(POOL_HOLD);
 
 interface SessionRow { id: string; fixture_id: string | null; state: string }
 async function sessionsOf(orgId: string): Promise<SessionRow[]> {
@@ -126,9 +99,7 @@ async function teardownStreams(): Promise<void> {
         );
     }
   } finally {
-    const release = lease;
-    lease = null;
-    await release?.();
+    await releaseStreamSlot();
   }
 }
 

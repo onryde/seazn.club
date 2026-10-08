@@ -26,13 +26,14 @@ import type { z } from "zod";
 import { log } from "@/server/logger";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import {
-  DEAD_PHONE_TAKEOVER_SECONDS, HOLD_SLACK_SECONDS, HOT_THERMAL_STATUS, INGEST_TIMEOUT_SECONDS, LOW_BATTERY_PERCENT,
+  DEAD_PHONE_TAKEOVER_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
   PHONE_BEAT_RETENTION_HOURS, POLL_FAR_SECONDS, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES,
   srtEnabled, streamIngestHost, streamPlaybackHost, tunable,
 } from "@/server/relay/config";
 import { beatAnswer, wireBeatAnswer } from "@/server/relay/domain/beat-answer";
 import { wireEndReason, type DbEndReason } from "@/server/relay/domain/end-reason";
 import { type ClaimOutcome, deadForTakeover, decideClaim, isNotResponding } from "@/server/relay/domain/pairing";
+import { phoneFlagsOf } from "@/server/relay/domain/phone-health";
 import { pollSecondsFor } from "@/server/relay/domain/poll-seconds";
 import { ACTIVE_STATES, isActive, type FailReason, type SessionState } from "@/server/relay/domain/session";
 import { slotState } from "@/server/relay/domain/slot";
@@ -44,6 +45,7 @@ import { recordEvent } from "@/server/relay/telemetry";
 import { captureStageOf } from "./capture-stage";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
 import { fixtureStreamTarget, resolveStreamCode, type ResolvedCode } from "./stream-codes";
+import { maybeAutoStart } from "./stream-auto";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
 type Descriptor = z.infer<typeof CaptureDescriptor>;
@@ -126,6 +128,7 @@ export type CaptureCommon = {
 type FixtureCtx = {
   fixture_no: number; status: string; scheduled_at: Date | null; finished_at: Date | null; competition_id: string;
   sport_key: string; tz: string; default_locale: string | null; home_name: string | null; away_name: string | null;
+  auto_stream: boolean;
 };
 
 /**
@@ -139,18 +142,21 @@ export async function captureCommon(
   now: Date,
 ): Promise<CaptureCommon> {
   // One statement for the fixture's facts: the V305 venue lane (division → org → UTC, the checkin-token.ts query), the
-  // org's locale (W25) and both sides' names. The destination is `fixtureStreamTarget`'s — the one the start opens on
+  // org's locale (W25), both sides' names and the fixture's automatic-streaming switch (W7, `autoAllowed`; false with no
+  // settings row). The destination is `fixtureStreamTarget`'s — the one the start opens on
   // (B8 review I-1), so the phone names exactly what it would stream to.
   const [ctx] = await sql<FixtureCtx[]>`
     select f.fixture_no, f.status, f.scheduled_at, f.finished_at, d.competition_id, d.sport_key,
            coalesce(ss.tz, o.timezone, 'UTC') as tz, o.default_locale,
-           h.display_name as home_name, a.display_name as away_name
+           h.display_name as home_name, a.display_name as away_name,
+           coalesce(st.auto_stream, false) as auto_stream
       from fixtures f
       join divisions d on d.id = f.division_id
       join organizations o on o.id = d.org_id
       left join schedule_settings ss on ss.division_id = d.id
       left join entrants h on h.id = f.home_entrant_id
       left join entrants a on a.id = f.away_entrant_id
+      left join fixture_stream_settings st on st.fixture_id = f.id
      where f.id = ${c.fixtureId} and d.org_id = ${c.orgId}`;
   // The code cascades with its fixture (T35), so a resolved code's fixture is there; one deleted in between reads as an
   // ended code, never a 500.
@@ -180,7 +186,7 @@ export async function captureCommon(
       open: s.open, fixtureStatus: ctx.status, scheduledAt: ctx.scheduled_at === null ? null : new Date(ctx.scheduled_at),
       finished: ctx.finished_at !== null,
     }, now),
-    autoAllowed: false,   // §6.4: PR-1 always false; PR-2 wires the fixture's switch (§7.1)
+    autoAllowed: ctx.auto_stream,   // §6.4 / §7.1: the fixture's switch (W7); the phone's own mode is the other half (A4)
     destinationName: target === null ? null : fitText(target.label, DEST_MAX),
     overlayUrl,
     scoreUpdates: keyed ? "realtime" : "polled",
@@ -355,16 +361,15 @@ function rawOf(b: Beat, atUtc: string): Record<string, unknown> {
   };
 }
 
-/** §6.10's derived flags, each from its config.ts threshold. `notResponding` is §6.9's W8 condition, judged on the
- *  pairing's PREVIOUS beat: this beat ends a stretch the panel must still see. */
+/** §6.10's derived flags — `domain/phone-health.ts`'s ONE derivation, the panel's amber line reads the same (PR-2 T2).
+ *  `notResponding` is §6.9's W8 condition, judged on the pairing's PREVIOUS beat: this beat ends a stretch the panel must
+ *  still see. */
 function flagsOf(b: Beat, notResponding: boolean): string[] {
-  const f: string[] = [];
-  if (b.battery !== null && b.battery.percent < LOW_BATTERY_PERCENT && !b.battery.charging) f.push("battery_low");
-  if (b.thermal !== null && b.thermal >= HOT_THERMAL_STATUS) f.push("hot");
-  if (b.delivery === "stalled") f.push("stalled");
-  if (b.notReady !== null) f.push("not_ready");
-  if (notResponding) f.push("not_responding");
-  return f;
+  return phoneFlagsOf({
+    notResponding, delivery: b.delivery, thermal: b.thermal,
+    battery: b.battery === null ? null : { percent: b.battery.percent, charging: b.battery.charging },
+    notReady: b.notReady !== null,
+  });
 }
 const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -424,7 +429,9 @@ type Decided = {
  *  3. the beat stored (§6.10) on the SERVER clock, history in a savepoint;
  *  4. `ended` (T21/T22) or `stopped: X` (T23/T24/T24a), decided under the same lock and applied after the commit;
  *  5. the open session ticked (§6.11) when its phone's beat names it;
- *  6. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence.
+ *  6. auto start (PR-2 §7.2): the current phone's beat may start the match's broadcast, once (`maybeAutoStart`) — never on
+ *     the operator's own `ended` beat or a beat that stopped a session, and never failing the beat;
+ *  7. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence.
  */
 export async function postBeat(rawCode: string, tok: string, body: Beat, deps: SessionDeps, now: Date): Promise<BeatAnswer> {
   const resolved = await resolveStreamCode(rawCode, tok, body.claim === "new" ? "claim" : "beat", body.phone, now);
@@ -492,9 +499,9 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
       // The new row carries the old one's beat state; the old one ends `replaced`, handing over through replaced_by.
       const [moved] = await tx<PairingRow[]>`
         insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, device_model, claimed_at, last_beat_at,
-                                             answered_poll_seconds, last_beat, not_ready, start_failed, mode, app_version, phone_state)
+                                             answered_poll_seconds, last_beat, not_ready, not_ready_since, start_failed, mode, app_version, phone_state)
         select org_id, ${resolved.codeId}, slot, phone, ${body.claim}, device_model, ${now}, last_beat_at,
-               answered_poll_seconds, last_beat, not_ready, start_failed, mode, app_version, phone_state
+               answered_poll_seconds, last_beat, not_ready, not_ready_since, start_failed, mode, app_version, phone_state
           from fixture_stream_pairings where id = ${holder.id}
         returning id, code_id, phone, last_beat_at, answered_poll_seconds`;
       await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'replaced', replaced_by = ${moved!.id} where id = ${holder.id}`;
@@ -525,9 +532,13 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
     const held = mine !== null && open !== null && open.pairing_id === mine.id;
     if (mine !== null) {
       const notResponding = held && isNotResponding({ held, lastBeatAt: new Date(mine.last_beat_at), answeredPoll: mine.answered_poll_seconds }, now);
+      // PR-2 T6 (FP16, R-2): `not_ready_since` is the clock of the CURRENT not-ready stretch, on the server's clock. It starts on
+      // the beat that takes not_ready from null to a reason, SURVIVES a change of reason (the phone has been unready the whole
+      // time), and a null beat clears it at once; a row with a reason but no clock (from before V431) starts one.
       await tx`
         update fixture_stream_pairings
            set last_beat = ${tx.json(raw as never)}, last_beat_at = ${now}, phone_state = ${body.state}, not_ready = ${body.notReady},
+               not_ready_since = case when ${body.notReady}::text is null then null else coalesce(not_ready_since, ${now}) end,
                start_failed = ${body.startFailed}, mode = ${body.mode}, app_version = ${body.appVersion},
                device_model = coalesce(${body.claim !== null && body.device !== null ? body.device.model : null}, device_model)
          where id = ${mine.id}`;
@@ -580,7 +591,19 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
     }
   }
 
-  // 6. The answer, from the rows as they now stand.
+  // 6. PR-2 (§7.2): auto start — the current phone's beat, never the operator's own Stop or a beat that stops a session.
+  // After the tick (a session that tick ended is no longer open) and before the answer, so the beat that starts the
+  // broadcast is answered `go-live` with `startedBy: "automatic"` (T42). It never fails the beat: reported, answered.
+  if (decided.mine !== null && body.state !== "ended" && decided.stop === null) {
+    try {
+      await maybeAutoStart({ orgId: resolved.orgId, fixtureId: resolved.fixtureId, pairingId: decided.mine.id, phoneMode: body.mode }, deps, now);
+    } catch (err) {
+      log.error({ err: String(err), orgId: resolved.orgId }, "capture beat: auto start failed — the beat is answered");
+      captureError(err, { orgId: resolved.orgId, route: "capture.beat.auto_start" });
+    }
+  }
+
+  // 7. The answer, from the rows as they now stand.
   const latest = await latestSession(resolved.fixtureId);
   const open = await openSessionOf(sql, resolved.fixtureId);
   const holder = await holderOf(sql, resolved.codeId, open);

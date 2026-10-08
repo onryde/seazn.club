@@ -54,13 +54,20 @@ import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "../../src/lib/stream-se
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
 import {
-  FAKE_CONNECT_AFTER_MS_DEFAULT,
   FAKE_CONNECTING_KEY_PREFIX,
   FAKE_REJECT_KEY_PREFIX,
-  FakeIngest,
   fakeRecoveringKey,
 } from "../../src/server/relay/fakes";
-import { FREE_RESTARTS_PER_WINDOW, MAX_DURATION_MINUTES } from "../../src/server/relay/config";
+import { FREE_RESTARTS_PER_WINDOW } from "../../src/server/relay/config";
+import {
+  FAKE_CONNECT_MS,
+  POLL_WAIT_MS,
+  POOL_SLOT_WAIT_MS,
+  cycleMs,
+  liveWaitMs,
+  releaseStreamSlot,
+  takeStreamSlot,
+} from "../helpers/stream-slot-pool";
 
 // ===========================================================================
 // Kit (file-local)
@@ -86,76 +93,36 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
 
 // Clocks. Every wait is DERIVED from the constants that set the pace — the fake ingest's connect delay and the Phone
 // tab's poll — never a flat literal (AGENTS.md class 20): a change to either moves every budget with it.
-/** The fake ingest reads "connected" this long after its input was created (server/relay/fakes.ts). A server started
- *  with FAKE_INGEST_CONNECT_AFTER_MS overrides it (CI sets it on the server AND this process, e2e.yml); parsed as
- *  strictly as fakes.ts parses it, so a junk value fails here rather than budgeting from NaN. */
-const FAKE_CONNECT_MS = ((): number => {
-  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
-  if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
-  if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be whole milliseconds, got ${JSON.stringify(raw)}`);
-  return Number(raw);
-})();
-const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
-/** One poll plus slack — a state the next read must already show. */
-const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
+// The fake ingest's connect delay (FAKE_CONNECT_MS — the server's own, CI sets it on the server AND this process,
+// e2e.yml), the poll wait (POLL_WAIT_MS) and the go-live wait are the stream-slot pool's ONE read of the env and its ONE
+// derivation (final review m-3), imported — never restated here.
+const LIVE_WAIT_MS = liveWaitMs(FAKE_CONNECT_MS);
 /** A seed (SQL org + API competition) plus one page load; the floor under every test's budget. */
 const SEED_MS = 60_000;
 /** A whole go-live → stop cycle in the browser. */
-const CYCLE_MS = LIVE_WAIT_MS + 3 * POLL_WAIT_MS;
+const CYCLE_MS = cycleMs(FAKE_CONNECT_MS);
 /** One fixture-page load, the budget openFixture waits for (spec 2026-09-30 §2: every open is now a full page load where
  *  a run-sheet row's toggle was not). Each case adds `NAVS * NAV_MS`, NAVS counted by reading the case. */
 const NAV_MS = 30_000;
 
 // ---------------------------------------------------------------------------
-// The deployment's stream capacity. Admission refuses a start once the ingest's storage headroom, after every ACTIVE
-// session's max-duration reservation, is below one more reservation (domain/session.ts `admit`: headroom <
-// maxDurationMinutes → storage_exhausted). Reservations are counted across the WHOLE deployment, so parallel workers
-// going live at once are refused as a storage fault ("Recording storage is full"), not a product one — the first run
-// of this file at 4 workers lost A1@320 exactly that way. The capacity is DERIVED from the fake's own storage limit and
-// the config's max duration, and handed out as Postgres advisory locks held for the test: keys [BASE, BASE + CAPACITY).
-// This file takes ONLY the first CAPACITY − 1 keys, one per case (A5 included); the last key is the credits
-// walkthrough's (stream-credits.spec.ts, SLOT_LOCK_BASE + 2 at the fake's capacity of 3 — controller allocation
-// 2026-09-29) and is never taken here: streamSlot cannot reach it. Every test stops its streams in teardown, so a red
-// case cannot hold a reservation for five hours.
+// The deployment's stream capacity, handed out as the STREAM-SLOT POOL (e2e/helpers/stream-slot-pool.ts, which states
+// why: admission weighs the whole server's storage headroom, so parallel workers going live at once are refused as a
+// storage fault — the first run of this file at 4 workers lost A1@320 exactly that way). This file takes ONE pool key per
+// case (A5 included), shared with directory and the capture walkthroughs; the credits walkthrough's key is never taken
+// here. Every test stops its streams in teardown, so a red case cannot hold a reservation for five hours.
 // ---------------------------------------------------------------------------
-const STREAM_CAPACITY = Math.floor(new FakeIngest().storage.totalStorageMinutesLimit / MAX_DURATION_MINUTES);
-const FILE_SLOTS = STREAM_CAPACITY - 1;
-const SLOT_LOCK_BASE = 7_301_130_000;
-/** Waiting for a slot: every other holder finishing at most one test's streaming (A3 streams twice). */
-const SLOT_WAIT_MS = 3 * CYCLE_MS;
+/** B5 frame's sessions under one key: the holder, D3, ok, failed. */
+const B5_SESSIONS = 4;
+/** This file's longest hold: the B5 frame — its sessions' cycles, the output warning and six polls (its budget's terms). */
+const POOL_HOLD = { file: "stream-relay.spec.ts", holdMs: B5_SESSIONS * CYCLE_MS + OUTPUT_WARNING_AFTER_MS + 6 * POLL_WAIT_MS } as const;
+/** The pool's one wait for a key (it was 3 cycles here — shorter than capture-phone's W23 and this file's own B5 frame). */
+const SLOT_WAIT_MS = POOL_SLOT_WAIT_MS;
 
-let lease: (() => Promise<void>) | null = null;
 const rigsThisTest: { request: APIRequestContext; orgId: string }[] = [];
 
-/** Take ONE of this file's FILE_SLOTS keys before the test's first go-live; held until teardown (a second call in the
- *  same test reuses it). Keys are only ever [BASE, BASE + FILE_SLOTS): the last capacity key is never taken here. */
-async function streamSlot(): Promise<void> {
-  if (lease) return;
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(dbUrl, {
-    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
-    prepare: !dbUrl.includes(":6543"),
-    max: 1,
-    idle_timeout: 0,
-  });
-  const deadline = Date.now() + SLOT_WAIT_MS;
-  for (;;) {
-    for (let i = 0; i < FILE_SLOTS; i++) {
-      const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${SLOT_LOCK_BASE + i}::bigint) as ok`;
-      if (row?.ok) {
-        lease = () => sql.end(); // a session-level advisory lock is released with its connection
-        return;
-      }
-    }
-    if (Date.now() > deadline) {
-      await sql.end();
-      throw new Error(`none of this file's ${FILE_SLOTS} stream slot(s) free after ${SLOT_WAIT_MS} ms`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-}
+/** Take ONE pool key before the test's first go-live; held until teardown (a second call in the same test reuses it). */
+const streamSlot = (): Promise<void> => takeStreamSlot(POOL_HOLD);
 
 /** Teardown: stop every stream the test's rigs still hold — through the product's own Stop, as the rig's owner — and
  *  force any that will not stop, so a red case never keeps a reservation. Then free the slot. */
@@ -177,9 +144,7 @@ async function teardownStreams(): Promise<void> {
         );
     }
   } finally {
-    const release = lease;
-    lease = null;
-    await release?.();
+    await releaseStreamSlot();
   }
 }
 
@@ -2166,7 +2131,7 @@ for (const width of WIDTHS) {
     page,
   }) => {
     const NAVS = 9; // openPhoneTab ×8 (no-dest, load error, ready, in-use, D3, ok, failed, no credits) + the reload after the route
-    const SESSIONS = 4; // the holder, D3, ok, failed
+    const SESSIONS = B5_SESSIONS; // the holder, D3, ok, failed — the file's declared pool hold counts them
     test.setTimeout(SLOT_WAIT_MS + SEED_MS + NAVS * NAV_MS + SESSIONS * CYCLE_MS + OUTPUT_WARNING_AFTER_MS + 6 * POLL_WAIT_MS);
     await page.setViewportSize({ width, height: 900 });
     const rig = await seedRelayRig(page, { entrants: 4 });

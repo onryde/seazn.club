@@ -13,21 +13,28 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   CaptureNotReady, CapturePhoneState, CaptureStartFailed, StreamPhoneBeat, type StreamPhone,
 } from "@/server/api-v1/schemas";
-import { CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_SILENT_FLOOR_SECONDS, POLL_FAR_SECONDS, tunable } from "@/server/relay/config";
+import {
+  AUTO_START_RETRY_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_NOT_READY_SHOW_AFTER_SECONDS, PHONE_SILENT_FLOOR_SECONDS,
+  POLL_FAR_SECONDS, tunable,
+} from "@/server/relay/config";
+import { AUTO_START_REFUSALS, autoStartVerdict, autoWontStart, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { isNotResponding, isPresent, isSilent } from "@/server/relay/domain/pairing";
+import { phoneHealthOf } from "@/server/relay/domain/phone-health";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { fixtureStreamTarget, requireSessionEditor } from "./stream-codes";
+import { autoStopAppliesTo } from "./stream-sessions";
 
 /** PR-1 carries one camera: the panel reads slot 0. */
 const SLOT = 0;
 
 type PairingRow = {
   id: string; device_model: string | null; app_version: string | null; mode: string | null; phone_state: string | null;
-  not_ready: string | null; start_failed: string | null; last_beat_at: Date; answered_poll_seconds: number; last_beat: unknown;
+  not_ready: string | null; not_ready_since: Date | null; start_failed: string | null; last_beat_at: Date; answered_poll_seconds: number;
+  last_beat: unknown;
 };
-const PAIRING_COLS = () => sql`p.id, p.device_model, p.app_version, p.mode, p.phone_state, p.not_ready, p.start_failed,
+const PAIRING_COLS = () => sql`p.id, p.device_model, p.app_version, p.mode, p.phone_state, p.not_ready, p.not_ready_since, p.start_failed,
   p.last_beat_at, p.answered_poll_seconds, p.last_beat`;
 
 /** One of the beat's enum words, or null — a column the beat wrote through the strict contract, re-checked on the way
@@ -79,6 +86,49 @@ async function phoneOf(fixtureId: string): Promise<{ row: PairingRow | null; hel
   return { row: cur ?? null, held: false, legacy: false, openId };
 }
 
+/** The fixture's settings row, joined onto the fixture read (null columns with no row), and the one fact the refusal check needs. */
+type SettingsFacts = {
+  /** Null when the fixture has no settings row. */
+  settings_id: string | null; auto_stream: boolean | null; auto_started_at: Date | null; auto_start_blocked_at: Date | null;
+  auto_start_attempted_at: Date | null; auto_start_refusal: string | null;
+  /** Some session of this fixture EVER received ingest (A16) — the tick's own fact (stream-auto.ts reads the same). */
+  any_ingest: boolean;
+};
+
+/**
+ * `StreamPhone.auto` (PR-2 T6, §7.1/§7.2). `enabled` is the column. The REFUSAL is not: the stored code outlives the attempt
+ * it belonged to — an `already_running` start and an unmapped error leave an earlier code in place, a Go live or a Stop makes
+ * it moot — so it is served only while the auto-start predicate could still pass (`autoStartVerdict`, the ONE definition of
+ * "due": switch on, phone automatic, match in play, no open session, not started, not blocked, no broadcast ever ingested).
+ * Two of its conjuncts are neutralised on purpose, because a refusal is meant to outlast them: the retry spacing (the attempt
+ * is by definition inside it right after the refusal; `autoStartAttemptedAt: null` makes it hold) and the phone's presence
+ * (a silent phone returns and the retry fires; `phonePresent: true`). Neither is a latch, so `wontStart` (final review I-1)
+ * reads the SAME verdict: the latch its failures name, by the domain's precedence (`autoWontStart`).
+ */
+function autoOf(
+  st: SettingsFacts & { status: string }, c: { phoneMode: PhoneMode | null; openSession: boolean; stopApplies: boolean | null }, now: Date,
+): StreamPhone["auto"] {
+  if (st.settings_id === null) return null;
+  const refusal = word({ options: AUTO_START_REFUSALS }, st.auto_start_refusal);
+  const verdict = autoStartVerdict({
+    autoStream: st.auto_stream === true,
+    phoneMode: c.phoneMode,
+    phonePresent: true,
+    fixtureStatus: st.status,
+    openSession: c.openSession,
+    autoStartedAt: st.auto_started_at,
+    autoStartBlockedAt: st.auto_start_blocked_at,
+    anySessionHadIngest: st.any_ingest,
+    autoStartAttemptedAt: null,
+  }, now, tunable("AUTO_START_RETRY_SECONDS", AUTO_START_RETRY_SECONDS));
+  return {
+    enabled: st.auto_stream === true,
+    refusal: refusal !== null && verdict.due ? refusal : null,
+    wontStart: autoWontStart(verdict.failed),
+    stopApplies: c.stopApplies,
+  };
+}
+
 /**
  * `GET /api/v1/fixtures/{id}/stream-phone` (§9). Editors only, session login only; another org's fixture is 404.
  *  - `code`: the fixture's ACTIVE code (else its latest ended one), with C2 evaluated on the server's clock;
@@ -86,20 +136,34 @@ async function phoneOf(fixtureId: string): Promise<{ row: PairingRow | null; hel
  *  - `destination`: `fixtureStreamTarget`'s — the target the phone's own start opens on (B8 review I-1), so the panel's
  *    picker shows exactly that: the saved choice, or with none saved the oldest (`source: "default"`); none when the
  *    choice was cleared or archived (T36, n1). Read, never written: opening the panel saves nothing;
- *  - `lastTakeover`: the latest time ANOTHER phone took the slot (§7.5, T2/T4) — read from the pairings, because a
+ *  - `lastTakeover`: the latest time ANOTHER phone took the slot ON THE ACTIVE CODE (§7.5, T2/T4; B7 review I-2: a reissue
+ *    answers the takeovers before it) — read from the pairings, because a
  *    takeover on a slot with no session has no session to carry a `phone_takeover` event. The session's phone re-seated
- *    onto a reissued code (B6 I-2) is the same phone moving, never a takeover;
- *  - `auto`: PR-2's, null;
+ *    onto a reissued code (B6 I-2) is the same phone moving, never a takeover. `elapsedMs` (PR-2 T12) is its age on the
+ *    server's clock, for the panel's 30-minute notice;
+ *  - `auto` (PR-2 T6): the fixture's settings row as the panel's switch and strips read it — null with no row. Its `refusal` is
+ *    served only while `autoStartVerdict` could still pass (`autoOf`): the stored code can outlive the attempt it belonged to;
+ *    `wontStart` (final review I-1) is the latch that verdict's failures name — why a switch left on will not start again;
+ *    `stopApplies` (B7 review M-3) is whether §7.3 will ever stop the open session — the tick's own facts and predicate;
+ *  - `phone.health` (PR-2 T6): domain/phone-health.ts's one derivation over the stored beat — withheld while the phone is silent
+ *    (its readings are stale; `not_responding` still names a held one); `phone.notReadyShown` (FP16, owner
+ *    ruling R-2): the debounce of the flapping `notReady`, from the pairing's `not_ready_since`, shown only once a BEAT a
+ *    constant after the stretch began still says not ready (and never for a silent phone);
  *  - `legacy` / `finished` (T11): the open session has no pairing (C-1), and the fixture is finished (C5's match-over row);
  *  - `session` (B8 review I-2): the fixture's OPEN session's id, whoever started it — the panel's `current` rests at
  *    Ready, so a session the PHONE started would otherwise stay unseen there.
  */
 export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now: () => Date }): Promise<StreamPhone> {
   requireSessionEditor(auth);
-  const [fx] = await sql<{ org_id: string; finished_at: Date | null }[]>`
-    select c.org_id, f.finished_at from fixtures f
+  const [fx] = await sql<(SettingsFacts & { org_id: string; finished_at: Date | null; status: string })[]>`
+    select c.org_id, f.finished_at, f.status,
+           st.fixture_id as settings_id, st.auto_stream, st.auto_started_at, st.auto_start_blocked_at, st.auto_start_attempted_at,
+           st.auto_start_refusal,
+           exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.first_ingest_at is not null) as any_ingest
+      from fixtures f
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
+      left join fixture_stream_settings st on st.fixture_id = f.id
      where f.id = ${fixtureId}`;
   if (!fx || fx.org_id !== auth.orgId) throw new HttpError(404, "fixture not found");
   const now = deps.now();
@@ -127,22 +191,44 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
   // --- the phone ---
   const { row: p, held, legacy, openId } = await phoneOf(fixtureId);
   let phone: StreamPhone["phone"] = null;
+  let phoneMode: PhoneMode | null = null;
   if (p) {
     const lastBeatAt = new Date(p.last_beat_at);
     const floor = tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS);
+    const notResponding = isNotResponding({ held, lastBeatAt, answeredPoll: p.answered_poll_seconds }, now);
+    const silent = isSilent(lastBeatAt, p.answered_poll_seconds, now, floor);
+    // A silent phone's last word is old news: its readings and its not-ready are not judged (I1). `notResponding` is the
+    // silence verdict itself, so a held phone that went quiet is still named.
+    const fresh = !silent;
+    const beat = beatOf(p.last_beat);
+    // FP16 / R-2: the debounce. `notReady` is the latest reason; the clock is the beat that began the stretch. A reason with no
+    // clock (a row from before V431) has no duration, so it is not shown; nor is a clock later than the last beat (skew).
+    const notReady = word(CaptureNotReady, p.not_ready);
+    const sinceMs = notReady === null || p.not_ready_since === null ? null : new Date(p.not_ready_since).getTime();
+    // BEAT-CONFIRMED (I2, "about 2 beats"): shown only when a beat at least the constant after the stretch began still says not
+    // ready — the last beat is that evidence, the wall clock between beats is not. One sighting never ages into shown.
+    const notReadyShown = fresh && sinceMs !== null && lastBeatAt.getTime() - sinceMs >= PHONE_NOT_READY_SHOW_AFTER_SECONDS * 1000;
+    phoneMode = p.mode === "automatic" || p.mode === "operator" ? p.mode : null;
     phone = {
       present: isPresent({ current: true, lastBeatAt, answeredPoll: p.answered_poll_seconds }, now, floor),
-      silent: isSilent(lastBeatAt, p.answered_poll_seconds, now, floor),
-      notResponding: isNotResponding({ held, lastBeatAt, answeredPoll: p.answered_poll_seconds }, now),
+      silent,
+      notResponding,
       model: p.device_model,
       appVersion: p.app_version,
-      mode: p.mode === "automatic" || p.mode === "operator" ? p.mode : null,
+      mode: phoneMode,
       state: word(CapturePhoneState, p.phone_state),
-      notReady: word(CaptureNotReady, p.not_ready),
+      notReady,
+      notReadyShown,
+      // §7.4: the ONE derivation (the beat history's flags read the same predicates). A null reading contributes nothing, and a
+      // silent phone's readings are withheld (I1) — the raw `beat` and `elapsedMs` below still say what it last reported and when.
+      health: phoneHealthOf({
+        notResponding,
+        delivery: fresh ? beat.delivery : null, thermal: fresh ? beat.thermal : null, battery: fresh ? beat.battery : null,
+      }),
       startFailed: word(CaptureStartFailed, p.start_failed),
       lastBeatAt: lastBeatAt.toISOString(),
       elapsedMs: Math.max(0, now.getTime() - lastBeatAt.getTime()),
-      beat: beatOf(p.last_beat),
+      beat,
       farPoll: p.answered_poll_seconds === POLL_FAR_SECONDS,
     };
   }
@@ -150,7 +236,11 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
   // --- the destination: the one the phone's start would open on (T36: a choice archived reads as none) ---
   const destination = await fixtureStreamTarget(sql, { orgId: auth.orgId, fixtureId });
 
-  // --- the last takeover (§7.5): a pairing ended `replaced` by ANOTHER phone's ---
+  // --- the last takeover (§7.5): a pairing ended `replaced` by ANOTHER phone's, on the fixture's CURRENT (active) code ---
+  // B7 review I-2: Revoke & reissue is the organiser's answer to a takeover, so a takeover on a code that has ENDED
+  // (`ended_at` set: reissued, revoked, or an expiry already written) is never served — the read model stays the one
+  // authority, and the panel's notice goes with the old code. The query keys on `ended_at` alone: expiry is written lazily
+  // (`wipeStreamCodeTok`, on the next mint or read), so a code past its grace that nothing has expired yet still serves it.
   let lastTakeover: StreamPhone["lastTakeover"] = null;
   if (!legacy) {
     const [t] = await sql<{ at: Date; model: string | null }[]>`
@@ -158,13 +248,19 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
         from fixture_stream_pairings old
         join fixture_stream_codes c on c.id = old.code_id
         join fixture_stream_pairings nxt on nxt.id = old.replaced_by
-       where c.fixture_id = ${fixtureId} and old.end_cause = 'replaced' and nxt.phone <> old.phone
+       where c.fixture_id = ${fixtureId} and c.ended_at is null
+         and old.end_cause = 'replaced' and nxt.phone <> old.phone
        order by old.ended_at desc, old.id desc limit 1`;
-    if (t) lastTakeover = { at: new Date(t.at).toISOString(), model: t.model };
+    // PR-2 T12: the notice's age on the server's clock (§7.5's 30 min); a stamp past `now` (skew) reads 0.
+    if (t) lastTakeover = { at: new Date(t.at).toISOString(), model: t.model, elapsedMs: Math.max(0, now.getTime() - new Date(t.at).getTime()) };
   }
 
+  // B7 review M-3: will §7.3 ever stop the OPEN session? The tick's own facts and predicate (null with none, or no settings row).
+  const stopApplies = openId === null || fx.settings_id === null ? null : await autoStopAppliesTo(openId);
+
   return {
-    code, phone, destination, lastTakeover, auto: null,
+    code, phone, destination, lastTakeover,
+    auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies }, now),
     legacy, finished: fx.finished_at !== null, session: openId === null ? null : { id: openId },
   };
 }
