@@ -309,8 +309,9 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
   - The runner applies **one mutant at a time** (grouped mutants hide survivors), runs only that mutant's killers, and restores the saved original bytes. Restoring with `git checkout` would discard the task's own uncommitted work.
   - **Changed-lines Stryker (engine code only)**, as well as the hand mutants:
     ```bash
-    cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && STRYKER_MUTATE="$(node scripts/stryker-changed.mjs --base "$(git merge-base HEAD origin/main)")" pnpm mutation > "$TMPDIR/w2a-stryker-t<N>.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json
+    cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2a-stryker-t<N>.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"
     ```
+    - **Changed-lines Stryker base (controller ruling, Task 0b review ⚠️2):** `TASK_BASE` is the commit the controller recorded before dispatching the loop (given in every dispatch), not the merge base — each task mutates only its own lines. The old report is deleted first and the run is chained with `&&`; `--report … --expect "$M"` refuses a report that is not this run's (I-2). A run whose ranges yield zero mutants (type-only change) exits 2: the task records "no mutable lines" with the `--base` output in its report instead of a verdict table.
     The expected result is `survived: 0, noCoverage: 0`, with a `killedBy` test name for every killed mutant.
     - A survivor gets a killing test, or, if it is truly equivalent, a row in the task report: the mutant, why no input can tell it apart, and the reviewer's agreement.
     - Never `// Stryker disable`. The engine has none today (`grep -arc "Stryker disable" packages/engine/src` returns 0 for every file).
@@ -1044,7 +1045,7 @@ Expected: `EXIT=0` twice. The judge shows `failed: 0` and `files: 2`, then `file
 Then a real changed-lines run on a one-line range proves the seam end to end:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-stryker/packages/engine && STRYKER_MUTATE="src/core/types.ts:91-101" pnpm mutation > "$TMPDIR/w2a-t0b-run.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json; echo REPORT_EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a-stryker/packages/engine && STRYKER_MUTATE="src/core/types.ts:91-101" pnpm mutation > "$TMPDIR/w2a-t0b-run.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "src/core/types.ts:91-101"; echo REPORT_EXIT=$?
 ```
 
 Expected:
@@ -1971,7 +1972,7 @@ Expected: `EXIT=0`; every row `KILLED by` the named test, 0 survived. Paste the 
 Then run changed-lines Stryker over this task's engine diff (Global Constraints, Mutation):
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && STRYKER_MUTATE="$(node scripts/stryker-changed.mjs --base "$(git merge-base HEAD origin/main)")" pnpm mutation > "$TMPDIR/w2a-stryker-t3.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json; echo REPORT_EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2a-stryker-t3.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"; echo REPORT_EXIT=$?
 ```
 
 Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` on every killed row. A survivor gets a killing test, or an equivalence row the reviewer signs. The range covers every earlier loop-D task's lines too, so a later task's run re-proves them.
@@ -2519,7 +2520,7 @@ Expected: `EXIT=0`; every row `KILLED by` the named test, 0 survived. Paste the 
 Then run changed-lines Stryker over this task's engine diff (Global Constraints, Mutation):
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && STRYKER_MUTATE="$(node scripts/stryker-changed.mjs --base "$(git merge-base HEAD origin/main)")" pnpm mutation > "$TMPDIR/w2a-stryker-t4.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json; echo REPORT_EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2a-stryker-t4.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"; echo REPORT_EXIT=$?
 ```
 
 Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` on every killed row. A survivor gets a killing test, or an equivalence row the reviewer signs. The range covers every earlier loop-D task's lines too, so a later task's run re-proves them.
@@ -2952,7 +2953,7 @@ Expected: `EXIT=0`; every row `KILLED by` the named test, 0 survived. Paste the 
 Then run changed-lines Stryker over this task's engine diff (Global Constraints, Mutation):
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && STRYKER_MUTATE="$(node scripts/stryker-changed.mjs --base "$(git merge-base HEAD origin/main)")" pnpm mutation > "$TMPDIR/w2a-stryker-t5.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json; echo REPORT_EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a/packages/engine && rm -f reports/mutation/changed.json && M="$(node scripts/stryker-changed.mjs --base "$TASK_BASE")" && STRYKER_MUTATE="$M" pnpm mutation > "$TMPDIR/w2a-stryker-t5.log" 2>&1; echo EXIT=$?; node scripts/stryker-changed.mjs --report reports/mutation/changed.json --expect "$M"; echo REPORT_EXIT=$?
 ```
 
 Expected: `REPORT_EXIT=0`, with `survived: 0, noCoverage: 0` and a `by <test>` on every killed row. A survivor gets a killing test, or an equivalence row the reviewer signs. The range covers every earlier loop-D task's lines too, so a later task's run re-proves them.
