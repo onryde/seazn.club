@@ -228,8 +228,9 @@ See §6.
      winner" guidance and no shoot-out advice.
    - `DRAW_NOT_ALLOWED` remains for non-bracket stages whose sport refuses draws.
    - Every other level result in a bracket is **accepted** and held as `needs_decision` (ruling 79).
-   - `core.finalize` on a held fixture (status `needs_decision`, or a level outcome in a bracket kind) is refused
-     with `LEVEL_RESULT_IN_BRACKET`. The fixture is settled first. The console hides Finalize while the fixture is
+   - `core.finalize` in a bracket kind is refused with `LEVEL_RESULT_IN_BRACKET` whenever `settleApplies` is true
+     (§5.1: a level outcome, an abandon with no outcome, or a chess game awaiting its tie-break) — the same predicate
+     that shows the console block (controller ruling P2-7, 2026-10-08). The fixture is settled first. The console hides Finalize while the fixture is
      held (§5.5; plan finding 27).
    - A `core.settle` whose `winner` is an entrant with status `withdrawn` is refused `SETTLE_NOT_APPLICABLE`
      (reason `withdrawn`), and nothing is written (preflight ruling C17; the auto-walkover is W2b's, §2.3).
