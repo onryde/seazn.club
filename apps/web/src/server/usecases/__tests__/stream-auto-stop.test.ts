@@ -197,15 +197,17 @@ describe.skipIf(!HAS_DB)("automatic stop — fires AUTO_STOP_AFTER_RESULT_SECOND
 });
 
 describe.skipIf(!HAS_DB)("automatic stop — every caller of the tick reaches it (test 2, FP7)", () => {
-  const callers: [string, (x: Live) => Promise<unknown>][] = [
-    ["a phone beat (postBeat's tick, cause beat)", ({ r, phone, sid }) => sidBeat(r, phone, sid)],
-    ["the organiser's poll (currentSession, cause poll)", ({ r }) => currentSession(r.auth, r.fixtureId, r.deps)],
-    ["the stream-tick pass (tickOpenSessions, cause sweep)", ({ r }) => tickOpenSessions(r.deps, { orgIds: [r.auth.orgId] })],
-    ["the daily sweep's backstop (sweepStreamSessions)", ({ r }) => sweepStreamSessions(r.deps, { orgIds: [r.auth.orgId] })],
+  // The cause is tickSession's own declared union ("poll" | "beat" | "sweep"); each caller passes the one that names it.
+  const callers: [string, "poll" | "beat" | "sweep", (x: Live) => Promise<unknown>][] = [
+    ["a phone beat (postBeat's tick)", "beat", ({ r, phone, sid }) => sidBeat(r, phone, sid)],
+    ["the organiser's poll (currentSession)", "poll", ({ r }) => currentSession(r.auth, r.fixtureId, r.deps)],
+    ["the stream-tick pass (tickOpenSessions)", "sweep", ({ r }) => tickOpenSessions(r.deps, { orgIds: [r.auth.orgId] })],
+    ["the daily sweep's backstop (sweepStreamSessions)", "sweep", ({ r }) => sweepStreamSessions(r.deps, { orgIds: [r.auth.orgId] })],
   ];
-  it("each caller leaves the session open 1 ms before the delay and ends it auto_stopped at the delay (4 callers)", async () => {
+  it("each caller leaves the session open 1 ms before the delay and ends it auto_stopped at the delay, logging ITS cause (4 callers)", async () => {
+    const info = vi.spyOn(log, "info");
     let checked = 0;
-    for (const [name, call] of callers) {
+    for (const [name, cause, call] of callers) {
       const x = await liveRig();
       const finished = await finishAt(x.r, x.sid, SEC);
       clockTo(x.r, new Date(finished.getTime() + DELAY_MS - 1));
@@ -214,10 +216,14 @@ describe.skipIf(!HAS_DB)("automatic stop — every caller of the tick reaches it
       clockTo(x.r, new Date(finished.getTime() + DELAY_MS));
       await call(x);
       expect(await sessionOf(x.sid), `${name}: at the delay`).toMatchObject({ end_reason: "auto_stopped" });
+      const logged = autoStopLogs(info).map((c) => c[0] as { sid?: string; cause?: string }).filter((l) => l.sid === x.sid);
+      expect(logged, `${name}: one auto-stop line`).toHaveLength(1);
+      expect(logged[0]!.cause, `${name}: the line names its caller`).toBe(cause);
       checked++;
     }
     expect(checked).toBe(callers.length);
     expect(checked).toBe(4);
+    expect(new Set(callers.map(([, c]) => c)), "all three causes are exercised").toEqual(new Set(["beat", "poll", "sweep"]));
   });
 });
 
@@ -471,21 +477,30 @@ describe.skipIf(!HAS_DB)("automatic stop — the first reason wins (test 6)", ()
     expect(await sessionOf(sid)).toMatchObject({ end_reason: "stopped" });
   });
 
-  it("a session still `ending` costs NO decision: ticking it with the auto stop due makes exactly as many applies as with the switch off at the same clock", async () => {
-    const { r, sid } = await liveRig();
-    const finished = await finishAt(r, sid, SEC);
-    await sql`update fixture_stream_sessions set state = 'ending', end_reason = 'stopped', ending_at = ${r.now()}, desired_state = 'ending' where id = ${sid}`;
-    clockTo(r, new Date(finished.getTime() + DELAY_MS));
-    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: false });
-    hook.calls = 0;
-    await sweepTick(r, sid);
-    const off = hook.calls;
-    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
-    hook.calls = 0;
-    await sweepTick(r, sid);
-    const on = hook.calls;
-    expect(on, `applies with the auto stop due (${on}) vs not (${off})`).toBe(off);
-    expect(await sessionOf(sid)).toMatchObject({ state: "ending", end_reason: "stopped" });
+  it("a session already `ending`, or already terminal, costs NO decision: ticking it with the auto stop due makes exactly as many applies as with the switch off at the same clock (2 states)", async () => {
+    const ends: [string, (sid: string, at: Date) => Promise<unknown>, { state: string; end_reason: string }][] = [
+      ["ending", (sid, at) => sql`update fixture_stream_sessions set state = 'ending', end_reason = 'stopped', ending_at = ${at}, desired_state = 'ending' where id = ${sid}`, { state: "ending", end_reason: "stopped" }],
+      ["completed", (sid, at) => sql`update fixture_stream_sessions set state = 'completed', end_reason = 'operator_stopped', ended_at = ${at} where id = ${sid}`, { state: "completed", end_reason: "operator_stopped" }],
+    ];
+    let checked = 0;
+    for (const [name, end, want] of ends) {
+      const { r, sid } = await liveRig();
+      const finished = await finishAt(r, sid, SEC);
+      await end(sid, r.now());
+      clockTo(r, new Date(finished.getTime() + DELAY_MS));
+      await saveStreamSettings(r.auth, r.fixtureId, { autoStream: false });
+      hook.calls = 0;
+      await sweepTick(r, sid);
+      const off = hook.calls;
+      await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
+      hook.calls = 0;
+      await sweepTick(r, sid);
+      const on = hook.calls;
+      expect(on, `${name}: applies with the auto stop due (${on}) vs not (${off})`).toBe(off);
+      expect(await sessionOf(sid), name).toMatchObject(want);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a TERMINAL session is untouched, and a tick of it does not throw", async () => {
@@ -564,6 +579,32 @@ describe.skipIf(!HAS_DB)("automatic stop — the locked re-take (test 7)", () =>
       checked++;
     }
     expect(checked).toBe(rows.length);
+  });
+
+  it("a session that ENDED for another reason in the window (ending or completed, max_duration) is not re-decided: no stop_requested_at is stamped on it, no stop transition is written and no auto-stop line is logged (2 forms)", async () => {
+    const forms: [string, (r: CaptureRig, sid: string) => Promise<unknown>, string][] = [
+      ["ending", (r, sid) => sql`update fixture_stream_sessions set state = 'ending', end_reason = 'max_duration', ending_at = ${r.now()}, desired_state = 'ending' where id = ${sid}`, "ending"],
+      ["completed", (r, sid) => sql`update fixture_stream_sessions set state = 'completed', end_reason = 'max_duration', ended_at = ${r.now()} where id = ${sid}`, "completed"],
+    ];
+    let checked = 0;
+    for (const [name, end, state] of forms) {
+      const info = vi.spyOn(log, "info");
+      const { r, sid } = await liveRig();
+      const finished = await finishAt(r, sid, SEC);
+      clockTo(r, new Date(finished.getTime() + DELAY_MS));
+      const seen = atSecondApply(async () => { await end(r, sid); }, r);
+      await sweepTick(r, sid);
+      hook.onLockOrg = null;
+      expect(seen.applies(), `${name}: PREMISE: the other end landed at the end decision's apply`).toBeGreaterThanOrEqual(2);
+      const [row] = await sql<{ state: string; end_reason: string | null; stop_requested_at: Date | null }[]>`
+        select state, end_reason, stop_requested_at from fixture_stream_sessions where id = ${sid}`;
+      expect(row, `${name}: the first reason wins and nothing is stamped over it`).toEqual({ state, end_reason: "max_duration", stop_requested_at: null });
+      expect(autoStopLogs(info), name).toHaveLength(0);
+      expect(await stopTransitions(sid), name).toBe(0);
+      info.mockRestore();
+      checked++;
+    }
+    expect(checked).toBe(forms.length);
   });
 
   it("an organiser Stop that lands in the same window is not re-decided: end_reason stays stopped, the session has ONE stop, and the tick does not log the auto stop's rule", async () => {

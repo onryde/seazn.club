@@ -969,6 +969,24 @@ describe.skipIf(!HAS_DB)("V431__auto_stream.sql — the constraints are real", (
     expect(after[0]!.auto_started_at, "a deleted session does not re-arm auto start").not.toBeNull();
   });
 
+  it("fixture_stream_sessions has a NON-partial btree (fixture_id) index, and maybeAutoStart's 'any session ever received ingest' read plans through an index (with seq scans disabled it has one to use) — the partial one_active cannot serve a terminal row", async () => {
+    const all = await sql<{ indexname: string; indexdef: string }[]>`
+      select indexname, indexdef from pg_indexes where schemaname = current_schema() and tablename = 'fixture_stream_sessions'`;
+    const idx = all.filter((i) => /USING btree \(fixture_id\)/.test(i.indexdef));
+    const plain = idx.filter((i) => !/\bWHERE\b/.test(i.indexdef));
+    expect(plain.map((i) => i.indexname), "exactly one non-partial (fixture_id) index").toHaveLength(1);
+    expect(idx.some((i) => i.indexname === "fixture_stream_sessions_one_active"), "twin: the partial one exists too, and is not the plain one").toBe(true);
+    const r = await rig();
+    const plan = await sql.begin(async (tx) => {
+      await tx`set local enable_seqscan = off`;
+      return tx<{ "QUERY PLAN": string }[]>`
+        explain select exists (select 1 from fixture_stream_sessions s where s.fixture_id = ${r.fixtureId} and s.first_ingest_at is not null) as any_ingest`;
+    });
+    const text = plan.map((p) => p["QUERY PLAN"]).join("\n");
+    expect(text, text).toContain(`Index Scan using ${plain[0]!.indexname}`);
+    expect(text, text).not.toMatch(/Seq Scan on fixture_stream_sessions/);
+  });
+
   it("fixture_stream_pairings.not_ready_since: a NULLABLE timestamptz with no default, null on a new pairing, round-trips a timestamp and clears back to null (FP16)", async () => {
     const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
       select data_type, is_nullable, column_default from information_schema.columns

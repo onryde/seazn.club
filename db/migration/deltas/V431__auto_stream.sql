@@ -12,5 +12,10 @@ alter table fixture_stream_settings
   add column target_chosen           boolean not null default false;
 update fixture_stream_settings set target_chosen = true;
 create index on fixture_stream_settings (auto_start_session_id);   -- V430 m-2: the FK has an index to walk on a session delete
+-- T4 review: maybeAutoStart's facts read asks "did any session of this fixture ever receive ingest" on EVERY beat of a paired
+-- phone. fixture_stream_sessions had no index on fixture_id that reaches a TERMINAL row (one_active is partial on the open
+-- states), so that exists() seq-scanned the whole table: 4357 buffers / 12 ms at 39k rows, 12 buffers / 0.09 ms with this.
+-- It is also the walk for the fixture_id FK's `on delete set null` (V430 T35).
+create index on fixture_stream_sessions (fixture_id);
 -- FP16: when the phone has been not-ready continuously, for the panel's debounce.
 alter table fixture_stream_pairings add column not_ready_since timestamptz null;

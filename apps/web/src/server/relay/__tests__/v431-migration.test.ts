@@ -62,6 +62,10 @@ describe("V431 (spec §8.2, plan R-1, FP16)", () => {
     expect(V431).toMatch(/create index on fixture_stream_settings \(auto_start_session_id\)/);
   });
 
+  it("fixture_stream_sessions gets a plain (fixture_id) index: maybeAutoStart's per-beat 'any session ever received ingest' read must not seq-scan the table", () => {
+    expect(V431).toMatch(/create index on fixture_stream_sessions \(fixture_id\)\s*;/);
+  });
+
   it("the stamps are timestamptz and nullable (null = never), so 'once per match' and 'never after a Stop' read as IS NULL", () => {
     for (const col of ["auto_started_at", "auto_start_blocked_at", "auto_start_attempted_at"]) {
       expect(V431, col).toMatch(new RegExp(`${col}\\s+timestamptz null`));

@@ -1713,8 +1713,9 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
 
   // 5–6: the phone-lost ends, judged on what this tick read and re-taken on the LOCKED row.
   if (!isTerminal(row.state)) row = await endIfPhoneLost(row, freshIngest, deps, cause);
-  // 7: the automatic stop after the result (PR-2 T5, FP7: here once, so every caller of the tick reaches it).
-  if (!isTerminal(row.state)) row = await endIfAutoStopDue(row, deps, cause);
+  // 7: the automatic stop after the result (PR-2 T5, FP7: here once, so every caller of the tick reaches it). It returns an
+  // ending or terminal row untouched on its own.
+  row = await endIfAutoStopDue(row, deps, cause);
   return { session: toSession(row), ingestState, outputObserved, coalescedSince, freshIngest, phoneReadFailed };
 }
 
