@@ -6,8 +6,10 @@
 //
 // One bracket fixture, in the RULEBOOK's terms — what play produced, then what the organiser or scorer did — folded
 // left to right into the status the fixture must have, who advances by which method, and which writes are refused.
-// Where the rows are silent the family throws `NotRuled` (an owner question) and never guesses (R6); an input the rows
-// exclude throws `RuledOut`, naming the row.
+// It never guesses (R6). The eight questions T15 raised where the rows were silent were answered by CONTROLLER rulings
+// P2-1..P2-8 (2026-10-08 — controller rulings, not owner rulings): three are encoded below as answers (P2-4, P2-5, P2-6,
+// and P2-7 together with spec §5.4.3 as amended), and the rest — kernel behaviour W2a does not change — throw
+// `OutOfScope`, named and never judged. An input the rows exclude throws `RuledOut`, naming the row.
 import type { StageKind } from "@seazn/engine/core";
 
 export type Side = "home" | "away";
@@ -51,27 +53,24 @@ type RuledSport = keyof typeof RULED_SPORTS;
 const CHESS: RuledSport = "boardgame"; // BG-KO-1, BG-KO-2
 const CARROM: RuledSport = "carrom"; // CA-KO-1
 const GENERIC: RuledSport = "generic"; // GN-KO-1
-const CRICKET: RuledSport = "cricket"; // CK-KO-1
 
-/** Owner questions: an input the rows are silent on. Each is raised, never answered. */
-export const NOT_RULED = {
-  "after-finalize": "an action after finalize: the rows do not say whether a finalized bracket fixture refuses it (and with which code) or accepts it",
-  "abandon-decided": "an abandon of a fixture that already has a winner: X-ST-1 speaks only of an abandon with no outcome",
-  "abandon-twice": "a second abandon while one is active: the rows are silent",
-  "cricket-organiser-settle": "an organiser-decision settle of a cricket knockout: CK-KO-1 names higher group finisher or lot, X-ST-1 lists organiser among the methods",
-  "tiebreak-phase-settle-method": "a higher-seed or organiser-decision settle of a chess game awaiting its tie-break: BG-KO-1 and X-ST-1 name lots as the organiser's settle there",
-  "tiebreak-interrupted": "a tie-break after an abandon or a settle interrupted the chess tie-break phase: the rows do not say whether the phase survives",
-  "finalize-undecided": "finalize with no result (nothing played, a chess game awaiting its tie-break, an abandon with no outcome): spec §5.4.3 refuses only a held level result, §5.5 says the server refuses while the settle block shows",
-  "void-nothing": "a void with no standing action to undo: it would void the play itself, which the rows do not model",
+/** Kernel behaviour W2a does not change: named, counted by the sweeps, never judged by this family (controller rulings
+ *  P2-1, P2-2, P2-3, P2-7 and P2-8, 2026-10-08 — controller rulings, not owner rulings). */
+export const OUT_OF_SCOPE = {
+  "after-finalize": "an action after finalize: pre-W2a kernel behaviour (controller ruling P2-1)",
+  "abandon-decided": "an abandon of a fixture that already has a winner: pre-W2a kernel behaviour (controller ruling P2-2)",
+  "abandon-twice": "a second abandon while one is active: pre-W2a kernel behaviour (controller ruling P2-3)",
+  "finalize-unplayed": "finalize of a bracket fixture with no outcome, no abandon and nothing pending: nothing to settle (controller ruling P2-7)",
+  "void-nothing": "a void with no standing action to undo: pre-W2a kernel behaviour (controller ruling P2-8)",
 } as const;
-export type NotRuledQuestion = keyof typeof NOT_RULED;
+export type OutOfScopeReason = keyof typeof OUT_OF_SCOPE;
 
-export class NotRuled extends Error {
-  readonly question: NotRuledQuestion;
-  constructor(question: NotRuledQuestion, at: string) {
-    super(`bracket-finish: not ruled (${question}) at ${at}: ${NOT_RULED[question]}`);
-    this.name = "NotRuled";
-    this.question = question;
+export class OutOfScope extends Error {
+  readonly reason: OutOfScopeReason;
+  constructor(reason: OutOfScopeReason, at: string) {
+    super(`bracket-finish: out of scope (${reason}) at ${at}: ${OUT_OF_SCOPE[reason]}`);
+    this.name = "OutOfScope";
+    this.reason = reason;
   }
 }
 
@@ -174,32 +173,31 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
     const refuse = (code: RefusalCode): void => {
       refused.push({ index, code });
     };
-    if (s.finalized) throw new NotRuled("after-finalize", at);
+    if (s.finalized) throw new OutOfScope("after-finalize", at); // P2-1
     switch (a.kind) {
       case "abandon":
-        if (s.abandoned) throw new NotRuled("abandon-twice", at);
-        if (win(s) !== null) throw new NotRuled("abandon-decided", at);
+        if (s.abandoned) throw new OutOfScope("abandon-twice", at); // P2-3
+        if (win(s) !== null) throw new OutOfScope("abandon-decided", at); // P2-2
         return accept({ ...s, abandoned: true });
       case "settle":
         if (a.by !== "organiser") return refuse("FORBIDDEN"); // X-ST-2 organiser only
         if (!settleApplies(s)) return refuse("SETTLE_NOT_APPLICABLE"); // X-ST-1 applies only to
-        if (c.sport === CRICKET && a.method === "organiser") throw new NotRuled("cricket-organiser-settle", at); // CK-KO-1
-        if (drawnChess(s) && !s.abandoned && a.method !== "lot") throw new NotRuled("tiebreak-phase-settle-method", at); // BG-KO-1 lots
+        // Every method on every bracket sport (controller rulings P2-4, cricket included, and P2-5, a pending chess tie-break included).
         return accept({ ...s, settle: { winner: a.winner, method: a.method } });
       case "tiebreak":
         if (s.play.kind !== "level" || s.tiebreak !== null) return refuse("TIEBREAK_NOT_APPLICABLE"); // §7 outside the tie-break phase
-        if (s.abandoned || s.settle !== null) throw new NotRuled("tiebreak-interrupted", at);
+        if (s.abandoned || s.settle !== null) return refuse("TIEBREAK_NOT_APPLICABLE"); // P2-6 after an abandon or a settle
         return accept({ ...s, tiebreak: { rung: a.rung, winner: a.winner } }); // BG-KO-2 the recorded winner
       case "void-last": {
         const before = undo.pop();
-        if (before === undefined) throw new NotRuled("void-nothing", at);
+        if (before === undefined) throw new OutOfScope("void-nothing", at); // P2-8
         s = before;
         return;
       }
       case "finalize":
         if (win(s) !== null) return accept({ ...s, finalized: true });
-        if (levelPlay(s)) return refuse("LEVEL_RESULT_IN_BRACKET"); // §5.4.3 finalize of a held fixture
-        throw new NotRuled("finalize-undecided", at);
+        if (settleApplies(s)) return refuse("LEVEL_RESULT_IN_BRACKET"); // §5.4.3 as amended (P2-7): finalize while settle applies
+        throw new OutOfScope("finalize-unplayed", at); // P2-7
     }
   });
 

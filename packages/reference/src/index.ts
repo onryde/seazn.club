@@ -10,8 +10,8 @@ import { bracketFinish } from "./families/bracket-finish.ts";
 
 export {
   BRACKET_STAGE_KINDS,
-  NOT_RULED,
-  NotRuled,
+  OUT_OF_SCOPE,
+  OutOfScope,
   RULED_OUT,
   RULED_SPORTS,
   RuledOut,
@@ -23,7 +23,7 @@ export type {
   BracketCase,
   BracketExpect,
   BracketFinishFamily,
-  NotRuledQuestion,
+  OutOfScopeReason,
   PlayResult,
   RefusalCode,
   RuledOutReason,

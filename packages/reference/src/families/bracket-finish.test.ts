@@ -1,12 +1,13 @@
-// The bracket-finish family's tests. Every expected value is read from a signed rule row (packages/engine/rules/*.md)
-// or spec 2026-10-08-format-matrix-w2a-design.md (§5.1, §5.4.2, §5.4.3, §7) — never from engine source (R8). The
-// engine is touched only for its DECLARED domain at test time: StageKind.options and the sport registry.
+// The bracket-finish family's tests. Every expected value is read from a signed rule row (packages/engine/rules/*.md),
+// spec 2026-10-08-format-matrix-w2a-design.md (§5.1, §5.4.2, §5.4.3, §7) or a CONTROLLER ruling P2-1..P2-8 on T15's
+// questions (2026-10-08; controller rulings, not owner rulings) — never from engine source (R8). The engine is touched
+// only for its DECLARED domain at test time: StageKind.options and the sport registry.
 import { describe, expect, it } from "vitest";
 import { StageKind } from "@seazn/engine/core";
 import { forEachSport } from "@seazn/engine/testkit";
 import {
-  NOT_RULED,
-  NotRuled,
+  OUT_OF_SCOPE,
+  OutOfScope,
   RULED_OUT,
   RULED_SPORTS,
   RuledOut,
@@ -95,9 +96,8 @@ const LEVEL_PLAY_BY_KO_ROW: Readonly<Record<string, BracketExpect | "ruled-out" 
 };
 const HELD_BY_X_BR_2: BracketExpect = { status: "needs_decision", advances: null, refused: [] }; // "held as needs_decision: not decided, nobody seated"
 const KO_ROW = /^[A-Z]+-KO-\d+$/;
-/** The sport whose own row sends a drawn bracket game to a tie-break (BG-KO-1's rules file), and cricket's (CK-KO-1's). */
+/** The sport whose own row sends a drawn bracket game to a tie-break (BG-KO-1's rules file). */
 const CHESS = rowById(ROWS, "BG-KO-1").file;
-const CRICKET = rowById(ROWS, "CK-KO-1").file;
 
 describe("bracket-finish scope, read from the rules directory (X-BR-1, X-DR-1, the per-sport KO rows)", () => {
   it("X-BR-1 + X-DR-1: the family's stage kinds are exactly the engine's declared kinds minus X-DR-1's draw kinds", () => {
@@ -198,13 +198,21 @@ describe("bracket-finish, swept over the registry (X-BR-2 and each sport's own K
     }
   });
 
-  it("X-ST-1: settle after a level result seats the winner and the loser, every method, for every sport that holds a level result", () => {
+  it("X-ST-1 + controller ruling P2-4: settle after a level result seats the winner and the loser, EVERY method, for every sport that holds a level result (cricket included)", () => {
+    // Which sports HOLD a level result comes from the rows (the sport's own KO row, else X-BR-2), not from the family.
+    const heldByRows = (key: string): boolean => {
+      const own = ROWS.find((r) => r.file === key && KO_ROW.test(r.id) && LEVEL_PLAY_BY_KO_ROW[r.id] !== null);
+      const want = own === undefined ? HELD_BY_X_BR_2 : LEVEL_PLAY_BY_KO_ROW[own.id];
+      return typeof want === "object" && want !== null && want.status === "needs_decision";
+    };
+    expect(heldByRows(rowById(ROWS, "CK-KO-1").file)).toBe(true); // CK-KO-1: "is held and closed by settle"
+    const METHODS_ = ["lot", "higher_seed", "organiser"] as const;
+    let held = 0;
     let judged = 0;
     const sports = forEachSport(({ key }) => {
-      const held = (() => { try { return expectBracketFinish({ ...base, sport: key }).status === "needs_decision"; } catch { return false; } })();
-      if (!held) return;
-      for (const method of ["lot", "higher_seed", "organiser"] as const) {
-        if (key === CRICKET && method === "organiser") continue; // CK-KO-1 names higher group finisher or lot only — the owner question NOT_RULED["cricket-organiser-settle"]
+      if (!heldByRows(key)) return;
+      held++;
+      for (const method of METHODS_) {
         for (const winner of ["home", "away"] as const) {
           const e = expectBracketFinish({ ...base, sport: key, hasLoserLine: true, actions: [{ kind: "settle", winner, method, by: "organiser" }] });
           expect(e, `${key} ${method} ${winner}`).toEqual({ status: "decided", advances: { winner, loser: winner === "home" ? "away" : "home", method: `settled_${method}` }, refused: [] });
@@ -213,7 +221,8 @@ describe("bracket-finish, swept over the registry (X-BR-2 and each sport's own K
       }
     });
     expect(sports).toBeGreaterThan(0);
-    expect(judged).toBeGreaterThan(0);
+    expect(held).toBeGreaterThan(0);
+    expect(judged).toBe(held * METHODS_.length * 2);
   });
 });
 
@@ -270,6 +279,34 @@ describe("bracket-finish transitions (TEST-STRATEGY rule 1: second call, empty i
     expect(football([{ kind: "finalize" }, settle("away")]).status).toBe("decided");
   });
 
+  it("spec §5.4.3 as amended (controller ruling P2-7): finalize is refused LEVEL_RESULT_IN_BRACKET whenever settle applies — an abandon with no outcome, a chess game awaiting its tie-break, abandoned or not — and accepted once settled", () => {
+    expect(football([{ kind: "abandon" }, { kind: "finalize" }], { kind: "none" })).toEqual({ status: "abandoned", advances: null, refused: [{ index: 1, code: "LEVEL_RESULT_IN_BRACKET" }] });
+    // single-sport: BG-KO-1 is chess's row (boardgame)
+    expect(expectBracketFinish({ ...base, actions: [{ kind: "finalize" }] })).toEqual({ status: "in_play", advances: null, refused: [{ index: 0, code: "LEVEL_RESULT_IN_BRACKET" }] });
+    expect(expectBracketFinish({ ...base, actions: [{ kind: "abandon" }, { kind: "finalize" }] })).toEqual({ status: "abandoned", advances: null, refused: [{ index: 1, code: "LEVEL_RESULT_IN_BRACKET" }] });
+    // single-sport: GN-KO-1 is generic's row — the refused draw wrote nothing, so only the abandon makes settle apply
+    expect(expectBracketFinish({ ...base, sport: "generic", actions: [{ kind: "abandon" }, { kind: "finalize" }] }).refused).toEqual([{ index: -1, code: "LEVEL_RESULT_IN_BRACKET" }, { index: 1, code: "LEVEL_RESULT_IN_BRACKET" }]);
+    // the positive pair: settled first, the same finalize is accepted
+    expect(football([{ kind: "abandon" }, settle("away"), { kind: "finalize" }], { kind: "none" })).toEqual({ status: "finalized", advances: { winner: "away", loser: null, method: "settled_lot" }, refused: [] });
+    expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung: "blitz", winner: "away" }, { kind: "finalize" }] })).toEqual({ status: "finalized", advances: { winner: "away", loser: null, method: "tiebreak_blitz" }, refused: [] });
+  });
+
+  it("BG-KO-1 + controller ruling P2-5: while a chess tie-break is pending, EVERY settle method is accepted (lots is not the only one)", () => {
+    for (const method of ["lot", "higher_seed", "organiser"] as const) {
+      // single-sport: BG-KO-1 is chess's row (boardgame)
+      expect(expectBracketFinish({ ...base, hasLoserLine: true, actions: [{ kind: "settle", winner: "away", method, by: "organiser" }] }), method).toEqual({ status: "decided", advances: { winner: "away", loser: "home", method: `settled_${method}` }, refused: [] });
+    }
+  });
+
+  it("BG-KO-1 + controller ruling P2-6: a tie-break after a settle or after an abandon is refused TIEBREAK_NOT_APPLICABLE, and changes nothing", () => {
+    const tb: Action = { kind: "tiebreak", rung: "armageddon", winner: "home" };
+    // single-sport: BG-KO-1 is chess's row (boardgame)
+    expect(expectBracketFinish({ ...base, actions: [{ kind: "abandon" }, tb] })).toEqual({ status: "abandoned", advances: null, refused: [{ index: 1, code: "TIEBREAK_NOT_APPLICABLE" }] });
+    expect(expectBracketFinish({ ...base, actions: [{ kind: "settle", winner: "away", method: "lot", by: "organiser" }, tb] })).toEqual({ status: "decided", advances: { winner: "away", loser: null, method: "settled_lot" }, refused: [{ index: 1, code: "TIEBREAK_NOT_APPLICABLE" }] });
+    // a void of the abandon reopens the phase: the same tie-break is then accepted
+    expect(expectBracketFinish({ ...base, actions: [{ kind: "abandon" }, { kind: "void-last" }, tb] }).advances).toEqual({ winner: "home", loser: null, method: "tiebreak_armageddon" });
+  });
+
   it("BG-KO-1: a tie-break outside the tie-break phase is refused TIEBREAK_NOT_APPLICABLE — nothing played, a win from play, a second tie-break", () => {
     const tb: Action = { kind: "tiebreak", rung: "blitz", winner: "away" };
     // single-sport: BG-KO-1 is chess's row (boardgame)
@@ -299,7 +336,7 @@ describe("bracket-finish transitions (TEST-STRATEGY rule 1: second call, empty i
 
   it("X-ST-2: a refused settle writes nothing — it leaves no action for a void to undo, and the organiser's settle after it is accepted", () => {
     expect(football([{ kind: "settle", winner: "home", method: "lot", by: "scorer" }, settle("away")])).toEqual({ status: "decided", advances: { winner: "away", loser: null, method: "settled_lot" }, refused: [{ index: 0, code: "FORBIDDEN" }] });
-    expect(() => football([{ kind: "settle", winner: "home", method: "lot", by: "device" }, { kind: "void-last" }])).toThrow(NotRuled);
+    expect(() => football([{ kind: "settle", winner: "home", method: "lot", by: "device" }, { kind: "void-last" }])).toThrow(OUT_OF_SCOPE["void-nothing"]);
   });
 
   it("a second call answers the same, and expectAll keeps the input order (reversed in, reversed out)", () => {
@@ -312,40 +349,38 @@ describe("bracket-finish transitions (TEST-STRATEGY rule 1: second call, empty i
   });
 });
 
-describe("bracket-finish refuses to guess (R6): NotRuled is an owner question, RuledOut an input the rows exclude", () => {
-  // One case per question. A question no case reaches is a dead branch; a case answering is a guess.
-  const QUESTION_CASES: Readonly<Record<keyof typeof NOT_RULED, BracketCase>> = {
+describe("bracket-finish never guesses: OutOfScope names kernel behaviour W2a does not change (controller rulings P2-1/2/3/7/8), RuledOut an input the rows exclude", () => {
+  // One case per out-of-scope reason. A reason no case reaches is a dead branch; a case answering is a judgement the
+  // controller ruled the family must not make.
+  const SCOPE_CASES: Readonly<Record<keyof typeof OUT_OF_SCOPE, BracketCase>> = {
     "after-finalize": { ...base, sport: "football", play: { kind: "win", winner: "home" }, actions: [{ kind: "finalize" }, { kind: "void-last" }] },
     "abandon-decided": { ...base, sport: "football", play: { kind: "win", winner: "home" }, actions: [{ kind: "abandon" }] },
     "abandon-twice": { ...base, sport: "football", actions: [{ kind: "abandon" }, { kind: "abandon" }] },
-    "cricket-organiser-settle": { ...base, sport: "cricket", actions: [{ kind: "settle", winner: "home", method: "organiser", by: "organiser" }] },
-    "tiebreak-phase-settle-method": { ...base, actions: [{ kind: "settle", winner: "home", method: "higher_seed", by: "organiser" }] },
-    "tiebreak-interrupted": { ...base, actions: [{ kind: "abandon" }, { kind: "tiebreak", rung: "rapid", winner: "home" }] },
-    "finalize-undecided": { ...base, actions: [{ kind: "finalize" }] },
+    "finalize-unplayed": { ...base, sport: "football", play: { kind: "none" }, actions: [{ kind: "finalize" }] },
     "void-nothing": { ...base, sport: "football", actions: [{ kind: "void-last" }] },
   };
 
-  it("every NotRuled question is reached by its case and names itself; none of them answers", () => {
-    const questions = Object.keys(NOT_RULED) as (keyof typeof NOT_RULED)[];
-    expect(questions.length).toBeGreaterThan(0);
-    expect(Object.keys(QUESTION_CASES).sort()).toEqual([...questions].sort());
+  it("every OutOfScope reason is reached by its case and names itself; none of them is judged", () => {
+    const reasons = Object.keys(OUT_OF_SCOPE) as (keyof typeof OUT_OF_SCOPE)[];
+    expect(reasons.length).toBeGreaterThan(0);
+    expect(Object.keys(SCOPE_CASES).sort()).toEqual([...reasons].sort());
     let judged = 0;
-    for (const q of questions) {
+    for (const r of reasons) {
       let thrown: unknown;
-      try { expectBracketFinish(QUESTION_CASES[q]); } catch (e) { thrown = e; }
-      expect(thrown, q).toBeInstanceOf(NotRuled);
-      expect((thrown as NotRuled).question, q).toBe(q);
-      expect((thrown as Error).message, q).toContain(NOT_RULED[q]);
+      try { expectBracketFinish(SCOPE_CASES[r]); } catch (e) { thrown = e; }
+      expect(thrown, r).toBeInstanceOf(OutOfScope);
+      expect((thrown as OutOfScope).reason, r).toBe(r);
+      expect((thrown as Error).message, r).toContain(OUT_OF_SCOPE[r]);
       judged++;
     }
-    expect(judged).toBe(questions.length);
+    expect(judged).toBe(reasons.length);
   });
 
-  it("the tie-break-phase method question covers both non-lot methods, and an interrupted tie-break covers a settle as well as an abandon", () => {
-    for (const method of ["higher_seed", "organiser"] as const) {
-      expect(() => expectBracketFinish({ ...base, actions: [{ kind: "settle", winner: "home", method, by: "organiser" }] }), method).toThrow(NOT_RULED["tiebreak-phase-settle-method"]);
-    }
-    expect(() => expectBracketFinish({ ...base, actions: [{ kind: "settle", winner: "home", method: "lot", by: "organiser" }, { kind: "tiebreak", rung: "rapid", winner: "away" }] })).toThrow(NOT_RULED["tiebreak-interrupted"]);
+  it("controller ruling P2-7: finalize is out of scope ONLY with nothing to settle — a generic draw refused (GN-KO-1) leaves nothing either", () => {
+    // single-sport: GN-KO-1 is generic's row
+    expect(() => expectBracketFinish({ ...base, sport: "generic", actions: [{ kind: "finalize" }] })).toThrow(OUT_OF_SCOPE["finalize-unplayed"]);
+    // the positive pair: an abandon makes settle apply, so the same finalize is REFUSED instead of out of scope
+    expect(expectBracketFinish({ ...base, sport: "football", play: { kind: "none" }, actions: [{ kind: "abandon" }, { kind: "finalize" }] }).refused).toEqual([{ index: 1, code: "LEVEL_RESULT_IN_BRACKET" }]);
   });
 
   it("CA-KO-1 / BG-KO-1 / X-BR-1: RuledOut names its row — a level carrom bracket match, a tie-break outside chess, a draw kind", () => {
@@ -412,7 +447,22 @@ type Snap = Pick<BracketExpect, "status" | "advances">;
 const snap = (e: BracketExpect): Snap => ({ status: e.status, advances: e.advances });
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-interface Tally { nodes: number; failures: number; first: string[]; statuses: Set<string>; codes: Set<string>; notRuled: Set<string>; ruledOut: Set<string>; sticky: number; voids: number; noops: number }
+interface Tally { nodes: number; failures: number; first: string[]; statuses: Set<string>; codes: Set<string>; outOfScope: Set<string>; ruledOut: Set<string>; sticky: number; voids: number; noops: number; settles: number; tiebreaks: number; finalizes: number }
+
+/** Settle applies (X-ST-1: a level outcome, an abandon with no outcome, a chess game awaiting its tie-break), read
+ *  off the fixture's OBSERVABLE status by spec §5.4.2's order — never from the family's own predicate. */
+const SETTLEABLE: ReadonlySet<string> = new Set(["needs_decision", "abandoned", "in_play"]);
+
+/** Which unanswered outcome a step may have, from the parent's observable state alone: an OutOfScope reason (controller
+ *  rulings P2-1/2/3/7/8), a RuledOut reason, or null (the step must be answered). */
+function allowedThrow(a: Action, parent: BracketExpect, standing: readonly Snap[], sport: string): readonly string[] | null {
+  if (a.kind === "tiebreak" && sport !== CHESS) return ["tiebreak-not-chess"]; // BG-KO-1: an input the rows exclude
+  if (parent.status === "finalized") return ["after-finalize"]; // P2-1
+  if (a.kind === "abandon" && (parent.status === "abandoned" || parent.status === "decided")) return ["abandon-twice", "abandon-decided"]; // P2-2, P2-3
+  if (a.kind === "void-last" && standing.length === 0) return ["void-nothing"]; // P2-8
+  if (a.kind === "finalize" && parent.status === "scheduled") return ["finalize-unplayed"]; // P2-7: nothing to settle
+  return null;
+}
 
 function fail(t: Tally, c: BracketCase, why: string): void {
   t.failures++;
@@ -427,18 +477,21 @@ function walk(c: BracketCase, parent: BracketExpect, standing: readonly Snap[], 
     const next: BracketCase = { ...c, actions: [...c.actions, a] };
     const i = next.actions.length - 1;
     t.nodes++;
+    const allowed = allowedThrow(a, parent, standing, next.sport);
     let n: BracketExpect;
     try {
       n = expectBracketFinish(next);
     } catch (e) {
-      if (e instanceof NotRuled) t.notRuled.add(e.question);
-      else if (e instanceof RuledOut) t.ruledOut.add(e.reason);
+      let reason: string;
+      if (e instanceof OutOfScope) { reason = e.reason; t.outOfScope.add(reason); }
+      else if (e instanceof RuledOut) { reason = e.reason; t.ruledOut.add(reason); }
       else { fail(t, next, `threw ${String(e)}`); continue; }
-      if (a.kind === "void-last" && standing.length > 0 && parent.status !== "finalized") fail(t, next, "a void with a standing action to undo went unanswered");
+      if (allowed === null || !allowed.includes(reason)) fail(t, next, `unanswered (${reason}) where the parent (${parent.status}) owes an answer${allowed === null ? "" : ` or one of ${allowed.join("/")}`}`);
       // sticky: once unanswered, every extension is unanswered (a left fold cannot recover an answer)
       try { expectBracketFinish({ ...next, actions: [...next.actions, { kind: "abandon" }] }); fail(t, next, "an extension answered"); } catch (e2) { if ((e2 as Error).constructor === (e as Error).constructor) t.sticky++; else fail(t, next, "an extension threw a different error"); }
       continue;
     }
+    if (allowed !== null) fail(t, next, `answered where it should be unanswered (${allowed.join("/")})`);
     if (!same(expectBracketFinish(next), n)) fail(t, next, "a second call answered differently");
     // the refusals are a left fold: the parent's list is a prefix, and at most one entry is new — this action's
     if (!same(n.refused.slice(0, parent.refused.length), parent.refused)) fail(t, next, "the refusals are not the parent's plus this step's");
@@ -461,8 +514,30 @@ function walk(c: BracketCase, parent: BracketExpect, standing: readonly Snap[], 
     } else {
       nextStanding = [...standing, snap(parent)];
     }
+    const code = added === 1 ? n.refused[n.refused.length - 1]?.code : undefined;
     // X-ST-2: every non-organiser settle is refused FORBIDDEN
-    if (a.kind === "settle" && a.by !== "organiser" && !(added === 1 && n.refused[n.refused.length - 1]?.code === "FORBIDDEN")) fail(t, next, "a non-organiser settle was not refused FORBIDDEN");
+    if (a.kind === "settle" && a.by !== "organiser" && code !== "FORBIDDEN") fail(t, next, "a non-organiser settle was not refused FORBIDDEN");
+    // X-ST-1 + P2-4/P2-5: an organiser's settle, ANY method, is accepted iff settle applies; it decides by that method
+    if (a.kind === "settle" && a.by === "organiser") {
+      t.settles++;
+      if (SETTLEABLE.has(parent.status)) {
+        if (code !== undefined || n.status !== "decided" || n.advances?.winner !== a.winner || n.advances.method !== `settled_${a.method}`) fail(t, next, `a settle on ${parent.status} did not decide by settled_${a.method}`);
+      } else if (code !== "SETTLE_NOT_APPLICABLE") fail(t, next, `a settle on ${parent.status} was not refused SETTLE_NOT_APPLICABLE`);
+    }
+    // BG-KO-1 + P2-6: a tie-break is accepted only while the drawn game awaits it (in_play), never after an abandon or a settle
+    if (a.kind === "tiebreak") {
+      t.tiebreaks++;
+      if (parent.status === "in_play") {
+        if (code !== undefined || n.status !== "decided" || n.advances?.winner !== a.winner || n.advances.method !== `tiebreak_${a.rung}`) fail(t, next, "a pending tie-break did not decide by its rung");
+      } else if (code !== "TIEBREAK_NOT_APPLICABLE") fail(t, next, `a tie-break on ${parent.status} was not refused TIEBREAK_NOT_APPLICABLE`);
+    }
+    // §5.4.3 + P2-7: finalize is refused LEVEL_RESULT_IN_BRACKET whenever settle applies; a decided fixture finalizes
+    if (a.kind === "finalize") {
+      t.finalizes++;
+      if (SETTLEABLE.has(parent.status) && code !== "LEVEL_RESULT_IN_BRACKET") fail(t, next, `a finalize on ${parent.status} was not refused LEVEL_RESULT_IN_BRACKET`);
+      if (parent.status === "decided" && n.status !== "finalized") fail(t, next, "a finalize of a decided fixture did not finalize it");
+    }
+    if (a.kind === "abandon" && n.status !== "abandoned") fail(t, next, `an accepted abandon left ${n.status}`);
     // X-BR-1 / X-BR-2: somebody advances iff the fixture is decided (or finalized) — never from a level result
     const decided = n.status === "decided" || n.status === "finalized";
     if (decided !== (n.advances !== null)) fail(t, next, `status ${n.status} with advances ${JSON.stringify(n.advances)}`);
@@ -482,8 +557,8 @@ function walk(c: BracketCase, parent: BracketExpect, standing: readonly Snap[], 
 }
 
 describe("bracket-finish, rule 10: every sequence up to DEPTH actions, every registered sport, every play, with and without a loser line", () => {
-  it(`invariants after every step (X-BR-1, X-BR-2, X-ST-1, X-ST-2, spec §5.1 void, §5.4.2 order, §7 codes) — at most ${MAX_NODES} nodes`, () => {
-    const t: Tally = { nodes: 0, failures: 0, first: [], statuses: new Set(), codes: new Set(), notRuled: new Set(), ruledOut: new Set(), sticky: 0, voids: 0, noops: 0 };
+  it(`invariants after every step (X-BR-1, X-BR-2, X-ST-1, X-ST-2, BG-KO-1, spec §5.1 void, §5.4.2 order, §5.4.3, §7 codes, controller rulings P2-1..P2-8) — at most ${MAX_NODES} nodes`, () => {
+    const t: Tally = { nodes: 0, failures: 0, first: [], statuses: new Set(), codes: new Set(), outOfScope: new Set(), ruledOut: new Set(), sticky: 0, voids: 0, noops: 0, settles: 0, tiebreaks: 0, finalizes: 0 };
     let roots = 0;
     const sports = forEachSport(({ key }) => {
       for (const play of PLAYS) {
@@ -504,17 +579,20 @@ describe("bracket-finish, rule 10: every sequence up to DEPTH actions, every reg
     });
     expect(t.first, `${t.failures} invariant failure(s)`).toEqual([]);
     expect(t.failures).toBe(0);
-    // anti-vacuity: the walk reached every status, every code, every owner question and every exclusion it can
+    // anti-vacuity: the walk reached every status, every code, every out-of-scope reason and every exclusion it can
     expect(sports).toBe(SPORT_COUNT);
     expect(roots).toBe(SPORT_COUNT * PLAYS.length * 2);
     expect(t.nodes).toBeGreaterThan(roots);
     expect(t.nodes).toBeLessThanOrEqual(MAX_NODES);
     expect([...t.statuses].sort()).toEqual([...STATUSES].sort());
     expect([...t.codes].sort()).toEqual([...CODES].sort());
-    expect([...t.notRuled].sort()).toEqual(Object.keys(NOT_RULED).sort());
+    expect([...t.outOfScope].sort()).toEqual(Object.keys(OUT_OF_SCOPE).sort());
     expect([...t.ruledOut].sort()).toEqual(["carrom-level", "tiebreak-not-chess"]); // not-bracket: the walk stays in knockout; the scope tests sweep it
     expect(t.sticky).toBeGreaterThan(0);
     expect(t.voids).toBeGreaterThan(0);
     expect(t.noops).toBeGreaterThan(0);
+    expect(t.settles).toBeGreaterThan(0);
+    expect(t.tiebreaks).toBeGreaterThan(0);
+    expect(t.finalizes).toBeGreaterThan(0);
   }, SWEEP_BUDGET_MS);
 });
