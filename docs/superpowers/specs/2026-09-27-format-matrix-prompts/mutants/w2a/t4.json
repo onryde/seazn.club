@@ -48,8 +48,8 @@
   {
     "id": "abandoned-dropped-from-precondition",
     "file": "packages/engine/src/core/events.ts",
-    "find": "(f.abandoned || module.awaitingDecider",
-    "replace": "(module.awaitingDecider",
+    "find": "  return f.abandoned || module.awaitingDecider",
+    "replace": "  return module.awaitingDecider",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -108,15 +108,30 @@
   {
     "id": "kernel-finalize-branch-deleted",
     "file": "packages/engine/src/core/events.ts",
-    "find": "} else if (event.type === \"core.finalize\" && settlement !== null && module.outcome(state) === null) {",
-    "replace": "} else if (false) {",
+    "find": "  return event.type === \"core.finalize\" && folded.settled && module.outcome(folded.state) === null;",
+    "replace": "  return false;",
     "killers": [
       {
         "cwd": "packages/engine",
         "files": [
           "src/core/settle.test.ts"
         ],
-        "name": "Review Focus 3: finalize after settling an abandon succeeds for EVERY sport"
+        "name": "Review Focus 3: finalize after settling an abandon succeeds for EVERY sport|W2a I-1: kernelOwnsEvent is spec §5\\.1's kernel-owned set"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "rule 10: any sequence of results, tie-breaks, settles, abandons, finalizes and void-last in a bracket keeps the invariants after every step"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts",
+          "src/server/overlay/__tests__/recent.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
       }
     ]
   },
@@ -311,6 +326,200 @@
           "src/lib/__tests__/event-copy.test.ts"
         ],
         "name": "X-ST-1: core\\.settle says who advances and how, for every engine settle method, in all four locales"
+      }
+    ]
+  },
+  {
+    "id": "i1-kernel-owned-drops-settle",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "const KERNEL_OWNED_CORE: readonly string[] = [\"core.suspend\", \"core.resume\", \"core.settle\"];",
+    "replace": "const KERNEL_OWNED_CORE: readonly string[] = [\"core.suspend\", \"core.resume\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "W2a I-1: kernelOwnsEvent is spec §5\\.1's kernel-owned set|finding 2: core\\.settle never reaches module\\.apply"
+      }
+    ]
+  },
+  {
+    "id": "i1-kernel-owned-drops-lineup",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return KERNEL_OWNED_CORE.includes(type) || isLineupEventType(type);",
+    "replace": "  return KERNEL_OWNED_CORE.includes(type);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "W2a I-1: kernelOwnsEvent is spec §5\\.1's kernel-owned set"
+      }
+    ]
+  },
+  {
+    "id": "i1-fold-gate-never-settled",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (!kernelOwnsEvent(module, event, { state, settled: settlement !== null })) {",
+    "replace": "    if (!kernelOwnsEvent(module, event, { state, settled: false })) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "Review Focus 3: finalize after settling an abandon succeeds for EVERY sport"
+      }
+    ]
+  },
+  {
+    "id": "i1-timeline-skip-is-the-old-list",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "      if (kernelOwnsEvent(module, event, { state, settled })) {",
+    "replace": "      if (event.type === \"core.suspend\" || event.type === \"core.resume\" || isLineupEventType(event.type)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "i1-timeline-skip-is-the-old-list-scan-only",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "      if (kernelOwnsEvent(module, event, { state, settled })) {",
+    "replace": "      if (event.type === \"core.suspend\" || event.type === \"core.resume\" || isLineupEventType(event.type)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "i1-recent-skip-is-the-old-list",
+    "file": "apps/web/src/server/overlay/recent.ts",
+    "find": "      if (kernelOwnsEvent(module, event, { state, settled })) {",
+    "replace": "      if (event.type === \"core.suspend\" || event.type === \"core.resume\" || isLineupEventType(event.type)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/overlay/__tests__/recent.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "i1-recent-skip-is-the-old-list-scan-only",
+    "file": "apps/web/src/server/overlay/recent.ts",
+    "find": "      if (kernelOwnsEvent(module, event, { state, settled })) {",
+    "replace": "      if (event.type === \"core.suspend\" || event.type === \"core.resume\" || isLineupEventType(event.type)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "i1-timeline-settled-never-set",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "        if (event.type === \"core.settle\") settled = true;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
+      }
+    ]
+  },
+  {
+    "id": "i1-recent-settled-never-set",
+    "file": "apps/web/src/server/overlay/recent.ts",
+    "find": "        if (event.type === \"core.settle\") settled = true;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/overlay/__tests__/recent.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
+      }
+    ]
+  },
+  {
+    "id": "minor2-bare-read-with-another-name",
+    "file": "tools/matrix/lib/fold.ts",
+    "find": "  return { outcome: outcomeOf(module, folded), state: folded.state as unknown };",
+    "replace": "  const finalState = folded.state;\n  return { outcome: outcomeOf(module, folded) && module.outcome(finalState), state: folded.state as unknown };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "no bare <module>\\.outcome\\(state\\) outside the allowed list"
+      }
+    ]
+  },
+  {
+    "id": "minor3-tiebreak-not-applicable-422",
+    "file": "apps/web/src/server/api-v1/http.ts",
+    "find": "  TIEBREAK_NOT_APPLICABLE: 409,",
+    "replace": "  TIEBREAK_NOT_APPLICABLE: 422,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/api-v1/__tests__/http.test.ts"
+        ],
+        "name": "maps EngineError TIEBREAK_NOT_APPLICABLE → 409"
+      }
+    ]
+  },
+  {
+    "id": "minor7-second-kernel-finalize-refused",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "      // kernel-owned: the module never sees it\n    }\n    // ONE call site, below every branch",
+    "replace": "      if (event.type === \"core.finalize\" && events.slice(0, events.indexOf(event)).some((e) => e.type === \"core.finalize\" && active.includes(e))) throw new EngineError(\"WRONG_PHASE\", \"already finalized\");\n      // kernel-owned: the module never sees it\n    }\n    // ONE call site, below every branch",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "review Minor 7: a SECOND finalize after a settled abandon"
       }
     ]
   }

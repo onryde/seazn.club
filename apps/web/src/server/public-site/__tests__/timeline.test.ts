@@ -63,7 +63,8 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { log } from "@/server/logger";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import enPublic from "@/dictionaries/en/public.json";
@@ -73,6 +74,9 @@ import {
   EngineError,
   LINEUP_EVENT_SCHEMAS,
   SETTLE_METHODS,
+  foldMatchWithStoppage,
+  isLevelOutcome,
+  outcomeOf,
   type EventEnvelope,
   type LineupPair,
   type ScoreSummary,
@@ -499,6 +503,51 @@ describe("buildTimeline", () => {
     // module accepts reports TRUE.
     const clean = buildTimeline(args({ sportKey: "tennis", events: tennisSetLedger }));
     expect(clean.derivedComplete).toBe(true);
+  });
+
+  it("W2a I-1: a SETTLED fixture replays to the end in every sport — core.settle (and a settled abandon's finalize) is the kernel's, never the module's — with no degrade warning", () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      let sports = 0;
+      let settled = 0;
+      const replays = (sportKey: string, cfg: unknown, events: EventEnvelope[]) => {
+        const a = args({ sportKey, cfg, events });
+        // Legal on the WRITE path first, so a red below is this builder's, never the ledger's.
+        foldMatchWithStoppage(a.module as never, a.cfg as never, a.lineups, events, { strictFromSeq: 0 });
+        return buildTimeline(a).derivedComplete;
+      };
+      for (const { key } of CORPORA) {
+        sports++;
+        const cfg = defaultCfgFor(key);
+        const a = args({ sportKey: key, cfg });
+        const base = [env(0, "core.start", {}), env(1, "core.abandon", { reason: "floodlights" })];
+        const o = outcomeOf(a.module as never, foldMatchWithStoppage(a.module as never, cfg as never, a.lineups, base));
+        if (!(o === null || isLevelOutcome(o))) continue; // this cfg's abandon awards a winner: nothing to settle (X-ST-1)
+        const events = [
+          ...base,
+          env(2, "core.settle", { winner: a.lineups.home.entrantId, method: "organiser" }),
+          env(3, "core.finalize", {}),
+        ];
+        expect(replays(key, cfg, events), key).toBe(true);
+        settled++;
+      }
+      // Chess in a bracket (BG-KO-1): drawn, tie-break pending, settled by lot, finalized by the kernel.
+      const bg = defaultCfgFor("boardgame") as object;
+      const ko = moduleFor("boardgame").configSchema.parse({ ...bg, tiebreak: true });
+      const drawn = [env(0, "core.start", {}), env(1, "boardgame.result", { winner: null, method: "agreement" })];
+      const close = (winner: string) => [env(2, "core.settle", { winner, method: "lot" }), env(3, "core.finalize", {})];
+      expect(replays("boardgame", ko, [...drawn, ...close("A")])).toBe(true);
+      // A settled league DRAW: the module has an outcome, so that finalize is the module's own.
+      expect(replays("boardgame", bg, [...drawn, ...close("H")])).toBe(true);
+      expect(sports).toBe(CORPORA.length);
+      expect(settled, `${settled} of ${sports} sports settled`).toBeGreaterThan(0);
+      expect(warn).not.toHaveBeenCalled();
+      // The positive pair: the spy does see the degrade warning, so its silence above is evidence.
+      expect(buildTimeline(args({ sportKey: "football", events: footballLedger })).derivedComplete).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("emphasis is not decoration: a point line is `score`, a derived set line is `strong`", () => {

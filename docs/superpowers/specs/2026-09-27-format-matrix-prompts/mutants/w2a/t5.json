@@ -252,5 +252,125 @@
         "name": "EVENT_BAND is the module's own fidelity map, not a second scale"
       }
     ]
+  },
+  {
+    "id": "d-c7-kernel-guard-dropped",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {",
+    "replace": "    if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending|BG-KO-1: a second tiebreak is refused \\(ruling D-C7: TIEBREAK_NOT_APPLICABLE\\)|C12: in phase tiebreak lots is the organiser's settle|rule 10: any sequence of results, tie-breaks, settles, abandons, finalizes and void-last in a bracket keeps the invariants after every step"
+      }
+    ]
+  },
+  {
+    "id": "d-c7-guard-settlement-blind",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {",
+    "replace": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement: null })) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending|C12: in phase tiebreak lots is the organiser's settle"
+      }
+    ]
+  },
+  {
+    "id": "d-c7-guard-ignores-phase",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {",
+    "replace": "    if (deciderTypes.has(event.type) && outcomeOf(module, { state, settlement }) !== null) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending|BG-KO-1: a tiebreak outside phase 'tiebreak' is refused, per rung"
+      }
+    ]
+  },
+  {
+    "id": "d-c7-guard-below-guarantee-4",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {\n      throw new EngineError(\n        \"TIEBREAK_NOT_APPLICABLE\",\n        `event \"${event.type}\" rejected: no tie-break is pending — it follows only a drawn knockout game that nothing has decided yet`,\n        { eventId: event.id, outcome: outcomeOf(module, { state, settlement }) },\n      );\n    }\n    if (decided && !postDecision.has(event.type)) {\n      throw new EngineError(\n        \"ALREADY_DECIDED\",\n        `event \"${event.type}\" rejected: match outcome already decided`,\n        { eventId: event.id },\n      );\n    }\n",
+    "replace": "    if (decided && !postDecision.has(event.type)) {\n      throw new EngineError(\n        \"ALREADY_DECIDED\",\n        `event \"${event.type}\" rejected: match outcome already decided`,\n        { eventId: event.id },\n      );\n    }\n    if (deciderTypes.has(event.type) && !deciderPending(module, { state, settlement })) {\n      throw new EngineError(\n        \"TIEBREAK_NOT_APPLICABLE\",\n        `event \"${event.type}\" rejected: no tie-break is pending — it follows only a drawn knockout game that nothing has decided yet`,\n        { eventId: event.id, outcome: outcomeOf(module, { state, settlement }) },\n      );\n    }\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending|BG-KO-1: a second tiebreak is refused \\(ruling D-C7: TIEBREAK_NOT_APPLICABLE\\)|C12: in phase tiebreak lots is the organiser's settle"
+      }
+    ]
+  },
+  {
+    "id": "d-c7-boardgame-declares-no-decider",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "  deciderTypes: [BOARDGAME_TIEBREAK_TYPE],",
+    "replace": "  deciderTypes: [],",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C7 \\(spec §7\\): boardgame\\.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending"
+      }
+    ]
+  },
+  {
+    "id": "d-c6-stats-follow-the-decider",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "      if (method === \"double_forfeit\") continue;\n      for (const entrant of ctx.entrants) creditEach(entrant, \"draws\");",
+    "replace": "      if (method === \"double_forfeit\") continue;\n      const decider = events.find((e) => e.type === \"core.settle\" || e.type === \"boardgame.tiebreak\");\n      if (decider !== undefined) {\n        const w = (decider.payload as { winner: string }).winner;\n        for (const entrant of ctx.entrants) creditEach(entrant, entrant.id === w ? \"wins\" : \"losses\");\n        continue;\n      }\n      for (const entrant of ctx.entrants) creditEach(entrant, \"draws\");",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "ruling D-C6 \\(FIDE practice\\): a drawn bracket game counts as a DRAW in player stats"
+      }
+    ]
+  },
+  {
+    "id": "minor4-tiebreak-winner-person",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "  // (review Minor 4); it was typed PersonId, a different brand of the same string.\n  winner: EntrantId,",
+    "replace": "  // (review Minor 4); it was typed PersonId, a different brand of the same string.\n  winner: PersonId,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "review Minor 4: the tie-break winner is the same entrant-id schema core\\.settle names its winner with"
+      }
+    ]
+  },
+  {
+    "id": "minor6-forfeit-guard-dropped",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "        if (state.phase !== \"live\") wrongPhase(`forfeit not allowed in phase \"${state.phase}\"`);\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "BG-KO-1: a core\\.forfeit while the tie-break is pending is refused WRONG_PHASE"
+      }
+    ]
   }
 ]

@@ -1,7 +1,8 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { EngineError } from "./errors.ts";
-import { CORE_EVENT_SCHEMAS, SETTLE_METHODS, foldMatchWithStoppage, outcomeOf, settleApplies, settledMethod, type EventEnvelope } from "./events.ts";
+import { CORE_EVENT_SCHEMAS, SETTLE_METHODS, foldMatchWithStoppage, isKernelOwnedEventType, kernelOwnsEvent, outcomeOf, settleApplies, settledMethod, type EventEnvelope } from "./events.ts";
+import { LINEUP_EVENT_SCHEMAS } from "./lineup.ts";
 import { isLevelOutcome } from "./types.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
@@ -153,6 +154,17 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
   it("X-ST-1: after a settle no play event is accepted (guarantee 4), but note and finalize are", () => {
     expect(codeOf(() => fold([ev(1, "core.start"), ev(2, "core.abandon", { reason: "r" }), settle(3), ev(4, "boardgame.result", { winner: H, method: "checkmate" })]))).toBe("ALREADY_DECIDED");
     expect(codeOf(() => fold([...drawn, settle(3), ev(4, "core.note", { text: "ok" })]))).toBeNull();
+    // …and it stays decided past an annotation: the note reaches the module, whose own outcome is still null on a
+    // settled abandon — the decided flag must not be re-derived from it (guarantee 4 is monotonic).
+    const settledAbandon = [ev(1, "core.start"), ev(2, "core.abandon", { reason: "r" }), settle(3)];
+    expect(codeOf(() => fold([...settledAbandon, ev(4, "core.note", { text: "ok" }), ev(5, "boardgame.result", { winner: H, method: "checkmate" })]))).toBe("ALREADY_DECIDED");
+  });
+
+  it("guarantee 5 through the I-1 dispatch: an annotation the module folds during a stoppage leaves play suspended; the resume ends it", () => {
+    const suspended = [ev(1, "core.start"), ev(2, "core.suspend", { reason: "rain" })];
+    const annotated = fold([...suspended, ev(3, "core.note", { text: "covers on" }), ev(4, "core.award", { person: "p1", key: "motm" })]);
+    expect(annotated.stoppage).toMatchObject({ reason: "rain", eventId: "e-2" });
+    expect(fold([...suspended, ev(3, "core.note", { text: "covers on" }), ev(4, "core.resume")]).stoppage).toBeNull(); // the positive pair
   });
 
   it("Review Focus 3: finalize after settling an abandon succeeds for EVERY sport (the kernel owns it there)", () => {
@@ -171,6 +183,46 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
     });
     expect(sports).toBe(11);
     expect(accepted).toBeGreaterThan(0);
+  });
+
+  it("review Minor 7: a SECOND finalize after a settled abandon is answered as a second finalize is everywhere else — accepted as a no-op where the kernel owns it, and by the module's own rule where the module does (generic alone refuses)", () => {
+    // Elsewhere: every module's own finalize is `if (state.outcome === null) wrongPhase(…); return {…, phase: "final"}`,
+    // so a second finalize on a decided fixture is accepted again — except generic (`phase !== "done"` ⇒ WRONG_PHASE).
+    // In the product the server locks the ledger at the first finalize (append-event.ts LOCKED_FIXTURE_STATUSES), so
+    // neither answer is reachable there. The kernel's own finalize (a settled abandon the module has not decided)
+    // aligns with the ten: accepted again, nothing moves.
+    let kernelOwned = 0;
+    let moduleOwned = 0;
+    const moduleRefusesSecond: string[] = [];
+    const sports = forEachSport(({ key, module }) => {
+      const lineups = defaultLineupPair(module.positions);
+      for (const { name, cfg } of declaredCfgs(module as never)) {
+        const run = (events: EventEnvelope[]) => foldMatchWithStoppage(module, cfg as never, lineups, events);
+        // The module's own answer to a second finalize, on a fixture decided by a forfeit and finalized once.
+        const forfeited = [ev(1, "core.start"), ev(2, "core.forfeit", { by: lineups.away.entrantId, reason: "no-show" }), ev(3, "core.finalize")];
+        expect(outcomeOf(module, run(forfeited)), `${key}/${name}`).not.toBeNull();
+        const moduleSecond = codeOf(() => run([...forfeited, ev(4, "core.finalize")]));
+        if (moduleSecond !== null && !moduleRefusesSecond.includes(key)) moduleRefusesSecond.push(key);
+        // A settled abandon, finalized once, then again.
+        const base = [ev(1, "core.start"), ev(2, "core.abandon", { reason: "rain" })];
+        const o = outcomeOf(module, run(base));
+        if (!(o === null || isLevelOutcome(o))) continue; // this cfg's abandon awards a winner: nothing to settle (X-ST-1)
+        const once = [...base, ev(3, "core.settle", { winner: lineups.home.entrantId, method: "organiser" }), ev(4, "core.finalize")];
+        const second = codeOf(() => run([...once, ev(5, "core.finalize")]));
+        if (kernelOwnsEvent(module, { type: "core.finalize" }, { state: run(once).state, settled: true })) {
+          expect(second, `${key}/${name}`).toBeNull();
+          expect(JSON.stringify(run([...once, ev(5, "core.finalize")])), `${key}/${name}`).toBe(JSON.stringify(run(once))); // a no-op
+          kernelOwned++;
+        } else {
+          expect(second, `${key}/${name}`).toBe(moduleSecond); // the module's own rule, as on any decided fixture
+          moduleOwned++;
+        }
+      }
+    });
+    expect(sports).toBe(11);
+    expect(kernelOwned).toBeGreaterThan(0);
+    expect(moduleOwned).toBeGreaterThan(0);
+    expect(moduleRefusesSecond).toEqual(["generic"]);
   });
 
   it("finding 4: settle is accepted while play is suspended after an abandon that left the stoppage open", () => {
@@ -204,6 +256,42 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
     const l = defaultLineupPair(generic.positions);
     foldMatchWithStoppage(spy as never, cfg as never, l, [ev(1, "generic.result", { p1Score: 1, p2Score: 1 }), ev(2, "core.settle", { winner: l.home.entrantId, method: "lot" })]);
     expect(seen).toEqual(["generic.result"]);
+  });
+
+  it("W2a I-1: kernelOwnsEvent is spec §5.1's kernel-owned set (suspend, resume, settle, the lineup family) plus finalize on a settled fixture the module has not decided — and the fold hands the module exactly the rest", () => {
+    // Expected from the spec's list and the engine's own lineup registry, never from the predicate. `core.void` is
+    // stripped by resolveVoids before any dispatch, so it is not asked.
+    const expected = ["core.resume", "core.settle", "core.suspend", ...Object.keys(LINEUP_EVENT_SCHEMAS)].sort();
+    const core = Object.keys(CORE_EVENT_SCHEMAS).filter((t) => t !== "core.void");
+    expect(core.filter((t) => isKernelOwnedEventType(t)).sort()).toEqual(expected);
+    const moduleOwned = core.filter((t) => !isKernelOwnedEventType(t)).sort();
+    expect(moduleOwned).toEqual(["core.abandon", "core.award", "core.finalize", "core.forfeit", "core.note", "core.start"]);
+    expect(isKernelOwnedEventType("boardgame.result")).toBe(false); // a sport's own type is always the module's
+    // The conditional member, row by row: finalize is the kernel's only when settled AND the module has no outcome.
+    const finalize = { type: "core.finalize" };
+    const abandoned = fold([ev(1, "core.start"), ev(2, "core.abandon", { reason: "rain" })]).state;
+    const level = fold(drawn).state;
+    expect(kernelOwnsEvent(boardgame, finalize, { state: abandoned, settled: true })).toBe(true);
+    expect(kernelOwnsEvent(boardgame, finalize, { state: abandoned, settled: false })).toBe(false);
+    expect(kernelOwnsEvent(boardgame, finalize, { state: level, settled: true })).toBe(false); // a settled draw: the module's
+    expect(kernelOwnsEvent(boardgame, { type: "core.note" }, { state: abandoned, settled: true })).toBe(false);
+    // Behaviour: across every module-owned core type the stream can carry, plus a suspend, a resume, a settle and a
+    // kernel-owned finalize, the fold hands the module exactly the events the predicate does not own.
+    const seen: string[] = [];
+    const spy = { ...boardgame, apply: (st: never, e: EventEnvelope, c: never) => { seen.push(e.type); return boardgame.apply(st, e as never, c); } };
+    const stream = [
+      ev(1, "core.start"), ev(2, "core.note", { text: "n" }), ev(3, "core.suspend", { reason: "rain" }), ev(4, "core.resume"),
+      ev(5, "core.award", { person: "p1", key: "motm" }), ev(6, "core.abandon", { reason: "rain" }), settle(7), ev(8, "core.finalize"),
+    ];
+    foldMatchWithStoppage(spy as never, bgCfg, bgLineups, stream);
+    let settledSoFar = false;
+    const forModule: string[] = [];
+    stream.forEach((e, i) => {
+      if (!kernelOwnsEvent(boardgame, e, { state: fold(stream.slice(0, i)).state, settled: settledSoFar })) forModule.push(e.type);
+      if (e.type === "core.settle") settledSoFar = true;
+    });
+    expect(seen).toEqual(forModule);
+    expect(seen).toEqual(["core.start", "core.note", "core.award", "core.abandon"]);
   });
 
   it("rule 10: any sequence of settle / void-last / note on a drawn game keeps the invariants after every step", () => {

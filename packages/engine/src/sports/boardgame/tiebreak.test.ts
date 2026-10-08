@@ -1,12 +1,13 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
-import { deciderPending, foldMatch, foldMatchWithStoppage, outcomeOf, settleApplies, type EventEnvelope } from "../../core/events.ts";
+import { CoreSettle, deciderPending, foldMatch, foldMatchWithStoppage, outcomeOf, settleApplies, type EventEnvelope } from "../../core/events.ts";
 import { mulberry32 } from "../../core/rng.ts";
 import { evalPadGate } from "../../sport/module.ts";
+import { aggregatePlayerStats, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 import { defaultLineupPair, makeEnvelope } from "../../testkit/index.ts";
 import { generic } from "../generic/index.ts";
-import { boardgame, BoardgameMethod, CHESS_SCORE, TIEBREAK_RUNGS } from "./boardgame.ts";
+import { boardgame, BoardgameMethod, BoardgameTiebreak, CHESS_SCORE, TIEBREAK_RUNGS } from "./boardgame.ts";
 
 const ev = (seq: number, type: string, payload: unknown = {}, voids?: string): EventEnvelope => makeEnvelope(seq, { type, payload }, voids);
 const lineups = defaultLineupPair(boardgame.positions);
@@ -71,9 +72,10 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     }
     expect(held).toEqual(["double_forfeit"]);
     expect(tiebreaks).toBe(methods.length - 1);
-    // Held, not stalled: no tie-break is accepted after it, and settle (X-ST-1) closes it.
+    // Held, not stalled: no tie-break is accepted after it (ruling D-C7: TIEBREAK_NOT_APPLICABLE, spec §7), and settle
+    // (X-ST-1) closes it.
     const df = [ev(1, "core.start"), ev(2, "boardgame.result", { winner: null, method: "double_forfeit" })];
-    expect(codeOf(() => fold(ko, [...df, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H })]))).toBe("ALREADY_DECIDED");
+    expect(codeOf(() => fold(ko, [...df, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H })]))).toBe("TIEBREAK_NOT_APPLICABLE");
     const settled = foldMatchWithStoppage(boardgame, ko as never, lineups, [...df, ev(3, "core.settle", { winner: H, method: "organiser" })]);
     expect(outcomeOf(boardgame, settled)).toEqual({ kind: "win", winner: H, loser: A, method: "settled_organiser" });
   });
@@ -95,15 +97,22 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     for (const rung of TIEBREAK_RUNGS) {
       const refused = errOf(() => fold(ko, [ev(1, "core.start"), ev(2, "boardgame.tiebreak", { rung, winner: H })]));
       expect(refused.code, rung).toBe("TIEBREAK_NOT_APPLICABLE");
-      expect(refused.message, rung).toContain('"live"'); // names the phase it was refused in
-      expect(codeOf(() => fold(league, [...drawn, ev(3, "boardgame.tiebreak", { rung, winner: H })])), rung).toBe("ALREADY_DECIDED");
+      // The kernel's refusal (ruling D-C7), which names the refused event — the module's own phase guard below it is
+      // the direct-apply backstop (testkit), pinned separately.
+      expect(refused.data, rung).toMatchObject({ eventId: "e-2" });
+      expect(refused.message, rung).toContain("boardgame.tiebreak");
+      expect(codeOf(() => fold(league, [...drawn, ev(3, "boardgame.tiebreak", { rung, winner: H })])), rung).toBe("TIEBREAK_NOT_APPLICABLE");
+      // The module's own guard, reached only by direct apply: it names the phase it was refused in.
+      const direct = errOf(() => boardgame.apply(fold(ko, [ev(1, "core.start")]), ev(2, "boardgame.tiebreak", { rung, winner: H }) as never));
+      expect(direct.code, rung).toBe("TIEBREAK_NOT_APPLICABLE");
+      expect(direct.message, rung).toContain('"live"');
       checked++;
     }
     expect(checked).toBe(3);
   });
 
-  it("BG-KO-1: a second tiebreak is refused", () => {
-    expect(codeOf(() => fold(ko, [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H }), ev(4, "boardgame.tiebreak", { rung: "blitz", winner: A })]))).toBe("ALREADY_DECIDED");
+  it("BG-KO-1: a second tiebreak is refused (ruling D-C7: TIEBREAK_NOT_APPLICABLE)", () => {
+    expect(codeOf(() => fold(ko, [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H }), ev(4, "boardgame.tiebreak", { rung: "blitz", winner: A })]))).toBe("TIEBREAK_NOT_APPLICABLE");
   });
 
   it("BG-KO-2 (ruling 82): the engine records the armageddon winner the scorer taps — either side, with or without colours", () => {
@@ -131,7 +140,7 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     expect(settleApplies(boardgame, { outcome: boardgame.outcome(pending), abandoned: false, state: pending })).toBe(true);
     const settled = foldMatchWithStoppage(boardgame, ko as never, lineups, [...drawn, ev(3, "core.settle", { winner: A, method: "lot" })]);
     expect(outcomeOf(boardgame, settled)).toEqual({ kind: "win", winner: A, loser: H, method: "settled_lot" });
-    expect(codeOf(() => foldMatchWithStoppage(boardgame, ko as never, lineups, [...drawn, ev(3, "core.settle", { winner: A, method: "lot" }), ev(4, "boardgame.tiebreak", { rung: "rapid", winner: H })]))).toBe("ALREADY_DECIDED");
+    expect(codeOf(() => foldMatchWithStoppage(boardgame, ko as never, lineups, [...drawn, ev(3, "core.settle", { winner: A, method: "lot" }), ev(4, "boardgame.tiebreak", { rung: "rapid", winner: H })]))).toBe("TIEBREAK_NOT_APPLICABLE");
     // The positive pair's negative: in phase "live" (nothing played) the same settle is refused.
     expect(settleApplies(boardgame, { outcome: null, abandoned: false, state: fold(ko, [ev(1, "core.start")]) })).toBe(false);
     expect(codeOf(() => foldMatchWithStoppage(boardgame, ko as never, lineups, [ev(1, "core.start"), ev(2, "core.settle", { winner: A, method: "lot" })]))).toBe("SETTLE_NOT_APPLICABLE");
@@ -175,6 +184,66 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     const s = fold(ko, [...drawn, ev(3, "core.abandon", { reason: "venue closed" })]);
     expect(s.phase).toBe("abandoned");
     expect(boardgame.outcome(s)).toBeNull();
+  });
+
+  it("ruling D-C7 (spec §7): boardgame.tiebreak is refused TIEBREAK_NOT_APPLICABLE whenever no decider is pending — before the game, while it is live, in a league, after a win, a settle, a tie-break, a double forfeit, an abandon or a finalize", () => {
+    const run = (cfg: unknown, events: EventEnvelope[]) => foldMatchWithStoppage(boardgame, cfg as never, lineups, events);
+    const tb = (seq: number) => ev(seq, "boardgame.tiebreak", { rung: "rapid", winner: H });
+    const df = [ev(1, "core.start"), ev(2, "boardgame.result", { winner: null, method: "double_forfeit" })];
+    const arms: [string, unknown, EventEnvelope[]][] = [
+      ["before the game", ko, []],
+      ["live", ko, [ev(1, "core.start")]],
+      ["a league draw (no tie-break in cfg)", league, drawn],
+      ["after a win", ko, [ev(1, "core.start"), ev(2, "boardgame.result", { winner: A, method: "resign" })]],
+      ["after a settle in phase tiebreak", ko, [...drawn, ev(3, "core.settle", { winner: A, method: "lot" })]],
+      ["after a tie-break (a second one)", ko, [...drawn, tb(3)]],
+      ["after a held double forfeit", ko, df],
+      ["after an abandon in phase tiebreak", ko, [...drawn, ev(3, "core.abandon", { reason: "venue closed" })]],
+      ["after a finalize", ko, [...drawn, tb(3), ev(4, "core.finalize")]],
+    ];
+    let checked = 0;
+    for (const [arm, cfg, prefix] of arms) {
+      expect(deciderPending(boardgame, run(cfg, prefix)), arm).toBe(false); // the predicate the ruling names
+      const refused = errOf(() => run(cfg, [...prefix, tb(prefix.length + 1)]));
+      expect(refused.code, arm).toBe("TIEBREAK_NOT_APPLICABLE");
+      expect(refused.data, arm).toMatchObject({ eventId: `e-${prefix.length + 1}` });
+      checked++;
+    }
+    expect(checked).toBe(arms.length);
+    // The positive pair: drawn in a bracket, the decider IS pending and the same event is accepted.
+    expect(deciderPending(boardgame, run(ko, drawn))).toBe(true);
+    expect(outcomeOf(boardgame, run(ko, [...drawn, tb(3)]))).toMatchObject({ kind: "win", winner: H, method: "tiebreak_rapid" });
+  });
+
+  it("BG-KO-1: a core.forfeit while the tie-break is pending is refused WRONG_PHASE — the game is over; a no-show in the tie-break is the scorer's tie-break winner or the organiser's settle", () => {
+    const refused = errOf(() => fold(ko, [...drawn, ev(3, "core.forfeit", { by: H, reason: "no-show for the rapid games" })]));
+    expect(refused.code).toBe("WRONG_PHASE");
+    expect(refused.message).toContain('forfeit not allowed in phase "tiebreak"'); // the forfeit's own guard, not the result's below it
+    // The positive pair: the same forfeit while the game is live decides it.
+    expect(boardgame.outcome(fold(ko, [ev(1, "core.start"), ev(2, "core.forfeit", { by: H, reason: "no-show" })]))).toMatchObject({ kind: "win", winner: A });
+  });
+
+  it("review Minor 4: the tie-break winner is the same entrant-id schema core.settle names its winner with", () => {
+    expect(BoardgameTiebreak.shape.winner).toBe(CoreSettle.shape.winner);
+  });
+
+  it("ruling D-C6 (FIDE practice): a drawn bracket game counts as a DRAW in player stats even when a tie-break or a settle decides who advances; a won game credits the win", () => {
+    // The decider settles ADVANCEMENT, not the game: the classical game stays drawn for both players.
+    const ctx: PlayerStatsFoldCtx = {
+      entrants: [{ id: H, kind: "individual" }, { id: A, kind: "individual" }],
+      personsOf: (entrantId) => [`${entrantId}-p1`],
+    };
+    const statsOf = (events: EventEnvelope[]) => aggregatePlayerStats(events, boardgame.playerStats!, undefined, ctx);
+    const drawForBoth = [{ personId: `${A}-p1`, stats: { draws: 1 } }, { personId: `${H}-p1`, stats: { draws: 1 } }];
+    const byTiebreak = [...drawn, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H })];
+    expect(outcomeOf(boardgame, foldMatchWithStoppage(boardgame, ko as never, lineups, byTiebreak))).toMatchObject({ kind: "win", winner: H }); // it DID decide who advances
+    expect(statsOf(byTiebreak)).toEqual(drawForBoth);
+    const bySettle = [...drawn, ev(3, "core.settle", { winner: A, method: "lot" })];
+    expect(outcomeOf(boardgame, foldMatchWithStoppage(boardgame, ko as never, lineups, bySettle))).toMatchObject({ kind: "win", winner: A });
+    expect(statsOf(bySettle)).toEqual(drawForBoth);
+    // The positive pair: a game won on the board credits the win and the loss.
+    const won = [ev(1, "core.start"), ev(2, "boardgame.result", { winner: H, method: "resign" })];
+    expect(statsOf(won)).toEqual([{ personId: `${A}-p1`, stats: { losses: 1 } }, { personId: `${H}-p1`, stats: { wins: 1 } }]);
   });
 
   it("padSpec: unchanged for a cfg without tiebreak; with it, a tie-break panel gated on state.phase", () => {
@@ -225,10 +294,13 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     expect(seen.score.size).toBeGreaterThanOrEqual(3); // absent, and at least two distinct chess scores
   });
 
-  it("rule 10: any sequence of results, tie-breaks, settles, abandons and void-last in a bracket keeps the invariants after every step", () => {
+  it("rule 10: any sequence of results, tie-breaks, settles, abandons, finalizes and void-last in a bracket keeps the invariants after every step", () => {
     // Invariants after every step: (a) a bracket game never folds to a draw; (b) phase tiebreak ⇔ awaitingDecider, and
     // there the module decides nothing — the outcome is a settle's or none; (c) a tie-break win names the last active tie-break's rung and winner; (d) a refused
-    // step leaves the fold byte-equal, with a code from the closed set below.
+    // step leaves the fold byte-equal, with a code from the closed set below; (e) a finalize is accepted iff the
+    // effective outcome (outcomeOf) is non-null — refused WRONG_PHASE otherwise (the kernel rule; the bracket's
+    // LEVEL_RESULT_IN_BRACKET is the server's, loop F); (f) a tie-break is accepted iff deciderPending — refused
+    // TIEBREAK_NOT_APPLICABLE otherwise (ruling D-C7).
     const REFUSALS = new Set(["TIEBREAK_NOT_APPLICABLE", "ALREADY_DECIDED", "SETTLE_NOT_APPLICABLE", "WRONG_PHASE"]);
     const step = fc.oneof(
       fc.record({ k: fc.constant("draw" as const), method: fc.constantFrom("agreement", "stalemate", "double_forfeit") }),
@@ -236,10 +308,11 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
       fc.record({ k: fc.constant("tiebreak" as const), rung: fc.constantFrom(...TIEBREAK_RUNGS), side: fc.constantFrom(H, A) }),
       fc.record({ k: fc.constant("settle" as const), side: fc.constantFrom(H, A) }),
       fc.constant({ k: "abandon" as const }),
+      fc.constant({ k: "finalize" as const }),
       fc.constant({ k: "voidLast" as const }),
     );
     const live = (events: readonly EventEnvelope[]) => events.filter((e) => e.type !== "core.void" && !events.some((v) => v.voids === e.id));
-    const counts = { steps: 0, refused: 0, tiebreakWins: 0, pending: 0 };
+    const counts = { steps: 0, refused: 0, tiebreakWins: 0, pending: 0, finalized: 0, finalizeRefused: 0, tiebreakRefused: 0 };
     fc.assert(fc.property(fc.array(step, { maxLength: 10 }), (steps) => {
       const events: EventEnvelope[] = [ev(1, "core.start")];
       const run = (es: EventEnvelope[]) => foldMatchWithStoppage(boardgame, ko as never, lineups, es);
@@ -251,14 +324,26 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
           : s.k === "tiebreak" ? ev(seq, "boardgame.tiebreak", { rung: s.rung, winner: s.side })
           : s.k === "settle" ? ev(seq, "core.settle", { winner: s.side, method: "lot" })
           : s.k === "abandon" ? ev(seq, "core.abandon", { reason: "r" })
+          : s.k === "finalize" ? ev(seq, "core.finalize")
           : (() => { const t = live(events).at(-1); return t === undefined || t.seq <= 1 ? null : ev(seq, "core.void", {}, t.id); })();
         if (candidate === null) continue;
-        const before = JSON.stringify(run(events));
+        const prior = run(events);
+        const before = JSON.stringify(prior);
+        let refusedCode: string | null = null;
         try { run([...events, candidate]); events.push(candidate); } catch (e) {
           if (!EngineError.is(e)) throw e;
           expect(REFUSALS.has(e.code), e.code).toBe(true); // (d)
           expect(JSON.stringify(run(events))).toBe(before); // (d)
+          refusedCode = e.code;
           counts.refused++;
+        }
+        if (s.k === "finalize") { // (e)
+          expect(refusedCode).toBe(outcomeOf(boardgame, prior) === null ? "WRONG_PHASE" : null);
+          if (refusedCode === null) counts.finalized++; else counts.finalizeRefused++;
+        }
+        if (s.k === "tiebreak") { // (f)
+          expect(refusedCode).toBe(deciderPending(boardgame, prior) ? null : "TIEBREAK_NOT_APPLICABLE");
+          if (refusedCode !== null) counts.tiebreakRefused++;
         }
         const f = run(events);
         const o = outcomeOf(boardgame, f);
@@ -282,5 +367,8 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     expect(counts.refused).toBeGreaterThan(0);
     expect(counts.tiebreakWins).toBeGreaterThan(0);
     expect(counts.pending).toBeGreaterThan(0);
+    expect(counts.finalized).toBeGreaterThan(0);
+    expect(counts.finalizeRefused).toBeGreaterThan(0);
+    expect(counts.tiebreakRefused).toBeGreaterThan(0);
   });
 });

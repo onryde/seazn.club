@@ -195,7 +195,9 @@ export const CHESS_SCORE = /^(\d+½?|½)–(\d+½?|½)$/;
 export const BOARDGAME_TIEBREAK_TYPE = "boardgame.tiebreak";
 export const BoardgameTiebreak = z.strictObject({
   rung: z.enum(TIEBREAK_RUNGS),
-  winner: PersonId,
+  // The entrant who advances — the same schema core.settle names its winner with
+  // (review Minor 4); it was typed PersonId, a different brand of the same string.
+  winner: EntrantId,
   score: z.string().regex(CHESS_SCORE).optional(),
 });
 export type BoardgameTiebreak = z.infer<typeof BoardgameTiebreak>;
@@ -624,6 +626,12 @@ function foldBoardgameStats(
       // way, since attendance is recorded independently of how the game
       // ended. Any OTHER null-winner method is an ordinary draw: every
       // entrant's roster earns it.
+      //
+      // Ruling D-C6 (FIDE practice): that holds in a bracket too. A tie-break
+      // or a settle decides who ADVANCES, not the game, so the classical game
+      // stays a draw here — deliberately read from the result event, never
+      // from the effective outcome (`outcomeOf`), unlike carrom's and
+      // generic's stat folds (D-C3).
       if (method === "double_forfeit") continue;
       for (const entrant of ctx.entrants) creditEach(entrant, "draws");
       continue;
@@ -869,6 +877,8 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   // C12: lots is the organiser's settle (ruling 73) — settleApplies is true while
   // the tie-break is pending. A held double forfeit is phase "done": false (T15-R1).
   awaitingDecider: (s: BoardgameState) => s.phase === "tiebreak",
+  // D-C7: the kernel refuses a tie-break TIEBREAK_NOT_APPLICABLE unless one is pending.
+  deciderTypes: [BOARDGAME_TIEBREAK_TYPE],
 
   // §9.3 — {win+loss, 2·draw, 0 (double forfeit)}.
   declaredPointsSets(cfg) {

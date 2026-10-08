@@ -80,6 +80,12 @@ describe("v1 envelope", () => {
     ["UNKNOWN_PHASE", 422],
     // S5 (#431) — tennis game-penalty award refused mid-tie-break.
     ["GAME_AWARD_DURING_TIEBREAK", 422],
+    // W2a — the four codes and the statuses the design's §7 error table gives
+    // them (docs/superpowers/specs/2026-10-08-format-matrix-w2a-design.md §7).
+    ["SETTLE_NOT_APPLICABLE", 409],
+    ["TIEBREAK_NOT_APPLICABLE", 409],
+    ["LEVEL_RESULT_IN_BRACKET", 409],
+    ["LEVEL_RESULT_SEATED", 500], // an assertion: only reachable through a bug
   ] as const)("maps EngineError %s → %d", async (code, status) => {
     const res = await v1(async () => {
       throw new EngineError(code, "boom");

@@ -8,15 +8,21 @@ import { describe, expect, it } from "vitest";
 // call is listed with why it is not a fold result.
 const REPO = resolve(__dirname, "../../../../../..");
 const ROOTS = ["apps/web/src", "packages/engine/src", "tools/matrix/lib"];
-const BARE = /\b[A-Za-z]+\.outcome\((state|next|folded)\b/g;
-const ALLOWED: Readonly<Record<string, string>> = {
-  "packages/engine/src/core/events.ts": "the kernel itself (decided flag, settle precondition, outcomeOf)",
-  "apps/web/src/server/overlay/recent.ts": "a point-state PROBE over a stored module state (:321, :355), not a fold result; a settlement is never part of module state, so outcomeOf cannot apply (preflight C8)",
-  "packages/engine/src/testkit/stoppages.ts": "testkit: module-level conformance, no settle in its streams",
-  "packages/engine/src/testkit/conformance.ts": "testkit: module-level conformance, no settle in its streams",
-  "packages/engine/src/testkit/simulation.ts": "testkit: simulation folds without settle",
-  "packages/engine/src/testkit/scenarios.ts": "testkit: scenario builder folds without settle",
+// Any argument name (review Minor 2): `module.outcome(finalState)` drops a settle
+// exactly like `module.outcome(state)` does. Comments are stripped before
+// counting (they name the shape), and every allowed file declares HOW MANY bare
+// calls it holds, so a new one in an allowed file is caught too.
+const BARE = /\b[A-Za-z_$][\w$]*\.outcome\(/g;
+const ALLOWED: Readonly<Record<string, { calls: number; reason: string }>> = {
+  "packages/engine/src/core/events.ts": { calls: 3, reason: "the kernel itself: the decided flag, outcomeOf, and kernelOwnsEvent's settled-finalize test" },
+  "apps/web/src/server/overlay/recent.ts": { calls: 2, reason: "a point-state PROBE over a stored module state, not a fold result; a settlement is never part of module state, so outcomeOf cannot apply (preflight C8)" },
+  "packages/engine/src/testkit/stoppages.ts": { calls: 1, reason: "testkit: module-level conformance, no settle in its streams" },
+  "packages/engine/src/testkit/conformance.ts": { calls: 5, reason: "testkit: module-level conformance, no settle in its streams" },
+  "packages/engine/src/testkit/simulation.ts": { calls: 3, reason: "testkit: simulation folds without settle" },
+  "packages/engine/src/testkit/scenarios.ts": { calls: 6, reason: "testkit: scenario builder; `played.state` comes from decidedStream, which drives module.apply with the module's own generated events — never a kernel-owned type" },
+  "packages/engine/src/testkit/golden.ts": { calls: 1, reason: "the frozen corpus records the MODULE's outcome (GOLDEN-POLICY: the per-sport back-compat tripwire); no corpus stream carries core.settle — guarded below, not assumed" },
 };
+const stripComments = (text: string): string => text.replace(/^\s*(\/\/|\*|\/\*).*$/gm, "");
 function walk(dir: string, out: string[]): string[] {
   for (const e of readdirSync(dir)) {
     const p = join(dir, e);
@@ -32,14 +38,21 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     expect(files.length).toBeGreaterThan(100);
     const bare: string[] = [];
     const readers: string[] = [];
+    const allowedSeen: Record<string, number> = {};
+    let scanned = 0;
     for (const f of files) {
       const rel = relative(REPO, f);
-      const text = readFileSync(f, "utf8");
+      const text = stripComments(readFileSync(f, "utf8"));
       if (/\boutcomeOf\(/.test(text) && rel !== "packages/engine/src/core/events.ts") readers.push(rel);
-      if (ALLOWED[rel] !== undefined) continue;
-      for (const m of text.matchAll(BARE)) bare.push(`${rel}: ${m[0]}`);
+      const calls = [...text.matchAll(BARE)].map((m) => text.slice(m.index, text.indexOf(")", m.index) + 1));
+      scanned += calls.length;
+      if (ALLOWED[rel] !== undefined) allowedSeen[rel] = calls.length;
+      else for (const c of calls) bare.push(`${rel}: ${c}`);
     }
-    expect(bare).toEqual([]);
+    expect(bare, `${scanned} bare .outcome( calls scanned`).toEqual([]);
+    // Each allowed file holds exactly the calls it declares — a new one there is a new reader, and must be argued.
+    expect(allowedSeen).toEqual(Object.fromEntries(Object.entries(ALLOWED).map(([rel, { calls }]) => [rel, calls])));
+    expect(scanned).toBeGreaterThan(0);
     // Exactly the six fold readers Step 8 moves (preflight C8), plus the two module player-stat folds
     // (ruling D-C3). A later task that adds a reader adds it here by name.
     expect(readers.sort()).toEqual([
@@ -88,6 +101,66 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     expect(property, `${foldSites} fold call sites, ${boundNames} fold bindings scanned`).toEqual([]);
   });
   it("every allowed file still exists and still holds a bare call (a stale entry is a failure)", () => {
-    for (const rel of Object.keys(ALLOWED)) expect(readFileSync(join(REPO, rel), "utf8"), rel).toMatch(BARE);
+    for (const rel of Object.keys(ALLOWED)) expect(stripComments(readFileSync(join(REPO, rel), "utf8")), rel).toMatch(BARE);
+  });
+  it("golden.ts's allowance holds: no golden corpus stream carries core.settle (the reason is a guard, not a comment)", () => {
+    const SPORTS = join(REPO, "packages/engine/src/sports");
+    let streams = 0;
+    const settled: string[] = [];
+    for (const dir of readdirSync(SPORTS)) {
+      if (!statSync(join(SPORTS, dir)).isDirectory()) continue;
+      for (const file of readdirSync(join(SPORTS, dir)).filter((n) => n.endsWith(".golden.json"))) {
+        const corpus = JSON.parse(readFileSync(join(SPORTS, dir, file), "utf8")) as { streams: { events: { type: string }[] }[] };
+        corpus.streams.forEach((stream, i) => {
+          streams++;
+          if (stream.events.some((e) => e.type === "core.settle")) settled.push(`${file}#${i}`);
+        });
+      }
+    }
+    expect(streams).toBeGreaterThan(200);
+    expect(settled).toEqual([]);
+  });
+});
+
+// W2a review I-1: two hand-rolled replay loops (the match-centre timeline, the
+// overlay's recent window) handed core.settle to module.apply — every sport
+// throws INVALID_EVENT on it, so every settled fixture lost its derived lines and
+// logged a warning on every render. The engine's own fold dispatches on
+// `kernelOwnsEvent`; every OTHER loop that calls `<module>.apply(` must skip on the
+// same predicate, or be listed here with why it is not a replay of a stored ledger.
+describe("review I-1: every module.apply replay loop skips what the kernel owns", () => {
+  const APPLY = /\b\w*[Mm]odule\.apply\(/g;
+  const NOT_A_LEDGER_REPLAY: readonly { file: string; call?: string; reason: string }[] = [
+    { file: "apps/web/src/server/overlay/recent.ts", call: "next = module.apply(", reason: "the point-state PROBE: one synthetic module event applied to a stored state, never a ledger event" },
+    { file: "packages/engine/src/testkit/helpers.ts", reason: "testkit: buildStream drives apply with a module's own events" },
+    { file: "packages/engine/src/testkit/conformance.ts", reason: "testkit: conformance drives apply with a module's own generated events" },
+    { file: "packages/engine/src/testkit/conformance-pad.ts", reason: "testkit: the registry/dispatch drift probe (one call, one message naming it)" },
+    { file: "packages/engine/src/testkit/simulation.ts", reason: "testkit: simulation drives apply with a module's own generated events" },
+    { file: "packages/engine/src/testkit/scenarios.ts", reason: "testkit: scenario builder drives apply with a module's own generated events" },
+  ];
+  it("each module.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason", () => {
+    const files = ROOTS.flatMap((r) => walk(join(REPO, r), []));
+    let sites = 0;
+    let guarded = 0;
+    const unguarded: string[] = [];
+    const listedSeen = new Set<string>();
+    for (const f of files) {
+      const rel = relative(REPO, f);
+      const text = stripComments(readFileSync(f, "utf8"));
+      for (const m of text.matchAll(APPLY)) {
+        sites++;
+        const line = text.slice(text.lastIndexOf("\n", m.index) + 1, text.indexOf("\n", m.index));
+        const listed = NOT_A_LEDGER_REPLAY.find((x) => x.file === rel && (x.call === undefined || line.includes(x.call)));
+        if (listed !== undefined) { listedSeen.add(`${listed.file}|${listed.call ?? ""}`); continue; }
+        // The loop it sits in: from the nearest `for (` before it. The skip must come between the two.
+        const loop = text.lastIndexOf("for (", m.index);
+        if (loop !== -1 && text.slice(loop, m.index).includes("kernelOwnsEvent(")) guarded++;
+        else unguarded.push(`${rel}: ${line.trim()}`);
+      }
+    }
+    expect(unguarded, `${sites} module.apply call sites scanned`).toEqual([]);
+    // The kernel's own fold, the timeline and the overlay's recent replay — and every listed entry is still real.
+    expect(guarded).toBeGreaterThanOrEqual(3);
+    expect([...listedSeen].sort()).toEqual(NOT_A_LEDGER_REPLAY.map((x) => `${x.file}|${x.call ?? ""}`).sort());
   });
 });
