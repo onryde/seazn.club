@@ -18704,7 +18704,7 @@ async function captureV2Suite(): Promise<void> {
     console.log("SKIP  capture-v2 suite (DATABASE_URL not set — the plan change needs SQL)");
     return;
   }
-  const EXPECTED_STEPS = 21;
+  const EXPECTED_STEPS = 24;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
@@ -18767,6 +18767,15 @@ async function captureV2Suite(): Promise<void> {
     return { status: res.status, json: (await res.json().catch(() => null)) as Answer | null };
   };
   const phoneCall = (path: string, method: "GET" | "POST", body?: unknown) => phoneCallOn(qr, path, method, body);
+  /** The organiser panel's read model (§9, `GET …/stream-phone`), as the panel polls it: the owner's session. */
+  type PhoneRead = {
+    auto?: { enabled?: unknown } | null;
+    lastTakeover?: { at?: unknown; model?: unknown; elapsedMs?: unknown } | null;
+  };
+  const readPhone = async (fixtureId: string): Promise<{ status: number; data: PhoneRead | null }> => {
+    const r = await v1(owner, `/api/v1/fixtures/${fixtureId}/stream-phone`);
+    return { status: r.status, data: v1data<PhoneRead | null>(r) ?? null };
+  };
   const phoneA = randomBytes(16).toString("hex");
   const phoneB = randomBytes(16).toString("hex");
   const beatOn = (q: Qr, phone: string, extra: Record<string, unknown> = {}) =>
@@ -18907,10 +18916,19 @@ async function captureV2Suite(): Promise<void> {
     });
 
     // 12. The organiser's switch (§7.1): on, over the API — the answer names it and leaves the destination unchosen.
+    const autoBefore = await readPhone(autoFx.fixtureId);
     const switched = await v1(owner, `/api/v1/fixtures/${autoFx.fixtureId}/stream-settings`, "PUT", { autoStream: true });
     step(
       `PUT stream-settings {autoStream: true} → 200 {targetId: null, autoStream: true} (got ${switched.status} ${JSON.stringify(switched.json.data)})`,
       switched.status === 200 && JSON.stringify(switched.json.data) === JSON.stringify({ targetId: null, autoStream: true }),
+    );
+
+    // 12b. The organiser's read (§9, PR-2 T6) serves the switch: `auto` null before it (the empty case — a fixture with
+    // no settings row), `auto.enabled` true after. The panel's switch renders from this read, never from the PUT's answer.
+    const autoAfter = await readPhone(autoFx.fixtureId);
+    step(
+      `GET stream-phone serves the switch: auto null before the PUT, auto.enabled true after (got ${autoBefore.status} ${JSON.stringify(autoBefore.data?.auto)} → ${autoAfter.status} ${JSON.stringify(autoAfter.data?.auto)})`,
+      autoBefore.status === 200 && autoBefore.data?.auto === null && autoAfter.status === 200 && autoAfter.data?.auto?.enabled === true,
     );
 
     // 13. A phone in Automatic claims the fixture's code: waiting, and the switch reaches it (autoAllowed, A4's other half).
@@ -18988,6 +19006,49 @@ async function captureV2Suite(): Promise<void> {
   } finally {
     await db.end();
   }
+
+  // 18–19. PR-2 §7.5 (T12, B7 review I-2): the organiser read's LAST TAKEOVER, on a third fixture whose code has no
+  // session — so a second phone's NEW claim is a plain takeover of the first (§5.5 T2), never a refusal of a live slot.
+  const takeFx = await timedFixture(owner, comp.id, {
+    name: "Capture takeover",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    entrants: [
+      { kind: "individual", display_name: `Take Home ${tag}`, seed: 1 },
+      { kind: "individual", display_name: `Take Away ${tag}`, seed: 2 },
+    ],
+  });
+  const takeMinted = await v1(owner, `/api/v1/fixtures/${takeFx.fixtureId}/stream-code`, "POST");
+  const qrTake = (takeMinted.json.data as { qr?: Qr } | undefined)?.qr;
+  if (!qrTake) {
+    step(`POST stream-code for the takeover fixture → 200 with a QR (got ${takeMinted.status})`, false);
+    return done();
+  }
+  const phoneE = randomBytes(16).toString("hex");
+  const phoneF = randomBytes(16).toString("hex");
+  const claimedE = await beatOn(qrTake, phoneE, { claim: "new", device: { model: "Smoke phone E" } });
+  const noTakeover = await readPhone(takeFx.fixtureId);
+  const claimedF = await beatOn(qrTake, phoneF, { claim: "new", device: { model: "Smoke phone F" } });
+  const tookOver = await readPhone(takeFx.fixtureId);
+  const took = tookOver.data?.lastTakeover;
+
+  // 18. None after the first claim; after the second, the takeover with the NEW phone's model and its age on the
+  // SERVER's clock (`elapsedMs`, the panel's 30-minute window) — a whole number of ms, never negative.
+  step(
+    `a second phone's claim is served as the last takeover: none after the first claim, then {model "Smoke phone F", elapsedMs a whole number ≥ 0} (claims ${claimedE.status}/${claimedF.status}, got ${JSON.stringify(noTakeover.data?.lastTakeover)} → ${JSON.stringify(took)})`,
+    claimedE.status === 200 && claimedF.status === 200 && noTakeover.status === 200 && noTakeover.data?.lastTakeover === null
+      && tookOver.status === 200 && took?.model === "Smoke phone F" && typeof took.elapsedMs === "number"
+      && Number.isInteger(took.elapsedMs) && took.elapsedMs >= 0,
+  );
+
+  // 19. Revoke & reissue is the organiser's answer to a takeover: the read no longer serves it (only the ACTIVE code's).
+  const reissued = await v1(owner, `/api/v1/fixtures/${takeFx.fixtureId}/stream-code/reissue`, "POST");
+  const afterReissue = await readPhone(takeFx.fixtureId);
+  step(
+    `Revoke & reissue → 200, and the read's lastTakeover is null (got ${reissued.status}, ${afterReissue.status} ${JSON.stringify(afterReissue.data?.lastTakeover)})`,
+    reissued.status === 200 && afterReissue.status === 200 && afterReissue.data?.lastTakeover === null,
+  );
 
   // 11. Every phone answer above was private, no-store — and there were answers to judge.
   step(
