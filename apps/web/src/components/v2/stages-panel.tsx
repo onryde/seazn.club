@@ -935,7 +935,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // which is the only escape from the format lock once fixtures exist.
         const deletable =
           stage.seq === Math.max(...stages.map((s) => s.seq)) &&
-          !stageFixtures.some((f) => ["in_play", "decided", "finalized"].includes(f.status));
+          // W2a: a held (`needs_decision`) fixture was PLAYED — same rule as deleteStage's server guard.
+          !stageFixtures.some((f) => ["in_play", "decided", "finalized", "needs_decision"].includes(f.status));
         const swissShellFixtures = stageFixtures.map((f) => ({ ...f, ext_key: f.ext_key ?? null }));
         const swissHasUnseated =
           stage.kind === "swiss" && nextUnseatedSwissRound(swissShellFixtures) !== null;

@@ -27,8 +27,10 @@ export type MatchBucket = (typeof MATCH_BUCKETS)[number];
  *  `decided`/`finalized` are results; `abandoned`/`forfeited`/`cancelled` are
  *  terminal without one — the hub still LISTS them under Completed, because a
  *  spectator looking for a match that was called off needs to find it saying
- *  so, not to find nothing. */
-const TERMINAL = new Set<string>(["decided", "finalized", "abandoned", "forfeited", "cancelled"]);
+ *  so, not to find nothing. W2a: `needs_decision` too — a held bracket match
+ *  WAS played (level); only its result awaits the organiser, and its status
+ *  line says so ("Needs a decision", `STATUS_LINE_KEYS`). */
+const TERMINAL = new Set<string>(["decided", "finalized", "abandoned", "forfeited", "cancelled", "needs_decision"]);
 
 /**
  * Which list a fixture belongs in, from its v1 wire status (`Fixture.status`,

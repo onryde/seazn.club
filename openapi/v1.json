@@ -7107,7 +7107,8 @@
                               "finalized",
                               "abandoned",
                               "forfeited",
-                              "cancelled"
+                              "cancelled",
+                              "needs_decision"
                             ]
                           },
                           "outcome": {
@@ -21523,7 +21524,8 @@
                                   "finalized",
                                   "abandoned",
                                   "forfeited",
-                                  "cancelled"
+                                  "cancelled",
+                                  "needs_decision"
                                 ]
                               },
                               "outcome": {
@@ -22392,7 +22394,8 @@
                                   "finalized",
                                   "abandoned",
                                   "forfeited",
-                                  "cancelled"
+                                  "cancelled",
+                                  "needs_decision"
                                 ]
                               },
                               "outcome": {
@@ -25338,7 +25341,8 @@
                                   "finalized",
                                   "abandoned",
                                   "forfeited",
-                                  "cancelled"
+                                  "cancelled",
+                                  "needs_decision"
                                 ]
                               },
                               "outcome": {
@@ -36389,7 +36393,8 @@
                             "finalized",
                             "abandoned",
                             "forfeited",
-                            "cancelled"
+                            "cancelled",
+                            "needs_decision"
                           ]
                         },
                         "outcome": {
@@ -36961,7 +36966,8 @@
                             "finalized",
                             "abandoned",
                             "forfeited",
-                            "cancelled"
+                            "cancelled",
+                            "needs_decision"
                           ]
                         },
                         "outcome": {
@@ -63932,7 +63938,8 @@
                             "finalized",
                             "abandoned",
                             "forfeited",
-                            "cancelled"
+                            "cancelled",
+                            "needs_decision"
                           ]
                         },
                         "outcome": {

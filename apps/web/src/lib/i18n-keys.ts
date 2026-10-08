@@ -2914,6 +2914,7 @@ export type DictionaryKey =
   | "matchCentre.status.forfeited"
   | "matchCentre.status.in_play"
   | "matchCentre.status.live"
+  | "matchCentre.status.needs_decision"
   | "matchCentre.status.notStarted"
   | "matchCentre.status.other"
   | "matchCentre.status.postponed"

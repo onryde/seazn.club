@@ -233,7 +233,10 @@ export async function playerStatsOwed(tx: Tx, divisionId: string): Promise<boole
  *  counts it as owed ever folds that goal; `recomputePlayerStats` puts no
  *  status filter on its events read). `fixtures.status`'s check constraint
  *  lists them all (`db/migration/v2-engine/tables/V214__fixtures.sql`). */
-const IN_PLAY_FIXTURE_STATUSES: readonly string[] = ["scheduled", "in_play"];
+// W2a: `needs_decision` is not settled — its result awaits the organiser, and
+// COMPLETED_FIXTURE_STATUSES (below) does not count it as a match, so its
+// goals must not fold either ("5 goals · 0 matches", final review m2's shape).
+const IN_PLAY_FIXTURE_STATUSES: readonly string[] = ["scheduled", "in_play", "needs_decision"];
 
 interface StatsDivision {
   sport_key: string;

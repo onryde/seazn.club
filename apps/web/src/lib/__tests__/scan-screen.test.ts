@@ -1,6 +1,7 @@
 // Scorer sheets §4.5 — the scan page's one table, read top to bottom. Empty
 // case first (the everyday scan), then each row whose right answer differs
 // from the wrong answer's constant.
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -71,11 +72,17 @@ describe("scanScreen (scorer sheets §4.5)", () => {
   it("every fixture status in the schema has an answer for both sides known and not carried", () => {
     // The DDL parse must find the whole set, or the loop below proves nothing.
     expect(STATUSES).toEqual(["scheduled", "in_play", "decided", "finalized", "abandoned", "forfeited", "cancelled"]);
-    for (const status of STATUSES) {
+    // W2a: V432 widens the check with `needs_decision`; FIXTURE_STATUSES is held to V432's constraint by
+    // v432-needs-decision-migration.test.ts, and must contain every V214 value.
+    expect(STATUSES.filter((s) => !(FIXTURE_STATUSES as readonly string[]).includes(s))).toEqual([]);
+    let checked = 0;
+    for (const status of FIXTURE_STATUSES) {
+      checked++;
       expect(scanScreen({ status, homeKnown: true, awayKnown: true, carriedForward: false, divisionStatus: "active" }).screen).toMatch(
         /^(confirm|pad|view_only)$/,
       );
     }
+    expect(checked).toBe(STATUSES.length + 1);
   });
 });
 

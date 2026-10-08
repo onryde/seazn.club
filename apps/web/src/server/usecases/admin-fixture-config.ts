@@ -334,7 +334,7 @@ export async function resnapshotFixtureConfig(
       await tx`
         update fixtures set
           outcome = ${folded.outcome === null ? null : tx.json(folded.outcome as never)},
-          status = ${fixtureStatusFromFold(folded.outcome, folded.active)}
+          status = ${fixtureStatusFromFold(folded.outcome, folded.active, row.stage_kind)}
         where id = ${fixtureId}`;
     }
     // Mirror logStaffAction's columns (lib/admin.ts) on THIS tx — never call

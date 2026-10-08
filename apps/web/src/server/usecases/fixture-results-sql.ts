@@ -88,7 +88,7 @@ export function fixtureEvidenceSql(tx: Tx, on = "f") {
 export function fixtureHasResultSql(tx: Tx, on = "f") {
   const f = tx(on);
   return tx`(
-    ${f}.status in ('in_play', 'decided', 'finalized')
+    ${f}.status in ('in_play', 'decided', 'finalized', 'needs_decision')
     or (${f}.status = 'abandoned' and ${f}.outcome is not null)
     or (${fixtureEvidenceSql(tx, on)})
   )`;

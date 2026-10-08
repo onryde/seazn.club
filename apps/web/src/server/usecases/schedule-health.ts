@@ -109,7 +109,7 @@ async function stageFixtures(tx: Tx, stageId: string): Promise<HealthFixtureRow[
     select id, scheduled_at, court_id, home_entrant_id, away_entrant_id, pool_id, round_no
     from fixtures
     where stage_id = ${stageId}
-      and status in ('scheduled', 'in_play', 'decided', 'finalized', 'abandoned', 'forfeited')
+      and status in ('scheduled', 'in_play', 'decided', 'finalized', 'abandoned', 'forfeited', 'needs_decision')
       and scheduled_at is not null
       and court_id is not null
     order by scheduled_at`;

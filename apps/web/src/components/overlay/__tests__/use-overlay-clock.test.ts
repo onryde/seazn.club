@@ -25,8 +25,9 @@ import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 // keeps a LOCAL literal, and this test is what keeps it from silently drifting
 // off the console's own set — proven equal here, in a file that never ships.
 describe("NO_CLOCK_STATUSES carries VOID_STATUSES without importing the panel", () => {
-  it("equals scheduled/decided/finalized plus the console's own VOID_STATUSES", () => {
-    expect(NO_CLOCK_STATUSES).toEqual(new Set(["scheduled", "decided", "finalized", ...VOID_STATUSES]));
+  it("equals scheduled/decided/finalized/needs_decision plus the console's own VOID_STATUSES", () => {
+    // W2a: a held fixture (`needs_decision`) has no play running — no clock.
+    expect(NO_CLOCK_STATUSES).toEqual(new Set(["scheduled", "decided", "finalized", "needs_decision", ...VOID_STATUSES]));
   });
 });
 

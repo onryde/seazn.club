@@ -456,6 +456,8 @@ const STATUS_STYLE: Record<string, string> = {
   abandoned: "bg-slate-100 text-slate-600",
   forfeited: "bg-red-50 text-red-500",
   cancelled: "bg-slate-100 text-slate-600",
+  // W2a: a held bracket fixture waits on the organiser (spec §5.5).
+  needs_decision: "bg-orange-100 text-orange-800",
 };
 
 /**

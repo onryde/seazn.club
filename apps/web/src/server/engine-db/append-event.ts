@@ -4,6 +4,8 @@ import { withTenant, type Tx } from "@/lib/db";
 import {
   EngineError,
   foldMatchWithStoppage,
+  forbidsLevelResult,
+  isLevelOutcome,
   outcomeOf,
   resolveVoids,
   type EventEnvelope,
@@ -119,9 +121,10 @@ export function nextStatus(
   candidateType: string,
   outcome: MatchOutcome | null,
   active: readonly EventEnvelope[],
+  stageKind: string | null,
 ): string {
   if (candidateType === "core.finalize") return "finalized";
-  return fixtureStatusFromFold(outcome, active);
+  return fixtureStatusFromFold(outcome, active, stageKind);
 }
 
 /**
@@ -140,11 +143,19 @@ export function nextStatus(
 export function fixtureStatusFromFold(
   outcome: MatchOutcome | null,
   active: readonly EventEnvelope[],
+  stageKind: string | null,
 ): string {
   const has = (type: string) => active.some((event) => event.type === type);
-  // Abandon first: cricket abandon folds to a no_result OUTCOME, but the
-  // fixture status stays "abandoned" (replay policy owns it from here).
+  // W2a D3 (spec §5.4.2), in this order. 1: the organiser's settle decides,
+  // even an abandoned match (X-ST-1).
+  if (has("core.settle")) return "decided";
+  // 2: abandon first otherwise (unchanged): cricket abandon folds to a
+  // no_result OUTCOME, but the fixture status stays "abandoned" — the
+  // 2026-09-21 "stuck and visible" ruling for an abandon nobody has settled.
   if (has("core.abandon")) return "abandoned";
+  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided,
+  // nobody seated, closed by the organiser's core.settle.
+  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) return "needs_decision";
   if (outcome !== null) return has("core.forfeit") ? "forfeited" : "decided";
   return has("core.start") ? "in_play" : "scheduled";
 }
@@ -386,7 +397,7 @@ export async function appendEventInTx(
       summary = excluded.summary, updated_at = now()
   `;
 
-  const status = nextStatus(candidate.type, outcome, active);
+  const status = nextStatus(candidate.type, outcome, active, stage?.kind ?? null);
   // Fire once, on the transition from no-result to a decided result. F9
   // (R3.5 review) — this used to be the trigger for a "fixture decided"
   // `log.info` call right here, before the fixtures update, the pg_notify,

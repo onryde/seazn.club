@@ -60,7 +60,7 @@ export const HUB_DICT_PREFIXES = [
  * `header.statusLine`, and `hubHeader` (`competition-hub.ts`) sets it only for
  * a called-off fixture: `matchCentre.status.<status>` for a member of
  * `STATUS_LINE_KEYS`, `matchCentre.status.other` for anything else. So these
- * six, and not the `matchCentre.` prefix — that is the match centre's whole
+ * seven (W2a: `needs_decision`), and not the `matchCentre.` prefix — that is the match centre's whole
  * vocabulary, and would put most of it back on the page this slice exists to
  * keep small. Missing, a forfeited final printed `matchCentre.status.forfeited`
  * on the public Matches and Knockout tabs.
@@ -75,6 +75,7 @@ export const HUB_DICT_KEYS = [
   "matchCentre.status.forfeited",
   "matchCentre.status.postponed",
   "matchCentre.status.walkover",
+  "matchCentre.status.needs_decision",
   "matchCentre.status.other",
 ] as const;
 

@@ -611,7 +611,7 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
     }
     const [played] = await tx`
       select 1 from fixtures
-      where stage_id = ${stageId} and status in ('in_play', 'decided', 'finalized') limit 1`;
+      where stage_id = ${stageId} and status in ('in_play', 'decided', 'finalized', 'needs_decision') limit 1`;
     if (played) {
       throw new HttpError(409, "stage has played fixtures and cannot be deleted");
     }
