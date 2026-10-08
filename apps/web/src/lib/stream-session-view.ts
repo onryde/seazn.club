@@ -384,13 +384,165 @@ export function durationLabel(ms: number, locale: string): string {
 }
 
 /** The strip under the chain (Option B rev 2): its tone and icon, an optional bold lead, and a sentence. A countdown
- *  body carries the server's two durations, verbatim, for the panel to format. */
+ *  body carries the server's two durations, verbatim, for the panel to format.
+ *  PR-2 (§7.4, Option A — owner-approved 2026-10-07): the lead may carry ONE value (`leadVars`: whole seconds, a percent, or
+ *  a reason's own key), the strip may carry the phone's info LINE (`line`: the health line, or the phone's model and mode),
+ *  and an auto-start refusal its REMEDY. Each is absent, never null, when it has nothing to say. */
 export type PhoneStrip = {
   tone: "slate" | "amber";
   icon: "phone" | "alert" | "clock" | "pause";
   lead: MessageKey | null;
+  leadVars?: { s: number } | { n: number } | { reason: MessageKey };
   body: { key: MessageKey; elapsedMs?: number; remainingMs?: number } | null;
+  line?: PhoneLinePart[];
+  remedy?: AutoRefusalRemedy;
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+// PR-2 (spec §7.1, §7.4, §7.5) — Option A. Every verdict below is the SERVER's: the amber reason is `phone.health`
+// (domain/phone-health.ts, W9's priority), "Phone not ready" is `notReadyShown` (the R-2 debounce, beat-confirmed), the
+// refusal is `auto.refusal` (served only while the automatic start could still fire), the takeover's age is
+// `lastTakeover.elapsedMs`. Nothing here compares a reading with a threshold or a server stamp with the browser's clock.
+// ---------------------------------------------------------------------------------------------------------------------
+
+type PhoneFacts = NonNullable<StreamPhone["phone"]>;
+type HealthReason = NonNullable<PhoneFacts["health"]>;
+type NotReadyReason = NonNullable<PhoneFacts["notReady"]>;
+type AutoRefusal = NonNullable<NonNullable<StreamPhone["auto"]>["refusal"]>;
+export type AutoRefusalRemedy = "buy" | "manage";
+
+/** One part of the strip's info line, joined " · " by the panel. A null reading has NO part (FP14): never "0 Mbps", never
+ *  "null". `model` is the phone's own name for itself, verbatim; the rest are the panel's words in the viewer's locale. */
+export type PhoneLinePart =
+  | { kind: "phone" }
+  | { kind: "model"; text: string }
+  | { kind: "mode"; mode: NonNullable<PhoneFacts["mode"]> }
+  | { kind: "battery"; percent: number; charging: boolean }
+  | { kind: "bitrate"; kbps: number }
+  | { kind: "heard"; elapsedMs: number }
+  | { kind: "waiting" };
+
+/** §7.4's amber sentences, keyed by the domain's own reasons (`Record` keeps it total: a new reason is a tsc error). */
+export const HEALTH_KEYS: Record<HealthReason, MessageKey> = {
+  not_responding: "stream.phone.health.not_responding",
+  stalled: "stream.phone.health.stalled",
+  hot: "stream.phone.health.hot",
+  battery_low: "stream.phone.health.battery_low",
+};
+
+/** §7.4's "Phone not ready: {reason}" words — held reads "turn the phone sideways". */
+export const NOT_READY_KEYS: Record<NotReadyReason, MessageKey> = {
+  camera: "stream.phone.notReady.reason.camera",
+  sound: "stream.phone.notReady.reason.sound",
+  network: "stream.phone.notReady.reason.network",
+  held: "stream.phone.notReady.reason.held",
+};
+
+/** §7.4: "Automatic start couldn't begin: {reason}" — the reason is the MANUAL refusal's own sentence wherever the panel
+ *  has one, so a refusal reads the same whichever start met it. */
+export const AUTO_REFUSAL_KEYS: Record<AutoRefusal, MessageKey> = {
+  no_credit: "stream.error.no_credits",
+  no_destination: "stream.auto.refusal.no_destination",
+  not_entitled: "stream.error.plan_lacks_relay",
+  destination_in_use: "stream.error.target_in_use.unknown",
+  unavailable: "stream.error.ingest_unavailable",
+};
+
+/** §7.4: "the same remedies as the manual refusals (Buy credits, Manage destinations)" — the two that have one. */
+export const AUTO_REFUSAL_REMEDY: Record<AutoRefusal, AutoRefusalRemedy | undefined> = {
+  no_credit: "buy",
+  no_destination: "manage",
+  not_entitled: undefined,
+  destination_in_use: undefined,
+  unavailable: undefined,
+};
+
+/** §7.4: "Phone · 78% charging · 2.4 Mbps · heard 4 s ago" — the read model's readings and the server's `elapsedMs`. */
+export function healthLine(f: PhoneFacts): PhoneLinePart[] {
+  const parts: PhoneLinePart[] = [{ kind: "phone" }];
+  const { battery, bitrateKbps } = f.beat;
+  if (battery !== null) parts.push({ kind: "battery", percent: battery.percent, charging: battery.charging });
+  if (bitrateKbps !== null) parts.push({ kind: "bitrate", kbps: bitrateKbps });
+  parts.push({ kind: "heard", elapsedMs: f.elapsedMs });
+  return parts;
+}
+
+const modelPart = (f: PhoneFacts): PhoneLinePart[] => (f.model !== null ? [{ kind: "model", text: f.model }] : []);
+const modePart = (f: PhoneFacts): PhoneLinePart[] => (f.mode !== null ? [{ kind: "mode", mode: f.mode }] : []);
+
+/** §7.4 + §7.5 at Ready (Option A state 1): "Pixel 8 · Operator". */
+const identityLine = (f: PhoneFacts): PhoneLinePart[] => [...modelPart(f), ...modePart(f)];
+
+/** Option A states 3a–3e: "Automatic · Pixel 8 · Waiting for the phone's video". */
+const waitingLine = (f: PhoneFacts): PhoneLinePart[] => [...modePart(f), ...modelPart(f), { kind: "waiting" }];
+
+/** The automatic start's refusal as a strip — null with no read model, no settings row, or no refusal served. The server
+ *  serves a refusal only while the automatic start could still fire, so its presence alone is the verdict. */
+export function autoRefusalStrip(phone: StreamPhone | null): PhoneStrip | null {
+  const refusal = phone?.auto?.refusal ?? null;
+  if (refusal === null) return null;
+  const remedy = AUTO_REFUSAL_REMEDY[refusal];
+  return {
+    tone: "amber", icon: "alert", lead: "stream.auto.refused", leadVars: { reason: AUTO_REFUSAL_KEYS[refusal] }, body: null,
+    ...(remedy ? { remedy } : {}),
+  };
+}
+
+/** Why a WAITING phone has not sent video, when the server confirmed one: the phone's own start failed (`startFailed`),
+ *  else a not-ready reason held past the R-2 debounce (`notReadyShown` — never the raw, flapping `notReady`). */
+function waitingWhy(f: PhoneFacts): Pick<PhoneStrip, "lead" | "leadVars"> | null {
+  if (f.startFailed !== null) return { lead: "stream.phone.startFailed" };
+  if (f.notReadyShown && f.notReady !== null) return { lead: "stream.phone.notReady.line", leadVars: { reason: NOT_READY_KEYS[f.notReady] } };
+  return null;
+}
+
+/** §7.4 live: the server's amber reason over the health line, or the line alone. A not-responding phone's readings are
+ *  stale, so its sentence (which names the silence) stands alone. A battery_low verdict always has its reading (the
+ *  domain requires one); were it ever missing, the sentence that names no number is shown — never "(0%)". */
+function liveHealthStrip(f: PhoneFacts): PhoneStrip {
+  const reason = f.health;
+  if (reason === null) return { tone: "slate", icon: "phone", lead: null, body: null, line: healthLine(f) };
+  if (reason === "not_responding") {
+    return { tone: "amber", icon: "alert", lead: HEALTH_KEYS[reason], leadVars: { s: Math.floor(f.elapsedMs / 1000) }, body: null };
+  }
+  if (reason === "battery_low") {
+    const battery = f.beat.battery;
+    return battery === null
+      ? { tone: "amber", icon: "alert", lead: "stream.phone.health.batteryLowBare", body: null, line: healthLine(f) }
+      : { tone: "amber", icon: "alert", lead: HEALTH_KEYS[reason], leadVars: { n: battery.percent }, body: null, line: healthLine(f) };
+  }
+  return { tone: "amber", icon: "alert", lead: HEALTH_KEYS[reason], body: null, line: healthLine(f) };
+}
+
+/** §7.5: "for 30 min after a takeover" — judged on the server's `lastTakeover.elapsedMs` (T12), never the browser's clock. */
+export const TAKEOVER_NOTICE_MS = 30 * 60_000;
+
+/** §7.5's notice: shown while the latest takeover is younger than 30 min on the server's clock and the viewer has not
+ *  dismissed THIS takeover (its instant); it names Stop only while the session is live. */
+export function takeoverNotice(
+  phone: StreamPhone | null, state: PhoneTabState, dismissedAt: string | null,
+): { at: string; model: string | null; namesStop: boolean } | null {
+  const t = phone?.lastTakeover ?? null;
+  if (t === null || t.elapsedMs >= TAKEOVER_NOTICE_MS || t.at === dismissedAt) return null;
+  return { at: t.at, model: t.model, namesStop: state === "live" };
+}
+
+/** §7.1: Live's read-only "Automatic: stops about N minutes after the result" — only while live, with the switch on AND
+ *  the session's phone in automatic mode (A4: the automatic stop needs both; with either off it would not happen). */
+export function autoStopLine(phone: StreamPhone | null, state: PhoneTabState): boolean {
+  return state === "live" && phone?.auto?.enabled === true && phone.phone?.mode === "automatic";
+}
+
+/** §7.4 "behind a tap" (FP22, owner ruling Q-D): the Details disclosure's phone data — data used and the app version, each
+ *  omitted when null. The disclosure itself exists only in Live/Ending, so neither shows while merely paired. */
+export function phoneDetails(phone: StreamPhone | null): ({ kind: "dataUsed"; mb: number } | { kind: "appVersion"; version: string })[] {
+  const f = phone?.phone ?? null;
+  if (f === null) return [];
+  const out: ({ kind: "dataUsed"; mb: number } | { kind: "appVersion"; version: string })[] = [];
+  if (f.beat.dataUsedMB !== null) out.push({ kind: "dataUsed", mb: f.beat.dataUsedMB });
+  if (f.appVersion !== null) out.push({ kind: "appVersion", version: f.appVersion });
+  return out;
+}
 
 /**
  * Which message the strip shows, from the two projections. None for a LEGACY session (C-1: today's panel), for a paired
@@ -405,20 +557,43 @@ export type PhoneStrip = {
 export function phoneStrip(phone: StreamPhone | null, session: StreamSessionCurrent | null): PhoneStrip | null {
   if (phone?.legacy) return null;
   const state = readyStateOf(phone, session);
+  const facts = phone?.phone ?? null;
   const timed = (c: StreamLostCountdown) => ({ key: countdownKey(c), elapsedMs: c.elapsedMs, remainingMs: c.remainingMs });
   switch (state) {
     case "no_phone": return { tone: "slate", icon: "phone", lead: null, body: { key: "stream.phone.pairFirst" } };
     case "silent": return { tone: "amber", icon: "alert", lead: null, body: { key: "stream.phone.silent" } };
-    case "waiting":
-      return session?.countdown
-        ? { tone: "amber", icon: "clock", lead: "stream.phone.waitingVideo", body: timed(session.countdown) }
+    case "waiting": {
+      const countdown = session?.countdown ?? null;
+      // PR-2 §7.4 (Option A 3a–3e): the server-confirmed reason leads; a countdown about a LOST phone keeps its own strip
+      // (the phone's last word is stale), any other countdown is the sentence under the lead, else the phone's line.
+      const why = facts && countdown?.reason !== "phone_lost" ? waitingWhy(facts) : null;
+      if (why && facts) {
+        return countdown
+          ? { tone: "amber", icon: "alert", ...why, body: timed(countdown) }
+          : { tone: "amber", icon: "alert", ...why, body: null, line: waitingLine(facts) };
+      }
+      return countdown
+        ? { tone: "amber", icon: "clock", lead: "stream.phone.waitingVideo", body: timed(countdown) }
         : { tone: "slate", icon: "clock", lead: "stream.phone.waitingVideo", body: null };
+    }
     case "live": {
       if (session?.countdown) return { tone: "amber", icon: "clock", lead: null, body: timed(session.countdown) };
-      const reason = session && phoneNoSignal(session) ? reconnectReasonOf(phone?.phone ?? null) : null;
-      return reason ? { tone: "amber", icon: "pause", lead: null, body: { key: RECONNECT_REASON_KEYS[reason] } } : null;
+      if (session && phoneNoSignal(session)) {
+        const reason = reconnectReasonOf(facts);
+        return reason ? { tone: "amber", icon: "pause", lead: null, body: { key: RECONNECT_REASON_KEYS[reason] } } : null;
+      }
+      // PR-2 §7.4: the input is up (or unread) — the phone-health line, amber when the SERVER names a reason. Live only:
+      // `ending` (also this row) is the last seconds flushing, with nothing to act on.
+      return session?.state === "live" && facts ? liveHealthStrip(facts) : null;
     }
-    case "paired":
+    case "paired": {
+      // PR-2: an automatic start the server refused (and could still retry) takes the strip; else the phone's identity
+      // (§7.5 model, §7.4 mode) — none when the phone named neither, as before.
+      const refused = autoRefusalStrip(phone);
+      if (refused) return refused;
+      const line = facts ? identityLine(facts) : [];
+      return line.length > 0 ? { tone: "slate", icon: "phone", lead: null, body: null, line } : null;
+    }
     case "ended":
     case "code_ended": return null;
   }

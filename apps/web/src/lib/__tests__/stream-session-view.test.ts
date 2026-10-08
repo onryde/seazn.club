@@ -37,7 +37,11 @@ import {
   TARGET_REMOVED, canGoLive, countdownKey, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning,
   destinationWarning, durationLabel, elapsedLabel, healthChips, outputElapsedMs, phoneNoSignal, phoneStrip, phoneTabState,
   readyStateOf, reconnectReasonOf, restartLine,
+  AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoRefusalStrip, autoStopLine,
+  healthLine, phoneDetails, takeoverNotice, type PhoneLinePart,
 } from "../stream-session-view";
+import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
+import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
 const LOCALES = ["en", "es", "fr", "nl"] as const;
@@ -792,10 +796,12 @@ describe("phoneStrip — the message under the chain (Option B rev 2, T11)", () 
     expect(phoneStrip(null, null)).toEqual({ tone: "slate", icon: "phone", lead: null, body: { key: "stream.phone.pairFirst" } });
   });
 
-  it("each Ready row: no phone → pair first; silent → amber, open Capture; paired, ended and code-ended → no strip", () => {
+  it("each Ready row: no phone → pair first; silent → amber, open Capture; paired → the phone's model and mode (PR-2, Option A); ended and code-ended → no strip", () => {
     expect(phoneStrip(readModel({ phone: null }), null)).toMatchObject({ tone: "slate", icon: "phone", body: { key: "stream.phone.pairFirst" } });
     expect(phoneStrip(readModel({ phone: SILENT }), null)).toMatchObject({ tone: "amber", icon: "alert", body: { key: "stream.phone.silent" } });
-    expect(phoneStrip(readModel(), null)).toBeNull();
+    expect(phoneStrip(readModel(), null)).toEqual({
+      tone: "slate", icon: "phone", lead: null, body: null, line: [{ kind: "model", text: "Pixel 8" }, { kind: "mode", mode: "operator" }],
+    });
     expect(phoneStrip(readModel(), view({ state: "completed" }))).toBeNull();
     expect(phoneStrip(readModel({ finished: true, code: ENDED_CODE }), null)).toBeNull();
     expect(msg("stream.phone.pairFirst")).toBe("Pair a phone first: scan the code with Seazn Capture");
@@ -825,7 +831,10 @@ describe("phoneStrip — the message under the chain (Option B rev 2, T11)", () 
     expect(JSON.stringify(paused)).not.toMatch(/countdown/);
     expect(phoneStrip(readModel({ phone: phoneFacts({ state: "reconnecting" }) }), live())?.body).toEqual({ key: "stream.phone.paused.weak" });
     expect(phoneStrip(readModel({ phone: phoneFacts({ state: "publishing" }) }), live()), "down, but no reason and no countdown").toBeNull();
-    expect(phoneStrip(readModel({ phone: phoneFacts({ notReady: "camera" }) }), live({ ingest: { state: "connected", protocol: "srt" } })), "the input is connected").toBeNull();
+    // PR-2 (§7.4, Option A): with the input connected the strip is the phone-health line — never the O5 reason (raw notReady).
+    expect(phoneStrip(readModel({ phone: phoneFacts({ notReady: "camera" }) }), live({ ingest: { state: "connected", protocol: "srt" } })), "the input is connected").toEqual({
+      tone: "slate", icon: "phone", lead: null, body: null, line: [{ kind: "phone" }, { kind: "heard", elapsedMs: 10_000 }],
+    });
     expect(phoneStrip(readModel({ phone: null }), live()), "no phone facts, no countdown").toBeNull();
   });
 
@@ -866,5 +875,301 @@ describe("restartLine — W23 (T11)", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// PR-2 (spec §7.1, §7.4, §7.5; the owner-approved mockup Option A): the phone-health line, the amber sentence, the
+// not-ready line, the auto-start refusal, the takeover notice, the live read-only line and the Details data. Every verdict
+// is the SERVER's (`phone.health`, `notReadyShown`, `auto.refusal`, `lastTakeover.elapsedMs`); the expected values are the
+// spec's sentences and the domain's own declarations, never read back from stream-session-view.ts.
+// ---------------------------------------------------------------------------------------------------------------------
+describe("PR-2 §7.4 — the phone-health line, built from the read model only (FP14: a null reading is OMITTED)", () => {
+  const withBeat = (beat: Partial<Phone["beat"]>, over: Partial<Phone> = {}) =>
+    phoneFacts({ beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null, ...beat }, ...over });
+
+  it("the spec's line: Phone · battery · bitrate · heard — each part from its own reading, in that order", () => {
+    expect(healthLine(withBeat({ battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400 }, { elapsedMs: 4_000 }))).toEqual([
+      { kind: "phone" }, { kind: "battery", percent: 78, charging: true }, { kind: "bitrate", kbps: 2400 }, { kind: "heard", elapsedMs: 4_000 },
+    ]);
+  });
+
+  it("the EMPTY case (a Paired-phase beat: battery, thermal and bitrate all null): only Phone and heard — no zero invented", () => {
+    const parts = healthLine(withBeat({}, { elapsedMs: 0 }));
+    expect(parts).toEqual([{ kind: "phone" }, { kind: "heard", elapsedMs: 0 }]);
+    expect(JSON.stringify(parts)).not.toMatch(/battery|bitrate|null/);
+  });
+
+  it("each reading omitted ALONE: no battery keeps the bitrate; no bitrate (a reconnect, the first reading) keeps the battery; a REAL 0 kbps is a reading and stays", () => {
+    const rows: [string, Partial<Phone["beat"]>, PhoneLinePart["kind"][]][] = [
+      ["no battery", { bitrateKbps: 1800 }, ["phone", "bitrate", "heard"]],
+      ["no bitrate", { battery: { percent: 14, charging: false, drainPctPerHour: 9 } }, ["phone", "battery", "heard"]],
+      ["a real zero bitrate", { bitrateKbps: 0 }, ["phone", "bitrate", "heard"]],
+    ];
+    let checked = 0;
+    for (const [name, beat, kinds] of rows) {
+      expect(healthLine(withBeat(beat)).map((p) => p.kind), name).toEqual(kinds);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+});
+
+describe("PR-2 §7.4 — the strip under the chain (Option A: one line; an amber state turns it amber)", () => {
+  const live = (over: Partial<StreamSessionView> = {}) => view({ state: "live", ingest: { state: "connected", protocol: "srt" }, ...over });
+  const warming = (over: Partial<StreamSessionView> = {}) => view({ state: "warming", ingest: { state: "disconnected", protocol: "srt" }, ...over });
+  const BAT = { percent: 14, charging: false, drainPctPerHour: null };
+
+  it("the HEALTH_KEYS table is total over the domain's HEALTH_REASONS, and each key says the spec's sentence (en), in all four locales", () => {
+    const SPEC: Record<string, string> = {
+      not_responding: "Phone not responding · last heard 52 s ago",
+      stalled: "Video isn't reaching Seazn from the phone",
+      hot: "The phone is running hot",
+      battery_low: "Phone battery low (14%) — plug it in",
+    };
+    expect(Object.keys(HEALTH_KEYS).sort()).toEqual([...HEALTH_REASONS].sort());
+    let checked = 0;
+    for (const r of HEALTH_REASONS) {
+      expect(msg(HEALTH_KEYS[r], { s: 52, n: 14 }), r).toBe(SPEC[r]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(inEveryLocale(Object.values(HEALTH_KEYS))).toBe(4 * LOCALES.length);
+  });
+
+  it("live, input connected: each reason the SERVER names turns the strip amber with its sentence; the line stays beneath (not for not-responding: its readings are stale)", () => {
+    let checked = 0;
+    for (const reason of HEALTH_REASONS) {
+      const f = phoneFacts({ health: reason, elapsedMs: 52_000, beat: { battery: BAT, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 12 } });
+      const strip = phoneStrip(readModel({ phone: f }), live())!;
+      expect([strip.tone, strip.icon, strip.lead], reason).toEqual(["amber", "alert", HEALTH_KEYS[reason]]);
+      if (reason === "not_responding") {
+        expect(strip.leadVars, reason).toEqual({ s: 52 });
+        expect(strip.line, `${reason}: no stale line`).toBeUndefined();
+      } else {
+        expect(strip.line?.map((p) => p.kind), reason).toEqual(["phone", "battery", "bitrate", "heard"]);
+      }
+      if (reason === "battery_low") expect(strip.leadVars, reason).toEqual({ n: 14 });
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length);
+  });
+
+  it("NEVER a client threshold: readings far past W9's limits with `health` null stay a slate line; `hot` from the server with a cool reading is still amber", () => {
+    const scorching = phoneFacts({ health: null, beat: { battery: { percent: 2, charging: false, drainPctPerHour: 40 }, bitrateKbps: 100, delivery: "stalled", thermal: 6, dataUsedMB: 1 } });
+    const slate = phoneStrip(readModel({ phone: scorching }), live())!;
+    expect([slate.tone, slate.lead], "the server named nothing").toEqual(["slate", null]);
+    const cool = phoneFacts({ health: "hot", beat: { battery: null, bitrateKbps: null, delivery: "ok", thermal: 0, dataUsedMB: null } });
+    expect(phoneStrip(readModel({ phone: cool }), live())!.lead, "the server's word wins").toBe(HEALTH_KEYS.hot);
+  });
+
+  it("a battery_low verdict with no reading to name is still amber, with the sentence that names no number (a guard, not a zero)", () => {
+    const strip = phoneStrip(readModel({ phone: phoneFacts({ health: "battery_low" }) }), live())!;
+    expect([strip.tone, strip.lead, strip.leadVars]).toEqual(["amber", "stream.phone.health.batteryLowBare", undefined]);
+    expect(msg("stream.phone.health.batteryLowBare")).toBe("Phone battery low — plug it in");
+  });
+
+  it("the countdown and the O5 pause still outrank the health line (the input is DOWN), and ending shows none", () => {
+    const f = phoneFacts({ health: "hot", notReady: "camera" });
+    const cd = { kind: "live" as const, reason: "phone_lost" as const, elapsedMs: 1, remainingMs: 2 };
+    expect(phoneStrip(readModel({ phone: f }), live({ ingest: { state: "disconnected", protocol: "srt" }, countdown: cd }))?.body?.key).toBe("stream.phone.countdown.live.phone_lost");
+    expect(phoneStrip(readModel({ phone: f }), live({ ingest: { state: "disconnected", protocol: "srt" } }))?.body?.key).toBe("stream.phone.paused.camera");
+    expect(phoneStrip(readModel({ phone: f }), view({ state: "ending", ingest: { state: "connected", protocol: "srt" } }))).toBeNull();
+  });
+
+  it("the not-ready line: ONLY while `notReadyShown` — the raw `notReady` alone (a flap the server has not confirmed) leaves Waiting as it was", () => {
+    const flap = phoneFacts({ notReady: "camera", notReadyShown: false, mode: "automatic" });
+    expect(phoneStrip(readModel({ phone: flap }), warming())).toEqual({ tone: "slate", icon: "clock", lead: "stream.phone.waitingVideo", body: null });
+    let checked = 0;
+    for (const reason of CaptureNotReady.options) {
+      const held = phoneFacts({ notReady: reason, notReadyShown: true, mode: "automatic" });
+      expect(phoneStrip(readModel({ phone: held }), warming()), reason).toEqual({
+        tone: "amber", icon: "alert", lead: "stream.phone.notReady.line", leadVars: { reason: NOT_READY_KEYS[reason] }, body: null,
+        line: [{ kind: "mode", mode: "automatic" }, { kind: "model", text: "Pixel 8" }, { kind: "waiting" }],
+      });
+      checked++;
+    }
+    expect(checked).toBe(CaptureNotReady.options.length);
+    // The clear: notReady back to null (the server's notReadyShown false with it) → Waiting again.
+    expect(phoneStrip(readModel({ phone: phoneFacts() }), warming())?.lead).toBe("stream.phone.waitingVideo");
+  });
+
+  it("§7.4's not-ready words (the spec's, en), every reason the contract declares, in all four locales", () => {
+    const SPEC: Record<string, string> = { camera: "camera", sound: "sound", network: "network", held: "turn the phone sideways" };
+    let checked = 0;
+    for (const r of CaptureNotReady.options) {
+      expect(msg("stream.phone.notReady.line", { reason: msg(NOT_READY_KEYS[r]) }), r).toBe(`Phone not ready: ${SPEC[r]}`);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(inEveryLocale(["stream.phone.notReady.line", "stream.phone.startFailed", ...Object.values(NOT_READY_KEYS)])).toBe(6 * LOCALES.length);
+  });
+
+  it("Couldn't start on the phone (startFailed) outranks not-ready; with the warming countdown both keep it as the lead over the countdown's sentence; a LOST phone's countdown keeps today's strip", () => {
+    const f = phoneFacts({ startFailed: "config", notReady: "sound", notReadyShown: true, mode: "operator", model: null });
+    expect(phoneStrip(readModel({ phone: f }), warming())).toEqual({
+      tone: "amber", icon: "alert", lead: "stream.phone.startFailed", body: null, line: [{ kind: "mode", mode: "operator" }, { kind: "waiting" }],
+    });
+    expect(msg("stream.phone.startFailed")).toBe("Couldn't start on the phone");
+    const timeout = { kind: "warming" as const, reason: "no_inbound_timeout" as const, elapsedMs: 45_000, remainingMs: 555_000 };
+    expect(phoneStrip(readModel({ phone: f }), warming({ countdown: timeout }))).toEqual({
+      tone: "amber", icon: "alert", lead: "stream.phone.startFailed", body: { key: "stream.phone.countdown.warming.no_inbound_timeout", elapsedMs: 45_000, remainingMs: 555_000 },
+    });
+    const lost = { ...timeout, reason: "phone_lost" as const };
+    expect(phoneStrip(readModel({ phone: f }), warming({ countdown: lost }))?.lead, "the lost phone's own strip").toBe("stream.phone.waitingVideo");
+  });
+
+  it("Ready, paired: the model and the mode, each omitted when null — both null is no strip (today's)", () => {
+    const rows: [Partial<Phone>, PhoneLinePart[] | null][] = [
+      [{ model: "Pixel 8", mode: "automatic" }, [{ kind: "model", text: "Pixel 8" }, { kind: "mode", mode: "automatic" }]],
+      [{ model: null, mode: "operator" }, [{ kind: "mode", mode: "operator" }]],
+      [{ model: "Pixel 8", mode: null }, [{ kind: "model", text: "Pixel 8" }]],
+      [{ model: null, mode: null }, null],
+    ];
+    let checked = 0;
+    for (const [over, line] of rows) {
+      const strip = phoneStrip(readModel({ phone: phoneFacts(over) }), null);
+      expect(strip === null ? null : strip.line, JSON.stringify(over)).toEqual(line);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(inEveryLocale(["stream.phone.mode.automatic", "stream.phone.mode.operator"])).toBe(2 * LOCALES.length);
+    expect([msg("stream.phone.mode.automatic"), msg("stream.phone.mode.operator")]).toEqual(["Automatic", "Operator"]);
+  });
+
+  it("FP14: no pre-live strip reads battery, thermal or bitrate — Ready and Waiting are the same with the readings null or set (and a server `health` set pre-live changes nothing)", () => {
+    const empty = { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null };
+    const full = { battery: BAT, bitrateKbps: 2400, delivery: "stalled" as const, thermal: 5, dataUsedMB: 40 };
+    const sessions: [string, StreamSessionView | null][] = [
+      ["ready", null], ["requested", warming({ state: "requested" })], ["provisioning", warming({ state: "provisioning" })], ["warming", warming()],
+    ];
+    const phones: Partial<Phone>[] = [{}, { present: false, silent: true }, { notReady: "held", notReadyShown: true }, { startFailed: "start-error" }];
+    let checked = 0;
+    for (const [name, s] of sessions) for (const over of phones) {
+      const a = phoneStrip(readModel({ phone: phoneFacts({ ...over, beat: empty, health: null }) }), s);
+      const b = phoneStrip(readModel({ phone: phoneFacts({ ...over, beat: full, health: "battery_low" }) }), s);
+      expect(b, `${name} ${JSON.stringify(over)}`).toEqual(a);
+      checked++;
+    }
+    expect(checked).toBe(sessions.length * phones.length);
+  });
+});
+
+describe("PR-2 §7.4 — the automatic start's refusal (served only while it could still fire — the server's gate)", () => {
+  it("the tables are total over the domain's AUTO_START_REFUSALS; each reason reads the manual refusal's own sentence; the remedies are Buy credits and Manage destinations", () => {
+    expect(Object.keys(AUTO_REFUSAL_KEYS).sort()).toEqual([...AUTO_START_REFUSALS].sort());
+    const SPEC: Record<string, [string, "buy" | "manage" | undefined]> = {
+      no_credit: ["You need a match credit to go live.", "buy"],
+      no_destination: ["This match has no destination to stream to.", "manage"],
+      not_entitled: ["Phone streaming isn't on your plan.", undefined],
+      destination_in_use: ["That destination is already live on another match.", undefined],
+      unavailable: ["The streaming service is unavailable. Try again in a minute.", undefined],
+    };
+    let checked = 0;
+    for (const r of AUTO_START_REFUSALS) {
+      const strip = autoRefusalStrip(readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: r, refusalAt: "2026-09-14T12:00:00Z" } }))!;
+      expect([strip.tone, strip.lead, strip.remedy], r).toEqual(["amber", "stream.auto.refused", SPEC[r]![1]]);
+      expect(msg(strip.lead!, { reason: msg((strip.leadVars as { reason: string }).reason) }), r).toBe(`Automatic start couldn't begin: ${SPEC[r]![0]}`);
+      expect(AUTO_REFUSAL_REMEDY[r], r).toBe(SPEC[r]![1]);
+      checked++;
+    }
+    expect(checked).toBe(AUTO_START_REFUSALS.length);
+    expect(inEveryLocale(["stream.auto.refused", "stream.auto.buyCredits", ...new Set(Object.values(AUTO_REFUSAL_KEYS))])).toBeGreaterThan(0);
+  });
+
+  it("the EMPTY cases: no read model, no settings row (`auto: null`), and a row with no refusal → no strip", () => {
+    expect(autoRefusalStrip(null)).toBeNull();
+    expect(autoRefusalStrip(readModel({ auto: null }))).toBeNull();
+    expect(autoRefusalStrip(readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null } }))).toBeNull();
+  });
+
+  it("Ready, paired: the refusal takes the strip; silent keeps the phone's own strip; a session in flight shows none", () => {
+    const auto = { enabled: true, startedAt: null, blocked: false, refusal: "no_destination" as const, refusalAt: "2026-09-14T12:00:00Z" };
+    expect(phoneStrip(readModel({ auto }), null)?.lead).toBe("stream.auto.refused");
+    expect(phoneStrip(readModel({ auto, phone: SILENT }), null)?.body?.key).toBe("stream.phone.silent");
+    expect(phoneStrip(readModel({ auto }), view({ state: "warming", ingest: { state: "disconnected", protocol: "srt" } }))?.lead).toBe("stream.phone.waitingVideo");
+  });
+});
+
+describe("PR-2 §7.5 — the takeover notice: 30 min on the SERVER's clock, dismissable per takeover, naming Stop only live", () => {
+  const AT = "2026-09-14T11:40:00.000Z";
+  const took = (elapsedMs: number, model: string | null = "Pixel 8", at = AT) => readModel({ lastTakeover: { at, model, elapsedMs } });
+
+  it("the window is §7.5's 30 minutes", () => {
+    expect(TAKEOVER_NOTICE_MS).toBe(30 * 60_000);
+  });
+
+  it("the EMPTY case: no read model, no takeover → none", () => {
+    expect(takeoverNotice(null, "idle", null)).toBeNull();
+    expect(takeoverNotice(readModel(), "idle", null)).toBeNull();
+  });
+
+  it("the boundary on the server's elapsedMs: 0 and 29:59 shown, 30:00 and later not", () => {
+    const rows: [number, boolean][] = [[0, true], [30 * 60_000 - 1_000, true], [30 * 60_000 - 1, true], [30 * 60_000, false], [31 * 60_000, false]];
+    let checked = 0;
+    for (const [ms, shown] of rows) {
+      expect(takeoverNotice(took(ms), "idle", null) !== null, `${ms} ms`).toBe(shown);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("names Stop ONLY while the session is live — every other tab state does not", () => {
+    const states: PhoneTabState[] = ["idle", "provisioning", "warming", "live", "ending", "ended", "failed"];
+    let checked = 0;
+    for (const st of states) {
+      expect(takeoverNotice(took(1_000), st, null)?.namesStop, st).toBe(st === "live");
+      checked++;
+    }
+    expect(checked).toBe(states.length);
+  });
+
+  it("dismissed for THIS takeover's instant hides it; a NEW takeover (another instant) shows again; the model is carried as given (null too)", () => {
+    expect(takeoverNotice(took(1_000), "idle", AT)).toBeNull();
+    expect(takeoverNotice(took(1_000, "Galaxy S24", "2026-09-14T11:55:00.000Z"), "idle", AT)).toEqual({ at: "2026-09-14T11:55:00.000Z", model: "Galaxy S24", namesStop: false });
+    expect(takeoverNotice(took(1_000, null), "live", null)).toEqual({ at: AT, model: null, namesStop: true });
+  });
+
+  it("the copy: the spec's sentence with and without Stop, with and without a model, in all four locales", () => {
+    expect(msg("stream.takeover.line", { model: "Pixel 8", time: "14:32" })).toBe("The camera moved to another phone (Pixel 8) at 14:32. Not yours? Revoke & reissue");
+    expect(msg("stream.takeover.lineLive", { model: "Pixel 8", time: "14:32" })).toBe("The camera moved to another phone (Pixel 8) at 14:32. Not yours? Stop the stream, then Revoke & reissue");
+    expect(msg("stream.takeover.lineNoModel", { time: "14:32" })).toBe("The camera moved to another phone at 14:32. Not yours? Revoke & reissue");
+    expect(msg("stream.takeover.lineLiveNoModel", { time: "14:32" })).toBe("The camera moved to another phone at 14:32. Not yours? Stop the stream, then Revoke & reissue");
+    expect(inEveryLocale(["stream.takeover.line", "stream.takeover.lineLive", "stream.takeover.lineNoModel", "stream.takeover.lineLiveNoModel", "stream.takeover.dismiss"])).toBe(5 * LOCALES.length);
+  });
+});
+
+describe("PR-2 §7.1 — Live's read-only line, and §7.4's Details data (owner ruling Q-D: Live/Ending only)", () => {
+  const auto = (enabled: boolean) => ({ enabled, startedAt: null, blocked: false, refusal: null, refusalAt: null });
+
+  it("the line shows only LIVE, with the switch on AND the session's phone automatic (A4: both switches) — the empty cases first", () => {
+    expect(autoStopLine(null, "live")).toBe(false);
+    expect(autoStopLine(readModel({ auto: null }), "live"), "no settings row").toBe(false);
+    const rows: [boolean, "automatic" | "operator" | null, PhoneTabState, boolean][] = [
+      [true, "automatic", "live", true],
+      [false, "automatic", "live", false],
+      [true, "operator", "live", false],
+      [true, null, "live", false],
+      [true, "automatic", "idle", false],
+      [true, "automatic", "warming", false],
+      [true, "automatic", "ending", false],
+    ];
+    let checked = 0;
+    for (const [enabled, mode, st, want] of rows) {
+      expect(autoStopLine(readModel({ auto: auto(enabled), phone: phoneFacts({ mode }) }), st), `${enabled} ${mode} ${st}`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("Details: data used and the app version, each OMITTED when null — and none at all without a phone", () => {
+    expect(phoneDetails(null)).toEqual([]);
+    expect(phoneDetails(readModel({ phone: null }))).toEqual([]);
+    const f = (dataUsedMB: number | null, appVersion: string | null) =>
+      readModel({ phone: phoneFacts({ appVersion, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB } }) });
+    expect(phoneDetails(f(245.3, "1.4.0"))).toEqual([{ kind: "dataUsed", mb: 245.3 }, { kind: "appVersion", version: "1.4.0" }]);
+    expect(phoneDetails(f(null, "1.4.0"))).toEqual([{ kind: "appVersion", version: "1.4.0" }]);
+    expect(phoneDetails(f(0, null)), "a real 0 MB is a reading").toEqual([{ kind: "dataUsed", mb: 0 }]);
+    expect(phoneDetails(f(null, null))).toEqual([]);
   });
 });

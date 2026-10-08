@@ -10,6 +10,7 @@ import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
 import { StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone, type StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { OUTPUT_WARNING_AFTER_MS, phoneStrip } from "@/lib/stream-session-view";
 import { chainFor, phoneDot, type Chain, type ChainNode, type LinkStyle, type PhoneDot } from "../stream-chain";
+import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
 
 type State = (typeof StreamSessionState.options)[number];
 type IngestWord = (typeof StreamIngest.shape.state.options)[number];
@@ -429,5 +430,53 @@ describe("W24 — the Phone node, link 1, the strip and the fold's dot agree for
       checked++;
     }
     expect(checked).toBe(WIRE.length);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// PR-2 (§7.4, Option A states 5 and 8): live with the input UP, the SERVER's `phone.health` moves the Phone node — not
+// responding is "Not answering" with the "!" (and the fold's dot amber with it: one statement, as W24's voices are), stalled
+// keeps the row's word with the "!". Hot and battery low are the strip's alone (the phone still sends). Never a reading
+// against a client threshold: a scorching phone the server has not named moves nothing.
+// ---------------------------------------------------------------------------------------------------------------------
+describe("PR-2 §7.4 — the Phone node reads the server's health verdict, live with the input up", () => {
+  const liveUp = v("live", "connected", "ok");
+  it("each reason the domain declares: not responding → amber Not answering '!'; stalled → amber, the row's word, '!'; hot and battery low → the row's node", () => {
+    const row = chainFor(liveUp)!.phone;
+    const WANT: Record<string, ChainNode> = {
+      not_responding: n("amber", "notAnswering", "bang"),
+      stalled: n("amber", row.word, "bang"),
+      hot: row,
+      battery_low: row,
+    };
+    let checked = 0;
+    for (const health of HEALTH_REASONS) {
+      const capture = { phone: beating({ health }), countdown: null };
+      const c = chainFor(liveUp, { capture })!;
+      expect(c.phone, health).toEqual(WANT[health]);
+      expect({ ...c, phone: null }, `${health}: nothing else moves`).toEqual({ ...chainFor(liveUp)!, phone: null });
+      expect(phoneDot(capture), `${health}: the fold's dot`).toBe(health === "not_responding" ? "amber" : "lime");
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length);
+  });
+
+  it("the EMPTY case and the client-threshold mutant: health null with readings past every W9 limit → the row's lime node, the dot lime", () => {
+    const scorching = beating({ health: null, beat: { battery: { percent: 1, charging: false, drainPctPerHour: 50 }, bitrateKbps: 1, delivery: "stalled", thermal: 6, dataUsedMB: 1 } });
+    expect(chainFor(liveUp, { capture: { phone: scorching, countdown: null } })!.phone).toEqual(chainFor(liveUp)!.phone);
+    expect(phoneDot({ phone: scorching, countdown: null })).toBe("lime");
+  });
+
+  it("pre-live and with the input DOWN the verdict moves nothing here: Ready, waiting and live-no-signal keep their T11 nodes", () => {
+    let checked = 0;
+    for (const health of HEALTH_REASONS) {
+      const capture = { phone: beating({ health }), countdown: null };
+      expect(chainFor(null, { capture })!.phone, `ready ${health}`).toEqual(chainFor(null, { capture: { phone: beating(), countdown: null } })!.phone);
+      expect(chainFor(v("warming", "disconnected", null), { capture })!.phone, `warming ${health}`).toEqual(n("amber", "starting"));
+      const down = v("live", "disconnected", "unknown", W);
+      expect(chainFor(down, { capture })!.phone, `live down ${health}`).toEqual(chainFor(down, { capture: { phone: beating(), countdown: null } })!.phone);
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length);
   });
 });

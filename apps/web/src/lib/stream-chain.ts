@@ -52,7 +52,14 @@ function capturePhone(view: ChainView | null, row: Chain, capture: CaptureFacts)
       if (capture.countdown?.kind === "live") return node("amber", "reconnecting", "bang");
       return capture.countdown?.reason === "phone_lost" ? node("amber", "notAnswering", "bang") : node("amber", "starting");
     case "live": {
-      if (!phoneNoSignal(view)) return row.phone;
+      // PR-2 §7.4 (Option A states 5, 8): the input is up — the SERVER's health verdict moves the node. Not responding is
+      // the silence word with the "!"; stalled keeps the row's word with the "!"; hot and battery low are the strip's alone.
+      if (!phoneNoSignal(view)) {
+        const health = capture.phone?.health ?? null;
+        if (health === "not_responding") return node("amber", "notAnswering", "bang");
+        if (health === "stalled") return node("amber", row.phone.word, "bang");
+        return row.phone;
+      }
       const bang = capture.countdown !== null || (d3Warning(view) === "phone" && reconnectReasonOf(capture.phone) === null);
       return node("amber", "reconnecting", bang ? "bang" : null);
     }
@@ -74,6 +81,8 @@ export function phoneDot({ phone, countdown }: CaptureFacts): PhoneDot {
   if (countdown?.reason === "phone_lost") return "amber";
   if (!phone) return "slate";
   if (countdown) return "lime";
+  // PR-2 §7.4: a HELD phone the server calls not responding is amber here too — the node says "Not answering" (W8 warns).
+  if (phone.health === "not_responding") return "amber";
   return phone.present ? "lime" : "amber";
 }
 
