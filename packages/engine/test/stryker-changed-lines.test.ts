@@ -4,13 +4,13 @@
 // measured with, for every group. No test here reads git history: CI's engine job is a shallow clone with no origin/main,
 // and after the merge the merge base would be HEAD itself, comparing the file with itself (preflight C4).
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseMutateRanges, rangesFromDiff, rangesFromUntracked, snapshotForm, verdictsFromReport } from "../scripts/stryker-changed.mjs";
+import { parseMutateRanges, rangesFromDiff, rangesFromUntracked, reportScopeProblems, snapshotForm, verdictsFromReport } from "../scripts/stryker-changed.mjs";
 import { resolveGroup } from "../scripts/stryker-cuts.mjs";
-import { STRYKER_GROUPS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
+import { STRYKER_EXCLUDED, STRYKER_GROUPS, STRYKER_PLACEMENT_OUT_OF_SCOPE, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 
 const ENGINE = resolve(import.meta.dirname, "..");
@@ -55,6 +55,35 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
     expect(() => parseMutateRanges("test/rules-reference.ts:1-2", ENGINE)).toThrow(/outside src/);
     expect(() => parseMutateRanges("src/core/events.test.ts:1-2", ENGINE)).toThrow(/test file/);
     expect(() => parseMutateRanges("src/core/events.ts", ENGINE)).toThrow(/is not <src path>:<a>-<b>/);
+  });
+
+  // Review I-1: Stryker 10 has no parser for .json ("No parser registered"), and the weekly legs never measure what
+  // stryker.groups.mjs excludes, so a changed-lines run must not hand Stryker either.
+  it("refuses a file Stryker cannot or must not mutate, by name: non-source, a declaration file, a __tests__ helper, and every exclusion stryker.groups.mjs declares", () => {
+    let named = 0;
+    for (const [entry, why] of [
+      ["src/sports/setbased/badminton.golden.json:1-2", /not mutable source/],
+      ["src/sports/setbased/tabletennis.schema.json:1-2", /not mutable source/],
+      ["src/sports/hockey/DOMAIN.md:1-2", /not mutable source/],
+      ["src/core/events.d.ts:1-2", /not mutable source/],
+      ["src/sports/cricket/__tests__/scorecard-ledger.ts:1-2", /a __tests__ helper/],
+    ] as const) {
+      expect(() => parseMutateRanges(entry, ENGINE), entry).toThrow(why);
+      named++;
+    }
+    expect(named).toBe(5);
+    // the exclusions are read from the two maps, never typed here; a glob stands for a file inside it
+    const globs = [...Object.keys(STRYKER_EXCLUDED), ...Object.keys(STRYKER_PLACEMENT_OUT_OF_SCOPE)];
+    let checked = 0;
+    for (const g of globs) {
+      const file = g.replace("**", "x.ts");
+      expect(() => parseMutateRanges(`${file}:1-2`, ENGINE), g).toThrow(/excluded from mutation by stryker\.groups\.mjs/);
+      checked++;
+    }
+    expect(checked).toBe(globs.length);
+    expect(checked, "both maps contributed").toBeGreaterThan(Math.max(Object.keys(STRYKER_EXCLUDED).length, Object.keys(STRYKER_PLACEMENT_OUT_OF_SCOPE).length));
+    // the positive neighbours: a measured scheduling file and a sport kernel beside them are kept
+    expect(parseMutateRanges("src/scheduling/bracket.ts:1-2,src/sports/setbased/kernel.ts:3-4", ENGINE)).toEqual(["src/scheduling/bracket.ts:1-2", "src/sports/setbased/kernel.ts:3-4"]);
   });
 
   it("with STRYKER_MUTATE the run is 'changed': exactly those ranges, not incremental, its own report — even with STRYKER_GROUP also set", () => {
@@ -130,6 +159,31 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
     expect(rangesFromDiff("")).toEqual([]);
   });
 
+  it("rangesFromDiff and rangesFromUntracked keep only mutable, measured source, and name every file they skip (review I-1)", () => {
+    const skippedOnly = [
+      "+++ b/packages/engine/src/sports/setbased/badminton.golden.json", "@@ -1,0 +1,4 @@",
+      "+++ b/packages/engine/src/sports/hockey/DOMAIN.md", "@@ -3,0 +4,2 @@",
+      "+++ b/packages/engine/src/testkit/golden.ts", "@@ -1,0 +1,9 @@",
+      "+++ b/packages/engine/src/sports/cricket/__tests__/scorecard-ledger.ts", "@@ -5,0 +6 @@",
+      "+++ b/packages/engine/src/scheduling/build.ts", "@@ -5,0 +6 @@",
+      "+++ b/packages/engine/src/core/events.d.ts", "@@ -1,0 +1 @@",
+    ];
+    const SKIPPED = ["src/sports/setbased/badminton.golden.json", "src/sports/hockey/DOMAIN.md", "src/testkit/golden.ts", "src/sports/cricket/__tests__/scorecard-ledger.ts", "src/scheduling/build.ts", "src/core/events.d.ts"];
+    // empty case first: a diff of only such files yields no range at all
+    expect(rangesFromDiff(skippedOnly.join("\n"))).toEqual([]);
+    // beside kept neighbours, before and after them, only the neighbours' lines survive
+    const skipped: string[] = [];
+    const diff = ["+++ b/packages/engine/src/core/events.ts", "@@ -10,0 +11,2 @@", ...skippedOnly, "+++ b/packages/engine/src/core/types.ts", "@@ -90,0 +91 @@"].join("\n");
+    expect(rangesFromDiff(diff, (file, why) => skipped.push(`${file} | ${why}`))).toEqual(["src/core/events.ts:11-12", "src/core/types.ts:91-91"]);
+    expect(skipped.map((s) => s.split(" | ")[0])).toEqual(SKIPPED);
+    expect(skipped.every((s) => s.split(" | ")[1]!.length > 0), "each skip says why").toBe(true);
+    // the same filter for a new untracked file
+    const untrackedSkipped: string[] = [];
+    expect(rangesFromUntracked([{ path: "src/testkit/new-sweep.ts", lines: 5 }, { path: "src/sports/setbased/new.golden.json", lines: 3 }, { path: "src/core/level.ts", lines: 12 }], (file) => untrackedSkipped.push(file)))
+      .toEqual(["src/core/level.ts:1-12"]);
+    expect(untrackedSkipped).toEqual(["src/testkit/new-sweep.ts", "src/sports/setbased/new.golden.json"]);
+  });
+
   it("verdictsFromReport names the killers, and counts Survived and NoCoverage as failures", () => {
     const report = {
       testFiles: { "src/x.test.ts": { tests: [{ id: "1", name: "kills it" }] } },
@@ -150,4 +204,46 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
     expect(v.failures).toBe(2); // a Timeout is a detected mutant (Stryker scores it killed); Survived and NoCoverage are not
     expect(verdictsFromReport({ testFiles: {}, files: {} }).rows).toEqual([]); // and the CLI refuses an empty report
   });
+
+  // Review I-2: Stryker writes changed.json only when a run completes and reports/ is gitignored, so a report left by an
+  // EARLIER run sits there until the next one finishes. --report checks the report against the ranges this run was given.
+  const mutantAt = (id: string, line: number, status = "Killed") => ({ id, mutatorName: "StringLiteral", replacement: '""', status, killedBy: status === "Killed" ? ["1"] : [], location: { start: { line } } });
+  const reportOf = (files: Record<string, ReturnType<typeof mutantAt>[]>) => ({ testFiles: { "src/core/types.test.ts": { tests: [{ id: "1", name: "kills it" }] } }, files: Object.fromEntries(Object.entries(files).map(([f, mutants]) => [f, { mutants }])) });
+
+  it("reportScopeProblems: a report of exactly the expected ranges has none; another file's report, or a mutant past either end of a range, is named", () => {
+    const ranges = ["src/core/types.ts:91-101"];
+    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 91), mutantAt("b", 101)] }), ranges)).toEqual([]);
+    // a report left by a run of another file: its mutant lies outside, and the expected file is absent
+    expect(reportScopeProblems(reportOf({ "src/core/events.ts": [mutantAt("x", 15)] }), ranges)).toEqual([
+      "mutant x at src/core/events.ts:15 lies outside every expected range",
+      "expected range src/core/types.ts:91-101: the report holds no entry for src/core/types.ts",
+    ]);
+    // the right file, the wrong lines: one below the range, one above it
+    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("lo", 90), mutantAt("in", 95), mutantAt("hi", 102)] }), ranges)).toEqual([
+      "mutant lo at src/core/types.ts:90 lies outside every expected range",
+      "mutant hi at src/core/types.ts:102 lies outside every expected range",
+    ]);
+    // the right lines of the wrong file: a line number alone does not put a mutant in scope
+    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 95)], "src/core/events.ts": [mutantAt("e", 95)] }), ranges)).toEqual([
+      "mutant e at src/core/events.ts:95 lies outside every expected range",
+    ]);
+    // two ranges: a mutant inside the second is in scope; a range whose file has an entry but no mutant is not "absent"
+    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 95)], "src/core/events.ts": [] }), ["src/core/types.ts:91-101", "src/core/events.ts:10-20"])).toEqual([]);
+  });
+
+  it("the --report CLI requires --expect, refuses a report that is not this run's (exit 2), and judges the one that is (exit 0)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "stryker-changed-report-"));
+    try {
+      const file = join(dir, "changed.json");
+      writeFileSync(file, JSON.stringify(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] })));
+      const run = (...args: string[]) => spawnSync(process.execPath, ["scripts/stryker-changed.mjs", "--report", file, ...args], { cwd: ENGINE, encoding: "utf8", timeout: SPAWN_MS, env: childEnv({}) });
+      const bare = run();
+      expect([bare.status, bare.stderr]).toEqual([2, expect.stringMatching(/--report needs --expect/)]);
+      const other = run("--expect", "src/core/events.ts:10-20");
+      expect([other.status, other.stderr]).toEqual([2, expect.stringMatching(/not this run's report/)]);
+      const mine = run("--expect", "src/core/types.ts:91-101");
+      expect([mine.status, mine.stderr]).toEqual([0, ""]);
+      expect(mine.stdout).toContain('{"mutants":1,"killed":1,"timeout":0,"survived":0,"noCoverage":0}');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, spawnBudget(3));
 });
