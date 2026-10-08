@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 import { ID, REPO, ROW_HEADER, RULES_DIR, STATUS, allRows, fileExists, hasToken, isMatrixCase, parseRuleRows, proofProblems, readRepoFile, ruleFiles, testTitles, type ReadRepoFile, type RuleRow } from "./rules-reference.ts";
 
 /** Signed rows whose proving test lands in a later W2a task. A task that adds
@@ -346,9 +347,16 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     expect(script.join("\n")).not.toMatch(/\bjq\b/);
   });
 
+  /** Every `runStep` is one bash spawn (which itself runs a stand-in vitest and a node judge). AGENTS.md class 20: a flat
+   *  timeout beside a derived cost is a latent red. Vitest's 5 s default fired at 17 s and 6 s under a CPU burner (24 burners on
+   *  12 cores: about 2 s a run), so each test below states its budget from the runs it makes, at the same cap the spawn carries
+   *  (`SPAWN_MS`, via `spawnBudget`), and asserts that the runs it made are the runs the budget was derived from. */
+  let spawns = 0;
+
   /** Runs the step's REAL run block in a scratch checkout whose vitest is a stand-in: it writes FAKE_JSON to the
    *  `--outputFile=` the step passed it, then exits FAKE_EXIT. Plain `bash`: the block's own `set -e` carries the fail-fast. */
   const runStep = (o: { json: object | null; exit?: number; stale?: object }) => {
+    spawns++;
     const root = realpathSync(mkdtempSync(join(tmpdir(), `w2a-rules-ci-${process.pid}-`)));
     try {
       const bin = join(root, "packages/engine/node_modules/.bin");
@@ -359,7 +367,7 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
       if (o.json !== null) { fake = join(root, "fake-report.json"); writeFileSync(fake, JSON.stringify(o.json)); }
       if (o.stale !== undefined) writeFileSync(join(root, REPORT), JSON.stringify(o.stale)); // a report left by an earlier run
       writeFileSync(join(root, "step.sh"), stepLines().filter((l) => l.startsWith("          ")).map((l) => l.slice(10)).join("\n") + "\n");
-      const r = spawnSync("bash", ["step.sh"], { cwd: root, env: { PATH: process.env.PATH ?? "", FAKE_JSON: fake, FAKE_EXIT: String(o.exit ?? 0) }, encoding: "utf8", timeout: 30_000 });
+      const r = spawnSync("bash", ["step.sh"], { cwd: root, env: { PATH: process.env.PATH ?? "", FAKE_JSON: fake, FAKE_EXIT: String(o.exit ?? 0) }, encoding: "utf8", timeout: SPAWN_MS });
       return { status: r.status, stdout: r.stdout, stderr: r.stderr };
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -367,31 +375,40 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
   };
   const report = (o: Record<string, unknown> = {}) => ({ numTotalTests: 11, numPassedTests: 11, numFailedTests: 0, numFailedTestSuites: 0, numPendingTests: 0, numTodoTests: 0, testResults: [{ name: "a.test.ts" }], ...o });
 
-  it("the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node", () => {
+  // Each red changes exactly one field, so no condition is covered by another: a file that collected zero tests
+  // still has its one testResults entry, and a stray second file leaves every count clean.
+  const REDS: Array<[string, object, string]> = [
+    ["zero tests in the one file", report({ numTotalTests: 0, numPassedTests: 0 }), "ZERO tests"],
+    ["no file matched at all", report({ numTotalTests: 0, numPassedTests: 0, testResults: [] }), "ZERO tests"],
+    ["a failed test", report({ numFailedTests: 1 }), "failed test(s)"],
+    ["a failed suite", report({ numFailedTestSuites: 1 }), "failed suite(s)"],
+    ["a skipped test", report({ numPendingTests: 1 }), "skipped"],
+    ["a todo test", report({ numTodoTests: 1 }), "todo"],
+    ["a stray file", report({ testResults: [{ name: "a.test.ts" }, { name: "b.test.ts" }] }), "ran 2 files, not exactly 1"],
+  ];
+  /** One green run, then one run per red. */
+  const JUDGE_RUNS = 1 + REDS.length;
+  /** A non-zero vitest exit, no report written, and a stale report left behind. */
+  const STEP_RUNS = 3;
+
+  it("the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node", (ctx) => {
+    spawns = 0;
     const green = runStep({ json: report() });
     expect(green.status, green.stderr).toBe(0);
     expect(green.stdout).toContain("rules reference: 11/11 tests passed");
-    // Each red changes exactly one field, so no condition is covered by another: a file that collected zero tests
-    // still has its one testResults entry, and a stray second file leaves every count clean.
-    const reds: Array<[string, object, string]> = [
-      ["zero tests in the one file", report({ numTotalTests: 0, numPassedTests: 0 }), "ZERO tests"],
-      ["no file matched at all", report({ numTotalTests: 0, numPassedTests: 0, testResults: [] }), "ZERO tests"],
-      ["a failed test", report({ numFailedTests: 1 }), "failed test(s)"],
-      ["a failed suite", report({ numFailedTestSuites: 1 }), "failed suite(s)"],
-      ["a skipped test", report({ numPendingTests: 1 }), "skipped"],
-      ["a todo test", report({ numTodoTests: 1 }), "todo"],
-      ["a stray file", report({ testResults: [{ name: "a.test.ts" }, { name: "b.test.ts" }] }), "ran 2 files, not exactly 1"],
-    ];
-    for (const [what, json, why] of reds) {
+    for (const [what, json, why] of REDS) {
       const r = runStep({ json });
       expect(r.status, `${what}: ${r.stdout}`).toBe(1);
       expect(r.stderr, what).toContain(`::error::`);
       expect(r.stderr, what).toContain(why);
     }
-    expect(reds).toHaveLength(7);
-  });
+    expect(REDS).toHaveLength(7);
+    expect(spawns, "the runs the budget was derived from are the runs made").toBe(JUDGE_RUNS);
+    expect(ctx.task.timeout, "the timeout vitest applied is the one stated from those runs, not a default").toBe(spawnBudget(spawns));
+  }, spawnBudget(JUDGE_RUNS));
 
-  it("the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run", () => {
+  it("the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run", (ctx) => {
+    spawns = 0;
     const failedExit = runStep({ json: report(), exit: 1 });
     expect(failedExit.status).not.toBe(0);
     expect(failedExit.stdout).not.toContain("rules reference:"); // set -e stopped it before the judge
@@ -400,5 +417,7 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     const stale = runStep({ json: null, stale: report() }); // rm -f clears the clean stale report, so the judge finds none
     expect(stale.status).not.toBe(0);
     expect(stale.stdout).not.toContain("rules reference:");
-  });
+    expect(spawns, "the runs the budget was derived from are the runs made").toBe(STEP_RUNS);
+    expect(ctx.task.timeout, "the timeout vitest applied is the one stated from those runs, not a default").toBe(spawnBudget(spawns));
+  }, spawnBudget(STEP_RUNS));
 });
