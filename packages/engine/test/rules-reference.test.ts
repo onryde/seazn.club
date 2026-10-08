@@ -11,7 +11,6 @@ import { ID, REPO, ROW_HEADER, RULES_DIR, STATUS, allRows, fileExists, hasToken,
  *  this map to be EMPTY. A row not named here must already be proved. */
 const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
   ["BG-KO-2", "Task 12"],
-  ["X-ST-2", "Task 9"],
 ]);
 
 /** The ten ids W2a seeds, typed from spec §6 (2026-10-08-format-matrix-w2a-design.md, "W2a seeds only"). */

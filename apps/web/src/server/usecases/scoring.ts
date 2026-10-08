@@ -33,6 +33,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { subjectToScorerCapabilityGates } from "./scorers";
+import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats } from "./stages";
 import { detectSuspensions, notifyServedSuspensions, type ServedFlip } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
@@ -498,6 +499,25 @@ async function assertEntitledToScore(
     throw new EngineError("WRONG_PHASE", "division has not started — scoring is closed", {
       divisionStatus: ctx.division_status,
     });
+  }
+
+  // X-ST-2 (ruling 77, widened by owner ruling D-O1): settle, forfeit and abandon — and a sport event that records a
+  // forfeit or walkover (chess `boardgame.result` method forfeit/double_forfeit) — end or decide a match, so only an
+  // organiser may record them: never a device link, never an official scorer (subjectToScorerCapabilityGates: a
+  // session that is not owner/admin). An org API key is an organiser credential and passes, as it does for finalize
+  // and void. Placed before the device and scorer branches so neither can let one through; 403 → FORBIDDEN on the
+  // wire. The pad reads the same predicate (pad-host.tsx), so the two cannot drift. The authority is this request's
+  // AuthCtx, resolved once at the door: a role change lands on the next request.
+  if (isOrganiserOnlyEvent(input.type, input.payload) && (auth.via === "device_link" || subjectToScorerCapabilityGates(auth))) {
+    const verb =
+      input.type === "core.settle"
+        ? "settle"
+        : input.type === "core.forfeit"
+          ? "record a walkover for"
+          : input.type === "core.abandon"
+            ? "abandon"
+            : "record a forfeit in";
+    throw new HttpError(403, `Only an organiser can ${verb} a match`);
   }
 
   // Device-link capabilities (doc 13 §7): strictly ⊂ scorer. Append + void
