@@ -90,7 +90,7 @@ export function drawsAllowed(sportKey: string, cfg: unknown, stageKind: StageKin
  *  `drawsAllowed` is unchanged: it answers a different question (may this fixture end level, by stage kind). */
 export function stageCfg(sportKey: string, cfg: unknown, stageKind: StageKind): unknown {
   if (!forbidsLevelResult(stageKind)) return cfg;
-  const overlay = sportModule(sportKey).bracketDeciders(cfg as never) as Record<string, unknown>;
+  const overlay = sportModule(sportKey).bracketDeciders(cfg) as Record<string, unknown>;
   return { ...(cfg as Record<string, unknown>), ...overlay };
 }
 

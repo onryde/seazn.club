@@ -13,7 +13,7 @@ export function fixtureStatusFromFold(outcome: unknown, active: readonly { reado
   const has = (type: string) => active.some((e) => e.type === type);
   if (has("core.settle")) return "decided";
   if (has("core.abandon")) return "abandoned";
-  if (outcome !== null && forbidsLevelResult(stageKind as never) && isLevelOutcome(outcome as never)) return "needs_decision";
+  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome as never)) return "needs_decision";
   if (outcome !== null) return has("core.forfeit") ? "forfeited" : "decided";
   return has("core.start") ? "in_play" : "scheduled";
 }

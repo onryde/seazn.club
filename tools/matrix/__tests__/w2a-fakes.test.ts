@@ -1,13 +1,13 @@
 // The fakes' W2a fidelity (spec §5.4.2 D3, rules X-BR-1, X-BR-2, X-ST-1): a bracket fixture that ends level is HELD
 // (needs_decision) and seats nobody; an organiser settle closes it, and only then does its winner advance; a second
 // settle is refused by name. Expected statuses and seats come from the rule rows, and the outcome from the engine's own
-// fold — never from the fake's text. Folds through loop D's kernel: red until D merges into the lane.
+// fold — never from the fake's text. Folds through loop D's kernel (merged into this lane).
 import { describe, expect, it } from "vitest";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { commandOf, newModelState, type ModelState } from "../lib/model/commands.ts";
 import { drawsAllowed, resolveSportCfg, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
-import type { RequestedOutcome } from "../lib/streams/types.ts";
+import type { RequestedOutcome, StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { Recorder, setUpDivision } from "../lib/scenarios/common.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
@@ -106,6 +106,30 @@ describe("the model fake serves the W2a status and seats (X-BR-1, X-BR-2, X-ST-1
     const league = await bracket("league", "boardgame");
     await league.d.postStream(league.sf1, stream(league.d, league.sf1, "league", { kind: "draw" }, "boardgame"));
     expect(row(league.d, league.sf1)).toMatchObject({ status: "decided", outcome: { kind: "draw" } });
+  });
+
+  it("D-C7: a tie-break with no decider pending is REFUSED (409 TIEBREAK_NOT_APPLICABLE) and writes nothing — after a decided game, after a first tie-break, in a league; the pending one is accepted", async () => {
+    // Positive pair first: a drawn bracket game awaits its tie-break, and the first tie-break is accepted.
+    const pending = await bracket("knockout", "boardgame");
+    const drawn = stream(pending.d, pending.sf1, "knockout", { kind: "tiebreak", rung: "rapid", winner: "home" }, "boardgame");
+    await pending.d.postStream(pending.sf1, drawn.slice(0, -1));
+    await pending.d.postStream(pending.sf1, drawn.slice(-1));
+    expect(row(pending.d, pending.sf1).status).toBe("decided");
+    const tiebreak = (m: { d: ModelFakeDriver; sf1: string; e: string[] }, rung: string): StreamEvent => ({ type: "boardgame.tiebreak", payload: { rung, winner: row(m.d, m.sf1).home_entrant_id! } });
+    const decided = await bracket("knockout", "boardgame");
+    await decided.d.postStream(decided.sf1, stream(decided.d, decided.sf1, "knockout", { kind: "win", winner: "home" }, "boardgame"));
+    const league = await bracket("league", "boardgame");
+    await league.d.postStream(league.sf1, stream(league.d, league.sf1, "league", { kind: "draw" }, "boardgame"));
+    let refusals = 0;
+    for (const [where, m] of [["after a decided game", decided], ["a second tie-break", pending], ["a drawn game in a league", league]] as const) {
+      const before = m.d.ledgers.get(m.sf1)!.length;
+      const refused = await m.d.postStream(m.sf1, [tiebreak(m, "blitz")]).then(() => null, (e: unknown) => e);
+      expect(refused, where).toBeInstanceOf(RefusedCall);
+      expect(refused, where).toMatchObject({ status: 409, code: "TIEBREAK_NOT_APPLICABLE" });
+      expect(m.d.ledgers.get(m.sf1)!.length, `${where}: a refused tie-break writes nothing`).toBe(before);
+      refusals++;
+    }
+    expect(refusals, "every refusal case ran").toBe(3);
   });
 
   it("the scenario fakes (FakeKnockoutDriver) hold a level knockout result the same way: needs_decision, the next round unseated, then the settle seats", async () => {

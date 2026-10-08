@@ -18,7 +18,7 @@ import { offlineBuilderDefault } from "./variants.ts";
 /** The rows whose first (root) stage is a bracket kind: the scenarios play the root stage's bracket through the hooks
  *  playDivision gives stage 1 only (D12), and a bracket behind a table is LIFECYCLE's. */
 export function bracketRootRows(): RowKey[] {
-  return ROW_KEYS.filter((row) => forbidsLevelResult(stagesForRow(row)[0]!.kind as StageKind));
+  return ROW_KEYS.filter((row) => forbidsLevelResult(stagesForRow(row)[0].kind as StageKind));
 }
 
 /** The cfg a bracket fixture of `sport` folds under, on the variant the planner uses (the offline builder default). */
@@ -39,9 +39,9 @@ function generatorBuilds(sport: string, outcome: RequestedOutcome): boolean {
 /** The scenario's applicability on a sport, with the one-line reason of each rule that is one sport's. */
 export function w2aApplies(key: W2aScenarioKey, sport: string): boolean {
   switch (key) {
-    case "BRACKET_SETTLE_LEVEL": return generatorBuilds(sport, { kind: "settle", then: "home", method: SETTLE_METHODS[0]!, after: "level" });
-    case "BRACKET_SETTLE_ABANDON": return generatorBuilds(sport, { kind: "settle", then: "home", method: SETTLE_METHODS[0]!, after: "abandon" });
-    case "BRACKET_TIEBREAK": return generatorBuilds(sport, { kind: "tiebreak", rung: TIEBREAK_RUNGS[0]!, winner: "home" });
+    case "BRACKET_SETTLE_LEVEL": return generatorBuilds(sport, { kind: "settle", then: "home", method: SETTLE_METHODS[0], after: "level" });
+    case "BRACKET_SETTLE_ABANDON": return generatorBuilds(sport, { kind: "settle", then: "home", method: SETTLE_METHODS[0], after: "abandon" });
+    case "BRACKET_TIEBREAK": return generatorBuilds(sport, { kind: "tiebreak", rung: TIEBREAK_RUNGS[0], winner: "home" });
     // single-sport: CA-KO-1 is carrom's rule (the ICF extra board); no other sport plays one.
     case "BRACKET_EXTRA_BOARD": return sport === "carrom";
     // single-sport: GN-KO-1 is generic's rule; and the refusal needs a draw that exists in a league to be posted at the bracket.

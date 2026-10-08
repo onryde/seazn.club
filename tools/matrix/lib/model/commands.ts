@@ -415,7 +415,7 @@ class Settle extends Cmd {
     return f.ledger.length === 0 && !isTerminal(f.status) ? "open" : null;
   }
   private pool(m: ModelState): FixtureModel[] {
-    if (!m.started || !forbidsLevelResult(m.stageKind as StageKind)) return [];
+    if (!m.started || !forbidsLevelResult(m.stageKind)) return [];
     return [...m.fixtures.values()].filter((f) => this.phase(m, f) !== null);
   }
   protected ready(m: ModelState) { return this.pool(m).length > 0; }
@@ -442,7 +442,7 @@ class Settle extends Cmd {
       await checkStep(m, d);
     }
     const winner = this.w % 2 === 0 ? home : away;
-    const method = SETTLE_METHODS[this.k % SETTLE_METHODS.length]!;
+    const method = SETTLE_METHODS[this.k % SETTLE_METHODS.length];
     try {
       await post(m, d, f, [{ type: "core.settle", payload: { winner, method } }]);
       m.settles.push({ status: 200, code: null });

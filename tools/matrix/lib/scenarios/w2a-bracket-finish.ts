@@ -55,8 +55,8 @@ export interface RefusalProbe {
 
 /** The settle method / tie-break rung the `n`th match rotates to — the engine's own lists, so a method added there is
  *  exercised without an edit here. */
-const methodAt = (n: number) => SETTLE_METHODS[n % SETTLE_METHODS.length]!;
-const rungAt = (n: number) => TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length]!;
+const methodAt = (n: number) => SETTLE_METHODS[n % SETTLE_METHODS.length];
+const rungAt = (n: number) => TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length];
 
 const settleEvery = (after: "level" | "abandon"): BracketPick => (_f, n, higher) => ({ kind: "settle", then: higher, method: methodAt(n), after });
 const tiebreakEvery: BracketPick = (_f, n, higher) => ({ kind: "tiebreak", rung: rungAt(n), winner: higher });

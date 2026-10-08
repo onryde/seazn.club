@@ -499,7 +499,7 @@ function orientationCheck(m: ModelState, meetings: readonly FixtureRow[]): { che
  *     feeding bracket (fedCandidates, the model's own structural seat read);
  *   - X-ST-1: a settled win (`settled_*`) seats its winner in a later round, where the bracket has one. */
 function bracketChecks(m: ModelState, mine: readonly FixtureRow[]): { id: string; checked: number; fails: string[] }[] {
-  if (!forbidsLevelResult(m.stageKind as StageKind)) return [];
+  if (!forbidsLevelResult(m.stageKind)) return [];
   const level = { id: BRACKET_LEVEL_CHECK, checked: 0, fails: [] as string[] };
   const held = { id: HELD_SEATS_CHECK, checked: 0, fails: [] as string[] };
   const settled = { id: SETTLE_SEATS_CHECK, checked: 0, fails: [] as string[] };

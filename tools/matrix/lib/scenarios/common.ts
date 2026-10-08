@@ -501,9 +501,9 @@ export function bracketPolicy(setup: DivisionSetup, f: FixtureRow, sport: string
  *  GN-KO-1). The method and rung rotate through the engine's own lists. Shared by the fixture policy and the ladder loop,
  *  so a ladder (a bracket kind played through challenges) owes its deciders by the same rule. */
 export function hardPath(sport: string, cfg: unknown, n: number, winner: Side): RequestedOutcome {
-  if (sport === "boardgame") return { kind: "tiebreak", rung: TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length]!, winner };
+  if (sport === "boardgame") return { kind: "tiebreak", rung: TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length], winner };
   const level = levelReachable(sport, cfg, "knockout") && n % 2 === 0;
-  return { kind: "settle", then: winner, method: SETTLE_METHODS[n % SETTLE_METHODS.length]!, after: level ? "level" : "abandon" };
+  return { kind: "settle", then: winner, method: SETTLE_METHODS[n % SETTLE_METHODS.length], after: level ? "level" : "abandon" };
 }
 
 const stageCtx = (kind: string, f: { pool_id: string | null; round_no: number | null }): StageCtx =>
@@ -570,7 +570,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // organiser through the API (X-ST-2); a tie-break is the scorer's, recorded on the pad.
   if (asked.kind === "settle") rec.settlesPosted++;
   if (asked.kind === "tiebreak") rec.tiebreaksPosted++;
-  if (forbidsLevelResult(stage.kind as StageKind)) {
+  if (forbidsLevelResult(stage.kind)) {
     // The loser line is read AFTER the post (the product seats it as it decides), from the stage's own rows.
     const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((r) => r.stage_id === stage.id);
     const row = rows.find((r) => r.id === f.id);
@@ -637,7 +637,7 @@ export async function decideRound(ctx: ScenarioContext, rec: Recorder, setup: Di
   const drawOk = stageDrawsOk(ctx, stage);
   // W2a: a bracket stage is asked for the hard path every third fixture (bracketPolicy); every other stage keeps the
   // table policy, byte for byte.
-  const bracket = forbidsLevelResult(stage.kind as StageKind);
+  const bracket = forbidsLevelResult(stage.kind);
   const bracketCfgOf = bracket ? stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind) : null;
   await hooks.beforeRound?.(round, batch);
   for (const f of [...batch].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))) {

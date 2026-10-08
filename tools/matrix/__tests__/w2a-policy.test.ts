@@ -1,6 +1,6 @@
 // W2a Task 14 Step 4: the bracket policy and the counted check (finding 16). Expected values come from the engine's own
 // declarations (SETTLE_METHODS, TIEBREAK_RUNGS, StageKind.options, supportsDraws) and the rule rows (BG-KO-1, GN-KO-1,
-// X-ST-1), never from the policy's own text. Needs loop D's exports — red until D merges into the lane.
+// X-ST-1), never from the policy's own text. Needs loop D's exports (merged into this lane).
 import { SETTLE_METHODS, StageKind, forbidsLevelResult } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { describe, expect, it } from "vitest";

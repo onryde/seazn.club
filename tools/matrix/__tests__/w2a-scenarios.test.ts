@@ -1,6 +1,6 @@
 // W2a Task 14 Step 4: the five opt-in bracket-finish scenarios. Expected values come from the rule rows (GN-KO-1,
 // CA-KO-1, BG-KO-1, X-BR-1/2, X-ST-1), the spec's frozen refusal (409 LEVEL_RESULT_IN_BRACKET) and the engine's own
-// SETTLE_METHODS / TIEBREAK_RUNGS — never from the scenarios' text. Needs loop D's exports: red until D merges.
+// SETTLE_METHODS / TIEBREAK_RUNGS — never from the scenarios' text. Needs loop D's exports (merged into this lane).
 import { SETTLE_METHODS, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { describe, expect, it } from "vitest";

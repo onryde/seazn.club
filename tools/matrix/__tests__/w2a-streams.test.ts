@@ -6,8 +6,7 @@
 // Cfgs come from the harness's own resolver (variantKeys / resolveSportCfg: the preset merged under the overrides,
 // parsed by the module's schema — how createDivision does it), not the engine's declaredCfgs: generic has no schema
 // default, so a bare `parse({})` throws for it (preflight C7), and the resolver is the cfg the product folds under.
-// Tests that fold core.settle / boardgame.tiebreak need loop D's engine (Tasks 4–5); until it is merged into this
-// lane they are RED, by name — they are never satisfied by a stub.
+// Tests that fold core.settle / boardgame.tiebreak fold through loop D's engine (Tasks 4–5), merged into this lane.
 import { describe, expect, it } from "vitest";
 import { BRACKET_KINDS, SETTLE_METHODS, foldMatchWithStoppage, isLevelOutcome, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";

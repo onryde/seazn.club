@@ -352,7 +352,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
     }
     // W2a (GN-KO-1, spec §5.4 item 3): a WRITE guard of the product (append-event.ts), not a fold refusal — a generic
     // draw in a bracket kind is refused and nothing is written. Every other level result is accepted and held.
-    if (this.sport === "generic" && kind !== null && forbidsLevelResult(kind as StageKind) && folded.outcome?.kind === "draw") {
+    if (this.sport === "generic" && kind !== null && forbidsLevelResult(kind) && folded.outcome?.kind === "draw") {
       throw new RefusedCall("POST", `/api/v1/fixtures/${f.id}/events`, 409, "LEVEL_RESULT_IN_BRACKET", "A knockout match can't end level — enter the winner.");
     }
     f.events = next;

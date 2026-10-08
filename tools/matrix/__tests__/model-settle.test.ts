@@ -2,7 +2,7 @@
 // X-BR-2, X-ST-1) are judged after every step from the product's rows; the expected refusal of a second settle is
 // the rule row's (X-ST-1, SETTLE_NOT_APPLICABLE). Rule 10: a fast-check sequence over the commands that can move a
 // bracket, Settle included, every step checked, and Settle actually exercised (zero is a failure). Folds through loop
-// D's kernel (core.settle): red until D merges into the lane.
+// D's kernel (core.settle).
 import { SETTLE_METHODS } from "@seazn/engine/core";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";

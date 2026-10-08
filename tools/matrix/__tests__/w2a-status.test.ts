@@ -1,6 +1,6 @@
 // The fakes' D3 status rule (w2a-status.ts), held to the RULE ROWS (X-BR-1, X-BR-2, X-ST-1) and to the engine's own
 // declarations (StageKind.options, BRACKET_KINDS) — never to the function's own text. Needs loop D's `core` exports
-// (BRACKET_KINDS, forbidsLevelResult, isLevelOutcome): red until D lands in the lane.
+// (BRACKET_KINDS, forbidsLevelResult, isLevelOutcome), merged into this lane.
 import { BRACKET_KINDS, StageKind } from "@seazn/engine/core";
 import { describe, expect, it } from "vitest";
 import { fixtureStatusFromFold } from "./w2a-status.ts";
