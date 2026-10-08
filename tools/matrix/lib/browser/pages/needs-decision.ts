@@ -56,7 +56,13 @@ export class SettleNeedsAWinner extends Error {
 /** The block and dialog on ONE fixture's console. The fixture id bounds the answer the page object waits for: the
  *  events route of THAT fixture, so another tab's write is never taken for this settle. */
 export class NeedsDecisionPage {
-  constructor(private readonly c: PageCtx, private readonly fixtureId: string) {}
+  // Explicit fields, not parameter properties: this file loads under node's strip-only TypeScript (strip-types-loadable.test.ts).
+  private readonly c: PageCtx;
+  private readonly fixtureId: string;
+  constructor(c: PageCtx, fixtureId: string) {
+    this.c = c;
+    this.fixtureId = fixtureId;
+  }
 
   /** The block, present only while the fixture is held. */
   block(): Locator {
