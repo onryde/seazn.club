@@ -339,8 +339,8 @@ with the frontend-design skill.
 ## 6. The rules reference (`packages/engine/rules/`)
 
 - `README.md` defines a rule row: a stable **id**, the **rule**, its **citation** (federation article or "product
-  rule"), its **status**, **enforced at** (engine and app paths) and **proved by** (test path(s) or matrix case
-  ids). A status is one of:
+  rule"), its **status**, **enforced at** (engine and app paths) and **proved by** (test path(s); matrix case ids
+  are additional evidence only, never sufficient alone). A status is one of:
   - `signed <ruling> <date>`;
   - `deviation <ruling> <date>`;
   - `⬜ open`.
@@ -354,7 +354,10 @@ with the frontend-design skill.
   least one (zero is a failure), and asserts:
   - every id is unique;
   - every `signed` or `deviation` row names at least one proving test;
-  - each named test file exists and contains the id string.
+  - each named test path is a test file (`*.test.ts(x)`, `*.spec.ts`) outside `rules/`, `docs/` and the checker
+    itself, exists, and has the id as a whole token in a test title (`it`/`test`/`describe`);
+  - the ids seeded here are all present (the expectation is this list, not the parsed files);
+  - every row-shaped line in a rules file is parsed (a row the parser skips is a failure).
   - It is mutated once per check.
 - **The wave rulebooks are frozen** as research drafts. `_INDEX.md` rulings get one-line pointers to rule ids. The
   engine-split session must learn that `rules/` moves with the engine: the owner tells it, or this session sends it
