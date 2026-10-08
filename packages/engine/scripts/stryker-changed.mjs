@@ -9,7 +9,9 @@
 //   node scripts/stryker-changed.mjs --report <changed.json> --expect "<ranges>"
 //                                                            one row per mutant with its killers by name; exits 1 on any
 //                                                            Survived or NoCoverage, 2 on a report that holds no mutant or
-//                                                            is not the run of <ranges> (reportScopeProblems)
+//                                                            is not the run of <ranges> (reportScopeProblems); a range with
+//                                                            no mutant (non-mutable lines) is listed, not failed
+//                                                            (rangesWithoutMutants)
 //   node scripts/stryker-changed.mjs --snapshot <out.json>   every group's config in snapshot form (snapshotForm)
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -120,16 +122,21 @@ async function groupConfigs(engine) {
   return out;
 }
 
+/** `file:a-b`, as parseMutateRanges returns it, in parts. @param {string} r */
+const rangeParts = (r) => {
+  const [, file, a, b] = /** @type {[string, string, string, string]} */ (/^(.+):(\d+)-(\d+)$/.exec(r));
+  return { file, a: Number(a), b: Number(b) };
+};
+
 /** The ways a Stryker report is not the run of `ranges` (`file:a-b`, as parseMutateRanges returns them): the run's own recorded
- *  `config.mutate` missing or not exactly `ranges` (an old run over a SUBSET of them passes the next two checks), a mutant outside
- *  every range, or a range whose file the report holds no entry for. Stryker writes the report only when a run completes and reports/
- *  is gitignored, so a report left by an EARLIER run stays until the next run finishes. @param {string[]} ranges @returns {string[]} */
+ *  `config.mutate` missing or not exactly `ranges` (an old run over a SUBSET of them passes the next check), or a mutant outside
+ *  every range. Stryker writes the report only when a run completes and reports/ is gitignored, so a report left by an EARLIER run
+ *  stays until the next run finishes. A range's file absent from the report is NOT a problem: a fresh run over lines with no mutable
+ *  code (imports, an interface) writes exactly that, and config.mutate already binds the report to this run (rangesWithoutMutants
+ *  lists such ranges). @param {string[]} ranges @returns {string[]} */
 export function reportScopeProblems(report, ranges) {
   const files = report.files ?? {};
-  const parsed = ranges.map((r) => {
-    const [, file, a, b] = /** @type {[string, string, string, string]} */ (/^(.+):(\d+)-(\d+)$/.exec(r));
-    return { file, a: Number(a), b: Number(b) };
-  });
+  const parsed = ranges.map(rangeParts);
   const problems = [];
   const mutate = report.config?.mutate;
   if (!Array.isArray(mutate)) problems.push("the report records no config.mutate, so the run that wrote it cannot be told");
@@ -138,8 +145,18 @@ export function reportScopeProblems(report, ranges) {
     const line = m.location.start.line;
     if (!parsed.some((r) => r.file === file && line >= r.a && line <= r.b)) problems.push(`mutant ${m.id} at ${file}:${line} lies outside every expected range`);
   }
-  for (const r of parsed) if (!Object.hasOwn(files, r.file)) problems.push(`expected range ${r.file}:${r.a}-${r.b}: the report holds no entry for ${r.file}`);
   return problems;
+}
+
+/** The ranges of `ranges`, in order, none of whose lines holds a mutant in the report: its file absent (Stryker leaves out a file it
+ *  generated no mutant for) or present without one there. On a report reportScopeProblems passes, these are lines Stryker found
+ *  nothing to mutate on, listed for the reader and never failed. @param {string[]} ranges @returns {string[]} */
+export function rangesWithoutMutants(report, ranges) {
+  const files = report.files ?? {};
+  return ranges.filter((r) => {
+    const { file, a, b } = rangeParts(r);
+    return !(files[file]?.mutants ?? []).some((m) => m.location.start.line >= a && m.location.start.line <= b);
+  });
 }
 
 /** Stryker's mutation-testing-report JSON → one row per mutant, killers by NAME. */
@@ -195,6 +212,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     }
     const v = verdictsFromReport(json);
     if (v.rows.length === 0) { process.stderr.write("the report holds zero mutants: refusing a vacuous pass\n"); process.exit(2); }
+    for (const r of rangesWithoutMutants(json, ranges)) process.stdout.write(`${r}: no mutants generated (non-mutable lines)\n`);
     for (const r of v.rows) process.stdout.write(`${r.file}:${r.line} ${r.mutator} ${r.status}${r.killedBy.length ? ` by ${r.killedBy.join("; ")}` : ""}\n`);
     const count = (s) => v.rows.filter((r) => r.status === s).length;
     process.stdout.write(`${JSON.stringify({ mutants: v.rows.length, killed: count("Killed"), timeout: count("Timeout"), survived: count("Survived"), noCoverage: count("NoCoverage") })}\n`);

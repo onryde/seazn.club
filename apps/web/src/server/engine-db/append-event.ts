@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { withTenant, type Tx } from "@/lib/db";
 import {
   EngineError,
-  foldMatch,
+  foldMatchWithStoppage,
+  outcomeOf,
   resolveVoids,
   type EventEnvelope,
   type MatchOutcome,
@@ -292,9 +293,9 @@ export async function appendEventInTx(
   // runs inside `tx`, where a throw aborts the transaction before any write
   // (PROMPT-61, above) — that must keep happening exactly as it does today,
   // so the catch below re-throws unchanged and never touches SQL itself.
-  const state = (() => {
+  const folded = (() => {
     try {
-      return foldMatch(sportModule, cfg, lineups, stream, {
+      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {
         strictFromSeq: candidate.seq,
       });
     } catch (error) {
@@ -325,8 +326,10 @@ export async function appendEventInTx(
       throw error;
     }
   })();
+  const state = folded.state;
   const summary = sportModule.summary(state);
-  const outcome = sportModule.outcome(state);
+  // W2a finding 1: a settle lives beside module state (outcomeOf).
+  const outcome = outcomeOf(sportModule, folded);
   const active = resolveVoids(stream);
 
   // PROMPT-61: a stage that cannot end level refuses to finalize a draw —

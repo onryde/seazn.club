@@ -4,6 +4,7 @@
 // lineups (loadLineupPair returns slots:[] for a fixture with no lineup rows).
 import {
   foldMatchWithStoppage,
+  outcomeOf,
   type EventEnvelope,
   type LineupPair,
   type MatchOutcome,
@@ -58,8 +59,9 @@ export function foldStream(
   away: string,
   events: readonly StreamEvent[],
 ): FoldedStream {
-  const state: unknown = foldMatchWithStoppage(module, cfg as never, lineupsFor(home, away), envelopes("matrix", events), FOLD_OPTIONS).state;
-  return { outcome: module.outcome(state), state };
+  // W2a finding 1: a settle lives beside module state (outcomeOf).
+  const folded = foldMatchWithStoppage(module, cfg as never, lineupsFor(home, away), envelopes("matrix", events), FOLD_OPTIONS);
+  return { outcome: outcomeOf(module, folded), state: folded.state as unknown };
 }
 
 export interface DeclaredPoints {

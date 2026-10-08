@@ -289,7 +289,10 @@ with the frontend-design skill.
   - While the block shows, Finalize is hidden, and the server refuses it with `LEVEL_RESULT_IN_BRACKET` (§5.4 item 3).
 - **Pad** (`components/v2/scorepad/v3/`):
   - The pad receives the stage kind. Today it is stage-blind (`skins/boardgame.tsx:381`, `skins/generic.tsx:176`).
-  - Generic and boardgame hide Draw in bracket kinds.
+  - Generic hides Draw in bracket kinds (GN-KO-1: the scorer enters the winner). **Boardgame keeps Draw (and its
+    double-forfeit dock) in every stage kind in phase `live`** — in a bracket the drawn game is the only pad entry into
+    the tie-break (BG-KO-1) and the double forfeit the only entry into its held `no_result` (T15-R1); it hides Draw
+    and the halves only while a decider is pending (`deciderPending`). Controller ruling D-P1, 2026-10-08.
   - The boardgame skin shows the **three-step tie-break** in phase `tiebreak`, with Back on each step:
     1. "Which tie-break decided it?" — Rapid, Blitz or Armageddon. The step also says "Decided by lot? Ask the
        organiser to settle the match."

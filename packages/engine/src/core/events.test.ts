@@ -238,7 +238,7 @@ describe("resolveVoids", () => {
 // ---------------------------------------------------------------------------
 
 describe("core event payloads", () => {
-  it("knows exactly the fourteen core types (spec 03 §2 + Jul3/07 core.award + W4 suspend/resume + S3/W4b core.lineup.*)", () => {
+  it("knows exactly the fifteen core types (spec 03 §2 + Jul3/07 core.award + W4 suspend/resume + S3/W4b core.lineup.* + W2a core.settle)", () => {
     expect(Object.keys(CORE_EVENT_SCHEMAS).sort()).toEqual([
       "core.abandon",
       "core.award",
@@ -251,6 +251,7 @@ describe("core event payloads", () => {
       "core.lineup.substitution",
       "core.note",
       "core.resume",
+      "core.settle",
       "core.start",
       "core.suspend",
       "core.void",

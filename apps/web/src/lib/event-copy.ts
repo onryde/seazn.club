@@ -41,7 +41,16 @@ export const EVENT_COPY_KEYS: readonly MessageKey[] = [
   "eventCopy.fromPenalty", "eventCopy.shootoutScored", "eventCopy.shootoutMissed",
   "eventCopy.wins", "eventCopy.winsBy", "eventCopy.draw", "eventCopy.recorded",
   "eventCopy.inProgress", "eventCopy.pointTo",
+  "eventCopy.settled", "eventCopy.settled.lot", "eventCopy.settled.higher_seed", "eventCopy.settled.organiser",
 ];
+
+/** W2a (X-ST-1): `core.settle`'s sentence per settle method (engine `SETTLE_METHODS`). A method this table does not
+ *  know falls to the method-free "{name} advances" rather than inventing how. */
+const SETTLED_KEY: Readonly<Record<string, MessageKey>> = {
+  lot: "eventCopy.settled.lot",
+  higher_seed: "eventCopy.settled.higher_seed",
+  organiser: "eventCopy.settled.organiser",
+};
 
 /** `m()` narrowed to MsgFn carries no vars, so interpolate on the way out. */
 const say = (m: MsgFn, key: MessageKey, vars?: Record<string, string | number>) =>
@@ -106,6 +115,13 @@ export function describeEvent(
       };
     case "core.abandon":
       return { label: badge, text: m("eventCopy.abandoned") + because(p, m), tone: "admin" };
+    case "core.settle": {
+      // W2a (X-ST-1): who advances and how; the organiser's optional note is
+      // free text, echoed like core.note's.
+      const key = (typeof p.method === "string" && SETTLED_KEY[p.method]) || "eventCopy.settled";
+      const note = typeof p.note === "string" && p.note ? ` — ${p.note}` : "";
+      return { label: badge, text: say(m, key, { name: name(names, p.winner, m) }) + note, tone: "admin" };
+    }
     case "core.award": {
       // Canonical CoreAward is { person, key } (Jul3/07 §4 — MOTM/MVP and
       // friends); `to` is a legacy fallback so old ledger rows keep a name.

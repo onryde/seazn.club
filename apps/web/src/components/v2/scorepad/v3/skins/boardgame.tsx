@@ -126,6 +126,7 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
   [RESULT_TYPE]: 0,
   [PAIRING_TYPE]: 1,
+  "boardgame.tiebreak": 0, // W2a BG-KO-1 — the module's own band (ruling D-C4; Task 12 owns the rest of this skin)
 };
 
 function withinBand(eventType: string, band: FidelityBand): boolean {

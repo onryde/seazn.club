@@ -1200,6 +1200,111 @@
     ]
   },
   {
+    "id": "budget-flat-judge-test",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "  }, spawnBudget(JUDGE_RUNS));",
+    "replace": "  });",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "budget-flat-step-test",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "  }, spawnBudget(STEP_RUNS));",
+    "replace": "  });",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run"
+      }
+    ]
+  },
+  {
+    "id": "judge-runs-undercounted",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "const JUDGE_RUNS = 1 + REDS.length;",
+    "replace": "const JUDGE_RUNS = REDS.length;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "step-runs-undercounted",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "const STEP_RUNS = 3;",
+    "replace": "const STEP_RUNS = 2;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run"
+      }
+    ]
+  },
+  {
+    "id": "spawn-not-counted",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "    spawns++;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "spawn-counter-not-reset-between-tests",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "    spawns = 0;\n    const failedExit",
+    "replace": "    const failedExit",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the checker runs on every pull request: CI wiring \\(review I-3\\)"
+      }
+    ]
+  },
+  {
+    "id": "spawn-cap-too-small",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "encoding: \"utf8\", timeout: SPAWN_MS });",
+    "replace": "encoding: \"utf8\", timeout: 1 });",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
     "id": "ci-step-continue-on-error",
     "file": ".github/workflows/ci.yml",
     "find": "      - name: Engine rules reference checker (DB-free)\n        run: |",

@@ -23,6 +23,7 @@ import { periodClockPosition, type MatchPosition } from "../../core/position.ts"
 import type { Rng } from "../../core/rng.ts";
 import {
   AttemptOutcome,
+  DRAW_KINDS,
   EntrantId,
   type DisciplineCard,
   type DisciplineModel,
@@ -2638,13 +2639,16 @@ export function makePeriodModule(
     metrics: preset.metrics,
     defaultTiebreakers: preset.defaultTiebreakers,
 
-    // v6/00 §3 — draws are a league result only where no decider is
+    // v6/00 §3 — draws are a table result only where no decider is
     // configured (FIH outdoor, rec ice); OT or a shootout means every match
-    // produces a winner.
+    // produces a winner. X-DR-1 (ruling 78; americano offered per W2a plan
+    // finding 15).
     supportsDraws(cfg, stage: StageKind) {
-      const leagueish = stage === "league" || stage === "group" || stage === "swiss";
-      return leagueish && cfg.overtime === null && cfg.shootout === null;
+      return DRAW_KINDS.has(stage) && cfg.overtime === null && cfg.shootout === null;
     },
+
+    // W2a: none (hockey/ice hockey deciders stay organiser-configured until W2c, spec §5.2)
+    bracketDeciders: () => ({}),
 
     declaredPointsSets(cfg) {
       const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];

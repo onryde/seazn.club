@@ -4,7 +4,7 @@
 // lifts a core.void's `payload.event_id` into the envelope's `voids`
 // (usecases/scoring.ts); the kernel never validates a void's payload (it
 // validates ACTIVE events only), so the envelope carries `{}`.
-import { foldMatchWithStoppage, type EventEnvelope, type MatchOutcome } from "@seazn/engine/core";
+import { foldMatchWithStoppage, outcomeOf, type EventEnvelope, type MatchOutcome } from "@seazn/engine/core";
 import { FOLD_OPTIONS, OFFLINE_RECORDED_AT, lineupsFor } from "../fold.ts";
 import { sportModule } from "../sport-cfg.ts";
 
@@ -34,6 +34,7 @@ export function liveEntries(entries: readonly LedgerEntry[]): LedgerEntry[] {
 export function foldLedger(sport: string, cfg: unknown, home: string, away: string, entries: readonly LedgerEntry[]): MatchOutcome | null {
   if (entries.length === 0) return null;
   const m = sportModule(sport);
-  const state: unknown = foldMatchWithStoppage(m, cfg as never, lineupsFor(home, away), ledgerEnvelopes("model", entries), FOLD_OPTIONS).state;
-  return m.outcome(state);
+  // W2a finding 1: a settle lives beside module state (outcomeOf).
+  const folded = foldMatchWithStoppage(m, cfg as never, lineupsFor(home, away), ledgerEnvelopes("model", entries), FOLD_OPTIONS);
+  return outcomeOf(m, folded);
 }

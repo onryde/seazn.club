@@ -101,6 +101,25 @@ export const StageKind = z.enum([
 ]);
 export type StageKind = z.infer<typeof StageKind>;
 
+// W2a (spec §5.4.1, rulings 72 and 78). Two halves of StageKind, disjoint and
+// exhaustive (stage-kind-sets.test.ts). BRACKET_KINDS is "a level result is
+// forbidden because someone must advance" — wider than the bracket-SHAPE set
+// (competition/progression.ts BRACKET_STAGE_KINDS), which has no ladder.
+export const BRACKET_KINDS: ReadonlySet<StageKind> = new Set<StageKind>([
+  "knockout", "double_elim", "stepladder", "page_playoff", "ladder",
+]);
+export const DRAW_KINDS: ReadonlySet<StageKind> = new Set<StageKind>([
+  "league", "group", "swiss", "americano",
+]);
+export function forbidsLevelResult(kind: string | null | undefined): boolean {
+  // No `typeof` guard: a set of kind strings answers false for null, undefined
+  // and any unknown string alike (a guard here is an unkillable mutant).
+  return (BRACKET_KINDS as ReadonlySet<unknown>).has(kind);
+}
+export function isLevelOutcome(outcome: MatchOutcome | null | undefined): boolean {
+  return outcome != null && (outcome.kind === "draw" || outcome.kind === "tie" || outcome.kind === "no_result");
+}
+
 // spec 03 §3 — context the sport module receives when computing standings
 // deltas (knockout football forbids draws; group cricket shares points, …).
 export const StageCtx = z.object({

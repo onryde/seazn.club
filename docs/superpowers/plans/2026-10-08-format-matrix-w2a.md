@@ -4883,10 +4883,10 @@ describe("Draw is hidden in bracket kinds (spec §5.5; X-DR-1, GN-KO-1)", () => 
   it("empty case first: with no stage kind (a pre-W2a bootstrap) the pad behaves as today", () => {
     expect(bgTiles(liveView("boardgame", { stageKind: null }), (k) => k).some((t) => t.id === DRAW_TILE_ID)).toBe(true);
   });
-  it("boardgame: Draw shows exactly outside bracket kinds", () => {
+  it("boardgame: Draw shows in every stage kind in phase live, and never while a decider is pending (ruling D-P1)", () => {
     let checked = 0;
     for (const k of StageKind.options) {
-      expect(bgTiles(liveView("boardgame", { stageKind: k }), (x) => x).some((t) => t.id === DRAW_TILE_ID), k).toBe(!BRACKET_KINDS.has(k));
+      expect(bgTiles(liveView("boardgame", { stageKind: k }), (x) => x).some((t) => t.id === DRAW_TILE_ID), k).toBe(true); // D-P1: the drawn game is the tie-break entry; add the deciderPending-hidden case beside it
       checked++;
     }
     expect(checked).toBe(StageKind.options.length);

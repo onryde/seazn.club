@@ -25,6 +25,7 @@ import {
   REPLAY_LINEUP_POLICY,
   initSquads,
   isLineupEventType,
+  kernelOwnsEvent,
   reduceLineupEvent,
   resolveVoids,
   type EventEnvelope,
@@ -444,17 +445,23 @@ export function replayDerived(args: {
     if (module.onLineup !== undefined) state = module.onLineup(state as never, squads);
     let previous: ScoreSummary = module.summary(state as never);
     let prevPoint: PointState | undefined;
+    let settled = false;
 
     for (let i = 0; i < active.length; i++) {
       const event = active[i]!;
       failedAt = event.seq;
-      // The three families `foldMatch` never hands to a module.
-      if (event.type === "core.suspend" || event.type === "core.resume") continue;
-      if (isLineupEventType(event.type)) {
-        const reduced = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
-        if (reduced.ok) {
-          squads = reduced.squads;
-          if (module.onLineup !== undefined) state = module.onLineup(state as never, squads);
+      // Everything the kernel folds itself and never hands to a module — the
+      // engine's own predicate (W2a I-1), never a list restated here: suspend,
+      // resume, settle, the lineup family, and a settled fixture's finalize.
+      // Of those only a lineup change moves anything this replay reads.
+      if (kernelOwnsEvent(module, event, { state, settled })) {
+        if (event.type === "core.settle") settled = true;
+        if (isLineupEventType(event.type)) {
+          const reduced = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
+          if (reduced.ok) {
+            squads = reduced.squads;
+            if (module.onLineup !== undefined) state = module.onLineup(state as never, squads);
+          }
         }
         continue;
       }
