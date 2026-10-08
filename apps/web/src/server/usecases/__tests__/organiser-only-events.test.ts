@@ -63,8 +63,11 @@ function unwrap(s: unknown): unknown {
   while (WRAPPERS.has(defOf(x)?.type as string)) x = defOf(x)!.innerType;
   return x;
 }
-/** The words a rulebook uses for a match lost without (all of) its play. It no longer FINDS anything (the sweep is
- *  vocabulary-free); it only decides whether a `no_result` a value produces is a forfeit (a double forfeit) or not. */
+/** The words a rulebook uses for a match lost without (all of) its play. The sweep FLAGS an award or a no_result
+ *  without it, but the vocabulary still FINDS one class on its own: a value that ends the match as a WIN under its
+ *  own method. Boardgame's single forfeit folds to `win{method:"forfeit"}` (neither award nor no_result), so only this
+ *  filter selects it for the gated list (review N2; the gap it leaves is `VOCABULARY_GAP`, beside `UNREACHED_TYPES`).
+ *  It also decides whether a `no_result` a value produces is a forfeit (a double forfeit) or not. */
 const FORFEIT_VOCABULARY = /forfeit|walkover|default|disqualif/i;
 /** The side placeholders: the walk's lineups name the entrants "H" and "A" (`defaultLineupPair`); the DB rows swap
  *  in the seeded fixture's real entrant ids. */
@@ -298,6 +301,25 @@ const UNREACHED_TYPES: Readonly<Record<string, string>> = {
   "hockey.shootout.attempt": "shootout phase only; no walk reaches a shootout",
 };
 
+/** KNOWN GAP (review N2), the sweep's other blind spot beside `UNREACHED_TYPES`: a value that ends the match as a WIN
+ *  under its own method is gated only when that method is in `FORFEIT_VOCABULARY`. A forfeit-like value spelled
+ *  outside it ("no_show", "concede") that folds to a win would be neither flagged nor gated. So every value the sweep
+ *  saw decide a match as itself is listed here, each read as a played result; a new one reds the test below and must
+ *  be read — a forfeit joins the lib's table (and the vocabulary), a played result joins this list. */
+const VOCABULARY_GAP: Readonly<Record<string, string>> = {
+  "boardgame.result.method=adjudication": "an arbiter's ruling on a played game (FIDE Art. 5.2): a played result",
+  "boardgame.result.method=agreement": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
+  "boardgame.result.method=checkmate": "a played result: the game was decided over the board",
+  "boardgame.result.method=dead_position": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
+  "boardgame.result.method=fifty_move": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
+  "boardgame.result.method=illegal_move": "a played result: the arbiter's penalty for an illegal move in play",
+  "boardgame.result.method=insufficient": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
+  "boardgame.result.method=repetition": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
+  "boardgame.result.method=resign": "a played result: the game was decided over the board",
+  "boardgame.result.method=stalemate": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
+  "boardgame.result.method=time": "a played result: the flag fell in play",
+};
+
 describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived from the engine", () => {
   it("X-ST-2 empty case first: the core constant is exactly the three ruled types, and the set is that list", () => {
     expect([...ORGANISER_ONLY_EVENT_TYPES].sort()).toEqual([...RULED_CORE_TYPES].sort());
@@ -388,6 +410,19 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
     const df = flagged.find((i) => i.type === "boardgame.result" && i.value === "double_forfeit");
     expect(df, "boardgame's double forfeit is flagged").toBeDefined();
     expect([...df!.decisive.values()]).toEqual(expect.arrayContaining([{ winner: null, method: "double_forfeit" }, { method: "double_forfeit" }]));
+  });
+
+  it("N2: every value outside the vocabulary that decides a match as itself (a win under its own method) is a named played result", () => {
+    const decidesAsItself = sweep.items
+      .filter((i) => i.value !== null && !FORFEIT_VOCABULARY.test(i.value) && i.namesMethod.size > 0)
+      .map(itemId);
+    expect(decidesAsItself.length, "the sweep saw decisive methods (zero = it saw nothing)").toBeGreaterThan(0);
+    expect(decidesAsItself.sort()).toEqual(Object.keys(VOCABULARY_GAP).sort());
+    // The class the vocabulary finds: boardgame's single forfeit decides as itself, with no award or no_result.
+    const forfeit = GATED_SPORT.find((i) => i.type === "boardgame.result" && i.value === "forfeit");
+    expect(forfeit, "the single forfeit is gated").toBeDefined();
+    expect(forfeit!.decisive.size, "found by the vocabulary alone: it never ends the match as award/no_result").toBe(0);
+    expect(forfeit!.namesMethod.size).toBeGreaterThan(0);
   });
 
   it("I-1: every forfeit-vocabulary value the fold does not treat as a forfeit carries a named reason, and no reason is stale", () => {

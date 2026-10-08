@@ -316,6 +316,13 @@
           "src/server/engine-db/__tests__/held-behaviours.test.ts"
         ],
         "name": "D-F1: the organiser can undo a settle on a legacy generic held row — the void is accepted and the row is held again"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "D-F1 \\(review N1\\): in score mode a void CAN make a new draw — voiding a point under a stored tally card re-folds it level; the void is accepted, the row is held, and the settle closes it"
       }
     ]
   },

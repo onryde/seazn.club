@@ -4,7 +4,8 @@
 //  2. A LEGACY generic held row (a generic draw stored before W2a, in a stage that is a bracket now; V432 holds it)
 //     refuses any later event whose fold is still the draw — LEVEL_RESULT_IN_BRACKET, "enter the winner".
 //  3. D-F1: except a core.void. The organiser must be able to undo a settle; voiding the settle on such a row returns
-//     it to needs_decision.
+//     it to needs_decision. And (fix round 2, review N1) a void that MAKES a new draw — score mode, a point voided
+//     under a tally card — is accepted and held the same way, then settled.
 // Witnesses are passthrough spies on the two modules the refreshes call (the real code still runs).
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -131,5 +132,24 @@ describe.skipIf(!HAS_DB)("M-3: the held behaviours Task 8 changed", () => {
     expect(await status(t.id), "voiding the settle returns the row to needs_decision").toBe("needs_decision");
     // The exemption is the void's alone: the next non-settle event is refused again.
     await expect(post(t.auth, t.id, "core.note", { text: "after the undo" })).rejects.toMatchObject({ code: "LEVEL_RESULT_IN_BRACKET" });
+  });
+
+  it("D-F1 (review N1): in score mode a void CAN make a new draw — voiding a point under a stored tally card re-folds it level; the void is accepted, the row is held, and the settle closes it", async () => {
+    const s = await seedBracket({ sport: "generic", variant: "score", stageKind: "knockout", entrants: 2 });
+    const id = s.fixtureIds[0]!;
+    const { home, away } = await sides(id);
+    await post(s.auth, id, "core.start");
+    await post(s.auth, id, "generic.score", { by: home, points: 1 });
+    await post(s.auth, id, "generic.score", { by: away, points: 1 });
+    const secondHome = await post(s.auth, id, "generic.score", { by: home, points: 1 });
+    await post(s.auth, id, "generic.result", {}); // a card with no scores settles from the running tally
+    expect(await status(id), "home 2–1 from the tally").toBe("decided");
+    const [point] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${id} and seq = ${secondHome.seq}`;
+    await post(s.auth, id, "core.void", { event_id: point!.id });
+    const [f] = await sql<{ kind: string }[]>`select outcome->>'kind' as kind from fixtures where id = ${id}`;
+    expect(f!.kind, "the stored card re-folds on the 1–1 tally").toBe("draw");
+    expect(await status(id), "the void is accepted and the new draw is held").toBe("needs_decision");
+    await post(s.auth, id, "core.settle", { winner: home, method: "organiser" });
+    expect(await status(id), "the organiser's settle closes it").toBe("decided");
   });
 });

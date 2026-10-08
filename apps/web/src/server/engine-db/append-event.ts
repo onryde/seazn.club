@@ -400,9 +400,12 @@ export async function appendEventInTx(
   // (PROMPT-61) — the throw aborts the tx before insert.
   if (outcome !== null && (outcome as { kind?: string }).kind === "draw") {
     if (forbidsLevelResult(stageKind)) {
-      // Controller ruling D-F1: a core.void is exempt. A generic draw can only still be in the fold under a void when
-      // it was stored before W2a (V432 holds it); the organiser must be able to undo a settle on that row, and the
-      // void returns it to needs_decision — it cannot create a new draw, only uncover the old one.
+      // Controller ruling D-F1: a core.void is exempt, on every generic row. Two ways a void leaves a draw in the
+      // fold: it uncovers one stored before W2a (V432 holds that row; voiding its settle returns it to needs_decision),
+      // or it MAKES a new one in score mode — a result card with no scores settles from the running tally, so voiding
+      // a point under it (H, A, H, card = 2–1; void the second H) re-folds the stored card level. Either way the void
+      // is accepted and the row is held (needs_decision), for the organiser to settle or to void again; refusing it
+      // would leave a wrong point unremovable.
       if (division.sport_key === "generic" && candidate.type !== "core.void") {
         throw new EngineError("LEVEL_RESULT_IN_BRACKET", "a knockout match can't end level — enter the winner", {
           fixtureId,

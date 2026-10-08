@@ -40,15 +40,23 @@ const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 const SETTLED = WITHDRAWAL_PLAYED_STATUSES;
 const PENDING = WITHDRAWAL_PENDING_STATUSES;
 
-/** A bracket fixture's status as the engine's withdrawal planner reads it. */
-function bracketWithdrawalStatus(status: string): "decided" | "scheduled" | "void" {
+/** A bracket fixture's status as the engine's withdrawal planner reads it. Every fixtures.status is named; an unknown
+ *  one throws (review N4, as `engineFixtureStatus` does) rather than silently reading as "void". */
+export function bracketWithdrawalStatus(status: string): "decided" | "scheduled" | "void" {
   if (SETTLED.has(status)) return "decided";
   if (PENDING.has(status)) return "scheduled";
-  // W2a (ruling C17): a HELD fixture is named, not fallen into. It is passed as "void" so the planner walks nobody
-  // over on it: it stays needs_decision, and the organiser settles it for the remaining entrant (a settle naming
-  // the withdrawn one is refused SETTLE_NOT_APPLICABLE). The auto-walkover of a held fixture is W2b's (spec §2.3).
-  if (status === "needs_decision") return "void";
-  return "void"; // abandoned, cancelled
+  switch (status) {
+    // W2a (ruling C17): a HELD fixture is passed as "void" so the planner walks nobody over on it: it stays
+    // needs_decision, and the organiser settles it for the remaining entrant (a settle naming the withdrawn one is
+    // refused SETTLE_NOT_APPLICABLE). The auto-walkover of a held fixture is W2b's (spec §2.3).
+    case "needs_decision":
+      return "void";
+    case "abandoned":
+    case "cancelled":
+      return "void";
+    default:
+      throw new Error(`bracketWithdrawalStatus: unknown fixtures.status "${status}"`);
+  }
 }
 const REASON = "entrant withdrew";
 

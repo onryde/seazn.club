@@ -465,8 +465,8 @@
   {
     "id": "withdrawal-held-named",
     "file": "apps/web/src/server/usecases/withdrawal.ts",
-    "find": "  if (status === \"needs_decision\") return \"void\";",
-    "replace": "  if (status === \"needs_decision\") return \"scheduled\";",
+    "find": "    case \"needs_decision\":\n      return \"void\";\n",
+    "replace": "",
     "killers": [
       {
         "cwd": "apps/web",
@@ -474,6 +474,58 @@
           "src/server/engine-db/__tests__/settle-seating.test.ts"
         ],
         "name": "X-ST-1 \\(ruling C17, Review Focus 5\\): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\), and a settle for the remaining one seats them"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
+        ],
+        "name": "N4: every fixtures\\.status maps as ruled, and the ruling table covers exactly the status domain"
+      }
+    ]
+  },
+  {
+    "id": "withdrawal-ended-named",
+    "file": "apps/web/src/server/usecases/withdrawal.ts",
+    "find": "    case \"abandoned\":\n    case \"cancelled\":\n      return \"void\";\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
+        ],
+        "name": "N4: every fixtures\\.status maps as ruled, and the ruling table covers exactly the status domain"
+      }
+    ]
+  },
+  {
+    "id": "withdrawal-unknown-throws",
+    "file": "apps/web/src/server/usecases/withdrawal.ts",
+    "find": "      throw new Error(`bracketWithdrawalStatus: unknown fixtures.status \"${status}\"`);",
+    "replace": "      return \"void\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
+        ],
+        "name": "N4: an unknown status throws \\(never a silent void\\)"
+      }
+    ]
+  },
+  {
+    "id": "v432-complete-filter",
+    "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
+    "find": "   where f.status = 'needs_decision'\n     and s.status = 'complete';",
+    "replace": "   where f.status = 'needs_decision';",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/__tests__/v432-needs-decision-migration.test.ts"
+        ],
+        "name": "review M-4: V432's backfill block reports the rows it moved and the complete stages that hold one, and leaves those stages complete"
       }
     ]
   }
