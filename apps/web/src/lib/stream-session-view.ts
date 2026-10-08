@@ -558,6 +558,25 @@ export function autoOperatorHint(phone: StreamPhone | null, autoOn: boolean): bo
   return autoOn && phone?.phone?.mode === "operator";
 }
 
+/** Why automatic start will not run again in this match (`auto.wontStart`, the server's latch — final review I-1). */
+export type AutoWontStartReason = NonNullable<NonNullable<StreamPhone["auto"]>["wontStart"]>;
+/** Each latch's line. A Record over the served enum, so a latch the server adds without copy here fails tsc. */
+export const AUTO_WONT_START_KEY: Record<AutoWontStartReason, MessageKey> = {
+  stopped: "stream.auto.wontStart.stopped",
+  already_streamed: "stream.auto.wontStart.already_streamed",
+  already_started: "stream.auto.wontStart.already_started",
+};
+/** The note under the switch (final review I-1, owner 2026-10-08, option A): ONE line, only while the switch is ON. A latch
+ *  the server names (`auto.wontStart`) outranks the Operator hint — the switch will not start this match at all, and the
+ *  phone's mode would not change that. Else the Operator hint (`autoOperatorHint`), else nothing. */
+export type AutoSwitchNote = { kind: "wontStart"; reason: AutoWontStartReason } | { kind: "operator" } | null;
+export function autoSwitchNote(phone: StreamPhone | null, autoOn: boolean): AutoSwitchNote {
+  if (!autoOn) return null;
+  const reason = phone?.auto?.wontStart ?? null;
+  if (reason !== null) return { kind: "wontStart", reason };
+  return autoOperatorHint(phone, autoOn) ? { kind: "operator" } : null;
+}
+
 /** §7.4 "behind a tap" (FP22, owner ruling Q-D): the Details disclosure's phone data — data used and the app version, each
  *  omitted when null. The disclosure itself exists only in Live/Ending, so neither shows while merely paired. */
 export function phoneDetails(phone: StreamPhone | null): ({ kind: "dataUsed"; mb: number } | { kind: "appVersion"; version: string })[] {

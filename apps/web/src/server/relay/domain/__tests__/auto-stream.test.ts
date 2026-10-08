@@ -14,8 +14,8 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AUTO_START_RETRY_SECONDS, AUTO_STOP_AFTER_RESULT_SECONDS } from "../../config";
 import {
-  AUTO_START_CONJUNCTS, AUTO_START_REFUSALS, AUTO_STOP_CONJUNCTS, autoStartVerdict, autoStopApplies, autoStopVerdict,
-  type AutoStartFacts, type AutoStopFacts,
+  AUTO_START_CONJUNCTS, AUTO_START_LATCHES, AUTO_START_REFUSALS, AUTO_STOP_CONJUNCTS, AUTO_WONT_START, autoStartVerdict, autoStopApplies,
+  autoStopVerdict, autoWontStart, type AutoStartFacts, type AutoStopFacts,
 } from "../auto-stream";
 
 const ROOT = resolve(import.meta.dirname, "../../../../../../..");
@@ -152,6 +152,59 @@ const STOP_FALSIFY: { conjunct: string; patch: Partial<AutoStopFacts> }[] = [
   { conjunct: "delay_elapsed", patch: { finishedAt: ago(ms(AUTO_STOP_AFTER_RESULT_SECONDS) - 1000) } },   // 179 s
   { conjunct: "session_predates_result", patch: { sessionPredatesResult: false } },
 ];
+
+// Final review I-1 (owner, 2026-10-08, option A). The ruling, LITERALLY: three latches turn automatic start off for the rest of
+// the match — an organiser Stop or Cancel (A12), the start already run (once per match), a session that received video (A16)
+// — and when several hold, stopped > already_streamed > already_started. Every expectation below is the ruling's, never read
+// off AUTO_START_LATCHES (the unit under test).
+describe("autoWontStart (final review I-1)", () => {
+  const RULING_LATCH: Record<string, string> = { not_blocked: "stopped", no_broadcast_ran: "already_streamed", not_yet_started: "already_started" };
+  const ruling = (f: AutoStartFacts) =>
+    f.autoStartBlockedAt !== null ? "stopped" : f.anySessionHadIngest ? "already_streamed" : f.autoStartedAt !== null ? "already_started" : null;
+  const of = (f: AutoStartFacts) => autoWontStart(autoStartVerdict(f, NOW, AUTO_START_RETRY_SECONDS).failed);
+
+  it("each latch names a REAL conjunct of the predicate, and the served vocabulary is the ruling's three, in its precedence", () => {
+    const names = AUTO_START_CONJUNCTS.map((c) => c.name);
+    for (const l of AUTO_START_LATCHES) expect(names, `${l.wontStart}: its conjunct is one the verdict can name`).toContain(l.conjunct);
+    expect(Object.fromEntries(AUTO_START_LATCHES.map((l) => [l.conjunct, l.wontStart]))).toEqual(RULING_LATCH);
+    expect([...AUTO_WONT_START]).toEqual(["stopped", "already_streamed", "already_started"]);
+  });
+
+  it("every conjunct falsified ALONE: the three latches name themselves, every other conjunct (the switch, the phone, the status, an open session, the spacing) names nothing", () => {
+    let latched = 0;
+    let checked = 0;
+    for (const row of START_FALSIFY) {
+      const f = { ...START_BASE, ...row.patch };
+      expect(of(f), `${row.conjunct} ${JSON.stringify(row.patch)}`).toBe(RULING_LATCH[row.conjunct] ?? null);
+      if (RULING_LATCH[row.conjunct]) latched++;
+      checked++;
+    }
+    expect([checked, latched]).toEqual([START_FALSIFY.length, 3]);
+    expect(of(START_BASE), "EMPTY: a due start latches nothing").toBeNull();
+    expect(of({ ...START_BASE, autoStream: false, phoneMode: null, fixtureStatus: "scheduled" }), "EMPTY: a fresh match with the switch off").toBeNull();
+  });
+
+  it("the PRECEDENCE: every combination of the three latches, under every non-latch conjunct both held and failed", () => {
+    let checked = 0;
+    const seen = new Set<string | null>();
+    const others = [{}, { autoStream: false, phoneMode: "operator" as const, phonePresent: false, fixtureStatus: "decided", openSession: true, autoStartAttemptedAt: ago(1) }];
+    for (const other of others) {
+      for (const blocked of [false, true]) {
+        for (const streamed of [false, true]) {
+          for (const started of [false, true]) {
+            const f: AutoStartFacts = { ...START_BASE, ...other, autoStartBlockedAt: blocked ? ago(1) : null, anySessionHadIngest: streamed, autoStartedAt: started ? ago(1) : null };
+            const want = ruling(f);
+            expect(of(f), `blocked ${blocked}, streamed ${streamed}, started ${started}, others ${JSON.stringify(other)}`).toBe(want);
+            seen.add(want);
+            checked++;
+          }
+        }
+      }
+    }
+    expect(checked).toBe(16);
+    expect(seen.size, "every answer and null").toBe(4);
+  });
+});
 
 describe("autoStopVerdict (§7.3)", () => {
   it("the table has one conjunct per line of the spec's autoStopDue, and unique names (anti-vacuity)", () => {

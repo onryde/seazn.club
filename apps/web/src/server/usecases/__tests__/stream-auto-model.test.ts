@@ -261,6 +261,9 @@ const COUNT_KEYS = [
   "storedRefusalHiddenAfterStop",
   // the organiser read's stopApplies (B7 review M-3), both ways: §7.3 will stop the open session, and it never will
   "organiserReadStopApplies", "organiserReadStopWithheld",
+  // the organiser read's wontStart (final review I-1): each latch served, and two or more at once (the precedence decides)
+  "organiserReadWontStart:stopped", "organiserReadWontStart:already_streamed", "organiserReadWontStart:already_started",
+  "organiserReadLatchesStacked",
   // the inputs
   "modeFlips", "twoBeatRaces", "switchOns", "switchOffs", "manualGoLives", "manualRefusals", "ingests", "pickedRuns",
   "organiserReadChecks", "answersChecked",
@@ -544,7 +547,7 @@ function checkInvariants(m: Readonly<Model>, x: Real, pre: Snap, post: Snap, inf
   t.invariantChecks++;
 }
 
-/** The organiser read (`streamPhone`, T6): the switch, the start instant, the block, and the stored refusal. WHICH refusal is served
+/** The organiser read (`streamPhone`, T6): the switch, the latch, and the stored refusal. WHICH refusal is served
  *  is not a spec row: it is the controller ruling, B4 (2026-10-07) — "a refusal is served only while the verdict could still pass,
  *  ignoring spacing and presence" (`autoOf` in stream-phone.ts). The expectation below restates that ruling, nothing more. */
 async function checkOrganiserRead(m: Readonly<Model>, x: Real): Promise<void> {
@@ -563,12 +566,16 @@ async function checkOrganiserRead(m: Readonly<Model>, x: Real): Promise<void> {
       ? null
       : stopVector(m, open, m.now()).every((c) => c.holds || c.name === "fixture_finished" || c.name === "delay_elapsed");
     if (stopApplies !== null) x.tally.count(stopApplies ? "organiserReadStopApplies" : "organiserReadStopWithheld");
+    // Final review I-1, the owner's ruling (2026-10-08) restated: the latches that hold for the match, and the precedence —
+    // stopped > already_streamed > already_started — read off the MODEL's own state, never the domain's table.
+    const latched = { stopped: m.blockedAt !== null, already_streamed: m.sessions.some((s) => s.ingestAt !== null), already_started: m.startedAt !== null };
+    const wontStart = latched.stopped ? "stopped" : latched.already_streamed ? "already_streamed" : latched.already_started ? "already_started" : null;
+    if (wontStart !== null) x.tally.count(`organiserReadWontStart:${wontStart}`);
+    if (Object.values(latched).filter(Boolean).length >= 2) x.tally.count("organiserReadLatchesStacked");
     expect(read.auto, "the organiser read").toEqual({
       enabled: m.autoOn,
-      startedAt: m.startedAt === null ? null : new Date(m.startedAt).toISOString(),
-      blocked: m.blockedAt !== null,
       refusal: could ? m.refusal : null,
-      refusalAt: could && m.attemptedAt !== null ? new Date(m.attemptedAt).toISOString() : null,
+      wontStart,
       stopApplies,
     });
   }

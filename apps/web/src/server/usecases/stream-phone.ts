@@ -17,7 +17,7 @@ import {
   AUTO_START_RETRY_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_NOT_READY_SHOW_AFTER_SECONDS, PHONE_SILENT_FLOOR_SECONDS,
   POLL_FAR_SECONDS, tunable,
 } from "@/server/relay/config";
-import { AUTO_START_REFUSALS, autoStartVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
+import { AUTO_START_REFUSALS, autoStartVerdict, autoWontStart, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { isNotResponding, isPresent, isSilent } from "@/server/relay/domain/pairing";
 import { phoneHealthOf } from "@/server/relay/domain/phone-health";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
@@ -91,25 +91,26 @@ type SettingsFacts = {
   /** Null when the fixture has no settings row. */
   settings_id: string | null; auto_stream: boolean | null; auto_started_at: Date | null; auto_start_blocked_at: Date | null;
   auto_start_attempted_at: Date | null; auto_start_refusal: string | null;
-  /** Some session of this fixture EVER received ingest — read only while a refusal is stored (it is false otherwise). */
+  /** Some session of this fixture EVER received ingest (A16) — the tick's own fact (stream-auto.ts reads the same). */
   any_ingest: boolean;
 };
 
 /**
- * `StreamPhone.auto` (PR-2 T6, §7.1/§7.2). `enabled`, `startedAt` and `blocked` are the columns. The REFUSAL is not: the
- * stored code outlives the attempt it belonged to — an `already_running` start and an unmapped error leave an earlier code in
- * place, a Go live or a Stop makes it moot — so it is served only while the auto-start predicate could still pass
- * (`autoStartVerdict`, the ONE definition of "due": switch on, phone automatic, match in play, no open session, not started,
- * not blocked, no broadcast ever ingested). Two of its conjuncts are neutralised on purpose, because a refusal is meant to
- * outlast them: the retry spacing (the attempt is by definition inside it right after the refusal; `autoStartAttemptedAt: null`
- * makes it hold) and the phone's presence (a silent phone returns and the retry fires; `phonePresent: true`).
+ * `StreamPhone.auto` (PR-2 T6, §7.1/§7.2). `enabled` is the column. The REFUSAL is not: the stored code outlives the attempt
+ * it belonged to — an `already_running` start and an unmapped error leave an earlier code in place, a Go live or a Stop makes
+ * it moot — so it is served only while the auto-start predicate could still pass (`autoStartVerdict`, the ONE definition of
+ * "due": switch on, phone automatic, match in play, no open session, not started, not blocked, no broadcast ever ingested).
+ * Two of its conjuncts are neutralised on purpose, because a refusal is meant to outlast them: the retry spacing (the attempt
+ * is by definition inside it right after the refusal; `autoStartAttemptedAt: null` makes it hold) and the phone's presence
+ * (a silent phone returns and the retry fires; `phonePresent: true`). Neither is a latch, so `wontStart` (final review I-1)
+ * reads the SAME verdict: the latch its failures name, by the domain's precedence (`autoWontStart`).
  */
 function autoOf(
   st: SettingsFacts & { status: string }, c: { phoneMode: PhoneMode | null; openSession: boolean; stopApplies: boolean | null }, now: Date,
 ): StreamPhone["auto"] {
   if (st.settings_id === null) return null;
   const refusal = word({ options: AUTO_START_REFUSALS }, st.auto_start_refusal);
-  const couldStillFire = refusal !== null && autoStartVerdict({
+  const verdict = autoStartVerdict({
     autoStream: st.auto_stream === true,
     phoneMode: c.phoneMode,
     phonePresent: true,
@@ -119,13 +120,11 @@ function autoOf(
     autoStartBlockedAt: st.auto_start_blocked_at,
     anySessionHadIngest: st.any_ingest,
     autoStartAttemptedAt: null,
-  }, now, tunable("AUTO_START_RETRY_SECONDS", AUTO_START_RETRY_SECONDS)).due;
+  }, now, tunable("AUTO_START_RETRY_SECONDS", AUTO_START_RETRY_SECONDS));
   return {
     enabled: st.auto_stream === true,
-    startedAt: st.auto_started_at === null ? null : new Date(st.auto_started_at).toISOString(),
-    blocked: st.auto_start_blocked_at !== null,
-    refusal: couldStillFire ? refusal : null,
-    refusalAt: couldStillFire && st.auto_start_attempted_at !== null ? new Date(st.auto_start_attempted_at).toISOString() : null,
+    refusal: refusal !== null && verdict.due ? refusal : null,
+    wontStart: autoWontStart(verdict.failed),
     stopApplies: c.stopApplies,
   };
 }
@@ -144,9 +143,10 @@ function autoOf(
  *    server's clock, for the panel's 30-minute notice;
  *  - `auto` (PR-2 T6): the fixture's settings row as the panel's switch and strips read it — null with no row. Its `refusal` is
  *    served only while `autoStartVerdict` could still pass (`autoOf`): the stored code can outlive the attempt it belonged to;
+ *    `wontStart` (final review I-1) is the latch that verdict's failures name — why a switch left on will not start again;
  *    `stopApplies` (B7 review M-3) is whether §7.3 will ever stop the open session — the tick's own facts and predicate;
  *  - `phone.health` (PR-2 T6): domain/phone-health.ts's one derivation over the stored beat — withheld while the phone is silent
- *    (its readings are stale; `not_responding` still names a held one); `phone.notReadyForMs` / `notReadyShown` (FP16, owner
+ *    (its readings are stale; `not_responding` still names a held one); `phone.notReadyShown` (FP16, owner
  *    ruling R-2): the debounce of the flapping `notReady`, from the pairing's `not_ready_since`, shown only once a BEAT a
  *    constant after the stretch began still says not ready (and never for a silent phone);
  *  - `legacy` / `finished` (T11): the open session has no pairing (C-1), and the fixture is finished (C5's match-over row);
@@ -159,8 +159,7 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
     select c.org_id, f.finished_at, f.status,
            st.fixture_id as settings_id, st.auto_stream, st.auto_started_at, st.auto_start_blocked_at, st.auto_start_attempted_at,
            st.auto_start_refusal,
-           (st.auto_start_refusal is not null
-            and exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.first_ingest_at is not null)) as any_ingest
+           exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.first_ingest_at is not null) as any_ingest
       from fixtures f
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
@@ -203,10 +202,9 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
     const fresh = !silent;
     const beat = beatOf(p.last_beat);
     // FP16 / R-2: the debounce. `notReady` is the latest reason; the clock is the beat that began the stretch. A reason with no
-    // clock (a row from before V431) has no duration, so it is not shown; a clock in the future (skew) reads 0.
+    // clock (a row from before V431) has no duration, so it is not shown; nor is a clock later than the last beat (skew).
     const notReady = word(CaptureNotReady, p.not_ready);
     const sinceMs = notReady === null || p.not_ready_since === null ? null : new Date(p.not_ready_since).getTime();
-    const notReadyForMs = sinceMs === null ? null : Math.max(0, now.getTime() - sinceMs);
     // BEAT-CONFIRMED (I2, "about 2 beats"): shown only when a beat at least the constant after the stretch began still says not
     // ready — the last beat is that evidence, the wall clock between beats is not. One sighting never ages into shown.
     const notReadyShown = fresh && sinceMs !== null && lastBeatAt.getTime() - sinceMs >= PHONE_NOT_READY_SHOW_AFTER_SECONDS * 1000;
@@ -220,7 +218,6 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
       mode: phoneMode,
       state: word(CapturePhoneState, p.phone_state),
       notReady,
-      notReadyForMs,
       notReadyShown,
       // §7.4: the ONE derivation (the beat history's flags read the same predicates). A null reading contributes nothing, and a
       // silent phone's readings are withheld (I1) — the raw `beat` and `elapsedMs` below still say what it last reported and when.

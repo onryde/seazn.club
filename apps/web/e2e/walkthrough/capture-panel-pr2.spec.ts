@@ -533,6 +533,64 @@ test("T10/T11 live: 'Automatic: stops about N minutes after the result'; the hea
 });
 
 // ===========================================================================
+// Final review I-1 (owner, 2026-10-08, option A): the switch stays on, but the match's automatic start is spent
+// ===========================================================================
+test("final review I-1: the switch on, Go live → Stop → back in Ready the switch still reads on and the line under it says the stream was stopped — replacing the Operator hint; at 1280, 768 and 320", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + NAV_MS + LIVE_WAIT_MS + 3 * BEAT_POLL_MS + 6 * POLL_WAIT_MS + 30_000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const rig = await seedRig(page);
+  await addTargetApi(page, rig.orgId, "Stopped destination");
+  const f = rig.fixtures[0]!;
+  const body = await openPhoneTab(page, rig, f);
+  const phone = await pairedPhone(page);
+  // The fixture is not in play, so the switch on and an automatic phone start nothing by themselves (§7.2 in_play).
+  let reading: Partial<BeatBody> = { mode: "automatic" };
+  drive(phone, () => reading);
+  const strip = body.getByTestId("stream-phone-strip");
+  const wont = body.getByTestId("stream-auto-wont-start");
+  const opHint = body.getByTestId("stream-auto-operator");
+  await expect(strip, "PREMISE: paired, in Automatic").toHaveText(`Pixel 8 · ${en("stream.phone.mode.automatic")}`, { timeout: BEAT_POLL_MS });
+  await body.getByTestId("stream-auto-switch").click();
+  await expect.poll(() => autoStreamOf(f.id), { timeout: POLL_WAIT_MS }).toBe(true);
+  await expect(body.getByTestId("stream-auto-hint"), "PREMISE: the switch reads on").toBeVisible({ timeout: POLL_WAIT_MS });
+  await expect(wont, "a fresh match: nothing is spent, no line").toHaveCount(0);
+
+  await tapGoLive(body, rig, f);
+  await untilLive(body);
+  await body.getByTestId("stream-stop").click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByRole("button", { name: en("stream.phone.stop"), exact: true }).click();
+  await expect(dialog).toHaveCount(0, { timeout: POLL_WAIT_MS });
+  const pill = body.getByTestId("stream-state-pill");
+  await expect(pill, "the Stop ends it").toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+  // Start another → Ready, where the switch is (stream-relay A3's way back).
+  await body.getByTestId("stream-again").click();
+  await expect(pill).toHaveText(en("stream.phone.state.idle"), { timeout: POLL_WAIT_MS });
+
+  // Back in Ready: the switch still reads on — and says why it will not start this match (A12, the organiser's Stop).
+  await expect(body.getByTestId("stream-auto-switch"), "the Stop leaves the switch as it was").toHaveAttribute("aria-checked", "true", { timeout: POLL_WAIT_MS });
+  await expect(wont, "the line names the Stop").toHaveText(en("stream.auto.wontStart.stopped"), { timeout: POLL_WAIT_MS });
+  await expect(wont).toHaveAttribute("data-reason", "stopped");
+  const [st] = await withDb((sql) => sql<{ blocked: Date | null }[]>`
+    select auto_start_blocked_at as blocked from fixture_stream_settings where fixture_id = ${f.id}`);
+  expect(st?.blocked, "PREMISE: the Stop stamped the block (A12)").not.toBeNull();
+  // The phone to Operator: the latch is the one note — it replaces the Operator hint, never stacks with it.
+  reading = { mode: "operator" };
+  await expect(strip, "PREMISE: the phone now reads Operator").toHaveText(`Pixel 8 · ${en("stream.phone.mode.operator")}`, { timeout: BEAT_POLL_MS });
+  await expect(opHint, "the latch replaces the Operator hint").toHaveCount(0);
+  await expect(wont).toHaveText(en("stream.auto.wontStart.stopped"));
+
+  for (const width of [1280, 768, 320] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(wont, `${width}: the line`).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await testInfo.attach(`i1-stopped-${width}`, { body: await body.getByTestId("stream-ready").screenshot(), contentType: "image/png" });
+  }
+});
+
+// ===========================================================================
 // T11 — waiting: "Phone not ready" only on the server's beat-confirmed hold
 // ===========================================================================
 test("T11 waiting: a not-ready that FLAPS (each stretch shorter than the constant) is never shown; a HOLD of at least the constant is; a new reason shows at once; the clear takes it away", async ({

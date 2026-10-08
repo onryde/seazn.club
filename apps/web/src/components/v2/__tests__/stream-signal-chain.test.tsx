@@ -234,7 +234,7 @@ describe("SignalChain (spec §3.2)", () => {
   it("the Seazn node's stalled word, in every locale: 'Waiting for video' while the server says stalled, 'Receiving' when it does not", () => {
     const facts = (health: "stalled" | null) => ({
       present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: null, mode: "automatic" as const, state: "publishing" as const,
-      notReady: null, notReadyForMs: null, notReadyShown: false, health, startFailed: null, lastBeatAt: "2026-10-08T12:00:00Z",
+      notReady: null, notReadyShown: false, health, startFailed: null, lastBeatAt: "2026-10-08T12:00:00Z",
       elapsedMs: 4_000, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
     });
     const seaznOf = (health: "stalled" | null, locale: Locale) => {
@@ -372,7 +372,7 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
   type Facts = NonNullable<StreamPhone["phone"]>;
   const facts = (over: Partial<Facts> = {}): Facts => ({
     present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "1.4.0", mode: "automatic", state: "publishing",
-    notReady: null, notReadyForMs: null, notReadyShown: false, health: null, startFailed: null, lastBeatAt: "2026-10-08T12:00:00Z",
+    notReady: null, notReadyShown: false, health: null, startFailed: null, lastBeatAt: "2026-10-08T12:00:00Z",
     elapsedMs: 4_000, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
   });
   const readModel = (f: Facts | null, over: Partial<StreamPhone> = {}): StreamPhone => ({
@@ -470,7 +470,7 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
   });
 
   it("the refusal: the reason sentence, and its remedy — Buy credits only with a handler (a button), Manage destinations a new-tab link to Directory → Streaming", () => {
-    const auto = (refusal: "no_credit" | "no_destination" | "unavailable") => ({ enabled: true, startedAt: null, blocked: false, refusal, refusalAt: "2026-10-08T12:00:00Z", stopApplies: null });
+    const auto = (refusal: "no_credit" | "no_destination" | "unavailable") => ({ enabled: true, refusal, wontStart: null, stopApplies: null });
     const noCredit = phoneStrip(readModel(facts({ state: "paired" }), { auto: auto("no_credit") }), null)!;
     const withBuy = html(noCredit, "en", () => {});
     expect(text(withBuy)).toBe("Automatic start couldn't begin: You need a match credit to go live. Buy credits");

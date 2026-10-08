@@ -623,7 +623,7 @@ type Facts = NonNullable<StreamPhone["phone"]>;
 /** The paired phone's facts as the T9 read model serves them — present, answering, nothing wrong. */
 const facts = (over: Partial<Facts> = {}): Facts => ({
   present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
-  state: "paired", notReady: null, notReadyForMs: null, notReadyShown: false, health: null, startFailed: null,
+  state: "paired", notReady: null, notReadyShown: false, health: null, startFailed: null,
   lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
   beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
 });
@@ -1068,10 +1068,10 @@ function bodyStates(): [string, ReactElement[]][] {
     ["live, a legacy session", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: LEGACY })],
     ["live", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", fixtureDecided: true, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } }), balance: 1 })],
     // PR-2 (Option A): the switch on, a refused automatic start, a takeover notice, the live line + Details data, an amber.
-    ["ready, the switch on", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null } }) })],
-    ["ready, the automatic start refused", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: "no_destination", refusalAt: "2026-09-14T11:59:00Z", stopApplies: null } }) })],
+    ["ready, the switch on", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ auto: { enabled: true, refusal: null, wontStart: null, stopApplies: null } }) })],
+    ["ready, the automatic start refused", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ auto: { enabled: true, refusal: "no_destination", wontStart: null, stopApplies: null } }) })],
     ["ready, a takeover notice", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ lastTakeover: { at: "2026-09-14T11:50:00.000Z", model: "Pixel 8", elapsedMs: 600_000 } }) })],
-    ["live, automatic, Details data, a takeover", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } }), balance: 1, phone: readModel({ auto: { enabled: true, startedAt: "2026-09-14T11:50:00Z", blocked: false, refusal: null, refusalAt: null, stopApplies: true }, lastTakeover: { at: "2026-09-14T11:55:00.000Z", model: null, elapsedMs: 300_000 }, phone: facts({ state: "publishing", mode: "automatic", appVersion: "1.4.0", beat: { battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 245 } }) }) })],
+    ["live, automatic, Details data, a takeover", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } }), balance: 1, phone: readModel({ auto: { enabled: true, refusal: null, wontStart: "already_started", stopApplies: true }, lastTakeover: { at: "2026-09-14T11:55:00.000Z", model: null, elapsedMs: 300_000 }, phone: facts({ state: "publishing", mode: "automatic", appVersion: "1.4.0", beat: { battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 245 } }) }) })],
     ["live, the battery low (amber)", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } }), balance: 1, phone: readModel({ phone: facts({ state: "publishing", health: "battery_low", beat: { battery: { percent: 14, charging: false, drainPctPerHour: 9 }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 12 } }) }) })],
     ["ending", body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), balance: 1 })],
     ["ended", body({ view: session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", replayUrl: "https://www.youtube.com/watch?v=abc", endReason: "stopped", creditUsed: true }), balance: 1 })],
@@ -2356,7 +2356,7 @@ describe("PhoneTabBody — the T9b frame: one credits line, Ready's order, the i
 // `auto.refusal`, `lastTakeover.elapsedMs`).
 describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the takeover and Details (Option A)", () => {
   type Auto = NonNullable<StreamPhone["auto"]>;
-  const auto = (over: Partial<Auto> = {}): Auto => ({ enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null, ...over });
+  const auto = (over: Partial<Auto> = {}): Auto => ({ enabled: true, refusal: null, wontStart: null, stopApplies: null, ...over });
   const READY = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" } as const;
   const LIVE = session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" }, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } });
   /** §7.1's caption and Live's line, the figure filled — singular at 1 (the plural key's `one`). */
@@ -2438,6 +2438,51 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
     expect(byTestId(flipping, "stream-auto-operator")).toBeDefined();
   });
 
+  // Final review I-1 (owner, 2026-10-08, option A): the latch line. Owner copy, pinned literally.
+  it("final review I-1: the won't-start line sits under the switch ONLY while it is on and the server names a latch — each latch's own words, in the Operator hint's amber; it REPLACES the Operator hint; off hides it; the switch names it", () => {
+    const COPY = {
+      stopped: "Automatic start is off for this match because the stream was stopped. Use Go live.",
+      already_started: "Automatic start already ran for this match. Use Go live to start again.",
+      already_streamed: "Automatic start is off for this match because a stream already ran. Use Go live.",
+    } as const;
+    type Reason = keyof typeof COPY;
+    const rm = (a: Auto, mode: "automatic" | "operator") => readModel({ auto: a, phone: facts({ state: "paired", mode }) });
+    // The Operator hint's own look, from the row that shows it — the latch line must wear the same.
+    const operatorTree = body({ ...READY, phone: rm(auto(), "operator") });
+    const operatorClass = attr(byTestId(operatorTree, "stream-auto-operator")!, "className");
+    expect(String(operatorClass), "PREMISE: the Operator hint is amber").toContain("text-amber-800");
+    const rows: [string, StreamPhone, Reason | null, boolean][] = [
+      ["on, stopped", rm(auto({ wontStart: "stopped" }), "automatic"), "stopped", false],
+      ["on, already_streamed", rm(auto({ wontStart: "already_streamed" }), "automatic"), "already_streamed", false],
+      ["on, already_started", rm(auto({ wontStart: "already_started" }), "automatic"), "already_started", false],
+      ["on, stopped + Operator: the latch replaces the hint", rm(auto({ wontStart: "stopped" }), "operator"), "stopped", false],
+      ["off, stopped", rm(auto({ enabled: false, wontStart: "stopped" }), "operator"), null, false],
+      ["on, no latch", rm(auto(), "automatic"), null, false],
+      ["on, no latch + Operator", rm(auto(), "operator"), null, true],
+    ];
+    let checked = 0;
+    for (const [name, phone, want, operator] of rows) {
+      const tree = body({ ...READY, phone });
+      const line = byTestId(tree, "stream-auto-wont-start");
+      expect(line !== undefined, `${name}: the line`).toBe(want !== null);
+      expect(byTestId(tree, "stream-auto-operator") !== undefined, `${name}: the Operator hint`).toBe(operator);
+      const described = String(attr(byTestId(tree, "stream-auto-switch")!, "aria-describedby") ?? "").split(" ").filter(Boolean);
+      if (want !== null) {
+        expect(textAt(tree, "stream-auto-wont-start"), name).toBe(COPY[want]);
+        expect(attr(line!, "data-reason"), name).toBe(want);
+        expect(attr(line!, "className"), `${name}: the Operator hint's amber`).toBe(operatorClass);
+        expect(described, `${name}: the switch names it`).toContain(attr(line!, "id"));
+        expect(tree.indexOf(byTestId(tree, "stream-auto-switch")!), `${name}: under the switch`).toBeLessThan(tree.indexOf(line!));
+      }
+      expect(described.length, `${name}: the caption, and at most ONE note`).toBe(phone.auto!.enabled ? (want !== null || operator ? 2 : 1) : 0);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    // A flip in flight to ON over a latch shows it at once (the switch as the panel shows it).
+    const flipping = body({ ...READY, phone: rm(auto({ enabled: false, wontStart: "already_started" }), "automatic"), autoPending: true });
+    expect(textAt(flipping, "stream-auto-wont-start")).toBe(COPY.already_started);
+  });
+
   it("T10: the switch is Ready's alone — every body state that draws Ready's grid has exactly one; every other state has none", () => {
     let withSwitch = 0;
     let without = 0;
@@ -2509,7 +2554,7 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
 
   it("T11: Ready, the automatic start refused — the strip carries it (Option A state 10); Buy credits opens the chooser; Go live names it", () => {
     const onShowBuy = vi.fn();
-    const refused = readModel({ auto: auto({ refusal: "no_credit", refusalAt: "2026-09-14T11:59:00Z" }) });
+    const refused = readModel({ auto: auto({ refusal: "no_credit" }) });
     const tree = body({ ...READY, phone: refused, onShowBuy });
     expect(stripOf(tree)?.strip).toMatchObject({ tone: "amber", lead: "stream.auto.refused", leadVars: { reason: "stream.auto.refusal.no_credit" }, remedy: "buy" });
     stripOf(tree)!.onBuy!();
@@ -2705,7 +2750,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
         return structuredClone({
           ...(s.phone ?? readModel()),
           destination: pick === null ? null : { id: pick.id, label: pick.label, source: pick.source },
-          ...(s.autoStream !== undefined ? { auto: { enabled: s.autoStream, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null } } : {}),
+          ...(s.autoStream !== undefined ? { auto: { enabled: s.autoStream, refusal: null, wontStart: null, stopApplies: null } } : {}),
           session: s.openSession !== undefined ? (s.openSession === null ? null : { id: s.openSession }) : open ? { id: s.current!.id } : null,
         });
       }

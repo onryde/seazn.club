@@ -45033,18 +45033,6 @@
                                     }
                                   ]
                                 },
-                                "notReadyForMs": {
-                                  "anyOf": [
-                                    {
-                                      "type": "integer",
-                                      "minimum": 0,
-                                      "maximum": 9007199254740991
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
                                 "notReadyShown": {
                                   "type": "boolean"
                                 },
@@ -45203,7 +45191,6 @@
                                 "mode",
                                 "state",
                                 "notReady",
-                                "notReadyForMs",
                                 "notReadyShown",
                                 "health",
                                 "startFailed",
@@ -45294,19 +45281,6 @@
                                 "enabled": {
                                   "type": "boolean"
                                 },
-                                "startedAt": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "blocked": {
-                                  "type": "boolean"
-                                },
                                 "refusal": {
                                   "anyOf": [
                                     {
@@ -45324,10 +45298,15 @@
                                     }
                                   ]
                                 },
-                                "refusalAt": {
+                                "wontStart": {
                                   "anyOf": [
                                     {
-                                      "type": "string"
+                                      "type": "string",
+                                      "enum": [
+                                        "stopped",
+                                        "already_streamed",
+                                        "already_started"
+                                      ]
                                     },
                                     {
                                       "type": "null"
@@ -45347,10 +45326,8 @@
                               },
                               "required": [
                                 "enabled",
-                                "startedAt",
-                                "blocked",
                                 "refusal",
-                                "refusalAt",
+                                "wontStart",
                                 "stopApplies"
                               ],
                               "additionalProperties": false
@@ -45421,7 +45398,6 @@
                       "mode": "automatic",
                       "state": "paired",
                       "notReady": "camera",
-                      "notReadyForMs": 0,
                       "notReadyShown": true,
                       "health": "not_responding",
                       "startFailed": "not-found",
@@ -45452,10 +45428,8 @@
                     },
                     "auto": {
                       "enabled": true,
-                      "startedAt": "example",
-                      "blocked": true,
                       "refusal": "no_destination",
-                      "refusalAt": "example",
+                      "wontStart": "stopped",
                       "stopApplies": true
                     },
                     "legacy": true,

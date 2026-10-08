@@ -54,6 +54,32 @@ export function autoStartVerdict(f: AutoStartFacts, now: Date, retrySeconds: num
   return { due: failed.length === 0, failed };
 }
 
+/**
+ * Final review I-1 (owner, 2026-10-08, option A): the LATCHES — the conjuncts of `autoStartDue` that, once failed, stay
+ * failed for the rest of the match, so a switch left ON will not start it. The panel says which, under the switch.
+ *  - `stopped`: an organiser Stop or Cancel (A12, `not_blocked`);
+ *  - `already_streamed`: some session of this fixture received video (A16, `no_broadcast_ran`);
+ *  - `already_started`: the automatic start has run (once per match, `not_yet_started`).
+ * PRECEDENCE is the row order: when several hold, the FIRST names the reason — stopped > already_streamed >
+ * already_started. The organiser's own act explains itself best; and an automatic start that received video is a stream
+ * that ran, the broader fact. Each row names its conjunct, and `autoWontStart` reads the VERDICT's failures — the
+ * predicate is the conjunct's own `holds`, never a copy. Every other conjunct (the switch, the phone, the status, an open
+ * session, the retry spacing) can still change during the match, so none of them is a latch.
+ */
+export const AUTO_START_LATCHES = [
+  { wontStart: "stopped", conjunct: "not_blocked" },
+  { wontStart: "already_streamed", conjunct: "no_broadcast_ran" },
+  { wontStart: "already_started", conjunct: "not_yet_started" },
+] as const;
+export type AutoWontStart = (typeof AUTO_START_LATCHES)[number]["wontStart"];
+export const AUTO_WONT_START = AUTO_START_LATCHES.map((l) => l.wontStart) as [AutoWontStart, ...AutoWontStart[]];
+
+/** The latch that holds, by precedence, over a verdict's `failed` (from `autoStartVerdict` on the same facts); null when
+ *  none does. */
+export function autoWontStart(failed: readonly string[]): AutoWontStart | null {
+  return AUTO_START_LATCHES.find((l) => failed.includes(l.conjunct))?.wontStart ?? null;
+}
+
 export type AutoStopFacts = {
   autoStream: boolean;
   /** The session's phone's stored `mode` (lags the phone's Settings by at most one poll interval, FP13); null when it has none. */

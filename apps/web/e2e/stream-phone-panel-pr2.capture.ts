@@ -177,7 +177,7 @@ async function pairPhone(baseURL: string, qrText: string): Promise<{ stop: () =>
 }
 
 type Json = Record<string, unknown>;
-const AUTO_ON = { enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null };
+const AUTO_ON = { enabled: true, refusal: null, wontStart: null, stopApplies: null };
 const HEALTHY_BEAT = { battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 245.3 };
 /** The read model's phone, with only `over` changed (the rest is the server's REAL answer). */
 const phoneWith = (r: Json, over: Json): Json => ({ ...r, phone: { ...(r.phone as Json), ...over } });
@@ -254,11 +254,11 @@ test.describe("capture QR v2 PR-2 — the organiser panel's Option A states", ()
       await expect(scope.getByTestId("stream-takeover")).toHaveCount(0, { timeout: POLL_WAIT_MS });
 
       // 10. Auto start refused: no credit (STAGED: auto.refusal) — Buy credits; 10b no destination — Manage destinations.
-      undo = await stage(page, PHONE, (r) => ({ ...r, auto: { ...AUTO_ON, refusal: "no_credit", refusalAt: new Date().toISOString() } }));
+      undo = await stage(page, PHONE, (r) => ({ ...r, auto: { ...AUTO_ON, refusal: "no_credit" } }));
       await expect(strip.getByTestId("stream-auto-remedy-buy")).toBeVisible({ timeout: POLL_WAIT_MS });
       await shoot(page, scope, "10-refused-no-credit");
       await undo();
-      undo = await stage(page, PHONE, (r) => ({ ...r, auto: { ...AUTO_ON, refusal: "no_destination", refusalAt: new Date().toISOString() } }));
+      undo = await stage(page, PHONE, (r) => ({ ...r, auto: { ...AUTO_ON, refusal: "no_destination" } }));
       await expect(strip.getByTestId("stream-auto-remedy-manage")).toBeVisible({ timeout: POLL_WAIT_MS });
       await shoot(page, scope, "10b-refused-no-destination");
       await undo();
@@ -281,7 +281,7 @@ test.describe("capture QR v2 PR-2 — the organiser panel's Option A states", ()
 
       // 3a–3d. Waiting, the phone not ready (STAGED: the server's confirmed reason); 3e. the phone's start failed.
       for (const [state, reason] of [["03a-waiting-not-ready-camera", "camera"], ["03b-waiting-not-ready-sound", "sound"], ["03c-waiting-not-ready-network", "network"], ["03d-waiting-not-ready-held", "held"]] as const) {
-        undo = await stage(page, PHONE, (r) => phoneWith(r, { notReady: reason, notReadyShown: true, notReadyForMs: 24_000, mode: "automatic" }));
+        undo = await stage(page, PHONE, (r) => phoneWith(r, { notReady: reason, notReadyShown: true, mode: "automatic" }));
         await expect(strip).toContainText(en("stream.phone.notReady.line", { reason: en(`stream.phone.notReady.reason.${reason}`) }), { timeout: POLL_WAIT_MS });
         await shoot(page, scope, state);
         await undo();

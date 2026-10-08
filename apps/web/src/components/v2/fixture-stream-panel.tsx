@@ -71,7 +71,8 @@ import {
   createErrorText,
   d3Warning,
   autoRefusalStrip,
-  autoOperatorHint,
+  AUTO_WONT_START_KEY,
+  autoSwitchNote,
   autoStopLine,
   elapsedLabel,
   healthChips,
@@ -2018,9 +2019,10 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const autoOn = p.autoPending ?? p.phone?.auto?.enabled ?? false;
   const autoTitleId = `stream-auto-title-${p.fixtureId}`;
   const autoHintId = `stream-auto-hint-${p.fixtureId}`;
-  // Owner-approved 2026-10-08: the switch on, the paired phone in Operator (the beat's mode) — it will not start on its own.
-  const operatorHint = autoOperatorHint(p.phone, autoOn);
-  const autoOperatorId = `stream-auto-operator-${p.fixtureId}`;
+  // Owner-approved 2026-10-08: the note under the switch while it is on — why it will not start for this match (the server's
+  // latch, final review I-1), else the paired phone in Operator (the beat's mode). One line, the latch first.
+  const autoNote = autoSwitchNote(p.phone, autoOn);
+  const autoNoteId = autoNote?.kind === "wontStart" ? `stream-auto-wont-start-${p.fixtureId}` : `stream-auto-operator-${p.fixtureId}`;
   const autoSwitch = (
     <div data-testid="stream-auto" className="mt-3">
       <button
@@ -2029,7 +2031,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         data-testid="stream-auto-switch"
         aria-checked={autoOn}
         aria-labelledby={autoTitleId}
-        aria-describedby={autoOn ? (operatorHint ? `${autoHintId} ${autoOperatorId}` : autoHintId) : undefined}
+        aria-describedby={autoOn ? (autoNote ? `${autoHintId} ${autoNoteId}` : autoHintId) : undefined}
         disabled={p.autoPending !== null}
         onClick={() => p.onToggleAuto(!autoOn)}
         className="flex min-h-11 w-full items-start gap-3 rounded-lg bg-white p-3 text-left ring-1 ring-purple-100 disabled:cursor-wait"
@@ -2053,10 +2055,15 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           )}
         </span>
       </button>
-      {operatorHint && (
-        <p id={autoOperatorId} data-testid="stream-auto-operator" className="mt-1 flex gap-1.5 px-1 text-xs text-amber-800">
+      {autoNote && (
+        <p
+          id={autoNoteId}
+          data-testid={autoNote.kind === "wontStart" ? "stream-auto-wont-start" : "stream-auto-operator"}
+          data-reason={autoNote.kind === "wontStart" ? autoNote.reason : undefined}
+          className="mt-1 flex gap-1.5 px-1 text-xs text-amber-800"
+        >
           <TriangleAlert aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-amber-600" strokeWidth={1.8} />
-          <span className="min-w-0">{msg("stream.auto.operatorHint")}</span>
+          <span className="min-w-0">{msg(autoNote.kind === "wontStart" ? AUTO_WONT_START_KEY[autoNote.reason] : "stream.auto.operatorHint")}</span>
         </p>
       )}
       {p.autoFailed && (

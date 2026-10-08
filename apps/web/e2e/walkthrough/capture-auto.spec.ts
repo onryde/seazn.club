@@ -271,6 +271,16 @@ async function sessionRow(id: string): Promise<SessionRow> {
   return row!;
 }
 /** The newest session on a fixture, waited for. */
+/** Final review I-1: the read's latch after an automatic start, judged against the session's row read AFTER it — a start
+ *  that has no video yet reads `already_started`; once the video arrives, `already_streamed` outranks it. A row with no
+ *  video proves the earlier read saw none, so only then is the answer pinned to one value. */
+async function startLatch(auto: StreamPhone["auto"], orgId: string, sid: string): Promise<boolean> {
+  const row = (await sessionsOf(orgId)).find((x) => x.id === sid);
+  expect(row, "premise: the started session's row").toBeDefined();
+  if (row!.first_ingest_at === null) return auto?.wontStart === "already_started";
+  return auto?.wontStart === "already_started" || auto?.wontStart === "already_streamed";
+}
+
 async function newestSession(orgId: string, fixtureId: string, timeout: number, notIn: string[] = []): Promise<SessionRow> {
   let found: SessionRow | undefined;
   await expect
@@ -471,8 +481,9 @@ test("auto start from the courtside pad: switch on, a phone in Automatic, the ma
   expect(settings, "the switch row records the start: once (A16)").toMatchObject({ auto_stream: true, auto_start_session_id: s.id, auto_start_refusal: null, auto_start_blocked_at: null });
   expect(settings!.auto_started_at, "auto_started_at is stamped").not.toBeNull();
   const read = await readPhone(page, on);
-  expect(read.auto, "the organiser's read: enabled, started, not blocked, no refusal").toMatchObject({ enabled: true, blocked: false, refusal: null, refusalAt: null });
-  expect(read.auto!.startedAt, "…with the start's instant").not.toBeNull();
+  expect(read.auto, "the organiser's read: enabled, no refusal").toMatchObject({ enabled: true, refusal: null });
+  // Final review I-1: the start latches. Read BEFORE the row, so a row with no video yet proves the read saw none either.
+  expect(await startLatch(read.auto, rig.orgId, s.id), "…and the start latched (once per match)").toBe(true);
   expect(read.session, "…and the open session").toEqual({ id: s.id });
 
   // The negative pair, the same run: the untouched fixture is in play with a phone in Automatic — and starts nothing,
@@ -589,7 +600,7 @@ test("A12 + A15: an automatic broadcast, the organiser's Stop on the panel → b
   const blocked = await settingsOf(f.id);
   expect(blocked!.auto_start_blocked_at, "A12: the panel's Stop stamped auto start off for this match").not.toBeNull();
   const read = await readPhone(page, f);
-  expect(read.auto, "the organiser's read: blocked, the earlier start kept").toMatchObject({ enabled: true, blocked: true, refusal: null });
+  expect(read.auto, "the organiser's read: stopped — the Stop outranks the start and the video it latched too").toMatchObject({ enabled: true, wontStart: "stopped", refusal: null });
   // More beats (the keep-alive) through a whole retry window: no restart. (Witnesses A16's "once" as well as A12's block:
   // this broadcast also started automatically and ingested. The block ALONE is the next test's.)
   const beatsBefore = phone.beatsSent;
@@ -677,7 +688,7 @@ test("A12 alone: before the match, a hand-started broadcast that never ingested 
   await new Promise((r) => setTimeout(r, QUIET_WINDOW_MS));
   expect(phoneB.beatsSent - beatsB, "the phone kept beating, in Automatic, through the window").toBeGreaterThanOrEqual(2);
   expect((await sessionsOf(rig.orgId)).map((x) => x.id), "A12: the match start started NOTHING — only the block stood in the way").toEqual([handB.id]);
-  expect((await readPhone(page, blockedF)).auto, "the read says why: blocked").toMatchObject({ enabled: true, blocked: true, startedAt: null, refusal: null });
+  expect((await readPhone(page, blockedF)).auto, "the read says why: stopped").toMatchObject({ enabled: true, wontStart: "stopped", refusal: null });
   await phoneB.dispose();
 
   // ---- the differential: the same steps, but the PHONE stops the hand-started broadcast (not an organiser's Stop) ----
@@ -734,19 +745,16 @@ test("refusal: balance 0 → the automatic start is refused, the read serves aut
   // spacing (it does in CI), so its beats could only ever land after the spacing ran out — and a server that ignored the
   // spacing would pass on them. The beats below come every second instead.
   phone.silence();
-  expect(refused, "refused: never started, not blocked, the attempt's instant").toMatchObject({ enabled: true, startedAt: null, blocked: false, refusal: "no_credit" });
-  const refusedAt = new Date(refused!.refusalAt!).getTime();
-  expect(Number.isFinite(refusedAt), "refusalAt is an instant").toBe(true);
+  expect(refused, "refused: nothing latched — never started, not stopped, no video").toMatchObject({ enabled: true, wontStart: null, refusal: "no_credit" });
   expect(await sessionsOf(rig.orgId), "a refused start writes no session row").toEqual([]);
   expect((await ledger(rig.orgId)).rows.filter((r) => r.reason === "consume"), "…and spends nothing").toEqual([]);
   expect((await ledger(rig.orgId)).total, "…and the start's own grant check gave nothing back (the month is granted once)").toBe(0);
   expect((await settingsOf(f.id))!.auto_started_at, "a refusal never stamps auto_started_at").toBeNull();
 
   // The spacing runs from the LATEST attempt's claim (the row's auto_start_attempted_at) — a keep-alive beat may have
-  // made a second refused attempt between the read above and the silence, so the read's refusalAt can be the older one.
+  // made a second refused attempt between the read above and the silence, so the row, read now, is the authority.
   const attempted = (await settingsOf(f.id))!.auto_start_attempted_at;
   expect(attempted, "the refused attempt's claim is stamped").not.toBeNull();
-  expect(attempted!.getTime(), "…no earlier than the refusal the read served").toBeGreaterThanOrEqual(refusedAt);
   const dueAt = attempted!.getTime() + RETRY_MS;
 
   // Credit to spend, and a beat every second: each one answered INSIDE the spacing is a due start in every way but the
@@ -776,8 +784,8 @@ test("refusal: balance 0 → the automatic start is refused, the read serves aut
   expect(s!.start_cause, "the retry starts it automatically").toBe("automatic");
   expect(s!.created_at.getTime() - attempted!.getTime(), "the retry waited out AUTO_START_RETRY_SECONDS after the latest refused attempt").toBeGreaterThanOrEqual(RETRY_MS - CLOCKS_MS);
   const after = (await readPhone(page, f)).auto;
-  expect(after, "the read: started, the refusal cleared").toMatchObject({ enabled: true, refusal: null, refusalAt: null, blocked: false });
-  expect(after!.startedAt, "…with the start's instant").not.toBeNull();
+  expect(after, "the read: the refusal cleared").toMatchObject({ enabled: true, refusal: null });
+  expect(await startLatch(after, rig.orgId, s!.id), "…and the retry's start latched (once per match)").toBe(true);
   expect(phone.captureMode).toBe("automatic");
 });
 

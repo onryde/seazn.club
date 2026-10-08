@@ -56,7 +56,7 @@ import { CaptureBeat, CaptureNotReady, CapturePhoneState, CaptureStartFailed } f
 // PR-2 T6: `StreamPhone.auto.refusal` and `StreamPhone.phone.health` are the domain's OWN declarations, never re-typed. Relative +
 // explicit `.ts`, same reason as above; both files import NOTHING (domain-purity.test.ts pins that), which is what lets the
 // standalone generator load them. (phone-health.ts itself imports ../config extensionlessly and cannot be loaded here.)
-import { AUTO_START_REFUSALS } from "../relay/domain/auto-stream.ts";
+import { AUTO_START_REFUSALS, AUTO_WONT_START } from "../relay/domain/auto-stream.ts";
 import { HEALTH_REASONS } from "../relay/domain/health-reasons.ts";
 // m2 — the ONE Intl-backed zone validator, reused rather than restated, so
 // `schedule_settings.tz` refuses exactly what `users.timezone` (lib/types.ts)
@@ -1512,10 +1512,6 @@ export const StreamPhone = z
         state: CapturePhoneState.nullable(),
         /** The phone's LATEST not-ready reason. The panel shows "Phone not ready" only while `notReadyShown` (below) is true. */
         notReady: CaptureNotReady.nullable(),
-        /** PR-2 T6 (FP16): how long the phone has been not-ready continuously, on the SERVER's clock at this response —
-         *  `now − not_ready_since`, where the clock starts on the beat that took `notReady` from null to a reason and
-         *  survives a change of reason. null when `notReady` is null (a clear hides it at once) and for a row with no clock. */
-        notReadyForMs: z.number().int().nonnegative().nullable(),
         /** PR-2 T6 (owner ruling R-2, "20 s, about 2 beats"): BEAT-CONFIRMED — a beat at least
          *  PHONE_NOT_READY_SHOW_AFTER_SECONDS (20 s) after the stretch began still says not ready, so one sighting never ages into
          *  shown, whatever the wall clock does between beats. False for a silent phone (its last word is stale). The server owns
@@ -1553,19 +1549,19 @@ export const StreamPhone = z
       .strict()
       .nullable(),
     /** PR-2 T6 (§7.1, §7.2): the automatic-streaming state from the fixture's settings row — null when it has none (the
-     *  switch was never touched and no organiser Stop has stamped one). `refusal` and `refusalAt` are served ONLY while an
-     *  automatic start could still fire (the auto-start predicate, less the phone's presence and the retry spacing): the stored
-     *  code can outlive the attempt it belonged to, so the raw column alone is never shown. */
+     *  switch was never touched and no organiser Stop has stamped one). `refusal` is served ONLY while an automatic start
+     *  could still fire (the auto-start predicate, less the phone's presence and the retry spacing): the stored code can
+     *  outlive the attempt it belonged to, so the raw column alone is never shown. */
     auto: z
       .object({
         enabled: z.boolean(),
-        /** When the automatic start succeeded (`auto_started_at`); null before. */
-        startedAt: z.string().nullable(),
-        /** An organiser Stop turned automatic start off for this match (A12). */
-        blocked: z.boolean(),
         refusal: z.enum(AUTO_START_REFUSALS).nullable(),
-        /** The refused attempt's instant (`auto_start_attempted_at`); null whenever `refusal` is. */
-        refusalAt: z.string().nullable(),
+        /** Final review I-1 (owner, 2026-10-08): why automatic start will not run again in this match, whatever the switch
+         *  says — the latch that holds over the auto-start predicate's own verdict (domain/auto-stream.ts
+         *  `AUTO_START_LATCHES`): `stopped` (an organiser Stop or Cancel, A12), `already_streamed` (a session received video,
+         *  A16), `already_started` (the automatic start has run). When several hold, that order decides. Null when none
+         *  holds. Served with the switch off too; the panel words it only under a switch that is on. */
+        wontStart: z.enum(AUTO_WONT_START).nullable(),
         /** B7 review M-3: whether §7.3's automatic stop will ever end the fixture's OPEN session (`autoStopApplies` over the
          *  same facts the tick judges, its pre/post-result comparison made in SQL) — the switch on, the session's phone
          *  automatic, and the session created before any result (A15). Null with no open session. The panel's live line

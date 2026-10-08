@@ -4182,6 +4182,24 @@ describe("every locale carries the same keys, file for file", () => {
 // word plus what it waits for — "Waiting" → "Waiting for video" — in every locale, so the node reads as a kind of the waiting
 // it sits beside. nl once said "Wacht op video" (a finite verb) beside "Wachten" (the chain's infinitive). Derived from the
 // sibling key, never a literal: a change to the waiting word moves the expectation with it.
+// Final review I-1: each "won't start" line sends the organiser to the Go live button — so it names that button by its own
+// label, in every locale (the expectation is the sibling key, never a literal).
+describe("each 'automatic start won't run' line names the locale's own Go live button", () => {
+  it("stream.auto.wontStart.* contains stream.phone.goLive, in every locale", () => {
+    const REASONS = ["stopped", "already_started", "already_streamed"];
+    let checked = 0;
+    for (const { locale, value: goLive } of across("ui", "stream.phone.goLive")) {
+      expect(goLive, `${locale}: PREMISE — the button has a label`).not.toBe("");
+      for (const r of REASONS) {
+        const line = load(locale, "ui")[`stream.auto.wontStart.${r}`] ?? "";
+        expect(line, `${locale} ${r}: names "${goLive}"`).toContain(goLive);
+        checked++;
+      }
+    }
+    expect(checked).toBe(REASONS.length * DICTIONARY_LOCALES.length);
+  });
+});
+
 describe("the chain's 'Waiting for video' extends its own waiting word, in every locale", () => {
   it("stream.chain.word.waitingVideo starts with stream.chain.word.waiting and a space", () => {
     let checked = 0;

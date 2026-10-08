@@ -677,7 +677,7 @@ describe.skipIf(!HAS_DB)("automatic start — isolation and the mode flip (tests
   // refusal (an unmapped error, or an organiser's start that won the race) must not leave the earlier attempt's code beside its own
   // newer `auto_start_attempted_at` — the organiser read would pair a stale code with a fresh time. Cleared where the attempt
   // ends, never in the claim itself (that would blank the strip while every retry is still in flight).
-  it("an attempt that ends with NO refusal clears the earlier attempt's code — an unmapped error and an already_running alike — and the organiser read serves neither a stale code nor a refusalAt for it", async () => {
+  it("an attempt that ends with NO refusal clears the earlier attempt's code — an unmapped error and an already_running alike — and the organiser read serves no stale code for it", async () => {
     let checked = 0;
     for (const how of ["unmapped error", "already_running"] as const) {
       const { r, phone } = await autoRig({ credits: 0 });
@@ -706,7 +706,7 @@ describe.skipIf(!HAS_DB)("automatic start — isolation and the mode flip (tests
       expect(after.auto_start_refusal, `${how}: the earlier attempt's code is cleared`).toBeNull();
       expect(after.auto_started_at, `${how}: and nothing was started by it`).toBeNull();
       const read = (await streamPhone(r.auth, r.fixtureId, { now: r.now })).auto!;
-      expect([read.refusal, read.refusalAt], `${how}: the read pairs no stale code with the newer attempt`).toEqual([null, null]);
+      expect(read.refusal, `${how}: the read pairs no stale code with the newer attempt`).toBeNull();
       checked++;
     }
     expect(checked).toBe(2);
