@@ -75,22 +75,61 @@ export const readRepoFile: ReadRepoFile = (p) => {
   }
 };
 
-/** `it(`, `test(`, `describe(` and Playwright's `test.describe(`. Modifiers (`.skip`, `.only`, `.each`) are not here on
- *  purpose: a skipped test proves nothing. */
-const isTestCall = (e: ts.Expression): boolean =>
-  ts.isIdentifier(e)
-    ? e.text === "it" || e.text === "test" || e.text === "describe"
-    : ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === "test" && e.name.text === "describe";
+/** Test frameworks' entry points. Every title-bearing call starts at one of these. */
+const TEST_ROOTS = ["it", "test", "describe"];
+/** Modifiers that switch a test off for good: its title proves nothing and nothing inside it runs. */
+const UNCONDITIONAL_SKIPS = ["skip", "todo", "fixme"];
+/** Modifiers that switch a test off only when a condition holds, as `it.skipIf(cond)(title, fn)`: CI's DB jobs run it. */
+const CONDITIONAL_SKIPS = ["skipIf", "runIf"];
+/** Playwright group modes, as `test.describe.serial(title, fn)`. */
+const DESCRIBE_MODES = ["serial", "parallel"];
+/** Callees that are themselves `title, fn` calls: `it(`, `test(`, `describe(`, `test.describe(`, `test.describe.serial(`. */
+const DIRECT_CALLEES = new Set([...TEST_ROOTS, "test.describe", ...DESCRIBE_MODES.map((m) => `test.describe.${m}`)]);
+/** Callees that are themselves calls returning the `title, fn` function: the callee of `it.skipIf(cond)(title, fn)`. */
+const GATE_CALLEES = new Set(TEST_ROOTS.flatMap((r) => CONDITIONAL_SKIPS.map((g) => `${r}.${g}`)));
 
-/** The first argument of every `it(`/`test(`/`describe(` call that is a string literal, from the AST, so a comment, a
- *  body string and a second argument are never titles. */
+/** `test.describe.serial` -> "test.describe.serial"; undefined unless the expression is a plain dotted name. */
+const dotted = (e: ts.Expression): string | undefined => {
+  if (ts.isIdentifier(e)) return e.text;
+  if (!ts.isPropertyAccessExpression(e)) return undefined;
+  const up = dotted(e.expression);
+  return up === undefined ? undefined : `${up}.${e.name.text}`;
+};
+
+/** Every name along a callee, root first, looking through calls: `describe.skip.each([1])` -> [describe, skip, each].
+ *  Undefined when the chain does not start at it/test/describe. */
+const names = (e: ts.Expression): string[] | undefined => {
+  if (ts.isIdentifier(e)) return TEST_ROOTS.includes(e.text) ? [e.text] : undefined;
+  if (ts.isCallExpression(e)) return names(e.expression);
+  if (!ts.isPropertyAccessExpression(e)) return undefined;
+  const up = names(e.expression);
+  return up === undefined ? undefined : [...up, e.name.text];
+};
+
+type Callee = "title" | "skipped" | "other";
+/** What a call's callee makes of its first argument. `skipped`: the title proves nothing and the call is not entered,
+ *  so a test inside `describe.skip(...)` is not a proof either. */
+function classify(callee: ts.Expression): Callee {
+  const chain = names(callee);
+  if (chain === undefined) return "other";
+  if (chain.some((n) => UNCONDITIONAL_SKIPS.includes(n))) return "skipped";
+  const direct = dotted(callee);
+  if (direct !== undefined) return DIRECT_CALLEES.has(direct) ? "title" : "other";
+  const gate = ts.isCallExpression(callee) ? dotted(callee.expression) : undefined;
+  return gate !== undefined && GATE_CALLEES.has(gate) ? "title" : "other";
+}
+
+/** The first argument of every title-bearing call that is a string literal, from the AST, so a comment, a body string
+ *  and a second argument are never titles; an unconditionally skipped call yields nothing and is not entered. */
 export function testTitles(path: string, source: string): string[] {
   const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, false);
   const titles: string[] = [];
   const visit = (n: ts.Node): void => {
-    if (ts.isCallExpression(n) && isTestCall(n.expression)) {
+    if (ts.isCallExpression(n)) {
+      const kind = classify(n.expression);
+      if (kind === "skipped") return;
       const first = n.arguments[0];
-      if (first !== undefined && ts.isStringLiteralLike(first)) titles.push(first.text);
+      if (kind === "title" && first !== undefined && ts.isStringLiteralLike(first)) titles.push(first.text);
     }
     ts.forEachChild(n, visit);
   };

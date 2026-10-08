@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ID, REPO, ROW_HEADER, RULES_DIR, STATUS, allRows, fileExists, hasToken, isMatrixCase, parseRuleRows, proofProblems, readRepoFile, ruleFiles, testTitles, type ReadRepoFile, type RuleRow } from "./rules-reference.ts";
@@ -30,6 +31,10 @@ const PROVES_TSX = "apps/web/src/components/__tests__/proves.test.tsx";
 const NEAR_MISS = "apps/web/src/server/__tests__/near-miss.test.ts";
 const COMMENT_ONLY = "apps/web/src/server/__tests__/comment-only.test.ts";
 const BODY_STRING = "apps/web/src/server/__tests__/body-string.test.ts";
+const DB_GATED = "apps/web/src/server/__tests__/db-gated.test.ts";
+const GATED_GROUP = "apps/web/src/server/__tests__/gated-group.test.ts";
+const SKIPPED_GROUP = "apps/web/src/server/__tests__/skipped-group.test.ts";
+const SERIAL_SPEC = "apps/web/e2e/serial.spec.ts";
 const WOULD_PROVE = 'it("X-ZZ-1: would prove, if its location counted", () => {});';
 /** Locations that must be refused even though each file holds a proving title. */
 const REFUSED_LOCATIONS: Array<[string, string]> = [
@@ -51,6 +56,12 @@ const FIXTURES = new Map<string, string>([
   [COMMENT_ONLY, '// it("X-ZZ-1: only a comment", () => {});\nit("unrelated", () => {});'],
   [BODY_STRING, 'it("unrelated", () => { expect("X-ZZ-1").toBe("X-ZZ-1"); });'],
   [NEAR_MISS, 'it("X-ZZ-10: a different rule", () => {});'],
+  // The shapes later W2a proofs are written in: DB-gated unit tests and serial Playwright groups (re-review M-2).
+  [DB_GATED, 'it.skipIf(!HAS_DB)("X-ZZ-1: needs a database", async () => {});'],
+  [GATED_GROUP, 'describe.skipIf(!HAS_DB)("db group", () => { it("X-ZZ-1: inside a gated group", () => {}); });'],
+  [SERIAL_SPEC, 'test.describe.serial("X-ZZ-1 walkthrough", () => { test("step one", async () => {}); });'],
+  // An unconditional skip proves nothing, and neither does anything inside it (re-review M-1).
+  [SKIPPED_GROUP, 'describe.skip("db group", () => { it("X-ZZ-1: inside a skipped group", () => {}); });'],
   ...REFUSED_LOCATIONS.map(([p]): [string, string] => [p, WOULD_PROVE]),
 ]);
 const read: ReadRepoFile = (p) => FIXTURES.get(p);
@@ -172,6 +183,51 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(testTitles("c.test.ts", "")).toEqual([]); // the empty case
   });
 
+  it("a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered (re-review M-1, M-2)", () => {
+    const source = [
+      'it.skipIf(!HAS_DB)("X-ZZ-1: db gated", () => {});',
+      'it.runIf(HAS_DB)("X-ZZ-1: db only", () => {});',
+      'test.skipIf(browserName === "webkit")("X-ZZ-1: not on webkit", async () => {});',
+      'test.runIf(isCi)("X-ZZ-1: only in ci", async () => {});',
+      'describe.skipIf(!HAS_DB)("X-ZZ-1 gated group", () => { it("X-ZZ-1: inside gated", () => {}); });',
+      'describe.runIf(HAS_DB)("X-ZZ-1 run group", () => {});',
+      'test.describe.serial("X-ZZ-1 serial group", () => { test("X-ZZ-1: in serial", async () => {}); });',
+      'test.describe.parallel("X-ZZ-1 parallel group", () => {});',
+      // None of the following is a proof, and nothing inside any of them is either.
+      'describe.skip("X-ZZ-1 skipped group", () => { it("X-ZZ-1: in skipped group", () => {}); });',
+      'describe.todo("X-ZZ-1 todo group", () => { it("X-ZZ-1: in todo group", () => {}); });',
+      'it.skip("X-ZZ-1: skipped", () => {});',
+      'it.todo("X-ZZ-1: todo");',
+      'test.fixme("X-ZZ-1: fixme", async () => {});',
+      'test.describe.skip("X-ZZ-1 pw skipped group", () => { test("X-ZZ-1: in pw skipped", async () => {}); });',
+      'test.describe.fixme("X-ZZ-1 pw fixme group", () => { test("X-ZZ-1: in pw fixme", async () => {}); });',
+      'describe.skip.each([1])("X-ZZ-1 skipped each", () => { it("X-ZZ-1: in skipped each", () => {}); });',
+      // Wrong shapes are not title-bearing calls, whatever their names.
+      'it.skipIf("X-ZZ-1: gate used as the test", () => {});',
+      'it(HAS_DB)("X-ZZ-1: a call, not a gate", () => {});',
+      'other.skipIf(c)("X-ZZ-1: not a test root", () => {});',
+      // A skip that is not a test's skip hides nothing: its body is still read.
+      'unrelated.skip(() => { it("X-ZZ-1: beside a skip that is not a test skip", () => {}); });',
+      'test.describe.configure({ mode: "serial" });',
+    ].join("\n");
+    const titles = testTitles("gated.test.ts", source);
+    expect(titles).toEqual([
+      "X-ZZ-1: db gated", "X-ZZ-1: db only", "X-ZZ-1: not on webkit", "X-ZZ-1: only in ci",
+      "X-ZZ-1 gated group", "X-ZZ-1: inside gated", "X-ZZ-1 run group",
+      "X-ZZ-1 serial group", "X-ZZ-1: in serial", "X-ZZ-1 parallel group", "X-ZZ-1: beside a skip that is not a test skip",
+    ]);
+    expect(titles).toHaveLength(11); // anti-vacuity: eleven titles read, not an empty list that happens to agree
+  });
+
+  it("a DB-gated or serial proof counts; the same id inside an unconditional skip is refused, and inside a conditional one is accepted (probe pin, synthetic signed rows)", () => {
+    for (const ok of [DB_GATED, GATED_GROUP, SERIAL_SPEC]) expect(proofProblems(row([ok]), read), ok).toEqual([]);
+    expect(proofProblems(row([SKIPPED_GROUP]), read)).toEqual([noTitle(SKIPPED_GROUP)]);
+    // The pair that differs in one word: skip vs skipIf around the same body.
+    const body = (wrap: string) => `${wrap}("db group", () => { it("X-ZZ-1: inside", () => {}); });`;
+    expect(testTitles("p.test.ts", body("describe.skip"))).toEqual([]);
+    expect(testTitles("p.test.ts", body("describe.skipIf(!HAS_DB)"))).toEqual(["db group", "X-ZZ-1: inside"]);
+  });
+
   it("an id must be a whole token in the title: a longer id, a prefix or a suffix is a near-miss, not a proof (synthetic titles)", () => {
     const cases: Array<[string, boolean]> = [
       ["X-ZZ-1: a title", true], ["(X-ZZ-1)", true], ["X-ZZ-1", true], ["covers X-ZZ-1.", true],
@@ -249,7 +305,6 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
   const code = (l: string) => l.trim() !== "" && !l.trimStart().startsWith("#");
   const HEAD = "      - name: Engine rules reference checker (DB-free)";
   const REPORT = "vitest-results-rules.json";
-  const JUDGE = ".numTotalTests > 0 and .numFailedTests == 0 and .numFailedTestSuites == 0 and .numPendingTests == 0 and .numTodoTests == 0 and (.testResults | length) == 1";
   const at = lines.indexOf(HEAD);
   /** The step's own lines: everything after its `- name:` line indented 8 or more (its keys and its block scalar). */
   const stepLines = (): string[] => {
@@ -279,34 +334,75 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     expect(stepLines().filter((l) => /^ {8}[a-z-]+:/.test(l)).map((l) => l.trim().replace(/:.*$/, ""))).toEqual(["run"]);
   });
 
-  it("the step runs only this file with the JSON reporter, clears any stale report first, and judges the report", () => {
+  it("the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)", () => {
     const script = stepLines().filter((l) => l.startsWith("          ")).map((l) => l.slice(10));
-    expect(script).toEqual([
+    expect(script.slice(0, 3)).toEqual([
       "set -euo pipefail",
       `rm -f ${REPORT}`,
       `./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=${REPORT} --testTimeout=30000 packages/engine/test/rules-reference.test.ts`,
-      `jq -r '"rules reference: \\(.numPassedTests)/\\(.numTotalTests) tests passed"' ${REPORT}`,
-      `jq -e '${JUDGE}' ${REPORT}`,
     ]);
+    // The judge is the rest: one `node -e '…'` block, nothing after its closing quote, no single quote inside it.
+    expect(script[3]).toBe("node -e '");
+    expect(script.at(-1)).toBe("'");
+    const body = script.slice(4, -1);
+    expect(body.length).toBeGreaterThan(0);
+    expect(body.filter((l) => l.includes("'"))).toEqual([]);
+    expect(script.join("\n")).not.toMatch(/\bjq\b/);
   });
 
-  it("the judge is red on zero tests, a failed test, a failed suite, a skip, a todo and a stray file, and green on a clean single-file pass", () => {
-    expect(spawnSync("jq", ["--version"], { encoding: "utf8" }).status, "jq must be installed to run this test").toBe(0);
-    const report = (o: Record<string, unknown>) => ({ numTotalTests: 11, numPassedTests: 11, numFailedTests: 0, numFailedTestSuites: 0, numPendingTests: 0, numTodoTests: 0, testResults: [{ name: "a.test.ts" }], ...o });
-    const judge = (r: object) => spawnSync("jq", ["-e", JUDGE], { input: JSON.stringify(r), encoding: "utf8" }).status;
-    expect(judge(report({}))).toBe(0);
+  /** Runs the step's REAL run block in a scratch checkout whose vitest is a stand-in: it writes FAKE_JSON to the
+   *  `--outputFile=` the step passed it, then exits FAKE_EXIT. Plain `bash`: the block's own `set -e` carries the fail-fast. */
+  const runStep = (o: { json: object | null; exit?: number; stale?: object }) => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), `w2a-rules-ci-${process.pid}-`)));
+    try {
+      const bin = join(root, "packages/engine/node_modules/.bin");
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(join(bin, "vitest"), ["#!/bin/sh", 'out=""', 'for a in "$@"; do case "$a" in --outputFile=*) out="${a#--outputFile=}";; esac; done', 'if [ -n "$FAKE_JSON" ]; then cp "$FAKE_JSON" "$out"; fi', 'exit "$FAKE_EXIT"', ""].join("\n"));
+      chmodSync(join(bin, "vitest"), 0o755);
+      let fake = "";
+      if (o.json !== null) { fake = join(root, "fake-report.json"); writeFileSync(fake, JSON.stringify(o.json)); }
+      if (o.stale !== undefined) writeFileSync(join(root, REPORT), JSON.stringify(o.stale)); // a report left by an earlier run
+      writeFileSync(join(root, "step.sh"), stepLines().filter((l) => l.startsWith("          ")).map((l) => l.slice(10)).join("\n") + "\n");
+      const r = spawnSync("bash", ["step.sh"], { cwd: root, env: { PATH: process.env.PATH ?? "", FAKE_JSON: fake, FAKE_EXIT: String(o.exit ?? 0) }, encoding: "utf8", timeout: 30_000 });
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const report = (o: Record<string, unknown> = {}) => ({ numTotalTests: 11, numPassedTests: 11, numFailedTests: 0, numFailedTestSuites: 0, numPendingTests: 0, numTodoTests: 0, testResults: [{ name: "a.test.ts" }], ...o });
+
+  it("the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node", () => {
+    const green = runStep({ json: report() });
+    expect(green.status, green.stderr).toBe(0);
+    expect(green.stdout).toContain("rules reference: 11/11 tests passed");
     // Each red changes exactly one field, so no condition is covered by another: a file that collected zero tests
     // still has its one testResults entry, and a stray second file leaves every count clean.
-    const reds: Array<[string, object]> = [
-      ["zero tests in the one file", report({ numTotalTests: 0, numPassedTests: 0 })],
-      ["no file matched at all", report({ numTotalTests: 0, numPassedTests: 0, testResults: [] })],
-      ["a failed test", report({ numFailedTests: 1 })],
-      ["a failed suite", report({ numFailedTestSuites: 1 })],
-      ["a skipped test", report({ numPendingTests: 1 })],
-      ["a todo test", report({ numTodoTests: 1 })],
-      ["a stray file", report({ testResults: [{ name: "a.test.ts" }, { name: "b.test.ts" }] })],
+    const reds: Array<[string, object, string]> = [
+      ["zero tests in the one file", report({ numTotalTests: 0, numPassedTests: 0 }), "ZERO tests"],
+      ["no file matched at all", report({ numTotalTests: 0, numPassedTests: 0, testResults: [] }), "ZERO tests"],
+      ["a failed test", report({ numFailedTests: 1 }), "failed test(s)"],
+      ["a failed suite", report({ numFailedTestSuites: 1 }), "failed suite(s)"],
+      ["a skipped test", report({ numPendingTests: 1 }), "skipped"],
+      ["a todo test", report({ numTodoTests: 1 }), "todo"],
+      ["a stray file", report({ testResults: [{ name: "a.test.ts" }, { name: "b.test.ts" }] }), "ran 2 files, not exactly 1"],
     ];
-    for (const [what, r] of reds) expect(judge(r), what).not.toBe(0);
+    for (const [what, json, why] of reds) {
+      const r = runStep({ json });
+      expect(r.status, `${what}: ${r.stdout}`).toBe(1);
+      expect(r.stderr, what).toContain(`::error::`);
+      expect(r.stderr, what).toContain(why);
+    }
     expect(reds).toHaveLength(7);
+  });
+
+  it("the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run", () => {
+    const failedExit = runStep({ json: report(), exit: 1 });
+    expect(failedExit.status).not.toBe(0);
+    expect(failedExit.stdout).not.toContain("rules reference:"); // set -e stopped it before the judge
+    const noReport = runStep({ json: null });
+    expect(noReport.status).not.toBe(0);
+    const stale = runStep({ json: null, stale: report() }); // rm -f clears the clean stale report, so the judge finds none
+    expect(stale.status).not.toBe(0);
+    expect(stale.stdout).not.toContain("rules reference:");
   });
 });

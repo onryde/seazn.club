@@ -178,8 +178,10 @@ scorer/pad ──append──▶ append-event.ts ──resolveFixtureCfg(+bracke
     | football, hockey, ice hockey, cricket | `{}` (organiser-configured deciders stay as they are until W2c) |
 - **Boardgame:**
   - cfg gains `tiebreak: boolean` (default `false`).
-  - When it is true, a `boardgame.result` with `winner: null` moves the match to phase `tiebreak` instead of folding
-    an outcome.
+  - When it is true, a **drawn** `boardgame.result` (`winner: null`, a draw method — not `double_forfeit`) moves the
+    match to phase `tiebreak` instead of folding an outcome. A double forfeit (`no_result`) in a bracket is NOT a drawn
+    game (BG-KO-1): it folds as today and is held `needs_decision` (X-BR-2), closed by settle; double-walkover credit
+    is W2b's (controller ruling T15-R1, 2026-10-08).
   - New event `boardgame.tiebreak`
     `{ rung: "rapid" | "blitz" | "armageddon", winner: SideId, score?: string }`:
     - It is accepted only in phase `tiebreak`, and folds to `win{ winner, method: "tiebreak_<rung>" }`.
