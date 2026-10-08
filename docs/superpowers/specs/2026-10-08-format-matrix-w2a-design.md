@@ -237,7 +237,9 @@ See §6.
    - A `core.settle` whose `winner` is an entrant with status `withdrawn` is refused `SETTLE_NOT_APPLICABLE`
      (reason `withdrawn`), and nothing is written (preflight ruling C17; the auto-walkover is W2b's, §2.3).
 4. **Seating guard.** The comment at `engine-db/competition.ts:144-150` becomes an assertion.
-   - A `draw`, `tie` or `no_result` reaching `bracketWinnerLoser` or `advancingSides` throws `LEVEL_RESULT_SEATED`.
+   - A `draw`, `tie` or `no_result` reaching a **seating** caller throws `LEVEL_RESULT_SEATED` — asserted where seats are
+     written (`onDecided`, `toBracketFixture`, `loadBracketFixtures`), not in `advancingSides` itself, whose remaining
+     callers release seats (controller ruling D-F2, loop F review).
      It is reached only through a bug, so it is tested by forcing the case.
    - `onDecided` is not called for `needs_decision`. A test proves that nobody is seated, and that settle then seats
      both sides.
