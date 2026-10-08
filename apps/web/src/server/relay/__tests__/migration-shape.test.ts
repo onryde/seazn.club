@@ -983,7 +983,10 @@ describe.skipIf(!HAS_DB)("V431__auto_stream.sql — the constraints are real", (
         explain select exists (select 1 from fixture_stream_sessions s where s.fixture_id = ${r.fixtureId} and s.first_ingest_at is not null) as any_ingest`;
     });
     const text = plan.map((p) => p["QUERY PLAN"]).join("\n");
-    expect(text, text).toContain(`Index Scan using ${plain[0]!.indexname}`);
+    // Through the plain index, read directly OR through a bitmap: which of the two the planner picks is the table's statistics
+    // (B8 gate: a long-lived test database, ~3 sessions per fixture after autoanalyze, plans a Bitmap Index Scan on the same
+    // index; a fresh one an Index Scan). Both read the index; neither is a seq scan.
+    expect(text, text).toMatch(new RegExp(`(?:Index Scan using|Bitmap Index Scan on) ${plain[0]!.indexname}\\b`));
     expect(text, text).not.toMatch(/Seq Scan on fixture_stream_sessions/);
   });
 
