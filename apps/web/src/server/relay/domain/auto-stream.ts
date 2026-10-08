@@ -60,8 +60,11 @@ export type AutoStopFacts = {
   phoneMode: PhoneMode | null;
   /** The fixture's `finished_at` (V430's trigger stamps it from `status`); null while no result stands. */
   finishedAt: Date | null;
-  /** The session's `created_at`. Both stamps are database clocks, so the comparison below is skew-free (Review Focus 4). */
-  sessionCreatedAt: Date;
+  /** Whether the session's `created_at` is strictly before the fixture's `finished_at`. The CALLER computes it IN SQL
+   *  (`s.created_at < f.finished_at`): both are database stamps at microsecond precision, and a JS `Date` truncates to the
+   *  millisecond, so a session created in the result's own millisecond would compare equal here and flip the verdict
+   *  (Review Focus 4). Read only while a result stands; `false` is the value to pass when there is none. */
+  sessionPredatesResult: boolean;
 };
 
 type StopConjunct = { name: string; holds: (f: AutoStopFacts, now: Date, delaySeconds: number) => boolean };
@@ -74,7 +77,7 @@ export const AUTO_STOP_CONJUNCTS: readonly StopConjunct[] = [
   { name: "fixture_finished", holds: (f) => f.finishedAt !== null },
   { name: "delay_elapsed", holds: (f, now, secs) => f.finishedAt === null || now.getTime() >= f.finishedAt.getTime() + secs * 1000 },
   // A15: a broadcast started AFTER the result is the organiser's deliberate post-match one and is never auto-stopped; strictly before.
-  { name: "session_predates_result", holds: (f) => f.finishedAt === null || f.sessionCreatedAt.getTime() < f.finishedAt.getTime() },
+  { name: "session_predates_result", holds: (f) => f.finishedAt === null || f.sessionPredatesResult },
 ];
 
 /** Due when every conjunct holds; `failed` names each one that does not, in table order. */

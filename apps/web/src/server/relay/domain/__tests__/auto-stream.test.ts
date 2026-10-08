@@ -142,16 +142,15 @@ describe("autoStartVerdict (§7.2)", () => {
 // ---- auto stop --------------------------------------------------------------------------------------------------
 const FINISHED_AT = ago(ms(AUTO_STOP_AFTER_RESULT_SECONDS) + 20_000);   // 200 s ago: the delay has elapsed
 const STOP_BASE: AutoStopFacts = {
-  autoStream: true, phoneMode: "automatic", finishedAt: FINISHED_AT, sessionCreatedAt: new Date(FINISHED_AT.getTime() - 60_000),
+  autoStream: true, phoneMode: "automatic", finishedAt: FINISHED_AT, sessionPredatesResult: true,
 };
 const STOP_FALSIFY: { conjunct: string; patch: Partial<AutoStopFacts> }[] = [
   { conjunct: "switch_on", patch: { autoStream: false } },
   { conjunct: "phone_automatic", patch: { phoneMode: "operator" } },
   { conjunct: "phone_automatic", patch: { phoneMode: null } },
   { conjunct: "fixture_finished", patch: { finishedAt: null } },
-  { conjunct: "delay_elapsed", patch: { finishedAt: ago(ms(AUTO_STOP_AFTER_RESULT_SECONDS) - 1000), sessionCreatedAt: ago(ms(AUTO_STOP_AFTER_RESULT_SECONDS) + 60_000) } },   // 179 s
-  { conjunct: "session_predates_result", patch: { sessionCreatedAt: FINISHED_AT } },                                          // equal
-  { conjunct: "session_predates_result", patch: { sessionCreatedAt: new Date(FINISHED_AT.getTime() + 1) } },                 // one ms after
+  { conjunct: "delay_elapsed", patch: { finishedAt: ago(ms(AUTO_STOP_AFTER_RESULT_SECONDS) - 1000) } },   // 179 s
+  { conjunct: "session_predates_result", patch: { sessionPredatesResult: false } },
 ];
 
 describe("autoStopVerdict (§7.3)", () => {
@@ -181,14 +180,14 @@ describe("autoStopVerdict (§7.3)", () => {
   });
 
   it("EMPTY: a fixture with no result (finishedAt null) and no switch is never due, however old the session", () => {
-    const v = autoStopVerdict({ autoStream: false, phoneMode: null, finishedAt: null, sessionCreatedAt: ago(ms(3600)) }, NOW, AUTO_STOP_AFTER_RESULT_SECONDS);
+    const v = autoStopVerdict({ autoStream: false, phoneMode: null, finishedAt: null, sessionPredatesResult: false }, NOW, AUTO_STOP_AFTER_RESULT_SECONDS);
     expect(v.due).toBe(false);
     expect(v.failed).toEqual(["switch_on", "phone_automatic", "fixture_finished"]);
   });
 
   it("every conjunct that CAN fail together lists ALL of them in table order — all but fixture_finished, which excludes the two that read the result", () => {
     const v = autoStopVerdict(
-      { autoStream: false, phoneMode: "operator", finishedAt: ago(1000), sessionCreatedAt: NOW },
+      { autoStream: false, phoneMode: "operator", finishedAt: ago(1000), sessionPredatesResult: false },
       NOW, AUTO_STOP_AFTER_RESULT_SECONDS,
     );
     expect(v.due).toBe(false);
@@ -199,7 +198,7 @@ describe("autoStopVerdict (§7.3)", () => {
   it("the delay: 179 s after the result is not due, exactly 180 s is, 181 s is (boundary from AUTO_STOP_AFTER_RESULT_SECONDS)", () => {
     const at = (secondsSinceResult: number) => {
       const finishedAt = ago(ms(secondsSinceResult));
-      return autoStopVerdict({ ...STOP_BASE, finishedAt, sessionCreatedAt: new Date(finishedAt.getTime() - 1) }, NOW, AUTO_STOP_AFTER_RESULT_SECONDS);
+      return autoStopVerdict({ ...STOP_BASE, finishedAt }, NOW, AUTO_STOP_AFTER_RESULT_SECONDS);
     };
     expect(at(AUTO_STOP_AFTER_RESULT_SECONDS - 1)).toEqual({ due: false, failed: ["delay_elapsed"] });
     expect(at(AUTO_STOP_AFTER_RESULT_SECONDS)).toEqual({ due: true, failed: [] });
@@ -210,21 +209,21 @@ describe("autoStopVerdict (§7.3)", () => {
     expect(AUTO_STOP_AFTER_RESULT_SECONDS).not.toBe(5);
     const at = (secondsSinceResult: number) => {
       const finishedAt = ago(ms(secondsSinceResult));
-      return autoStopVerdict({ ...STOP_BASE, finishedAt, sessionCreatedAt: new Date(finishedAt.getTime() - 1) }, NOW, 5);
+      return autoStopVerdict({ ...STOP_BASE, finishedAt }, NOW, 5);
     };
     expect(at(4)).toEqual({ due: false, failed: ["delay_elapsed"] });
     expect(at(5)).toEqual({ due: true, failed: [] });
   });
 
-  // The ordering differential (A15): the SAME facts, every other conjunct holding, flip on the session's creation
-  // relative to the result — a broadcast started after the result is the organiser's deliberate post-match one.
-  it("ORDERING: a session created one ms before the result is stopped; at the same instant or one ms after it is never", () => {
+  // The ordering differential (A15): the SAME facts, every other conjunct holding, flip on the one boolean the caller computes
+  // in SQL. Its MICROsecond precision is proven against the real database in stream-auto-stop.test.ts, not here.
+  it("ORDERING: a session that predates the result is stopped; one that does not is never — and with NO result the flag is not read", () => {
     const finishedAt = ago(ms(AUTO_STOP_AFTER_RESULT_SECONDS) + 5000);
-    const withSession = (offsetMs: number) =>
-      autoStopVerdict({ ...STOP_BASE, finishedAt, sessionCreatedAt: new Date(finishedAt.getTime() + offsetMs) }, NOW, AUTO_STOP_AFTER_RESULT_SECONDS);
-    expect(withSession(-1)).toEqual({ due: true, failed: [] });
-    expect(withSession(0)).toEqual({ due: false, failed: ["session_predates_result"] });
-    expect(withSession(1)).toEqual({ due: false, failed: ["session_predates_result"] });
+    const with_ = (sessionPredatesResult: boolean) =>
+      autoStopVerdict({ ...STOP_BASE, finishedAt, sessionPredatesResult }, NOW, AUTO_STOP_AFTER_RESULT_SECONDS);
+    expect(with_(true)).toEqual({ due: true, failed: [] });
+    expect(with_(false)).toEqual({ due: false, failed: ["session_predates_result"] });
+    expect(autoStopVerdict({ ...STOP_BASE, finishedAt: null, sessionPredatesResult: false }, NOW, AUTO_STOP_AFTER_RESULT_SECONDS)).toEqual({ due: false, failed: ["fixture_finished"] });
   });
 
   it("a second call answers the same and never mutates its facts (frozen input)", () => {

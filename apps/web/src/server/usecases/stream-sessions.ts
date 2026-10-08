@@ -22,7 +22,7 @@ import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "
 import { checkDestination } from "@/lib/stream-destinations";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
-  CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
+  AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
   CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
   RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, WARMING_TIMEOUT_MINUTES, relayEnvironment, tunable,
@@ -32,6 +32,7 @@ import {
   type Command, type Decision, type Effect, type HoldState, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
 import { isPresent } from "@/server/relay/domain/pairing";
+import { autoStopVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
@@ -1596,7 +1597,9 @@ export type TickObservation = {
 /** T7 (§6.11): who advances a session. The organiser poll's reconcile-and-ingest block, extracted so a phone beat and the
  *  stream-tick job (W22) advance a session nobody is watching. In order: 1. lazy expiry; 2. the coalesced ingest read
  *  (`claimIngestPoll`; the sample and its event in ONE tx, B0 R-1); 3. warming → live (the credit); 4. target_rejected;
- *  5. m-5, then ask 10 (§6.8.3); 6. W19 (§6.8.5). `cause` names the caller in the log line of an end it makes. */
+ *  5. m-5, then ask 10 (§6.8.3); 6. W19 (§6.8.5); 7. the automatic stop after the result (§7.3) — LAST, so a phone-lost
+ *  end that the same tick makes is the session's reason (the first reason wins). `cause` names the caller in the log line
+ *  of an end it makes. */
 export async function tickSession(sessionId: string, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<TickObservation> {
   let row = await readRow(sessionId);
   if (!row) return { session: null, ingestState: null, outputObserved: null, coalescedSince: undefined, freshIngest: undefined, phoneReadFailed: false };
@@ -1710,6 +1713,8 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
 
   // 5–6: the phone-lost ends, judged on what this tick read and re-taken on the LOCKED row.
   if (!isTerminal(row.state)) row = await endIfPhoneLost(row, freshIngest, deps, cause);
+  // 7: the automatic stop after the result (PR-2 T5, FP7: here once, so every caller of the tick reaches it).
+  if (!isTerminal(row.state)) row = await endIfAutoStopDue(row, deps, cause);
   return { session: toSession(row), ingestState, outputObserved, coalescedSince, freshIngest, phoneReadFailed };
 }
 
@@ -1802,6 +1807,56 @@ async function endIfPhoneLost(row: Row, fresh: IngestState | undefined, deps: Se
   }, deps);
   const after = (await readRow(row.id)) ?? row;
   if (rule !== null && isTerminal(after.state)) log.info({ sid: row.id, orgId: row.org_id, cause, rule, state: after.state }, "stream session: ended by the tick");
+  return after;
+}
+
+/** The facts `autoStopDue` (§7.3) judges, in ONE statement (one snapshot). The session's phone is its `pairing_id`, ended or
+ *  not: the mode that was set is what the session's phone chose (FP13 — it lags the phone's Settings by at most one poll
+ *  interval, by design). Every join is a fact, not a filter: a session with no `pairing_id` has a null `mode` (no phone, never
+ *  auto-stopped), one with no settings row has `auto_stream` false, and a deleted fixture (`fixture_id` null) returns no row
+ *  at all. `session_predates_result` is compared HERE, in SQL: `created_at` and `finished_at` are database stamps at
+ *  microsecond precision and a JS `Date` truncates both to the millisecond, so a session created in the result's own
+ *  millisecond would read equal there (Review Focus 4). Two clocks stay apart: those two stamps are compared with each other,
+ *  and the delay is `deps.now()` against `finished_at`. `exec` is apply's tx when re-taken under the row lock. */
+type AutoStopFacts = { auto_stream: boolean; mode: string | null; finished_at: Date | null; session_predates_result: boolean };
+async function autoStopFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<AutoStopFacts | null> {
+  const [f] = await exec<AutoStopFacts[]>`
+    select coalesce(st.auto_stream, false) as auto_stream, p.mode, f.finished_at,
+           coalesce(s.created_at < f.finished_at, false) as session_predates_result
+      from fixture_stream_sessions s
+      join fixtures f on f.id = s.fixture_id
+      left join fixture_stream_settings st on st.fixture_id = s.fixture_id
+      left join fixture_stream_pairings p on p.id = s.pairing_id
+     where s.id = ${sessionId}`;
+  return f ?? null;
+}
+const phoneModeOf = (mode: string | null): PhoneMode | null => (mode === "automatic" || mode === "operator" ? mode : null);
+function autoStopDue(f: AutoStopFacts, now: Date): boolean {
+  return autoStopVerdict({
+    autoStream: f.auto_stream, phoneMode: phoneModeOf(f.mode), finishedAt: f.finished_at, sessionPredatesResult: f.session_predates_result,
+  }, now, tunable("AUTO_STOP_AFTER_RESULT_SECONDS", AUTO_STOP_AFTER_RESULT_SECONDS)).due;
+}
+
+/** Step 7 of the tick (§7.3): end the session `auto_stopped` once `autoStopDue`. Judged on an UNLOCKED read first (the common
+ *  answer is "no", and `apply` takes the org's money lock), then RE-TAKEN on the locked row inside `apply`: a result reverted,
+ *  a switch turned off or an organiser's Stop may have landed between the two, and only the locked answer ends anything. An
+ *  `ending` or terminal session is not re-decided — the first reason wins (`ending × stop` is the identity in the domain, but
+ *  deciding it would still cost the org lock). */
+async function endIfAutoStopDue(row: Row, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<Row> {
+  if (row.state === "ending" || isTerminal(row.state)) return row;
+  const facts = await autoStopFactsOf(sql, row.id);
+  if (!facts || !autoStopDue(facts, deps.now())) return row;
+  let decided = false;
+  await apply(row.id, async (s, tx) => {
+    if (s.state === "ending" || isTerminal(s.state)) return null;
+    const locked = await autoStopFactsOf(tx, s.id);
+    decided = locked !== null && autoStopDue(locked, deps.now());
+    return decided ? { type: "stop", reason: "auto_stopped" } : null;
+  }, deps);
+  const after = (await readRow(row.id)) ?? row;
+  if (decided && (after.state === "ending" || isTerminal(after.state))) {
+    log.info({ sid: row.id, orgId: row.org_id, cause, rule: "auto-stop", state: after.state }, "stream session: ended by the tick");
+  }
   return after;
 }
 
