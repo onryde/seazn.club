@@ -1,0 +1,163 @@
+[
+  {
+    "id": "duplicate-id-across-files",
+    "file": "packages/engine/rules/generic.md",
+    "find": "| GN-KO-1 | A generic bracket fixture",
+    "replace": "| X-BR-1 | A duplicate of the cross-sport X-BR-1 id. | product rule, ruling 72 | signed 72 2026-10-08 | — | — |\n| GN-KO-1 | A generic bracket fixture",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every id is well-formed and unique across all files" }]
+  },
+  {
+    "id": "status-date-format",
+    "file": "packages/engine/rules/boardgame.md",
+    "find": "ruling 82 | signed 73 2026-10-08",
+    "replace": "ruling 82 | signed 73 08-10-2026",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+  },
+  {
+    "id": "awaiting-entry-deleted",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "  [\"X-ST-2\", \"Task 9\"],\n",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every signed or deviation row names a proving test that exists and contains the id \\(or awaits proof by name\\)" }]
+  },
+  {
+    "id": "awaiting-entry-stale",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "[\"X-ST-2\", \"Task 9\"],",
+    "replace": "[\"X-ST-2\", \"Task 9\"],\n  [\"X-ZZ-9\", \"Task 99\"],",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every AWAITING_PROOF id is a real signed row \\(a stale entry is a failure\\)" }]
+  },
+  {
+    "id": "no-table-parses-a-row",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (start === -1) return [];",
+    "replace": "if (start === -1) return [{ id: \"X-ZZ-1\", rule: \"\", citation: \"\", status: \"⬜ open\", enforcedAt: [], provedBy: [], file }];",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "empty case first: a file with no rule table parses to no rows" }]
+  },
+  {
+    "id": "enforced-at-path-missing",
+    "file": "packages/engine/rules/carrom.md",
+    "find": "packages/engine/src/sports/carrom/carrom.ts",
+    "replace": "packages/engine/src/sports/carrom/caron.ts",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every enforced-at path exists" }]
+  },
+  {
+    "id": "proof-file-exists-unchecked",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (!fileExists(p)) out.push",
+    "replace": "if (false) out.push",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the proof checks catch a row with no test, a missing file and a file that does not name the id \\(synthetic signed rows\\)" }]
+  },
+  {
+    "id": "proof-names-id-unchecked",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "else if (!fileNames(p, r.id)) out.push",
+    "replace": "else if (false) out.push",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the proof checks catch a row with no test, a missing file and a file that does not name the id \\(synthetic signed rows\\)" }]
+  },
+  {
+    "id": "proof-no-test-unchecked",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (tests.length === 0) return [",
+    "replace": "if (false) return [",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the proof checks catch a row with no test, a missing file and a file that does not name the id \\(synthetic signed rows\\)" }]
+  },
+  {
+    "id": "six-cells-unchecked",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (cells.length !== 6) throw",
+    "replace": "if (false) throw",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the parser refuses a row that is not 6 cells, and ID refuses a malformed id \\(synthetic inputs\\)" }]
+  },
+  {
+    "id": "id-pattern-open",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "export const ID = /^[A-Z]{1,3}-[A-Z]{2}-\\d+$/;",
+    "replace": "export const ID = /^.+$/;",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the parser refuses a row that is not 6 cells, and ID refuses a malformed id \\(synthetic inputs\\)" }]
+  },
+  {
+    "id": "readme-read-as-rules",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": " && f !== \"README.md\"",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "parses at least one row from every rule file, and zero rows overall is a failure" }]
+  },
+  {
+    "id": "awaiting-row-claims-proof",
+    "file": "packages/engine/rules/cross-sport.md",
+    "find": "ruling 77 | signed 77 2026-10-08 | `apps/web/src/server/usecases/scoring.ts` | — |",
+    "replace": "ruling 77 | signed 77 2026-10-08 | `apps/web/src/server/usecases/scoring.ts` | `packages/engine/test/rules-reference.test.ts` |",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every signed or deviation row names a proving test that exists and contains the id \\(or awaits proof by name\\)" }]
+  },
+  {
+    "id": "status-deviation-form-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "|deviation \\d+ \\d{4}-\\d{2}-\\d{2}",
+    "replace": "",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+  },
+  {
+    "id": "status-open-form-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "|⬜ open)$/",
+    "replace": ")$/",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+  },
+  {
+    "id": "status-start-anchor-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "export const STATUS = /^(",
+    "replace": "export const STATUS = /(",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+  },
+  {
+    "id": "status-end-anchor-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "|⬜ open)$/",
+    "replace": "|⬜ open)/",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+  },
+  {
+    "id": "table-runs-past-its-end",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (!line.startsWith(\"| \")) break;",
+    "replace": "if (!line.startsWith(\"| \")) continue;",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a rule table ends at the first non-row line, and a row's path cells split on <br>, strip backticks and read — as none \\(synthetic input\\)" }]
+  },
+  {
+    "id": "dash-cell-read-as-path",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "cell.trim() === \"—\" ?",
+    "replace": "false ?",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a rule table ends at the first non-row line, and a row's path cells split on <br>, strip backticks and read — as none \\(synthetic input\\)" }]
+  },
+  {
+    "id": "path-cell-split-elsewhere",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "cell.split(\"<br>\")",
+    "replace": "cell.split(\";\")",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a rule table ends at the first non-row line, and a row's path cells split on <br>, strip backticks and read — as none \\(synthetic input\\)" }]
+  },
+  {
+    "id": "path-backticks-kept",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "p.trim().replace(/^`|`$/g, \"\")",
+    "replace": "p.trim()",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a rule table ends at the first non-row line, and a row's path cells split on <br>, strip backticks and read — as none \\(synthetic input\\)" }]
+  },
+  {
+    "id": "matrix-entry-never-skipped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "p.startsWith(\"matrix:\")",
+    "replace": "false",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a matrix: entry is a case id, not a test path: it is skipped beside a real proving test \\(synthetic signed row\\)" }]
+  },
+  {
+    "id": "every-entry-is-a-matrix-case",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "p.startsWith(\"matrix:\")",
+    "replace": "true",
+    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a matrix: entry is a case id, not a test path: it is skipped beside a real proving test \\(synthetic signed row\\)" }]
+  }
+]
