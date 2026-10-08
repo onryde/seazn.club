@@ -747,8 +747,9 @@ describe("evaluateInvariants + observed helpers", () => {
     const body = enums[0]![1]!;
     const product = [...body.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
     expect(product).toHaveLength(body.split(",").length); // an entry the regex cannot read is not silently dropped
-    // W2a: a bracket match held for its settle (needs_decision) is live, not finished. This check is what makes the api-v1
-    // enum's needs_decision (loop D) reach the harness's status vocabulary.
+    // W2a: a bracket match held for its settle (needs_decision) is live, not finished. RED UNTIL Task 7 adds needs_decision to
+    // the api-v1 status enum (schemas.ts, the z.enum with "forfeited"): this check is what makes that edit reach the harness's
+    // status vocabulary. Loop D does not touch the enum.
     const LIVE = ["scheduled", "in_play", "needs_decision"];
     expect(LIVE.every((s) => product.includes(s))).toBe(true);
     expect([...TERMINAL_STATUSES].sort()).toEqual(product.filter((s) => !LIVE.includes(s)).sort());

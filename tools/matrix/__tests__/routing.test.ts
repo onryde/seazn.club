@@ -71,6 +71,21 @@ describe("routeTo", () => {
 // its openness is the Q-A guard's job (scenario-catalogue.test.ts: open
 // exactly while a route names it). The sweep reads every row, so its counts
 // stay above zero when any one row is rewritten.
+/** "ruling 71", "rulings 72–79", "rulings 3, 5 and 9". A list item is a whole number not followed by "-<digit>": "(ruling 71,
+ *  2026-10-08)" cites ruling 71 and a date, not a ruling 2026. */
+const CITED_RULINGS = /\brulings? (\d+(?:–\d+)?(?:(?:,| and|, and) \d+(?:–\d+)?(?![\d]|-\d))*)/gi;
+const citedIn = (text: string): number[] =>
+  [...text.matchAll(CITED_RULINGS)].flatMap(([, list]) => [...list!.matchAll(/(\d+)(?:–(\d+))?/g)].flatMap(([, lo, hi]) => Array.from({ length: Number(hi ?? lo) - Number(lo) + 1 }, (_, i) => Number(lo) + i)));
+
+describe("the cited-ruling reader", () => {
+  it("reads lists and ranges, and leaves an ISO date after a comma alone", () => {
+    expect(citedIn("rulings 72–79 signed")).toEqual([72, 73, 74, 75, 76, 77, 78, 79]);
+    expect(citedIn("rulings 3, 5 and 9")).toEqual([3, 5, 9]);
+    expect(citedIn("Split into W2a–W2e (ruling 71, 2026-10-08).")).toEqual([71]);
+    expect(citedIn("no citation here")).toEqual([]);
+  });
+});
+
 describe("the Status rows' links and cited rulings (any row, open or closed)", () => {
   const PROMPTS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts";
   /** Each Status body row's cells after the wave and the scope: its state. */
@@ -114,7 +129,7 @@ describe("the Status rows' links and cited rulings (any row, open or closed)", (
     expect(numbered.size, "owner rulings read").toBeGreaterThan(0);
     let checked = 0;
     for (const { wave, state } of states()) {
-      for (const [, list] of state.matchAll(/\brulings? (\d+(?:–\d+)?(?:(?:,| and|, and) \d+(?:–\d+)?)*)/gi)) {
+      for (const [, list] of state.matchAll(CITED_RULINGS)) {
         for (const [, lo, hi] of list!.matchAll(/(\d+)(?:–(\d+))?/g)) {
           for (let n = Number(lo); n <= Number(hi ?? lo); n++) {
             expect(numbered.has(n), `${wave} cites ruling ${n}`).toBe(true);

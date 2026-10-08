@@ -339,6 +339,8 @@ describe("the W2 status row has left `not started` for the backlog being ready o
 
 // --- the carries' quotations ------------------------------------------------------------------------------------------------------
 
+const RB2B_7 = /\bRB2B-7\b/;
+
 describe("each quotation a carry makes is in the document it quotes", () => {
   const outside = INDEX.replace(SECTION, "");
 
@@ -350,9 +352,14 @@ describe("each quotation a carry makes is in the document it quotes", () => {
     const rulebook = flat(read(`${SPECS}/rulebook-W2-goals-boards.md`));
     expect(rulebook).toContain("turning shoot-outs on for a hockey table stage opens SO points fields seeded 2/1");
     expect(rulebook).toContain("**None is a ruling.**");
-    // The plan's false premise 20 is this contradiction, and no entry of this file names RB2B outside the section.
+    // The plan's false premise 20 is this contradiction, and no entry of this file names RB2B-7 outside the section. (W2a's
+    // owner rulings 72-74, 2026-10-08, cite OTHER rulebook rows - RB2B-14, -16, -23, -28 - as their source; the carry's claim is
+    // about the one row, RB2B-7, that no ruling signs.)
     expect(flat(outside)).toContain("**W2 prompt trap 2** (\"declared 3/0 loses to the FIH 2/1 the rulebook adopts\", SC-P4)");
-    expect(outside.includes("RB2B"), "an RB2B entry in this file would be a ruling the carry says is absent").toBe(false);
+    expect(RB2B_7.test(outside), "an RB2B-7 entry in this file would be a ruling the carry says is absent").toBe(false);
+    // The pin sees RB2B-7 and leaves the other rows W2a's rulings cite alone (RB2B-70 would not be it either).
+    expect(RB2B_7.test("signed: RB2B-7")).toBe(true);
+    expect(RB2B_7.test("RB2B-14, RB2B-16 and RB2B-70")).toBe(false);
   });
 
   it("the W3 prompt states the re-baseline handoff, and ruling 70 carries the recommendation the section calls the controller's", () => {
