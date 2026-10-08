@@ -4,160 +4,1244 @@
     "file": "packages/engine/rules/generic.md",
     "find": "| GN-KO-1 | A generic bracket fixture",
     "replace": "| X-BR-1 | A duplicate of the cross-sport X-BR-1 id. | product rule, ruling 72 | signed 72 2026-10-08 | — | — |\n| GN-KO-1 | A generic bracket fixture",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every id is well-formed and unique across all files" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every id is well-formed and unique across all files"
+      }
+    ]
   },
   {
     "id": "status-date-format",
     "file": "packages/engine/rules/boardgame.md",
     "find": "ruling 82 | signed 73 2026-10-08",
     "replace": "ruling 82 | signed 73 08-10-2026",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open"
+      }
+    ]
   },
   {
     "id": "awaiting-entry-deleted",
     "file": "packages/engine/test/rules-reference.test.ts",
     "find": "  [\"X-ST-2\", \"Task 9\"],\n",
     "replace": "",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every signed or deviation row names a proving test that exists and contains the id \\(or awaits proof by name\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every signed or deviation row names a proving test that exists and contains the id \\(or awaits proof by name\\)"
+      }
+    ]
   },
   {
     "id": "awaiting-entry-stale",
     "file": "packages/engine/test/rules-reference.test.ts",
     "find": "[\"X-ST-2\", \"Task 9\"],",
     "replace": "[\"X-ST-2\", \"Task 9\"],\n  [\"X-ZZ-9\", \"Task 99\"],",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every AWAITING_PROOF id is a real signed row \\(a stale entry is a failure\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every AWAITING_PROOF id is a real signed row \\(a stale entry is a failure\\)"
+      }
+    ]
   },
   {
     "id": "no-table-parses-a-row",
     "file": "packages/engine/test/rules-reference.ts",
-    "find": "if (start === -1) return [];",
-    "replace": "if (start === -1) return [{ id: \"X-ZZ-1\", rule: \"\", citation: \"\", status: \"⬜ open\", enforcedAt: [], provedBy: [], file }];",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "empty case first: a file with no rule table parses to no rows" }]
+    "find": "const rows: RuleRow[] = [];",
+    "replace": "const rows: RuleRow[] = [{ id: \"X-ZZ-1\", rule: \"\", citation: \"\", status: \"⬜ open\", enforcedAt: [], provedBy: [], file }];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "empty case first: a file with no rule table parses to no rows"
+      }
+    ]
   },
   {
     "id": "enforced-at-path-missing",
     "file": "packages/engine/rules/carrom.md",
     "find": "packages/engine/src/sports/carrom/carrom.ts",
     "replace": "packages/engine/src/sports/carrom/caron.ts",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every enforced-at path exists" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every enforced-at path exists"
+      }
+    ]
   },
   {
     "id": "proof-file-exists-unchecked",
     "file": "packages/engine/test/rules-reference.ts",
-    "find": "if (!fileExists(p)) out.push",
-    "replace": "if (false) out.push",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the proof checks catch a row with no test, a missing file and a file that does not name the id \\(synthetic signed rows\\)" }]
+    "find": "if (source === undefined) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the proof checks catch a row with no test, a missing file and a file that does not name the id \\(synthetic signed rows\\)"
+      }
+    ]
   },
   {
     "id": "proof-names-id-unchecked",
     "file": "packages/engine/test/rules-reference.ts",
-    "find": "else if (!fileNames(p, r.id)) out.push",
-    "replace": "else if (false) out.push",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the proof checks catch a row with no test, a missing file and a file that does not name the id \\(synthetic signed rows\\)" }]
+    "find": "if (!testTitles(p, source).some((t) => hasToken(t, r.id))) out.push",
+    "replace": "if (false) out.push",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the proof checks catch a row with no test, a missing file and a file that does not name the id \\(synthetic signed rows\\)"
+      }
+    ]
   },
   {
     "id": "proof-no-test-unchecked",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "if (tests.length === 0) return [",
     "replace": "if (false) return [",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the proof checks catch a row with no test, a missing file and a file that does not name the id \\(synthetic signed rows\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the proof checks catch a row with no test, a missing file and a file that does not name the id \\(synthetic signed rows\\)"
+      }
+    ]
   },
   {
     "id": "six-cells-unchecked",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "if (cells.length !== 6) throw",
     "replace": "if (false) throw",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the parser refuses a row that is not 6 cells, and ID refuses a malformed id \\(synthetic inputs\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the parser refuses a row that is not 6 cells, and ID refuses a malformed id \\(synthetic inputs\\)"
+      }
+    ]
   },
   {
     "id": "id-pattern-open",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "export const ID = /^[A-Z]{1,3}-[A-Z]{2}-\\d+$/;",
     "replace": "export const ID = /^.+$/;",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "the parser refuses a row that is not 6 cells, and ID refuses a malformed id \\(synthetic inputs\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the parser refuses a row that is not 6 cells, and ID refuses a malformed id \\(synthetic inputs\\)"
+      }
+    ]
   },
   {
     "id": "readme-read-as-rules",
     "file": "packages/engine/test/rules-reference.ts",
     "find": " && f !== \"README.md\"",
     "replace": "",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "parses at least one row from every rule file, and zero rows overall is a failure" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "parses at least one row from every rule file, and zero rows overall is a failure"
+      }
+    ]
   },
   {
     "id": "awaiting-row-claims-proof",
     "file": "packages/engine/rules/cross-sport.md",
     "find": "ruling 77 | signed 77 2026-10-08 | `apps/web/src/server/usecases/scoring.ts` | — |",
     "replace": "ruling 77 | signed 77 2026-10-08 | `apps/web/src/server/usecases/scoring.ts` | `packages/engine/test/rules-reference.test.ts` |",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every signed or deviation row names a proving test that exists and contains the id \\(or awaits proof by name\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every signed or deviation row names a proving test that exists and contains the id \\(or awaits proof by name\\)"
+      }
+    ]
   },
   {
     "id": "status-deviation-form-dropped",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "|deviation \\d+ \\d{4}-\\d{2}-\\d{2}",
     "replace": "",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open"
+      }
+    ]
   },
   {
     "id": "status-open-form-dropped",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "|⬜ open)$/",
     "replace": ")$/",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open"
+      }
+    ]
   },
   {
     "id": "status-start-anchor-dropped",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "export const STATUS = /^(",
     "replace": "export const STATUS = /(",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open"
+      }
+    ]
   },
   {
     "id": "status-end-anchor-dropped",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "|⬜ open)$/",
     "replace": "|⬜ open)/",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every status is signed <ruling> <date>, deviation <ruling> <date> or ⬜ open"
+      }
+    ]
   },
   {
     "id": "table-runs-past-its-end",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "if (!line.startsWith(\"| \")) break;",
     "replace": "if (!line.startsWith(\"| \")) continue;",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a rule table ends at the first non-row line, and a row's path cells split on <br>, strip backticks and read — as none \\(synthetic input\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a row-shaped line the parser did not read is a failure: a row after prose, a second table, or no table header \\(synthetic inputs\\)"
+      }
+    ]
   },
   {
     "id": "dash-cell-read-as-path",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "cell.trim() === \"—\" ?",
     "replace": "false ?",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a rule table ends at the first non-row line, and a row's path cells split on <br>, strip backticks and read — as none \\(synthetic input\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a row's path cells split on <br>, strip backticks and read — as none, and prose after the table is not a row \\(synthetic input\\)"
+      }
+    ]
   },
   {
     "id": "path-cell-split-elsewhere",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "cell.split(\"<br>\")",
     "replace": "cell.split(\";\")",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a rule table ends at the first non-row line, and a row's path cells split on <br>, strip backticks and read — as none \\(synthetic input\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a row's path cells split on <br>, strip backticks and read — as none, and prose after the table is not a row \\(synthetic input\\)"
+      }
+    ]
   },
   {
     "id": "path-backticks-kept",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "p.trim().replace(/^`|`$/g, \"\")",
     "replace": "p.trim()",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a rule table ends at the first non-row line, and a row's path cells split on <br>, strip backticks and read — as none \\(synthetic input\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a row's path cells split on <br>, strip backticks and read — as none, and prose after the table is not a row \\(synthetic input\\)"
+      }
+    ]
   },
   {
     "id": "matrix-entry-never-skipped",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "p.startsWith(\"matrix:\")",
     "replace": "false",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a matrix: entry is a case id, not a test path: it is skipped beside a real proving test \\(synthetic signed row\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a matrix: entry is additional evidence only: skipped beside a real proving test, and a matrix-only row names no proving test \\(synthetic signed rows\\)"
+      }
+    ]
   },
   {
     "id": "every-entry-is-a-matrix-case",
     "file": "packages/engine/test/rules-reference.ts",
     "find": "p.startsWith(\"matrix:\")",
     "replace": "true",
-    "killers": [{ "cwd": "packages/engine", "files": ["test/rules-reference.test.ts"], "name": "a matrix: entry is a case id, not a test path: it is skipped beside a real proving test \\(synthetic signed row\\)" }]
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a matrix: entry is additional evidence only: skipped beside a real proving test, and a matrix-only row names no proving test \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "matrix-only-row-passes",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (tests.length === 0) return [",
+    "replace": "if (r.provedBy.length === 0) return [",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a matrix: entry is additional evidence only: skipped beside a real proving test, and a matrix-only row names no proving test \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "token-edge-hyphen-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const TOKEN_EDGE = \"[A-Za-z0-9-]\";",
+    "replace": "const TOKEN_EDGE = \"[A-Za-z0-9]\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "an id must be a whole token in the title: a longer id, a prefix or a suffix is a near-miss, not a proof \\(synthetic titles\\)"
+      }
+    ]
+  },
+  {
+    "id": "token-edge-digits-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const TOKEN_EDGE = \"[A-Za-z0-9-]\";",
+    "replace": "const TOKEN_EDGE = \"[A-Za-z-]\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "an id must be a whole token in the title: a longer id, a prefix or a suffix is a near-miss, not a proof \\(synthetic titles\\)"
+      }
+    ]
+  },
+  {
+    "id": "token-edge-letters-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const TOKEN_EDGE = \"[A-Za-z0-9-]\";",
+    "replace": "const TOKEN_EDGE = \"[0-9-]\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "an id must be a whole token in the title: a longer id, a prefix or a suffix is a near-miss, not a proof \\(synthetic titles\\)"
+      }
+    ]
+  },
+  {
+    "id": "token-left-edge-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "(?<!${TOKEN_EDGE})",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "an id must be a whole token in the title: a longer id, a prefix or a suffix is a near-miss, not a proof \\(synthetic titles\\)"
+      }
+    ]
+  },
+  {
+    "id": "token-right-edge-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "(?!${TOKEN_EDGE})",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "an id must be a whole token in the title: a longer id, a prefix or a suffix is a near-miss, not a proof \\(synthetic titles\\)"
+      }
+    ]
+  },
+  {
+    "id": "path-leading-slash-allowed",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "p.startsWith(\"/\") || ",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a proof path must be a normalised repo-relative test file outside packages/engine/rules/, docs/ and the checker itself \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "path-parent-escape-allowed",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "p.startsWith(\"../\") || ",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a proof path must be a normalised repo-relative test file outside packages/engine/rules/, docs/ and the checker itself \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "path-unnormalised-allowed",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": " || posix.normalize(p) !== p",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a proof path must be a normalised repo-relative test file outside packages/engine/rules/, docs/ and the checker itself \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "rules-dir-may-prove",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "p.startsWith(\"packages/engine/rules/\") || ",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a proof path must be a normalised repo-relative test file outside packages/engine/rules/, docs/ and the checker itself \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "docs-dir-may-prove",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": " || p.startsWith(\"docs/\")",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a proof path must be a normalised repo-relative test file outside packages/engine/rules/, docs/ and the checker itself \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "checker-may-prove-itself",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (CHECKER_FILES.includes(p)) return",
+    "replace": "if (false) return",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a proof path must be a normalised repo-relative test file outside packages/engine/rules/, docs/ and the checker itself \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "test-file-pattern-open",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "export const TEST_FILE = /\\.(?:test\\.tsx?|spec\\.ts)$/;",
+    "replace": "export const TEST_FILE = /./;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a proof path must be a normalised repo-relative test file outside packages/engine/rules/, docs/ and the checker itself \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "test-pattern-tsx-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "test\\.tsx?",
+    "replace": "test\\.ts",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a proof path must be a normalised repo-relative test file outside packages/engine/rules/, docs/ and the checker itself \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "test-pattern-spec-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "|spec\\.ts)",
+    "replace": ")",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a proof path must be a normalised repo-relative test file outside packages/engine/rules/, docs/ and the checker itself \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "title-root-describe-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const TEST_ROOTS = [\"it\", \"test\", \"describe\"];",
+    "replace": "const TEST_ROOTS = [\"it\", \"test\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "test titles are the first string argument of it/test/describe/test\\.describe calls: not a comment, a body string, a second argument, a skipped or generated test"
+      }
+    ]
+  },
+  {
+    "id": "title-test-describe-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "\"test.describe\", ...DESCRIBE_MODES",
+    "replace": "...DESCRIBE_MODES",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "test titles are the first string argument of it/test/describe/test\\.describe calls: not a comment, a body string, a second argument, a skipped or generated test"
+      }
+    ]
+  },
+  {
+    "id": "title-serial-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const DESCRIBE_MODES = [\"serial\", \"parallel\"];",
+    "replace": "const DESCRIBE_MODES = [\"parallel\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "title-parallel-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const DESCRIBE_MODES = [\"serial\", \"parallel\"];",
+    "replace": "const DESCRIBE_MODES = [\"serial\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "title-skipif-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const CONDITIONAL_SKIPS = [\"skipIf\", \"runIf\"];",
+    "replace": "const CONDITIONAL_SKIPS = [\"runIf\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "title-runif-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const CONDITIONAL_SKIPS = [\"skipIf\", \"runIf\"];",
+    "replace": "const CONDITIONAL_SKIPS = [\"skipIf\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "skip-modifier-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const UNCONDITIONAL_SKIPS = [\"skip\", \"todo\", \"fixme\"];",
+    "replace": "const UNCONDITIONAL_SKIPS = [\"todo\", \"fixme\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a DB-gated or serial proof counts; the same id inside an unconditional skip is refused, and inside a conditional one is accepted \\(probe pin, synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "todo-modifier-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const UNCONDITIONAL_SKIPS = [\"skip\", \"todo\", \"fixme\"];",
+    "replace": "const UNCONDITIONAL_SKIPS = [\"skip\", \"fixme\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "fixme-modifier-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const UNCONDITIONAL_SKIPS = [\"skip\", \"todo\", \"fixme\"];",
+    "replace": "const UNCONDITIONAL_SKIPS = [\"skip\", \"todo\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "skipped-body-entered",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (kind === \"skipped\") return;",
+    "replace": "if (false) return;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a DB-gated or serial proof counts; the same id inside an unconditional skip is refused, and inside a conditional one is accepted \\(probe pin, synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "skip-lookthrough-calls-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (ts.isCallExpression(e)) return names(e.expression);\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "skip-root-unchecked",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "return TEST_ROOTS.includes(e.text) ? [e.text] : undefined;",
+    "replace": "return [e.text];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "gate-accepted-as-direct-callee",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "return DIRECT_CALLEES.has(direct) ? \"title\" : \"other\";",
+    "replace": "return DIRECT_CALLEES.has(direct) || GATE_CALLEES.has(direct) ? \"title\" : \"other\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "any-call-of-a-test-root-is-a-gate",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "return gate !== undefined && GATE_CALLEES.has(gate) ? \"title\" : \"other\";",
+    "replace": "return gate !== undefined ? \"title\" : \"other\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "title-kind-unchecked",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "kind === \"title\" && first !== undefined",
+    "replace": "first !== undefined",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "test titles are the first string argument of it/test/describe/test\\.describe calls: not a comment, a body string, a second argument, a skipped or generated test"
+      }
+    ]
+  },
+  {
+    "id": "title-template-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "ts.isStringLiteralLike(first)",
+    "replace": "ts.isStringLiteral(first)",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "test titles are the first string argument of it/test/describe/test\\.describe calls: not a comment, a body string, a second argument, a skipped or generated test"
+      }
+    ]
+  },
+  {
+    "id": "title-any-argument-counts",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const first = n.arguments[0];",
+    "replace": "const first = n.arguments[n.arguments.length - 1];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "test titles are the first string argument of it/test/describe/test\\.describe calls: not a comment, a body string, a second argument, a skipped or generated test"
+      }
+    ]
+  },
+  {
+    "id": "title-nested-not-visited",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "ts.forEachChild(n, visit);",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "test titles are the first string argument of it/test/describe/test\\.describe calls: not a comment, a body string, a second argument, a skipped or generated test"
+      }
+    ]
+  },
+  {
+    "id": "only-first-path-checked",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "for (const p of tests) {",
+    "replace": "for (const p of tests.slice(0, 1)) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "every listed test path must prove the id, not just one of them \\(synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "reader-rooted-at-engine",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "readFileSync(join(REPO, p), \"utf8\")",
+    "replace": "readFileSync(join(ENGINE, p), \"utf8\")",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the default reader reads the real repo: a missing file is undefined, any other failure is loud, and proofProblems uses it when none is injected"
+      }
+    ]
+  },
+  {
+    "id": "reader-swallows-every-error",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if ((e as NodeJS.ErrnoException).code === \"ENOENT\") return undefined;",
+    "replace": "return undefined;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the default reader reads the real repo: a missing file is undefined, any other failure is loud, and proofProblems uses it when none is injected"
+      }
+    ]
+  },
+  {
+    "id": "reader-default-not-wired",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "read: ReadRepoFile = readRepoFile",
+    "replace": "read: ReadRepoFile = () => undefined",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the default reader reads the real repo: a missing file is undefined, any other failure is loud, and proofProblems uses it when none is injected"
+      }
+    ]
+  },
+  {
+    "id": "row-shaped-skip-ignored",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (skipped.length > 0) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a row-shaped line the parser did not read is a failure: a row after prose, a second table, or no table header \\(synthetic inputs\\)"
+      }
+    ]
+  },
+  {
+    "id": "read-rows-not-excused",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": " && !read.has(i)",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a row-shaped line the parser did not read is a failure: a row after prose, a second table, or no table header \\(synthetic inputs\\)"
+      }
+    ]
+  },
+  {
+    "id": "row-shaped-pattern-open",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "export const ROW_SHAPED = /^\\| [A-Z]{1,3}-[A-Z]{2}-\\d+ \\|/;",
+    "replace": "export const ROW_SHAPED = /^\\| /;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a row-shaped line the parser did not read is a failure: a row after prose, a second table, or no table header \\(synthetic inputs\\)"
+      }
+    ]
+  },
+  {
+    "id": "row-shaped-pattern-never",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "export const ROW_SHAPED = /^\\| [A-Z]{1,3}-[A-Z]{2}-\\d+ \\|/;",
+    "replace": "export const ROW_SHAPED = /(?!)/;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a row-shaped line the parser did not read is a failure: a row after prose, a second table, or no table header \\(synthetic inputs\\)"
+      }
+    ]
+  },
+  {
+    "id": "seed-id-absent",
+    "file": "packages/engine/rules/boardgame.md",
+    "find": "| BG-KO-2 | A drawn",
+    "replace": "| BG-KO-3 | A drawn",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the ten ids W2a seeds are all present: the expectation is spec §6's list, not the parsed files"
+      }
+    ]
+  },
+  {
+    "id": "ci-stale-report-kept",
+    "file": ".github/workflows/ci.yml",
+    "find": "          rm -f vitest-results-rules.json\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run"
+      }
+    ]
+  },
+  {
+    "id": "ci-set-e-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "          set -euo pipefail\n          rm -f vitest-results-rules.json\n",
+    "replace": "          rm -f vitest-results-rules.json\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run"
+      }
+    ]
+  },
+  {
+    "id": "ci-runs-whole-engine-test-dir",
+    "file": ".github/workflows/ci.yml",
+    "find": "--testTimeout=30000 packages/engine/test/rules-reference.test.ts",
+    "replace": "--testTimeout=30000 packages/engine/test",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge \\(no jq\\)"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-total-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "replace": "if (false) fail(\"the rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-failed-tests-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (r.numFailedTests !== 0) fail(",
+    "replace": "if (false) fail(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-failed-suites-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (r.numFailedTestSuites !== 0) fail(`${r.numFailedTestSuites} rules reference",
+    "replace": "if (false) fail(`${r.numFailedTestSuites} rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-pending-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (r.numPendingTests !== 0) fail(",
+    "replace": "if (false) fail(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-todo-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (r.numTodoTests !== 0) fail(",
+    "replace": "if (false) fail(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-one-file-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (files.length !== 1) fail(",
+    "replace": "if (false) fail(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-exit-swallowed",
+    "file": ".github/workflows/ci.yml",
+    "find": "process.exit(1); };\n            if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "replace": "process.exit(0); };\n            if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-annotation-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "console.error(`::error::${msg}`); process.exit(1); };\n            if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "replace": "console.error(msg); process.exit(1); };\n            if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-reads-the-wrong-report",
+    "file": ".github/workflows/ci.yml",
+    "find": "JSON.parse(fs.readFileSync(\"vitest-results-rules.json\", \"utf8\"))",
+    "replace": "JSON.parse(fs.readFileSync(\"vitest-results-reference.json\", \"utf8\"))",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-single-quote-in-judge-body",
+    "file": ".github/workflows/ci.yml",
+    "find": "(r.testResults || []).map((t) => t.name);\n            console.log(`rules reference",
+    "replace": "(r.testResults || []).map((t) => t.name); // it's\n            console.log(`rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge \\(no jq\\)"
+      }
+    ]
+  },
+  {
+    "id": "ci-jq-in-judge-body",
+    "file": ".github/workflows/ci.yml",
+    "find": "(r.testResults || []).map((t) => t.name);\n            console.log(`rules reference",
+    "replace": "(r.testResults || []).map((t) => t.name); /* jq */\n            console.log(`rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge \\(no jq\\)"
+      }
+    ]
+  },
+  {
+    "id": "ci-command-after-judge",
+    "file": ".github/workflows/ci.yml",
+    "find": "not exactly 1: ${files.join(\", \")}`);\n          '\n",
+    "replace": "not exactly 1: ${files.join(\", \")}`);\n          '\n          echo done\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge \\(no jq\\)"
+      }
+    ]
+  },
+  {
+    "id": "ci-step-continue-on-error",
+    "file": ".github/workflows/ci.yml",
+    "find": "      - name: Engine rules reference checker (DB-free)\n        run: |",
+    "replace": "      - name: Engine rules reference checker (DB-free)\n        continue-on-error: true\n        run: |",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "nothing narrows it: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block"
+      }
+    ]
+  },
+  {
+    "id": "ci-gates-job-conditional",
+    "file": ".github/workflows/ci.yml",
+    "find": "    name: Typecheck + lint + drift gates\n",
+    "replace": "    name: Typecheck + lint + drift gates\n    if: github.event_name == 'push'\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "nothing narrows it: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block"
+      }
+    ]
+  },
+  {
+    "id": "ci-trigger-path-filtered",
+    "file": ".github/workflows/ci.yml",
+    "find": "on:\n  pull_request:\n",
+    "replace": "on:\n  pull_request:\n    paths:\n      - \"packages/engine/**\"\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "nothing narrows it: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block"
+      }
+    ]
   }
 ]
