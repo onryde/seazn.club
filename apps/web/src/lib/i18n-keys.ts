@@ -1961,6 +1961,7 @@ export type DictionaryKey =
   | "engineError.TIEBREAK_NOT_APPLICABLE"
   | "engineError.UNKNOWN_PHASE"
   | "engineError.WRONG_PHASE"
+  | "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled"
   | "entrants.add.kind"
   | "entrants.add.pairPlayers"
   | "entrants.add.player"

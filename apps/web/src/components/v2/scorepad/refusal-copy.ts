@@ -84,7 +84,7 @@ export const REFUSAL_FALLBACK: MessageKey = "scorepad.rejection.fallback";
  */
 export function refusalText(rejection: RejectionInfo | null, m: MsgFn): string | null {
   if (!rejection) return null;
-  const engine = engineErrorLabel(rejection.code, m);
+  const engine = engineErrorLabel(rejection.code, m, rejection.reason);
   if (engine !== null) return engine;
   // Owner ruling 2026-09-23: the refusal NAMES the match to void first — by
   // the label the schedule board shows it by (fix round 2 ruling): "F·1" for a

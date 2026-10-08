@@ -2,7 +2,7 @@
   {
     "id": "generic-refusal-off",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "if (division.sport_key === \"generic\") {",
+    "find": "if (division.sport_key === \"generic\" && candidate.type !== \"core.void\") {",
     "replace": "if (false) {",
     "killers": [
       {
@@ -18,14 +18,21 @@
           "src/server/engine-db/__tests__/draw-guard.test.ts"
         ],
         "name": "GN-KO-1: a level generic knockout result is refused LEVEL_RESULT_IN_BRACKET \\(enter the winner\\) and leaves the ledger untouched"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "GN-KO-1 \\(legacy\\): a held generic draw refuses a later non-settle event with LEVEL_RESULT_IN_BRACKET, and the ledger is untouched"
       }
     ]
   },
   {
     "id": "hold-not-refuse",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "    if (forbidsLevelResult(stageKind)) {\n      if (division.sport_key",
-    "replace": "    if (false) {\n      if (division.sport_key",
+    "find": "    if (forbidsLevelResult(stageKind)) {\n      // Controller ruling D-F1",
+    "replace": "    if (false) {\n      // Controller ruling D-F1",
     "killers": [
       {
         "cwd": "apps/web",
@@ -48,6 +55,13 @@
           "src/server/engine-db/__tests__/settle-seating.test.ts"
         ],
         "name": "X-BR-2: a level football knockout result is held — needs_decision, nobody seated in the final, onDecided not run; the settle runs it"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "X-BR-2: a held fixture's discipline and news refreshes wait for the settle; the settle runs both"
       }
     ]
   },
@@ -287,6 +301,185 @@
           "src/server/engine-db/__tests__/settle-seating.test.ts"
         ],
         "name": "X-BR-1: the completed-bracket rebuild read \\(stages\\.ts loadBracketFixtures\\) refuses the forced shape; a held row reads clean"
+      }
+    ]
+  },
+  {
+    "id": "void-exempt-off",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (division.sport_key === \"generic\" && candidate.type !== \"core.void\") {",
+    "replace": "if (division.sport_key === \"generic\") {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "D-F1: the organiser can undo a settle on a legacy generic held row — the void is accepted and the row is held again"
+      }
+    ]
+  },
+  {
+    "id": "import-held-skip-off",
+    "file": "apps/web/src/server/usecases/event-import.ts",
+    "find": "if (last.status !== \"needs_decision\") {",
+    "replace": "if (true) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/event-import-held.test.ts"
+        ],
+        "name": "X-BR-2: an imported stream ending HELD \\(a chess double forfeit in a knockout\\) lands, and runs no decided side effect"
+      }
+    ]
+  },
+  {
+    "id": "reason-finalize-drop",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "        reason: LEVEL_RESULT_REASON.finalizeUnsettled,",
+    "replace": "        reason: LEVEL_RESULT_REASON.genericDraw,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "M-1: each LEVEL_RESULT_IN_BRACKET emitter names its reason — a generic draw asks for the winner, a finalize of a held fixture for a settle"
+      }
+    ]
+  },
+  {
+    "id": "reason-generic-drop",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "          reason: LEVEL_RESULT_REASON.genericDraw,",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "M-1: each LEVEL_RESULT_IN_BRACKET emitter names its reason — a generic draw asks for the winner, a finalize of a held fixture for a settle"
+      }
+    ]
+  },
+  {
+    "id": "http-reason-drop",
+    "file": "apps/web/src/server/api-v1/http.ts",
+    "find": "if (isLevelResultReason(reason)) extra = { reason };",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/api-v1/__tests__/http.test.ts"
+        ],
+        "name": "M-1: LEVEL_RESULT_IN_BRACKET forwards each named reason, and nothing else from \\.data"
+      }
+    ]
+  },
+  {
+    "id": "vocab-reason-ignored",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "  if (byReason && typeof reason === \"string\" && Object.hasOwn(byReason, reason)) return m(byReason[reason]!);",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/scoring-vocab.test.ts"
+        ],
+        "name": "M-1: LEVEL_RESULT_IN_BRACKET reads its reason — the finalize refusal asks for a settle, the generic draw for the winner, in every locale"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/refusal-copy.test.ts"
+        ],
+        "name": "M-1: a LEVEL_RESULT_IN_BRACKET refusal reads its reason \\(finalize asks for a settle; a generic draw for the winner\\)"
+      }
+    ]
+  },
+  {
+    "id": "transport-level-renegotiated",
+    "file": "apps/web/src/components/v2/scorepad/transport.ts",
+    "find": "  \"LEVEL_RESULT_IN_BRACKET\",\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/transport.test.ts"
+        ],
+        "name": "M-1: every engine 409 but SEQ_CONFLICT/SCHEDULE_CONFLICT is terminal, and LEVEL_RESULT_IN_BRACKET carries its reason"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/transport.test.ts"
+        ],
+        "name": "TERMINAL_CONFLICT_CODES is exactly the set of terminal 409s the server throws"
+      }
+    ]
+  },
+  {
+    "id": "transport-reason-drop",
+    "file": "apps/web/src/components/v2/scorepad/transport.ts",
+    "find": "            ...(isLevelResultReason(reason) ? { reason } : {}),",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/transport.test.ts"
+        ],
+        "name": "M-1: every engine 409 but SEQ_CONFLICT/SCHEDULE_CONFLICT is terminal, and LEVEL_RESULT_IN_BRACKET carries its reason"
+      }
+    ]
+  },
+  {
+    "id": "pipeline-reason-drop",
+    "file": "apps/web/src/components/v2/scorepad/pipeline.ts",
+    "find": ", ...(r.reason ? { reason: r.reason } : {}) };",
+    "replace": " };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/pipeline.test.ts"
+        ],
+        "name": "M-1: a LEVEL_RESULT_IN_BRACKET refusal keeps its reason in the outcome"
+      }
+    ]
+  },
+  {
+    "id": "hook-reason-drop",
+    "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+    "find": "            ...(outcome.reason ? { reason: outcome.reason } : {}),",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/use-pad-pipeline.test.tsx"
+        ],
+        "name": "M-1: keeps a LEVEL_RESULT_IN_BRACKET refusal's reason, so the pad's copy can tell a finalize from a generic draw"
+      }
+    ]
+  },
+  {
+    "id": "refusal-copy-reason-drop",
+    "file": "apps/web/src/components/v2/scorepad/refusal-copy.ts",
+    "find": "engineErrorLabel(rejection.code, m, rejection.reason)",
+    "replace": "engineErrorLabel(rejection.code, m)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/refusal-copy.test.ts"
+        ],
+        "name": "M-1: a LEVEL_RESULT_IN_BRACKET refusal reads its reason \\(finalize asks for a settle; a generic draw for the winner\\)"
       }
     ]
   }

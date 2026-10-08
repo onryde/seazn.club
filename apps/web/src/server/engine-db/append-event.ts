@@ -14,6 +14,7 @@ import {
   type ScoreSummary,
   type StageKind,
 } from "@seazn/engine/core";
+import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
@@ -349,6 +350,7 @@ export async function appendEventInTx(
       throw new EngineError("LEVEL_RESULT_IN_BRACKET", "settle the match before finalizing — a knockout match can't end level", {
         fixtureId,
         stage: stageKind,
+        reason: LEVEL_RESULT_REASON.finalizeUnsettled, // review M-1: its own copy (settle, or record the decider)
       });
     }
   }
@@ -398,10 +400,14 @@ export async function appendEventInTx(
   // (PROMPT-61) — the throw aborts the tx before insert.
   if (outcome !== null && (outcome as { kind?: string }).kind === "draw") {
     if (forbidsLevelResult(stageKind)) {
-      if (division.sport_key === "generic") {
+      // Controller ruling D-F1: a core.void is exempt. A generic draw can only still be in the fold under a void when
+      // it was stored before W2a (V432 holds it); the organiser must be able to undo a settle on that row, and the
+      // void returns it to needs_decision — it cannot create a new draw, only uncover the old one.
+      if (division.sport_key === "generic" && candidate.type !== "core.void") {
         throw new EngineError("LEVEL_RESULT_IN_BRACKET", "a knockout match can't end level — enter the winner", {
           fixtureId,
           stage: stageKind,
+          reason: LEVEL_RESULT_REASON.genericDraw,
         });
       }
     } else if (stage !== undefined && !sportModule.supportsDraws(cfg as never, stage.kind as StageKind)) {

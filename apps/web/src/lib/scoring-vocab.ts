@@ -32,6 +32,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { EngineErrorCode, SquadProvenance, SquadRole } from "@seazn/engine/core";
 import { swatchName } from "@/lib/brand-palette";
 import { interpolate } from "@/lib/i18n-runtime";
+import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { NEXT_MATCH_STARTED_CODE, ROUND_CODE_KEYS, nextMatchLabel, nextMatchRefOf } from "@/lib/next-match-started";
 
 export type WicketKind =
@@ -1298,9 +1299,25 @@ export const squadProvenanceLabel = (provenance: string, m: MsgFn): string =>
 export const configLabel = (key: string, m: MsgFn): string | null =>
   key in CONFIG_KEY ? m(CONFIG_KEY[key]) : null;
 
+/**
+ * W2a fix round 1 (review M-1): an engine code whose emitters ask for different things carries a `reason`
+ * (`EngineError.data.reason`, forwarded on the wire by http.ts), and the copy branches on it. A reason absent here —
+ * or no reason at all, from an older server — reads the code's own copy (ENGINE_ERROR_KEY).
+ */
+export const ENGINE_ERROR_REASON_KEY: Partial<Record<EngineErrorCode, Readonly<Record<string, MessageKey>>>> = {
+  // The generic-draw reason keeps the code's own "Enter the winner" copy.
+  LEVEL_RESULT_IN_BRACKET: {
+    [LEVEL_RESULT_REASON.finalizeUnsettled]: "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled",
+  },
+};
+
 /** Localized copy for an engine refusal; null when the code isn't an engine one. */
-export const engineErrorLabel = (code: string, m: MsgFn): string | null =>
-  code in ENGINE_ERROR_KEY ? m(ENGINE_ERROR_KEY[code as EngineErrorCode]) : null;
+export const engineErrorLabel = (code: string, m: MsgFn, reason?: unknown): string | null => {
+  if (!(code in ENGINE_ERROR_KEY)) return null;
+  const byReason = ENGINE_ERROR_REASON_KEY[code as EngineErrorCode];
+  if (byReason && typeof reason === "string" && Object.hasOwn(byReason, reason)) return m(byReason[reason]!);
+  return m(ENGINE_ERROR_KEY[code as EngineErrorCode]);
+};
 
 /**
  * R3.5/Task G — a decided fixture's own `MatchOutcome` (kind/winner/loser/
@@ -1513,7 +1530,7 @@ export function scoringErrorText(
   fallback: MessageKey,
   extra?: Record<string, unknown> | null,
 ): string {
-  const engine = code ? engineErrorLabel(code, m) : null;
+  const engine = code ? engineErrorLabel(code, m, extra?.reason) : null;
   if (engine !== null) return engine;
   if (code === NEXT_MATCH_STARTED_CODE) {
     const ref = nextMatchRefOf(extra);
@@ -1529,6 +1546,7 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(WICKET_KEY), ...Object.values(EXTRA_KEY),
   ...Object.values(SPORT_KEY), ...Object.values(SWATCH_KEY),
   ...Object.values(EVENT_KEY), ...Object.values(ENGINE_ERROR_KEY),
+  ...Object.values(ENGINE_ERROR_REASON_KEY).flatMap((byReason) => Object.values(byReason ?? {})),
   ...Object.values(POSITION_KEY), ...Object.values(PLAYER_STAT_KEY),
   ...Object.values(AWARD_KEY),
   ...Object.values(SQUAD_ROLE_KEY), ...Object.values(SQUAD_PROVENANCE_KEY),

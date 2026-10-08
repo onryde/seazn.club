@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { EngineError, EngineErrorCode } from "@seazn/engine/core";
+import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { getRequestContext } from "@/server/request-context";
 import { setRateLimitInfo } from "../context";
@@ -216,6 +217,28 @@ describe("v1 envelope", () => {
       stageId: "s2",
       previousStageId: "s1",
     });
+  });
+
+  // W2a fix round 1 (review M-1): LEVEL_RESULT_IN_BRACKET has two emitters asking for different things, so its
+  // reason reaches the wire — and only a reason this codebase names (lib/level-result-reason.ts).
+  it("M-1: LEVEL_RESULT_IN_BRACKET forwards each named reason, and nothing else from .data", async () => {
+    let checked = 0;
+    for (const reason of Object.values(LEVEL_RESULT_REASON)) {
+      const res = await v1(async () => {
+        throw new EngineError("LEVEL_RESULT_IN_BRACKET", "m", { fixtureId: "f1", stage: "knockout", reason });
+      });
+      expect(res.status, reason).toBe(409);
+      expect((await body(res)).error, reason).toEqual({ code: "LEVEL_RESULT_IN_BRACKET", message: "m", reason });
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The empty case: no reason, or one this codebase does not name, forwards code + message only.
+    for (const data of [{ fixtureId: "f1" }, { fixtureId: "f1", reason: "made_up" }]) {
+      const res = await v1(async () => {
+        throw new EngineError("LEVEL_RESULT_IN_BRACKET", "m", data);
+      });
+      expect((await body(res)).error).toEqual({ code: "LEVEL_RESULT_IN_BRACKET", message: "m" });
+    }
   });
 
   // The empty case of the block above: every OTHER STAGE_NOT_READY (Swiss
