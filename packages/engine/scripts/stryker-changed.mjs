@@ -120,8 +120,9 @@ async function groupConfigs(engine) {
   return out;
 }
 
-/** The ways a Stryker report is not the run of `ranges` (`file:a-b`, as parseMutateRanges returns them): a mutant outside every
- *  range, or a range whose file the report holds no entry for. Stryker writes the report only when a run completes and reports/
+/** The ways a Stryker report is not the run of `ranges` (`file:a-b`, as parseMutateRanges returns them): the run's own recorded
+ *  `config.mutate` missing or not exactly `ranges` (an old run over a SUBSET of them passes the next two checks), a mutant outside
+ *  every range, or a range whose file the report holds no entry for. Stryker writes the report only when a run completes and reports/
  *  is gitignored, so a report left by an EARLIER run stays until the next run finishes. @param {string[]} ranges @returns {string[]} */
 export function reportScopeProblems(report, ranges) {
   const files = report.files ?? {};
@@ -130,6 +131,9 @@ export function reportScopeProblems(report, ranges) {
     return { file, a: Number(a), b: Number(b) };
   });
   const problems = [];
+  const mutate = report.config?.mutate;
+  if (!Array.isArray(mutate)) problems.push("the report records no config.mutate, so the run that wrote it cannot be told");
+  else if (!isDeepStrictEqual(mutate, ranges)) problems.push(`the report's config.mutate ${JSON.stringify(mutate)} is not the expected ${JSON.stringify(ranges)}`);
   for (const [file, f] of Object.entries(files)) for (const m of f.mutants ?? []) {
     const line = m.location.start.line;
     if (!parsed.some((r) => r.file === file && line >= r.a && line <= r.b)) problems.push(`mutant ${m.id} at ${file}:${line} lies outside every expected range`);

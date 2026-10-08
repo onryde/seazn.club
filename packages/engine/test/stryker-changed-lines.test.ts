@@ -4,9 +4,9 @@
 // measured with, for every group. No test here reads git history: CI's engine job is a shallow clone with no origin/main,
 // and after the merge the merge base would be HEAD itself, comparing the file with itself (preflight C4).
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir, totalmem } from "node:os";
-import { join, resolve } from "node:path";
+import { join, matchesGlob, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseMutateRanges, rangesFromDiff, rangesFromUntracked, reportScopeProblems, snapshotForm, verdictsFromReport } from "../scripts/stryker-changed.mjs";
 import { resolveGroup } from "../scripts/stryker-cuts.mjs";
@@ -208,42 +208,93 @@ describe("changed-lines Stryker (W2a Task 0b)", () => {
   // Review I-2: Stryker writes changed.json only when a run completes and reports/ is gitignored, so a report left by an
   // EARLIER run sits there until the next one finishes. --report checks the report against the ranges this run was given.
   const mutantAt = (id: string, line: number, status = "Killed") => ({ id, mutatorName: "StringLiteral", replacement: '""', status, killedBy: status === "Killed" ? ["1"] : [], location: { start: { line } } });
-  const reportOf = (files: Record<string, ReturnType<typeof mutantAt>[]>) => ({ testFiles: { "src/core/types.test.ts": { tests: [{ id: "1", name: "kills it" }] } }, files: Object.fromEntries(Object.entries(files).map(([f, mutants]) => [f, { mutants }])) });
+  /** A Stryker report: `mutate` is the `config.mutate` the run recorded (Stryker writes its options into the report), null for none. */
+  const reportOf = (files: Record<string, ReturnType<typeof mutantAt>[]>, mutate: string[] | null) => ({
+    ...(mutate === null ? {} : { config: { mutate } }),
+    testFiles: { "src/core/types.test.ts": { tests: [{ id: "1", name: "kills it" }] } },
+    files: Object.fromEntries(Object.entries(files).map(([f, mutants]) => [f, { mutants }])),
+  });
 
   it("reportScopeProblems: a report of exactly the expected ranges has none; another file's report, or a mutant past either end of a range, is named", () => {
     const ranges = ["src/core/types.ts:91-101"];
-    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 91), mutantAt("b", 101)] }), ranges)).toEqual([]);
-    // a report left by a run of another file: its mutant lies outside, and the expected file is absent
-    expect(reportScopeProblems(reportOf({ "src/core/events.ts": [mutantAt("x", 15)] }), ranges)).toEqual([
+    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 91), mutantAt("b", 101)] }, ranges), ranges)).toEqual([]);
+    // a report left by a run of another file: the run's own ranges differ, its mutant lies outside, the expected file is absent
+    expect(reportScopeProblems(reportOf({ "src/core/events.ts": [mutantAt("x", 15)] }, ["src/core/events.ts:10-20"]), ranges)).toEqual([
+      'the report\'s config.mutate ["src/core/events.ts:10-20"] is not the expected ["src/core/types.ts:91-101"]',
       "mutant x at src/core/events.ts:15 lies outside every expected range",
       "expected range src/core/types.ts:91-101: the report holds no entry for src/core/types.ts",
     ]);
     // the right file, the wrong lines: one below the range, one above it
-    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("lo", 90), mutantAt("in", 95), mutantAt("hi", 102)] }), ranges)).toEqual([
+    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("lo", 90), mutantAt("in", 95), mutantAt("hi", 102)] }, ranges), ranges)).toEqual([
       "mutant lo at src/core/types.ts:90 lies outside every expected range",
       "mutant hi at src/core/types.ts:102 lies outside every expected range",
     ]);
     // the right lines of the wrong file: a line number alone does not put a mutant in scope
-    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 95)], "src/core/events.ts": [mutantAt("e", 95)] }), ranges)).toEqual([
+    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 95)], "src/core/events.ts": [mutantAt("e", 95)] }, ranges), ranges)).toEqual([
       "mutant e at src/core/events.ts:95 lies outside every expected range",
     ]);
     // two ranges: a mutant inside the second is in scope; a range whose file has an entry but no mutant is not "absent"
-    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 95)], "src/core/events.ts": [] }), ["src/core/types.ts:91-101", "src/core/events.ts:10-20"])).toEqual([]);
+    const two = ["src/core/types.ts:91-101", "src/core/events.ts:10-20"];
+    expect(reportScopeProblems(reportOf({ "src/core/types.ts": [mutantAt("a", 95)], "src/core/events.ts": [] }, two), two)).toEqual([]);
+  });
+
+  // Re-review N-1: an old report over a STRICT SUBSET of this run's ranges (types.ts:91-95, now 91-101) holds only in-range
+  // mutants and every expected file, so the two checks above pass it. The run's own config.mutate tells the runs apart.
+  it("reportScopeProblems: the report's own config.mutate must be exactly the expected ranges, and a report without one is refused", () => {
+    const ranges = ["src/core/types.ts:91-101"];
+    const mutants = { "src/core/types.ts": [mutantAt("a", 92), mutantAt("b", 95)] };
+    expect(reportScopeProblems(reportOf(mutants, ranges), ranges)).toEqual([]); // the positive pair
+    expect(reportScopeProblems(reportOf(mutants, ["src/core/types.ts:91-95"]), ranges)).toEqual([
+      'the report\'s config.mutate ["src/core/types.ts:91-95"] is not the expected ["src/core/types.ts:91-101"]',
+    ]);
+    expect(reportScopeProblems(reportOf(mutants, null), ranges)).toEqual(["the report records no config.mutate, so the run that wrote it cannot be told"]);
   });
 
   it("the --report CLI requires --expect, refuses a report that is not this run's (exit 2), and judges the one that is (exit 0)", () => {
     const dir = mkdtempSync(join(tmpdir(), "stryker-changed-report-"));
     try {
       const file = join(dir, "changed.json");
-      writeFileSync(file, JSON.stringify(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] })));
+      writeFileSync(file, JSON.stringify(reportOf({ "src/core/types.ts": [mutantAt("a", 95)] }, ["src/core/types.ts:91-101"])));
       const run = (...args: string[]) => spawnSync(process.execPath, ["scripts/stryker-changed.mjs", "--report", file, ...args], { cwd: ENGINE, encoding: "utf8", timeout: SPAWN_MS, env: childEnv({}) });
       const bare = run();
       expect([bare.status, bare.stderr]).toEqual([2, expect.stringMatching(/--report needs --expect/)]);
       const other = run("--expect", "src/core/events.ts:10-20");
       expect([other.status, other.stderr]).toEqual([2, expect.stringMatching(/not this run's report/)]);
+      // re-review N-3: an empty --expect is a named refusal (exit 2), never an uncaught throw (exit 1, the survivor code)
+      const empty = run("--expect", "");
+      expect([empty.status, empty.stderr]).toEqual([2, expect.stringMatching(/^--expect: STRYKER_MUTATE is set but names no range/)]);
       const mine = run("--expect", "src/core/types.ts:91-101");
       expect([mine.status, mine.stderr]).toEqual([0, ""]);
       expect(mine.stdout).toContain('{"mutants":1,"killed":1,"timeout":0,"survived":0,"noCoverage":0}');
     } finally { rmSync(dir, { recursive: true, force: true }); }
-  }, spawnBudget(3));
+  }, spawnBudget(4));
+
+  // Re-review N-2: git's empty tree is a fixed object every git has, so diffing against it reads no history (CI's shallow clone
+  // is fine) and names every file under src/ as added: megabytes of diff, past execFileSync's 1 MB default buffer.
+  const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+  it("--base against git's empty tree keeps exactly the measured source, past a 1 MB diff, and names every skipped non-source file on stderr", () => {
+    // the premise, measured, so the case cannot silently stop witnessing the buffer
+    const raw = spawnSync("git", ["diff", "-U0", EMPTY_TREE, "--", "src"], { cwd: ENGINE, timeout: SPAWN_MS, maxBuffer: 1024 ** 3 });
+    expect(raw.status).toBe(0);
+    expect(raw.stdout.length, "the diff is bigger than execFileSync's 1 MB default").toBeGreaterThan(1024 * 1024);
+    const r = spawnSync(process.execPath, ["scripts/stryker-changed.mjs", "--base", EMPTY_TREE], { cwd: ENGINE, encoding: "utf8", timeout: SPAWN_MS, env: childEnv({}) });
+    expect(r.status, r.stderr.slice(0, 400)).toBe(0);
+    // the universe stryker-groups.test.ts sweeps, less what the two maps exclude: derived here, never typed
+    const universe = globSync("src/**/*.ts", { cwd: ENGINE }).filter((f) => !/__tests__|\.test\.ts$|\.d\.ts$/.test(f));
+    const globs = [...Object.keys(STRYKER_EXCLUDED), ...Object.keys(STRYKER_PLACEMENT_OUT_OF_SCOPE)];
+    const expected = universe.filter((f) => !globs.some((g) => matchesGlob(f, g))).sort();
+    const kept = [...new Set(r.stdout.split(",").map((e) => e.replace(/:\d+-\d+$/, "")))].sort();
+    expect(kept).toEqual(expected);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length, "the maps removed something").toBeLessThan(universe.length);
+    // every golden/schema .json and DOMAIN.md under src/ is named as skipped, with its reason
+    const nonSource = [...globSync("src/**/*.json", { cwd: ENGINE }), ...globSync("src/**/*.md", { cwd: ENGINE })];
+    let named = 0;
+    for (const f of nonSource) {
+      expect(r.stderr, f).toContain(`skipped ${f}: not mutable source`);
+      named++;
+    }
+    expect(named).toBe(nonSource.length);
+    expect(named).toBeGreaterThan(0);
+  }, spawnBudget(2));
 });
