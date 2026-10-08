@@ -12,9 +12,10 @@
 //  - `label` (owner ruling 2026-10-08, Option A) is the division's name (`divisions.name`, read here by its own
 //    statement), the pool word (the RAW `table.poolLabel` of the org locale's `public.json`, the key put in), and the
 //    round's text, joined with " · ", an absent part left out. The round's text: a plain round reads the RAW
-//    `bracket.round.plain` of the org locale's `ui.json` with the number its chip `R{n}` shows; every other round reads
-//    its chip. Over 40 characters the pool goes first, then the division, then the label. Read off the dictionary files
-//    here, never through `poolLabel`, `msgFor` or the builder.
+//    `bracket.round.plain` of the org locale's `ui.json` with the number its chip `R{n}` shows; the final, the third-place
+//    match and the grand final read their RAW long names (`bracket.round.final` / `.thirdPlace` / `.grandFinal`, the
+//    coordinator's A1 follow-up); every other round reads its chip. Over 40 characters the pool goes first, then the
+//    division, then the label. Read off the dictionary files here, never through `poolLabel`, `msgFor` or the builder.
 // Every sweep counts what it checked; zero checked is a failure.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -85,15 +86,24 @@ const fill = (dict: Record<string, string>, key: string, v: string, value: strin
 const poolWordOf = (locale: Locale, key: string): string => fill(PUBLIC[locale], "table.poolLabel", "key", key, `${locale} public.json`);
 /** A plain round's long form: the locale's `ui.json` `bracket.round.plain`, the number put in. */
 const roundWordOf = (locale: Locale, n: number): string => fill(UI[locale], "bracket.round.plain", "n", n, `${locale} ui.json`);
-/** A chip straight off the locale's `ui.json` (`bracket.roundShort.*` with no number in it). */
+/** A string straight off the locale's `ui.json` with no variable in it — a chip (`bracket.roundShort.*`) or a round's
+ *  long name (`bracket.round.*`). */
 const chipOf = (locale: Locale, key: string): string => {
   const raw = UI[locale][key];
   expect(raw, `PREMISE: ${locale} ui.json has ${key}`).toBeTruthy();
+  expect(raw, `PREMISE: ${key} carries no variable`).not.toContain("{");
   return raw!;
 };
+/** The rounds whose label reads their LONG name (A1, 2026-10-08), by the engine's role kind: the dictionary key. */
+const LONG_NAME_KEY: Readonly<Record<string, string>> = {
+  final: "bracket.round.final", third_place: "bracket.round.thirdPlace", grand_final: "bracket.round.grandFinal",
+};
+const longNameOf = (locale: Locale, kind: "final" | "third_place" | "grand_final"): string => chipOf(locale, LONG_NAME_KEY[kind]!);
 /** The round's text the owner ruled (2026-10-08): a plain round reads its long form with the number its chip `R{n}`
- *  shows, every other round its chip. */
+ *  shows; the final, the third-place match and the grand final their long names; every other round its chip. */
 const roundTextOf = (locale: Locale, role: Pick<RoundRole, "kind"> | CaptureStage["role"], code: string): string => {
+  const longKey = LONG_NAME_KEY[role.kind];
+  if (longKey !== undefined) return chipOf(locale, longKey);
   if (role.kind !== "plain_round") return code;
   const m = /^R(\d+)$/.exec(code);
   expect(m, `PREMISE: a plain round's chip is R{n} (got ${code})`).not.toBeNull();
@@ -214,20 +224,21 @@ describe("buildCaptureStage — its guards (pure)", () => {
     // The positive pair: the same rows written by today's generator (is_final on the final, the flag on the bronze).
     const today = legacy.map((f, i) => (i === 2 ? { ...f, is_final: true } : i === 3 ? { ...f, third_place: true } : f));
     expect(buildCaptureStage({ fixtureId: bronze.id, stageKind: "knockout", poolKey: null, divisionName: "Open", rows: today }, en, enPool))
-      .toEqual({ code: en("bracket.roundShort.thirdPlace"), role: { kind: "third_place" }, label: `Open · ${chipOf("en", "bracket.roundShort.thirdPlace")}` });
+      .toEqual({ code: en("bracket.roundShort.thirdPlace"), role: { kind: "third_place" }, label: `Open · ${longNameOf("en", "third_place")}` });
     expect(buildCaptureStage({ fixtureId: today[2]!.id, stageKind: "knockout", poolKey: null, divisionName: "Open", rows: today }, en, enPool))
-      .toEqual({ code: en("bracket.roundShort.final"), role: { kind: "final" }, label: `Open · ${chipOf("en", "bracket.roundShort.final")}` });
+      .toEqual({ code: en("bracket.roundShort.final"), role: { kind: "final" }, label: `Open · ${longNameOf("en", "final")}` });
   });
 
   // ---- the label (owner ruling 2026-10-08, Option A) ----
 
-  it("label, en: the owner's examples — `Open · Round 2`, `Open · QF`, `Open · SF`, the final's and the bronze's chips, `Girls U14 · Group A · Round 2`; a plain round reads the number its CHIP shows, never the role's", () => {
+  it("label, en: the owner's examples — `Open · Round 2`, `Open · QF`, `Open · SF`, `Open · Final`, the bronze's long name, `Girls U14 · Group A · Round 2`; a plain round reads the number its CHIP shows, never the role's", () => {
     const cases: Array<{ name: string; input: Omit<Parameters<typeof buildCaptureStage>[0], "rows" | "fixtureId">; rows: RoundCodeFixture[]; at: number; want: string; literal?: string }> = [];
     const league = [row({ round_no: 1 }), row({ round_no: 2 })];
     cases.push({ name: "plain round", input: { stageKind: "league", poolKey: null, divisionName: "Open" }, rows: league, at: 1,
       want: labelOf("en", { division: "Open", pool: null, round: roundWordOf("en", 2) }), literal: "Open · Round 2" });
     const ko = knockout8();
-    for (const [at, key, literal] of [[0, "bracket.roundShort.quarter", "Open · QF"], [4, "bracket.roundShort.semi", "Open · SF"], [6, "bracket.roundShort.final", undefined], [7, "bracket.roundShort.thirdPlace", undefined]] as const) {
+    // QF and SF keep the chip (their long names are plural); the final and the bronze read their long names (A1).
+    for (const [at, key, literal] of [[0, "bracket.roundShort.quarter", "Open · QF"], [4, "bracket.roundShort.semi", "Open · SF"], [6, "bracket.round.final", "Open · Final"], [7, "bracket.round.thirdPlace", undefined]] as const) {
       cases.push({ name: key, input: { stageKind: "knockout", poolKey: null, divisionName: "Open" }, rows: ko, at, want: `Open · ${chipOf("en", key)}`, literal });
     }
     const group = [row({ round_no: 1 }), row({ round_no: 2 })];
@@ -252,6 +263,42 @@ describe("buildCaptureStage — its guards (pure)", () => {
     const sparseStage = buildCaptureStage({ fixtureId: sparse[0]!.id, stageKind: "league", poolKey: null, divisionName: "Open", rows: sparse }, en, enPool)!;
     expect(sparseStage.role, "PREMISE: the role's n differs from the chip's").toEqual({ kind: "plain_round", n: 1 });
     expect(sparseStage.code).toBe("R5");
+  });
+
+  it("label, the long names (A1): the final, the third-place match and the grand final read `bracket.round.final` / `.thirdPlace` / `.grandFinal` in en AND es; QF, SF, the winners' final and the grand-final reset keep their chips", () => {
+    // A double elimination's last two lanes, as the generator writes them: the winners' final, then the GF lane.
+    const de = [
+      row({ round_no: 1, lane: "WB" }),
+      row({ round_no: 2, lane: "GF", is_final: true }),
+      row({ round_no: 3, lane: "GF", is_final: true, conditional: true }),
+    ];
+    const ko = knockout8();
+    let checked = 0;
+    for (const locale of ["en", "es"] as const) {
+      const msg = msgOf(locale);
+      const at = (rows: RoundCodeFixture[], i: number, stageKind: string) =>
+        buildCaptureStage({ fixtureId: rows[i]!.id, stageKind, poolKey: null, divisionName: "Open", rows }, msg, (k) => poolWordOf(locale, k))!;
+      const cases: Array<[CaptureStage, string, string]> = [
+        [at(ko, 6, "knockout"), "final", `Open · ${longNameOf(locale, "final")}`],
+        [at(ko, 7, "knockout"), "third_place", `Open · ${longNameOf(locale, "third_place")}`],
+        [at(de, 1, "double_elim"), "grand_final", `Open · ${longNameOf(locale, "grand_final")}`],
+        [at(ko, 0, "knockout"), "quarter_final", `Open · ${chipOf(locale, "bracket.roundShort.quarter")}`],
+        [at(ko, 4, "knockout"), "semi_final", `Open · ${chipOf(locale, "bracket.roundShort.semi")}`],
+        [at(de, 0, "double_elim"), "winners_final", `Open · ${fill(UI[locale], "bracket.roundShort.winnersRound", "n", 1, `${locale} ui.json`)}`],
+        [at(de, 2, "double_elim"), "grand_final_reset", `Open · ${chipOf(locale, "bracket.roundShort.grandFinalReset")}`],
+      ];
+      for (const [got, kind, want] of cases) {
+        expect(got.role.kind, `${locale}: PREMISE the role`).toBe(kind);
+        expect(got.label, `${locale} ${kind}`).toBe(want);
+        // code is unchanged: always the chip.
+        expect(got.label!.endsWith(got.code) || ["final", "third_place", "grand_final"].includes(kind), `${locale} ${kind}: the chip unless long-named`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 7 rounds × 2 locales").toBe(14);
+    expect(longNameOf("es", "third_place"), "PREMISE: the brief's es words").toBe("Tercer puesto");
+    expect(longNameOf("es", "grand_final")).toBe("Gran final");
+    expect(longNameOf("en", "third_place"), "PREMISE: the long name differs from the chip").not.toBe(chipOf("en", "bracket.roundShort.thirdPlace"));
   });
 
   it("label, es: `Open · Ronda 2`, `Open · CF`, `Girls U14 · Grupo A · Ronda 2` — the org locale's words, never English", () => {
@@ -315,6 +362,18 @@ describe("buildCaptureStage — its guards (pure)", () => {
     const full = labelOf("en", { division: LONG_DIVISION, pool: "B", round }).length;
     const noPool = labelOf("en", { division: LONG_DIVISION, pool: null, round }).length;
     expect(both.warned.map((c) => (c[0] as { length: number }).length), "each drop logs the length it found").toEqual([full, noPool]);
+  });
+
+  it("over 40 with a long name (A1): a 30-character division and the bronze match — `division · 3rd` would fit, `division · Third place` does not — drops the division (logged), the round's long name kept", () => {
+    const ko = knockout8();
+    const bronze = ko[7]!;
+    const d = divisionOfLength(30);
+    const longName = longNameOf("en", "third_place");
+    expect(`${d} · ${chipOf("en", "bracket.roundShort.thirdPlace")}`.length, "PREMISE: the chip would have fit").toBeLessThanOrEqual(MAX);
+    expect(`${d} · ${longName}`.length, "PREMISE: the long name does not").toBeGreaterThan(MAX);
+    const { got, warned } = warnsOf(() => buildCaptureStage({ fixtureId: bronze.id, stageKind: "knockout", poolKey: null, divisionName: d, rows: ko }, en, enPool)!);
+    expect(got).toEqual({ code: chipOf("en", "bracket.roundShort.thirdPlace"), role: { kind: "third_place" }, label: longName });
+    expect(droppedOf(warned)).toEqual(["division"]);
   });
 
   it("over 40, step 3 — then the LABEL: a round's text over 40 on its own omits the label (logged), the rest of the stage kept; exactly 40 is carried. The pool word is asked for only when there IS a pool", () => {
@@ -450,12 +509,13 @@ describe.skipIf(!HAS_DB)("the descriptor's stage over every family (W28)", () =>
     const r = await family("knockout", 8, { thirdPlace: true });
     expect(r.codeTally).toEqual({ QF: 4, SF: 2, F: 1, "3rd": 1 });
     expect(r.kindTally).toEqual({ quarter_final: 4, semi_final: 2, final: 1, third_place: 1 });
-    // The label (owner ruling 2026-10-08): the division's name, then every bracket round's chip.
+    // The label (owner ruling 2026-10-08): the division's name, then the chip — the final's and the bronze's long names.
     const chip = (key: string) => `Open · ${chipOf("en", key)}`;
     expect(r.labelTally).toEqual({
-      [chip("bracket.roundShort.quarter")]: 4, [chip("bracket.roundShort.semi")]: 2, [chip("bracket.roundShort.final")]: 1, [chip("bracket.roundShort.thirdPlace")]: 1,
+      [chip("bracket.roundShort.quarter")]: 4, [chip("bracket.roundShort.semi")]: 2, [chip("bracket.round.final")]: 1, [chip("bracket.round.thirdPlace")]: 1,
     });
     expect(r.labelTally["Open · QF"], "the owner's own example").toBe(4);
+    expect(r.labelTally["Open · Final"], "the owner's own example").toBe(1);
   });
 
   it("knockout of 16: R16 ×8, carried as round_of with entrants 16", async () => {
@@ -474,12 +534,19 @@ describe.skipIf(!HAS_DB)("the descriptor's stage over every family (W28)", () =>
     const losers = [...r.got.values()].filter((s) => s.role.kind === "losers_round");
     expect(losers.length).toBeGreaterThan(0);
     for (const s of losers) expect(s.role.n, s.code).toBeGreaterThanOrEqual(1);
+    // The grand final reads its long name (A1); the reset keeps its chip GF2, the winners' final its WB3.
+    const labelOfCode = (code: string) => [...r.got.values()].filter((s) => s.code === code).map((s) => s.label);
+    expect(labelOfCode("GF")).toEqual([`Open · ${longNameOf("en", "grand_final")}`]);
+    expect(labelOfCode("GF2")).toEqual(["Open · GF2"]);
+    expect(labelOfCode("WB3")).toEqual(["Open · WB3"]);
   });
 
   it("page playoff of 4: Q1, E, Q2, F — qualifier1, eliminator, qualifier2, final", async () => {
     const r = await family("page_playoff", 4, {});
     expect(r.codeTally).toEqual({ Q1: 1, E: 1, Q2: 1, F: 1 });
     expect(r.kindTally).toEqual({ qualifier1: 1, eliminator: 1, qualifier2: 1, final: 1 });
+    // Its final's chip IS the final's (F) and its role IS final: the long name, like every other final (A1).
+    expect(r.labelTally).toEqual({ "Open · Q1": 1, "Open · E": 1, "Open · Q2": 1, [`Open · ${longNameOf("en", "final")}`]: 1 });
   });
 
   it("stepladder of 5: E1, E2, E3, F — rung n 1..3, then final", async () => {
@@ -487,6 +554,7 @@ describe.skipIf(!HAS_DB)("the descriptor's stage over every family (W28)", () =>
     expect(r.codeTally).toEqual({ E1: 1, E2: 1, E3: 1, F: 1 });
     expect([...r.got.values()].filter((s) => s.role.kind === "rung").map((s) => s.role.n).sort()).toEqual([1, 2, 3]);
     expect(r.kindTally.final).toBe(1);
+    expect(r.labelTally[`Open · ${longNameOf("en", "final")}`], "the ladder's final: its long name (A1)").toBe(1);
   });
 
   it("league of 4: the board codes nothing, so R1–R3 (two each), plain_round n = the round", async () => {
@@ -575,8 +643,9 @@ describe.skipIf(!HAS_DB)("the descriptor's stage over every family (W28)", () =>
     expect(r.kindTally).toEqual({ quarter_final: 4, semi_final: 2, final: 1, third_place: 1 });
     const chip = (key: string) => `Open · ${chipOf("es", key)}`;
     expect(r.labelTally).toEqual({
-      [chip("bracket.roundShort.quarter")]: 4, [chip("bracket.roundShort.semi")]: 2, [chip("bracket.roundShort.final")]: 1, [chip("bracket.roundShort.thirdPlace")]: 1,
+      [chip("bracket.roundShort.quarter")]: 4, [chip("bracket.roundShort.semi")]: 2, [chip("bracket.round.final")]: 1, [chip("bracket.round.thirdPlace")]: 1,
     });
+    expect(r.labelTally["Open · Tercer puesto"], "the es long name").toBe(1);
     expect(r.labelTally["Open · CF"], "the brief's es example").toBe(4);
   });
 

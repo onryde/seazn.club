@@ -10,10 +10,12 @@ import "server-only";
 //  - `label` (owner ruling 2026-10-08, Option A): what the phone shows verbatim — the division's name, the pool's display
 //    label (`poolLabel`, `table.poolLabel` of the org locale's `public` dictionary: "Group A", "Grupo A", "Poule A") and
 //    the round's text, joined with " · ", a part that is absent left out: "Open · Round 2", "Open · QF",
-//    "Girls U14 · Group A · Round 2". The round's text is `code` for every coded round, and the long
-//    `bracket.round.plain` ("Round {n}", "Ronda {n}") for an uncoded one — a plain round — with the n its `R{n}` chip
-//    shows. Over 40 characters the pool word is dropped, then the division; still over, the label is omitted, the rest
-//    of the stage kept. Each drop is logged.
+//    "Girls U14 · Group A · Round 2". The round's text: an uncoded round — a plain round — reads the long
+//    `bracket.round.plain` ("Round {n}", "Ronda {n}") with the n its `R{n}` chip shows; the final, the third-place match
+//    and the grand final read their long names (`roundRoleLabel`: "Final", "Third place", "Grand final"; follow-up A1,
+//    2026-10-08); every other coded round reads `code` (the other long names are plural or wordy: "Quarter-finals").
+//    Over 40 characters the pool word is dropped, then the division; still over, the label is omitted, the rest of the
+//    stage kept. Each drop is logged.
 //
 // ONE builder, `buildCaptureStage`, returns `{code, role, pool?, label?}`.
 import type { RoundRole } from "@seazn/engine/competition";
@@ -22,12 +24,15 @@ import { getDictionary, toLocale } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
 import { poolLabel } from "@/lib/pool-label";
-import { laneRoundRank, roundRoleFor } from "@/lib/round-role-label";
+import { laneRoundRank, roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
 import { CAPTURE_POOL_RE, CAPTURE_STAGE_LABEL_MAX, CaptureStage } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+/** The coded rounds whose label reads the round's LONG name, not its chip (A1, 2026-10-08): the singular finals. Each
+ *  one's chip is its own role's (`roundRoleShort`: F, 3rd, GF) — a winners'-lane final is `winners_final`, not here. */
+const LONG_NAMED_ROLES: ReadonlySet<RoundRole["kind"]> = new Set(["final", "third_place", "grand_final"]);
 /** A pool's display label from its key, in the org's locale (`poolLabel` over the `public` dictionary). */
 type PoolText = (key: string) => string;
 
@@ -87,8 +92,11 @@ export function buildCaptureStage(input: CaptureStageInput, msg: Msg, poolText: 
   const code = rc?.code ?? `R${self.round_no}`;
   // The round's text. An uncoded round is exactly a plain round — the role is forced to `plain_round` above whenever
   // the board leaves the chip uncoded, and the board codes no plain round (`roundRoleShort`) — so it reads the long form
-  // with the n its chip `R{round_no}` shows; every coded round reads its chip.
-  const round = rc === undefined ? msg("bracket.round.plain", { n: self.round_no }) : rc.code;
+  // with the n its chip `R{round_no}` shows; a final, third-place match or grand final its long name; every other coded
+  // round its chip.
+  const round = rc === undefined
+    ? msg("bracket.round.plain", { n: self.round_no })
+    : LONG_NAMED_ROLES.has(role.kind) ? roundRoleLabel(msg, role) : rc.code;
   const division = divisionName?.trim() || undefined;
   const label = fitLabel(fixtureId, { division, pool: pool !== undefined ? poolText(pool) : undefined, round });
   const stage = { code, role: { ...role }, ...(pool !== undefined ? { pool } : {}), ...(label !== undefined ? { label } : {}) };
