@@ -18839,10 +18839,11 @@ async function captureV2Suite(): Promise<void> {
 
   // 6b. W28 — both descriptors carry the stage: the fixture is round 1 of a league (timedFixture), so the board's chip
   // R1 and the engine's plain round 1.
-  // label (2026-10-07): the league match has no pool, so its label is exactly the code.
-  const wantStage = JSON.stringify({ code: "R1", role: { kind: "plain_round", n: 1 }, label: "R1" });
+  // label (owner ruling 2026-10-08): the division's name ("Capture", above) · the round's long form ("Round 1": a league
+  // round is a plain round, in the new org's default en); the league match has no pool.
+  const wantStage = JSON.stringify({ code: "R1", role: { kind: "plain_round", n: 1 }, label: "Capture · Round 1" });
   step(
-    `both descriptors carry the stage {code: R1, role: plain_round 1, label: R1} (got ${JSON.stringify(own.json?.stage)} / ${JSON.stringify(other.json?.stage)})`,
+    `both descriptors carry the stage {code: R1, role: plain_round 1, label: Capture · Round 1} (got ${JSON.stringify(own.json?.stage)} / ${JSON.stringify(other.json?.stage)})`,
     JSON.stringify(own.json?.stage) === wantStage && JSON.stringify(other.json?.stage) === wantStage,
   );
 
