@@ -46,7 +46,7 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
  *  same commit, and capture re-vendors the file. */
 const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "3292e33f84b693e5def6048012f6653ca7e31e1573fda3901da4fe67a62c5d43",
-  "capture-descriptor.v1.json": "45fc9ad71f763ed0d34e654b729e4103e3d47c82fd6af1e9e46cc3ad5ef5ed55",
+  "capture-descriptor.v1.json": "84e936b72b866df4fc37317e06fc3f6f5555dd2196b10b24efc890b52f28a5d6",
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
@@ -832,7 +832,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(labelOf("valid-waiting-stage-label-40")).toHaveLength(40);
     expect(labelOf("invalid-stage-label-41")).toHaveLength(41);
     expect(labelOf("invalid-stage-label-empty")).toBe("");
-    expect(labelOf("valid-waiting-stage"), "a pooled fixture's label: its pool word, then the code").toMatch(/ · R1$/);
+    // The server's own label for division "Open", pool A, plain round 1, en (capture-stage.ts, owner ruling 2026-10-08):
+    // division · pool word · round.
+    expect(labelOf("valid-waiting-stage"), "a pooled fixture's label: division, pool word, round").toBe("Open · Group A · Round 1");
     expect(Object.hasOwn(fixture(dir, "valid-waiting-stage-code-8").stage as object, "label"), "premise: a stage with no label").toBe(false);
   });
 
