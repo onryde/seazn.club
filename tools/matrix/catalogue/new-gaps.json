@@ -1,0 +1,34 @@
+{
+  "gaps": [
+    {
+      "id": "NEW-W1d-1",
+      "wave": "W7",
+      "title": "mexicano counts the pair entrants it made as players: round 2+ pairs a pair entrant with itself (500) or seats one person twice",
+      "evidence": "mexicano|*|LIFECYCLE and F1 on every sport, and R4 where the 500 or a re-seat fires (it moves between runs): `generate answered 500 INTERNAL` at round 2, `I10 round N: <person> seated 2x` naming the earlier pair entrant the person belongs to, f1-round-size 'round 2: 2 seated, expected 1'. e.g. mexicano|football|11-a-side|LIFECYCLE, mexicano|badminton|bwf|F1. Not an audit row (FX-G9/G10/G11 are bye bias, sport-gated points and the non-decided stall; FX-G10 is the likelier reason the pairing differs per run); W1-driving TRIAGE.md's mexicano-pair-entrants-counted-as-players signature, 32 cases. Screenshots (T17 run 37346206686, baseline dispatch 3; shard artifacts kept to 2027-01-03, fetch with `gh run download 37346206686 -n <artifact>`; the `merged` artifact omits PNGs by design; `case-N` is the 1-based position of the case in its own shard's results.json, each opened and its breadcrumb read): L1 shard-L1-3 `ci-37346206686-1-l1-s3/shots/case-20/08-completed.png` (mexicano|football|11-a-side|LIFECYCLE@1280: Round 2 of the Mexicano rotation seats Player 7.23 on both sides of Court 1 and Player 6.23 on both sides of Court 2); L2 shard-L2-2 `ci-37346206686-1-l2-s2/shots/case-398/08-completed.png` (mexicano|football|11-a-side|F1@430: Round 2 seats Player 2.23 on both sides of one court and Player 5.23 on both sides of the other; the stage-tools sheet is open over the top of the page)."
+    },
+    {
+      "id": "NEW-W1d-2",
+      "wave": "W7",
+      "title": "americano: R4 withdraws a player and the product does nothing with the pending games, the person is seated again",
+      "evidence": "americano|*|R4 on all 11 sports (e.g. americano|badminton|bwf|R4): r4-policy-reported 'policy none, expected walkover (6 pending game(s) of the withdrawn entrant ... at withdrawal)' and r4-not-seated-later 'seats withdrawn <person>' in rounds after the withdrawal. No audit row names americano withdrawal (FX-G7 is page_playoff only). W1-driving TRIAGE.md signature r4-withdrawn-player-kept-playing. Screenshots (T17 run 37346206686, baseline dispatch 3; shard artifacts kept to 2027-01-03, fetch with `gh run download 37346206686 -n <artifact>`; the `merged` artifact omits PNGs by design; `case-N` is the 1-based position of the case in its own shard's results.json, each opened and its breadcrumb read): L2 shard-L2-1 `ci-37346206686-1-l2-s1/shots/case-39/06-withdrawn.png` (americano|football|11-a-side|R4a@375: the Entrants tab with the seed-3 team Withdrawn, the state the later rounds still seat). No L1 case belongs to this gap."
+    },
+    {
+      "id": "NEW-W1d-3",
+      "wave": "W4",
+      "title": "stepladder: withdrawing an entrant is refused 422 WRONG_PHASE (every game after the first has a TBD side)",
+      "evidence": "stepladder_only|*|R4 on all 11 sports (e.g. stepladder_only|badminton|bwf|R4): POST /api/v1/entrants/<id>/withdraw -> HTTP 422 WRONG_PHASE 'fixture has an unassigned entrant (bye/TBD)' (append-event.ts:189, fold.ts:120); withdrawal.ts:217-220 turns a walkover against a TBD opponent into a void posted as core.abandon, which the event guard refuses. Same family as the committed model regressions MB-002/MB-003 (ko-withdraw-waiting-on-tbd). Not an audit row (FX-G7 is page_playoff). The stepladder R4 policy and cascade checks have never been judged live. Screenshots (T17 run 37346206686, baseline dispatch 3; shard artifacts kept to 2027-01-03, fetch with `gh run download 37346206686 -n <artifact>`; the `merged` artifact omits PNGs by design; `case-N` is the 1-based position of the case in its own shard's results.json, each opened and its breadcrumb read): L2 shard-L2-2 `ci-37346206686-1-l2-s2/shots/case-42/05-generated.png` (stepladder_only|football|11-a-side|R4a@375: the generated ladder, rungs filled 'Winner of R3-1' to 'Winner of R6-1', the stage the withdraw POST was refused in with 422 WRONG_PHASE). No L1 case belongs to this gap."
+    },
+    {
+      "id": "NEW-W1d-4",
+      "wave": "W4",
+      "title": "no division-builder control builds knockout_third_place, page_playoff_only or stepladder_only",
+      "evidence": "L2: knockout_third_place|football|11-a-side|{F1,M1,R4a}@<width>, stepladder_only|football|11-a-side|{F1,M1}@<width>, page_playoff_only|football|11-a-side|M1@<width>: check organiser-ui-path 'no organiser control builds <row>' (6 cases a dispatch). Two more L2 cases fail the same check beside a product defect and key to that defect, so their rules' `also` lists them here (T19 fix round, review m1): page_playoff_only|football|11-a-side|R4a@360 (keyed FX-G7) and stepladder_only|football|11-a-side|R4a@375 (keyed NEW-W1d-3); 8 L2 cases a dispatch in all. By design (D7, lib/api-only-ui.ts API_ONLY_UI_WAVE): the owning wave owes the control. Design section 8 W4 names 'third-place UI'; no audit row does (audit offered-matrix.md lists the rows as API-only). Screenshots (T17 run 37346206686, baseline dispatch 3; shard artifacts kept to 2027-01-03, fetch with `gh run download 37346206686 -n <artifact>`; the `merged` artifact omits PNGs by design; `case-N` is the 1-based position of the case in its own shard's results.json, each opened and its breadcrumb read): L2 shard-L2-2 `ci-37346206686-1-l2-s2/shots/case-400/08-completed.png` (knockout_third_place|football|11-a-side|F1@360: the organiser path ended with a stage card '1. Knockout' Complete, the stage it could build). No L1 case belongs to this gap."
+    },
+    {
+      "id": "NEW-W1d-5",
+      "wave": "W5",
+      "title": "no division-builder control builds group_only or group_group_ko",
+      "evidence": "L2: group_only|football|11-a-side|{F1,M1,R4a}@<width>, group_group_ko|football|11-a-side|{M1,R4a}@<width>: check organiser-ui-path 'no organiser control builds <row>' (5 cases a dispatch). One more L2 case fails the same check beside a product defect and keys to it, so its rule's `also` lists it here (T19 fix round, review m1): group_group_ko|football|11-a-side|F1@320 (keyed ST-G5); 6 L2 cases a dispatch in all. By design (D7, lib/api-only-ui.ts API_ONLY_UI_WAVE): the owning wave owes the control. No audit row names it (offered-matrix.md lists the rows as API-only). Screenshots (T17 run 37346206686, baseline dispatch 3; shard artifacts kept to 2027-01-03, fetch with `gh run download 37346206686 -n <artifact>`; the `merged` artifact omits PNGs by design; `case-N` is the 1-based position of the case in its own shard's results.json, each opened and its breadcrumb read): L2 shard-L2-2 `ci-37346206686-1-l2-s2/shots/case-399/08-completed.png` (group_only|football|11-a-side|F1@834: the organiser path ended with a stage card '1. Group stage' Complete, 9 played). No L1 case belongs to this gap."
+    }
+  ]
+}

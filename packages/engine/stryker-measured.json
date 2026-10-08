@@ -1,0 +1,758 @@
+{
+  "run": {
+    "id": 37371368951,
+    "sha": "78c7ef3e6",
+    "attempts": 3,
+    "runner": "ubuntu-latest, 4 vCPU",
+    "concurrency": 3,
+    "maxParallel": 12
+  },
+  "measured": {
+    "competition-1": {
+      "mutants": 407,
+      "wallSeconds": 2733,
+      "dryRunSeconds": 152,
+      "phaseSeconds": 2538
+    },
+    "competition-2": {
+      "mutants": 300,
+      "wallSeconds": 2698,
+      "dryRunSeconds": 151,
+      "phaseSeconds": 2522
+    },
+    "competition-3": {
+      "mutants": 306,
+      "wallSeconds": 216,
+      "dryRunSeconds": 117,
+      "phaseSeconds": 70
+    },
+    "competition-4": {
+      "mutants": 408,
+      "wallSeconds": 449,
+      "dryRunSeconds": 149,
+      "phaseSeconds": 264
+    },
+    "competition-5": {
+      "mutants": 383,
+      "wallSeconds": 3984,
+      "dryRunSeconds": 152,
+      "phaseSeconds": 3803
+    },
+    "competition-6": {
+      "mutants": 402,
+      "wallSeconds": 3706,
+      "dryRunSeconds": 159,
+      "phaseSeconds": 3518
+    },
+    "competition-7": {
+      "mutants": 350,
+      "wallSeconds": 2371,
+      "dryRunSeconds": 148,
+      "phaseSeconds": 2189
+    },
+    "core-1": {
+      "mutants": 409,
+      "wallSeconds": 3993,
+      "dryRunSeconds": 190,
+      "phaseSeconds": 3771
+    },
+    "core-2": {
+      "mutants": 403,
+      "wallSeconds": 3686,
+      "dryRunSeconds": 133,
+      "phaseSeconds": 3518
+    },
+    "core-3": {
+      "mutants": 190,
+      "wallSeconds": 701,
+      "dryRunSeconds": 152,
+      "phaseSeconds": 514
+    },
+    "modules-1": {
+      "mutants": 405,
+      "wallSeconds": 74,
+      "dryRunSeconds": 2,
+      "phaseSeconds": 41
+    },
+    "modules-2": {
+      "mutants": 181,
+      "wallSeconds": 78,
+      "dryRunSeconds": 3,
+      "phaseSeconds": 41
+    },
+    "modules-3": {
+      "mutants": 373,
+      "wallSeconds": 59,
+      "dryRunSeconds": 2,
+      "phaseSeconds": 33
+    },
+    "modules-4": {
+      "mutants": 382,
+      "wallSeconds": 115,
+      "dryRunSeconds": 2,
+      "phaseSeconds": 80
+    },
+    "modules-5": {
+      "mutants": 364,
+      "wallSeconds": 2940,
+      "dryRunSeconds": 176,
+      "phaseSeconds": 2728
+    },
+    "modules-6": {
+      "mutants": 408,
+      "wallSeconds": 766,
+      "dryRunSeconds": 171,
+      "phaseSeconds": 566
+    },
+    "modules-7": {
+      "mutants": 410,
+      "wallSeconds": 383,
+      "dryRunSeconds": 120,
+      "phaseSeconds": 233
+    },
+    "draws-1": {
+      "mutants": 297,
+      "wallSeconds": 3519,
+      "dryRunSeconds": 158,
+      "phaseSeconds": 3328
+    },
+    "draws-2": {
+      "mutants": 381,
+      "wallSeconds": 78,
+      "dryRunSeconds": 2,
+      "phaseSeconds": 40
+    },
+    "draws-3": {
+      "mutants": 401,
+      "wallSeconds": 867,
+      "dryRunSeconds": 155,
+      "phaseSeconds": 675
+    },
+    "draws-4": {
+      "mutants": 407,
+      "wallSeconds": 5740,
+      "dryRunSeconds": 87,
+      "phaseSeconds": 5620
+    },
+    "sports-cricket-1": {
+      "mutants": 368,
+      "wallSeconds": 10316,
+      "dryRunSeconds": 170,
+      "phaseSeconds": 10112
+    },
+    "sports-cricket-2": {
+      "mutants": 384,
+      "wallSeconds": 6322,
+      "dryRunSeconds": 196,
+      "phaseSeconds": 6086
+    },
+    "sports-cricket-3": {
+      "mutants": 375,
+      "wallSeconds": 6682,
+      "dryRunSeconds": 172,
+      "phaseSeconds": 6480
+    },
+    "sports-cricket-4": {
+      "mutants": 345,
+      "wallSeconds": 5571,
+      "dryRunSeconds": 191,
+      "phaseSeconds": 5344
+    },
+    "sports-cricket-5": {
+      "mutants": 367,
+      "wallSeconds": 3825,
+      "dryRunSeconds": 114,
+      "phaseSeconds": 3683
+    },
+    "sports-cricket-6": {
+      "mutants": 350,
+      "wallSeconds": 7032,
+      "dryRunSeconds": 96,
+      "phaseSeconds": 6908
+    },
+    "sports-cricket-7": {
+      "mutants": 309,
+      "wallSeconds": 9622,
+      "dryRunSeconds": 173,
+      "phaseSeconds": 9413
+    },
+    "sports-cricket-8": {
+      "mutants": 383,
+      "wallSeconds": 5670,
+      "dryRunSeconds": 125,
+      "phaseSeconds": 5510
+    },
+    "sports-cricket-9": {
+      "mutants": 379,
+      "wallSeconds": 13766,
+      "dryRunSeconds": 165,
+      "phaseSeconds": 13562
+    },
+    "sports-cricket-10": {
+      "mutants": 347,
+      "wallSeconds": 13035,
+      "dryRunSeconds": 170,
+      "phaseSeconds": 12837
+    },
+    "sports-cricket-11": {
+      "mutants": 374,
+      "wallSeconds": 5730,
+      "dryRunSeconds": 100,
+      "phaseSeconds": 5603
+    },
+    "sports-cricket-12": {
+      "mutants": 384,
+      "wallSeconds": 10232,
+      "dryRunSeconds": 104,
+      "phaseSeconds": 10098
+    },
+    "sports-cricket-13": {
+      "mutants": 349,
+      "wallSeconds": 5119,
+      "dryRunSeconds": 120,
+      "phaseSeconds": 4970
+    },
+    "sports-cricket-14": {
+      "mutants": 406,
+      "wallSeconds": 5524,
+      "dryRunSeconds": 169,
+      "phaseSeconds": 5321
+    },
+    "sports-football-1": {
+      "mutants": 362,
+      "wallSeconds": 3668,
+      "dryRunSeconds": 104,
+      "phaseSeconds": 3538
+    },
+    "sports-football-2": {
+      "mutants": 393,
+      "wallSeconds": 7408,
+      "dryRunSeconds": 169,
+      "phaseSeconds": 7203
+    },
+    "sports-football-3": {
+      "mutants": 367,
+      "wallSeconds": 4279,
+      "dryRunSeconds": 90,
+      "phaseSeconds": 4161
+    },
+    "sports-football-4": {
+      "mutants": 379,
+      "wallSeconds": 6136,
+      "dryRunSeconds": 171,
+      "phaseSeconds": 5934
+    },
+    "sports-football-5": {
+      "mutants": 338,
+      "wallSeconds": 11029,
+      "dryRunSeconds": 126,
+      "phaseSeconds": 10868
+    },
+    "sports-football-6": {
+      "mutants": 388,
+      "wallSeconds": 6857,
+      "dryRunSeconds": 167,
+      "phaseSeconds": 6662
+    },
+    "sports-period-2": {
+      "mutants": 388,
+      "wallSeconds": 13281,
+      "dryRunSeconds": 167,
+      "phaseSeconds": 13080
+    },
+    "sports-period-3": {
+      "mutants": 387,
+      "wallSeconds": 6651,
+      "dryRunSeconds": 150,
+      "phaseSeconds": 6468
+    },
+    "sports-period-4": {
+      "mutants": 321,
+      "wallSeconds": 6136,
+      "dryRunSeconds": 139,
+      "phaseSeconds": 5964
+    },
+    "sports-period-5": {
+      "mutants": 280,
+      "wallSeconds": 5344,
+      "dryRunSeconds": 132,
+      "phaseSeconds": 5181
+    },
+    "sports-period-6": {
+      "mutants": 306,
+      "wallSeconds": 3130,
+      "dryRunSeconds": 99,
+      "phaseSeconds": 2998
+    },
+    "sports-period-7": {
+      "mutants": 307,
+      "wallSeconds": 10555,
+      "dryRunSeconds": 128,
+      "phaseSeconds": 10394
+    },
+    "sports-period-8": {
+      "mutants": 318,
+      "wallSeconds": 4946,
+      "dryRunSeconds": 172,
+      "phaseSeconds": 4745
+    },
+    "sports-period-9": {
+      "mutants": 410,
+      "wallSeconds": 15788,
+      "dryRunSeconds": 145,
+      "phaseSeconds": 15611
+    },
+    "sports-setbased-1": {
+      "mutants": 304,
+      "wallSeconds": 6957,
+      "dryRunSeconds": 102,
+      "phaseSeconds": 6828
+    },
+    "sports-setbased-2": {
+      "mutants": 398,
+      "wallSeconds": 6777,
+      "dryRunSeconds": 165,
+      "phaseSeconds": 6580
+    },
+    "sports-setbased-3": {
+      "mutants": 394,
+      "wallSeconds": 3827,
+      "dryRunSeconds": 168,
+      "phaseSeconds": 3629
+    },
+    "sports-setbased-4": {
+      "mutants": 370,
+      "wallSeconds": 11970,
+      "dryRunSeconds": 164,
+      "phaseSeconds": 11774
+    },
+    "sports-setbased-5": {
+      "mutants": 351,
+      "wallSeconds": 7670,
+      "dryRunSeconds": 175,
+      "phaseSeconds": 7467
+    },
+    "sports-setbased-6": {
+      "mutants": 391,
+      "wallSeconds": 11755,
+      "dryRunSeconds": 199,
+      "phaseSeconds": 11519
+    },
+    "sports-nested-1": {
+      "mutants": 242,
+      "wallSeconds": 2885,
+      "dryRunSeconds": 94,
+      "phaseSeconds": 2758
+    },
+    "sports-nested-2": {
+      "mutants": 365,
+      "wallSeconds": 6174,
+      "dryRunSeconds": 187,
+      "phaseSeconds": 5952
+    },
+    "sports-nested-3": {
+      "mutants": 364,
+      "wallSeconds": 5443,
+      "dryRunSeconds": 99,
+      "phaseSeconds": 5318
+    },
+    "sports-nested-4": {
+      "mutants": 370,
+      "wallSeconds": 11086,
+      "dryRunSeconds": 165,
+      "phaseSeconds": 10893
+    },
+    "sports-other-1": {
+      "mutants": 362,
+      "wallSeconds": 8166,
+      "dryRunSeconds": 168,
+      "phaseSeconds": 7971
+    },
+    "sports-other-2": {
+      "mutants": 348,
+      "wallSeconds": 9618,
+      "dryRunSeconds": 166,
+      "phaseSeconds": 9427
+    },
+    "sports-other-3": {
+      "mutants": 383,
+      "wallSeconds": 5089,
+      "dryRunSeconds": 137,
+      "phaseSeconds": 4921
+    },
+    "sports-other-4": {
+      "mutants": 395,
+      "wallSeconds": 10823,
+      "dryRunSeconds": 172,
+      "phaseSeconds": 10620
+    },
+    "sports-other-5": {
+      "mutants": 407,
+      "wallSeconds": 11924,
+      "dryRunSeconds": 169,
+      "phaseSeconds": 11728
+    },
+    "sports-other-6": {
+      "mutants": 342,
+      "wallSeconds": 4213,
+      "dryRunSeconds": 102,
+      "phaseSeconds": 4085
+    },
+    "sports-other-7": {
+      "mutants": 354,
+      "wallSeconds": 8694,
+      "dryRunSeconds": 165,
+      "phaseSeconds": 8500
+    }
+  },
+  "cancelled": {
+    "sports-football-7": {
+      "mutants": 369,
+      "dryRunSeconds": 185,
+      "attempts": {
+        "attempt2": {
+          "tested": 313,
+          "phaseSeconds": 14600,
+          "lastHourTested": 51
+        },
+        "attempt3": {
+          "tested": 316,
+          "phaseSeconds": 14580,
+          "lastHourTested": 47
+        }
+      },
+      "rate": 230
+    },
+    "sports-period-1": {
+      "mutants": 321,
+      "dryRunSeconds": 167,
+      "attempts": {
+        "attempt2": {
+          "tested": 306,
+          "phaseSeconds": 12808,
+          "lastHourTested": 89
+        },
+        "attempt3": {
+          "tested": 304,
+          "phaseSeconds": 12808,
+          "lastHourTested": 92
+        }
+      },
+      "rate": 127
+    },
+    "sports-nested-5": {
+      "mutants": 372,
+      "dryRunSeconds": 177,
+      "attempts": {
+        "attempt2": {
+          "tested": 354,
+          "phaseSeconds": 14760,
+          "lastHourTested": 53
+        },
+        "attempt3": {
+          "tested": 357,
+          "phaseSeconds": 14680,
+          "lastHourTested": 53
+        }
+      },
+      "rate": 204
+    }
+  },
+  "split": {
+    "sports-cricket-9": {
+      "mutants": 379,
+      "lost": 0,
+      "parts": {
+        "sports-cricket-9": {
+          "mutants": 173,
+          "basis": "measured",
+          "wallSeconds": 3747,
+          "dryRunSeconds": 94,
+          "phaseSeconds": 3627,
+          "run": {
+            "id": 37538987509,
+            "job": 112527140683,
+            "sha": "34ac56eb7"
+          }
+        },
+        "sports-cricket-15": {
+          "mutants": 206,
+          "basis": "measured",
+          "wallSeconds": 7519,
+          "dryRunSeconds": 165,
+          "phaseSeconds": 7321,
+          "run": {
+            "id": 37532620624,
+            "job": 112505632112,
+            "sha": "0920dbf5e"
+          }
+        }
+      }
+    },
+    "sports-cricket-10": {
+      "mutants": 347,
+      "lost": 0,
+      "parts": {
+        "sports-cricket-10": {
+          "mutants": 99,
+          "basis": "measured",
+          "wallSeconds": 6430,
+          "dryRunSeconds": 165,
+          "phaseSeconds": 6235,
+          "run": {
+            "id": 37538997992,
+            "job": 112527184538,
+            "sha": "34ac56eb7"
+          }
+        },
+        "sports-cricket-16": {
+          "mutants": 248,
+          "basis": "measured",
+          "wallSeconds": 6661,
+          "dryRunSeconds": 179,
+          "phaseSeconds": 6457,
+          "run": {
+            "id": 37532639397,
+            "job": 112505671221,
+            "sha": "0920dbf5e"
+          }
+        }
+      }
+    },
+    "sports-period-2": {
+      "mutants": 388,
+      "lost": 0,
+      "parts": {
+        "sports-period-2": {
+          "mutants": 269,
+          "basis": "measured",
+          "wallSeconds": 9605,
+          "dryRunSeconds": 173,
+          "phaseSeconds": 9404,
+          "run": {
+            "id": 37539005165,
+            "job": 112527241706,
+            "sha": "34ac56eb7"
+          }
+        },
+        "sports-period-11": {
+          "mutants": 119,
+          "basis": "measured",
+          "wallSeconds": 3840,
+          "dryRunSeconds": 172,
+          "phaseSeconds": 3638,
+          "run": {
+            "id": 37532657110,
+            "job": 112505753247,
+            "sha": "0920dbf5e"
+          }
+        }
+      }
+    },
+    "sports-period-9": {
+      "mutants": 410,
+      "lost": 1,
+      "parts": {
+        "sports-period-9": {
+          "mutants": 72,
+          "basis": "measured",
+          "wallSeconds": 2242,
+          "dryRunSeconds": 178,
+          "phaseSeconds": 2036,
+          "run": {
+            "id": 37583585117,
+            "job": 112668631253,
+            "sha": "543ee2b53"
+          }
+        },
+        "sports-period-13": {
+          "mutants": 98,
+          "basis": "measured",
+          "wallSeconds": 6634,
+          "dryRunSeconds": 179,
+          "phaseSeconds": 6420,
+          "run": {
+            "id": 37583590932,
+            "job": 112668660780,
+            "sha": "543ee2b53"
+          }
+        },
+        "sports-period-14": {
+          "mutants": 58,
+          "basis": "measured",
+          "wallSeconds": 3726,
+          "dryRunSeconds": 171,
+          "phaseSeconds": 3521,
+          "run": {
+            "id": 37583597153,
+            "job": 112668671105,
+            "sha": "543ee2b53"
+          }
+        },
+        "sports-period-12": {
+          "mutants": 181,
+          "basis": "measured",
+          "wallSeconds": 6937,
+          "dryRunSeconds": 151,
+          "phaseSeconds": 6758,
+          "run": {
+            "id": 37532673771,
+            "job": 112505800301,
+            "sha": "0920dbf5e"
+          }
+        }
+      },
+      "cancelledPart": {
+        "leg": "sports-period-9",
+        "cut": "src/sports/period/kernel.ts:2648-2832 (makePeriodModule.declaredPointsSets up to makePeriodModule.arbitraryEvent.if#10)",
+        "mutants": 228,
+        "wallSeconds": 13004,
+        "dryRunSeconds": 188,
+        "attempts": {
+          "attempt1": {
+            "tested": 227,
+            "phaseSeconds": 12788,
+            "lastHourTested": 42
+          }
+        },
+        "rate": 258,
+        "run": {
+          "id": 37539011809,
+          "job": 112527212464,
+          "sha": "34ac56eb7"
+        },
+        "replacedBy": [
+          "sports-period-9",
+          "sports-period-13",
+          "sports-period-14"
+        ]
+      }
+    },
+    "sports-period-1": {
+      "mutants": 321,
+      "lost": 0,
+      "parts": {
+        "sports-period-1": {
+          "mutants": 192,
+          "basis": "measured",
+          "wallSeconds": 6660,
+          "dryRunSeconds": 130,
+          "phaseSeconds": 6504,
+          "run": {
+            "id": 37532530767,
+            "job": 112505341469,
+            "sha": "0920dbf5e"
+          }
+        },
+        "sports-period-10": {
+          "mutants": 129,
+          "basis": "measured",
+          "wallSeconds": 4464,
+          "dryRunSeconds": 174,
+          "phaseSeconds": 4255,
+          "run": {
+            "id": 37532539994,
+            "job": 112505368627,
+            "sha": "0920dbf5e"
+          }
+        }
+      }
+    },
+    "sports-football-7": {
+      "mutants": 369,
+      "lost": 1,
+      "parts": {
+        "sports-football-7": {
+          "mutants": 113,
+          "basis": "measured",
+          "wallSeconds": 4495,
+          "dryRunSeconds": 167,
+          "phaseSeconds": 4305,
+          "run": {
+            "id": 37532548091,
+            "job": 112505377568,
+            "sha": "0920dbf5e"
+          }
+        },
+        "sports-football-8": {
+          "mutants": 129,
+          "basis": "measured",
+          "wallSeconds": 6898,
+          "dryRunSeconds": 170,
+          "phaseSeconds": 6705,
+          "run": {
+            "id": 37532557075,
+            "job": 112505439220,
+            "sha": "0920dbf5e"
+          }
+        },
+        "sports-football-9": {
+          "mutants": 126,
+          "basis": "measured",
+          "wallSeconds": 5078,
+          "dryRunSeconds": 135,
+          "phaseSeconds": 4913,
+          "run": {
+            "id": 37532565988,
+            "job": 112505454296,
+            "sha": "0920dbf5e"
+          }
+        }
+      }
+    },
+    "sports-nested-5": {
+      "mutants": 372,
+      "lost": 3,
+      "parts": {
+        "sports-nested-5": {
+          "mutants": 90,
+          "basis": "measured",
+          "wallSeconds": 2266,
+          "dryRunSeconds": 132,
+          "phaseSeconds": 2102,
+          "run": {
+            "id": 37532575325,
+            "job": 112505476305,
+            "sha": "0920dbf5e"
+          }
+        },
+        "sports-nested-6": {
+          "mutants": 93,
+          "basis": "measured",
+          "wallSeconds": 1518,
+          "dryRunSeconds": 102,
+          "phaseSeconds": 1389,
+          "run": {
+            "id": 37532585435,
+            "job": 112505627466,
+            "sha": "0920dbf5e"
+          }
+        },
+        "sports-nested-7": {
+          "mutants": 96,
+          "basis": "measured",
+          "wallSeconds": 5390,
+          "dryRunSeconds": 173,
+          "phaseSeconds": 5190,
+          "run": {
+            "id": 37532594187,
+            "job": 112505539241,
+            "sha": "0920dbf5e"
+          }
+        },
+        "sports-nested-8": {
+          "mutants": 90,
+          "basis": "measured",
+          "wallSeconds": 3801,
+          "dryRunSeconds": 128,
+          "phaseSeconds": 3644,
+          "run": {
+            "id": 37532603444,
+            "job": 112505576837,
+            "sha": "0920dbf5e"
+          }
+        }
+      }
+    }
+  }
+}

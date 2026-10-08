@@ -7,6 +7,7 @@
 //   statesAcross   the per-case states of K runs, compared (ruling 61);
 //   regressions    a run against the committed baseline, restricted to the exact
 //                  ids a sample planned (D13, review C3c);
+//   forceBaselineStates  the baseline as it is judged: the ids owner ruling 70 holds red, read red;
 //   matchPlanIds   a run's case ids against the planner's, for the plan the run
 //                  recorded (ruling T4-IDS): CI runs have no lock entry, so this
 //                  is the only check that a merged run holds the plan's cases;
@@ -22,7 +23,7 @@ import { CASE_STATES, LAYERS, VACUOUS_REASONS, isPlannedShape, type CaseResultV2
 /** Every way the judge refuses to judge (exit 2, nothing written). Each is the Error's own `name`. */
 export const JUDGE_REFUSALS = [
   "RunUnreadable", "RunNotV3", "TooFewRuns", "RunRepeated", "RunsDisagree", "NoCases", "PlanMissing", "PlanUnknown", "PlanIdsMismatch", "ScopeMismatch",
-  "ExpectUnreadable", "ExpectedAbsent", "UnexpectedCase", "RerunMissing", "NoneCompared", "CaseIdsDiffer",
+  "ExpectUnreadable", "ExpectedAbsent", "UnexpectedCase", "RerunMissing", "NoneCompared", "CaseIdsDiffer", "BaselineUnreadable",
 ] as const;
 export type JudgeRefusalName = (typeof JUDGE_REFUSALS)[number];
 
@@ -100,6 +101,21 @@ export const HELD: ReadonlySet<string> = new Set(["works", "refused"]);
 
 /** What `regressions` reads of a run: any version's cases. */
 export type RunLike = { readonly cases: readonly Pick<CaseResultV2, "caseId" | "state" | "reason">[] };
+
+/** The baseline as it is judged (owner ruling 70): each id in `forced` is read in the state `forced` gives it, whatever the baseline run
+ *  recorded. A case forced to red is no longer HELD, so a later red on it is no change and a later works is an improvement — the
+ *  baseline run's own luck (a lots draw that paired nobody in some runs) is not a promise the product made. `applied` lists the forced
+ *  ids the baseline holds, in baseline order: an id it lacks overrides nothing, and is not counted as applied. The input is not edited. */
+export function forceBaselineStates<T extends RunLike>(baseline: T, forced: ReadonlyMap<string, CaseState>): { run: T; applied: string[] } {
+  const applied: string[] = [];
+  const cases = baseline.cases.map((c) => {
+    const state = forced.get(c.caseId);
+    if (state === undefined) return c;
+    applied.push(c.caseId);
+    return { ...c, state };
+  });
+  return { run: { ...baseline, cases }, applied };
+}
 
 /** `baseline` against `now`, restricted to EXACTLY the ids in `expected` — never a cell or a scenario: the baseline's
  *  `league|cricket|test|LIFECYCLE|cricket#…` cases share a cell and a scenario with the fixed sample's

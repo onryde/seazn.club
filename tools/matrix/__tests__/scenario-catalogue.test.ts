@@ -782,8 +782,9 @@ function judgeCitations(found: readonly Citation[], rows: ReadonlyMap<string, st
   expect(found.map((c) => c.file).sort(), "the decision citations in the shipped harness are pinned by file: a new one is a decision, raise the pin beside it").toEqual([...pinned].sort());
   for (const c of found) expect(rows.has(c.wave), `${c.file}:${c.line} cites ${c.wave}, which has no status row in _INDEX.md`).toBe(true);
 }
-/** A Status-table state that is still owed work. Markdown emphasis is not part of the state. */
-const isOpen = (state: string): boolean => /^(not started|in progress|awaiting)/i.test(state.replace(/[*_]/g, "").trim());
+/** A Status-table state that is still owed work: a wave whose backlog is ready (W1d Task 22) has its work ahead of it, so a route
+ *  may still name it. Markdown emphasis is not part of the state. */
+const isOpen = (state: string): boolean => /^(not started|backlog ready|in progress|awaiting)/i.test(state.replace(/[*_]/g, "").trim());
 /** _INDEX.md's Status table: wave → state. */
 function statusRows(): Map<string, string> {
   const start = INDEX.indexOf("## Status");
@@ -999,6 +1000,9 @@ describe("Q-A guard — the route reader", () => {
     expect(isOpen("**Tasks 1–11 done; final review (R21) fix batch landed**")).toBe(false);
     expect(isOpen("not started (ruling 28)")).toBe(true);
     expect(isOpen("_awaiting owner_")).toBe(true);
+    // W1d Task 22: a wave whose backlog is written is still owed its work, and a wave that merely mentions a backlog is not open.
+    expect(isOpen("backlog ready (W1d baseline `47f210e3f`)")).toBe(true);
+    expect(isOpen("**Done**: its backlog ready earlier")).toBe(false);
     expect(isOpen("done")).toBe(false);
   });
 });

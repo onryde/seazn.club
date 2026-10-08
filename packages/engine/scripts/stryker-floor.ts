@@ -20,10 +20,15 @@
 //       with only some of its legs planned (a dispatch of one leg) is printed as not judged, never judged on part of its
 //       mutants; a planned leg without a report is a refusal, never a skip. Exit 2 if any family was refused, else 1 if any was
 //       below its floor, else 0.
-//   --set-floor <family> <dir>
-//       PR-B only: writes floor = floor(score, 1 dp) into stryker-floor.json, and refuses to lower an existing floor.
+//   --set-floor <family> <dir> [--margin <points>]
+//       PR-B only: writes floor = floor(score - margin, 1 dp) into stryker-floor.json, and refuses to lower an existing floor.
+//       The margin (W1d ruling T20-FLOOR-MARGIN: half a point, 0.5) keeps a floor above the run-to-run noise: Timeout mutants flip
+//       with the runner's speed, so a floor at the exact score reds on a re-run of an unchanged tree. A margin is 0 or more, in points,
+//       with at most one decimal, and never larger than the score. The measured score (floor(score, 2 dp)) and the margin are recorded
+//       per family under `derivation` in the same file, so a floor's derivation is visible: with no --margin a later --set-floor
+//       re-applies the margin recorded for that family (0 when none is), and an explicit --margin replaces it.
 //   --check-file-against <ref>
-//       the floor only rises: exit 1 when any family's floor in the working file is LOWER than at <ref>, or a family was
+//       the floor only rises (the FLOORS are compared: the recorded measured score and margin are information only): exit 1 when any family's floor in the working file is LOWER than at <ref>, or a family was
 //       removed. stryker-floor.json ABSENT at <ref> means "no floors yet" (PR-A's own first run, where HEAD^1 is main, which
 //       lacks the file): exit 0, printing `no floors at <ref>: nothing to compare`. The file absent in the WORKING TREE is
 //       always exit 2: PR-A commits it, so a missing file is a deletion, and after PR-B a deleted floor file must never read
@@ -32,6 +37,11 @@
 //   --survivors <leg> <mutation.json> --out <file>
 //       writes `file:line:col mutator → replacement` for each Survived / NoCoverage mutant not in stryker-equivalent.json:
 //       one LEG's evidence (a leg is what a CI job runs), not a floor.
+//   --check-selection <leg> <report.json>
+//       judges only WHERE a report's mutants are: exit 0 when every one lies inside the leg's files and line ranges (the check
+//       --survivors makes first), 2 when one does not, or when there are none. It reads a report or Stryker's INCREMENTAL file
+//       (the same shape, written whole or, after an interrupt, partial), whose statuses it does not read: the workflow runs it on
+//       the incremental file before saving that to the cache, so a file Survivors would refuse is never cached (W1d T20).
 //
 // Exit codes, each with one meaning (the one convention, D8):
 //   0  done: the score is at or above the floor / the floor was written / nothing fell / the survivors were written;
@@ -53,9 +63,10 @@ const EQUIVALENT_FILE = "stryker-equivalent.json";
 const USAGE = [
   "usage: stryker-floor.ts --check <family> <dir> [--skip-if-no-floors]",
   "       stryker-floor.ts --check-all <dir> --legs <leg,leg,...> [--skip-if-no-floors]",
-  "       stryker-floor.ts --set-floor <family> <dir>",
+  "       stryker-floor.ts --set-floor <family> <dir> [--margin <points>]",
   "       stryker-floor.ts --check-file-against <ref>",
   "       stryker-floor.ts --survivors <leg> <mutation.json> --out <file>",
+  "       stryker-floor.ts --check-selection <leg> <report.json>",
 ].join("\n");
 
 export interface Mutant {
@@ -168,6 +179,8 @@ interface Tally {
   detected: number; valid: number;
   /** floor(score x 10): the score in tenths of a percent, by integer arithmetic (a float quotient can read 73.3999… for 73.4). */
   tenths: number;
+  /** floor(score x 100): the same in hundredths, the precision a floor's derivation records (tenths = floor(hundredths / 10)). */
+  hundredths: number;
   /** The keys of every Survived / NoCoverage mutant that is not recorded equivalent, by file, line, column. */
   survivors: string[];
 }
@@ -193,7 +206,7 @@ function tally(report: Report, equivalents: readonly string[]): Tally {
   const detected = t.killed + t.timeout;
   const valid = detected + t.survived + t.noCoverage;
   survivors.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line || a.col - b.col || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)));
-  return { ...t, detected, valid, tenths: valid === 0 ? 0 : Math.floor((detected * 1000) / valid), survivors: survivors.map((s) => s.key) };
+  return { ...t, detected, valid, tenths: valid === 0 ? 0 : Math.floor((detected * 1000) / valid), hundredths: valid === 0 ? 0 : Math.floor((detected * 10000) / valid), survivors: survivors.map((s) => s.key) };
 }
 
 const fmt = (tenths: number): string => (tenths / 10).toFixed(1);
@@ -229,7 +242,7 @@ function selection(entries: readonly string[], file: string): "all" | [number, n
 /** What of `report` the leg's `mutate` entries do not select: a file the leg does not select, or, for a file the leg selects
  *  only by line range (a leg of a split file), a mutant that STARTS outside every range (`file:line`). A report of another leg
  *  of the same file is the wrong report too. */
-function outsideGroup(leg: string, report: Report): string[] {
+function outsideGroup(leg: string, report: { files: Record<string, { mutants: { location: { start: { line: number } } }[] }> }): string[] {
   const entries = entriesOf(leg);
   const out: string[] = [];
   for (const [file, { mutants }] of Object.entries(report.files)) {
@@ -238,6 +251,26 @@ function outsideGroup(leg: string, report: Report): string[] {
     else if (sel !== "all") for (const m of mutants) if (!sel.some(([from, to]) => m.location.start.line >= from && m.location.start.line <= to)) out.push(`${file}:${m.location.start.line}`);
   }
   return out;
+}
+
+/** The places of a report's (or an incremental file's) mutants, and nothing else: the statuses of a partial file are not judged
+ *  here (a Pending one is the interrupted run's own). Refuses what is not a `files` map of mutants with a start line. */
+function parsePlaces(text: string, what: string): { files: Record<string, { mutants: { location: { start: { line: number } } }[] }>; mutants: number } {
+  const raw = parseJson(text, what);
+  if (!isObject(raw) || !isObject(raw.files)) throw new Refusal(`${what} has no \`files\` map`);
+  const files: Record<string, { mutants: { location: { start: { line: number } } }[] }> = {};
+  let mutants = 0;
+  for (const [file, entry] of Object.entries(raw.files)) {
+    if (!isObject(entry) || !Array.isArray(entry.mutants)) throw new Refusal(`${what}'s ${file} has no \`mutants\` array`);
+    files[file] = { mutants: [] };
+    for (const [i, m] of (entry.mutants as unknown[]).entries()) {
+      const start = isObject(m) && isObject(m.location) && isObject(m.location.start) ? m.location.start : null;
+      if (start === null || !isCount(start.line)) throw new Refusal(`${what}'s ${file} mutant #${i} has no location.start line`);
+      files[file].mutants.push({ location: { start: { line: start.line } } });
+      mutants++;
+    }
+  }
+  return { files, mutants };
 }
 
 /** The legs' reports as one: a file two legs both report (the parts of a split file) lists the mutants of all of them. */
@@ -292,13 +325,86 @@ export function check(family: string, reports: LegReports, floors: Floors, equiv
   return { exit: ok ? 0 : 1, why: `${family}: score ${describeScore(p.t)} over ${p.legs} leg(s) ${ok ? "is at or above" : "is BELOW"} the floor ${fmt(floorTenths)}%`, scoreTenths: p.t.tenths, floorTenths, survivors: p.t.survivors };
 }
 
-/** The floors with `family`'s set to floor(score, 1 dp), refusing to lower one that exists. */
-export function setFloor(family: string, reports: LegReports, floors: Floors, equivalents: readonly string[] = []): Refused | { exit: 0; why: string; floors: Floors } {
+/** What a floor was derived from (W1d ruling T20-FLOOR-MARGIN): the measured score in percent, floored to two decimals, and the margin
+ *  in points (at most one decimal) taken off it. floor = floor(measured - margin, 1 dp), so a raise can re-apply the margin. */
+export interface Derivation { measured: number; margin: number }
+export type Derivations = Record<string, Derivation>;
+
+/** The pure rule: floor(measured - margin, 1 dp), by integer arithmetic on hundredths and tenths (exact: floor(h / 10) - m is floor((h - 10 m) / 10)
+ *  for a whole number of tenths m, so no float difference can move a score that sits on a tenth). */
+export function derivedFloor(measured: number, margin: number): number {
+  return (Math.floor(Math.round(measured * 100) / 10) - Math.round(margin * 10)) / 10;
+}
+
+/** Why `margin` is no margin, or null: a number of points from 0 to 100 with at most one decimal (never negative, never NaN). */
+function marginFault(margin: unknown): string | null {
+  if (typeof margin !== "number" || !Number.isFinite(margin) || margin < 0 || margin > 100 || Math.abs(margin * 10 - Math.round(margin * 10)) > 1e-9) {
+    return `a margin is a number of points from 0 to 100 with at most one decimal (got ${typeof margin === "number" ? String(margin) : JSON.stringify(margin)})`;
+  }
+  return null;
+}
+
+/** stryker-floor.json's `derivation`: `{family: {measured, margin}}`. Absent is the pre-margin shape (none recorded). An entry owes BOTH
+ *  fields: a missing measured score is refused by name, so the floor it explains cannot stand on a derivation nobody can read. */
+export function parseDerivations(text: string): Derivations {
+  const raw = parseJson(text, FLOOR_FILE);
+  if (!isObject(raw)) throw new Refusal(`${FLOOR_FILE} is not an object`);
+  if (raw.derivation === undefined) return {};
+  if (!isObject(raw.derivation)) throw new Refusal(`${FLOOR_FILE}: \`derivation\` must be a map of family -> {measured, margin}`);
+  const out: Derivations = {};
+  for (const [f, v] of Object.entries(raw.derivation)) {
+    if (!isObject(v)) throw new Refusal(`${FLOOR_FILE}: the derivation of "${f}" must be {measured, margin} (got ${JSON.stringify(v)})`);
+    if (v.measured === undefined) throw new Refusal(`${FLOOR_FILE}: the derivation of "${f}" has no measured score: the score its floor was set from`);
+    if (v.margin === undefined) throw new Refusal(`${FLOOR_FILE}: the derivation of "${f}" has no margin`);
+    const { measured, margin } = v;
+    if (typeof measured !== "number" || !Number.isFinite(measured) || measured < 0 || measured > 100 || Math.abs(measured * 100 - Math.round(measured * 100)) > 1e-6) {
+      throw new Refusal(`${FLOOR_FILE}: the derivation of "${f}": the measured score must be a number from 0 to 100 with at most two decimals (got ${JSON.stringify(measured)})`);
+    }
+    const bad = marginFault(margin);
+    if (bad !== null) throw new Refusal(`${FLOOR_FILE}: the derivation of "${f}": ${bad}`);
+    out[f] = { measured, margin: margin as number };
+  }
+  return out;
+}
+
+/** Where the floors and their derivations disagree: a floor with no measured score recorded, a floor that is not floor(measured - margin, 1 dp)
+ *  (higher OR lower: a hand edit of either side), and a derivation of a family with no floor. Empty when every floor explains itself. */
+export function derivationFaults(floors: Floors, derivations: Derivations): string[] {
+  const faults: string[] = [];
+  for (const [f, floor] of Object.entries(floors)) {
+    const d = derivations[f];
+    if (d === undefined) {
+      faults.push(`"${f}" has a floor of ${floor} and no measured score recorded: its derivation is not visible`);
+      continue;
+    }
+    const want = derivedFloor(d.measured, d.margin);
+    if (Math.round(want * 10) !== Math.round(floor * 10)) faults.push(`"${f}": the floor is ${floor}, but floor(${d.measured} - ${d.margin}, 1 dp) is ${want}`);
+  }
+  for (const f of Object.keys(derivations)) if (floors[f] === undefined) faults.push(`"${f}" has a derivation and no floor`);
+  return faults;
+}
+
+/** The floors with `family`'s set to floor(score - margin, 1 dp), refusing to lower one that exists, with the derivation recorded beside it.
+ *  The margin is `opts.margin`, else the one recorded for the family in `opts.derivations`, else 0. */
+export function setFloor(family: string, reports: LegReports, floors: Floors, equivalents: readonly string[] = [], opts: { margin?: number; derivations?: Derivations } = {}): Refused | { exit: 0; why: string; floors: Floors; derivations: Derivations } {
+  const margin = opts.margin ?? opts.derivations?.[family]?.margin ?? 0;
+  const bad = marginFault(margin);
+  if (bad !== null) return { exit: 2, why: `refusing the margin for "${family}": ${bad}` };
   const p = prepare(family, reports, equivalents);
   if ("exit" in p) return p;
+  const floorTenths = p.t.tenths - Math.round(margin * 10);
+  if (floorTenths < 0) return { exit: 2, why: `refusing a margin of ${margin} for "${family}": it leaves no floor under the measured score ${fmt(p.t.tenths)}%` };
   const was = floors[family];
-  if (was !== undefined && p.t.tenths < Math.round(was * 10)) return { exit: 2, why: `refusing to lower the floor of "${family}" from ${fmt(Math.round(was * 10))}% to ${fmt(p.t.tenths)}%: a floor only rises` };
-  return { exit: 0, why: `${family}: floor ${was === undefined ? "set" : `${fmt(Math.round(was * 10))}% ->`} ${fmt(p.t.tenths)}% (score ${describeScore(p.t)} over ${p.legs} leg(s))`, floors: { ...floors, [family]: p.t.tenths / 10 } };
+  if (was !== undefined && floorTenths < Math.round(was * 10)) {
+    return { exit: 2, why: `refusing to lower the floor of "${family}" from ${fmt(Math.round(was * 10))}% to ${fmt(floorTenths)}% (score ${fmt(p.t.tenths)}% less a margin of ${margin}): a floor only rises` };
+  }
+  const measured = p.t.hundredths / 100;
+  return {
+    exit: 0,
+    why: `${family}: floor ${was === undefined ? "set" : `${fmt(Math.round(was * 10))}% ->`} ${fmt(floorTenths)}% (margin ${margin} under the measured score ${measured.toFixed(2)}%; score ${describeScore(p.t)} over ${p.legs} leg(s))`,
+    floors: { ...floors, [family]: floorTenths / 10 },
+    derivations: { ...opts.derivations, [family]: { measured, margin } },
+  };
 }
 
 /** The families whose floor is lower in `now` than in `was`, or gone, in the order `was` lists them. A family added in `now` is not one. */
@@ -469,12 +575,15 @@ function parse(argv: string[]) {
         "set-floor": { type: "boolean" },
         "check-file-against": { type: "string" },
         survivors: { type: "boolean" },
+        "check-selection": { type: "boolean" },
         out: { type: "string" },
         "skip-if-no-floors": { type: "boolean" },
+        margin: { type: "string" },
       },
     });
   } catch (e) {
-    throw new Refusal(`${(e as Error).message}\n${USAGE}`);
+    const hint = argv.includes("--margin") ? "\n(a margin is written --margin=0.5 or --margin 0.5: it is never negative)" : "";
+    throw new Refusal(`${(e as Error).message}${hint}\n${USAGE}`);
   }
 }
 
@@ -483,18 +592,30 @@ export function main(argv: string[]): number {
   try {
     const parsed = parse(argv);
     const { values, positionals } = parsed;
-    const modes = (["check", "check-all", "set-floor", "check-file-against", "survivors"] as const).filter((m) => values[m] !== undefined);
+    const modes = (["check", "check-all", "set-floor", "check-file-against", "survivors", "check-selection"] as const).filter((m) => values[m] !== undefined);
     if (modes.length !== 1) throw new Refusal(`exactly one mode is required\n${USAGE}`);
     const mode = modes[0]!;
-    const takes = { check: "<family> <dir>", "set-floor": "<family> <dir>", survivors: "<leg> <mutation.json>", "check-all": "<dir>", "check-file-against": "" } as const;
+    const takes = { check: "<family> <dir>", "set-floor": "<family> <dir>", survivors: "<leg> <mutation.json>", "check-all": "<dir>", "check-file-against": "", "check-selection": "<leg> <report.json>" } as const;
     const need = mode === "check-file-against" ? 0 : mode === "check-all" ? 1 : 2;
     if (positionals.length !== need) throw new Refusal(`${mode} takes ${need === 0 ? "no positional arguments" : takes[mode]}\n${USAGE}`);
     if (values.out !== undefined && mode !== "survivors") throw new Refusal(`--out belongs to --survivors\n${USAGE}`);
     if (values["skip-if-no-floors"] !== undefined && mode !== "check" && mode !== "check-all") throw new Refusal(`--skip-if-no-floors belongs to --check and --check-all\n${USAGE}`);
     if (values.legs !== undefined && mode !== "check-all") throw new Refusal(`--legs belongs to --check-all\n${USAGE}`);
+    if (values.margin !== undefined && mode !== "set-floor") throw new Refusal(`--margin belongs to --set-floor\n${USAGE}`);
     if (mode === "check-all" && (values.legs === undefined || values.legs === "")) throw new Refusal(`--check-all needs --legs <leg,leg,...>: the legs the run planned\n${USAGE}`);
 
     if (mode === "check-file-against") return checkFileAgainst(values["check-file-against"] ?? "");
+
+    if (mode === "check-selection") {
+      const [leg = "", reportPath = ""] = positionals;
+      if (GROUPS[leg] === undefined) throw new Refusal(`unknown group "${leg}": expected one of ${Object.keys(STRYKER_GROUPS).join(", ")}`);
+      const places = parsePlaces(readText(reportPath, "the incremental file"), "the incremental file");
+      if (places.mutants === 0) throw new Refusal(`the incremental file holds no mutants: nothing to judge, and nothing earned to keep`);
+      const outside = outsideGroup(leg, places);
+      if (outside.length > 0) throw new Refusal(`the incremental file is not group "${leg}"'s: it holds ${outside.slice(0, 3).join(", ")}, outside the group's files and line ranges`);
+      out(`stryker-floor: check-selection ${leg}: ${places.mutants} mutants in ${Object.keys(places.files).length} files, all inside the group's files and line ranges`);
+      return 0;
+    }
 
     if (mode === "survivors") {
       const [leg = "", reportPath = ""] = positionals;
@@ -521,10 +642,15 @@ export function main(argv: string[]): number {
 
     const [family = "", dir = ""] = positionals;
     if (mode === "set-floor") {
-      const r = setFloor(family, readLegReports(dir, FAMILIES[family] ?? []), floors, equivalents);
+      // A margin is typed as text and read by pattern, never by Number(): Number("") is 0 and would write a floor at the exact score.
+      if (values.margin !== undefined && !/^\d{1,3}(\.\d)?$/.test(values.margin)) {
+        throw new Refusal(`--margin "${values.margin}" is not a margin: a number of points, 0 or more, with at most one decimal (0, 0.5, 1)`);
+      }
+      const derivations = parseDerivations(floorText);
+      const r = setFloor(family, readLegReports(dir, FAMILIES[family] ?? []), floors, equivalents, { margin: values.margin === undefined ? undefined : Number(values.margin), derivations });
       if (r.exit === 2) throw new Refusal(r.why);
       const raw = JSON.parse(floorText) as Record<string, unknown>;
-      writeFileSync(resolve(FLOOR_FILE), `${JSON.stringify({ ...raw, families: r.floors }, null, 2)}\n`);
+      writeFileSync(resolve(FLOOR_FILE), `${JSON.stringify({ ...raw, families: r.floors, derivation: r.derivations }, null, 2)}\n`);
       out(`stryker-floor: ${r.why}`);
       return 0;
     }

@@ -367,9 +367,9 @@ describe("baselineL3Path (catalogue/baseline.json names the committed L3 baselin
     return { catalogue: join(repo, "catalogue"), repo };
   };
 
-  it("the real one names the committed w1-driving L3 run, resolved against the repo root, and that file exists", () => {
+  it("the real one names the committed W1d baseline's L3 run (PR-B, Task 21), resolved against the repo root, and that file exists", () => {
     const p = baselineL3Path();
-    expect(p).toBe(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1drv-l3/results.json"));
+    expect(p).toBe(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1d-baseline/L3/results.json"));
     expect(readFileSync(p, "utf8").length).toBeGreaterThan(1000);
   });
 

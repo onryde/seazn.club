@@ -10,9 +10,17 @@ name: Stryker mutation
 #    are held equal to the keys by matrix-workflow.test.ts. inject_visibility proves the guard live.
 #  - pull_request on this file and the Stryker files: the probe, so the workflow proves itself on its own PR.
 # The matrix (and each job's timeout, from packages/engine/stryker-timeouts.json, at most 300 minutes) is derived by
-# packages/engine/scripts/stryker-matrix.mjs, whose own test spawns it per event. THE TIMEOUTS ARE NOT YET MEASURED ON A HOSTED
-# RUNNER: they come from a local per-mutant rate (26 runner-seconds), and the probe's carries an extra x2 allowance. PR-B (Task 20)
-# re-derives every leg's timeout from the per-mutant time of its first hosted run. The floor (stryker-floor.json) gates, not
+# packages/engine/scripts/stryker-matrix.mjs, whose own test spawns it per event. THE TIMEOUTS ARE FROM THE FIRST FULL RUN (run
+# 37371368951, sha 78c7ef3e6, ubuntu-latest, concurrency 3): packages/engine/stryker-measured.json records what each leg took, and a
+# leg's timeout is 1.5 x that (min 10, max 300 minutes). The run cancelled three legs at their timeouts and four more took over 200
+# minutes, so those seven were cut again into 17 parts (10 more jobs, cut points in packages/engine/stryker.groups.mjs), and T20
+# step 2b RAN every part (16 to the end; sports-period-9's first part was cancelled at its timeout again and was cut into three, 2 more
+# jobs, and those ran to the end too): every one of the 81 legs is timed from its own job's wall, 1.5 x it, like a leg that was never
+# cut, and a part that has not run yet (the next cut) would be timed from the pace of the part it was cut from, until it has. A leg's Stryker incremental file is cached under a key that carries the
+# fingerprint of its CUT (`matrix.cut`, which stryker-matrix.mjs derives from the leg's STRYKER_GROUPS entry, the anchors of
+# the parts it takes and the files its globs resolve to), so a leg that is cut again never restores the file another cut wrote (T20:
+# four re-cut legs kept their names, restored the old cut's results and were refused by the Survivors guard, which stays as it
+# is), and a file that cannot be judged by where its mutants are is never saved. The floor (stryker-floor.json) gates, not
 # Stryker's `break`, and is kept per FAMILY (ruling 66's ten groups, the sum of their legs: a file cut again never removes a
 # floor), so the `floors` job, not a leg, judges it: it runs after every leg and reads the legs' artifacts. Until PR-B sets a floor
 # it prints "no floor yet" and the families' scores are only logged.
@@ -28,33 +36,87 @@ on:
         default: all
         options:
           - all
-          - competition-tiebreakers
-          - competition-progression
-          - competition
-          - core
-          - modules-io
-          - modules-sport
-          - modules-people
-          - draws-bracket
-          - draws-pairing
-          - sports-cricket
-          - sports-cricket-kernel-1
-          - sports-cricket-kernel-2
-          - sports-cricket-kernel-3
-          - sports-cricket-kernel-4
+          - competition-1
+          - competition-2
+          - competition-3
+          - competition-4
+          - competition-5
+          - competition-6
+          - competition-7
+          - core-1
+          - core-2
+          - core-3
+          - modules-1
+          - modules-2
+          - modules-3
+          - modules-4
+          - modules-5
+          - modules-6
+          - modules-7
+          - draws-1
+          - draws-2
+          - draws-3
+          - draws-4
+          - sports-cricket-1
+          - sports-cricket-2
+          - sports-cricket-3
+          - sports-cricket-4
+          - sports-cricket-5
+          - sports-cricket-6
+          - sports-cricket-7
+          - sports-cricket-8
+          - sports-cricket-9
+          - sports-cricket-10
+          - sports-cricket-11
+          - sports-cricket-12
+          - sports-cricket-13
+          - sports-cricket-14
+          - sports-cricket-15
+          - sports-cricket-16
           - sports-football-1
           - sports-football-2
           - sports-football-3
+          - sports-football-4
+          - sports-football-5
+          - sports-football-6
+          - sports-football-7
+          - sports-football-8
+          - sports-football-9
           - sports-period-1
           - sports-period-2
           - sports-period-3
+          - sports-period-4
+          - sports-period-5
+          - sports-period-6
+          - sports-period-7
+          - sports-period-8
+          - sports-period-9
+          - sports-period-10
+          - sports-period-11
+          - sports-period-12
+          - sports-period-13
+          - sports-period-14
           - sports-setbased-1
           - sports-setbased-2
+          - sports-setbased-3
+          - sports-setbased-4
+          - sports-setbased-5
+          - sports-setbased-6
           - sports-nested-1
           - sports-nested-2
-          - sports-other-carrom
-          - sports-other-generic
-          - sports-other
+          - sports-nested-3
+          - sports-nested-4
+          - sports-nested-5
+          - sports-nested-6
+          - sports-nested-7
+          - sports-nested-8
+          - sports-other-1
+          - sports-other-2
+          - sports-other-3
+          - sports-other-4
+          - sports-other-5
+          - sports-other-6
+          - sports-other-7
           - probe
       inject_visibility:
         description: "mutation proof of the visibility guard: none, or a visibility to pretend (the run must then fail)"
@@ -65,6 +127,8 @@ on:
     paths:
       - ".github/workflows/mutation.yml"
       - "packages/engine/stryker*"
+      - "packages/engine/vitest.config.ts"
+      - "packages/engine/vitest.stryker.config.ts"
       - "packages/engine/scripts/stryker-*"
 
 permissions:
@@ -118,7 +182,7 @@ jobs:
             *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
           esac
           if [ "$vis" != "public" ]; then
-            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            echo "::error title=Stryker mutation run refused::repository visibility is '${vis:-unreadable}'. The Stryker mutation workflow (mutation.yml) runs one hosted job per group, and those minutes are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run it privately (ruling 68)."
             exit 1
           fi
           echo "repository is public; guard passes"
@@ -140,8 +204,15 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     # One group's timeout or red dry run must never cancel the others (Task 20 expects a timeout and still needs the
     # other groups' wall times).
+    # max-parallel (T20-FIX1, ruling T20-FIX1): the org is on GitHub's Free plan, about 20 concurrent hosted jobs account-wide,
+    # and `group=all` queues one job per leg (81, about 1.5 hours each, 119 job-hours at the measured walls). Uncapped, one dispatch
+    # holds every slot for about 7.7 hours and ci.yml's PR runs (13-16 jobs) and e2e.yml's push fan-out (11 jobs) queue behind it.
+    # At 12 a dispatch leaves 8 slots for CI and takes about 11.5 hours (about 16.1 at 8). A literal on purpose: an input or a variable
+    # would let a dispatch lift it unseen (tools/matrix/__tests__/matrix-workflow.test.ts pins the number; the figures here are
+    # derived from stryker-measured.json by test/stryker-sizing.test.ts).
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       GROUP: ${{ matrix.group }}   # job level: every step below reads $GROUP (step env does not carry over)
@@ -172,7 +243,7 @@ jobs:
             *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
           esac
           if [ "$vis" != "public" ]; then
-            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            echo "::error title=Stryker mutation run refused::repository visibility is '${vis:-unreadable}'. The Stryker mutation workflow (mutation.yml) runs one hosted job per group, and those minutes are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run it privately (ruling 68)."
             exit 1
           fi
           echo "repository is public; guard passes"
@@ -186,19 +257,33 @@ jobs:
           cache: pnpm
       # Only the engine and what it needs (Stryker, vitest and the parser are its devDependencies): the apps' trees are never run here.
       - run: pnpm install --frozen-lockfile --filter @seazn/engine...
-      # The incremental file carries last week's results forward, so an unchanged mutant is not re-run. Restore and save are
+      # The incremental file can carry the last run's results forward, so an unchanged mutant is not re-run, but only while the
+      # cache entry survives: GitHub evicts an entry not read for 7 days, and a weekly run sits on that edge, so budget it as cold
+      # (MUTATION.md section 9). Restore and save are
       # separate steps, the save `if: always()`: actions/cache's own post-save runs only when the whole job succeeded, and a
       # group whose Stryker run exited non-zero (the step above) would never keep the file it had just earned.
-      # The key ends in '@<sha>' and the restore key in '@', never '-': a group name is lowercase letters and hyphens, so with
-      # a hyphen `stryker-sports-cricket-` would also match `stryker-sports-cricket-kernel-1@<sha>` and the wrong group's file
-      # could be the one restored (matrix-workflow.test.ts derives that collision from the real group names).
+      # The key is `stryker-<group>@<cut>@<sha>` and the restore key stops after the second '@': a group name is lowercase
+      # letters, digits and hyphens, and its number is the last part (`sports-cricket-1`, `sports-cricket-10`), so a restore key
+      # that stopped at the name would also match `stryker-sports-cricket-10@...` and the wrong group's file could be the one
+      # restored. The first '@' ends the name (matrix-workflow.test.ts derives that collision from the real group names).
+      # `matrix.cut` is the fingerprint of the leg's cut (stryker-matrix.mjs, in the plan step: the leg's entries, the anchors
+      # of the parts it takes, never an entry's text alone, since `cricket.ts#10` stayed `cricket.ts#10` while its range halved,
+      # and the sorted files its globs resolve to, since a file added, removed or renamed inside a glob changes what the leg holds
+      # under the same entries). The second '@' ends the cut, so a restore key can only ever reach a file this SAME cut wrote, and
+      # an unchanged leg still carries last week's results forward. Nothing here hashes anything: the plan step does, before any
+      # install.
+      # The save follows a CHECK, not Survivors: `--check-selection` is the first thing Survivors does (every mutant inside the leg's
+      # files and line ranges), run on the incremental file itself, so a file Survivors would refuse is never cached and cannot be
+      # restored into next week's run. It is not Survivors itself because an interrupted Stryker (the timeout, a cancel) writes a
+      # PARTIAL incremental file and no JSON report (Stryker's "Saved a partial incremental report ... after an unexpected
+      # interrupt"), so a save that waited for Survivors would never keep what the longest legs earned before the clock stopped them.
       - name: Restore the incremental file
         uses: actions/cache/restore@v4
         with:
           path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
-          key: stryker-${{ matrix.group }}@${{ github.sha }}
+          key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}
           restore-keys: |
-            stryker-${{ matrix.group }}@
+            stryker-${{ matrix.group }}@${{ matrix.cut }}@
       - name: Run Stryker
         working-directory: packages/engine
         run: |
@@ -206,12 +291,19 @@ jobs:
           mkdir -p reports/mutation
           STRYKER_GROUP="$GROUP" pnpm mutation
           code=$?; echo "EXIT=$code"; echo "$code" > reports/mutation/exit.txt; exit "$code"
+      # `if: always()` on purpose, as below. A missing file (Stryker died before it wrote one) or one outside the leg is a red step, and
+      # the save after it is skipped.
+      - name: Check the incremental file
+        id: incremental
+        if: always()
+        working-directory: packages/engine
+        run: node --experimental-strip-types scripts/stryker-floor.ts --check-selection "$GROUP" "reports/mutation/$GROUP.incremental.json"
       - name: Save the incremental file
-        if: always()   # deliberate, as below; a missing file (Stryker died first) is a warning from the action, not a failure
+        if: always() && steps.incremental.outcome == 'success'   # deliberate: only a file the check accepted
         uses: actions/cache/save@v4
         with:
           path: packages/engine/reports/mutation/${{ matrix.group }}.incremental.json
-          key: stryker-${{ matrix.group }}@${{ github.sha }}
+          key: stryker-${{ matrix.group }}@${{ matrix.cut }}@${{ github.sha }}
       # One leg's evidence; the floor is judged per family, by the `floors` job once every leg has reported.
       - name: Survivors
         if: always()   # deliberate: save evidence after a non-zero Stryker exit (a manual cancel also runs it; accepted)
@@ -271,7 +363,7 @@ jobs:
             *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
           esac
           if [ "$vis" != "public" ]; then
-            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
+            echo "::error title=Stryker mutation run refused::repository visibility is '${vis:-unreadable}'. The Stryker mutation workflow (mutation.yml) runs one hosted job per group, and those minutes are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run it privately (ruling 68)."
             exit 1
           fi
           echo "repository is public; guard passes"

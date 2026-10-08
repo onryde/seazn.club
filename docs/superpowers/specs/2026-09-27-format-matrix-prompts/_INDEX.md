@@ -13,9 +13,9 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28 (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251). MERGED 2026-09-28 — PR #896, merge `a5f813404`.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes; fix round 1 (`62d91dd48`, `93eb5af0d`), re-review 1 Approved. Final whole-branch review (2026-09-30): Needs fixes, 0 Critical / 2 Important / 19 Minor; the final fix landed (`0532d0cb6`, `e431cbbce`, `80f370e9f`, `d5ce3e871`, `6e857491d`, `975f53b23`). Final re-review: Needs fixes (I-2's own probe still passed); fixed in `f33c1b312` and the docs commit that writes this line. MERGED 2026-09-30 — PR #905, merge `ebf7ec040`.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
-| W1d | CI (weekly + dispatch, visibility guard) + first full truth run | **In progress**: **PR-A open (#921, draft): infra (Tasks 1–16); PR-B after the owner merges.** PR-A is Tasks 1–16 on `feat/format-matrix-w1d-infra` (worktree `format-matrix-w1d-exec`), each task closed on a clean task review (the whole-branch review's fixes landed in the final-fix round), and the 28 "W1d first tasks" are closed below (each names its task and commit; item 13 is accepted with no code). Task 16's live smoke on a fresh env: the HTTP slice is unchanged (24/24, no difference against `w1drv-http-slice`), and the sharded form (`--shard 1/2`, `2/2`, `matrix:merge`) is state-for-state identical to the unsharded run. Merge gate: the owner merges PR-A (ruling 62); PR-B (Tasks 17–22, the evidence) is cut from `main` after. **Plan APPROVED (ruling 69)**; review 8 Approved (0C/0I/3m carried) on `2d3a7801f` (review-1 to review-7 fixes on `ed9801b60`) (2026-10-04): `docs/superpowers/plans/2026-10-04-format-matrix-w1d.md` on `docs/format-matrix-w1d-plan` off `main` `dfe8132da`. Owner rulings 60–68: GitHub weekly + dispatch, harness-green per §6.5, one plan and two PRs (PR-A Tasks 1–16 infra, PR-B Tasks 17–22 evidence), every ❌ keyed by gap ID, full scope L1 231 + L2 1,731 + L3 937. **D7 resolved by ruling 65** (no ░ applies to driven cases only; the merge judges with `--planned-not-run allow`). **Ruling 66:** the matrix proves formats and rules, not scheduling, so the placement container and greedy guard are removed. **Ruling 67:** Stryker covers the whole engine except placement scheduling, in ten groups sized from measured mutant counts and wall time (Task 15 cut them into 27 legs from the measured 26 runner-seconds per mutant, 2.6× the plan's formula). **Ruling 68:** the repo goes private after W1d, so every matrix and Stryker job takes a switchable runner (`vars.MATRIX_RUNNER`); the Fly runner is a follow-up outside W1d. Sonnet for implementers and task reviewers, Opus for the two whole-branch reviews (owner). No owner question blocks a task. |
+| W1d | CI (weekly + dispatch, visibility guard) + first full truth run | **In progress**: **PR-A merged (#921, merge commit `47f210e3f`, 2026-10-05). PR-B (Tasks 17–22) is ready on `feat/format-matrix-w1d-evidence` (both Opus whole-branch reviews closed, 2026-10-07): Tasks 17–22 are done (17 the three dispatches, see "W1d dispatches"; 18 the triage tooling; 19 the triage rules and the 164 P-rule reds re-keyed (163 to a gap, 1 with none); 21 the baseline commit at `truth-runs/w1d-baseline`, owner ruling 70's three cells held red by `judge regression`; 22 Steps 1–2 the per-wave backlog written at the end of this file by `matrix:backlog`). Task 20 (Stryker) is done: the first full run is workflow run 37371368951; seven long legs were cut into parts from it and every one of the 81 legs is timed from its own measured run; the ten family floors sit 0.5 point under the measured scores (ruling T20-FLOOR-MARGIN); see `truth-runs/w1d-baseline/MUTATION.md`. Task 22 Step 3, the owner setting `MATRIX_WEEKLY_ENABLED`, comes AFTER PR-B merges (ruling T22-REORDER, with Task 20 Steps 2–4): the one variable also gates the Sunday Stryker run, and main's PR-A Stryker workflow is uncalibrated and has no `max-parallel`.** PR-A is Tasks 1–16 on `feat/format-matrix-w1d-infra` (worktree `format-matrix-w1d-exec`), each task closed on a clean task review (the whole-branch review's fixes landed in the final-fix round), and the 28 "W1d first tasks" are closed below (each names its task and commit; item 13 is accepted with no code). Task 16's live smoke on a fresh env: the HTTP slice is unchanged (24/24, no difference against `w1drv-http-slice`), and the sharded form (`--shard 1/2`, `2/2`, `matrix:merge`) is state-for-state identical to the unsharded run. Merge gate: the owner merges PR-A (ruling 62); PR-B (Tasks 17–22, the evidence) is cut from `main` after. **Plan APPROVED (ruling 69)**; review 8 Approved (0C/0I/3m carried) on `2d3a7801f` (review-1 to review-7 fixes on `ed9801b60`) (2026-10-04): `docs/superpowers/plans/2026-10-04-format-matrix-w1d.md` on `docs/format-matrix-w1d-plan` off `main` `dfe8132da`. Owner rulings 60–68: GitHub weekly + dispatch, harness-green per §6.5, one plan and two PRs (PR-A Tasks 1–16 infra, PR-B Tasks 17–22 evidence), every ❌ keyed by gap ID, full scope L1 231 + L2 1,731 + L3 937. **D7 resolved by ruling 65** (no ░ applies to driven cases only; the merge judges with `--planned-not-run allow`). **Ruling 66:** the matrix proves formats and rules, not scheduling, so the placement container and greedy guard are removed. **Ruling 67:** Stryker covers the whole engine except placement scheduling, in ten groups sized from measured mutant counts and wall time (Task 15 cut them into 27 legs from the measured 26 runner-seconds per mutant, 2.6× the plan's formula). **Ruling 68:** the repo goes private after W1d, so every matrix and Stryker job takes a switchable runner (`vars.MATRIX_RUNNER`); the Fly runner is a follow-up outside W1d. Sonnet for implementers and task reviewers, Opus for the two whole-branch reviews (owner). No owner question blocks a task. |
 | W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | **Tasks 1–16 done 2026-10-01. Tasks 1–15 each closed on a clean review (Task 15 on re-review 1, Approved, after two fix rounds). Task 16's review: Needs fixes (0 Critical, 1 Important, 7 Minor); fix round 1 landed (T16-R3, T16-R4). Its re-review passed, and the final whole-branch review (the controller's, T15-R1) and its scoped re-review both Approved. MERGED as PR #912, merge commit `c347fedf9` (2026-10-01), and the worktree and branches were removed afterwards. The post-wave cleanup (rulings 55, 56, 58) is PR #913 (`67d6b1a8a`, 2026-10-04): the harness now lives at `tools/matrix`.** Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` (rulings 44–54; the owner's 2026-10-01 decisions are rulings 55–59); prompt `W1-driving.md`. Worktree `format-matrix-w1-driving-exec` and branch `feat/format-matrix-w1-driving` were removed after the merge. **Done-when (ruling 48), on `truth-runs/w1drv-l3/results.json`** (`--set w1-driving --workers 4`, harness `15ed62365`, clean): 937 cases = 743 ✅ + 194 ❌; ⏳ naming W1-driving **0** (⏳ of any wave 0); harness ❌ **0** after triage — the 60 harness reds were three defects, each fixed test first (`9a64ec4cd`, `b1325f721`, `e51bf3699`), and 30 of those cases are ✅ on their re-run. **164 product reds**, each judged on its latest committed run (`truth-runs/w1drv-l3-rerun/`, `truth-runs/w1drv-l3-fr1/`, `truth-runs/w1drv-l3-fr2/`), 0 unfit, 0 unclassified, per wave **W2 62, W4 32, W7 56, W5 11, W3 3** (`truth-runs/w1drv-l3/TRIAGE.md`; before ruling T15-R4 moved the bracket-draw stall to W2: W4 94, W7 56, W5 11, W3 3). HTTP slice on 4 workers: 24/24 ✅, the 378 checks it shares with W1c identical in verdict and count (`truth-runs/w1drv-http-slice/results.json`). **L1 proof at 1280, ×3** (`truth-runs/w1drv-l1/w1drv-l1-t15-r1/results.json`, `-r2`, `-r3`, harness `63bda33e4`): 7 cases each, 6 ✅ and `mexicano\|generic` ❌ (the predicted W7 round-2 self-pair 500); r2 and r3 identical to r1 on every check, and r1 identical to T13's `w1drv-l1-r1` on all 206 checks; per-screen verdicts in `truth-runs/w1drv-l1/README.md`. Model (`truth-runs/w1drv-model/`): swiss\|badminton and swiss\|generic ok at 40 runs, league\|football ok at 20; of the six single-stage rows without model evidence, four ok, and double elim and stepladder each found a NEW product red, committed as MB-007 and MB-008; Task 16's widened-fence run found MB-009 (`w1drv-t16-model-g1`), then both cells ran ok (`w1drv-t16-model-g1c`), and `--regressions` replayed all 8 committed cases as known (`w1drv-t16-model-reg2`). **MB-010 (fix round 1, T16-R3):** with the double-elim generate fence narrowed to the added-entrant branch, the live double-elim cell found Start → Withdraw → Generate 500ing in MB-007's words (`w1drv-t16fr1-model-de`). It is committed as MB-010, and the fence's withdrawn branch now covers double elim on its evidence. Double elim then ran ok 20/20 (`w1drv-t16fr1-model-de2`), and `--regressions` replays all 9 committed cases as known, each under its own id (`w1drv-t16fr1-model-reg`). See "Findings routed (W1-driving)" and "W1d first tasks". The branch was rebased onto `main` twice (2026-10-01): every recorded harness SHA is pre-rebase and stays as recorded; `truth-runs/W1-DRIVING-REBASES.md` maps each to its rebased commit and shows the harness unchanged across both. |
-| W2 | Sport scoring fidelity | not started |
+| W2 | Sport scoring fidelity | backlog ready (W1d baseline `47f210e`) |
 | W3 | Swiss | not started |
 | W4 | Knockout family | not started |
 | W5 | Round-robin family | not started |
@@ -853,6 +853,9 @@ Elsewhere the text is the controller's record.
     - **Amended 2026-10-04: the evidence STAYS.** Recorded from the controller's cleanup brief, which carries the
       owner's "ok": the truth runs are 12 MB, read by 12 CI test files, W1d's baseline, and history already holds
       them, so moving them out buys nothing. They are left out of the image instead.
+    - **Measured 2026-10-05:** `truth-runs` is 24136 KiB under `du -sk` (24074264 bytes over its 362 tracked
+      files, the sum of `git ls-files -z truth-runs | xargs -0 stat -f %z`; an earlier draft of this line carried 24074186), of which `w1d-baseline` is 9916 KiB, not the ~12 MB written above (that figure predates the W1d
+      baseline). The ruling stands; only the number moved.
     - **The package.** The harness lives at `tools/matrix` as `@seazn/matrix`; `tools/` is the home for dev-only
       harnesses (bench to follow; it did on 2026-10-04 as `tools/bench`, `@seazn/bench`, recorded in the bench
       programme's `_INDEX.md`). Choosing `tools/` over `packages/` was the controller's ruling (CL-R3, revised),
@@ -979,6 +982,18 @@ Elsewhere the text is the controller's record.
     22 tasks, its recommendations D1–D24, and its executor carries. It is executed subagent-driven under the plan's
     Execution model policy (Sonnet for implementers, task reviewers and fixers; Opus for the whole-branch reviews,
     owner 2026-10-04). The plan branch is pushed, and PR-A starts.
+70. **Harness-green holds with three named P6 exceptions** (2026-10-05, owner "A" to the Task 17 Step 5 question).
+    Three dispatches on `matrix-truth/w1d-baseline` (`47f210e3f`) judged `across`: L1 (231) and L2 (1731) 0 differing;
+    L3 (937) 3 differing — `swiss_knockout|football|11-a-side|R4`, `swiss_knockout|carrom|club-29|R4`,
+    `swiss_knockout|generic|score|R4`. Every red reads "round 5 paired nobody (SW-H1)". The cause is the product:
+    the `lots` tie-break (`packages/engine/src/competition/tiebreakers.ts`, `lotSeed` hashes the per-run entrant
+    UUIDs) reorders tied Swiss entrants every run in the sports whose cascade ends in `lots` (football, carrom,
+    boardgame, generic), so `rank_adjacent` pairs a different path to round 5, which on some paths has no
+    rematch-free matching, and P6 (SW-H1: an empty round reported as success) fires. The harness is deterministic
+    (code read: seed-order policy, fixed withdrawer, `fixture_no` order). Ruled: the harness is green for W1d; the
+    committed baseline records those three cases RED with cause P6 (the worst observed state), and a later `works`
+    is an improvement, not a regression. No re-dispatch. Recommendation (mine, not a ruling): move P6 up in W3,
+    because a real Swiss-into-knockout after a withdrawal can strand on an empty round 5 that says it succeeded.
 
 ## Recommendations (mine — not rulings)
 
@@ -1079,7 +1094,8 @@ Elsewhere the text is the controller's record.
     with the shard matrix.** Free parallelism, no unmeasured contention on pad holds. `MAX_WORKERS` stays 8. Built as
     recommended: `--driver browser --workers N` is a usage error that says so (`run.ts:633`). If the owner wants
     browser workers, they become a W1d follow-up task, and nothing else in the plan depends on the answer.
-  - **D2's enable step is the owner's act, after PR-B proves three green dispatches:** `gh variable set
+  - **D2's enable step is the owner's act, after PR-B merges (ruling T22-REORDER, 2026-10-06; it was "after PR-B proves
+    three green dispatches", which Task 17 has already done, so that wording would read as "enable now"):** `gh variable set
     MATRIX_WEEKLY_ENABLED --body true`. Until then both schedules (matrix-truth Saturday 02:17 UTC, mutation Sunday
     03:23 UTC) fire as a visible run of skipped jobs, and the same command with `false` switches them off in seconds,
     with no PR. The controller records the time and the first scheduled run id here (R22). Do not set
@@ -2931,3 +2947,310 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
     tests by name, never by pattern. Needs a positive control and a non-zero scanned count. W1d builds it because W1d
     adds scripts that spawn the matrix.
    — done in W1d T11 (`b6de52dba`, `b8700d19e`): the guard reads `child_process` call arguments, with a positive control, a non-zero scanned count (387 calls in 170 files), per-name floors and an importers oracle. Zero hits on the real tree. Stated gaps (package-name spawn, a variable-held path, `execa`, aliased and promisified spawners) are pinned as known gaps: see the "Limit" note under ruling 56.
+
+## W1d dispatches (Task 17, 2026-10-05)
+
+Tag `matrix-truth/w1d-baseline` = `47f210e3f2094405e4ed4c8b5c9ea6bd2a6085d9` (PR-A's merge). The tag push started no
+workflow. `vars.MATRIX_RUNNER` is unset at repo level; org-level variables are not readable with this token, so the
+guard run's log is the authority (it shows no self-hosted line). Dispatched one at a time, each after the previous
+run's `status` was `completed`. Every judge call used `--planned-not-run allow` (ruling 65).
+
+| # | run | scope | conclusion | jobs | wall (UTC) | L1 | L2 | L3 | `judge faults` |
+|---|---|---|---|---|---|---|---|---|---|
+| guard | 37341071590 | full, `inject_visibility=private` | failure at "Visibility guard" (expected) | plan failed; build, shards, merge skipped | 16:28–16:28 | — | — | — | — |
+| 1 | 37341165564 | full | success | 15 (0 cancelled) | 16:29–16:48 | 155 ✅ 23 ❌ 53 🚫 | 40 ✅ 22 ❌ 164 🚫 1505 ░ | 772 ✅ 165 ❌ | 0 / 0 / 0 |
+| 2 | 37343825825 | full | success | 15 (0 cancelled) | 16:49–17:07 | same as 1 | same as 1 | 773 ✅ 164 ❌ | 0 / 0 / 0 |
+| 3 | 37346206686 | full | success | 15 (0 cancelled) | 17:08–17:28 | same as 1 | same as 1 | 773 ✅ 164 ❌ | 0 / 0 / 0 |
+
+Case counts equal ruling 64's plan sizes (231, 1731, 937). Shards: L1 8, L2 2, L3 2.
+
+**Verdict (ruling 61, `judge across`):** L1 exit 0 (231 compared, 0 differing, 0 faults); L2 exit 0 (1731, 0, 0);
+L3 exit 1 (937 compared, 3 differing, 0 faults). The three differing cases, by run: football red/works/red, carrom
+red/works/works, generic works/red/works. Across all three runs `swiss_knockout` R4 is red in boardgame and hockey
+every time and works in the other six sports every time. Owner ruling 70 accepts harness-green with those three
+named exceptions.
+
+**Step 6 (false premise 17).** Nothing fires on a schedule yet: `vars.MATRIX_WEEKLY_ENABLED` is unset. Task 22 Step 3
+reads the first scheduled run's event payload.
+
+## W1d truth-run backlog (baseline `47f210e`)
+
+Generated by `pnpm matrix:backlog` from the committed baseline and the triage catalogue, and held to them by `tools/matrix/__tests__/w1d-backlog-index.test.ts`: the tables below are data and are never edited by hand. Each wave starts from the ❌ cases of its table and from the audit ids the baseline never drove. The ❌ list is a floor, not the whole backlog (design §8): an audit id in a not-exercised table is owed a scenario by its wave before the wave can call it closed.
+
+`(+N also)` in a cases cell: N further cases, keyed to another gap and counted once there, that also fail one of this gap's checks. The example cases are the first case of each layer the gap has, then the rest in plan order, up to five. `TRIAGE.md` lists every case and `AUDIT-LEDGER.md` the evidence of every id (both in `truth-runs/w1d-baseline/`).
+
+The baseline is the merged run of each layer (L1 `ci-37346206686-1-l1`: 231 cases, 23 ❌; L2 `ci-37346206686-1-l2`: 1,731 cases, 22 ❌; L3 `ci-37346206686-1-l3`: 937 cases, 164 ❌). The triage read 2,899 cases and keyed 209 ❌ to 12 gaps; the ledger holds 150 audit ids, 106 of them `not-exercised`.
+
+What the ❌ count leaves out, counted from the same three runs. ░ (planned, never driven): L2 1,505; ruling 65 keeps these as backlog, not as reds, and the count shrinks as the waves add scenario scripts. 🚫 (no organiser path): L1 53 and L2 164, 217 in all; each is routed to a wave by its own reason and counted in that wave's section. Held red by ruling 70 only inside `judge regression`: `swiss_knockout|carrom|club-29|R4` and `swiss_knockout|generic|score|R4` (2 cells, `works` in the committed L3); `judge regression` reads the L3 baseline only, so with them it holds 166 red cases, not the 164 of the committed L3.
+
+Regenerate (`$OUT` is any empty directory): run the triage command of `truth-runs/w1d-baseline/README.md`, "Reproduce", into `$OUT`, then
+
+    pnpm matrix:backlog --triage $OUT/triage.json --sha 47f210e --out $OUT/backlog.md
+
+A test runs both commands as printed and requires the result to equal this section.
+
+| wave | name | gaps | ❌ cases | audit ids | reproduced | exercised-not-reproduced | not-exercised | verified-by-read | verified-by-failing-test |
+|---|---|---|---|---|---|---|---|---|---|
+| W2 | sport scoring fidelity | 2 | 77 | 54 | 2 | 0 | 42 | 10 | 0 |
+| W3 | Swiss | 1 | 3 | 32 | 1 | 0 | 20 | 11 | 0 |
+| W4 | knockout family | 4 | 41 | 9 | 2 | 0 | 6 | 1 | 0 |
+| W5 | round-robin family | 2 | 17 | 19 | 1 | 0 | 13 | 5 | 0 |
+| W6 | double elimination | 0 | 0 | 4 | 0 | 0 | 1 | 3 | 0 |
+| W7 | americano, mexicano, ladder | 3 | 71 | 8 | 1 | 0 | 2 | 5 | 0 |
+| W8 | scorer sheets | 0 | 0 | 20 | 0 | 0 | 19 | 1 | 0 |
+| W9 | operational [O] | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| W10 | sweep | 0 | 0 | 4 | 0 | 0 | 3 | 1 | 0 |
+
+### W2 — sport scoring fidelity
+
+The ledger holds 54 audit ids for W2: 2 reproduced, 0 exercised-not-reproduced, 42 not-exercised, 10 verified-by-read, 0 verified-by-failing-test.
+
+🚫 21 planned cases have no organiser path and route to W2 by their own reason (L2 21); the baseline never drove them, so they are in no table below.
+
+| gap | title | cases | layers | examples |
+|---|---|---|---|---|
+| SC-O1 | A drawn knockout game is accepted as final. No tiebreak mechanism exists (no armageddon, rapid tiebreak or mini-match), the bracket seats… | 65 | L1, L2, L3 | `league_ko\|boardgame\|blitz\|LIFECYCLE@1280`, `league_ko\|boardgame\|blitz\|R4a@768`, `league_ko\|boardgame\|blitz\|LIFECYCLE`, `groups_ko\|boardgame\|blitz\|LIFECYCLE@1280`, `group_stepladder\|boardgame\|blitz\|LIFECYCLE@1280` |
+| SC-O2 | `supportsDraws` is a deny-list that misses `page_playoff` (a bracket kind) and `ladder`. A draw there passes the KO guard and stalls | 12 | L1, L3 | `group_playoffs\|generic\|score\|LIFECYCLE@1280`, `group_playoffs\|generic\|score\|LIFECYCLE`, `swiss_playoff\|generic\|score\|LIFECYCLE@1280`, `group_playoffs\|generic\|score\|M1`, `group_playoffs\|generic\|score\|R4` |
+
+Audit ids no baseline case drives (`not-exercised`, 42): each is owed a scenario before W2 can close it.
+
+| id | severity | title |
+|---|---|---|
+| FX-G23 | L | Overrides are limited to 4 sets sports (owner D2a). Squash/pickleball/padel-style and non-sets sports can't vary Bo per stage. |
+| SC-X3 | M | An abandoned knockout match is left stuck by owner ruling, with no first-class event to settle it by lot, higher seed or bowl-out. The only… |
+| SC-S1 | M | Set-summary validator accepts impossible games scores in a tie-break set: 8–6, 9–7 (TB at 6–6) and 5–3 in Fast4 (TB at 3–3). `wasLive`… |
+| SC-S2 | M | Bo1 with deciding set "Match tie-break to 10/7" (or "tie-break to 10") turns the whole single-set match into a match tie-break (the only set… |
+| SC-S4 | M | Retirement mid-match is recorded as `core.forfeit` with a free-text reason defaulting to "walkover"; the ledger keeps only the partial… |
+| SC-S5 | L | A match tie-break (App VI decider) contributes 0 games to games_won/games_lost; ITF convention counts it as one game (and one set) to the… |
+| SC-S6 | L | No double-forfeit / double-walkover: `CoreForfeit` takes one `by`; set-based and nested kernels throw on `no_result`/`draw`. A both-no-show… |
+| SC-S7 | L | Tennis emits no `points_lost` metric; a division whose custom cascade includes `point_ratio` (keys are validated globally, not per sport —… |
+| SC-S8 | L | Award metrics are untested: the only forfeit standings test asserts match points `[3,0]` and nothing about sets/points credited, so S3/S4… |
+| SC-S9 | L | A group stage overridden to best of 3 on a FIVB-points division (`{"3-2":[2,1],"*":[3,0]}`) pays 3–0 for a 2–1 win via `"*"`; the pointsMap… |
+| SC-P3 | M | No "repeat sudden-death OT periods until a goal" playoff mode. `overtime` is one sudden-death period or a fixed count, and a level OT with… |
+| SC-P4 | M | The shoot-out points split (`points.shootoutWin/Loss`) is editable for football only. Turning "Shoot-out on a draw" on for FIH hockey in the… |
+| SC-P5 | M | A shoot-out-decided match is always recorded won 1 / lost 1 in the table, and a draw-with-bonus is not configurable. The FIH test is titled… |
+| SC-P6 | L | The test "keeps regulation points in knockout but honours the group SO split" folds the knockout case with a cfg that has no split, so it… |
+| SC-P8 | L | Stage decider overlay keys from API v1 are `z.unknown()` and never validated against the sport schema at stage create. `extraTime` does… |
+| SC-P9 | L | Abandon under `abandonPolicy: "award"` with a level score gives `no_result`. The knockout guard checks only `kind === "draw"`, and… |
+| SC-P10 | L | A stage `PointsRule` (API only) re-derives points from won/drawn/lost only. It has no OT-loss or SO bonus kind, so ice hockey's 3-2-1-0… |
+| SC-P11 | L | No futsal preset: no accumulated fouls, 5-a-side default, or second-mark kicks. The closest is `small-sided` (7-a-side, 2×20). |
+| SC-P12 | L | "Result only" (band 0) still needs start, every goal, the HT/period markers and FT. There is no one-shot final-score entry. The period… |
+| SC-P13 | L | `supportsDraws` is false in `ladder`, `double_elim`, `stepladder` and `page_playoff`, so a level ladder challenge is refused unless a… |
+| SC-C3 | M | NRR for a DLS or revised-overs result does not follow ICC: Team 1 is not credited with (target − 1) runs off Team 2's revised overs, or with… |
+| SC-C4 | M | Coarse innings summary: no upper bound on runs and no chase-overshoot check. A chase summary can pass the target by any amount, and the… |
+| SC-C5 | M | No test covers NRR operands for DLS or revised-overs matches, or refusal of a knockout tie or no_result |
+| SC-C6 | L | Coarse `boundaries` is accepted by the schema, but no pad path produces it: neither the over sheet nor the "Innings total" action has the… |
+| SC-C7 | L | The "Overs per innings" editor writes `ballsPerInnings = overs × 6` whatever `ballsPerOver` is, and the NRR display hardcodes 6 balls per… |
+| SC-C8 | L | A super over is band 3 only. A result-only (band 0) scorer whose knockout ties must switch the recording band before a super-over tile… |
+| SC-O3 | M | In a KO stage with `allowDraws` on, the pad offers Draw / a level settle (cfg-only), and the server refuses with shootout/extra-time advice… |
+| SC-O4 | M | Under `tieBoard:"draw"` (division-wide), a level KO match cannot be finished. The last board's append is refused, there is no stage-level… |
+| SC-O6 | M | There is no result-only (band 0) entry at game or match level: band 0 is the per-board summary. Paper results must be re-keyed board by… |
+| SC-O8 | L | No per-stage format override ("final is best of 5"). Per-stage rules are sets-sports only |
+| SC-O9 | L | `carrom.game.adjust` has no upper bound on `delta`, so an adjustment can put a game score far past `gameTo` |
+| SC-O10 | L | Result method and winner are not cross-checked (a decisive "stalemate", or a drawn "checkmate"). Only the pad's two action lists keep them… |
+| SC-O11 | L | The 500 score cap is pad-only; the engine accepts any non-negative int |
+| SC-O12 | L | Team chess (board points such as 2½–1½, match points) is unsupported: entrant kinds are individual only |
+| ST-G8 | M | A stage PointsRule (bonus points, forfeit points, awarded walkover score, no-result bonus) has no UI. It is reachable only via API/templates… |
+| ST-G9 | M | `applyPointsRule` forces `no_result` to 0 (bonus aside). A cricket tie has `drawn:0` (`ties` metric only), so under any rule it scores 0 and… |
+| ST-G10 | M | The cascade is division-level only (no per-stage). It has no editor UI (console shows it read-only, `o/.../page.tsx:899`). `validateCascade`… |
+| ST-G11 | L | UEFA recursive h2h is unreachable: web never sets `h2hRecursive` (`toTableStage` omits it). `h2h_scope:"overall"` is API-only and its wiring… |
+| ST-G16 | M | OT/SO wins and losses fold into W/L with different points. There is no OTW/OTL (or SOW/SOL) column. |
+| ST-G29 | L | `game_ratio` decides ties but has no derived column (`DERIVED_METRICS` omits it). The set-ratio header is the bare word "Ratio". |
+| ST-G31 | M | Default cascades diverge from federation rules: BWF uses matches won, then h2h for 2-way ties and game/point difference for 3+; ITTF uses… |
+| ST-G32 | M | No table-ORDER test for tennis `game_ratio`, table tennis, or cricket NRR folded from real deltas. Cricket NR points and football abandon… |
+
+- **SC-P4 and the prompt's trap 2 contradict each other (false premise 20)** — `W2-scoring-fidelity.md` trap 2 names SC-P4 as the model of a collectable field that loses to the engine: "the declared 3/0 loses to the FIH 2/1 the rulebook adopts (§7.1), so the case is ❌ until fixed". Two other sources say otherwise. The SC-P4 entry of "False premises found" in this file: "FIH 2/1 shoot-out split" is the FIH Pro League rule only; FIH tournament regulations use 3/1/0 with draws standing and no pool shoot-outs, which the product already does by default, and the gap narrows to "no points fields when shoot-outs are switched on". And design §8's row for this wave: "FIH 2/1 is Pro League only". The goals-and-boards rulebook's RB2B-7 recommends seeding 2/1 when shoot-outs are on for a table stage, but that rulebook says "None is a ruling", and no entry of this file's "Owner rulings" signs it. The baseline cannot settle it: the ledger reads SC-P4 `not-exercised`: Shoot-out points split editable for football only: a match-rules editor limit; no scenario edits a division's match rules through the editor (D6/D7 change a stage's shape or rules). The planner of this wave resolves which oracle the SC-P4 case takes, with the rulebook's sign-off, before the case is written; a case written from the trap alone asserts a split the other two sources call a Pro League rule. This is false premise 20 of the W1d plan, and not W1d's to fix.
+- **swiss_playoff R4 cells the committed run keys to this wave** — The committed run keys these swiss_playoff R4 cells to this wave: SC-O1 (`swiss_playoff|boardgame|blitz|R4`) and SC-O2 (`swiss_playoff|generic|score|R4`). Their reason is not stable: it flips between the stall and SW-H1 across the dispatches (the W3 carry "The swiss_playoff R4 reason flip: red in all three dispatches, two reasons" lists the reason per dispatch). Read them there before counting a move in SC-O1 and SC-O2 as progress or as a regression: a drop here that comes with a matching rise under SW-H1 is the reason flipping, not a fix.
+
+### W3 — Swiss
+
+The ledger holds 32 audit ids for W3: 1 reproduced, 0 exercised-not-reproduced, 20 not-exercised, 11 verified-by-read, 0 verified-by-failing-test.
+
+No 🚫 case routes to W3 by its own reason.
+
+| gap | title | cases | layers | examples |
+|---|---|---|---|---|
+| SW-H1 | Pairing can dead-end, and Pair next then reports success. | 3 | L3 | `swiss_playoff\|hockey\|fih-outdoor\|R4`, `swiss_knockout\|football\|11-a-side\|R4`, `swiss_knockout\|hockey\|fih-outdoor\|R4` |
+
+Audit ids no baseline case drives (`not-exercised`, 20): each is owed a scenario before W3 can close it.
+
+| id | severity | title |
+|---|---|---|
+| FX-G13 | M | Rebuild deletes in one committed transaction, then regenerates in another. If regeneration throws (custom `byes` count now wrong,… |
+| ST-G21 | M | Columns are hand-picked: no sport metrics, NRR, set ratio or Buchholz (only Pts ratio since #884). D is always shown. Rows cut at 10 with no… |
+| SW-M2 | Med | Undo of "Pair next round" does nothing |
+| SW-M3 | Med | An ad-hoc match gives everyone else a phantom bye |
+| SW-M4 | Med | Ad-hoc fixtures break the shell model in other ways. |
+| SW-M5 | Med | Unpair can clear an ad-hoc fixture |
+| SW-M7 | Med | A bye never freezes `config_snapshot` |
+| SW-M9 | Med | No double walkover. |
+| SW-M11 | Med | Pairing groups ignore the table's points. |
+| SW-M12 | Med | The roster-drift panel's Rebuild wipes the Swiss schedule |
+| SW-M13 | Med | A bye shell can be scheduled onto a court. |
+| SW-L1 | Low | A two-sided walkover or forfeit enters Buchholz and SB as a played game against the real opponent. FIDE C.07 (2023) treats it as unplayed,… |
+| SW-L2 | Low | The virtual-opponent formula assumes half-point scoring (`+1 per remaining round`). It is mis-scaled for any non-boardgame points rule that… |
+| SW-L6 | Low | An unseeded round 1 folds by registration order (`order by seed nulls last, created_at`). There is no random-draw option. |
+| SW-L7 | Low | No late entry after Start: enrolment is locked on `active`. |
+| SW-L8 | Low | Surplus boards are deleted from the highest `seq_in_round` down, so a board with a pinned time can be removed while an unscheduled one… |
+| SW-L9 | Low (test) | The engine property test "no rematch ever" passes on an empty round. No test asserts every round is fully paired, and none covers a greedy… |
+| SW-L10 | Low (test) | No browser e2e drives a Swiss to completion and into its knockout cut. Swiss specs cover shells, legend, round-1 pick and pre-Start field… |
+| SW-L11 | Low | Public surfaces have no Swiss-specific state (no "Round X of N", no "pairings announced after round N-1"). Nothing in `server/public-site`… |
+| SW-L12 | Low | No pairing preview or manual board swap for rounds 2+. Only round 1 has a hint (`roundOnePairs`). |
+
+- **Owner ruling 70: three cells held red, and the re-baseline that retires the hold** — Across the three dispatches the cells `swiss_knockout|football|11-a-side|R4`, `swiss_knockout|carrom|club-29|R4` and `swiss_knockout|generic|score|R4` flipped between works and red. Every red reads "round 5 paired nobody (SW-H1)", and the cause is the product's `lots` tiebreak (a UUID-hashed draw, by design) exposing P6 (SW-H1: an empty Swiss round reported as success). Ruling 70 (2026-10-05) records the three RED, cause P6, whatever the baseline run showed: the `ruling70` block of `catalogue/baseline.json`, applied by `judge regression`. **The SW-H1 fix must remove that block and `RULING_70_IDS` (`lib/pr-sample.ts`) and re-baseline L3 in the same change** (`W3-swiss.md`, "Output and handoff"). The guards that notice a stale block fire at the re-baseline, not when the fix merges, so a fix merged alone leaves the override live, where it can hide a regression on those three cells only. In this baseline SW-H1 is keyed on 3 cases of the committed run (`swiss_playoff|hockey|fih-outdoor|R4`, `swiss_knockout|football|11-a-side|R4` and `swiss_knockout|hockey|fih-outdoor|R4`), of which `swiss_knockout|football|11-a-side|R4` is one of the ruling's cells. The ruling's other 2 cells (`swiss_knockout|carrom|club-29|R4` and `swiss_knockout|generic|score|R4`) are `works` in the committed run: the triage counts none of them, and only `judge regression` holds them red until the re-baseline.
+- **Recommendation (the controller's, not an owner ruling): move P6 up** — Within this wave, take SW-H1 (P6) early: a real Swiss-into-knockout after a withdrawal can strand on an empty round 5 that says it succeeded. This is the controller's recommendation, as owner ruling 70's entry words it; the owner has not ruled on it.
+- **The swiss_playoff R4 reason flip: red in all three dispatches, two reasons** — `swiss_playoff|boardgame|blitz|R4` and `swiss_playoff|generic|score|R4` are red in all three dispatches with the same failing checks, but the reason flips: dispatch 1 SW-H1, dispatch 2 stall, dispatch 3 stall. SW-H1 is `round 5 paired nobody (SW-H1)`; stall is `stage 2: did not complete`, the drawn-game stall. The triage separates the two by reason, so the committed run (dispatch 3) keys them to SC-O1 (`swiss_playoff|boardgame|blitz|R4`) and SC-O2 (`swiss_playoff|generic|score|R4`). The SW-H1 fix does not turn these cells green: the stall reason stays with the gap that owns it, and a re-baseline that reads the SW-H1 reason on them again moves them back to SW-H1.
+
+### W4 — knockout family
+
+The ledger holds 9 audit ids for W4: 2 reproduced, 0 exercised-not-reproduced, 6 not-exercised, 1 verified-by-read, 0 verified-by-failing-test.
+
+🚫 100 planned cases have no organiser path and route to W4 by their own reason (L1 33 and L2 67, 100 in all); the baseline never drove them, so they are in no table below.
+
+| gap | title | cases | layers | examples |
+|---|---|---|---|---|
+| FX-G14 | The plate draws `roundLosers(round 1, count q)`, but a seed proposal requires the source stage COMPLETE, so the plate cannot start until the… | 11 | L2, L3 | `ko_plate\|hockey\|fih-outdoor\|F1@320`, `ko_plate\|football\|11-a-side\|F1`, `ko_plate\|cricket\|t20\|F1`, `ko_plate\|carrom\|club-29\|F1`, `ko_plate\|generic\|score\|F1` |
+| FX-G7 | Withdrawal puts page_playoff in the "open formats: remaining games void" branch, not walkover (`BRACKET_WALKOVER_KINDS` excludes it). The… | 12 | L2, L3 | `page_playoff_only\|football\|11-a-side\|R4a@360`, `page_playoff_only\|football\|11-a-side\|R4`, `page_playoff_only\|cricket\|t20\|R4`, `page_playoff_only\|boardgame\|blitz\|R4`, `page_playoff_only\|carrom\|club-29\|R4` |
+| NEW-W1d-3 | stepladder: withdrawing an entrant is refused 422 WRONG_PHASE (every game after the first has a TBD side) | 12 | L2, L3 | `stepladder_only\|football\|11-a-side\|R4a@375`, `stepladder_only\|football\|11-a-side\|R4`, `stepladder_only\|cricket\|t20\|R4`, `stepladder_only\|boardgame\|blitz\|R4`, `stepladder_only\|carrom\|club-29\|R4` |
+| NEW-W1d-4 | no division-builder control builds knockout_third_place, page_playoff_only or stepladder_only | 6 (+2 also) | L2 | `knockout_third_place\|football\|11-a-side\|R4a@320`, `knockout_third_place\|football\|11-a-side\|M1@360`, `page_playoff_only\|football\|11-a-side\|M1@375`, `stepladder_only\|football\|11-a-side\|M1@390`, `knockout_third_place\|football\|11-a-side\|F1@360` |
+
+Audit ids no baseline case drives (`not-exercised`, 6): each is owed a scenario before W4 can close it.
+
+| id | severity | title |
+|---|---|---|
+| FX-G16 | L | Correcting a result in a completed source stage stales only `draft` seed proposals. A CONFIRMED proposal, or an `on_complete`… |
+| FX-G17 | L | Unseeded entrants are ordered by `created_at`, so the first registrants get seed 1, byes and pool heads. There is no random-draw option… |
+| FX-G18 | L | A void un-fill (#856) and the dead-feeder cascade are both same-stage only, so cross-stage (`cross_feeds`) seats keep the old name. |
+| ST-G7 | M | A completed bracket writes an all-zero `placementTable` snapshot. The division page and hub skip bracket kinds; the embed does not.… |
+| ST-G18 | L | `bracketRanks` gives losers of the same round distinct ranks by seed, then UUID. Without a 3rd-place match, the SF losers become "3" and "4"… |
+| ST-G26 | L | Picks `standings[0]` from an unordered query (any pool, or a KO placement). P/Pts stay English (asserted intentional). `revalidate=300`. |
+
+- **NEW-W1d-3 (W4): a design row backs the wave.** Section 8's row for W4 (knockout family) names `stepladder` for `stepladder_only`.
+- **NEW-W1d-4 (W4): a design row backs the wave.** Section 8's row for W4 (knockout family) names `third place` for `knockout_third_place`; names `page_playoff` for `page_playoff_only`; names `stepladder` for `stepladder_only`.
+
+### W5 — round-robin family
+
+The ledger holds 19 audit ids for W5: 1 reproduced, 0 exercised-not-reproduced, 13 not-exercised, 5 verified-by-read, 0 verified-by-failing-test.
+
+🚫 33 planned cases have no organiser path and route to W5 by their own reason (L1 20 and L2 13, 33 in all); the baseline never drove them, so they are in no table below.
+
+| gap | title | cases | layers | examples |
+|---|---|---|---|---|
+| NEW-W1d-5 | no division-builder control builds group_only or group_group_ko | 5 (+1 also) | L2 | `group_only\|football\|11-a-side\|R4a@768`, `group_group_ko\|football\|11-a-side\|R4a@834`, `group_only\|football\|11-a-side\|M1@834`, `group_group_ko\|football\|11-a-side\|M1@320`, `group_only\|football\|11-a-side\|F1@834` |
+| ST-G5 | A pool's membership is "entrants with a result or award in this pool". A seated member who has not played yet is missing from its pool… | 12 | L2, L3 | `group_group_ko\|football\|11-a-side\|F1@320`, `group_group_ko\|football\|11-a-side\|F1`, `group_group_ko\|cricket\|t20\|F1`, `group_group_ko\|boardgame\|blitz\|F1`, `group_group_ko\|carrom\|club-29\|F1` |
+
+Audit ids no baseline case drives (`not-exercised`, 13): each is owed a scenario before W5 can close it.
+
+| id | severity | title |
+|---|---|---|
+| FX-G5 | M | With the wave-major `rank_order` fold, 3 pools top-2 (q=6 or 8) pairs C1 v C2 in round 1, and 5 pools top-3 pairs A2 v A3. Tests cover only… |
+| FX-G15 | M | Add match (the documented safe workaround for G1) puts each ad-hoc match in round `max+1` unless a round is passed. |
+| FX-G19 | L | Board cards for group fixtures read `R{n}` with no pool, because `BoardFixture` carries no `pool_id`. |
+| ST-G4 | M | The cross-pool (bestNth) comparison always uses `points,diff,for,wins`. Cricket NRR, set/point ratio, h2h and lots are ignored. Sports… |
+| ST-G6 | M | Standings are read with `pool_id is null` only. A pooled division gets no standings section. |
+| ST-G12 | M | The h2h mini-table is built from whatever matches the tied group has played so far, with no "all h2h matches played" guard. It is untested… |
+| ST-G13 | M | When the cascade ends without `lots`, residual ties are ordered by seed, then entrant UUID, and the popover explains it as "seeding".… |
+| ST-G14 | M | `overrideStandings` rejects a duplicate rank across the WHOLE body, so rank 1 cannot be pinned in two pools. Each call replaces all prior… |
+| ST-G15 | M | An expunge (<50% played) skips `finalized` fixtures, so the withdrawn entrant's finalized results still count while its other results are… |
+| ST-G20 | M | Hub tables have no withdrawn/disqualified chip. `buildTableView` takes no statuses. The wiring test scans only `<StandingsTable` call sites. |
+| ST-G23 | M | Neither standings endpoint declares a response. `StandingsRowOut` (`schemas.ts:1524`) is unused and wrong (rank required; W/D/L, metrics,… |
+| ST-G24 | M | Only one snapshot is exported (`limit 1`), so a pooled stage exports one pool and a later knockout replaces the league table. Headers are… |
+| ST-G28 | L | The private GET without `pool_id` on a pooled stage returns `rows: []`, and there is no pool listing endpoint. Public rows reference… |
+
+- **NEW-W1d-5 (W5): a design row backs the wave.** Section 8's row for W5 (round-robin family) names `group` for `group_only`; does not name `group_group_ko`, which reaches W5 by section 8's clause that a gap not listed goes to the wave owning its format (the row lists `group`).
+- **ST-G5 pool of one: a product decision, owned here** — ST-G5's 12 cases are the same F1 field on 11 sports: 7 entrants snaked into 4 pools leave pool A holding seed 1 alone, with no fixture and so no member. Its table is empty, seed 1 stands in no pool, and stage 1's `/complete` answers 409 `STAGE_COMPLETED_SEEDING_FAILED` (the triage rule's note). Whether to refuse such a field with a named reason, or to change what makes an entrant a member of a pool, is a product decision: not W1d's and not a harness question, so it belongs to this gap's wave. This file records no owner ruling on it.
+
+### W6 — double elimination
+
+The ledger holds 4 audit ids for W6: 0 reproduced, 0 exercised-not-reproduced, 1 not-exercised, 3 verified-by-read, 0 verified-by-failing-test.
+
+No 🚫 case routes to W6 by its own reason.
+
+No ❌ case of the baseline is keyed to W6.
+
+Audit ids no baseline case drives (`not-exercised`, 1): each is owed a scenario before W6 can close it.
+
+| id | severity | title |
+|---|---|---|
+| ST-G33 | L | Double-elim ranks are tested with 2 entrants only (`placement-snapshots.test.ts:322`). Pooled rank locks are untested. No test feeds a void… |
+
+### W7 — americano, mexicano, ladder
+
+The ledger holds 8 audit ids for W7: 1 reproduced, 0 exercised-not-reproduced, 2 not-exercised, 5 verified-by-read, 0 verified-by-failing-test.
+
+No 🚫 case routes to W7 by its own reason.
+
+| gap | title | cases | layers | examples |
+|---|---|---|---|---|
+| FX-G11 | The next round is generated only when EVERY stage fixture is `decided`. A `finalized` (core.finalize), `forfeited` or `abandoned` fixture… | 12 | L2, L3 | `mexicano\|football\|11-a-side\|M1@430`, `mexicano\|football\|11-a-side\|M1`, `mexicano\|cricket\|t20\|M1`, `mexicano\|boardgame\|blitz\|M1`, `mexicano\|carrom\|club-29\|M1` |
+| NEW-W1d-1 | mexicano counts the pair entrants it made as players: round 2+ pairs a pair entrant with itself (500) or seats one person twice | 47 | L1, L2, L3 | `mexicano\|football\|11-a-side\|LIFECYCLE@1280`, `mexicano\|football\|11-a-side\|R4a@390`, `mexicano\|football\|11-a-side\|LIFECYCLE`, `mexicano\|cricket\|t20\|LIFECYCLE@1280`, `mexicano\|boardgame\|blitz\|LIFECYCLE@1280` |
+| NEW-W1d-2 | americano: R4 withdraws a player and the product does nothing with the pending games, the person is seated again | 12 | L2, L3 | `americano\|football\|11-a-side\|R4a@375`, `americano\|football\|11-a-side\|R4`, `americano\|cricket\|t20\|R4`, `americano\|boardgame\|blitz\|R4`, `americano\|carrom\|club-29\|R4` |
+
+Audit ids no baseline case drives (`not-exercised`, 2): each is owed a scenario before W7 can close it.
+
+| id | severity | title |
+|---|---|---|
+| FX-G12 | M | Keys are positional `am-r{r}-c{c}`. A roster change regenerates a different rotation, but no key is new, so nothing is inserted. The stage… |
+| ST-G19 | L | There is no public ladder view while it runs (no snapshot until completion). On completion, the `placementTable` zero rows render as a… |
+
+- **NEW-W1d-1 (W7): a design row backs the wave.** Section 8's row for W7 (americano, mexicano, ladder) names `mexicano` for `mexicano`.
+- **NEW-W1d-2 (W7): a design row backs the wave.** Section 8's row for W7 (americano, mexicano, ladder) names `americano` for `americano`.
+- **Mexicano R4: an intermittent 500 in generation** — In 9 of the 11 `mexicano|<sport>|R4` cells the failing-check set flips across the three dispatches while the state stays red in all three (`dispatch-cuts.json` holds the 9 cells as each dispatch recorded them). A cell's failing set shows the re-seat (`I10-americano-seats-each-person-once`, a person seated twice in a round, with `r4-not-seated-later`), the 500 (`generate` answering 500 INTERNAL: `I4-nothing-ends-stuck`, `I8-generate-named`, `life-loop-bounded`), or both together, and which it shows moves between dispatches. The 500 shows in 5, 5 and 6 of those 9 cells, in dispatches 1, 2 and 3 respectively. The other 2 cells (cricket and generic) keep one shape. So the product's mexicano `generate` answers 500 INTERNAL on some runs of the same plan and a different failure on others: an intermittent 500. The triage keys every shape to NEW-W1d-1, so no red is lost, but the state alone cannot tell the shapes apart, and a fix is proven by all of them going quiet over several dispatches, not by one green run.
+
+### W8 — scorer sheets
+
+The ledger holds 20 audit ids for W8: 0 reproduced, 0 exercised-not-reproduced, 19 not-exercised, 1 verified-by-read, 0 verified-by-failing-test.
+
+No 🚫 case routes to W8 by its own reason.
+
+No ❌ case of the baseline is keyed to W8.
+
+Audit ids no baseline case drives (`not-exercised`, 19): each is owed a scenario before W8 can close it.
+
+| id | severity | title |
+|---|---|---|
+| SH-G2 | M | Printed links never re-check the entitlement. |
+| SH-G3 | M | No bulk revoke. |
+| SH-G4 | M | Unscheduled fixtures cannot print. |
+| SH-G5 | M | Non-Latin names have no glyphs |
+| SH-G6 | M | No paper fallback and no format on the card: |
+| SH-G7 | M | No real sport is exercised from a sheet. |
+| SH-G8 | M | Groups, double-elim and playoff sheets are untested |
+| SH-G9 | M | A whole-competition print is one long transaction. |
+| SH-G10 | L | A cut-out card carries no court |
+| SH-G11 | L | The scan screen names the court differently from the sheet. |
+| SH-G12 | L | No reprint prompt after a reschedule. |
+| SH-G13 | L | Analytics and filename are wrong for range/division prints. |
+| SH-G14 | L | `dateFrom > dateTo` is not validated. |
+| SH-G15 | L | Division sheet order is by division name, not the board's division order. |
+| SH-G16 | L | An unpaired Swiss bye shell is not excluded. |
+| SH-G17 | L | A double-elim grand-final reset (`conditional`) prints like any match |
+| SH-G18 | L | Cards for future Swiss rounds can die. |
+| SH-G19 | L | A withdrawn entrant's match still prints |
+| SH-G20 | L | The scan-side lineup catalog reads the division config, not the stage overlay |
+
+### W9 — operational [O]
+
+No audit id routes to W9.
+
+🚫 63 planned cases have no organiser path and route to W9 by their own reason (L2 63); the baseline never drove them, so they are in no table below.
+
+No ❌ case of the baseline is keyed to W9.
+
+None of W9's audit ids is `not-exercised`.
+
+### W10 — sweep
+
+The ledger holds 4 audit ids for W10: 0 reproduced, 0 exercised-not-reproduced, 3 not-exercised, 1 verified-by-read, 0 verified-by-failing-test.
+
+No 🚫 case routes to W10 by its own reason.
+
+No ❌ case of the baseline is keyed to W10.
+
+Audit ids no baseline case drives (`not-exercised`, 3): each is owed a scenario before W10 can close it.
+
+| id | severity | title |
+|---|---|---|
+| ST-G22 | M | Names come from raw `entrants.display_name`, bypassing the consent/youth masking public surfaces apply. |
+| ST-G25 | L | The read-standings guide uses `r.entrant_name`, which does not exist (rows carry `entrantId`), and never mentions pools. |
+| ST-G27 | L | The standings email block has no production caller and hardcodes English P/W/L/Pts with no D. |

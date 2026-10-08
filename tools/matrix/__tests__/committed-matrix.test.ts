@@ -74,6 +74,8 @@ const EVIDENCE_DIRS = [
   "w1c-walkthrough-a", "w1c-http-slice", "w1c-l1", "w1c-l2", "w1c-api-only", "w1c-sweep-ko", "w1c-padproof",
   // W1d Task 14 (PF-2): the top-level directory only; the three set runs live beneath it.
   "w1d-carry",
+  // W1d Task 21 (PF-2): the baseline's top-level directory; its L1, L2 and L3 runs live beneath it.
+  "w1d-baseline",
 ];
 /** The files at W1c Task 14's close: a sweep that reads fewer lost some (review R-m7 — `checked === files.length` alone is a tautology). */
 const EVIDENCE_FLOOR = 100;
@@ -92,6 +94,11 @@ const runDirOf = (f: string): string => f.slice(TRUTH_RUNS.length + 1).split("/"
 function uncitedPictures(pictures: readonly string[], markdownOf: (dir: string) => readonly string[]): string[] {
   return pictures.filter((p) => !markdownOf(runDirOf(p)).some((md) => md.includes(p.split("/").at(-1)!)));
 }
+
+/** The strings of one committed file that the secret sweep judges: every raw JSON string value, every line of Markdown and of a catalogue
+ *  generator (.py, W1d Task 19). null for an extension it cannot read — a refusal the sweep turns into a red, never a skip. */
+const sweepItems = (f: string, text: string): string[] | null =>
+  f.endsWith(".json") ? stringsIn(JSON.parse(text)) : f.endsWith(".md") || f.endsWith(".py") ? text.split("\n") : null;
 
 describe("committed evidence and catalogue, every file (FB-1, F-3)", () => {
   const tracked = trackedUnder(TRUTH_RUNS);
@@ -159,24 +166,54 @@ describe("committed evidence and catalogue, every file (FB-1, F-3)", () => {
     expect(checked, "files read").toBe(all.length);
     expect(checked).toBeGreaterThanOrEqual(EVIDENCE_FLOOR + CATALOGUE_FLOOR);
   });
-  it("holds no secret-shaped string: every raw JSON string value, every Markdown line (R14a)", () => {
+  it("the sweep's reader has teeth on every extension it accepts: a secret-shaped line in a .py, a .md or a .json is found, and an extension it cannot read is refused (W1d T21 review M5)", () => {
+    // Built in two pieces: this file must not itself hold a secret-shaped literal (the sweep reads it too).
+    const secret = `${"sk"}_live_${"ABCDEFGH12345678abcdef"}`;
+    const probes: [string, string][] = [
+      ["generator.py", `import os\nTOKEN = "${secret}"\n`],
+      ["notes.md", `a line\n${secret}\n`],
+      ["run.json", JSON.stringify({ a: ["fine", secret] })],
+    ];
+    let seen = 0;
+    for (const [f, text] of probes) {
+      const items = sweepItems(f, text);
+      expect(items, `${f} is read`).not.toBeNull();
+      expect(items!.flatMap((s) => findSecrets(s)).length, `${f}: the secret in it is found`).toBeGreaterThan(0);
+      seen++;
+    }
+    expect(seen).toBe(probes.length);
+    // The positive pair: the same files without the secret read clean, so the finding above is the secret's.
+    for (const [f] of probes) expect(sweepItems(f, f.endsWith(".json") ? "{}" : "nothing\n")!.flatMap((s) => findSecrets(s)), f).toEqual([]);
+    expect(sweepItems("shot.bin", "x"), "an extension the sweep cannot read is refused, not skipped").toBeNull();
+  });
+  it("holds no secret-shaped string: every raw JSON string value, every Markdown and Python line (R14a)", () => {
     let files = 0;
     let strings = 0;
+    const byExt = new Map<string, number>();
     const hits: string[] = [];
     for (const f of all) {
       const text = readFileSync(resolve(REPO, f), "utf8");
       // Raw values, never the JSON body: escaping erases the \b a secret
       // pattern needs (redact.ts header, review I1).
-      const items = f.endsWith(".json") ? stringsIn(JSON.parse(text)) : f.endsWith(".md") ? text.split("\n") : null;
+      const items = sweepItems(f, text);
       expect(items, `${f}: a committed file this sweep cannot read`).not.toBeNull();
       for (const s of items ?? []) for (const h of findSecrets(s)) hits.push(`${f}: ${h.slice(0, 12)}…`);
       strings += items?.length ?? 0;
+      const ext = f.slice(f.lastIndexOf("."));
+      byExt.set(ext, (byExt.get(ext) ?? 0) + (items?.length ?? 0));
       files++;
     }
     expect(hits).toEqual([]);
     expect(files).toBe(all.length);
     expect(files).toBeGreaterThanOrEqual(EVIDENCE_FLOOR + CATALOGUE_FLOOR);
     expect(strings, "strings scanned").toBeGreaterThan(files);
+    // Every line of every committed generator went through the scan: the count is the files' own, never the reader's (T21 review M5:
+    // a `.py` branch that returned [] kept every other assertion here green).
+    const pyFiles = all.filter((f) => f.endsWith(".py"));
+    const pyLines = pyFiles.reduce((n, f) => n + readFileSync(resolve(REPO, f), "utf8").split("\n").length, 0);
+    expect(pyFiles.length, "the catalogue's generators").toBeGreaterThanOrEqual(7);
+    expect(byExt.get(".py") ?? 0, ".py lines scanned").toBe(pyLines);
+    expect(pyLines).toBeGreaterThan(0);
   });
 });
 
@@ -233,9 +270,11 @@ describe("every committed results.json is what decideState makes of its checks (
 // stored as ░/🚫 with its checks lost (class 6: absent = suppressed) is caught,
 // where a state-only skip and a `skipped >=` floor both waved it through.
 
-/** The results.json files committed at W1c Task 14's close (fix round 1), plus the three W1d Task 14 set runs
- *  (w1d-carry/match-day, void-proof, carry8-1280): a sweep that judges fewer lost some. */
-const RESULTS_FLOOR = 36;
+/** The results.json files committed today: 141, counted from `git ls-files` under truth-runs (and equal to the plans.lock.json entries,
+ *  which the sweep below holds to the committed runs). It was 36 at W1c Task 14's close and 39 beside the first W1d runs, while 138 were
+ *  tracked: a floor 100 below the count catches nothing. W1d T21 review M6 set it to the count; an evidence PR that adds runs raises it by
+ *  the runs it adds, as every one has. */
+const RESULTS_FLOOR = 141;
 
 describe("each committed run, judged against its own plan (W1c Task 14 fix round 1, review I-1)", () => {
   it("a run is judged against the plan it recorded or is named with — never both, never neither", () => {

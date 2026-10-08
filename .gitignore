@@ -35,6 +35,10 @@ out/
 # production
 build/
 
+# python bytecode (tools/matrix/catalogue/scripts are run by hand and by catalogue-scripts.test.ts)
+__pycache__/
+*.pyc
+
 # misc
 .DS_Store
 *.pem

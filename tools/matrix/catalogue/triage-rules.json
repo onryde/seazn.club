@@ -1,0 +1,698 @@
+{
+  "rules": [
+    {
+      "id": "bg-draw-stall-double-elim",
+      "match": {
+        "cell": "double_elim|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-group-group-ko",
+      "match": {
+        "cell": "group_group_ko|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-group-playoffs",
+      "match": {
+        "cell": "group_playoffs|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-group-stepladder",
+      "match": {
+        "cell": "group_stepladder|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-groups-ko",
+      "match": {
+        "cell": "groups_ko|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-knockout",
+      "match": {
+        "cell": "knockout|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-knockout-third-place",
+      "match": {
+        "cell": "knockout_third_place|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-ko-plate",
+      "match": {
+        "cell": "ko_plate|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-league-ko",
+      "match": {
+        "cell": "league_ko|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-qualifying-main",
+      "match": {
+        "cell": "qualifying_main|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-stepladder-only",
+      "match": {
+        "cell": "stepladder_only|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded",
+          "m1-walkover-recorded",
+          "m1-winner-progresses"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-swiss-knockout",
+      "match": {
+        "cell": "swiss_knockout|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-swiss-playoff",
+      "match": {
+        "cell": "swiss_playoff|boardgame",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'."
+    },
+    {
+      "id": "bg-draw-stall-page-playoff-only-lifecycle",
+      "match": {
+        "cell": "page_playoff_only|boardgame",
+        "scenario": "LIFECYCLE",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'. page_playoff_only R4 is another defect (FX-G7), so the rule names the scenarios."
+    },
+    {
+      "id": "bg-draw-stall-page-playoff-only-m1",
+      "match": {
+        "cell": "page_playoff_only|boardgame",
+        "scenario": "M1",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame's supportsDraws is true on every bracket kind, so a drawn bracket game is accepted and the next round is never seated: the stage never completes. The stall shape: I4 'did not complete ... and named no reason'. page_playoff_only R4 is another defect (FX-G7), so the rule names the scenarios."
+    },
+    {
+      "id": "bg-draw-final-league-ko",
+      "match": {
+        "cell": "league_ko|boardgame",
+        "reason": "ended draw",
+        "failing": [
+          "I2-bracket-one-champion-ranks-permutation"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame: The stage completed over a drawn final: I2 fails, I4 and the loop pass. 'bracket fixture ended draw'."
+    },
+    {
+      "id": "bg-draw-final-groups-ko",
+      "match": {
+        "cell": "groups_ko|boardgame",
+        "reason": "ended draw",
+        "failing": [
+          "I2-bracket-one-champion-ranks-permutation",
+          "ui-champion-shown"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame: The stage completed over a drawn final: I2 fails, I4 and the loop pass. 'bracket fixture ended draw'."
+    },
+    {
+      "id": "bg-draw-final-swiss-knockout",
+      "match": {
+        "cell": "swiss_knockout|boardgame",
+        "reason": "ended draw",
+        "failing": [
+          "I2-bracket-one-champion-ranks-permutation"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame: The stage completed over a drawn final: I2 fails, I4 and the loop pass. 'bracket fixture ended draw'."
+    },
+    {
+      "id": "bg-draw-final-group-stepladder",
+      "match": {
+        "cell": "group_stepladder|boardgame",
+        "reason": "carries a terminal final key",
+        "failing": [
+          "I2-bracket-one-champion-ranks-permutation"
+        ]
+      },
+      "gap": "SC-O1",
+      "wave": "W2",
+      "was": "P1",
+      "note": "boardgame: The stage completed over a drawn final: I2 fails, I4 and the loop pass. 'no decided fixture carries a terminal final key (sl-g2)': the drawn game is the final."
+    },
+    {
+      "id": "gn-draw-stall-group-playoffs",
+      "match": {
+        "cell": "group_playoffs|generic",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O2",
+      "wave": "W2",
+      "was": "P1",
+      "note": "generic's supportsDraws is a deny-list that omits page_playoff (generic.ts:650-653), so a drawn page-playoff game is accepted and the final is never seated. The stall shape."
+    },
+    {
+      "id": "gn-draw-stall-swiss-playoff",
+      "match": {
+        "cell": "swiss_playoff|generic",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O2",
+      "wave": "W2",
+      "was": "P1",
+      "note": "generic's supportsDraws is a deny-list that omits page_playoff (generic.ts:650-653), so a drawn page-playoff game is accepted and the final is never seated. The stall shape."
+    },
+    {
+      "id": "gn-draw-stall-page-playoff-only-lifecycle",
+      "match": {
+        "cell": "page_playoff_only|generic",
+        "scenario": "LIFECYCLE",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SC-O2",
+      "wave": "W2",
+      "was": "P1",
+      "note": "generic's supportsDraws is a deny-list that omits page_playoff (generic.ts:650-653), so a drawn page-playoff game is accepted and the final is never seated. The stall shape."
+    },
+    {
+      "id": "gn-draw-final-page-playoff-only-m1",
+      "match": {
+        "cell": "page_playoff_only|generic",
+        "scenario": "M1",
+        "reason": "carries a terminal final key",
+        "failing": [
+          "I2-bracket-one-champion-ranks-permutation"
+        ]
+      },
+      "gap": "SC-O2",
+      "wave": "W2",
+      "was": "P1",
+      "note": "generic's supportsDraws is a deny-list that omits page_playoff (generic.ts:650-653), so a drawn page-playoff game is accepted and the final is never seated. Here the stage completed with pp-final the drawn game: I2 'no decided fixture carries a terminal final key (pp-final)'."
+    },
+    {
+      "id": "page-playoff-withdraw-voids",
+      "match": {
+        "cell": "page_playoff_only|*",
+        "scenario": "R4",
+        "reason": "and named no reason",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded",
+          "organiser-ui-path"
+        ]
+      },
+      "gap": "FX-G7",
+      "wave": "W4",
+      "was": "P4",
+      "also": [
+        {
+          "check": "organiser-ui-path",
+          "gap": "NEW-W1d-4",
+          "wave": "W4"
+        }
+      ],
+      "note": "R4 withdraws seed 3 from a page playoff: withdrawal.ts sends page_playoff down the open-format void branch, pp-q2 ends abandoned and pp-final stays scheduled with a TBD side, so the stage never completes (the audit inferred the cascade hands walkovers onward; the live run shows the final never seated)."
+    },
+    {
+      "id": "ko-plate-seeding-failed",
+      "match": {
+        "cell": "ko_plate|*",
+        "scenario": "F1",
+        "reason": "STAGE_COMPLETED_SEEDING_FAILED",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "advance-seeded-as-declared",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "FX-G14",
+      "wave": "W4",
+      "was": "P2",
+      "note": "The run shows the wrapper code only: 409 STAGE_COMPLETED_SEEDING_FAILED after stage 1 committed, stage 2 never seeded (wrapper code seen: apps/web/src/server/usecases/stages.ts:4239-4253 wraps any computeSeedProposal error). The inner cause is derived from the code, not observed: the plate takes roundLosers(round 1, q) (apps/web/src/lib/format-templates.ts:270-283); with 7 entrants round 1 has a bye, so fewer losers than q, and loserAt throws QUALIFICATION_INVALID (packages/engine/src/competition/progression.ts:577-596)."
+    },
+    {
+      "id": "swiss-round-paired-nobody-swiss-knockout",
+      "match": {
+        "cell": "swiss_knockout|*",
+        "scenario": "R4",
+        "reason": "paired nobody (SW-H1)",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SW-H1",
+      "wave": "W3",
+      "was": "P6",
+      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red."
+    },
+    {
+      "id": "swiss-round-paired-nobody-swiss-playoff",
+      "match": {
+        "cell": "swiss_playoff|*",
+        "scenario": "R4",
+        "reason": "paired nobody (SW-H1)",
+        "failing": [
+          "I4-nothing-ends-stuck",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "SW-H1",
+      "wave": "W3",
+      "was": "P6",
+      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red."
+    },
+    {
+      "id": "mexicano-stalled-on-forfeit",
+      "match": {
+        "cell": "mexicano|*",
+        "scenario": "M1",
+        "reason": "stalled_rounds",
+        "failing": [
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "FX-G11",
+      "wave": "W7",
+      "was": "CT:mexicano-stalled-on-non-decided",
+      "note": "M1 records a walkover: the next mexicano round is generated only when EVERY fixture is decided, so the forfeited one blocks it and the loop exits stalled_rounds."
+    },
+    {
+      "id": "mexicano-pair-entrants-lifecycle",
+      "match": {
+        "cell": "mexicano|*",
+        "scenario": "LIFECYCLE",
+        "reason": "generate answered 500 INTERNAL",
+        "failing": [
+          "I10-americano-seats-each-person-once",
+          "I4-nothing-ends-stuck",
+          "I8-generate-named",
+          "life-draw-path-exercised",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "NEW-W1d-1",
+      "wave": "W7",
+      "was": "CT:mexicano-pair-entrants-counted-as-players",
+      "note": "Mexicano counts the pair entrants it made as players: round 2+ sizes over them, the Generate pairs a pair entrant with itself (500 INTERNAL) or seats one person twice."
+    },
+    {
+      "id": "mexicano-pair-entrants-f1",
+      "match": {
+        "cell": "mexicano|*",
+        "scenario": "F1",
+        "reason": "generate answered 500 INTERNAL",
+        "failing": [
+          "I10-americano-seats-each-person-once",
+          "I4-nothing-ends-stuck",
+          "I8-generate-named",
+          "f1-everyone-drawn",
+          "f1-round-size",
+          "life-built-as-posted",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "NEW-W1d-1",
+      "wave": "W7",
+      "was": "P7",
+      "note": "Mexicano counts the pair entrants it made as players: round 2+ sizes over them, the Generate pairs a pair entrant with itself (500 INTERNAL) or seats one person twice. F1: the consequences (round size, everyone drawn, built as posted) beside the self-pair 500."
+    },
+    {
+      "id": "mexicano-pair-entrants-r4-self-pair",
+      "match": {
+        "cell": "mexicano|*",
+        "scenario": "R4",
+        "reason": "generate answered 500 INTERNAL",
+        "failing": [
+          "I10-americano-seats-each-person-once",
+          "I4-nothing-ends-stuck",
+          "I8-generate-named",
+          "life-loop-bounded"
+        ]
+      },
+      "gap": "NEW-W1d-1",
+      "wave": "W7",
+      "was": "CT:mexicano-pair-entrants-counted-as-players",
+      "note": "Mexicano counts the pair entrants it made as players: round 2+ sizes over them, the Generate pairs a pair entrant with itself (500 INTERNAL) or seats one person twice. R4, the self-pair 500 shape. Which round it fires in differs per run (the failing set moves), so the rule keys the 500, not the set."
+    },
+    {
+      "id": "mexicano-pair-entrants-r4-reseated",
+      "match": {
+        "cell": "mexicano|*",
+        "scenario": "R4",
+        "reason": "r4-not-seated-later:",
+        "failing": [
+          "I10-americano-seats-each-person-once",
+          "r4-not-seated-later"
+        ]
+      },
+      "gap": "NEW-W1d-1",
+      "wave": "W7",
+      "was": null,
+      "wasWhy": "its three W1-driving cases carry two labels in the map (CT:mexicano-pair-entrants-counted-as-players x2, P7 x1), and a rule has one `was`",
+      "note": "Mexicano counts the pair entrants it made as players: round 2+ sizes over them, the Generate pairs a pair entrant with itself (500 INTERNAL) or seats one person twice. R4, the shape where the withdrawn person is seated again through another pair entrant (r4-not-seated-later) with no 500."
+    },
+    {
+      "id": "americano-withdrawn-keeps-playing",
+      "match": {
+        "cell": "americano|*",
+        "scenario": "R4",
+        "reason": "policy none, expected walkover",
+        "failing": [
+          "r4-not-seated-later",
+          "r4-policy-reported"
+        ]
+      },
+      "gap": "NEW-W1d-2",
+      "wave": "W7",
+      "was": "CT:r4-withdrawn-player-kept-playing",
+      "note": "R4 withdraws seed 3 from an americano: the product does nothing with the pending games (policy none, none voided or walked over) and the withdrawn person is seated again in later rounds."
+    },
+    {
+      "id": "stepladder-withdraw-wrong-phase",
+      "match": {
+        "cell": "stepladder_only|*",
+        "scenario": "R4",
+        "reason": "WRONG_PHASE",
+        "failing": [
+          "organiser-ui-path"
+        ]
+      },
+      "gap": "NEW-W1d-3",
+      "wave": "W4",
+      "was": "P5",
+      "also": [
+        {
+          "check": "organiser-ui-path",
+          "gap": "NEW-W1d-4",
+          "wave": "W4"
+        }
+      ],
+      "note": "R4 withdraws seed 3 from a stepladder: POST /entrants/:id/withdraw answers 422 WRONG_PHASE 'fixture has an unassigned entrant (bye/TBD)' (every stepladder game but the first has a TBD side) and the scenario never reaches its checks."
+    },
+    {
+      "id": "group-pool-membership-from-results",
+      "match": {
+        "cell": "group_group_ko|*",
+        "scenario": "F1",
+        "reason": "in no pool",
+        "failing": [
+          "I1-rr-pair-once-per-leg",
+          "I4-nothing-ends-stuck",
+          "advance-seeded-as-declared",
+          "f1-everyone-drawn",
+          "life-built-as-posted",
+          "life-loop-bounded",
+          "organiser-ui-path",
+          "ui-standings-match"
+        ]
+      },
+      "gap": "ST-G5",
+      "wave": "W5",
+      "was": "P3",
+      "also": [
+        {
+          "check": "organiser-ui-path",
+          "gap": "NEW-W1d-5",
+          "wave": "W5"
+        }
+      ],
+      "note": "ST-G5's mechanism in its worst shape: a pool's members are the entrants with a result or award (entrantsOfPool, stage.ts), so 7 entrants snaked into 4 pools leave pool A holding seed 1 alone, with no fixture and so no member. Its table is empty, seed 1 stands in no pool (I1 'in no pool', f1-everyone-drawn, life-built-as-posted), and stage 1's /complete answers 409 STAGE_COMPLETED_SEEDING_FAILED. The audit's own shape is the day-one table (a seated member who has not played is missing)."
+    },
+    {
+      "id": "no-builder-knockout-third-place",
+      "match": {
+        "cell": "knockout_third_place|football",
+        "layer": "L2",
+        "reason": "no organiser control builds knockout_third_place",
+        "failing": [
+          "organiser-ui-path"
+        ]
+      },
+      "gap": "NEW-W1d-4",
+      "wave": "W4",
+      "was": null,
+      "wasWhy": "W1-driving (L3, and the L1 HTTP slice) had no organiser UI path: this by-design L2 red (D7) has no P-rule to re-key",
+      "note": "D7: no division-builder control builds this API-only row, so L2 reds organiser-ui-path by design; the wave that owns the row owes the control."
+    },
+    {
+      "id": "no-builder-stepladder-only-f1",
+      "match": {
+        "cell": "stepladder_only|football",
+        "scenario": "F1",
+        "layer": "L2",
+        "reason": "no organiser control builds stepladder_only",
+        "failing": [
+          "organiser-ui-path"
+        ]
+      },
+      "gap": "NEW-W1d-4",
+      "wave": "W4",
+      "was": null,
+      "wasWhy": "W1-driving (L3, and the L1 HTTP slice) had no organiser UI path: this by-design L2 red (D7) has no P-rule to re-key",
+      "note": "D7: no division-builder control builds this API-only row, so L2 reds organiser-ui-path by design; the wave that owns the row owes the control. R4 is the stepladder withdraw refusal (NEW-W1d-3) and keys there."
+    },
+    {
+      "id": "no-builder-stepladder-only-m1",
+      "match": {
+        "cell": "stepladder_only|football",
+        "scenario": "M1",
+        "layer": "L2",
+        "reason": "no organiser control builds stepladder_only",
+        "failing": [
+          "organiser-ui-path"
+        ]
+      },
+      "gap": "NEW-W1d-4",
+      "wave": "W4",
+      "was": null,
+      "wasWhy": "W1-driving (L3, and the L1 HTTP slice) had no organiser UI path: this by-design L2 red (D7) has no P-rule to re-key",
+      "note": "D7: no division-builder control builds this API-only row, so L2 reds organiser-ui-path by design; the wave that owns the row owes the control. R4 is the stepladder withdraw refusal (NEW-W1d-3) and keys there."
+    },
+    {
+      "id": "no-builder-page-playoff-only-m1",
+      "match": {
+        "cell": "page_playoff_only|football",
+        "scenario": "M1",
+        "layer": "L2",
+        "reason": "no organiser control builds page_playoff_only",
+        "failing": [
+          "organiser-ui-path"
+        ]
+      },
+      "gap": "NEW-W1d-4",
+      "wave": "W4",
+      "was": null,
+      "wasWhy": "W1-driving (L3, and the L1 HTTP slice) had no organiser UI path: this by-design L2 red (D7) has no P-rule to re-key",
+      "note": "D7: no division-builder control builds this API-only row, so L2 reds organiser-ui-path by design; the wave that owns the row owes the control. R4 is the page-playoff withdrawal (FX-G7) and keys there."
+    },
+    {
+      "id": "no-builder-group-only",
+      "match": {
+        "cell": "group_only|football",
+        "layer": "L2",
+        "reason": "no organiser control builds group_only",
+        "failing": [
+          "organiser-ui-path"
+        ]
+      },
+      "gap": "NEW-W1d-5",
+      "wave": "W5",
+      "was": null,
+      "wasWhy": "W1-driving (L3, and the L1 HTTP slice) had no organiser UI path: this by-design L2 red (D7) has no P-rule to re-key",
+      "note": "D7: no division-builder control builds this API-only row, so L2 reds organiser-ui-path by design; the wave that owns the row owes the control."
+    },
+    {
+      "id": "no-builder-group-group-ko-m1",
+      "match": {
+        "cell": "group_group_ko|football",
+        "scenario": "M1",
+        "layer": "L2",
+        "reason": "no organiser control builds group_group_ko",
+        "failing": [
+          "organiser-ui-path"
+        ]
+      },
+      "gap": "NEW-W1d-5",
+      "wave": "W5",
+      "was": null,
+      "wasWhy": "W1-driving (L3, and the L1 HTTP slice) had no organiser UI path: this by-design L2 red (D7) has no P-rule to re-key",
+      "note": "D7: no division-builder control builds this API-only row, so L2 reds organiser-ui-path by design; the wave that owns the row owes the control. F1 is the pool membership defect (ST-G5) and keys there."
+    },
+    {
+      "id": "no-builder-group-group-ko-r4",
+      "match": {
+        "cell": "group_group_ko|football",
+        "scenario": "R4",
+        "layer": "L2",
+        "reason": "no organiser control builds group_group_ko",
+        "failing": [
+          "organiser-ui-path"
+        ]
+      },
+      "gap": "NEW-W1d-5",
+      "wave": "W5",
+      "was": null,
+      "wasWhy": "W1-driving (L3, and the L1 HTTP slice) had no organiser UI path: this by-design L2 red (D7) has no P-rule to re-key",
+      "note": "D7: no division-builder control builds this API-only row, so L2 reds organiser-ui-path by design; the wave that owns the row owes the control. F1 is the pool membership defect (ST-G5) and keys there."
+    }
+  ]
+}

@@ -105,6 +105,32 @@ describe("corpusWriteVerdict — a corpus write refuses a dirty working tree", (
   });
 });
 
+/** A corpus path as the checkout names it: with the `.stryker-tmp/sandbox-<id>/` a Stryker run copies the package into taken out
+ *  (exactly one such segment, straight after `packages/engine/`, and nothing else is rewritten), so a mutation run's dry run
+ *  reads the same paths a plain run does. A path outside a sandbox comes back as it went in. */
+const SANDBOX = /^(packages\/engine\/)\.stryker-tmp\/sandbox-[A-Za-z0-9_-]+\//;
+function outOfSandbox(path: string): string {
+  return path.replace(SANDBOX, "$1");
+}
+
+describe("outOfSandbox, the one rewrite the corpus-path test makes", () => {
+  const COPY = "packages/engine/.stryker-tmp/sandbox-36Ol7J/src/sports/football/football.golden.json";
+  it("takes the sandbox segment out of a Stryker copy's path and leaves the checkout's own paths alone", () => {
+    expect(outOfSandbox(COPY)).toBe(FOOTBALL);
+    expect(outOfSandbox(FOOTBALL)).toBe(FOOTBALL);
+    expect(outOfSandbox(CRICKET)).toBe(CRICKET);
+  });
+  it("rewrites only that segment: a different directory, a second segment, or a path that is not in the engine is NOT mapped onto a checkout path", () => {
+    for (const other of [
+      "packages/engine/.stryker-tmp/other/src/sports/football/football.golden.json",
+      "packages/engine/.stryker-tmp/sandbox-/src/sports/football/football.golden.json",
+      "packages/other/.stryker-tmp/sandbox-36Ol7J/src/sports/football/football.golden.json",
+      "packages/engine/src/.stryker-tmp/sandbox-36Ol7J/sports/football/football.golden.json",
+    ]) expect(outOfSandbox(other), other).toBe(other);
+    expect(outOfSandbox("packages/engine/.stryker-tmp/sandbox-a/.stryker-tmp/sandbox-b/x.json")).toBe("packages/engine/.stryker-tmp/sandbox-b/x.json");
+  });
+});
+
 describe("the git probes behind the guard", () => {
   it("returns null outside a checkout, which is what fails the guard closed", () => {
     const outside = mkdtempSync(join(tmpdir(), "golden-policy-"));
@@ -121,7 +147,9 @@ describe("the git probes behind the guard", () => {
 
   it("allows exactly the committed corpus files, repo-relative and on disk", () => {
     const root = gitRepoRoot(process.cwd()) as string;
-    const paths = corpusWritablePaths(root);
+    // Under Stryker the suite runs from a COPY of the package, `packages/engine/.stryker-tmp/sandbox-<id>/`, and the corpus
+    // paths are derived from where the module sits; the checkout's own path is what the policy names (see outOfSandbox).
+    const paths = corpusWritablePaths(root).map(outOfSandbox);
     expect(paths).toHaveLength(11);
     expect(paths).toContain(FOOTBALL);
     expect(paths).toContain(CRICKET);

@@ -1,1 +1,18 @@
-{ "L3": "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1drv-l3/results.json" }
+{
+  "L3": "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1d-baseline/L3/results.json",
+  "ruling70": {
+    "note": "Owner ruling 70 (2026-10-05): the three swiss_knockout R4 cells whose Swiss round 5 pairs nobody under the product's lots tiebreak (a UUID-hashed draw, by design) flip between works and red across runs (P6, audit SW-H1, routed to W3). The baseline records them RED whatever the committed run showed: a later works on them reads as an improvement and a later red as no change. judge regression applies this list to the baseline it is given, and only to the run it was written for (workflowRun, tag, tagCommit: the committed L3 must be that run, or the block is refused). The SW-H1 fix removes this block and re-baselines L3.",
+    "state": "red",
+    "cause": "P6",
+    "gap": "SW-H1",
+    "wave": "W3",
+    "workflowRun": 37346206686,
+    "tag": "matrix-truth/w1d-baseline",
+    "tagCommit": "47f210e3f2094405e4ed4c8b5c9ea6bd2a6085d9",
+    "ids": [
+      "swiss_knockout|football|11-a-side|R4",
+      "swiss_knockout|carrom|club-29|R4",
+      "swiss_knockout|generic|score|R4"
+    ]
+  }
+}

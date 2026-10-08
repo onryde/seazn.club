@@ -321,6 +321,23 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 18 (ruling 63, D18, D22): the triage and the audit ledger, each a library and its CLI; the ledger reads the
+  // TypeScript compiler through createRequire (as single-sport.ts does), so its load is what this walk proves.
+  const W1D_T18 = ["lib/triage.ts", "triage.ts", "lib/audit-ledger.ts", "audit-ledger.ts"];
+  it("W1d Task 18's modules are in the walk", () => {
+    const missing = W1D_T18.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T18.length).toBe(4);
+    expect(missing).toEqual([]);
+  });
+
+  // W1d Task 22 (ruling 62, D19): the per-wave backlog writer, a library and its CLI; both read JSON and fold it, nothing more.
+  const W1D_T22 = ["lib/backlog.ts", "backlog.ts"];
+  it("W1d Task 22's modules are in the walk", () => {
+    const missing = W1D_T22.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T22.length).toBe(2);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().
