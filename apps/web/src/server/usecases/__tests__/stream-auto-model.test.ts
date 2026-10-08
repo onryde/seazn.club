@@ -24,7 +24,9 @@
 //      `autoStopOfBroadcastBornBetweenTwoFinishes`, required like every other);
 //   5. a reverted result cancels a pending automatic stop, and a re-finish restarts the 180 s: an auto-stopped session ended with
 //      a result standing and ≥ AUTO_STOP_AFTER_RESULT_SECONDS after that result's `finished_at`;
-//   6. an automatic stop fires only when the predicate holds, and by the next tick once it does (no tick, no end);
+//   6. an automatic stop fires only when the predicate holds, and by the next tick once it does (no tick, no end). The switch is
+//      read AT THE TICK, never latched when the broadcast started (the scene "the switch turned off mid-match"), and A15's hand
+//      restart after an organiser Stop is still stopped (the scene "a hand restart after the organiser's Stop");
 //   7. an automatic start is retried no more often than AUTO_START_RETRY_SECONDS, and a refusal never stamps `auto_started_at`;
 //   8. the switch never changes `target_chosen` / `target_id` — nor does an automatic start, a Stop stamp, or any step but
 //      the organiser's own Go live (the destination pick). Witnessed both ways: a switch that CREATES the row (nothing chosen
@@ -158,9 +160,12 @@ type S = {
   ingestAt: number | null;
   open: boolean;
   end: { key: EndKey; at: number } | null;
-  /** A result had been recorded at or before its creation (some finish, reverted or not): only a re-finish can make it predate
-   *  the CURRENT result, so an automatic stop of it is the owner-accepted score-correction edge. */
-  bornAfterAResult: boolean;
+  /** A result STOOD when it was created (`finished_at` set): only a revert and a re-finish can make it predate the CURRENT result,
+   *  so an automatic stop of it is the owner-accepted score-correction edge. */
+  bornUnderAResult: boolean;
+  /** The switch was ON when it was created: a stop it withholds later was withheld by a switch turned OFF after the start (the
+   *  witness that the stop reads the switch at the TICK, never a value latched at creation). */
+  switchOnAtCreation: boolean;
 };
 
 type Model = {
@@ -188,8 +193,6 @@ type Model = {
   revertedPendingFinish: number | null;
   /** The previous finish's instant while a re-finish is within ITS 180 s but past the previous one's. */
   prevFinish: number | null;
-  /** The latest finish ever recorded (a revert does not clear it). */
-  lastFinish: number | null;
 };
 
 const openOf = (m: Readonly<Model>): S | null => m.sessions.find((s) => s.open) ?? null;
@@ -246,6 +249,10 @@ const COUNT_KEYS = [
   "stopCancelledByRevert", "stopRestartedByRefinish", "postResultBroadcastLeftAlone", "createdInTheResultsMillisecondLeftAlone",
   // the score-correction edge (owner ruling 2026-10-08: accepted): a broadcast born after an earlier result, auto-stopped after a re-finish
   "autoStopOfBroadcastBornBetweenTwoFinishes",
+  // the stop reads the switch at the tick: the switch turned OFF after the broadcast started withholds it (never latched at creation)
+  "stopWithheldBySwitchTurnedOffMidMatch",
+  // A12 + A15: a hand restart after the organiser's Stop, auto-stopped after the result
+  "autoStopAfterOrganiserStop",
   // invariant 8, both ways: the switch creating the row (nothing chosen) and the switch beside a pick (a choice)
   "switchCreatesTheRow", "switchBesideAPick",
   // the other ends the model accepts, and the Stop
@@ -261,7 +268,7 @@ const ACTIONS = [
   "beat", "doubleBeat", "matchStart", "finish", "revert", "toggleAuto", "manualGoLive", "organiserStop", "advance", "tick", "ingestOn",
   "grantCredits", "advanceToRetryEdge", "sceneRefusalHiddenByStop", "sceneRefusalRetry", "sceneStopBlocksStart", "sceneIngestBlocksStart", "scenePostResult", "sceneRevertRefinish",
   "sceneTie", "sceneStopNeedsBoth", "sceneOnce", "sceneTimeout", "sceneTickThenStart", "sceneManualRefusal", "sceneAutoStartThenStop",
-  "sceneOrganiserStopsAuto", "sceneScoreCorrection",
+  "sceneOrganiserStopsAuto", "sceneScoreCorrection", "sceneSwitchOffMidMatch", "sceneHandRestartAfterStop",
 ] as const;
 type Action = (typeof ACTIONS)[number];
 
@@ -274,7 +281,8 @@ const INVARIANT_WITNESSES: Readonly<Record<1 | 2 | 3 | 4 | 5 | 6 | 7 | 8, readon
   3: ["startSole:no_broadcast_ran"],
   4: ["postResultBroadcastLeftAlone", "createdInTheResultsMillisecondLeftAlone", "autoStopOfBroadcastBornBetweenTwoFinishes"],
   5: ["stopCancelledByRevert", "stopRestartedByRefinish", "stopSole:fixture_finished"],
-  6: ["autoStopsFired", "autoStopsAtTheBoundary", "stopSole:delay_elapsed", "stopSole:switch_on", "stopSole:phone_automatic"],
+  6: ["autoStopsFired", "autoStopsAtTheBoundary", "stopSole:delay_elapsed", "stopSole:switch_on", "stopSole:phone_automatic",
+    "stopWithheldBySwitchTurnedOffMidMatch", "autoStopAfterOrganiserStop"],
   7: ["autoStartsRefused", "retriesFired", "retryWithheldOneMsEarly", "retryFiredAtTheEdge", "startSole:retry_spacing"],
   8: ["switchCreatesTheRow", "switchBesideAPick", "manualGoLives"],
 };
@@ -386,6 +394,7 @@ function tickPlan(m: Readonly<Model>, s: S, now: number, o: { beatTick: boolean;
   if (!askPossible) {
     const sole = soleBlocker(v);
     if (sole !== null) t.count(`stopSole:${sole}` as CountKey);
+    if (sole === "switch_on" && s.switchOnAtCreation) t.count("stopWithheldBySwitchTurnedOffMidMatch");
   }
   const allowed = new Set<EndKey>();
   if (due) allowed.add("auto_stopped");
@@ -419,7 +428,7 @@ async function settle(m: Model, x: Real, info: Info): Promise<void> {
     expect(ms(s.warming_at), "PREMISE: a new session enters warming at the instant it is created").toBe(now);
     m.sessions.push({
       sid: s.id, createdAt: now, startedBy: info.created, live: false, ingestAt: null, open: true, end: null,
-      bornAfterAResult: m.lastFinish !== null && m.lastFinish <= now,
+      bornUnderAResult: m.finishedAt !== null, switchOnAtCreation: m.autoOn,
     });
     if (info.created === "automatic") { m.autoSid = s.id; m.startedAt = now; }
   }
@@ -447,7 +456,9 @@ async function settle(m: Model, x: Real, info: Info): Promise<void> {
       t.count("autoStopsFired");
       t.count(ms_.startedBy === "organiser" ? "autoStopsOfHandStartedBroadcast" : "autoStopsOfAutoStartedBroadcast");
       if (m.finishedAt !== null && now === m.finishedAt + DELAY_MS) t.count("autoStopsAtTheBoundary");
-      if (ms_.bornAfterAResult) t.count("autoStopOfBroadcastBornBetweenTwoFinishes");
+      if (ms_.bornUnderAResult) t.count("autoStopOfBroadcastBornBetweenTwoFinishes");
+      // A12 + A15: the organiser's Stop turned auto START off; a broadcast she restarted by hand after it is still auto-STOPPED.
+      if (ms_.startedBy === "organiser" && m.blockedAt !== null && ms_.createdAt > m.blockedAt) t.count("autoStopAfterOrganiserStop");
     }
     if (key === "timeout") t.count("warmingTimeouts");
     if (key === "phone_lost") t.count("phoneLostEnds");
@@ -531,13 +542,14 @@ function checkInvariants(m: Readonly<Model>, x: Real, pre: Snap, post: Snap, inf
   t.invariantChecks++;
 }
 
-/** The organiser read (`streamPhone`, T6): the switch, the start instant, the block, and a refusal served only while a start
- *  could still fire. Neutralised on purpose in the read, and here: the retry spacing and the phone's presence. */
+/** The organiser read (`streamPhone`, T6): the switch, the start instant, the block, and the stored refusal. WHICH refusal is served
+ *  is not a spec row: it is the controller ruling, B4 (2026-10-07) — "a refusal is served only while the verdict could still pass,
+ *  ignoring spacing and presence" (`autoOf` in stream-phone.ts). The expectation below restates that ruling, nothing more. */
 async function checkOrganiserRead(m: Readonly<Model>, x: Real): Promise<void> {
   const read = await streamPhone(x.r.auth, x.r.fixtureId, x.r.deps);
   if (!m.row) { expect(read.auto, "no settings row, no `auto`").toBeNull(); }
   else {
-    // The stored code is served while `autoStartVerdict` could still pass (retry spacing and presence neutralised on purpose).
+    // Controller ruling, B4 (2026-10-07): served only while the verdict could still pass, ignoring retry_spacing and phone_present.
     const restHold = m.refusal !== null && m.autoOn && m.pairing?.storedMode === "automatic" && m.status === "in_play" && openOf(m) === null
       && m.startedAt === null && !m.sessions.some((s) => s.ingestAt !== null);
     const could = restHold && m.blockedAt === null;
@@ -785,7 +797,6 @@ async function finish(m: Model, x: Real): Promise<void> {
     await sql`update fixtures set finished_at = ${x.r.now()} where id = ${x.r.fixtureId}`;
     m.status = "decided";
     m.finishedAt = x.r.now().getTime();
-    m.lastFinish = m.finishedAt;
   });
 }
 
@@ -958,6 +969,19 @@ const cmd = {
       cmd.manualGoLive(), cmd.ingestOn(), cmd.toggleAuto(true), cmd.beat("automatic"), cmd.advance(DELAY_MS), cmd.tick("poll"), cmd.revert(),
       cmd.finish(), cmd.advance(DELAY_MS), cmd.tick("poll")]);
   }),
+  /** §7.3 reads the switch at the TICK, never a value latched when the broadcast started: the switch on, the match starts, the
+   *  automatic broadcast goes live, then the organiser turns the switch OFF mid-match — the result's 180 s pass and the tick leaves
+   *  it alone; the switch back ON, the next tick stops it. */
+  sceneSwitchOffMidMatch: (g = true) => new Cmd(`sceneSwitchOffMidMatch(${g})`, "sceneSwitchOffMidMatch", () => true, async (m, x) => {
+    await seq(m, x, [...(g ? [cmd.grant()] : []), cmd.beat("automatic"), cmd.toggleAuto(true), cmd.matchStart(), cmd.beat("automatic"), cmd.ingestOn(),
+      cmd.toggleAuto(false), cmd.finish(), cmd.advance(DELAY_MS), cmd.tick("poll"), cmd.toggleAuto(true), cmd.tick("poll")]);
+  }),
+  /** A12 and A15 together: the organiser Stops the AUTOMATIC broadcast (auto start is off for the match), restarts by hand, and that
+   *  hand restart is still auto-stopped after the result (A15: auto stop applies to a broadcast restarted by hand). */
+  sceneHandRestartAfterStop: (g = true) => new Cmd(`sceneHandRestartAfterStop(${g})`, "sceneHandRestartAfterStop", () => true, async (m, x) => {
+    await seq(m, x, [...(g ? [cmd.grant()] : []), cmd.beat("automatic"), cmd.toggleAuto(true), cmd.matchStart(), cmd.beat("automatic"),
+      cmd.organiserStop("open"), cmd.beat("automatic"), cmd.manualGoLive(), cmd.ingestOn(), cmd.finish(), cmd.advance(DELAY_MS), cmd.tick("poll")]);
+  }),
 };
 
 const modeArb = fc.oneof({ arbitrary: fc.constant("automatic" as Mode), weight: 2 }, { arbitrary: fc.constant("operator" as Mode), weight: 1 });
@@ -1000,6 +1024,8 @@ const ALL: fc.Arbitrary<Cmd>[] = [
   fc.boolean().map(cmd.sceneOrganiserStopsAuto),
   fc.constant(null).map(cmd.sceneRefusalHiddenByStop),
   fc.boolean().map(cmd.sceneScoreCorrection),
+  fc.boolean().map(cmd.sceneSwitchOffMidMatch),
+  fc.boolean().map(cmd.sceneHandRestartAfterStop),
 ];
 const COMMANDS = fc.commands(ALL, { maxCommands: MAX_COMMANDS, size: "max" });
 
@@ -1016,7 +1042,7 @@ async function freshReal(tally: Tally, o: { funded: boolean; picked: boolean }):
   const model: Model = {
     status: "scheduled", finishedAt: null, autoOn: false, funded: o.funded, row: o.picked, picked: o.picked, pairing: null,
     startedAt: null, autoSid: null, blockedAt: null, attemptedAt: null, refusal: null, sessions: [], t0: r.now().getTime(), now: () => r.now().getTime(),
-    revertedPendingFinish: null, prevFinish: null, lastFinish: null,
+    revertedPendingFinish: null, prevFinish: null,
   };
   expect(real.prev.fixture.status, "PREMISE: the rig's fixture starts scheduled").toBe("scheduled");
   expect(real.prev.settings !== null, "PREMISE: the settings row is the pick's").toBe(o.picked);
@@ -1028,9 +1054,9 @@ function declaredConjunctsAreJudged(): number {
   const m: Model = {
     status: "scheduled", finishedAt: null, autoOn: false, funded: false, row: false, picked: false, pairing: null, startedAt: null, autoSid: null,
     blockedAt: null, attemptedAt: null, refusal: null, sessions: [], t0: 0, now: () => 0, revertedPendingFinish: null, prevFinish: null,
-    lastFinish: null,
   };
-  const s: S = { sid: "x", createdAt: 0, startedBy: "organiser", live: false, ingestAt: null, open: true, end: null, bornAfterAResult: false };
+  const s: S = { sid: "x", createdAt: 0, startedBy: "organiser", live: false, ingestAt: null, open: true, end: null, bornUnderAResult: false,
+    switchOnAtCreation: false };
   expect(startVector(m, "automatic", 0).map((c) => c.name), "the model judges every declared autoStartDue conjunct, in order").toEqual(AUTO_START_CONJUNCTS.map((c) => c.name));
   expect(stopVector(m, s, 0).map((c) => c.name), "the model judges every declared autoStopDue conjunct, in order").toEqual(AUTO_STOP_CONJUNCTS.map((c) => c.name));
   return AUTO_START_CONJUNCTS.length + AUTO_STOP_CONJUNCTS.length;
@@ -1039,14 +1065,21 @@ function declaredConjunctsAreJudged(): number {
 /** Every counter is required: each names a spec row or an ordering the model exists to witness (a run that cannot reach one is a
  *  generator defect, never a skipped row). */
 const REQUIRED_COUNTS: readonly CountKey[] = COUNT_KEYS;
-/** Wall-clock budget per generated run (measured at ~0.6 s on a quiet machine: eight times that), plus the setup. */
-const PER_RUN_BUDGET_MS = 5_000;
+/** The property's wall-clock budget, DERIVED from what it runs (AGENTS.md #20): runs × (setup + a ceiling on steps per run × a cost
+ *  per step). Measured 2026-10-08: ~8.7 ms a step on a quiet machine (140 s for 16214 steps), ~45 ms a step under the T7 reviewer's
+ *  load (723 s), 73–83 steps per run over six seeds. The step cost is over twice the loaded figure, and the steps ceiling is not a
+ *  comment: it is asserted after the run, so a generator that grows fails BY NAME instead of reading as a timeout. */
+const STEP_BUDGET_MS = 100;
+const STEPS_PER_RUN_CEILING = 120;
+const RUN_SETUP_BUDGET_MS = 1_000;
+const PROPERTY_BUDGET_MS = RUNS * (RUN_SETUP_BUDGET_MS + STEPS_PER_RUN_CEILING * STEP_BUDGET_MS) + 60_000;
 
 describe.skipIf(!HAS_DB)("automatic start and stop (§7.2 / §7.3, rule 10): one phone, the real use-cases, eight invariants after every step", () => {
   it(`model: the invariants hold over every generated sequence; every action and counter is reached by DRAWN runs (seed ${SEED}, ${RUNS} runs)`, async () => {
     expect(declaredConjunctsAreJudged(), "9 start + 5 stop conjuncts").toBe(14);
     const tally = new Tally();
-    console.log(`[stream-auto-model] property: seed=${SEED} runs=${RUNS} maxCommands=${MAX_COMMANDS} report=${REPORT}`);
+    console.log(`[stream-auto-model] property: seed=${SEED} runs=${RUNS} maxCommands=${MAX_COMMANDS} budget=${PROPERTY_BUDGET_MS} ms report=${REPORT}`);
+    const started = Date.now();
     try {
       await fc.assert(
         fc.asyncProperty(fc.record({ funded: fc.boolean(), picked: fc.boolean() }), COMMANDS, async (setup, cmds) => {
@@ -1063,7 +1096,8 @@ describe.skipIf(!HAS_DB)("automatic start and stop (§7.2 / §7.3, rule 10): one
     }
     const report = tally.report();
     appendFileSync(REPORT, report);
-    console.log(`[stream-auto-model] PASSED ${report}`);
+    const took = Date.now() - started;
+    console.log(`[stream-auto-model] PASSED in ${Math.round(took / 1000)} s (${(took / Math.max(1, tally.steps)).toFixed(1)} ms/step, ${(tally.steps / Math.max(1, tally.runs)).toFixed(1)} steps/run) ${report}`);
     const zeroCounts = REQUIRED_COUNTS.filter((k) => tally.counts[k] === 0);
     const zeroActions = ACTIONS.filter((a) => tally.actions.get(a) === 0);
     expect(zeroCounts, `counters no drawn run reached — ${report}`).toEqual([]);
@@ -1073,7 +1107,8 @@ describe.skipIf(!HAS_DB)("automatic start and stop (§7.2 / §7.3, rule 10): one
     expect(tally.runs).toBe(RUNS);
     expect(tally.invariantChecks).toBe(tally.steps);
     expect(tally.steps).toBeGreaterThan(RUNS);
-  }, RUNS * PER_RUN_BUDGET_MS + 60_000);
+    expect(tally.steps / tally.runs, "PREMISE of PROPERTY_BUDGET_MS: the mean steps per run stay under STEPS_PER_RUN_CEILING").toBeLessThanOrEqual(STEPS_PER_RUN_CEILING);
+  }, PROPERTY_BUDGET_MS);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1117,6 +1152,10 @@ const PINNED: readonly { scene: string; make: () => Cmd; world: { funded: boolea
   // Owner ruling 2026-10-08 (relayed by the controller): accepted. Left alone under the first result, auto-stopped under the second.
   { scene: "the score-correction edge: a broadcast born after the first result is auto-stopped after the re-finish", make: () => cmd.sceneScoreCorrection(true),
     world: { funded: false, picked: false }, reaches: ["postResultBroadcastLeftAlone", "autoStopOfBroadcastBornBetweenTwoFinishes", "autoStopsOfHandStartedBroadcast", "switchBesideAPick"] },
+  { scene: "the switch turned off mid-match withholds the stop; back on, the next tick stops the broadcast", make: () => cmd.sceneSwitchOffMidMatch(true),
+    world: { funded: false, picked: false }, reaches: ["stopWithheldBySwitchTurnedOffMidMatch", "autoStartsFired", "autoStopsOfAutoStartedBroadcast", "switchCreatesTheRow"] },
+  { scene: "a hand restart after the organiser's Stop is auto-stopped after the result (A12 + A15)", make: () => cmd.sceneHandRestartAfterStop(true),
+    world: { funded: false, picked: true }, reaches: ["autoStopAfterOrganiserStop", "organiserStopsOfAutoStarted", "autoStopsOfHandStartedBroadcast"] },
 ];
 
 describe.skipIf(!HAS_DB)("automatic start and stop: the pinned scenes", () => {
