@@ -202,7 +202,7 @@ test.describe("capture QR v2 PR-2 — the organiser panel's Option A states", ()
       return JSON.stringify(wide) === JSON.stringify(narrow) ? [] : [{ state: st, wide, narrow }];
     });
     writeFileSync(join(DIR!, "shots.json"), JSON.stringify({ shots, dupes, diffs }, null, 2));
-    expect(states.length, "states captured").toBeGreaterThanOrEqual(15);
+    expect(states.length, "states captured").toBeGreaterThanOrEqual(20);
     expect(shots.length, "every state at every width").toBe(states.length * WIDTHS.length);
     expect(dupes, "two shots are pixel-identical").toEqual([]);
     expect(diffs, "the panel's control set differs between 320 and 1280").toEqual([]);
@@ -235,10 +235,19 @@ test.describe("capture QR v2 PR-2 — the organiser panel's Option A states", ()
       await sw.click();
       await expect(sw).toHaveAttribute("aria-checked", "true", { timeout: POLL_WAIT_MS });
       await expect(scope.getByTestId("stream-auto-hint")).toBeVisible();
+      // The phone beats in Operator (REAL): the owner-approved hint under the switch (2026-10-08).
+      await expect(scope.getByTestId("stream-auto-operator")).toHaveText(en("stream.auto.operatorHint"), { timeout: POLL_WAIT_MS });
       await shoot(page, scope, "02-ready-auto-on");
+      // 2b. The same, the phone in Automatic (STAGED: the beat's mode) — no hint.
+      let undo = await stage(page, PHONE, (r) => phoneWith(r, { mode: "automatic" }));
+      await expect(strip).toHaveText(`Pixel 8 · ${en("stream.phone.mode.automatic")}`, { timeout: POLL_WAIT_MS });
+      await expect(scope.getByTestId("stream-auto-operator")).toHaveCount(0);
+      await shoot(page, scope, "02b-ready-auto-on-automatic");
+      await undo();
+      await expect(scope.getByTestId("stream-auto-operator")).toBeVisible({ timeout: POLL_WAIT_MS });
 
       // 9a. Takeover notice at Ready (STAGED: lastTakeover).
-      let undo = await stage(page, PHONE, (r) => ({ ...r, lastTakeover: { at: new Date(Date.now() - 120_000).toISOString(), model: "Pixel 8", elapsedMs: 120_000 } }));
+      undo = await stage(page, PHONE, (r) => ({ ...r, lastTakeover: { at: new Date(Date.now() - 120_000).toISOString(), model: "Pixel 8", elapsedMs: 120_000 } }));
       await expect(scope.getByTestId("stream-takeover")).toBeVisible({ timeout: POLL_WAIT_MS });
       await shoot(page, scope, "09a-takeover-ready");
       await undo();
@@ -281,12 +290,19 @@ test.describe("capture QR v2 PR-2 — the organiser panel's Option A states", ()
       await expect(strip).toContainText(en("stream.phone.startFailed"), { timeout: POLL_WAIT_MS });
       await shoot(page, scope, "03e-waiting-start-failed");
       await undo();
+      // 9c. Takeover notice while waiting — names Cancel (STAGED: lastTakeover; owner ruling 2026-10-08).
+      undo = await stage(page, PHONE, (r) => ({ ...r, lastTakeover: { at: new Date(Date.now() - 60_000).toISOString(), model: "Pixel 8", elapsedMs: 60_000 } }));
+      await expect(scope.getByTestId("stream-takeover-text")).toContainText("Cancel the stream", { timeout: POLL_WAIT_MS });
+      await shoot(page, scope, "09c-takeover-waiting");
+      await undo();
+      await expect(scope.getByTestId("stream-takeover")).toHaveCount(0, { timeout: POLL_WAIT_MS });
 
       // Live (REAL: the input connects).
       await ingest("connected");
       await expect(scope.getByTestId("stream-stop")).toBeVisible({ timeout: 60_000 });
 
       // 4. Live, healthy (STAGED readings; the switch REALLY on, the phone's mode staged automatic): the line, and §7.1's.
+      // `stopApplies` is the server's (B7 review M-3): staged true here, as the real read answers for this session.
       const live = (over: Json) => (r: Json) => ({ ...phoneWith(r, { mode: "automatic", elapsedMs: 4_000, health: null, beat: HEALTHY_BEAT, ...over }), auto: { ...AUTO_ON, stopApplies: true } });
       undo = await stage(page, PHONE, live({}));
       await expect(scope.getByTestId("stream-auto-live")).toBeVisible({ timeout: POLL_WAIT_MS });
@@ -309,6 +325,8 @@ test.describe("capture QR v2 PR-2 — the organiser panel's Option A states", ()
       for (const [state, over] of ambers) {
         undo = await stage(page, PHONE, live(over));
         await expect(strip).toHaveAttribute("data-tone", "amber", { timeout: POLL_WAIT_MS });
+        // Owner ruling 2026-10-08: stalled — the Seazn node waits for video; every other amber leaves it Receiving.
+        await expect(scope.getByTestId("stream-chain")).toHaveAttribute("data-seazn", over.health === "stalled" ? "waitingVideo" : "receiving");
         await shoot(page, scope, state);
         await undo();
         await expect(strip).toHaveAttribute("data-tone", "slate", { timeout: POLL_WAIT_MS });

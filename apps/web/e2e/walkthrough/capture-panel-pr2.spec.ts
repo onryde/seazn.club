@@ -354,6 +354,23 @@ async function untilLive(body: Locator): Promise<void> {
 /** §7.5: the takeover's instant as the venue's clock prints it (en-GB, 24 h — format.ts `fmtTime`'s house shape). */
 const venueTime = (at: Date, tz: string): string =>
   new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: tz }).format(at);
+/** B7 review M-5: every READING on the phone line sits on one line (only the model and the waiting sentence may wrap). The
+ *  lines a part spans are the distinct tops of its fragments — an inline box with a child span reports one rect per run. */
+async function expectReadingsUnbroken(strip: Locator, where: string, opts: { wraps?: boolean } = {}): Promise<void> {
+  const parts = await strip.getByTestId("stream-phone-line").locator("[data-line-part]")
+    .evaluateAll((els) => els.map((e) => [e.getAttribute("data-line-part"), new Set([...e.getClientRects()].map((r) => Math.round(r.top))).size] as const));
+  const readings = parts.filter(([kind]) => kind !== "model" && kind !== "waiting");
+  expect(readings.map(([k]) => k), `${where}: the line's readings (anti-vacuity)`).toEqual(["phone", "battery", "bitrate", "heard"]);
+  for (const [kind, lines] of readings) expect(lines, `${where}: the ${kind} reading is on one line`).toBe(1);
+  if (!opts.wraps) return;
+  const lineTops = await strip.getByTestId("stream-phone-line").evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+  });
+  expect(lineTops, `${where}: PREMISE — the line wraps at this width, so a split was possible`).toBeGreaterThan(1);
+}
+
 async function lastTakeoverAt(fixtureId: string): Promise<Date> {
   let at: Date | null = null;
   await expect
@@ -389,6 +406,7 @@ for (const width of [1280, 768, 320] as const) {
     await expect(sw).toHaveAttribute("aria-checked", "false");
     await expect(sw).toContainText(en("stream.auto.switch"));
     await expect(body.getByTestId("stream-auto-hint"), "off: no caption").toHaveCount(0);
+    await expect(body.getByTestId("stream-auto-operator"), "off: no operator hint, though the phone is in Operator").toHaveCount(0);
     expect(await autoStreamOf(f.id), "premise: nothing saved yet").not.toBe(true);
     // The switch sits under the destination picker (Option A).
     const [pickerBox, switchBox] = [await body.getByTestId("stream-target").boundingBox(), await sw.boundingBox()];
@@ -400,6 +418,14 @@ for (const width of [1280, 768, 320] as const) {
     await expect(sw).toHaveAttribute("aria-checked", "true", { timeout: POLL_WAIT_MS });
     await expect(body.getByTestId("stream-auto-hint")).toHaveText(enPlural("stream.auto.switchHint", AUTO_STOP_MIN));
     await expect.poll(() => autoStreamOf(f.id), { message: "the tap SAVED the switch", timeout: POLL_WAIT_MS }).toBe(true);
+    // Owner-approved 2026-10-08: the paired phone beats in Operator (the fake's default mode, read back by the server) — on,
+    // the hint under the switch says it won't start on its own, and the switch names it.
+    const opHint = body.getByTestId("stream-auto-operator");
+    await expect(opHint).toHaveText(en("stream.auto.operatorHint"), { timeout: POLL_WAIT_MS });
+    const opHintId = await opHint.getAttribute("id");
+    await expect(sw).toHaveAttribute("aria-describedby", new RegExp(`(^| )${escapeRe(opHintId!)}( |$)`));
+    const hintBox = await opHint.boundingBox();
+    expect(hintBox!.y, "under the switch").toBeGreaterThanOrEqual((await sw.boundingBox())!.y + (await sw.boundingBox())!.height - 1);
     await expectNoHorizontalScroll(page);
     // A reload reads the server's answer, not the tap's memory.
     const again = await openPhoneTab(page, rig, f);
@@ -408,6 +434,7 @@ for (const width of [1280, 768, 320] as const) {
     await again.getByTestId("stream-auto-switch").click();
     await expect(again.getByTestId("stream-auto-switch")).toHaveAttribute("aria-checked", "false", { timeout: POLL_WAIT_MS });
     await expect.poll(() => autoStreamOf(f.id), { message: "the second tap saved it OFF", timeout: POLL_WAIT_MS }).toBe(false);
+    await expect(again.getByTestId("stream-auto-operator"), "off again: the operator hint goes").toHaveCount(0);
     await expect(again.getByTestId("stream-auto-error"), "no failure line").toHaveCount(0);
   });
 }
@@ -456,6 +483,8 @@ test("T10/T11 live: 'Automatic: stops about N minutes after the result'; the hea
 
   await body.getByTestId("stream-auto-switch").click();
   await expect.poll(() => autoStreamOf(f.id), { timeout: POLL_WAIT_MS }).toBe(true);
+  await expect(body.getByTestId("stream-auto-hint"), "PREMISE: the switch reads on").toBeVisible({ timeout: POLL_WAIT_MS });
+  await expect(body.getByTestId("stream-auto-operator"), "on, the phone in Automatic: no operator hint").toHaveCount(0);
   await tapGoLive(body, rig, f);
   await untilLive(body);
 
@@ -482,14 +511,31 @@ test("T10/T11 live: 'Automatic: stops about N minutes after the result'; the hea
   reading = { ...reading, delivery: "stalled" };
   await expect(lead, "stalled outranks both").toHaveText(en("stream.phone.health.stalled"), { timeout: BEAT_POLL_MS });
   await expect(body.locator('[data-node="phone"] [data-mark="bang"]'), "stalled: the node's '!'").toHaveCount(1);
-  // The phone at 320: the amber strip and its line fit.
+  // Owner ruling 2026-10-08: the video is not reaching Seazn — the Seazn node says so, from the same server verdict.
+  await expect(body.getByTestId("stream-chain"), "stalled: the Seazn node waits for video").toHaveAttribute("data-seazn", "waitingVideo");
+  await expect(body.locator('[data-node="seazn"]')).toContainText(en("stream.chain.word.waitingVideo"));
+  // The phone at 320: the amber strip and its line fit, and every reading stays on one line (B7 review M-5: "2.4 Mbps"
+  // once broke across two).
   await page.setViewportSize({ width: 320, height: 800 });
   await expectNoHorizontalScroll(page);
+  await expectReadingsUnbroken(strip, "320, stalled (the small line under the lead)");
   await page.setViewportSize({ width: 1280, height: 900 });
   // Back to healthy: the amber goes with the server's verdict.
   reading = { ...reading, delivery: "ok", thermal: 0, battery: { percent: 78, charging: true, drainPctPerHour: null } };
   await expect(strip, "healthy again").toHaveAttribute("data-tone", "slate", { timeout: BEAT_POLL_MS });
+  await expect(body.getByTestId("stream-chain"), "healthy: Seazn receives again").toHaveAttribute("data-seazn", "receiving");
+  // M-5's own case: the healthy line is the strip's only text (full size) — at 320 it wraps, and "2.4 Mbps" once split.
+  await page.setViewportSize({ width: 320, height: 800 });
+  await expect(strip).toHaveText(healthLinePattern({ percent: 78, charging: true, mbps: "2.4" }), { timeout: BEAT_POLL_MS });
+  await expectReadingsUnbroken(strip, "320, healthy (the line alone)", { wraps: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
   for (const bad of ["null", "undefined", "NaN", "0 Mbps"]) expect(await strip.textContent(), bad).not.toContain(bad);
+  // B7 review M-3: the line is the SERVER's stopApplies (the tick's own predicate). The phone switched to Operator means the
+  // automatic stop would not happen — no line; back in Automatic, the line again.
+  reading = { ...reading, mode: "operator" };
+  await expect(body.getByTestId("stream-auto-live"), "the phone in Operator: no automatic stop, no line").toHaveCount(0, { timeout: BEAT_POLL_MS });
+  reading = { ...reading, mode: "automatic" };
+  await expect(body.getByTestId("stream-auto-live"), "back in Automatic").toHaveText(enPlural("stream.auto.liveLine", AUTO_STOP_MIN), { timeout: BEAT_POLL_MS });
 
   // W8: the phone falls silent while its video still arrives — not responding after NOT_RESPONDING_BEATS cadences.
   stop();
@@ -666,6 +712,21 @@ test("T12 Ready: a second phone claims → the amber notice names ITS model and 
   expect(third1.status).toBe(200);
   third.keepAlive();
   await expect(again.getByTestId("stream-takeover-text")).toContainText("(iPhone 15)", { timeout: 2 * POLL_WAIT_MS });
+
+  // B7 review I-2: Revoke & reissue IS the answer to a takeover — the server stops serving it with the old code, so the
+  // notice goes with it (no dismissal involved: this takeover was never dismissed).
+  const fold = again.getByTestId("stream-code-disclosure");
+  if ((await fold.getAttribute("open")) === null) await fold.locator("summary").click();
+  await again.getByTestId("stream-code-reissue").click();
+  const dialog = page.getByRole("alertdialog");
+  const [reissued] = await Promise.all([
+    page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === `/api/v1/fixtures/${f.id}/stream-code/reissue`, { timeout: POLL_WAIT_MS }),
+    dialog.getByRole("button", { name: en("stream.code.reissue.confirm.button"), exact: true }).click(),
+  ]);
+  expect(reissued.status(), "the reissue answered").toBe(200);
+  await expect(again.getByTestId("stream-takeover"), "reissued: the notice is gone").toHaveCount(0, { timeout: 2 * POLL_WAIT_MS });
+  await page.waitForTimeout(STREAM_POLL_MS + 1_000); // one more poll: it must stay gone
+  await expect(again.getByTestId("stream-takeover"), "and stays gone past the next poll").toHaveCount(0);
 });
 
 test("T12 live: the phone dies (no beat, no video) and a second phone takes over → the notice names Stop while the session is live", async ({
