@@ -45,6 +45,7 @@ import { recordEvent } from "@/server/relay/telemetry";
 import { captureStageOf } from "./capture-stage";
 import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLink } from "./device-links";
 import { fixtureStreamTarget, resolveStreamCode, type ResolvedCode } from "./stream-codes";
+import { maybeAutoStart } from "./stream-auto";
 import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
 type Descriptor = z.infer<typeof CaptureDescriptor>;
@@ -428,7 +429,9 @@ type Decided = {
  *  3. the beat stored (§6.10) on the SERVER clock, history in a savepoint;
  *  4. `ended` (T21/T22) or `stopped: X` (T23/T24/T24a), decided under the same lock and applied after the commit;
  *  5. the open session ticked (§6.11) when its phone's beat names it;
- *  6. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence.
+ *  6. auto start (PR-2 §7.2): the current phone's beat may start the match's broadcast, once (`maybeAutoStart`) — never on
+ *     the operator's own `ended` beat or a beat that stopped a session, and never failing the beat;
+ *  7. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence.
  */
 export async function postBeat(rawCode: string, tok: string, body: Beat, deps: SessionDeps, now: Date): Promise<BeatAnswer> {
   const resolved = await resolveStreamCode(rawCode, tok, body.claim === "new" ? "claim" : "beat", body.phone, now);
@@ -584,7 +587,19 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
     }
   }
 
-  // 6. The answer, from the rows as they now stand.
+  // 6. PR-2 (§7.2): auto start — the current phone's beat, never the operator's own Stop or a beat that stops a session.
+  // After the tick (a session that tick ended is no longer open) and before the answer, so the beat that starts the
+  // broadcast is answered `go-live` with `startedBy: "automatic"` (T42). It never fails the beat: reported, answered.
+  if (decided.mine !== null && body.state !== "ended" && decided.stop === null) {
+    try {
+      await maybeAutoStart({ orgId: resolved.orgId, fixtureId: resolved.fixtureId, pairingId: decided.mine.id, phoneMode: body.mode }, deps, now);
+    } catch (err) {
+      log.error({ err: String(err), orgId: resolved.orgId }, "capture beat: auto start failed — the beat is answered");
+      captureError(err, { orgId: resolved.orgId, route: "capture.beat.auto_start" });
+    }
+  }
+
+  // 7. The answer, from the rows as they now stand.
   const latest = await latestSession(resolved.fixtureId);
   const open = await openSessionOf(sql, resolved.fixtureId);
   const holder = await holderOf(sql, resolved.codeId, open);
