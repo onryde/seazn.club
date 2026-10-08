@@ -95,5 +95,6 @@ vitest-results-*.json
 # (W1c Task 7/8 rulings; final review m-13).
 docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/**/shots/
 
-# Hand-mutant runner self-test scratch dir (scripts/__tests__/mutate.test.ts): created and removed per run.
-scripts/.mutate-selftest-*/
+# Hand-mutant runner self-test scratch dir (scripts/__tests__/mutate.test.ts): created and removed per run. At the repo
+# root, not under scripts/: scripts/__tests__/test-email-domain.test.ts walks scripts/ and would race its removal.
+/.mutate-selftest-*/

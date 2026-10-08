@@ -30,7 +30,7 @@
   {
     "id": "duplicate-id",
     "file": "scripts/mutate.ts",
-    "find": "if (ids.has(m.id)) throw",
+    "find": "if (ids.has(id)) throw",
     "replace": "if (false) throw",
     "killers": [
       {
@@ -128,7 +128,7 @@
   {
     "id": "survivor-exit",
     "file": "scripts/mutate.ts",
-    "find": "verdicts.every((v) => v.state === \"KILLED\") ? 0 : 1",
+    "find": "verdicts.every(settled) ? 0 : 1",
     "replace": "0",
     "killers": [
       {
@@ -206,6 +206,501 @@
         "files": [
           "scripts/__tests__/mutate.test.ts"
         ]
+      }
+    ]
+  },
+  {
+    "id": "list-array",
+    "file": "scripts/mutate.ts",
+    "find": "if (!Array.isArray(mutants)) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "mutant-object",
+    "file": "scripts/mutate.ts",
+    "find": "if (!isObject(m)) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "id-string",
+    "file": "scripts/mutate.ts",
+    "find": "if (typeof m.id !== \"string\") throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "field-types",
+    "file": "scripts/mutate.ts",
+    "find": "if (typeof m[field] !== \"string\") throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "field-file-unchecked",
+    "file": "scripts/mutate.ts",
+    "find": "[\"file\", \"find\", \"replace\"] as const",
+    "replace": "[\"find\", \"replace\"] as const",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "field-find-unchecked",
+    "file": "scripts/mutate.ts",
+    "find": "[\"file\", \"find\", \"replace\"] as const",
+    "replace": "[\"file\", \"replace\"] as const",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "field-replace-unchecked",
+    "file": "scripts/mutate.ts",
+    "find": "[\"file\", \"find\", \"replace\"] as const",
+    "replace": "[\"file\", \"find\"] as const",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "collect-ok-defined",
+    "file": "scripts/mutate.ts",
+    "find": "m.collectFailOk !== undefined &&",
+    "replace": "true &&",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "collect-ok-type",
+    "file": "scripts/mutate.ts",
+    "find": "typeof m.collectFailOk !== \"string\"",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "collect-ok-empty",
+    "file": "scripts/mutate.ts",
+    "find": "m.collectFailOk === \"\"",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "killers-array",
+    "file": "scripts/mutate.ts",
+    "find": "if (!Array.isArray(m.killers)) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "killer-object",
+    "file": "scripts/mutate.ts",
+    "find": "if (!isObject(k)) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "cwd-string",
+    "file": "scripts/mutate.ts",
+    "find": "if (typeof k.cwd !== \"string\") throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "files-array",
+    "file": "scripts/mutate.ts",
+    "find": "if (!Array.isArray(k.files)) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "name-defined",
+    "file": "scripts/mutate.ts",
+    "find": "k.name !== undefined &&",
+    "replace": "true &&",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "name-type",
+    "file": "scripts/mutate.ts",
+    "find": "typeof k.name !== \"string\"",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "name-empty",
+    "file": "scripts/mutate.ts",
+    "find": "k.name === \"\"",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "cwd-directory",
+    "file": "scripts/mutate.ts",
+    "find": "statOf(cwd)?.isDirectory() !== true",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "file-type",
+    "file": "scripts/mutate.ts",
+    "find": "typeof file !== \"string\"",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "file-empty",
+    "file": "scripts/mutate.ts",
+    "find": "file === \"\"",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "file-exists",
+    "file": "scripts/mutate.ts",
+    "find": "if (found === undefined) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "file-is-file",
+    "file": "scripts/mutate.ts",
+    "find": "if (!found.isFile()) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "mutant-file-exists",
+    "file": "scripts/mutate.ts",
+    "find": "statOf(resolve(repo, m.file as string))?.isFile() !== true",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "validateMutants refuses|well-formed list"
+      }
+    ]
+  },
+  {
+    "id": "collect-detect",
+    "file": "scripts/mutate.ts",
+    "find": "if (r.numFailedTestSuites > 0) collectFailure ??= collectDetail(r);",
+    "replace": "if (false) collectFailure ??= collectDetail(r);",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "COLLECT_FAILED, not KILLED|collectFailOk with a reason"
+      }
+    ]
+  },
+  {
+    "id": "collect-vs-killed",
+    "file": "scripts/mutate.ts",
+    "find": "killedBy.length > 0 ? { id: m.id",
+    "replace": "false ? { id: m.id",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "reports a killed mutant|COLLECT_FAILED, not KILLED"
+      }
+    ]
+  },
+  {
+    "id": "collect-accepted-any",
+    "file": "scripts/mutate.ts",
+    "find": "v.accepted !== undefined)",
+    "replace": "true)",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "COLLECT_FAILED, not KILLED|collectFailOk with a reason"
+      }
+    ]
+  },
+  {
+    "id": "collect-accepted-never",
+    "file": "scripts/mutate.ts",
+    "find": "|| (v.state === \"COLLECT_FAILED\" && v.accepted !== undefined)",
+    "replace": "|| false",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "COLLECT_FAILED, not KILLED|collectFailOk with a reason"
+      }
+    ]
+  },
+  {
+    "id": "collect-accepted-dropped",
+    "file": "scripts/mutate.ts",
+    "find": "{ accepted: m.collectFailOk }",
+    "replace": "{}",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "COLLECT_FAILED, not KILLED|collectFailOk with a reason"
+      }
+    ]
+  },
+  {
+    "id": "collect-ansi",
+    "file": "scripts/mutate.ts",
+    "find": ".replace(ANSI, \"\").replace(/\\s+/g, \" \")",
+    "replace": ".replace(/\\s+/g, \" \")",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "COLLECT_FAILED, not KILLED|collectFailOk with a reason"
+      }
+    ]
+  },
+  {
+    "id": "table-accepted",
+    "file": "scripts/mutate.ts",
+    "find": "COLLECT_FAILED (accepted: ${v.accepted}) — ${v.detail}",
+    "replace": "COLLECT_FAILED — ${v.detail}",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "the table prints each state"
+      }
+    ]
+  },
+  {
+    "id": "table-bold",
+    "file": "scripts/mutate.ts",
+    "find": "**COLLECT_FAILED** — ${v.detail}",
+    "replace": "COLLECT_FAILED — ${v.detail}",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "the table prints each state"
+      }
+    ]
+  },
+  {
+    "id": "scratch-in-scripts",
+    "file": "scripts/__tests__/mutate.test.ts",
+    "find": "mkdtempSync(join(REPO, \".mutate-selftest-\"))",
+    "replace": "mkdtempSync(join(REPO, \"scripts\", \".mutate-selftest-\"))",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "the scratch dir is a root-level"
+      }
+    ]
+  },
+  {
+    "id": "scratch-not-ignored",
+    "file": ".gitignore",
+    "find": "/.mutate-selftest-*/",
+    "replace": "/.mutate-selftest-zzz/",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "scripts/__tests__/mutate.test.ts"
+        ],
+        "name": "the scratch dir is a root-level"
       }
     ]
   }
