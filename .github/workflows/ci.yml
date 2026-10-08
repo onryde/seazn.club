@@ -298,16 +298,27 @@ jobs:
 
       # The engine rules reference (W2a ruling 75, packages/engine/rules/). Its rows are proved by tests in apps/web,
       # e2e and tools, so this checker must run on a PR that touches none of packages/engine/**: the engine job
-      # further down is path-filtered, and this job is not. Same judge discipline as the two steps above, with jq
-      # instead of node: red on zero tests, a failed test or suite, a skip or todo, and a stray second file.
+      # further down is path-filtered, and this job is not. Same node judge discipline as the two steps above: red on
+      # zero tests, a failed test or suite, a skip or todo, and any file but the one asked for.
       # packages/engine/test/rules-reference.test.ts pins this step (its CI-wiring describe).
       - name: Engine rules reference checker (DB-free)
         run: |
           set -euo pipefail
           rm -f vitest-results-rules.json
           ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-rules.json --testTimeout=30000 packages/engine/test/rules-reference.test.ts
-          jq -r '"rules reference: \(.numPassedTests)/\(.numTotalTests) tests passed"' vitest-results-rules.json
-          jq -e '.numTotalTests > 0 and .numFailedTests == 0 and .numFailedTestSuites == 0 and .numPendingTests == 0 and .numTodoTests == 0 and (.testResults | length) == 1' vitest-results-rules.json
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("vitest-results-rules.json", "utf8"));
+            const files = (r.testResults || []).map((t) => t.name);
+            console.log(`rules reference: ${r.numPassedTests}/${r.numTotalTests} tests passed in ${files.length} file(s), ${r.numFailedTestSuites} failed suite(s)`);
+            const fail = (msg) => { console.error(`::error::${msg}`); process.exit(1); };
+            if (!(r.numTotalTests > 0)) fail("the rules reference step ran ZERO tests. A suite that fails to collect reads 0/0, so this is a red, not a pass.");
+            if (r.numFailedTests !== 0) fail(`${r.numFailedTests} rules reference failed test(s).`);
+            if (r.numFailedTestSuites !== 0) fail(`${r.numFailedTestSuites} rules reference failed suite(s) (a file that fails to COLLECT counts here, not in numFailedTests).`);
+            if (r.numPendingTests !== 0) fail(`${r.numPendingTests} rules reference test(s) were skipped.`);
+            if (r.numTodoTests !== 0) fail(`${r.numTodoTests} rules reference test(s) are todo.`);
+            if (files.length !== 1) fail(`the rules reference step ran ${files.length} files, not exactly 1: ${files.join(", ")}`);
+          '
 
   # -------------------------------------------------------------------------
   # The apps/web unit / property / grid suite, in FOUR shards. It was 216s — 182s

@@ -570,10 +570,10 @@
     ]
   },
   {
-    "id": "title-describe-dropped",
+    "id": "title-root-describe-dropped",
     "file": "packages/engine/test/rules-reference.ts",
-    "find": "e.text === \"it\" || e.text === \"test\" || e.text === \"describe\"",
-    "replace": "e.text === \"it\" || e.text === \"test\"",
+    "find": "const TEST_ROOTS = [\"it\", \"test\", \"describe\"];",
+    "replace": "const TEST_ROOTS = [\"it\", \"test\"];",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -587,8 +587,8 @@
   {
     "id": "title-test-describe-dropped",
     "file": "packages/engine/test/rules-reference.ts",
-    "find": " && e.name.text === \"describe\"",
-    "replace": " && e.name.text === \"describe\" && false",
+    "find": "\"test.describe\", ...DESCRIBE_MODES",
+    "replace": "...DESCRIBE_MODES",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -600,10 +600,190 @@
     ]
   },
   {
-    "id": "title-test-modifiers-accepted",
+    "id": "title-serial-dropped",
     "file": "packages/engine/test/rules-reference.ts",
-    "find": " && e.name.text === \"describe\"",
+    "find": "const DESCRIBE_MODES = [\"serial\", \"parallel\"];",
+    "replace": "const DESCRIBE_MODES = [\"parallel\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "title-parallel-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const DESCRIBE_MODES = [\"serial\", \"parallel\"];",
+    "replace": "const DESCRIBE_MODES = [\"serial\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "title-skipif-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const CONDITIONAL_SKIPS = [\"skipIf\", \"runIf\"];",
+    "replace": "const CONDITIONAL_SKIPS = [\"runIf\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "title-runif-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const CONDITIONAL_SKIPS = [\"skipIf\", \"runIf\"];",
+    "replace": "const CONDITIONAL_SKIPS = [\"skipIf\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "skip-modifier-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const UNCONDITIONAL_SKIPS = [\"skip\", \"todo\", \"fixme\"];",
+    "replace": "const UNCONDITIONAL_SKIPS = [\"todo\", \"fixme\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a DB-gated or serial proof counts; the same id inside an unconditional skip is refused, and inside a conditional one is accepted \\(probe pin, synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "todo-modifier-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const UNCONDITIONAL_SKIPS = [\"skip\", \"todo\", \"fixme\"];",
+    "replace": "const UNCONDITIONAL_SKIPS = [\"skip\", \"fixme\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "fixme-modifier-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "const UNCONDITIONAL_SKIPS = [\"skip\", \"todo\", \"fixme\"];",
+    "replace": "const UNCONDITIONAL_SKIPS = [\"skip\", \"todo\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "skipped-body-entered",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (kind === \"skipped\") return;",
+    "replace": "if (false) return;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a DB-gated or serial proof counts; the same id inside an unconditional skip is refused, and inside a conditional one is accepted \\(probe pin, synthetic signed rows\\)"
+      }
+    ]
+  },
+  {
+    "id": "skip-lookthrough-calls-dropped",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "if (ts.isCallExpression(e)) return names(e.expression);\n",
     "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "skip-root-unchecked",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "return TEST_ROOTS.includes(e.text) ? [e.text] : undefined;",
+    "replace": "return [e.text];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "gate-accepted-as-direct-callee",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "return DIRECT_CALLEES.has(direct) ? \"title\" : \"other\";",
+    "replace": "return DIRECT_CALLEES.has(direct) || GATE_CALLEES.has(direct) ? \"title\" : \"other\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "any-call-of-a-test-root-is-a-gate",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "return gate !== undefined && GATE_CALLEES.has(gate) ? \"title\" : \"other\";",
+    "replace": "return gate !== undefined ? \"title\" : \"other\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "a conditional skip and a Playwright describe mode carry a title; an unconditional skip, todo or fixme neither yields one nor is entered \\(re-review M-1, M-2\\)"
+      }
+    ]
+  },
+  {
+    "id": "title-kind-unchecked",
+    "file": "packages/engine/test/rules-reference.ts",
+    "find": "kind === \"title\" && first !== undefined",
+    "replace": "first !== undefined",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -795,96 +975,6 @@
     ]
   },
   {
-    "id": "judge-total-dropped",
-    "file": "packages/engine/test/rules-reference.test.ts",
-    "find": ".numTotalTests > 0 and ",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "test/rules-reference.test.ts"
-        ],
-        "name": "the judge is red on zero tests, a failed test, a failed suite, a skip, a todo and a stray file, and green on a clean single-file pass"
-      }
-    ]
-  },
-  {
-    "id": "judge-failed-tests-dropped",
-    "file": "packages/engine/test/rules-reference.test.ts",
-    "find": " and .numFailedTests == 0",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "test/rules-reference.test.ts"
-        ],
-        "name": "the judge is red on zero tests, a failed test, a failed suite, a skip, a todo and a stray file, and green on a clean single-file pass"
-      }
-    ]
-  },
-  {
-    "id": "judge-failed-suites-dropped",
-    "file": "packages/engine/test/rules-reference.test.ts",
-    "find": " and .numFailedTestSuites == 0",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "test/rules-reference.test.ts"
-        ],
-        "name": "the judge is red on zero tests, a failed test, a failed suite, a skip, a todo and a stray file, and green on a clean single-file pass"
-      }
-    ]
-  },
-  {
-    "id": "judge-pending-dropped",
-    "file": "packages/engine/test/rules-reference.test.ts",
-    "find": " and .numPendingTests == 0",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "test/rules-reference.test.ts"
-        ],
-        "name": "the judge is red on zero tests, a failed test, a failed suite, a skip, a todo and a stray file, and green on a clean single-file pass"
-      }
-    ]
-  },
-  {
-    "id": "judge-todo-dropped",
-    "file": "packages/engine/test/rules-reference.test.ts",
-    "find": " and .numTodoTests == 0",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "test/rules-reference.test.ts"
-        ],
-        "name": "the judge is red on zero tests, a failed test, a failed suite, a skip, a todo and a stray file, and green on a clean single-file pass"
-      }
-    ]
-  },
-  {
-    "id": "judge-one-file-dropped",
-    "file": "packages/engine/test/rules-reference.test.ts",
-    "find": " and (.testResults | length) == 1",
-    "replace": "",
-    "killers": [
-      {
-        "cwd": "packages/engine",
-        "files": [
-          "test/rules-reference.test.ts"
-        ],
-        "name": "the judge is red on zero tests, a failed test, a failed suite, a skip, a todo and a stray file, and green on a clean single-file pass"
-      }
-    ]
-  },
-  {
     "id": "ci-stale-report-kept",
     "file": ".github/workflows/ci.yml",
     "find": "          rm -f vitest-results-rules.json\n",
@@ -895,7 +985,22 @@
         "files": [
           "test/rules-reference.test.ts"
         ],
-        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and judges the report"
+        "name": "the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run"
+      }
+    ]
+  },
+  {
+    "id": "ci-set-e-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "          set -euo pipefail\n          rm -f vitest-results-rules.json\n",
+    "replace": "          rm -f vitest-results-rules.json\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run"
       }
     ]
   },
@@ -910,22 +1015,187 @@
         "files": [
           "test/rules-reference.test.ts"
         ],
-        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and judges the report"
+        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge \\(no jq\\)"
       }
     ]
   },
   {
-    "id": "ci-judge-failed-tests-dropped",
+    "id": "ci-judge-total-dropped",
     "file": ".github/workflows/ci.yml",
-    "find": " and .numFailedTests == 0",
-    "replace": "",
+    "find": "if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "replace": "if (false) fail(\"the rules reference",
     "killers": [
       {
         "cwd": "packages/engine",
         "files": [
           "test/rules-reference.test.ts"
         ],
-        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and judges the report"
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-failed-tests-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (r.numFailedTests !== 0) fail(",
+    "replace": "if (false) fail(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-failed-suites-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (r.numFailedTestSuites !== 0) fail(`${r.numFailedTestSuites} rules reference",
+    "replace": "if (false) fail(`${r.numFailedTestSuites} rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-pending-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (r.numPendingTests !== 0) fail(",
+    "replace": "if (false) fail(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-todo-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (r.numTodoTests !== 0) fail(",
+    "replace": "if (false) fail(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-one-file-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "if (files.length !== 1) fail(",
+    "replace": "if (false) fail(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-exit-swallowed",
+    "file": ".github/workflows/ci.yml",
+    "find": "process.exit(1); };\n            if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "replace": "process.exit(0); };\n            if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-annotation-dropped",
+    "file": ".github/workflows/ci.yml",
+    "find": "console.error(`::error::${msg}`); process.exit(1); };\n            if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "replace": "console.error(msg); process.exit(1); };\n            if (!(r.numTotalTests > 0)) fail(\"the rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-judge-reads-the-wrong-report",
+    "file": ".github/workflows/ci.yml",
+    "find": "JSON.parse(fs.readFileSync(\"vitest-results-rules.json\", \"utf8\"))",
+    "replace": "JSON.parse(fs.readFileSync(\"vitest-results-reference.json\", \"utf8\"))",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the judge is green on a clean single-file pass and red, naming its reason, on each of six faults, run through real bash and node"
+      }
+    ]
+  },
+  {
+    "id": "ci-single-quote-in-judge-body",
+    "file": ".github/workflows/ci.yml",
+    "find": "(r.testResults || []).map((t) => t.name);\n            console.log(`rules reference",
+    "replace": "(r.testResults || []).map((t) => t.name); // it's\n            console.log(`rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge \\(no jq\\)"
+      }
+    ]
+  },
+  {
+    "id": "ci-jq-in-judge-body",
+    "file": ".github/workflows/ci.yml",
+    "find": "(r.testResults || []).map((t) => t.name);\n            console.log(`rules reference",
+    "replace": "(r.testResults || []).map((t) => t.name); /* jq */\n            console.log(`rules reference",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge \\(no jq\\)"
+      }
+    ]
+  },
+  {
+    "id": "ci-command-after-judge",
+    "file": ".github/workflows/ci.yml",
+    "find": "not exactly 1: ${files.join(\", \")}`);\n          '\n",
+    "replace": "not exactly 1: ${files.join(\", \")}`);\n          '\n          echo done\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "test/rules-reference.test.ts"
+        ],
+        "name": "the step runs only this file with the JSON reporter, clears any stale report first, and ends in a node judge \\(no jq\\)"
       }
     ]
   },
