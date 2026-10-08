@@ -36,12 +36,11 @@ import {
 } from "../helpers/fake-capture-phone";
 import { StreamPhone, StreamSettings } from "../../src/server/api-v1/schemas";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
+import { FAKE_CONNECT_AFTER_MS_DEFAULT } from "../../src/server/relay/fakes";
+import { POOL_SLOT_WAIT_MS, poolHoldProblem, releaseStreamSlot, takeStreamSlot } from "../helpers/stream-slot-pool";
 import {
   AUTO_START_RETRY_SECONDS,
   AUTO_STOP_AFTER_RESULT_SECONDS,
-  FREE_RESTARTS_PER_WINDOW,
-  MAX_DURATION_MINUTES,
   POLL_NEAR_SECONDS,
   POLL_STARTING_SECONDS,
 } from "../../src/server/relay/config";
@@ -107,27 +106,19 @@ const NAV_MS = 30_000;
 const PAD_MS = 30_000;
 
 // ===========================================================================
-// The stream-slot pool — SHARED with capture-phone.spec.ts, stream-relay.spec.ts and directory-stream-destinations.spec.ts
-// (restated: a spec cannot import another spec). The fake ingest admits STREAM_CAPACITY concurrent sessions; every
-// session any of them opens is opened under one of the pool's advisory-lock keys, held until its teardown has driven the
-// session terminal. capture-phone's W22 holds the WHOLE pool while it posts the GLOBAL cron tick — so a session opened
-// here without a key could be ticked (and ended) by it. An AUTOMATIC start opens a session on a beat, not a tap: every
-// test below takes its key BEFORE the match starts, which is the instant a beat can first start one.
+// The stream-slot pool (e2e/helpers/stream-slot-pool.ts) — SHARED with capture-phone, stream-relay, directory and
+// capture-panel-pr2. Every session any of them opens is opened under one of the pool's advisory-lock keys, held until its
+// teardown has driven the session terminal. capture-phone's W22 holds the WHOLE pool while it posts the GLOBAL cron tick
+// — so a session opened here without a key could be ticked (and ended) by it. An AUTOMATIC start opens a session on a
+// beat, not a tap: every test below takes its key BEFORE the match starts, which is the instant a beat can first start one.
 // ===========================================================================
-const STREAM_CAPACITY = Math.floor(new FakeIngest().storage.totalStorageMinutesLimit / MAX_DURATION_MINUTES);
-const POOL_SLOTS = STREAM_CAPACITY - 1;
-const SLOT_LOCK_BASE = 7_301_130_000;
-/** capture-phone.spec.ts's own derivation of the pool's longest hold (its W23, five go-live → stop cycles) — the wait a
- *  key here may owe it. Restated from that file's LIVE_WAIT_MS / CYCLE_MS / LONGEST_HOLD_MS. */
-const PHONE_SPEC_CYCLE_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000 + 3 * POLL_WAIT_MS;
-const PHONE_SPEC_LONGEST_HOLD_MS = (FREE_RESTARTS_PER_WINDOW + 2) * PHONE_SPEC_CYCLE_MS;
 /** This file's longest hold: A12 + A15 — an automatic start to live, the Stop, the quiet window, a Go live, the result and
- *  the automatic stop. It must stay inside the hold the pool's other files budget for, or their waits fall short. */
+ *  the automatic stop. The pool's limit judges it (here, in beforeEach, with every other environment problem). */
 const OWN_LONGEST_HOLD_MS = 2 * INGEST_SEEN_MS + 4 * POLL_WAIT_MS + QUIET_WINDOW_MS + AUTO_STOP_MS + AUTO_STOP_LATE_MS;
-const SLOT_WAIT_MS = 2 * Math.max(PHONE_SPEC_LONGEST_HOLD_MS, OWN_LONGEST_HOLD_MS);
-if (OWN_LONGEST_HOLD_MS > PHONE_SPEC_LONGEST_HOLD_MS) {
-  ENV_PROBLEMS.push(`this file holds a stream slot up to ${OWN_LONGEST_HOLD_MS} ms, longer than the ${PHONE_SPEC_LONGEST_HOLD_MS} ms the pool's other files wait for one`);
-}
+const POOL_HOLD = { file: "capture-auto.spec.ts", holdMs: OWN_LONGEST_HOLD_MS } as const;
+const SLOT_WAIT_MS = POOL_SLOT_WAIT_MS;
+const holdProblem = poolHoldProblem(POOL_HOLD);
+if (holdProblem) ENV_PROBLEMS.push(holdProblem);
 
 async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promise<T> {
   const dbUrl = process.env.DATABASE_URL;
@@ -146,37 +137,10 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
   }
 }
 
-let lease: (() => Promise<void>) | null = null;
 const rigsThisTest: { request: APIRequestContext; orgId: string }[] = [];
 
-async function streamSlot(): Promise<void> {
-  if (lease) return;
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
-  expect(POOL_SLOTS, "the fake's capacity leaves this pool at least one slot").toBeGreaterThanOrEqual(1);
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(dbUrl, {
-    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
-    prepare: !dbUrl.includes(":6543"),
-    max: 1,
-    idle_timeout: 0,
-  });
-  const deadline = Date.now() + SLOT_WAIT_MS;
-  for (;;) {
-    for (let i = 0; i < POOL_SLOTS; i++) {
-      const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${SLOT_LOCK_BASE + i}::bigint) as ok`;
-      if (row?.ok) {
-        lease = () => sql.end();
-        return;
-      }
-    }
-    if (Date.now() > deadline) {
-      await sql.end();
-      throw new Error(`none of the pool's ${POOL_SLOTS} stream slot(s) free after ${SLOT_WAIT_MS} ms`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-}
+/** One pool key, held until teardown; a second call in the same test reuses it. */
+const streamSlot = (): Promise<void> => takeStreamSlot(POOL_HOLD);
 
 async function teardownStreams(): Promise<void> {
   try {
@@ -196,9 +160,7 @@ async function teardownStreams(): Promise<void> {
         );
     }
   } finally {
-    const release = lease;
-    lease = null;
-    await release?.();
+    await releaseStreamSlot();
   }
 }
 

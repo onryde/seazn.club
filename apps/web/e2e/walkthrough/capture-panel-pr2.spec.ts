@@ -46,13 +46,13 @@ import {
   type FakeCapturePhone,
 } from "../helpers/fake-capture-phone";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
+import { FAKE_CONNECT_AFTER_MS_DEFAULT } from "../../src/server/relay/fakes";
+import { POOL_SLOT_WAIT_MS, releaseStreamSlot, takeStreamSlot } from "../helpers/stream-slot-pool";
 import {
   AUTO_STOP_AFTER_RESULT_SECONDS,
   DEAD_PHONE_TAKEOVER_SECONDS,
   HOT_THERMAL_STATUS,
   LOW_BATTERY_PERCENT,
-  MAX_DURATION_MINUTES,
   NOT_RESPONDING_BEATS,
   PHONE_NOT_READY_SHOW_AFTER_SECONDS,
   POLL_NEAR_SECONDS,
@@ -108,46 +108,20 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
   }
 }
 
-// The stream-slot pool, as capture-phone.spec.ts derives it: keys [BASE, BASE + CAPACITY − 1), the last key being
-// stream-credits.spec.ts's. The longest hold here is the health walk (one go-live, five reading changes and the
-// not-responding silence) — well inside capture-phone's W23, which sets the pool's wait budget.
-const STREAM_CAPACITY = Math.floor(new FakeIngest().storage.totalStorageMinutesLimit / MAX_DURATION_MINUTES);
-const POOL_SLOTS = STREAM_CAPACITY - 1;
-const SLOT_LOCK_BASE = 7_301_130_000;
-const SLOT_WAIT_MS = 10 * 60_000;
+// The stream-slot pool (e2e/helpers/stream-slot-pool.ts), shared with capture-phone, capture-auto, stream-relay and
+// directory. This file's longest hold is the health walk, from its Go live to its teardown: the live wait, six reading
+// changes (a beat and a poll each), the not-responding silence and four polls — its budget's own terms.
+const POOL_HOLD = {
+  file: "capture-panel-pr2.spec.ts",
+  holdMs: LIVE_WAIT_MS + 6 * BEAT_POLL_MS + NOT_RESPONDING_MS + 4 * POLL_WAIT_MS,
+} as const;
+const SLOT_WAIT_MS = POOL_SLOT_WAIT_MS;
 
-let lease: (() => Promise<void>) | null = null;
 const rigsThisTest: { request: APIRequestContext; orgId: string }[] = [];
 const drivers: (() => void)[] = [];
 
-async function streamSlot(): Promise<void> {
-  if (lease) return;
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
-  expect(POOL_SLOTS, "the fake's capacity leaves this pool at least one slot").toBeGreaterThanOrEqual(1);
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(dbUrl, {
-    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
-    prepare: !dbUrl.includes(":6543"),
-    max: 1,
-    idle_timeout: 0,
-  });
-  const deadline = Date.now() + SLOT_WAIT_MS;
-  for (;;) {
-    for (let i = 0; i < POOL_SLOTS; i++) {
-      const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${SLOT_LOCK_BASE + i}::bigint) as ok`;
-      if (row?.ok) {
-        lease = () => sql.end();
-        return;
-      }
-    }
-    if (Date.now() > deadline) {
-      await sql.end();
-      throw new Error(`none of the pool's ${POOL_SLOTS} stream slot(s) free after ${SLOT_WAIT_MS} ms`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-}
+/** One pool key, held until teardown; a second call in the same test reuses it. */
+const streamSlot = (): Promise<void> => takeStreamSlot(POOL_HOLD);
 
 async function teardownStreams(): Promise<void> {
   try {
@@ -168,9 +142,7 @@ async function teardownStreams(): Promise<void> {
         );
     }
   } finally {
-    const release = lease;
-    lease = null;
-    await release?.();
+    await releaseStreamSlot();
   }
 }
 

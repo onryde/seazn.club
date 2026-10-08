@@ -46,12 +46,19 @@ import {
   type FakeCapturePhone,
 } from "../helpers/fake-capture-phone";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
+import { FAKE_CONNECT_AFTER_MS_DEFAULT } from "../../src/server/relay/fakes";
+import {
+  POOL_SLOT_WAIT_MS,
+  STREAM_CAPACITY,
+  cycleMs,
+  releaseStreamSlot,
+  takeStreamSlot,
+  takeWholePool,
+} from "../helpers/stream-slot-pool";
 import {
   CODE_GRACE_AFTER_FINISH_MINUTES,
   DEAD_PHONE_TAKEOVER_SECONDS,
   FREE_RESTARTS_PER_WINDOW,
-  MAX_DURATION_MINUTES,
   PHONE_LOST_LIVE_MINUTES,
   PHONE_SILENT_FLOOR_SECONDS,
   PHONE_SILENT_SLACK_SECONDS,
@@ -97,7 +104,7 @@ const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
 const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
 const SEED_MS = 60_000;
 const NAV_MS = 30_000;
-const CYCLE_MS = LIVE_WAIT_MS + 3 * POLL_WAIT_MS;
+const CYCLE_MS = cycleMs(FAKE_CONNECT_MS);
 /** How late a server-timed end may land after its deadline: it is made by the next tick, and the panel's poll IS the
  *  tick — one poll, plus the read's own round trip. */
 const END_LATE_MS = STREAM_POLL_MS + 3_000;
@@ -132,63 +139,29 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
   }
 }
 
-// The deployment's stream capacity (stream-relay.spec.ts's derivation): admission refuses a start once the ingest's
-// storage headroom is below one more max-duration reservation. Keys [BASE, BASE + CAPACITY − 1) are the pool this file
-// SHARES with stream-relay.spec.ts and directory-stream-destinations.spec.ts; the last key is stream-credits.spec.ts's
-// and is never taken here.
-const STREAM_CAPACITY = Math.floor(new FakeIngest().storage.totalStorageMinutesLimit / MAX_DURATION_MINUTES);
-const POOL_SLOTS = STREAM_CAPACITY - 1;
-const SLOT_LOCK_BASE = 7_301_130_000;
-/** The longest any holder in the pool streams: this file's W23 (five go-live → stop cycles). */
+// The stream-slot pool (e2e/helpers/stream-slot-pool.ts): the deployment's stream capacity as advisory-lock keys, the
+// first CAPACITY − 1 SHARED with stream-relay, directory, capture-auto and capture-panel-pr2; the last is
+// stream-credits.spec.ts's and is never taken here (W22 takes it only for the instant of its tick).
+/** This file's longest hold, and the longest W22's whole-pool run stays inside: W23's five go-live → stop cycles. */
 const LONGEST_HOLD_MS = (FREE_RESTARTS_PER_WINDOW + 2) * CYCLE_MS;
-const SLOT_WAIT_MS = 2 * LONGEST_HOLD_MS;
+const POOL_HOLD = { file: "capture-phone.spec.ts", holdMs: LONGEST_HOLD_MS } as const;
+const SLOT_WAIT_MS = POOL_SLOT_WAIT_MS;
 
-let lease: (() => Promise<void>) | null = null;
 const rigsThisTest: { request: APIRequestContext; orgId: string }[] = [];
 
-async function streamSlot(): Promise<void> {
-  if (lease) return;
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
-  expect(POOL_SLOTS, "the fake's capacity leaves this pool at least one slot").toBeGreaterThanOrEqual(1);
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(dbUrl, {
-    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
-    prepare: !dbUrl.includes(":6543"),
-    max: 1,
-    idle_timeout: 0,
-  });
-  const deadline = Date.now() + SLOT_WAIT_MS;
-  for (;;) {
-    for (let i = 0; i < POOL_SLOTS; i++) {
-      const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${SLOT_LOCK_BASE + i}::bigint) as ok`;
-      if (row?.ok) {
-        lease = () => sql.end();
-        return;
-      }
-    }
-    if (Date.now() > deadline) {
-      await sql.end();
-      throw new Error(`none of the pool's ${POOL_SLOTS} stream slot(s) free after ${SLOT_WAIT_MS} ms`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-}
+/** One pool key, held until teardown; a second call in the same test reuses it (W22's whole pool included). */
+const streamSlot = (): Promise<void> => takeStreamSlot(POOL_HOLD);
 
 /** stream-credits.spec.ts budgets waiting out one other holder of ITS key at that holder's go-live and teardown
- *  (`LIVE_MS + NAV_MS` there; restated, a spec cannot import another spec). W22 waits no longer than one go-live → stop
- *  cycle for it, which covers that hold. */
+ *  (`LIVE_MS + NAV_MS` there). W22 waits no longer than one go-live → stop cycle for it, which covers that hold. */
 const CREDITS_KEY_WAIT_MS = CYCLE_MS;
-/** How often W22 asks for the whole pool. Each ask takes nothing it cannot keep, so it can ask often; a sibling polls a
- *  free key every 500 ms, and the whole pool is only ever free between two of their asks. */
-const WHOLE_POOL_POLL_MS = 100;
 
 /**
  * W22's exclusion (B9 review m-3; re-review n-2). The cron tick is GLOBAL — it ticks every open session on the server —
  * and in CI this file shares a server and a parallel shard with the other stream walkthroughs, whose held-WAITING rows
  * rely on nothing ticking them. Every session any of them opens is opened under one of the deployment's STREAM_CAPACITY
- * slot keys (the pool [BASE, BASE + CAPACITY − 1), shared with stream-relay and directory, and stream-credits'
- * BASE + CAPACITY − 1), held until its teardown has driven the session terminal. Holding EVERY key therefore means no
+ * slot keys (the pool [BASE, BASE + CAPACITY − 1), shared with stream-relay, directory, capture-auto and
+ * capture-panel-pr2, and stream-credits' BASE + CAPACITY − 1), held until its teardown has driven the session terminal. Holding EVERY key therefore means no
  * other test has a session open: the tick can reach this test's own and nothing else.
  *
  * Taken so that WAITING for it holds nothing (n-2: W22 used to wait for the other keys while holding its own and the
@@ -201,59 +174,11 @@ const WHOLE_POOL_POLL_MS = 100;
  * The bound a sibling can wait on W22 is therefore W22's run from its go-live to its teardown: the go-live, the W19
  * window and the late tick, credits' key (instant unless stream-credits shares the shard and is mid-hold, then at most
  * CREDITS_KEY_WAIT_MS), and the end landing — measured at 79 s (b9-report.md, the "W22 pool" annotation), inside the
- * 3 × CYCLE_MS that stream-relay and directory budget a pool wait at. Only with stream-credits in the same shard and
+ * pool's one wait for a key (POOL_SLOT_WAIT_MS, every member's). Only with stream-credits in the same shard and
  * mid-hold at the tick can it run past that, by at most CREDITS_KEY_WAIT_MS.
  * W22 holds both pool keys only while nobody else holds either, so it never overlaps W23's hold.
  */
-async function wholePool(): Promise<{ pool: number; waitedMs: number; credits: () => Promise<{ release: () => Promise<void> }> }> {
-  if (lease) throw new Error("wholePool: this test already holds a key — take the pool BEFORE any streamSlot()");
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(dbUrl, {
-    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
-    prepare: !dbUrl.includes(":6543"),
-    max: 1,
-    idle_timeout: 0,
-  });
-  const pool = Array.from({ length: POOL_SLOTS }, (_, i) => SLOT_LOCK_BASE + i);
-  const creditsKey = SLOT_LOCK_BASE + POOL_SLOTS;
-  const from = Date.now();
-  for (;;) {
-    const got: number[] = [];
-    for (const k of pool) {
-      const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${k}::bigint) as ok`;
-      if (!row?.ok) break;
-      got.push(k);
-    }
-    if (got.length === pool.length) break;
-    for (const k of got) await sql`select pg_advisory_unlock(${k}::bigint)`;
-    if (Date.now() - from > SLOT_WAIT_MS) {
-      await sql.end();
-      throw new Error(`W22's exclusion: the ${pool.length} pool key(s) were never free together in ${SLOT_WAIT_MS} ms`);
-    }
-    await new Promise((r) => setTimeout(r, WHOLE_POOL_POLL_MS));
-  }
-  // The lease: every key on this connection goes with it, at teardown, once the session is terminal.
-  lease = () => sql.end();
-  const waitedMs = Date.now() - from;
-  const credits = async (): Promise<{ release: () => Promise<void> }> => {
-    const deadline = Date.now() + CREDITS_KEY_WAIT_MS;
-    for (;;) {
-      const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${creditsKey}::bigint) as ok`;
-      if (row?.ok) {
-        return {
-          release: async () => {
-            await sql`select pg_advisory_unlock(${creditsKey}::bigint)`;
-          },
-        };
-      }
-      if (Date.now() > deadline) throw new Error(`W22's exclusion: stream-credits' key still held after ${CREDITS_KEY_WAIT_MS} ms`);
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  };
-  return { pool: pool.length, waitedMs, credits };
-}
+const wholePool = () => takeWholePool(POOL_HOLD, { creditsKeyWaitMs: CREDITS_KEY_WAIT_MS });
 
 async function teardownStreams(): Promise<void> {
   try {
@@ -273,9 +198,7 @@ async function teardownStreams(): Promise<void> {
         );
     }
   } finally {
-    const release = lease;
-    lease = null;
-    await release?.();
+    await releaseStreamSlot();
   }
 }
 
