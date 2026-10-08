@@ -29,12 +29,6 @@ export const ENGINE_HTTP_STATUS: Readonly<Record<EngineErrorCode, number>> = Obj
   SEEDING_MAP_SOURCE_INVALID: 422,
   SEEDING_BESTNTH_UNEQUAL_POOLS: 422,
   SEEDING_MAP_SOURCE_AMBIGUOUS: 422,
-  // W2a (spec §7; loop D Task 4 appends the codes, ENGINE_HTTP maps them): the three refusals are conflicts with the
-  // fixture's state, and the assertion (X-BR-1) is a server bug, so it surfaces as one.
-  SETTLE_NOT_APPLICABLE: 409,
-  TIEBREAK_NOT_APPLICABLE: 409,
-  LEVEL_RESULT_IN_BRACKET: 409,
-  LEVEL_RESULT_SEATED: 500,
 });
 
 /** The `?? 422` of http.ts:158 — what the product answers an EngineError whose
