@@ -630,7 +630,8 @@ describe("I-1 — which D3 box: phone first (owner 2026-10-01, option a)", () =>
 type Phone = NonNullable<StreamPhone["phone"]>;
 const phoneFacts = (over: Partial<Phone> = {}): Phone => ({
   present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
-  state: "paired", notReady: null, startFailed: null, lastBeatAt: "2026-09-14T12:09:50Z", elapsedMs: 10_000,
+  state: "paired", notReady: null, notReadyForMs: null, notReadyShown: false, health: null, startFailed: null,
+  lastBeatAt: "2026-09-14T12:09:50Z", elapsedMs: 10_000,
   beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
 });
 const readModel = (over: Partial<StreamPhone> = {}): StreamPhone => ({

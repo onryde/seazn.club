@@ -18,19 +18,23 @@ import type { z } from "zod";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { CaptureBeat } from "@/server/api-v1/capture-schemas";
-import { StreamPhone } from "@/server/api-v1/schemas";
+import { CaptureBeat, CaptureNotReady } from "@/server/api-v1/capture-schemas";
+import { StreamPhone, StreamPhoneHealth } from "@/server/api-v1/schemas";
 import {
-  CODE_GRACE_AFTER_FINISH_MINUTES, NOT_RESPONDING_BEATS, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS,
+  AUTO_START_RETRY_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES, HOT_THERMAL_STATUS, LOW_BATTERY_PERCENT, NOT_RESPONDING_BEATS,
+  PHONE_NOT_READY_SHOW_AFTER_SECONDS, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS,
 } from "@/server/relay/config";
+import { AUTO_START_CONJUNCTS, AUTO_START_REFUSALS, type AutoStartRefusal } from "@/server/relay/domain/auto-stream";
+import { HEALTH_REASONS, type HealthReason } from "@/server/relay/domain/phone-health";
 import { readFirstInput } from "@/server/relay/secret-columns";
-import { rigUser } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, rigUser, sessionOnTarget, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { getCode, postBeat, postStart } from "../capture-phone";
 import { reissueStreamCode, saveStreamSettings } from "../stream-codes";
-import { createSession } from "../stream-sessions";
+import { grantCredits } from "../stream-credits";
+import { createSession, stopSession } from "../stream-sessions";
 import { createStreamTarget } from "../stream-targets";
 import { streamPhone } from "../stream-phone";
-import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
+import { captureRig, override, phoneId, type CaptureRig } from "./_capture-rig";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -170,7 +174,13 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
       state: "armed", notReady: "camera", startFailed: "config", lastBeatAt: beatAt.toISOString(), elapsedMs: 7_000,
       beat: { battery: { percent: 15, charging: false, drainPctPerHour: 4.5 }, bitrateKbps: 2400, delivery: "stalled", thermal: 3, dataUsedMB: 12.5 },
       farPoll: (await pairingOf(r, a)).answered_poll_seconds === POLL_FAR_SECONDS,
+      // PR-2 T6: this beat has THREE problems at once (stalled, hot at HOT_THERMAL_STATUS, battery 15 on no charger); W9's
+      // priority serves the first — stalled. The camera reason is 7 s old, inside PHONE_NOT_READY_SHOW_AFTER_SECONDS.
+      health: "stalled", notReadyForMs: 7_000, notReadyShown: false,
     });
+    expect(HOT_THERMAL_STATUS, "PREMISE: the beat's thermal 3 is a hot reading").toBeLessThanOrEqual(3);
+    expect(15, "PREMISE: the beat's battery is low").toBeLessThan(LOW_BATTERY_PERCENT);
+    expect(7, "PREMISE: 7 s is inside the debounce").toBeLessThan(PHONE_NOT_READY_SHOW_AFTER_SECONDS);
     expect(v.lastTakeover, "one phone, no takeover").toBeNull();
   });
 
@@ -317,7 +327,7 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     const r = await captureRig();
     const key = `yt-secret-${randomUUID()}`;
     const target = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Keyed", streamKey: key });
-    await saveStreamSettings(r.auth, r.fixtureId, { targetId: target.id });
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: target.id, autoStream: true });   // PR-2: `auto` is an object the scan covers
     const a = phoneId("a");
     await r.pair(a);
     const { sessionId: sid } = await createSession(r.auth, r.fixtureId, { mode: "passthrough", targetId: target.id }, r.deps);
@@ -331,6 +341,7 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     ];
     const v = await readRig(r);
     expect(v.phone?.present, "PREMISE: the read is not empty").toBe(true);
+    expect(v.auto, "PREMISE: PR-2's `auto` object is part of what is scanned").toMatchObject({ enabled: true });
     const text = JSON.stringify(v);
     let checked = 0;
     for (const s of secrets) {
@@ -426,5 +437,514 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
 
   it("anti-vacuity: this file read the model and parsed every answer through the strict schema", () => {
     expect(reads).toBeGreaterThan(20);
+  });
+});
+
+// =====================================================================================================================
+// PR-2 T6 — the organiser read gains `auto`, `phone.health`, the debounced not-ready and the device model's survival.
+//
+// Expected values come from declarations — HEALTH_REASONS / config.ts's thresholds, AUTO_START_CONJUNCTS /
+// AUTO_START_REFUSALS, PHONE_NOT_READY_SHOW_AFTER_SECONDS, the contract's CaptureNotReady — and from the rig's own clock and
+// the beat bodies this file sends; never from stream-phone.ts. W9's priority (not responding, stalled, hot, battery low) is
+// pinned LITERALLY in the ladder below: HEALTH_REASONS is the unit under test there, so an order derived from it could not
+// notice a swap. Every table counts its rows and fails at zero.
+// =====================================================================================================================
+const SEC = 1000;
+const NEVER = 3_600_000;
+const C_MS = PHONE_NOT_READY_SHOW_AFTER_SECONDS * SEC;
+const nrOf = (v: StreamPhone) => ({ notReady: v.phone!.notReady, forMs: v.phone!.notReadyForMs, shown: v.phone!.notReadyShown });
+const lowBattery = (over: Partial<NonNullable<Beat["battery"]>> = {}) => ({ percent: LOW_BATTERY_PERCENT - 1, charging: false, drainPctPerHour: 6, ...over });
+/** The cadence-derived not-responding point: NOT_RESPONDING_BEATS × the cadence the phone was last ANSWERED. */
+const notRespondingMs = async (r: CaptureRig, phone: string) => NOT_RESPONDING_BEATS * (await pairingOf(r, phone)).answered_poll_seconds * SEC;
+
+type SettingsRow = {
+  auto_stream: boolean; auto_started_at: Date | null; auto_start_blocked_at: Date | null; auto_start_attempted_at: Date | null;
+  auto_start_refusal: string | null;
+};
+const settingsOf = async (r: CaptureRig): Promise<SettingsRow> => {
+  const [row] = await sql<SettingsRow[]>`
+    select auto_stream, auto_started_at, auto_start_blocked_at, auto_start_attempted_at, auto_start_refusal
+      from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+  expect(row, "PREMISE: the fixture has a settings row").toBeDefined();
+  return row!;
+};
+
+/** The T4 rig: credits, a paired phone on its operator-mode claim, the switch ON, the match in play. Nothing falsified. */
+async function autoRig(opts: Parameters<typeof captureRig>[0] = {}) {
+  const r = await captureRig({ credits: 3, connectAfterMs: NEVER, ...opts });
+  const phone = phoneId("a");
+  await beat(r, phone, { claim: "new", mode: "operator" });
+  await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
+  await sql`update fixtures set status = 'in_play' where id = ${r.fixtureId}`;
+  return { r, phone };
+}
+/** An automatic phone whose start was REFUSED for want of a credit: the refusal and the attempt are stored by the REAL beat. */
+async function refusedRig() {
+  const { r, phone } = await autoRig({ credits: 0 });
+  await spendMonthlyStreamGrant(r.auth.orgId);
+  await beat(r, phone, { mode: "automatic" });
+  expect((await settingsOf(r)).auto_start_refusal, "PREMISE: the beat's start was refused no_credit").toBe("no_credit");
+  return { r, phone };
+}
+
+describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
+  it("EMPTY then the sequence: no settings row → null (a code, a paired phone and a beat do not make one); a pick-only row → the switch OFF; the switch → on; a second read agrees each time", async () => {
+    const r = await captureRig();
+    await beat(r, phoneId("a"), { claim: "new", mode: "automatic" });
+    expect((await readRig(r)).auto, "no settings row").toBeNull();
+    expect((await readRig(r)).auto, "a second read").toBeNull();
+    expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${r.fixtureId}`, "the reads wrote no row").toHaveLength(0);
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
+    const off = { enabled: false, startedAt: null, blocked: false, refusal: null, refusalAt: null };
+    expect((await readRig(r)).auto, "a row made by a destination pick has the switch off").toEqual(off);
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
+    const on = { ...off, enabled: true };
+    expect((await readRig(r)).auto).toEqual(on);
+    expect((await readRig(r)).auto, "a second read").toEqual(on);
+  });
+
+  it("startedAt and blocked come from the columns: an automatic start stamps startedAt (the beat's instant) and leaves refusal/refusalAt null although the attempt IS stamped; the organiser's Stop of it blocks auto start (A12); a second read agrees", async () => {
+    const { r, phone } = await autoRig();
+    const answer = await beat(r, phone, { mode: "automatic" });
+    expect(answer, "PREMISE: the beat started the broadcast").toMatchObject({ state: "go-live", startedBy: "automatic" });
+    expect((await settingsOf(r)).auto_start_attempted_at, "PREMISE: the attempt is stamped, so a refusalAt that ignored `refusal` would be non-null").not.toBeNull();
+    const started = { enabled: true, startedAt: r.now().toISOString(), blocked: false, refusal: null, refusalAt: null };
+    expect((await readRig(r)).auto).toEqual(started);
+    expect((await readRig(r)).auto, "a second read").toEqual(started);
+    const sid = (answer as { sid: string }).sid;
+    await stopSession(r.auth, r.fixtureId, sid, r.deps);
+    const stopped = (await readRig(r)).auto!;
+    expect(stopped.blocked, "A12: the organiser's Stop turns auto START off for the match").toBe(true);
+    expect([stopped.enabled, stopped.startedAt], "the switch and the start stay as they were").toEqual([true, started.startedAt]);
+  });
+
+  it("A12 with the switch NEVER touched: the organiser's Stop creates the row — blocked, switch off — and `auto` reads it (the row that chose nothing is still a row)", async () => {
+    const r = await captureRig();
+    const sid = await r.start(phoneId("a"));
+    // The organiser's Go live writes the destination pick (a row); the Stop must be the ONLY thing that makes one here.
+    await sql`delete from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+    expect((await readRig(r)).auto, "PREMISE: no row before the Stop").toBeNull();
+    await stopSession(r.auth, r.fixtureId, sid, r.deps);
+    expect((await readRig(r)).auto).toEqual({ enabled: false, startedAt: null, blocked: true, refusal: null, refusalAt: null });
+  });
+
+  // One scenario per code AUTO_START_REFUSALS declares — the T4 test's own arrangements, through the REAL beat.
+  const scenarios: Record<AutoStartRefusal, { credits?: number; arrange: (r: CaptureRig) => Promise<void> }> = {
+    no_credit: { credits: 0, arrange: async (r) => { await spendMonthlyStreamGrant(r.auth.orgId); } },
+    not_entitled: { arrange: async (r) => { await override(r.auth.orgId, "streaming.relay", false); } },
+    no_destination: { arrange: async (r) => { await sql`update org_stream_targets set archived_at = now() where id = ${r.target.id}`; } },
+    destination_in_use: {
+      arrange: async (r) => {
+        const other = (await startedDivisionWithFixture(r.auth)).fixtureId;
+        await pairPresentPhone(other, { at: r.now() });
+        await createSession(r.auth, other, { mode: "passthrough", targetId: r.target.id }, r.deps);
+      },
+    },
+    unavailable: { arrange: async (r) => { r.ingest.storage = { totalStorageMinutes: 1000, totalStorageMinutesLimit: 1000, videoCount: 0 }; } },
+  };
+  it("after a REFUSED automatic start the read serves the refusal's code and the attempt's instant — each code AUTO_START_REFUSALS declares; startedAt stays null; a second read agrees", async () => {
+    let reached = 0;
+    for (const code of AUTO_START_REFUSALS) {
+      const sc = scenarios[code];
+      const { r, phone } = await autoRig({ credits: sc.credits ?? 3 });
+      await sc.arrange(r);
+      await beat(r, phone, { mode: "automatic" });
+      const want = { enabled: true, startedAt: null, blocked: false, refusal: code, refusalAt: r.now().toISOString() };
+      expect((await readRig(r)).auto, code).toEqual(want);
+      expect((await readRig(r)).auto, `${code}: a second read`).toEqual(want);
+      reached++;
+    }
+    expect(reached).toBe(AUTO_START_REFUSALS.length);
+    expect(reached).toBe(5);
+  });
+
+  // The B3 review: `auto_start_refusal` is not cleared by every path (an `already_running` start and an unmapped error leave the
+  // earlier code in place), so the column alone can be STALE. The read serves it only while `autoStartVerdict` could still
+  // pass — the predicate's own conjuncts, with the two a refusal is MEANT to outlast neutralised: the retry spacing (it is
+  // inside that very window right after the refusal) and the phone's presence (a silent phone returns and the retry fires).
+  const NEUTRALISED = ["phone_present", "retry_spacing"];
+  type Ctx = { r: CaptureRig; phone: string; held: { sid?: string } };
+  const falsifiers: Record<string, { falsify: (c: Ctx) => Promise<void>; restore: (c: Ctx) => Promise<void> }> = {
+    switch_on: {
+      falsify: async ({ r }) => { await sql`update fixture_stream_settings set auto_stream = false where fixture_id = ${r.fixtureId}`; },
+      restore: async ({ r }) => { await sql`update fixture_stream_settings set auto_stream = true where fixture_id = ${r.fixtureId}`; },
+    },
+    phone_automatic: {   // the REAL producer: the phone's Settings flip rides its next beat (the stored mode lags one interval)
+      falsify: async ({ r, phone }) => { await beat(r, phone, { mode: "operator" }); },
+      restore: async ({ r, phone }) => { await beat(r, phone, { mode: "automatic" }); },
+    },
+    in_play: {
+      falsify: async ({ r }) => { await sql`update fixtures set status = 'cancelled' where id = ${r.fixtureId}`; },
+      restore: async ({ r }) => { await sql`update fixtures set status = 'in_play' where id = ${r.fixtureId}`; },
+    },
+    no_open_session: {
+      falsify: async (c) => { c.held.sid = await sessionOnTarget(c.r.auth.orgId, c.r.fixtureId, c.r.target.id, "warming"); },
+      restore: async (c) => { await sql`update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = now(), ending_at = now() where id = ${c.held.sid!}`; },
+    },
+    not_yet_started: {
+      falsify: async ({ r }) => { await sql`update fixture_stream_settings set auto_started_at = now() where fixture_id = ${r.fixtureId}`; },
+      restore: async ({ r }) => { await sql`update fixture_stream_settings set auto_started_at = null where fixture_id = ${r.fixtureId}`; },
+    },
+    not_blocked: {
+      falsify: async ({ r }) => { await sql`update fixture_stream_settings set auto_start_blocked_at = now() where fixture_id = ${r.fixtureId}`; },
+      restore: async ({ r }) => { await sql`update fixture_stream_settings set auto_start_blocked_at = null where fixture_id = ${r.fixtureId}`; },
+    },
+    no_broadcast_ran: {
+      falsify: async (c) => {
+        c.held.sid = await sessionOnTarget(c.r.auth.orgId, c.r.fixtureId, c.r.target.id, "completed");
+        await sql`update fixture_stream_sessions set first_ingest_at = now() where id = ${c.held.sid}`;
+      },
+      restore: async (c) => { await sql`update fixture_stream_sessions set first_ingest_at = null where id = ${c.held.sid!}`; },
+    },
+  };
+  it("a STALE refusal is never served: the column still says no_credit, yet with each predicate conjunct falsified alone the read serves none (and no refusalAt) — and with it undone, the same rig serves it again", async () => {
+    // The table is keyed to the predicate's own declaration: a conjunct added to AUTO_START_CONJUNCTS reds this until it has a row.
+    expect(Object.keys(falsifiers).sort()).toEqual(AUTO_START_CONJUNCTS.map((c) => c.name).filter((n) => !NEUTRALISED.includes(n)).sort());
+    let checked = 0;
+    for (const [conjunct, row] of Object.entries(falsifiers)) {
+      const { r, phone } = await refusedRig();
+      const c: Ctx = { r, phone, held: {} };
+      const refused = (await readRig(r)).auto!;
+      expect(refused, `${conjunct}: PREMISE — fresh, the refusal is served`).toMatchObject({ refusal: "no_credit", refusalAt: r.now().toISOString() });
+      await row.falsify(c);
+      expect((await settingsOf(r)).auto_start_refusal, `${conjunct}: PREMISE — the column is still set, so only the read can hide it`).toBe("no_credit");
+      const stale = (await readRig(r)).auto!;
+      expect([stale.refusal, stale.refusalAt], `${conjunct} falsified: a stale refusal is not served`).toEqual([null, null]);
+      expect([stale.enabled, stale.blocked, stale.startedAt], `${conjunct}: the other fields still read their columns`).toEqual([
+        conjunct !== "switch_on", conjunct === "not_blocked", conjunct === "not_yet_started" ? expect.any(String) : null,
+      ]);
+      await row.restore(c);
+      const back = (await readRig(r)).auto!;
+      expect(back.refusal, `${conjunct} undone: the same rig serves the refusal again (the positive pair)`).toBe("no_credit");
+      checked++;
+    }
+    expect(checked).toBe(AUTO_START_CONJUNCTS.length - NEUTRALISED.length);
+    expect(checked).toBe(7);
+  });
+
+  it("what a refusal is MEANT to outlast: a SILENT phone and a retry that is DUE both still serve it (the phone returns and the retry fires) — and the success that follows clears it", async () => {
+    const { r, phone } = await refusedRig();
+    const answered = (await pairingOf(r, phone)).answered_poll_seconds;
+    r.tick(silentMs(answered) + SEC);
+    const silent = await readRig(r);
+    expect([silent.phone?.present, silent.phone?.silent], "PREMISE: the phone is silent now").toEqual([false, true]);
+    expect(silent.auto, "silence and an elapsed retry spacing do not hide it").toMatchObject({ refusal: "no_credit" });
+    expect(silentMs(answered) + SEC, "PREMISE: past the retry spacing too").toBeGreaterThanOrEqual(AUTO_START_RETRY_SECONDS * SEC);
+    // The phone returns, a credit is bought, the retry is due: it starts, and the success clears the refusal.
+    await grantCredits({ orgId: r.auth.orgId, delta: 1, createdBy: await rigUser(), note: "retry", idempotencyKey: randomUUID() });
+    await beat(r, phone, { mode: "automatic" });
+    const done = await readRig(r);
+    expect(done.auto, "started: no refusal, no refusalAt, startedAt is the retry's instant").toEqual({
+      enabled: true, startedAt: r.now().toISOString(), blocked: false, refusal: null, refusalAt: null,
+    });
+    expect(done.session, "PREMISE: a session opened").not.toBeNull();
+  });
+
+  it("the sequence a real organiser takes: refused no_credit → credit bought → manual Go live → manual Stop: no stale strip at the Go live (a session is open) and none after the Stop (blocked, and a broadcast ran)", async () => {
+    const { r } = await refusedRig();
+    await grantCredits({ orgId: r.auth.orgId, delta: 1, createdBy: await rigUser(), note: "manual", idempotencyKey: randomUUID() });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, { mode: "passthrough", targetId: r.target.id }, r.deps);
+    const live = await readRig(r);
+    expect([live.session?.id, live.auto?.refusal, live.auto?.refusalAt], "a session is open").toEqual([sessionId, null, null]);
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    const after = (await readRig(r)).auto!;
+    expect([after.blocked, after.refusal, after.refusalAt], "A12 blocked it").toEqual([true, null, null]);
+  });
+
+  it("another sport (cricket): the read is the same — a refusal is served", async () => {
+    const { r, phone } = await autoRig({ sport: "cricket", credits: 0 });
+    await spendMonthlyStreamGrant(r.auth.orgId);
+    await beat(r, phone, { mode: "automatic" });
+    expect((await readRig(r)).auto).toMatchObject({ enabled: true, refusal: "no_credit" });
+  });
+});
+
+describe.skipIf(!HAS_DB)("streamPhone — `phone.health` (PR-2 T6, §7.4: ONE derivation, phone-health.ts)", () => {
+  type Ctx = { r: CaptureRig; a: string; sid: string };
+  type Drive = { cause: (c: Ctx) => Promise<void>; defuse: (c: Ctx) => Promise<void> };
+  const drives: Record<HealthReason, Drive> = {
+    stalled: {
+      cause: async ({ r, a }) => { await beat(r, a, { claim: "new", state: "armed", delivery: "stalled" }); },
+      defuse: async ({ r, a }) => { r.tick(SEC); await beat(r, a, { state: "armed", delivery: "ok" }); },
+    },
+    hot: {
+      cause: async ({ r, a }) => { await beat(r, a, { claim: "new", state: "armed", thermal: HOT_THERMAL_STATUS }); },
+      defuse: async ({ r, a }) => { r.tick(SEC); await beat(r, a, { state: "armed", thermal: HOT_THERMAL_STATUS - 1 }); },
+    },
+    battery_low: {
+      cause: async ({ r, a }) => { await beat(r, a, { claim: "new", state: "armed", battery: lowBattery() }); },
+      defuse: async ({ r, a }) => { r.tick(SEC); await beat(r, a, { state: "armed", battery: lowBattery({ percent: LOW_BATTERY_PERCENT }) }); },
+    },
+    not_responding: {
+      cause: async (c) => {
+        c.sid = await c.r.start(c.a);
+        await beat(c.r, c.a, { sid: c.sid, state: "connecting" });   // the session's phone, naming it: answered at an open session's cadence
+        c.r.tick(await notRespondingMs(c.r, c.a));
+      },
+      defuse: async (c) => { await beat(c.r, c.a, { sid: c.sid, state: "connecting" }); },
+    },
+  };
+  it("each reason HEALTH_REASONS declares, driven by the beat (or the silence) that causes it: served; a second read agrees; defused (the boundary neighbour, a clear beat) → null", async () => {
+    let checked = 0;
+    for (const reason of HEALTH_REASONS) {
+      const r = await captureRig({ connectAfterMs: NEVER });
+      const c: Ctx = { r, a: phoneId("a"), sid: "" };
+      await drives[reason].cause(c);
+      expect((await readRig(r)).phone?.health, reason).toBe(reason);
+      expect((await readRig(r)).phone?.health, `${reason}: a second read`).toBe(reason);
+      await drives[reason].defuse(c);
+      expect((await readRig(r)).phone?.health, `${reason} defused`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length);
+    expect(checked).toBe(4);
+  });
+
+  it("W9's PRIORITY (not responding, stalled, hot, battery low), pinned literally: each rung wins while every rung below it also holds, and removing it reveals the next", async () => {
+    const r = await captureRig({ connectAfterMs: NEVER });
+    const a = phoneId("a");
+    const sid = await r.start(a);
+    const allWrong = { sid, state: "connecting", delivery: "stalled", thermal: HOT_THERMAL_STATUS, battery: lowBattery() } as const;
+    const healthNow = async () => (await readRig(r)).phone?.health;
+    const ladder: [string, Partial<Beat>, HealthReason | null][] = [
+      ["stalled + hot + battery low", allWrong, "stalled"],
+      ["hot + battery low", { ...allWrong, delivery: "ok" }, "hot"],
+      ["battery low alone", { ...allWrong, delivery: "ok", thermal: HOT_THERMAL_STATUS - 1 }, "battery_low"],
+      ["nothing wrong", { ...allWrong, delivery: "ok", thermal: HOT_THERMAL_STATUS - 1, battery: lowBattery({ percent: LOW_BATTERY_PERCENT }) }, null],
+    ];
+    let checked = 0;
+    for (const [what, over, want] of ladder) {
+      r.tick(SEC);
+      await beat(r, a, over);
+      expect(await healthNow(), what).toBe(want);
+      checked++;
+    }
+    // The top rung: the same three problems on the last beat, then silence for NOT_RESPONDING_BEATS cadences.
+    r.tick(SEC);
+    await beat(r, a, allWrong);
+    const nr = await notRespondingMs(r, a);
+    r.tick(nr - 1);
+    expect(await healthNow(), "1 ms before not-responding the beat's own worst problem wins").toBe("stalled");
+    r.tick(1);
+    expect(await healthNow(), "not responding outranks stalled, hot and battery low at once").toBe("not_responding");
+    checked += 2;
+    expect(checked).toBe(6);
+  });
+
+  it("FP14: a Paired-phase beat (battery, thermal, bitrate all null) is health null with nothing invented — null stays null, never 0 — and a beat with no stored shape reads all-null too", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    await beat(r, a, { claim: "new", state: "paired", battery: null, thermal: null, bitrateKbps: null, delivery: "unknown" });
+    const paired = await readRig(r);
+    expect(paired.phone?.health).toBeNull();
+    expect(paired.phone?.beat).toEqual({ battery: null, bitrateKbps: null, delivery: "unknown", thermal: null, dataUsedMB: null });
+    expect((await readRig(r)).phone?.health, "a second read").toBeNull();
+    // From Armed the readings arrive — healthy ones are still health null (the positive pair for the readings).
+    r.tick(SEC);
+    await beat(r, a, { state: "armed", battery: { percent: 80, charging: false, drainPctPerHour: 3 }, thermal: 1, delivery: "ok" });
+    const armed = await readRig(r);
+    expect([armed.phone?.health, armed.phone?.beat.battery?.percent, armed.phone?.beat.thermal]).toEqual([null, 80, 1]);
+    // A pairing whose stored beat is gone (an older shape, or none yet): all-null, health null.
+    await sql`update fixture_stream_pairings set last_beat = null where id = ${(await pairingOf(r, a)).id}`;
+    const none = await readRig(r);
+    expect([none.phone?.health, none.phone?.beat.battery, none.phone?.beat.thermal, none.phone?.beat.bitrateKbps]).toEqual([null, null, null, null]);
+  });
+
+  it("another sport (cricket): a hot phone reads hot — and the schema's health words are exactly HEALTH_REASONS, in order", async () => {
+    const r = await captureRig({ sport: "cricket" });
+    await beat(r, phoneId("a"), { claim: "new", state: "armed", thermal: HOT_THERMAL_STATUS });
+    expect((await readRig(r)).phone?.health).toBe("hot");
+    expect(StreamPhoneHealth.options).toEqual([...HEALTH_REASONS]);
+    expect(StreamPhone.shape.auto.unwrap().shape.refusal.unwrap().options, "and `auto.refusal`'s are AUTO_START_REFUSALS").toEqual([...AUTO_START_REFUSALS]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("streamPhone — the debounced not-ready (PR-2 T6, FP16, owner ruling R-2)", () => {
+  it("PREMISE: the constant is the owner's 20 s and the arithmetic below has room", () => {
+    expect(PHONE_NOT_READY_SHOW_AFTER_SECONDS).toBe(20);
+    expect(C_MS).toBeGreaterThan(4 * SEC);
+  });
+
+  it("(a) a FLAP shorter than the constant never shows: every non-null stretch is constant − 1 s, each declared reason in turn, twice round — read just before the clearing beat and just after it", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    await beat(r, a, { claim: "new" });
+    const reasons = CaptureNotReady.options;
+    let checked = 0;
+    for (let i = 0; i < reasons.length * 2; i++) {
+      const reason = reasons[i % reasons.length]!;
+      await beat(r, a, { notReady: reason });
+      r.tick(C_MS - SEC);
+      expect(nrOf(await readRig(r)), `${reason}: C − 1 s into the stretch`).toEqual({ notReady: reason, forMs: C_MS - SEC, shown: false });
+      await beat(r, a, { notReady: null });
+      expect(nrOf(await readRig(r)), `${reason}: cleared`).toEqual({ notReady: null, forMs: null, shown: false });
+      r.tick(SEC);
+      checked += 2;
+    }
+    expect(checked).toBe(reasons.length * 2 * 2);
+  });
+
+  // A scripted 40-beat trace in the SHAPE staging showed (27 sound / 11 held / 3 camera flips in ten minutes): the same mix,
+  // beats every half-constant, a run of two not-ready beats then a clear, then one then a clear — so the longest stretch is
+  // cleared exactly one constant after it began, and a read just before that clearing beat is the boundary's far side.
+  const MIX: (typeof CaptureNotReady.options)[number][] = [
+    "sound", "sound", "held", "sound", "camera", "sound", "held", "sound", "sound", "held", "sound", "sound",
+    "held", "sound", "sound", "camera", "held", "sound", "sound", "held", "sound", "sound", "sound", "sound",
+  ];
+  it("(a) a scripted 40-beat staging-shaped trace never shows — 79 reads, every one false — and its positive twin on the same rig (the run held to the constant) shows", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    const GAP = C_MS / 2;
+    expect([...new Set(MIX)].sort(), "PREMISE: the three reasons staging showed").toEqual(["camera", "held", "sound"]);
+    for (const reason of new Set(MIX)) expect(CaptureNotReady.options, `PREMISE: ${reason} is a declared reason`).toContain(reason);
+    let mix = 0;
+    let beats = 0;
+    let checked = 0;
+    let sinceAt: number | null = null;
+    let longest = 0;
+    for (let idx = 0; idx < 40; idx++) {
+      const unit = idx % 5;
+      const reason = unit === 2 || unit === 4 ? null : MIX[mix++]!;
+      if (idx > 0) {
+        r.tick(GAP - 1);
+        const before = nrOf(await readRig(r));
+        expect(before.shown, `beat ${idx}: just before it`).toBe(false);
+        expect(before.forMs, `beat ${idx}: just before it`).toBe(sinceAt === null ? null : r.now().getTime() - sinceAt);
+        if (sinceAt !== null) longest = Math.max(longest, r.now().getTime() - sinceAt);
+        checked++;
+        r.tick(1);
+      }
+      await beat(r, a, idx === 0 ? { claim: "new", notReady: reason } : { notReady: reason });
+      beats++;
+      sinceAt = reason === null ? null : sinceAt ?? r.now().getTime();
+      const after = nrOf(await readRig(r));
+      expect(after.shown, `beat ${idx}: just after it`).toBe(false);
+      expect(after.forMs, `beat ${idx}: just after it`).toBe(sinceAt === null ? null : r.now().getTime() - sinceAt);
+      checked++;
+    }
+    expect([beats, mix, checked]).toEqual([40, MIX.length, 79]);
+    expect(longest, "the longest stretch the script held is one tick short of the constant").toBe(C_MS - 1);
+    // The twin: the run continues to the constant and it shows (the trace's machinery is not vacuous).
+    await beat(r, a, { notReady: "sound" });
+    r.tick(GAP);
+    await beat(r, a, { notReady: "held" });
+    r.tick(GAP - 1);
+    expect(nrOf(await readRig(r)), "one tick short").toEqual({ notReady: "held", forMs: C_MS - 1, shown: false });
+    r.tick(1);
+    expect(nrOf(await readRig(r)), "at the constant").toEqual({ notReady: "held", forMs: C_MS, shown: true });
+  });
+
+  it("(b) a HOLD shows at exactly the constant and not 1 s earlier; a change of reason inside the hold KEEPS the clock; (c) a clear hides at once and the next reason is a FRESH clock", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    await beat(r, a, { claim: "new", notReady: "camera" });   // FP16: it reads "camera" before the first reading
+    expect(nrOf(await readRig(r)), "the instant it begins").toEqual({ notReady: "camera", forMs: 0, shown: false });
+    r.tick(C_MS / 4);
+    await beat(r, a, { notReady: "sound" });   // the reason changes inside the hold
+    r.tick(C_MS - C_MS / 4 - SEC);
+    expect(nrOf(await readRig(r)), "1 s earlier").toEqual({ notReady: "sound", forMs: C_MS - SEC, shown: false });
+    r.tick(SEC);
+    expect(nrOf(await readRig(r)), "exactly the constant, counted from the FIRST reason").toEqual({ notReady: "sound", forMs: C_MS, shown: true });
+    expect(nrOf(await readRig(r)), "a second read").toEqual({ notReady: "sound", forMs: C_MS, shown: true });
+    r.tick(SEC);
+    expect(nrOf(await readRig(r)).shown, "and it stays shown while the hold lasts").toBe(true);
+    // (c) the clear.
+    await beat(r, a, { notReady: null });
+    expect(nrOf(await readRig(r)), "the very next read").toEqual({ notReady: null, forMs: null, shown: false });
+    r.tick(SEC);
+    await beat(r, a, { notReady: "held" });
+    expect(nrOf(await readRig(r)), "a fresh clock, not the old one").toEqual({ notReady: "held", forMs: 0, shown: false });
+    r.tick(C_MS - SEC);
+    expect(nrOf(await readRig(r)), "the old clock would have shown long ago").toEqual({ notReady: "held", forMs: C_MS - SEC, shown: false });
+    r.tick(SEC);
+    expect(nrOf(await readRig(r))).toEqual({ notReady: "held", forMs: C_MS, shown: true });
+  });
+
+  it("guards on the stored facts: a row from before V431 (not-ready but no clock) hides the line; a clock in the future reads 0 ms; a clock with no reason reads nothing — and the next beat repairs the first", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    await beat(r, a, { claim: "new", notReady: "network" });
+    const id = (await pairingOf(r, a)).id;
+    await sql`update fixture_stream_pairings set not_ready_since = null where id = ${id}`;
+    expect(nrOf(await readRig(r)), "legacy: no clock, no line").toEqual({ notReady: "network", forMs: null, shown: false });
+    r.tick(SEC);
+    await beat(r, a, { notReady: "network" });
+    expect(nrOf(await readRig(r)), "the next beat starts the clock").toEqual({ notReady: "network", forMs: 0, shown: false });
+    await sql`update fixture_stream_pairings set not_ready_since = now() + interval '1 hour' where id = ${id}`;
+    expect(nrOf(await readRig(r)), "skew: never negative").toEqual({ notReady: "network", forMs: 0, shown: false });
+    await sql`update fixture_stream_pairings set not_ready = null, not_ready_since = ${new Date(r.now().getTime() - 5 * C_MS)} where id = ${id}`;
+    expect(nrOf(await readRig(r)), "a clock with no reason is not a hold").toEqual({ notReady: null, forMs: null, shown: false });
+  });
+
+  it("`notReady` never gates an automatic start: the T4 start case with notReady \"camera\" on the arriving beat still starts, and the answer is go-live", async () => {
+    const { r, phone } = await autoRig();
+    const answer = await beat(r, phone, { mode: "automatic", notReady: "camera" });
+    expect(answer).toMatchObject({ state: "go-live", startedBy: "automatic" });
+    const v = await readRig(r);
+    expect(v.auto?.startedAt, "started").toBe(r.now().toISOString());
+    expect(v.phone?.notReady, "PREMISE: and the phone is reporting not ready").toBe("camera");
+  });
+});
+
+describe.skipIf(!HAS_DB)("streamPhone — the device model survives the beats that carry none (PR-2 T6, FP15)", () => {
+  it("claim with a model, then three beats with device null, a `resume` with none, and a SAME-phone `new` claim with a new model: the model is kept, kept, kept, then replaced", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    const model = async () => (await readRig(r)).phone?.model;
+    await beat(r, a, { claim: "new", device: { model: "Pixel 8" } });
+    expect(await model()).toBe("Pixel 8");
+    for (let i = 1; i <= 3; i++) {
+      r.tick(SEC);
+      await beat(r, a, { device: null });
+      expect(await model(), `beat ${i} carries device null`).toBe("Pixel 8");
+    }
+    r.tick(SEC);
+    await beat(r, a, { claim: "resume", device: null });
+    expect(await model(), "a resume claim with no device keeps it").toBe("Pixel 8");
+    r.tick(SEC);
+    await beat(r, a, { claim: "new", device: { model: "Pixel 9" } });
+    expect(await model(), "a new claim with a model replaces it").toBe("Pixel 9");
+    r.tick(SEC);
+    await beat(r, a, { device: null });
+    expect(await model(), "and that one is kept in turn").toBe("Pixel 9");
+  });
+
+  it("a takeover: lastTakeover.model is the TAKING phone's and stays so through its null-device beats and its own `ended` beat (the final beat sends none); the stored column agrees", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    const b = phoneId("b");
+    await beat(r, a, { claim: "new", device: { model: "Phone A" } });
+    r.tick(SEC);
+    await beat(r, b, { claim: "new", device: { model: "Galaxy S24" } });   // T2: B takes the paired slot
+    for (let i = 1; i <= 3; i++) {
+      r.tick(SEC);
+      await beat(r, b, { device: null });
+      const v = await readRig(r);
+      expect([v.phone?.model, v.lastTakeover?.model], `B's beat ${i} carries device null`).toEqual(["Galaxy S24", "Galaxy S24"]);
+    }
+    const sid = await r.start(b);
+    await beat(r, b, { sid, state: "ended", endReason: "operator-stopped", device: null });
+    expect((await pairingOf(r, b)).end_cause, "PREMISE: the final beat ended B's pairing").toBe("operator_stopped");
+    const [{ device_model }] = await sql<{ device_model: string | null }[]>`select device_model from fixture_stream_pairings where id = ${(await pairingOf(r, b)).id}`;
+    expect(device_model, "the column survived the final beat").toBe("Galaxy S24");
+    const after = await readRig(r);
+    expect(after.phone, "PREMISE: the Stop left no phone").toBeNull();
+    expect(after.lastTakeover?.model, "and the takeover notice still names B's model").toBe("Galaxy S24");
+  });
+
+  it("startFailed (FP17, PR-1's): set by a beat, cleared by the next beat that sends null", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    await beat(r, a, { claim: "new", startFailed: "config" });
+    expect((await readRig(r)).phone?.startFailed).toBe("config");
+    r.tick(SEC);
+    await beat(r, a, { startFailed: null });
+    expect((await readRig(r)).phone?.startFailed).toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("anti-vacuity (PR-2 T6)", () => {
+  it("the T6 blocks read the model and parsed every answer through the strict schema", () => {
+    expect(reads, "239 reads when written: the file's PR-1 blocks make ~60, the T6 blocks the rest").toBeGreaterThan(200);
   });
 });

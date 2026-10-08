@@ -619,7 +619,8 @@ type Facts = NonNullable<StreamPhone["phone"]>;
 /** The paired phone's facts as the T9 read model serves them — present, answering, nothing wrong. */
 const facts = (over: Partial<Facts> = {}): Facts => ({
   present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
-  state: "paired", notReady: null, startFailed: null, lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
+  state: "paired", notReady: null, notReadyForMs: null, notReadyShown: false, health: null, startFailed: null,
+  lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
   beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
 });
 /** The `stream-phone` read model (§9, T9): an active code with a paired, present phone — Ready's "paired" row. */

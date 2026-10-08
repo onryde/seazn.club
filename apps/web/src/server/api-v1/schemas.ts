@@ -53,6 +53,11 @@ export {
 } from "./capture-schemas.ts";
 // T9: the panel's read model (StreamPhone) reuses the beat's own field shapes, so it cannot drift from the contract.
 import { CaptureBeat, CaptureNotReady, CapturePhoneState, CaptureStartFailed } from "./capture-schemas.ts";
+// PR-2 T6: `StreamPhone.auto.refusal` is the auto-start refusal list's OWN declaration, never re-typed. Relative + explicit
+// `.ts`, same reason as above; domain/auto-stream.ts imports nothing. (phone-health.ts cannot be imported the same way: it
+// imports ../config extensionlessly, which domain-purity.test.ts pins and the standalone generator cannot resolve — see
+// StreamPhoneHealth below.)
+import { AUTO_START_REFUSALS } from "../relay/domain/auto-stream.ts";
 // m2 — the ONE Intl-backed zone validator, reused rather than restated, so
 // `schedule_settings.tz` refuses exactly what `users.timezone` (lib/types.ts)
 // and `organizations.timezone` (api/orgs/[id]/route.ts) already refuse.
@@ -1480,11 +1485,18 @@ export const StreamPhoneBeat = z
     dataUsedMB: CaptureBeat.shape.dataUsedMB,
   })
   .strict();
+/** PR-2 T6 (§7.4): the amber reasons the panel's health line can name, in W9's priority order — `HEALTH_REASONS`
+ *  (domain/phone-health.ts), mirrored here because that module cannot be loaded by the standalone OpenAPI generator (see the
+ *  import note above). stream-phone.test.ts pins the two lists equal, order included; the usecase assigns
+ *  `phoneHealthOf(…)`'s `HealthReason | null` to this type, so a reason added there and not here is a tsc error. */
+export const StreamPhoneHealth = z.enum(["not_responding", "stalled", "hot", "battery_low"]);
+export type StreamPhoneHealth = z.infer<typeof StreamPhoneHealth>;
 /** Capture QR v2 §9 / §6.12 (T9): `GET /api/v1/fixtures/{id}/stream-phone`, the organiser panel's phone read model. It
  *  carries NO secret — never the tok or its hash, never `cred`, never a destination's stream key: every field is picked
  *  by name. `code` is the fixture's stream code (the active one, else the latest ended); `phone` the slot's phone (§6.9's
  *  present / silent / not responding, on the server's clock); `destination` what the phone's start opens on (I-1);
- *  `lastTakeover` the latest time another phone took the slot (§7.5); `auto` is PR-2's, always null here. */
+ *  `lastTakeover` the latest time another phone took the slot (§7.5); `auto` (PR-2 T6, §7.1) the fixture's automatic-streaming
+ *  state — null when the fixture has no settings row. */
 export const StreamPhone = z
   .object({
     code: z
@@ -1504,7 +1516,18 @@ export const StreamPhone = z
         appVersion: z.string().nullable(),
         mode: CaptureBeat.shape.mode.nullable(),
         state: CapturePhoneState.nullable(),
+        /** The phone's LATEST not-ready reason. The panel shows "Phone not ready" only while `notReadyShown` (below) is true. */
         notReady: CaptureNotReady.nullable(),
+        /** PR-2 T6 (FP16): how long the phone has been not-ready continuously, on the SERVER's clock at this response —
+         *  `now − not_ready_since`, where the clock starts on the beat that took `notReady` from null to a reason and
+         *  survives a change of reason. null when `notReady` is null (a clear hides it at once) and for a row with no clock. */
+        notReadyForMs: z.number().int().nonnegative().nullable(),
+        /** PR-2 T6 (owner ruling R-2): `notReadyForMs` has reached PHONE_NOT_READY_SHOW_AFTER_SECONDS (20 s). The server owns
+         *  the threshold; the panel never compares a number. */
+        notReadyShown: z.boolean(),
+        /** PR-2 T6 (§7.4): the amber reason, from domain/phone-health.ts's one derivation (W9's priority: not responding,
+         *  stalled, hot, battery low) — null when none applies, and always null in the Paired phase (no readings yet). */
+        health: StreamPhoneHealth.nullable(),
         startFailed: CaptureStartFailed.nullable(),
         lastBeatAt: z.string(),
         /** `now − lastBeatAt` on the SERVER's clock at this response (the D3 M6 rule): the panel never compares its own
@@ -1522,7 +1545,23 @@ export const StreamPhone = z
      *  or a choice that was cleared or archived (never swapped for another). */
     destination: z.object({ id: z.string(), label: z.string(), source: z.enum(["saved", "default"]) }).strict().nullable(),
     lastTakeover: z.object({ at: z.string(), model: z.string().nullable() }).strict().nullable(),
-    auto: z.null(),
+    /** PR-2 T6 (§7.1, §7.2): the automatic-streaming state from the fixture's settings row — null when it has none (the
+     *  switch was never touched and no organiser Stop has stamped one). `refusal` and `refusalAt` are served ONLY while an
+     *  automatic start could still fire (the auto-start predicate, less the phone's presence and the retry spacing): the stored
+     *  code can outlive the attempt it belonged to, so the raw column alone is never shown. */
+    auto: z
+      .object({
+        enabled: z.boolean(),
+        /** When the automatic start succeeded (`auto_started_at`); null before. */
+        startedAt: z.string().nullable(),
+        /** An organiser Stop turned automatic start off for this match (A12). */
+        blocked: z.boolean(),
+        refusal: z.enum(AUTO_START_REFUSALS).nullable(),
+        /** The refused attempt's instant (`auto_start_attempted_at`); null whenever `refusal` is. */
+        refusalAt: z.string().nullable(),
+      })
+      .strict()
+      .nullable(),
     /** T11 (controller ruling C-1): the fixture's OPEN session has no pairing (it opened before stream codes) — the panel
      *  renders today's panel for it. False with no open session, or one that has (or had) a phone. */
     legacy: z.boolean(),

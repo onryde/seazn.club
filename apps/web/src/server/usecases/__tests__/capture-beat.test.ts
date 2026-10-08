@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import type { z } from "zod";
 import { sql } from "@/lib/db";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
-import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
+import { CaptureBeat, CaptureBeatAnswer, CaptureNotReady } from "@/server/api-v1/capture-schemas";
 import {
   DEAD_PHONE_TAKEOVER_SECONDS, HOT_THERMAL_STATUS, LOW_BATTERY_PERCENT, NOT_RESPONDING_BEATS, PHONE_BEAT_RETENTION_HOURS,
   POLL_NEAR_SECONDS, POLL_STARTING_SECONDS,
@@ -91,13 +91,13 @@ const claimNew = (r: CaptureRig, phone: string, over: Partial<Beat> = {}) => bea
 
 type PRow = {
   id: string; code_id: string; phone: string; claim_kind: string; device_model: string | null; app_version: string | null; mode: string | null;
-  phone_state: string | null; not_ready: string | null; start_failed: string | null; ended_at: Date | null; end_cause: string | null;
-  replaced_by: string | null; last_beat_at: Date; answered_poll_seconds: number; last_beat: Record<string, unknown> | null;
+  phone_state: string | null; not_ready: string | null; not_ready_since: Date | null; start_failed: string | null; ended_at: Date | null;
+  end_cause: string | null; replaced_by: string | null; last_beat_at: Date; answered_poll_seconds: number; last_beat: Record<string, unknown> | null;
 };
 async function pairings(r: CaptureRig): Promise<PRow[]> {
   return sql<PRow[]>`
-    select p.id, p.code_id, p.phone, p.claim_kind, p.device_model, p.app_version, p.mode, p.phone_state, p.not_ready, p.start_failed,
-           p.ended_at, p.end_cause, p.replaced_by, p.last_beat_at, p.answered_poll_seconds, p.last_beat
+    select p.id, p.code_id, p.phone, p.claim_kind, p.device_model, p.app_version, p.mode, p.phone_state, p.not_ready, p.not_ready_since,
+           p.start_failed, p.ended_at, p.end_cause, p.replaced_by, p.last_beat_at, p.answered_poll_seconds, p.last_beat
       from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id
      where c.fixture_id = ${r.fixtureId} order by p.claimed_at, p.id`;
 }
@@ -809,6 +809,108 @@ describe.skipIf(!HAS_DB)("postBeat — storage (§6.10)", () => {
     } finally {
       await sql.unsafe(`alter table fixture_stream_phone_beats drop constraint ${name}`);
     }
+  });
+});
+
+// PR-2 T6 (FP16, owner ruling R-2): PR-1 stores only the LATEST `notReady`, so the panel's debounce cannot be done from the
+// row. The beat keeps a second fact beside it — `not_ready_since`, the SERVER's time of the beat that began the current
+// not-ready stretch. Decisions recorded here: a CHANGE of reason inside a stretch keeps the clock (the phone has been unready
+// the whole time; the debounce asks "for how long", not "for this reason"); a null beat clears it at once.
+describe.skipIf(!HAS_DB)("postBeat — the not-ready clock (FP16, R-2)", () => {
+  const sinceMs = async (r: CaptureRig, phone: string) => (await pairingOf(r, phone)).not_ready_since?.getTime() ?? null;
+
+  it("EMPTY: a claim with nothing wrong stamps no clock; null → reason stamps the SERVER's now (not the phone's `at`); the same reason later and a CHANGE of reason keep the stamp; null clears it; the next reason is a FRESH stamp", async () => {
+    const r = await captureRig();
+    const A = phoneId("a");
+    await claimNew(r, A);
+    expect(await sinceMs(r, A), "PREMISE/empty: nothing wrong, nothing stamped").toBeNull();
+    r.tick(3 * SEC);
+    const t0 = r.now().getTime();
+    const phoneAt = new Date(t0 + 5 * 3600 * SEC).toISOString();
+    await beat(r, A, { notReady: "camera", at: phoneAt });
+    expect(await sinceMs(r, A), "the beat that began the stretch, on the server's clock").toBe(t0);
+    let checked = 0;
+    for (const reason of [...CaptureNotReady.options, "camera" as const]) {
+      r.tick(7 * SEC);
+      await beat(r, A, { notReady: reason });
+      expect((await pairingOf(r, A)).not_ready, `PREMISE: the beat wrote ${reason}`).toBe(reason);
+      expect(await sinceMs(r, A), `${reason}: the stretch's clock is kept — a repeat and a change of reason both`).toBe(t0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every declared reason, then a repeat").toBe(CaptureNotReady.options.length + 1);
+    r.tick(SEC);
+    await beat(r, A, { notReady: null });
+    expect((await pairingOf(r, A)).not_ready).toBeNull();
+    expect(await sinceMs(r, A), "a null beat clears the clock at once").toBeNull();
+    r.tick(SEC);
+    await beat(r, A, { notReady: null });
+    expect(await sinceMs(r, A), "and a second null beat keeps it clear").toBeNull();
+    r.tick(5 * SEC);
+    const t1 = r.now().getTime();
+    await beat(r, A, { notReady: "sound" });
+    expect(t1, "PREMISE: a different instant from the first stretch").not.toBe(t0);
+    expect(await sinceMs(r, A), "the next stretch is a fresh clock").toBe(t1);
+  });
+
+  it("only the CURRENT phone's beat moves the clock: a non-current phone's beat changes nothing; a takeover's new pairing starts its OWN clock and the replaced pairing keeps the one it had", async () => {
+    const r = await captureRig();
+    const A = phoneId("a");
+    const B = phoneId("b");
+    await claimNew(r, A);
+    r.tick(SEC);
+    await beat(r, A, { notReady: "sound" });
+    const tA = r.now().getTime();
+    expect(await sinceMs(r, A), "PREMISE: A's stretch is stamped").toBe(tA);
+    r.tick(4 * SEC);
+    expect(await beat(r, B, { notReady: "held" }), "T6/T7: B never claimed").toMatchObject({ state: "replaced" });
+    expect(await sinceMs(r, A), "a non-current phone's beat leaves A's clock alone").toBe(tA);
+    expect((await pairings(r)).filter((p) => p.phone === B), "and writes no pairing for B").toHaveLength(0);
+    r.tick(4 * SEC);
+    const tB = r.now().getTime();
+    await claimNew(r, B, { notReady: "held" });   // T2: B takes the paired slot
+    const rows = await pairings(r);
+    const a = rows.find((p) => p.phone === A)!;
+    const b = rows.find((p) => p.phone === B)!;
+    expect([a.end_cause, b.ended_at], "PREMISE: B took A's slot").toEqual(["replaced", null]);
+    expect(a.not_ready_since?.getTime(), "the replaced pairing keeps its own clock").toBe(tA);
+    expect(b.not_ready_since?.getTime(), "B's pairing starts its own, never A's").toBe(tB);
+    expect(tB, "PREMISE: told apart").not.toBe(tA);
+  });
+
+  it("the HOLDER's rescan after a reissue is the same phone moving: its moved pairing carries the stretch's clock over (it does not restart it), and a null beat on the new code still clears it", async () => {
+    const r = await captureRig({ connectAfterMs: NEVER });
+    const A = phoneId("a");
+    await claimNew(r, A);
+    const S = await r.start(A);   // the rig's start beats once with nothing wrong, so the stretch begins AFTER it
+    r.tick(SEC);
+    await beat(r, A, { sid: S, state: "connecting", notReady: "sound" });
+    const t0 = r.now().getTime();
+    const before = await pairingOf(r, A);
+    expect(before.not_ready_since?.getTime(), "PREMISE: the stretch is running").toBe(t0);
+    const fresh = await reissueStreamCode(r.auth, r.fixtureId);
+    const viaNew = { code: fresh.qr.code, tok: fresh.qr.tok };
+    r.tick(9 * SEC);
+    await beat(r, A, { code: viaNew.code, claim: "new", sid: S, state: "connecting", notReady: "sound" }, viaNew);
+    const moved = current(await pairings(r));
+    expect(moved.map((p) => p.phone), "PREMISE: ONE current pairing, A's, moved").toEqual([A]);
+    expect(moved[0]!.id, "PREMISE: a NEW row (the old one ended `replaced`)").not.toBe(before.id);
+    expect(moved[0]!.not_ready_since?.getTime(), "the rescan does not restart the debounce").toBe(t0);
+    expect((await session(S)).pairing_id, "PREMISE: the session follows the phone").toBe(moved[0]!.id);
+    r.tick(SEC);
+    await beat(r, A, { code: viaNew.code, sid: S, state: "armed", notReady: null }, viaNew);
+    expect((await pairingOf(r, A)).not_ready_since, "a clear on the new code").toBeNull();
+  });
+
+  it("another sport (cricket): the clock is the pairing's, the sport is not read", async () => {
+    const r = await captureRig({ sport: "cricket" });
+    const A = phoneId("a");
+    await claimNew(r, A);
+    r.tick(SEC);
+    await beat(r, A, { notReady: "held" });
+    expect(await sinceMs(r, A)).toBe(r.now().getTime());
+    r.tick(SEC);
+    await beat(r, A, { notReady: null });
+    expect(await sinceMs(r, A)).toBeNull();
   });
 });
 

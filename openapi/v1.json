@@ -44871,7 +44871,7 @@
     },
     "/api/v1/fixtures/{id}/stream-phone": {
       "get": {
-        "summary": "The organiser panel's phone read model (editor session only): the fixture's stream code (active, finishing or ended, with its end cause), its paired phone — present, silent and not responding judged on the server's clock, its model, app version, mode, state, readiness and latest beat (battery, bitrate, delivery, thermal, data used), with elapsedMs since that beat on the server's clock — the destination pre-pick (null when archived), and the last time another phone took the slot. A session with no phone (opened before stream codes) shows no phone. Carries no secret. Served private, no-store",
+        "summary": "The organiser panel's phone read model (editor session only): the fixture's stream code (active, finishing or ended, with its end cause), its paired phone — present, silent and not responding judged on the server's clock, its model, app version, mode, state, readiness and latest beat (battery, bitrate, delivery, thermal, data used), with elapsedMs since that beat on the server's clock, the amber health reason (null when none), and how long it has been continuously not ready (shown only after it has held 20 seconds) — the destination pre-pick (null when archived), the last time another phone took the slot, and the fixture's automatic-streaming state (null with no settings row; a refusal is shown only while an automatic start could still fire). A session with no phone (opened before stream codes) shows no phone. Carries no secret. Served private, no-store",
         "tags": [
           "fixtures"
         ],
@@ -45033,6 +45033,37 @@
                                     }
                                   ]
                                 },
+                                "notReadyForMs": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "notReadyShown": {
+                                  "type": "boolean"
+                                },
+                                "health": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "not_responding",
+                                        "stalled",
+                                        "hot",
+                                        "battery_low"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "startFailed": {
                                   "anyOf": [
                                     {
@@ -45172,6 +45203,9 @@
                                 "mode",
                                 "state",
                                 "notReady",
+                                "notReadyForMs",
+                                "notReadyShown",
+                                "health",
                                 "startFailed",
                                 "lastBeatAt",
                                 "elapsedMs",
@@ -45247,7 +45281,67 @@
                           ]
                         },
                         "auto": {
-                          "type": "null"
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "enabled": {
+                                  "type": "boolean"
+                                },
+                                "startedAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "blocked": {
+                                  "type": "boolean"
+                                },
+                                "refusal": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "no_destination",
+                                        "no_credit",
+                                        "not_entitled",
+                                        "destination_in_use",
+                                        "unavailable"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "refusalAt": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "enabled",
+                                "startedAt",
+                                "blocked",
+                                "refusal",
+                                "refusalAt"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "legacy": {
                           "type": "boolean"
@@ -45310,6 +45404,9 @@
                       "mode": "automatic",
                       "state": "paired",
                       "notReady": "camera",
+                      "notReadyForMs": 0,
+                      "notReadyShown": true,
+                      "health": "not_responding",
                       "startFailed": "not-found",
                       "lastBeatAt": "example",
                       "elapsedMs": 0,
@@ -45335,7 +45432,13 @@
                       "at": "example",
                       "model": "example"
                     },
-                    "auto": null,
+                    "auto": {
+                      "enabled": true,
+                      "startedAt": "example",
+                      "blocked": true,
+                      "refusal": "no_destination",
+                      "refusalAt": "example"
+                    },
                     "legacy": true,
                     "finished": true,
                     "session": {

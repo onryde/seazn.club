@@ -499,9 +499,9 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
       // The new row carries the old one's beat state; the old one ends `replaced`, handing over through replaced_by.
       const [moved] = await tx<PairingRow[]>`
         insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, device_model, claimed_at, last_beat_at,
-                                             answered_poll_seconds, last_beat, not_ready, start_failed, mode, app_version, phone_state)
+                                             answered_poll_seconds, last_beat, not_ready, not_ready_since, start_failed, mode, app_version, phone_state)
         select org_id, ${resolved.codeId}, slot, phone, ${body.claim}, device_model, ${now}, last_beat_at,
-               answered_poll_seconds, last_beat, not_ready, start_failed, mode, app_version, phone_state
+               answered_poll_seconds, last_beat, not_ready, not_ready_since, start_failed, mode, app_version, phone_state
           from fixture_stream_pairings where id = ${holder.id}
         returning id, code_id, phone, last_beat_at, answered_poll_seconds`;
       await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'replaced', replaced_by = ${moved!.id} where id = ${holder.id}`;
@@ -532,9 +532,13 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
     const held = mine !== null && open !== null && open.pairing_id === mine.id;
     if (mine !== null) {
       const notResponding = held && isNotResponding({ held, lastBeatAt: new Date(mine.last_beat_at), answeredPoll: mine.answered_poll_seconds }, now);
+      // PR-2 T6 (FP16, R-2): `not_ready_since` is the clock of the CURRENT not-ready stretch, on the server's clock. It starts on
+      // the beat that takes not_ready from null to a reason, SURVIVES a change of reason (the phone has been unready the whole
+      // time), and a null beat clears it at once; a row with a reason but no clock (from before V431) starts one.
       await tx`
         update fixture_stream_pairings
            set last_beat = ${tx.json(raw as never)}, last_beat_at = ${now}, phone_state = ${body.state}, not_ready = ${body.notReady},
+               not_ready_since = case when ${body.notReady}::text is null then null else coalesce(not_ready_since, ${now}) end,
                start_failed = ${body.startFailed}, mode = ${body.mode}, app_version = ${body.appVersion},
                device_model = coalesce(${body.claim !== null && body.device !== null ? body.device.model : null}, device_model)
          where id = ${mine.id}`;
