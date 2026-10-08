@@ -543,7 +543,9 @@ test("W5: no phone → Go live disabled, the strip says pair first, and the API 
   const phone = await pairedPhone(page);
   expect(phone.qr.code, "the phone scanned the code the panel holds").toMatch(/^[0-9a-hjkmnp-tv-z]{12}$/);
   await expect(goLive, "a present phone: Go live").toBeEnabled({ timeout: POLL_WAIT_MS });
-  await expect(body.getByTestId("stream-phone-strip"), "a paired phone: no strip").toHaveCount(0);
+  // PR-2 (§7.4/§7.5, Option A state 1): a paired phone's strip names it — its model, then its mode (nothing amber).
+  await expect(body.getByTestId("stream-phone-strip"), "a paired phone: its model and mode").toHaveText(`Pixel 8 · ${en("stream.phone.mode.operator")}`);
+  await expect(body.getByTestId("stream-phone-strip")).toHaveAttribute("data-tone", "slate");
   await expect(body.getByTestId("stream-chain")).toHaveAttribute("data-phone", "paired");
   const fold = body.getByTestId("stream-code-disclosure");
   await expect(fold.locator("summary")).toContainText(en("stream.code.paired"));
