@@ -5,6 +5,7 @@ import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import type { PublicStandingsOut, StageRef } from "../driver/types.ts";
 import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun, type ObservedStage } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
+import { judgeDrive } from "../reference-bracket.ts";
 import { resolveSportCfg } from "../sport-cfg.ts";
 import type { BuiltReadback, DivisionSetup, Recorder } from "./common.ts";
 import { lineupItems } from "./lineup-plan.ts";
@@ -227,6 +228,23 @@ export function bracketDeciderExercised(rec: Recorder, observed: ObservedRun): C
     { ok: settled === rec.settlesPosted, note: `posted ${rec.settlesPosted} settle(s), the product shows ${settled} settled win(s)` },
     { ok: tiebroken === rec.tiebreaksPosted, note: `posted ${rec.tiebreaksPosted} tie-break(s), the product shows ${tiebroken} tie-break win(s)` },
   ]);
+}
+
+/** W2a (ruling T15-R3): every bracket match the harness drove is judged against the reference family `bracket-finish`
+ *  (reference-bracket.ts): the oracle is given the actions driven, and its status, advancing winner and method must be
+ *  the product's. One item per judged drive. A drive the oracle does not cover (a walkover, or the oracle's own
+ *  OutOfScope / RuledOut) is NOT judged: counted and named in the verdict's reason, never silent. A run with a bracket
+ *  stage that judged nothing fails (R25); a run with no bracket stage abstains by name. */
+export function referenceBracketFinish(rec: Recorder, observed: ObservedRun): CheckResult {
+  const brackets = observed.stages.filter((s) => forbidsLevelResult(s.kind as StageKind));
+  if (brackets.length === 0) return assertion("life-reference-bracket-finish", [], "no bracket stage in this run: the bracket-finish oracle says nothing about it");
+  const judgements = rec.bracketDrives.map(judgeDrive);
+  const items: Item[] = judgements.flatMap((j) => (j.judged ? [{ ok: j.ok, note: j.note }] : []));
+  const skipped = judgements.flatMap((j) => (j.judged ? [] : [j.why]));
+  const verdict = assertion("life-reference-bracket-finish", items);
+  if (verdict.verdict !== "pass" || skipped.length === 0) return verdict;
+  const why = [...new Set(skipped)].join("; ");
+  return { ...verdict, reason: `${verdict.reason}; ${skipped.length} drive(s) not judged (${why})` };
 }
 
 /** The format lock's answer: usecases/divisions.ts `formatLocked()` throws

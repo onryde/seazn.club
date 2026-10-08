@@ -388,6 +388,9 @@ importers:
       '@seazn/engine':
         specifier: workspace:*
         version: link:../../packages/engine
+      '@seazn/reference':
+        specifier: workspace:*
+        version: link:../../packages/reference
       fast-check:
         specifier: ^3
         version: 3.23.2

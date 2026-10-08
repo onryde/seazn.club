@@ -20,6 +20,7 @@ import {
 import { drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
 import { generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { START, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
+import type { BracketDrive } from "../reference-bracket.ts";
 import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
@@ -207,6 +208,9 @@ export class Recorder {
    *  `decided` also counts the table stages played before a bracket, so a bracket that opens on a 2-in-3 offset (or
    *  has fewer than three fixtures) would never be asked for a decider. */
   bracketOrdinal = 0;
+  /** W2a (ruling T15-R3): every bracket fixture the harness drove, with what the product answered — what
+   *  life-reference-bracket-finish judges against the reference family. */
+  readonly bracketDrives: BracketDrive[] = [];
   decided = 0;
   events = 0;
   /** W1-driving Task 6: stage id → its own loop record. */
@@ -560,6 +564,9 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // organiser through the API (X-ST-2); a tie-break is the scorer's, recorded on the pad.
   if (asked.kind === "settle") rec.settlesPosted++;
   if (asked.kind === "tiebreak") rec.tiebreaksPosted++;
+  if (forbidsLevelResult(stage.kind as StageKind)) {
+    rec.bracketDrives.push({ fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked, status: posted.at(-1)?.status ?? null, outcome: productOutcome });
+  }
   const foreign = state.last_seq - prior.length;
   if (foreign !== 0) {
     rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign, finishedBefore: null, request: null });
