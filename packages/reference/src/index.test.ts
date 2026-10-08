@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { StageKind } from "@seazn/engine/core";
 import { forEachSport } from "@seazn/engine/testkit";
-import { FAMILIES, NoReferenceFamily, familiesFor, requireFamily } from "./index.ts";
+import { AmbiguousReferenceFamily, FAMILIES, NoReferenceFamily, familiesFor, requireFamily, type ReferenceFamilyScope } from "./index.ts";
 import { bracketKindsFromRows, readRuleRows } from "../test/rule-rows.ts";
 
 // The bracket kinds come from the rules directory (X-DR-1's draw allow-list, subtracted from the engine's declared
@@ -46,5 +46,44 @@ describe("reference families (design §7.2; W2a adds bracket-finish, rule rows X
     expect(sports).toBeGreaterThan(0);
     expect(resolved).toBe(sports * BRACKET.length);
     expect(refused).toBe(sports * (KINDS.length - BRACKET.length));
+  });
+
+  it("the consumer's call: requireFamily(kind, sport).expect(case) answers every bracket kind × every sport (X-BR-1: a win from play is decided and seats both sides)", () => {
+    let judged = 0;
+    const sports = forEachSport(({ key }) => {
+      for (const kind of BRACKET) {
+        const e = requireFamily(kind as StageKind, key).expect({ stageKind: kind as StageKind, sport: key, play: { kind: "win", winner: "home" }, actions: [], hasLoserLine: true });
+        expect(e, `${kind} × ${key}`).toEqual({ status: "decided", advances: { winner: "home", loser: "away", method: "play" }, refused: [] });
+        judged++;
+      }
+    });
+    expect(sports).toBeGreaterThan(0);
+    expect(judged).toBe(sports * BRACKET.length);
+  });
+});
+
+describe("requireFamily over an injected family list (controller ruling T15-R5; a keep witness per familiesFor arm)", () => {
+  const fam = (id: string, stageKinds: readonly StageKind[], sports: readonly string[] | "any"): ReferenceFamilyScope => ({ id, rulebook: `test ${id}`, stageKinds, sports });
+
+  it("empty case first: an empty list resolves nothing, and the refusal names the pair", () => {
+    expect(familiesFor("knockout", "tennis", [])).toEqual([]);
+    expect(() => requireFamily("knockout", "tennis", [])).toThrow(NoReferenceFamily);
+  });
+
+  it("T15-R5: two families answering one kind × sport is AMBIGUOUS — a named refusal naming the pair and both families, never the first match", () => {
+    const two = [fam("a", ["knockout"], "any"), fam("b", ["knockout", "ladder"], ["tennis"])];
+    expect(() => requireFamily("knockout", "tennis", two)).toThrow(AmbiguousReferenceFamily);
+    expect(() => requireFamily("knockout", "tennis", two)).toThrow("reference: 2 reference families for knockout × tennis (a, b)");
+    // the positive pairs: where only one answers, it resolves
+    expect(requireFamily("knockout", "football", two).id).toBe("a");
+    expect(requireFamily("ladder", "tennis", two).id).toBe("b");
+  });
+
+  it("familiesFor's arms: a family answers only its stage kinds, and only its sports unless it answers any", () => {
+    const only = [fam("tennis-ko", ["knockout"], ["tennis"])];
+    expect(requireFamily("knockout", "tennis", only).id).toBe("tennis-ko");
+    expect(() => requireFamily("knockout", "football", only)).toThrow(NoReferenceFamily); // the sports arm
+    expect(() => requireFamily("league", "tennis", only)).toThrow(NoReferenceFamily); // the stage-kind arm
+    expect(familiesFor("knockout", "football", [fam("any-ko", ["knockout"], "any")]).map((f) => f.id)).toEqual(["any-ko"]); // the "any" arm
   });
 });

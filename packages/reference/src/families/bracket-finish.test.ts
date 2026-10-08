@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { StageKind } from "@seazn/engine/core";
 import { forEachSport } from "@seazn/engine/testkit";
 import {
+  LEVEL_KINDS,
   OUT_OF_SCOPE,
   OutOfScope,
   RULED_OUT,
@@ -16,11 +17,13 @@ import {
   type Action,
   type BracketCase,
   type BracketExpect,
+  type LevelKind,
   type PlayResult,
 } from "./bracket-finish.ts";
-import { bracketKindsFromRows, drawKindsFromXDR1, readRuleRows, rowById } from "../../test/rule-rows.ts";
+import { bracketKindsFromRows, drawKindsFromXDR1, levelKindsFromXBR1, readRuleRows, rowById } from "../../test/rule-rows.ts";
 
-const base: BracketCase = { stageKind: "knockout", sport: "boardgame", play: { kind: "level" }, actions: [], hasLoserLine: false };
+const DRAW = { kind: "level", as: "draw" } as const satisfies PlayResult;
+const base: BracketCase = { stageKind: "knockout", sport: "boardgame", play: DRAW, actions: [], hasLoserLine: false };
 
 describe("reference family bracket-finish (rule rows X-BR-1/2, X-ST-1/2, BG-KO-1/2, CA-KO-1, GN-KO-1, CK-KO-1)", () => {
   it("empty case first: a bracket with zero fixtures has nothing to expect (and a fixture with nothing played is scheduled)", () => {
@@ -70,7 +73,7 @@ describe("reference family bracket-finish (rule rows X-BR-1/2, X-ST-1/2, BG-KO-1
     expect(expectBracketFinish({ ...base, sport: "generic" })).toEqual({ status: "scheduled", advances: null, refused: [{ index: -1, code: "LEVEL_RESULT_IN_BRACKET" }] });
   });
   it("CK-KO-1: a cricket knockout no-result is held and settled by the higher group finisher", () => {
-    expect(expectBracketFinish({ ...base, sport: "cricket", actions: [{ kind: "settle", winner: "home", method: "higher_seed", by: "organiser" }] }).advances).toEqual({ winner: "home", loser: null, method: "settled_higher_seed" });
+    expect(expectBracketFinish({ ...base, sport: "cricket", play: { kind: "level", as: "no_result" }, actions: [{ kind: "settle", winner: "home", method: "higher_seed", by: "organiser" }] }).advances).toEqual({ winner: "home", loser: null, method: "settled_higher_seed" });
   });
   it("finalize of a level result is refused until it is settled", () => {
     expect(expectBracketFinish({ ...base, sport: "football", actions: [{ kind: "finalize" }] }).refused).toEqual([{ index: 0, code: "LEVEL_RESULT_IN_BRACKET" }]);
@@ -84,18 +87,47 @@ const KINDS: readonly string[] = StageKind.options;
 const BRACKET_KINDS_FROM_ROWS = bracketKindsFromRows(ROWS, KINDS);
 const DRAW_KINDS_FROM_ROWS = drawKindsFromXDR1(ROWS, KINDS);
 
-/** What a level PLAY result in a bracket becomes, per a sport's own KO row — the oracle's reading of each row's
- *  sentence, one line each. `null`: the row does not speak to a level play result. A sport with no such row answers
- *  by X-BR-2. Every `-KO-` row in the rules directory must be classified here (a new one reds the sweep below). */
-const LEVEL_PLAY_BY_KO_ROW: Readonly<Record<string, BracketExpect | "ruled-out" | null>> = {
-  "BG-KO-1": { status: "in_play", advances: null, refused: [] }, // "a drawn chess game goes to a tie-break" + ruling C12 (in_play)
-  "BG-KO-2": null, // the armageddon winner — about the tie-break, not the play
-  "CA-KO-1": "ruled-out", // "always plays the ICF extra board": a carrom bracket match is never level
-  "GN-KO-1": { status: "scheduled", advances: null, refused: [{ index: -1, code: "LEVEL_RESULT_IN_BRACKET" }] }, // "refuses a draw"
-  "CK-KO-1": { status: "needs_decision", advances: null, refused: [] }, // "is held and closed by settle"
-};
+/** X-BR-1's level kinds, read from its sentence: "`draw`, `tie` and `no_result` are never a decided result". */
+const LEVEL_KINDS_FROM_ROWS = levelKindsFromXBR1(ROWS) as LevelKind[];
 const HELD_BY_X_BR_2: BracketExpect = { status: "needs_decision", advances: null, refused: [] }; // "held as needs_decision: not decided, nobody seated"
+type LevelAnswer = BracketExpect | "ruled-out";
+/** What a level PLAY result in a bracket becomes, per a sport's own KO row and per X-BR-1 level kind — the oracle's
+ *  reading of each row's sentence. A row answers only the level kinds it names; `null`: the row does not speak to a
+ *  level play result at all. A level kind no row of the sport names answers by X-BR-2 (spec §5.4.3 / ruling 79: "every
+ *  other level result in a bracket is accepted and held"). Every `-KO-` row in the rules directory must be classified
+ *  here (a new one reds the sweep below). */
+const LEVEL_PLAY_BY_KO_ROW: Readonly<Record<string, Readonly<Partial<Record<LevelKind, LevelAnswer>>> | null>> = {
+  // "a drawn chess game goes to a tie-break" + ruling C12 (in_play). A double forfeit (no_result) is NOT a drawn game
+  // (spec §5.2 as amended, controller ruling T15-R1): X-BR-2 holds it.
+  "BG-KO-1": { draw: { status: "in_play", advances: null, refused: [] } },
+  "BG-KO-2": null, // the armageddon winner — about the tie-break, not the play
+  // "always plays the ICF extra board": a level board SCORE never stands. A no_result is no score: X-BR-2 holds it.
+  "CA-KO-1": { draw: "ruled-out", tie: "ruled-out" },
+  // "refuses a draw" (ruling 79: "refusal remains only for a generic draw"); a tie or a no_result is held by X-BR-2.
+  "GN-KO-1": { draw: { status: "scheduled", advances: null, refused: [{ index: -1, code: "LEVEL_RESULT_IN_BRACKET" }] } },
+  // "a cricket knockout tie with no super over, or a no-result, is held and closed by settle"
+  "CK-KO-1": { tie: HELD_BY_X_BR_2, no_result: HELD_BY_X_BR_2 },
+};
 const KO_ROW = /^[A-Z]+-KO-\d+$/;
+/** The level kind BG-KO-1 sends to a tie-break: "a drawn chess game" (the table above answers it in_play). */
+const DRAWN: LevelKind = "draw";
+
+/** Which row answers a level play result of kind `as` for `sport` — the sport's KO row that names `as`, else X-BR-2 —
+ *  and how many of the sport's rows name it (more than one is a contradiction the sweep refuses). */
+function levelAnswer(sport: string, as: LevelKind): { id: string; want: LevelAnswer; naming: number } {
+  const own = ROWS.filter((r) => r.file === sport && KO_ROW.test(r.id) && LEVEL_PLAY_BY_KO_ROW[r.id]?.[as] !== undefined);
+  const want = own[0] === undefined ? undefined : LEVEL_PLAY_BY_KO_ROW[own[0].id]?.[as];
+  return own[0] === undefined || want === undefined ? { id: "X-BR-2", want: HELD_BY_X_BR_2, naming: own.length } : { id: own[0].id, want, naming: own.length };
+}
+const heldByRows = (sport: string, as: LevelKind): boolean => {
+  const { want } = levelAnswer(sport, as);
+  return typeof want === "object" && want.status === "needs_decision";
+};
+
+/** The rows this family owes an answer: every bracket, settle and draw row (X-BR, X-ST, X-DR) and every sport's KO
+ *  row. Any other row — a later wave's — is not this family's. */
+const OWED_ROW = /^X-(BR|ST|DR)-\d+$|^[A-Z]+-KO-\d+$/;
+const owedRows = (rows: readonly { id: string }[]): string[] => rows.map((r) => r.id).filter((id) => OWED_ROW.test(id)).sort();
 /** The sport whose own row sends a drawn bracket game to a tie-break (BG-KO-1's rules file). */
 const CHESS = rowById(ROWS, "BG-KO-1").file;
 
@@ -162,79 +194,112 @@ describe("bracket-finish scope, read from the rules directory (X-BR-1, X-DR-1, t
     }
   });
 
-  it("the rows the family cites are exactly the rules directory's rows, every one signed (none stale, none unanswered)", () => {
+  it("the rows the family cites are rules-directory rows, every one signed, and every X-BR, X-ST, X-DR and KO row is cited (none stale, none unanswered; a later wave's other row is not this family's)", () => {
     expect(ROWS.length).toBeGreaterThan(0);
-    expect([...bracketFinish.rows].sort()).toEqual(ROWS.map((r) => r.id).sort());
+    const ids = ROWS.map((r) => r.id);
+    expect(new Set(bracketFinish.rows).size).toBe(bracketFinish.rows.length); // no row cited twice
+    for (const id of bracketFinish.rows) expect(ids, `${id} is cited but is no rules row (stale)`).toContain(id);
     for (const id of bracketFinish.rows) expect(rowById(ROWS, id).status, id).toMatch(/^signed \d+ \d{4}-\d{2}-\d{2}$/);
+    const owed = owedRows(ROWS);
+    expect(owed.length).toBeGreaterThan(0);
+    for (const id of owed) expect(bracketFinish.rows, `${id} is owed but not cited (unanswered)`).toContain(id);
+    // the filter's own witness: a later wave's unrelated row is not owed; a new KO or bracket row is
+    const row = (id: string) => ({ id });
+    expect(owedRows([...ROWS, row("TN-SC-9")])).toEqual(owed);
+    expect(owedRows([...ROWS, row("ZZ-KO-9"), row("X-BR-9")])).toEqual([...owed, "X-BR-9", "ZZ-KO-9"].sort());
   });
 });
 
 describe("bracket-finish, swept over the registry (X-BR-2 and each sport's own KO row)", () => {
-  it("X-BR-2 / BG-KO-1 / CA-KO-1 / GN-KO-1 / CK-KO-1: a level play result in every bracket kind, for every registered sport, answers by that sport's KO row or else X-BR-2", () => {
+  it("X-BR-1 level kinds: the family's level kinds are exactly X-BR-1's (draw, tie, no_result as the row names them)", () => {
+    expect(LEVEL_KINDS_FROM_ROWS.length).toBeGreaterThan(0);
+    expect(new Set(LEVEL_KINDS).size).toBe(LEVEL_KINDS.length);
+    expect([...LEVEL_KINDS].sort()).toEqual([...LEVEL_KINDS_FROM_ROWS].sort());
+  });
+
+  it("X-BR-2 / BG-KO-1 / CA-KO-1 / GN-KO-1 / CK-KO-1: every X-BR-1 level kind, in every bracket kind, for every registered sport, answers by the sport's KO row that names that kind, or else X-BR-2", () => {
     // every KO row in the directory is classified, and every classification names a real row
     const koRows = ROWS.filter((r) => KO_ROW.test(r.id)).map((r) => r.id).sort();
     expect(koRows.length).toBeGreaterThan(0);
     expect(Object.keys(LEVEL_PLAY_BY_KO_ROW).sort()).toEqual(koRows);
     const reached = new Map<string, number>();
+    const perKind = new Map<string, number>();
     let judged = 0;
     const sports = forEachSport(({ key }) => {
-      const own = ROWS.filter((r) => r.file === key && KO_ROW.test(r.id) && LEVEL_PLAY_BY_KO_ROW[r.id] !== null);
-      expect(own.length, key).toBeLessThanOrEqual(1);
-      const id = own[0]?.id ?? "X-BR-2";
-      const want = id === "X-BR-2" ? HELD_BY_X_BR_2 : LEVEL_PLAY_BY_KO_ROW[id];
-      for (const stageKind of bracketFinish.stageKinds) {
-        const c: BracketCase = { stageKind, sport: key, play: { kind: "level" }, actions: [], hasLoserLine: true };
-        if (want === "ruled-out") expect(() => expectBracketFinish(c), `${key} ${stageKind}`).toThrow(new RegExp(id));
-        else expect(expectBracketFinish(c), `${key} ${stageKind}`).toEqual(want);
-        judged++;
+      for (const as of LEVEL_KINDS_FROM_ROWS) {
+        const { id, want, naming } = levelAnswer(key, as);
+        expect(naming, `${key} ${as}: two of its rows answer it`).toBeLessThanOrEqual(1);
+        for (const stageKind of bracketFinish.stageKinds) {
+          const c: BracketCase = { stageKind, sport: key, play: { kind: "level", as }, actions: [], hasLoserLine: true };
+          if (want === "ruled-out") expect(() => expectBracketFinish(c), `${key} ${as} ${stageKind}`).toThrow(new RegExp(id));
+          else expect(expectBracketFinish(c), `${key} ${as} ${stageKind}`).toEqual(want);
+          judged++;
+          perKind.set(as, (perKind.get(as) ?? 0) + 1);
+        }
+        reached.set(`${id} ${as}`, (reached.get(`${id} ${as}`) ?? 0) + 1);
       }
-      reached.set(id, (reached.get(id) ?? 0) + 1);
     });
     expect(sports).toBeGreaterThan(0);
-    expect(judged).toBe(sports * bracketFinish.stageKinds.length);
-    // each answering row was reached by a registered sport, and so was the X-BR-2 default (no row is dead text)
-    for (const id of [...Object.keys(LEVEL_PLAY_BY_KO_ROW).filter((k) => LEVEL_PLAY_BY_KO_ROW[k] !== null), "X-BR-2"]) {
-      expect(reached.get(id) ?? 0, id).toBeGreaterThan(0);
-    }
+    expect(judged).toBe(sports * LEVEL_KINDS_FROM_ROWS.length * bracketFinish.stageKinds.length);
+    for (const as of LEVEL_KINDS_FROM_ROWS) expect(perKind.get(as) ?? 0, as).toBe(sports * bracketFinish.stageKinds.length);
+    // every (row, level kind) answer was reached by a registered sport, and so was X-BR-2 for every level kind (no row,
+    // and no level kind of a row, is dead text)
+    const answers = Object.entries(LEVEL_PLAY_BY_KO_ROW).flatMap(([id, byKind]) => Object.keys(byKind ?? {}).map((as) => `${id} ${as}`));
+    expect(answers.length).toBeGreaterThan(0);
+    for (const k of [...answers, ...LEVEL_KINDS_FROM_ROWS.map((as) => `X-BR-2 ${as}`)]) expect(reached.get(k) ?? 0, k).toBeGreaterThan(0);
   });
 
-  it("X-ST-1 + controller ruling P2-4: settle after a level result seats the winner and the loser, EVERY method, for every sport that holds a level result (cricket included)", () => {
-    // Which sports HOLD a level result comes from the rows (the sport's own KO row, else X-BR-2), not from the family.
-    const heldByRows = (key: string): boolean => {
-      const own = ROWS.find((r) => r.file === key && KO_ROW.test(r.id) && LEVEL_PLAY_BY_KO_ROW[r.id] !== null);
-      const want = own === undefined ? HELD_BY_X_BR_2 : LEVEL_PLAY_BY_KO_ROW[own.id];
-      return typeof want === "object" && want !== null && want.status === "needs_decision";
-    };
-    expect(heldByRows(rowById(ROWS, "CK-KO-1").file)).toBe(true); // CK-KO-1: "is held and closed by settle"
+  it("X-ST-1 + controller ruling P2-4: settle after a held level result seats the winner and the loser, EVERY method, for every sport and level kind the rows hold (cricket's tie and no-result included)", () => {
+    // Which (sport, level kind) pairs are HELD comes from the rows (the sport's own KO row naming the kind, else
+    // X-BR-2), not from the family.
+    const cricket = rowById(ROWS, "CK-KO-1").file;
+    expect(heldByRows(cricket, "tie")).toBe(true); // CK-KO-1: "a … tie …, or a no-result, is held and closed by settle"
+    expect(heldByRows(cricket, "no_result")).toBe(true);
     const METHODS_ = ["lot", "higher_seed", "organiser"] as const;
-    let held = 0;
+    let pairs = 0;
     let judged = 0;
     const sports = forEachSport(({ key }) => {
-      if (!heldByRows(key)) return;
-      held++;
-      for (const method of METHODS_) {
-        for (const winner of ["home", "away"] as const) {
-          const e = expectBracketFinish({ ...base, sport: key, hasLoserLine: true, actions: [{ kind: "settle", winner, method, by: "organiser" }] });
-          expect(e, `${key} ${method} ${winner}`).toEqual({ status: "decided", advances: { winner, loser: winner === "home" ? "away" : "home", method: `settled_${method}` }, refused: [] });
-          judged++;
+      for (const as of LEVEL_KINDS_FROM_ROWS) {
+        if (!heldByRows(key, as)) continue;
+        pairs++;
+        for (const method of METHODS_) {
+          for (const winner of ["home", "away"] as const) {
+            const e = expectBracketFinish({ ...base, sport: key, play: { kind: "level", as }, hasLoserLine: true, actions: [{ kind: "settle", winner, method, by: "organiser" }] });
+            expect(e, `${key} ${as} ${method} ${winner}`).toEqual({ status: "decided", advances: { winner, loser: winner === "home" ? "away" : "home", method: `settled_${method}` }, refused: [] });
+            judged++;
+          }
         }
       }
     });
     expect(sports).toBeGreaterThan(0);
-    expect(held).toBeGreaterThan(0);
-    expect(judged).toBe(held * METHODS_.length * 2);
+    expect(pairs).toBeGreaterThan(0);
+    expect(judged).toBe(pairs * METHODS_.length * 2);
+  });
+
+  it("GN-KO-1 refuses only a DRAW (ruling 79): a generic tie or no_result is held, and the organiser's settle closes it", () => {
+    for (const as of ["tie", "no_result"] as const) {
+      // single-sport: GN-KO-1 is generic's row
+      expect(expectBracketFinish({ ...base, sport: "generic", play: { kind: "level", as } }), as).toEqual(HELD_BY_X_BR_2);
+      expect(expectBracketFinish({ ...base, sport: "generic", play: { kind: "level", as }, actions: [{ kind: "settle", winner: "away", method: "lot", by: "organiser" }] }).advances, as).toEqual({ winner: "away", loser: null, method: "settled_lot" });
+    }
+  });
+
+  it("CA-KO-1: a carrom draw or tie is no bracket result (the extra board decides it); a carrom no_result is no score, so X-BR-2 holds it", () => {
+    // single-sport: CA-KO-1 is carrom's row
+    for (const as of ["draw", "tie"] as const) expect(() => expectBracketFinish({ ...base, sport: "carrom", play: { kind: "level", as } }), as).toThrow(RULED_OUT["carrom-level"]);
+    expect(expectBracketFinish({ ...base, sport: "carrom", play: { kind: "level", as: "no_result" } })).toEqual(HELD_BY_X_BR_2);
   });
 });
 
 describe("bracket-finish transitions (TEST-STRATEGY rule 1: second call, empty input, after a void, another sport)", () => {
-  const football = (actions: readonly Action[], play: PlayResult = { kind: "level" }, hasLoserLine = false): BracketExpect =>
+  const football = (actions: readonly Action[], play: PlayResult = DRAW, hasLoserLine = false): BracketExpect =>
     // single-sport: football has no KO row of its own, so it reads X-BR-2/X-ST-1 alone; the registry sweeps above cover every sport
     expectBracketFinish({ ...base, sport: "football", play, actions, hasLoserLine });
   const settle = (winner: "home" | "away", method: "lot" | "higher_seed" | "organiser" = "lot"): Action => ({ kind: "settle", winner, method, by: "organiser" });
 
   it("X-ST-1: a void of the settle restores needs_decision, and a second settle after it is accepted (a different winner)", () => {
     expect(football([settle("home"), { kind: "void-last" }])).toEqual({ status: "needs_decision", advances: null, refused: [] });
-    expect(football([settle("home"), { kind: "void-last" }, settle("away", "organiser")], { kind: "level" }, true)).toEqual({ status: "decided", advances: { winner: "away", loser: "home", method: "settled_organiser" }, refused: [] });
+    expect(football([settle("home"), { kind: "void-last" }, settle("away", "organiser")], DRAW, true)).toEqual({ status: "decided", advances: { winner: "away", loser: "home", method: "settled_organiser" }, refused: [] });
   });
 
   it("X-ST-1 / spec §5.1: each settle method records its own method string", () => {
@@ -254,7 +319,7 @@ describe("bracket-finish transitions (TEST-STRATEGY rule 1: second call, empty i
 
   it("spec §5.4.2: an abandon outranks a held level result (abandoned), and a settle outranks the abandon (decided); a void of the abandon restores needs_decision", () => {
     expect(football([{ kind: "abandon" }])).toEqual({ status: "abandoned", advances: null, refused: [] });
-    expect(football([{ kind: "abandon" }, settle("away")], { kind: "level" }, true)).toEqual({ status: "decided", advances: { winner: "away", loser: "home", method: "settled_lot" }, refused: [] });
+    expect(football([{ kind: "abandon" }, settle("away")], DRAW, true)).toEqual({ status: "decided", advances: { winner: "away", loser: "home", method: "settled_lot" }, refused: [] });
     expect(football([{ kind: "abandon" }, { kind: "void-last" }])).toEqual({ status: "needs_decision", advances: null, refused: [] });
   });
 
@@ -315,6 +380,26 @@ describe("bracket-finish transitions (TEST-STRATEGY rule 1: second call, empty i
     expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung: "rapid", winner: "home" }, tb] })).toEqual({ status: "decided", advances: { winner: "home", loser: null, method: "tiebreak_rapid" }, refused: [{ index: 1, code: "TIEBREAK_NOT_APPLICABLE" }] });
   });
 
+  it("BG-KO-1 + spec §5.2 as amended (controller ruling T15-R1): a chess double forfeit (no_result) is not a drawn game — held needs_decision, a tie-break on it is refused, finalize is refused, any settle closes it", () => {
+    // single-sport: BG-KO-1 is chess's row (boardgame); the registry sweep above holds every other sport's no_result
+    const nr: BracketCase = { ...base, play: { kind: "level", as: "no_result" } };
+    expect(expectBracketFinish(nr)).toEqual({ status: "needs_decision", advances: null, refused: [] });
+    let rungs = 0;
+    for (const rung of ["rapid", "blitz", "armageddon"] as const) {
+      expect(expectBracketFinish({ ...nr, actions: [{ kind: "tiebreak", rung, winner: "home" }] }), rung).toEqual({ status: "needs_decision", advances: null, refused: [{ index: 0, code: "TIEBREAK_NOT_APPLICABLE" }] });
+      // the positive pair: the same tie-break on a DRAWN game decides it
+      expect(expectBracketFinish({ ...base, actions: [{ kind: "tiebreak", rung, winner: "home" }] }).advances, rung).toEqual({ winner: "home", loser: null, method: `tiebreak_${rung}` });
+      rungs++;
+    }
+    expect(rungs).toBe(3);
+    expect(expectBracketFinish({ ...nr, actions: [{ kind: "finalize" }] })).toEqual({ status: "needs_decision", advances: null, refused: [{ index: 0, code: "LEVEL_RESULT_IN_BRACKET" }] });
+    for (const method of ["lot", "higher_seed", "organiser"] as const) {
+      expect(expectBracketFinish({ ...nr, hasLoserLine: true, actions: [{ kind: "settle", winner: "away", method, by: "organiser" }] }), method).toEqual({ status: "decided", advances: { winner: "away", loser: "home", method: `settled_${method}` }, refused: [] });
+    }
+    // a void of the settle restores the hold — and a tie-break is still refused after it
+    expect(expectBracketFinish({ ...nr, actions: [{ kind: "settle", winner: "away", method: "lot", by: "organiser" }, { kind: "void-last" }, { kind: "tiebreak", rung: "rapid", winner: "home" }] })).toEqual({ status: "needs_decision", advances: null, refused: [{ index: 2, code: "TIEBREAK_NOT_APPLICABLE" }] });
+  });
+
   it("BG-KO-1: a void of the tie-break puts the game back in its tie-break phase — then the organiser's lot, or a new tie-break, decides it", () => {
     const tb: Action = { kind: "tiebreak", rung: "rapid", winner: "home" };
     // single-sport: BG-KO-1 is chess's row (boardgame)
@@ -329,14 +414,19 @@ describe("bracket-finish transitions (TEST-STRATEGY rule 1: second call, empty i
     expect(expectBracketFinish({ ...base, actions: [{ kind: "abandon" }, { kind: "settle", winner: "home", method: "organiser", by: "organiser" }] }).advances).toEqual({ winner: "home", loser: null, method: "settled_organiser" });
   });
 
-  it("CK-KO-1: lot also closes a held cricket knockout", () => {
+  it("CK-KO-1: lot also closes a held cricket knockout tie", () => {
     // single-sport: CK-KO-1 is cricket's row
-    expect(expectBracketFinish({ ...base, sport: "cricket", actions: [{ kind: "settle", winner: "away", method: "lot", by: "organiser" }] }).advances).toEqual({ winner: "away", loser: null, method: "settled_lot" });
+    expect(expectBracketFinish({ ...base, sport: "cricket", play: { kind: "level", as: "tie" }, actions: [{ kind: "settle", winner: "away", method: "lot", by: "organiser" }] }).advances).toEqual({ winner: "away", loser: null, method: "settled_lot" });
   });
 
   it("X-ST-2: a refused settle writes nothing — it leaves no action for a void to undo, and the organiser's settle after it is accepted", () => {
     expect(football([{ kind: "settle", winner: "home", method: "lot", by: "scorer" }, settle("away")])).toEqual({ status: "decided", advances: { winner: "away", loser: null, method: "settled_lot" }, refused: [{ index: 0, code: "FORBIDDEN" }] });
     expect(() => football([{ kind: "settle", winner: "home", method: "lot", by: "device" }, { kind: "void-last" }])).toThrow(OUT_OF_SCOPE["void-nothing"]);
+  });
+
+  it("the family's expect(case) answers one case — what a consumer calls after requireFamily(kind, sport)", () => {
+    expect(bracketFinish.expect({ ...base, sport: "football" })).toEqual(HELD_BY_X_BR_2);
+    expect(bracketFinish.expect({ ...base, sport: "football", play: { kind: "win", winner: "away" }, hasLoserLine: true }).advances).toEqual({ winner: "away", loser: "home", method: "play" });
   });
 
   it("a second call answers the same, and expectAll keeps the input order (reversed in, reversed out)", () => {
@@ -376,7 +466,17 @@ describe("bracket-finish never guesses: OutOfScope names kernel behaviour W2a do
     expect(judged).toBe(reasons.length);
   });
 
-  it("controller ruling P2-7: finalize is out of scope ONLY with nothing to settle — a generic draw refused (GN-KO-1) leaves nothing either", () => {
+  it("each OutOfScope reason cites the controller ruling that put it out of scope (finalize-unplayed: T15-R4)", () => {
+    const RULING: Readonly<Record<keyof typeof OUT_OF_SCOPE, string>> = { "after-finalize": "P2-1", "abandon-decided": "P2-2", "abandon-twice": "P2-3", "finalize-unplayed": "T15-R4", "void-nothing": "P2-8" };
+    let cited = 0;
+    for (const [r, ruling] of Object.entries(RULING) as [keyof typeof OUT_OF_SCOPE, string][]) {
+      expect(OUT_OF_SCOPE[r], r).toContain(`controller ruling ${ruling})`);
+      cited++;
+    }
+    expect(cited).toBe(Object.keys(OUT_OF_SCOPE).length);
+  });
+
+  it("controller rulings P2-7 + T15-R4: finalize is out of scope ONLY with nothing to settle — a generic draw refused (GN-KO-1) leaves nothing either", () => {
     // single-sport: GN-KO-1 is generic's row
     expect(() => expectBracketFinish({ ...base, sport: "generic", actions: [{ kind: "finalize" }] })).toThrow(OUT_OF_SCOPE["finalize-unplayed"]);
     // the positive pair: an abandon makes settle apply, so the same finalize is REFUSED instead of out of scope
@@ -416,7 +516,8 @@ describe("bracket-finish never guesses: OutOfScope names kernel behaviour W2a do
 // root lockfile outside lane P2. Every sequence up to DEPTH over ALPHABET is walked (a superset of what a random
 // sampler draws at those lengths), and the first failure in walk order is already a shortest one.
 
-const PLAYS: readonly PlayResult[] = [{ kind: "none" }, { kind: "win", winner: "home" }, { kind: "win", winner: "away" }, { kind: "level" }];
+/** Nothing played, a win either way, and every X-BR-1 level kind (read from the row). */
+const PLAYS: readonly PlayResult[] = [{ kind: "none" }, { kind: "win", winner: "home" }, { kind: "win", winner: "away" }, ...LEVEL_KINDS_FROM_ROWS.map((as): PlayResult => ({ kind: "level", as }))];
 const ALPHABET: readonly Action[] = [
   { kind: "abandon" },
   { kind: "settle", winner: "home", method: "lot", by: "organiser" },
@@ -548,7 +649,8 @@ function walk(c: BracketCase, parent: BracketExpect, standing: readonly Snap[], 
       if (n.advances.loser !== loser) fail(t, next, `loser ${n.advances.loser}, expected ${loser}`);
     }
     if (n.status === "needs_decision" && next.play.kind !== "level") fail(t, next, "needs_decision without a level play result");
-    if (n.status === "in_play" && !(next.sport === CHESS && next.play.kind === "level")) fail(t, next, "in_play outside a drawn game awaiting its tie-break");
+    if (n.status === "in_play" && !(next.sport === CHESS && next.play.kind === "level" && next.play.as === DRAWN)) fail(t, next, "in_play outside a drawn game awaiting its tie-break");
+    if (n.status === "needs_decision" && next.sport === CHESS && next.play.kind === "level" && next.play.as === DRAWN) fail(t, next, "a drawn chess game held instead of awaiting its tie-break (BG-KO-1)");
     if (n.status === "finalized" && !(a.kind === "finalize" && parent.status === "decided" && same(n.advances, parent.advances))) fail(t, next, "finalized other than by finalizing a decided fixture");
     if (n.status === "scheduled" && nextStanding.length > 0) fail(t, next, "scheduled with a standing action");
     t.statuses.add(n.status);
@@ -557,9 +659,10 @@ function walk(c: BracketCase, parent: BracketExpect, standing: readonly Snap[], 
 }
 
 describe("bracket-finish, rule 10: every sequence up to DEPTH actions, every registered sport, every play, with and without a loser line", () => {
-  it(`invariants after every step (X-BR-1, X-BR-2, X-ST-1, X-ST-2, BG-KO-1, spec §5.1 void, §5.4.2 order, §5.4.3, §7 codes, controller rulings P2-1..P2-8) — at most ${MAX_NODES} nodes`, () => {
+  it(`invariants after every step (X-BR-1, X-BR-2, X-ST-1, X-ST-2, BG-KO-1, spec §5.1 void, §5.4.2 order, §5.4.3, §7 codes, controller rulings P2-1..P2-8 and T15-R1) — at most ${MAX_NODES} nodes`, () => {
     const t: Tally = { nodes: 0, failures: 0, first: [], statuses: new Set(), codes: new Set(), outOfScope: new Set(), ruledOut: new Set(), sticky: 0, voids: 0, noops: 0, settles: 0, tiebreaks: 0, finalizes: 0 };
     let roots = 0;
+    const rootRuledOut: string[] = [];
     const sports = forEachSport(({ key }) => {
       for (const play of PLAYS) {
         for (const hasLoserLine of [false, true]) {
@@ -568,7 +671,7 @@ describe("bracket-finish, rule 10: every sequence up to DEPTH actions, every reg
           t.nodes++;
           let e: BracketExpect;
           try { e = expectBracketFinish(root); } catch (err) {
-            if (err instanceof RuledOut) { t.ruledOut.add(err.reason); continue; }
+            if (err instanceof RuledOut) { t.ruledOut.add(err.reason); rootRuledOut.push(`${key} ${play.kind === "level" ? play.as : play.kind} ${hasLoserLine} ${err.reason}`); continue; }
             throw err;
           }
           t.statuses.add(e.status);
@@ -588,6 +691,16 @@ describe("bracket-finish, rule 10: every sequence up to DEPTH actions, every reg
     expect([...t.codes].sort()).toEqual([...CODES].sort());
     expect([...t.outOfScope].sort()).toEqual(Object.keys(OUT_OF_SCOPE).sort());
     expect([...t.ruledOut].sort()).toEqual(["carrom-level", "tiebreak-not-chess"]); // not-bracket: the walk stays in knockout; the scope tests sweep it
+    // m2: the ROOTS the rows exclude are exactly the (sport, level kind) pairs a KO row rules out, with and without a
+    // loser line — read from the rows table, never from the family — and nothing else
+    const wantRootRuledOut: string[] = [];
+    forEachSport(({ key }) => {
+      for (const as of LEVEL_KINDS_FROM_ROWS) {
+        if (levelAnswer(key, as).want === "ruled-out") for (const l of [false, true]) wantRootRuledOut.push(`${key} ${as} ${l} carrom-level`);
+      }
+    });
+    expect(wantRootRuledOut.length).toBe(4); // carrom × {draw, tie} × {no loser line, a loser line} (CA-KO-1)
+    expect([...rootRuledOut].sort()).toEqual([...wantRootRuledOut].sort());
     expect(t.sticky).toBeGreaterThan(0);
     expect(t.voids).toBeGreaterThan(0);
     expect(t.noops).toBeGreaterThan(0);

@@ -56,6 +56,17 @@ export function drawKindsFromXDR1(rows: readonly RuleRow[], stageKinds: readonly
   return kinds;
 }
 
+/** X-BR-1's level kinds, as the row's sentence reads them ("…; `draw`, `tie` and `no_result` are never a decided
+ *  result"). Zero names is a refusal, not an empty answer. */
+export function levelKindsFromXBR1(rows: readonly RuleRow[]): string[] {
+  const { rule } = rowById(rows, "X-BR-1");
+  const m = /; (.+?) are never a decided result/.exec(rule);
+  if (m?.[1] === undefined) throw new Error(`rule-rows: X-BR-1 no longer reads "…; … are never a decided result": ${rule}`);
+  const kinds = [...m[1].matchAll(/`([a-z_]+)`/g)].map((k) => k[1] ?? "");
+  if (kinds.length === 0) throw new Error(`rule-rows: X-BR-1 names no level kind in "${m[1]}"`);
+  return kinds;
+}
+
 /** X-BR-1's scope, "a bracket kind": every stage kind the engine declares where X-DR-1 allows no draw (ruling 78,
  *  "no level result where someone must advance"). */
 export function bracketKindsFromRows(rows: readonly RuleRow[], stageKinds: readonly string[]): string[] {

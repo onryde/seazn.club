@@ -7,18 +7,27 @@
 // One bracket fixture, in the RULEBOOK's terms — what play produced, then what the organiser or scorer did — folded
 // left to right into the status the fixture must have, who advances by which method, and which writes are refused.
 // It never guesses (R6). The eight questions T15 raised where the rows were silent were answered by CONTROLLER rulings
-// P2-1..P2-8 (2026-10-08 — controller rulings, not owner rulings): three are encoded below as answers (P2-4, P2-5, P2-6,
-// and P2-7 together with spec §5.4.3 as amended), and the rest — kernel behaviour W2a does not change — throw
-// `OutOfScope`, named and never judged. An input the rows exclude throws `RuledOut`, naming the row.
+// P2-1..P2-8 (2026-10-08 — controller rulings, not owner rulings): four are encoded below as answers (P2-4, P2-5, P2-6,
+// and P2-7 together with spec §5.4.3 as amended), and the other four (P2-1, P2-2, P2-3, P2-8) — kernel behaviour W2a
+// does not change — throw `OutOfScope`, named and never judged. The review of T15 added controller rulings T15-R1
+// (a chess double forfeit is not a drawn game: X-BR-2 holds it, spec §5.2 as amended), T15-R2 (a level result carries
+// its X-BR-1 kind), T15-R4 (finalize with nothing to settle is out of scope; a forfeit is not modelled by this family)
+// and T15-R5 (an ambiguous family match is refused, in ../index.ts). An input the rows exclude throws `RuledOut`, naming
+// the row.
 import type { StageKind } from "@seazn/engine/core";
 
 export type Side = "home" | "away";
 export type Rung = "rapid" | "blitz" | "armageddon";
 export type SettleMethod = "lot" | "higher_seed" | "organiser";
 
+/** X-BR-1's level kinds: "`draw`, `tie` and `no_result` are never a decided result" (controller ruling T15-R2). */
+export const LEVEL_KINDS = ["draw", "tie", "no_result"] as const;
+export type LevelKind = (typeof LEVEL_KINDS)[number];
+
 /** One bracket fixture, described in the RULEBOOK's terms — what was played and what the organiser or scorer did —
- *  never as engine events. */
-export type PlayResult = { kind: "win"; winner: Side } | { kind: "level" } | { kind: "none" };
+ *  never as engine events. A level result names its X-BR-1 kind: a chess double forfeit is `no_result`, not a drawn
+ *  game (controller ruling T15-R1). */
+export type PlayResult = { kind: "win"; winner: Side } | { kind: "level"; as: LevelKind } | { kind: "none" };
 export type Action =
   | { kind: "abandon" }
   | { kind: "settle"; winner: Side; method: SettleMethod; by: "organiser" | "scorer" | "device" }
@@ -28,11 +37,14 @@ export type Action =
 export interface BracketCase { stageKind: StageKind; sport: string; play: PlayResult; actions: readonly Action[]; hasLoserLine: boolean }
 
 export type Status = "scheduled" | "in_play" | "decided" | "needs_decision" | "abandoned" | "finalized";
+/** How a win was made. `"play"` is the ORACLE's label for a win from play: a consumer maps the product's own play
+ *  methods onto it. The others are spec §5.2's `tiebreak_<rung>` and §5.1's `settled_<method>`, verbatim. */
+export type WinMethod = "play" | `tiebreak_${Rung}` | `settled_${SettleMethod}`;
 /** Spec §7's refusal codes, plus the code the server already returns to a scorer or a device (X-ST-2). */
 export type RefusalCode = "LEVEL_RESULT_IN_BRACKET" | "SETTLE_NOT_APPLICABLE" | "TIEBREAK_NOT_APPLICABLE" | "FORBIDDEN";
 export interface BracketExpect {
   status: Status; // in_play: a chess game awaiting its tie-break (ruling C12)
-  advances: { winner: Side; loser: Side | null; method: string } | null;
+  advances: { winner: Side; loser: Side | null; method: WinMethod } | null;
   /** Which writes are refused, by rule. `index: -1` is the play itself, refused before any action. */
   refused: readonly { index: number; code: RefusalCode }[];
 }
@@ -54,13 +66,13 @@ const CHESS: RuledSport = "boardgame"; // BG-KO-1, BG-KO-2
 const CARROM: RuledSport = "carrom"; // CA-KO-1
 const GENERIC: RuledSport = "generic"; // GN-KO-1
 
-/** Kernel behaviour W2a does not change: named, counted by the sweeps, never judged by this family (controller rulings
- *  P2-1, P2-2, P2-3, P2-7 and P2-8, 2026-10-08 — controller rulings, not owner rulings). */
+/** Named, counted by the sweeps, never judged by this family (controller rulings P2-1, P2-2, P2-3, P2-8 and T15-R4,
+ *  2026-10-08 — controller rulings, not owner rulings). A consumer treats it like `RuledOut`: no exact check. */
 export const OUT_OF_SCOPE = {
   "after-finalize": "an action after finalize: pre-W2a kernel behaviour (controller ruling P2-1)",
   "abandon-decided": "an abandon of a fixture that already has a winner: pre-W2a kernel behaviour (controller ruling P2-2)",
   "abandon-twice": "a second abandon while one is active: pre-W2a kernel behaviour (controller ruling P2-3)",
-  "finalize-unplayed": "finalize of a bracket fixture with no outcome, no abandon and nothing pending: nothing to settle (controller ruling P2-7)",
+  "finalize-unplayed": "finalize of a bracket fixture with no outcome, no abandon and nothing pending: nothing to settle (controller ruling T15-R4)",
   "void-nothing": "a void with no standing action to undo: pre-W2a kernel behaviour (controller ruling P2-8)",
 } as const;
 export type OutOfScopeReason = keyof typeof OUT_OF_SCOPE;
@@ -77,7 +89,7 @@ export class OutOfScope extends Error {
 /** Inputs the rows exclude, each naming its row. */
 export const RULED_OUT = {
   "not-bracket": "X-BR-1 / X-DR-1: the family answers bracket kinds only; draws are allowed in league, group, swiss and americano",
-  "carrom-level": "CA-KO-1: a carrom bracket match always plays the ICF extra board, so it never ends level",
+  "carrom-level": "CA-KO-1: a carrom bracket match always plays the ICF extra board, so its boards never end level (a draw or a tie)",
   "tiebreak-not-chess": "BG-KO-1: the tie-break is a drawn chess bracket game's; no other sport records one",
 } as const;
 export type RuledOutReason = keyof typeof RULED_OUT;
@@ -92,13 +104,13 @@ export class RuledOut extends Error {
 }
 
 /** Spec §5.2: the tie-break folds to win{ method: "tiebreak_<rung>" }, one method per rung. */
-const TIEBREAK_METHOD: Readonly<Record<Rung, string>> = {
+const TIEBREAK_METHOD: { readonly [R in Rung]: `tiebreak_${R}` } = {
   rapid: "tiebreak_rapid", // BG-KO-1 rapid
   blitz: "tiebreak_blitz", // BG-KO-1 blitz
   armageddon: "tiebreak_armageddon", // BG-KO-1 armageddon
 };
 /** Spec §5.1: settle folds to win{ method: "settled_<method>" }. */
-const SETTLED_METHOD: Readonly<Record<SettleMethod, string>> = {
+const SETTLED_METHOD: { readonly [M in SettleMethod]: `settled_${M}` } = {
   lot: "settled_lot", // X-ST-1 lot
   higher_seed: "settled_higher_seed", // X-ST-1 higher seed
   organiser: "settled_organiser", // X-ST-1 organiser
@@ -118,24 +130,24 @@ const other = (s: Side): Side => (s === "home" ? "away" : "home");
 export function expectBracketFinish(c: BracketCase): BracketExpect {
   // ── Inputs the rows exclude ──
   if (!(BRACKET_STAGE_KINDS as readonly string[]).includes(c.stageKind)) throw new RuledOut("not-bracket", `${c.stageKind} is not a bracket kind`);
-  if (c.play.kind === "level" && c.sport === CARROM) throw new RuledOut("carrom-level", `a level carrom result in ${c.stageKind}`); // CA-KO-1
+  if (c.play.kind === "level" && c.play.as !== "no_result" && c.sport === CARROM) throw new RuledOut("carrom-level", `a carrom ${c.play.as} in ${c.stageKind}`); // CA-KO-1: a no_result is no board score, so X-BR-2 holds it
   const chess = c.sport === CHESS;
   const strayTiebreak = chess ? -1 : c.actions.findIndex((a) => a.kind === "tiebreak");
   if (strayTiebreak !== -1) throw new RuledOut("tiebreak-not-chess", `a tie-break at action ${strayTiebreak} on ${c.sport}`); // BG-KO-1
 
   /** X-BR-1: a fixture is decided only by a win — from play, a decider (the chess tie-break) or settle. */
-  const win = (s: State): { winner: Side; method: string } | null => {
+  const win = (s: State): { winner: Side; method: WinMethod } | null => {
     if (s.settle !== null) return { winner: s.settle.winner, method: SETTLED_METHOD[s.settle.method] };
     if (s.tiebreak !== null) return { winner: s.tiebreak.winner, method: TIEBREAK_METHOD[s.tiebreak.rung] };
     if (s.play.kind === "win") return { winner: s.play.winner, method: "play" };
     return null;
   };
-  /** X-BR-2: a play-produced level result (a drawn chess game goes to its tie-break instead — BG-KO-1). Held while
-   *  nothing has decided it: every reader asks `win(s)` first. */
-  const levelPlay = (s: State): boolean => s.play.kind === "level" && !chess;
-  /** BG-KO-1 + ruling C12: a drawn chess bracket game — awaiting its tie-break while nothing has decided it (every
-   *  reader asks `win(s)` first). */
-  const drawnChess = (s: State): boolean => s.play.kind === "level" && chess;
+  /** BG-KO-1 + ruling C12: a DRAWN chess bracket game — awaiting its tie-break while nothing has decided it (every
+   *  reader asks `win(s)` first). A double forfeit (no_result) is not a drawn game (T15-R1). */
+  const drawnChess = (s: State): boolean => chess && s.play.kind === "level" && s.play.as === "draw";
+  /** X-BR-2: every other play-produced level result, held while nothing has decided it (every reader asks `win(s)`
+   *  first). */
+  const levelPlay = (s: State): boolean => s.play.kind === "level" && !drawnChess(s);
   /** X-ST-1: settle applies only to a level outcome, an abandon with no outcome, or a chess game awaiting its tie-break. */
   const settleApplies = (s: State): boolean => {
     if (win(s) !== null) return false; // X-ST-1 already decided, a second settle included ("after the first one the outcome is win", spec §5.1)
@@ -157,8 +169,8 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
 
   const refused: { index: number; code: RefusalCode }[] = [];
   let s: State = { play: c.play, tiebreak: null, abandoned: false, settle: null, finalized: false };
-  if (c.play.kind === "level" && c.sport === GENERIC) {
-    refused.push({ index: -1, code: "LEVEL_RESULT_IN_BRACKET" }); // GN-KO-1 refuses a draw
+  if (c.play.kind === "level" && c.play.as === "draw" && c.sport === GENERIC) {
+    refused.push({ index: -1, code: "LEVEL_RESULT_IN_BRACKET" }); // GN-KO-1 refuses a draw (only a draw: ruling 79)
     s = { ...s, play: { kind: "none" } };
   }
   /** The state before each standing action, so a void restores exactly what preceded it (spec §5.1). */
@@ -185,7 +197,7 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
         // Every method on every bracket sport (controller rulings P2-4, cricket included, and P2-5, a pending chess tie-break included).
         return accept({ ...s, settle: { winner: a.winner, method: a.method } });
       case "tiebreak":
-        if (s.play.kind !== "level" || s.tiebreak !== null) return refuse("TIEBREAK_NOT_APPLICABLE"); // §7 outside the tie-break phase
+        if (!drawnChess(s) || s.tiebreak !== null) return refuse("TIEBREAK_NOT_APPLICABLE"); // §7 outside the tie-break phase (T15-R1: a double forfeit has none)
         if (s.abandoned || s.settle !== null) return refuse("TIEBREAK_NOT_APPLICABLE"); // P2-6 after an abandon or a settle
         return accept({ ...s, tiebreak: { rung: a.rung, winner: a.winner } }); // BG-KO-2 the recorded winner
       case "void-last": {
@@ -197,7 +209,7 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
       case "finalize":
         if (win(s) !== null) return accept({ ...s, finalized: true });
         if (settleApplies(s)) return refuse("LEVEL_RESULT_IN_BRACKET"); // §5.4.3 as amended (P2-7): finalize while settle applies
-        throw new OutOfScope("finalize-unplayed", at); // P2-7
+        throw new OutOfScope("finalize-unplayed", at); // T15-R4
     }
   });
 
@@ -211,10 +223,13 @@ export function expectBracketFinish(c: BracketCase): BracketExpect {
 export interface BracketFinishFamily {
   readonly id: "bracket-finish";
   readonly rulebook: string;
-  /** The rule rows this family answers — every row of packages/engine/rules (its test proves none is stale or missing). */
+  /** The rule rows this family answers: rules-directory rows, covering every X-BR, X-ST, X-DR and KO row (its test
+   *  proves none is stale and none is unanswered). */
   readonly rows: readonly string[];
   readonly stageKinds: readonly StageKind[];
   readonly sports: "any";
+  /** One case — what a consumer calls after `requireFamily(kind, sport)`. Throws `RuledOut` / `OutOfScope`. */
+  expect(c: BracketCase): BracketExpect;
   expectAll(cases: readonly BracketCase[]): BracketExpect[];
 }
 
@@ -225,5 +240,6 @@ export const bracketFinish: BracketFinishFamily = Object.freeze({
   rows: Object.freeze(["X-BR-1", "X-BR-2", "X-ST-1", "X-ST-2", "X-DR-1", "BG-KO-1", "BG-KO-2", "CA-KO-1", "GN-KO-1", "CK-KO-1"]),
   stageKinds: BRACKET_STAGE_KINDS,
   sports: "any",
+  expect: (c: BracketCase): BracketExpect => expectBracketFinish(c),
   expectAll: (cases: readonly BracketCase[]): BracketExpect[] => cases.map((c) => expectBracketFinish(c)),
 } as const);
