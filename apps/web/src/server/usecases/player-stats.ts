@@ -424,22 +424,25 @@ async function foldDivision(
     select id, stage_id, config_snapshot, home_entrant_id, away_entrant_id
     from fixtures where division_id = ${divisionId}`;
   const stageIds = [...new Set(fixtureInfoRows.map((r) => r.stage_id))];
-  const stageConfigById = new Map(
+  // W2a: the kind beside the config — a bracket stage adds the sport's deciders (fixture-cfg.ts).
+  const stageById = new Map(
     stageIds.length === 0
       ? []
       : (
-          await tx<{ id: string; config: Record<string, unknown> | null }[]>`
-            select id, config from stages where id in ${tx(stageIds)}`
-        ).map((r) => [r.id, r.config] as const),
+          await tx<{ id: string; kind: string; config: Record<string, unknown> | null }[]>`
+            select id, kind, config from stages where id in ${tx(stageIds)}`
+        ).map((r) => [r.id, r] as const),
   );
   const fixtureInfoById = new Map(fixtureInfoRows.map((r) => [r.id, r]));
+  const sportModule = resolveModule(division.sport_key, division.module_version);
 
   const perFixtureResults = [...byFixture.entries()].map(([fixtureId, ledger]) => {
     const info = fixtureInfoById.get(fixtureId);
     const cfg = resolveFixtureCfg(
       info?.config_snapshot,
       division.config,
-      info ? stageConfigById.get(info.stage_id) : undefined,
+      info ? stageById.get(info.stage_id) : undefined,
+      sportModule,
     );
     const ctx = entrantFoldCtx(
       info?.home_entrant_id ?? null,

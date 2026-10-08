@@ -268,7 +268,7 @@ export async function appendEventInTx(
   // the division up must have the format they choose apply. See
   // `fixture-cfg.ts` for the full rationale; it is the single reader of the
   // column, shared with `fold.ts` so the two folds cannot drift apart.
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage?.config);
+  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
   // Take it on the FIRST event only. The advisory lock above is held to
   // commit, so no concurrent appender can interleave between this decision
   // and the write below — the snapshot is taken exactly once.

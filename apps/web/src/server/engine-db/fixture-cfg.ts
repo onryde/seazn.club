@@ -1,5 +1,18 @@
 import "server-only";
+import { forbidsLevelResult } from "@seazn/engine/core";
 import { stageScopedCfg } from "./stage-cfg";
+
+/** The fixture's stage, as every caller already reads it: its kind (the overlay's switch) and its config (the
+ *  stage-scoped overlay `stageScopedCfg` applies). Null/undefined = no stage row (a fixture outside any stage). */
+export interface FixtureStageSource {
+  readonly kind: string | null | undefined;
+  readonly config: Record<string, unknown> | null | undefined;
+}
+/** The two members of a sport module the bracket overlay needs; every SportModule satisfies it. */
+export interface DeciderSource {
+  readonly configSchema: { safeParse(v: unknown): { success: boolean; data?: unknown } };
+  bracketDeciders(cfg: never): Record<string, unknown>;
+}
 
 /**
  * WHICH CONFIG DOES THIS FIXTURE FOLD AGAINST — the one decision, in one place.
@@ -32,17 +45,42 @@ import { stageScopedCfg } from "./stage-cfg";
  * overlay to be re-applied at read time against a stage config that has since
  * moved, which is the same drift one layer down.
  *
+ * W2a (ruling 76, spec §5.4.1): a fixture in a BRACKET stage kind
+ * (`forbidsLevelResult`) also gets the sport's `bracketDeciders(cfg)` on top of
+ * the stage-scoped cfg — chess's tie-break, carrom's extra board — and the
+ * overlay wins over the division and the stage (CA-KO-1: a bracket always plays
+ * the extra board, whatever the division's `tieBoard`). The V347 freeze then
+ * carries it from the first event; a frozen snapshot is returned untouched
+ * (Review Focus 4: a fixture scored before deploy keeps its cfg and finishes
+ * through needs_decision and settle).
+ *
+ * The sport's schema is asked with `safeParse`, never `parse`: this output goes
+ * to `foldMatch` UNPARSED and every module tolerates a cfg its schema rejects
+ * (`match-centre-load.ts`'s safeParse note), so a throwing parse would make the
+ * read path of a bracket fixture stricter than the fold itself — a 500 on a
+ * config that scores fine. On a refusal the raw cfg is passed; no shipped
+ * `bracketDeciders` reads a cfg field.
+ *
  * @param snapshot `fixtures.config_snapshot` as the driver returns it: the
  *   frozen jsonb, or null/undefined when none has been taken. Presence is the
  *   test, not truthiness — `{}` is a legitimate config for several modules.
+ * @param stage the fixture's stage row (`kind` and `config`); every caller
+ *   selects `s.kind` beside the `config` it already read.
+ * @param module the fixture's sport module (its `bracketDeciders`).
  */
 export function resolveFixtureCfg(
   snapshot: unknown,
   divisionCfg: unknown,
-  stageCfg: Record<string, unknown> | null | undefined,
+  stage: FixtureStageSource | null | undefined,
+  module: DeciderSource,
 ): unknown {
   if (hasFrozenCfg(snapshot)) return snapshot;
-  return stageScopedCfg(divisionCfg, stageCfg);
+  const scoped = stageScopedCfg(divisionCfg, stage?.config);
+  if (!forbidsLevelResult(stage?.kind)) return scoped;
+  if (scoped === null || typeof scoped !== "object" || Array.isArray(scoped)) return scoped; // a JSON-null division config stays as it is
+  const parsed = module.configSchema.safeParse(scoped);
+  const overlay = module.bracketDeciders((parsed.success ? parsed.data : scoped) as never);
+  return Object.keys(overlay).length === 0 ? scoped : { ...(scoped as Record<string, unknown>), ...overlay };
 }
 
 /**

@@ -4,30 +4,36 @@
 // own. The DB-backed proof that they actually do is in
 // `config-snapshot.test.ts`.
 import { describe, expect, it } from "vitest";
+import { boardgame } from "@seazn/engine/sports/boardgame";
+import { carrom } from "@seazn/engine/sports/carrom";
+import { generic } from "@seazn/engine/sports/generic";
+import { BRACKET_KINDS, StageKind } from "@seazn/engine/core";
 import { hasFrozenCfg, resolveFixtureCfg } from "../fixture-cfg";
 
 const DIVISION = { bestOf: 3, points: { w: 3, d: 1, l: 0 }, shootout: null } as const;
 const STAGE = { shootout: { bestOf: 5 }, placements: { "1": [1, 2] } };
+/** The pre-W2a cases ride a LEAGUE stage: no bracket overlay, so they keep pinning the snapshot/live decision alone. */
+const league = (config: Record<string, unknown> | null | undefined) => ({ kind: "league", config });
 
 describe("resolveFixtureCfg", () => {
   it("falls back to the live stage-scoped cfg when no snapshot has been taken", () => {
     // A fixture with zero events has nothing to protect: the organiser is still
     // setting the division up and the format they pick must apply.
-    expect(resolveFixtureCfg(null, DIVISION, STAGE)).toEqual({
+    expect(resolveFixtureCfg(null, DIVISION, league(STAGE), generic)).toEqual({
       ...DIVISION,
       shootout: { bestOf: 5 },
     });
   });
 
   it("applies the stage decider overlay on the fallback path, not the raw division config", () => {
-    expect((resolveFixtureCfg(null, DIVISION, STAGE) as { shootout: unknown }).shootout).toEqual({
+    expect((resolveFixtureCfg(null, DIVISION, league(STAGE), generic) as { shootout: unknown }).shootout).toEqual({
       bestOf: 5,
     });
   });
 
   it("leaves a division config untouched when the stage overlays nothing", () => {
-    expect(resolveFixtureCfg(null, DIVISION, null)).toBe(DIVISION);
-    expect(resolveFixtureCfg(undefined, DIVISION, undefined)).toBe(DIVISION);
+    expect(resolveFixtureCfg(null, DIVISION, league(null), generic)).toBe(DIVISION);
+    expect(resolveFixtureCfg(undefined, DIVISION, league(undefined), generic)).toBe(DIVISION);
   });
 
   it("returns the snapshot verbatim, ignoring both live configs entirely", () => {
@@ -36,7 +42,7 @@ describe("resolveFixtureCfg", () => {
     const snapshot = { bestOf: 3, points: { w: 3, d: 1, l: 0 }, shootout: { bestOf: 5 } };
     const movedDivision = { bestOf: 1, points: { w: 2, d: 0, l: 0 } };
     const movedStage = { shootout: { bestOf: 9 } };
-    expect(resolveFixtureCfg(snapshot, movedDivision, movedStage)).toBe(snapshot);
+    expect(resolveFixtureCfg(snapshot, movedDivision, league(movedStage), generic)).toBe(snapshot);
   });
 
   it("keeps a snapshot that is falsy-but-present", () => {
@@ -44,7 +50,7 @@ describe("resolveFixtureCfg", () => {
     // no JS operator, but a `snapshot || live` implementation would still be
     // wrong for `0`/`""`; assert on presence, not truthiness.
     const empty = {};
-    expect(resolveFixtureCfg(empty, DIVISION, STAGE)).toBe(empty);
+    expect(resolveFixtureCfg(empty, DIVISION, league(STAGE), generic)).toBe(empty);
   });
 
   it("hasFrozenCfg answers the SAME question the resolver asks, for every shape", () => {
@@ -58,7 +64,7 @@ describe("resolveFixtureCfg", () => {
     // restating the predicate, so a change to either alone fails here.
     const shapes: unknown[] = [null, undefined, {}, 0, "", false, { bestOf: 3 }, []];
     for (const shape of shapes) {
-      const resolverTreatsAsPresent = resolveFixtureCfg(shape, DIVISION, null) !== DIVISION;
+      const resolverTreatsAsPresent = resolveFixtureCfg(shape, DIVISION, league(null), generic) !== DIVISION;
       expect(hasFrozenCfg(shape), `disagreed about ${JSON.stringify(shape) ?? "undefined"}`).toBe(
         resolverTreatsAsPresent,
       );
@@ -72,6 +78,52 @@ describe("resolveFixtureCfg", () => {
     // at read time against a stage config that has since moved — the same drift
     // one layer down. The DB-backed proof that append-event really persists
     // THIS value is in `config-snapshot.test.ts`.
-    expect(resolveFixtureCfg(null, DIVISION, STAGE)).not.toEqual(DIVISION);
+    expect(resolveFixtureCfg(null, DIVISION, league(STAGE), generic)).not.toEqual(DIVISION);
+  });
+});
+
+describe("resolveFixtureCfg — the bracket overlay (ruling 76, spec §5.4.1)", () => {
+  const live = boardgame.configSchema.parse({});
+  it("empty case first: no stage, or a stage with no kind, applies no overlay", () => {
+    expect(resolveFixtureCfg(null, live, null, boardgame)).toEqual(live);
+    expect(resolveFixtureCfg(null, live, undefined, boardgame)).toEqual(live);
+    expect(resolveFixtureCfg(null, live, { kind: null, config: null }, boardgame)).toEqual(live);
+  });
+  it("BG-KO-1: every bracket kind gets the sport's declared overlay; every other kind gets none", () => {
+    let checked = 0;
+    let overlaid = 0;
+    for (const kind of StageKind.options) {
+      const out = resolveFixtureCfg(null, live, { kind, config: null }, boardgame) as Record<string, unknown>;
+      expect(out, kind).toEqual(BRACKET_KINDS.has(kind) ? { ...live, ...boardgame.bracketDeciders(live) } : live);
+      if (out.tiebreak === true) overlaid++;
+      checked++;
+    }
+    expect(checked).toBe(StageKind.options.length);
+    expect(overlaid).toBe(BRACKET_KINDS.size); // the sweep saw the overlay land, not only its absence
+  });
+  it("CA-KO-1: the overlay wins over the division and the stage overlay (right answer differs from the division's 'draw')", () => {
+    const division = carrom.configSchema.parse({ tieBoard: "draw" });
+    const out = resolveFixtureCfg(null, division, { kind: "knockout", config: { rules: { tieBoard: "draw" } } }, carrom);
+    expect((out as { tieBoard: string }).tieBoard).toBe("extra");
+  });
+  it("a sport that declares {} returns the stage-scoped cfg itself in a bracket (no copy, nothing added)", () => {
+    const division = generic.configSchema.parse(generic.variants.score); // a declared variant: generic has no all-default cfg
+    expect(resolveFixtureCfg(null, division, { kind: "knockout", config: null }, generic)).toBe(division);
+  });
+  it("Review Focus 4: a frozen snapshot without deciders keeps them out — the freeze wins over the overlay", () => {
+    const frozen = { ...live };
+    expect(resolveFixtureCfg(frozen, live, { kind: "knockout", config: null }, boardgame)).toBe(frozen);
+    expect("tiebreak" in (resolveFixtureCfg(frozen, live, { kind: "knockout", config: null }, boardgame) as object)).toBe(false);
+  });
+  it("a non-object live cfg (a JSON null division config) passes through untouched rather than throwing in parse", () => {
+    expect(resolveFixtureCfg(null, null, { kind: "knockout", config: null }, boardgame)).toBeNull();
+  });
+  it("a live cfg the sport's schema refuses still resolves and still gets the overlay — the read path is never stricter than the fold", () => {
+    // fold.ts hands this output to foldMatch unparsed, and module.init takes raw cfg (match-centre-load.ts's
+    // safeParse note): a parse here that threw would make every read of a bracket fixture 500 on a config the fold
+    // itself accepts. The sport's bracketDeciders reads no cfg field, so the raw cfg is a sound argument.
+    const odd = { ...live, variant: "bullet" };
+    expect(boardgame.configSchema.safeParse(odd).success).toBe(false); // the premise: the schema refuses it
+    expect(resolveFixtureCfg(null, odd, { kind: "knockout", config: null }, boardgame)).toEqual({ ...odd, tiebreak: true });
   });
 });

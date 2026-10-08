@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// W2a Task 6 — a passthrough spy on the real resolver, for the bracket-overlay case at the end of this file.
+vi.mock("@/server/engine-db/fixture-cfg", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/engine-db/fixture-cfg")>();
+  return { ...real, resolveFixtureCfg: vi.fn(real.resolveFixtureCfg) };
+});
+
 import { sql } from "@/lib/db";
+import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
+import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { importEvents, IMPORT_CAPS } from "../event-import";
 import {
@@ -253,5 +262,26 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
       }],
     });
     expect(report.results[0]!.error?.code).not.toBe("import.entitlement");
+  });
+});
+
+describe.skipIf(!HAS_DB)("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1, W2a Task 6)", () => {
+  it("event-import.ts importEvents", async () => {
+    // The dry-run fold resolves the fixture's cfg before it judges the stream; a start-only stream is then
+    // refused not_decided, which writes nothing — the cfg it was judged under is what this case reads.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    const spy = vi.mocked(resolveFixtureCfg);
+    spy.mockClear();
+    const report = await importEvents(s.auth, s.divisionId, {
+      import_id: "imp-w2a-overlay",
+      streams: [{ fixture: { id: s.fixtureIds[0]! }, events: [{ type: "core.start", payload: {} }] }],
+    });
+    expect(report.results[0]!.error?.code).toBe("import.not_decided"); // the fold ran (a refusal earlier would skip it)
+    const calls = spy.mock.calls.map((c, i) => ({
+      kind: (c[2] as { kind?: string } | null | undefined)?.kind ?? null,
+      out: spy.mock.results[i]!.value as Record<string, unknown> | null,
+    }));
+    expect(calls.length, "the entry never called resolveFixtureCfg").toBeGreaterThan(0);
+    expect(calls.some((c) => c.kind === "knockout" && c.out?.tiebreak === true), JSON.stringify(calls)).toBe(true);
   });
 });

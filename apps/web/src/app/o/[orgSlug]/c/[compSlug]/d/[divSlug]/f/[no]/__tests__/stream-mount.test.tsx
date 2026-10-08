@@ -47,7 +47,7 @@ vi.mock("@/server/usecases/fixtures", () => ({
   listEvents: vi.fn(async () => []),
   eventRecorderNames: vi.fn(async () => ({})),
   getLineup: vi.fn(async () => ({ slots: [] })),
-  loadFixturePadCfg: vi.fn(async () => ({})),
+  loadFixturePadCfg: vi.fn(async () => ({ cfg: {}, stageKind: null })),
 }));
 vi.mock("@/server/usecases/divisions", () => ({
   getDivision: vi.fn(async () => ({

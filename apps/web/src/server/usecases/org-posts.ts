@@ -772,12 +772,14 @@ async function extractScorers(
       select config_snapshot from fixtures where id = ${fx.fixture_id}`;
     const [divisionCfgRow] = await tx<{ config: unknown }[]>`
       select config from divisions where id = ${fx.division_id}`;
-    const [stageCfgRow] = await tx<{ config: Record<string, unknown> | null }[]>`
-      select config from stages where id = ${fx.stage_id}`;
+    // W2a: the kind beside the config — a bracket stage adds the sport's deciders (fixture-cfg.ts).
+    const [stageCfgRow] = await tx<{ kind: string; config: Record<string, unknown> | null }[]>`
+      select kind, config from stages where id = ${fx.stage_id}`;
     const cfg = resolveFixtureCfg(
       fixtureCfgRow?.config_snapshot,
       divisionCfgRow?.config,
-      stageCfgRow?.config,
+      stageCfgRow,
+      resolveModule(fx.sport_key, fx.module_version),
     );
     // S8/#417 W6 review round 2, fix 2 — the fixture-scoped loader, not
     // loadEntrantMembersForDivision: this function is single-fixture (see

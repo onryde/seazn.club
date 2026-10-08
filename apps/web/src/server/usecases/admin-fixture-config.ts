@@ -9,6 +9,7 @@ import {
   hasFrozenCfg,
   recomputeStandings,
   resolveFixtureCfg,
+  resolveModule,
 } from "@/server/engine-db";
 import { foldFixture } from "@/server/engine-db/fold";
 import { releaseFedSeats } from "@/server/engine-db/fed-seats";
@@ -84,7 +85,11 @@ interface Row {
   config_snapshot_at: Date | null;
   division_config: unknown;
   stage_config: Record<string, unknown> | null;
+  /** W2a — the stage's kind: a bracket kind adds the sport's deciders to the live cfg (fixture-cfg.ts) and holds a
+   *  level result as needs_decision (append-event.ts `fixtureStatusFromFold`). */
+  stage_kind: string;
   sport_key: string;
+  module_version: string;
   division_name: string;
   competition_name: string;
   org_name: string;
@@ -99,7 +104,8 @@ async function loadRow(db: Queryable, fixtureId: string): Promise<Row | null> {
   const [row] = await db<Row[]>`
     select f.id, f.org_id, f.stage_id, f.pool_id, f.fixture_no, f.status, f.outcome,
            f.config_snapshot, f.config_snapshot_at,
-           d.config as division_config, s.config as stage_config, d.sport_key,
+           d.config as division_config, s.config as stage_config, s.kind as stage_kind,
+           d.sport_key, d.module_version,
            d.name as division_name, c.name as competition_name, o.name as org_name,
            (select count(*)::int from score_events e where e.fixture_id = f.id) as event_count
     from fixtures f
@@ -119,7 +125,14 @@ export async function fixtureConfigPanel(fixtureId: string): Promise<FixtureConf
   // `resolveFixtureCfg(null, …)` rather than a second call to stageScopedCfg:
   // "what live config resolves to" must have ONE definition, or the divergence
   // shown here could differ from the one the fold would actually see.
-  const live = resolveFixtureCfg(null, row.division_config, row.stage_config);
+  // W2a: with the stage's kind, so a bracket fixture's live cfg carries the sport's deciders exactly as its first
+  // append would freeze them (fixture-cfg.ts).
+  const live = resolveFixtureCfg(
+    null,
+    row.division_config,
+    { kind: row.stage_kind, config: row.stage_config },
+    resolveModule(row.sport_key, row.module_version),
+  );
   const snapshot = row.config_snapshot;
   return {
     fixtureId: row.id,
@@ -190,7 +203,12 @@ export async function resnapshotFixtureConfig(
       );
     }
 
-    const live = resolveFixtureCfg(null, row.division_config, row.stage_config);
+    const live = resolveFixtureCfg(
+      null,
+      row.division_config,
+      { kind: row.stage_kind, config: row.stage_config },
+      resolveModule(row.sport_key, row.module_version),
+    );
     await tx`
       update fixtures
       set config_snapshot = ${tx.json(live as never)}, config_snapshot_at = now()

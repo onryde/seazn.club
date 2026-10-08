@@ -135,7 +135,8 @@ describe.skipIf(!HAS_DB)("loadFixturePadCfg (design §T4)", () => {
     // renders 5; the fold used 1, and the pad must agree with the fold.
     await driftDivisionConfig(divisionId, { bestOf: 5 });
 
-    const cfg = (await loadFixturePadCfg(auth, fixtureId)) as Record<string, unknown>;
+    // W2a: the loader returns `{ cfg, stageKind }` (the pad needs the kind too).
+    const cfg = (await loadFixturePadCfg(auth, fixtureId)).cfg as Record<string, unknown>;
     expect(cfg.bestOf).toBe(frozen!.config_snapshot!.bestOf);
     expect(cfg.bestOf).toBe(1);
   }, 30_000);
@@ -154,7 +155,7 @@ describe.skipIf(!HAS_DB)("loadFixturePadCfg (design §T4)", () => {
     const overridden = (await loadFixturePadCfg(
       auth,
       await firstFixtureOf(stageId),
-    )) as Record<string, unknown>;
+    )).cfg as Record<string, unknown>;
     expect(overridden.bestOf).toBe(3);
 
     // The sibling stage still inherits: three distinct values (1/3/5 across
@@ -162,7 +163,7 @@ describe.skipIf(!HAS_DB)("loadFixturePadCfg (design §T4)", () => {
     const inherited = (await loadFixturePadCfg(
       auth,
       await firstFixtureOf(siblingId),
-    )) as Record<string, unknown>;
+    )).cfg as Record<string, unknown>;
     expect(inherited.bestOf).toBe(5);
   }, 30_000);
 
@@ -182,7 +183,7 @@ describe.skipIf(!HAS_DB)("loadFixturePadCfg (design §T4)", () => {
     const stageId = await seedStage(auth, divisionId, 1, { shootout: true });
     await generateStageFixtures(auth, stageId);
 
-    const cfg = (await loadFixturePadCfg(auth, await firstFixtureOf(stageId))) as Record<
+    const cfg = (await loadFixturePadCfg(auth, await firstFixtureOf(stageId))).cfg as Record<
       string,
       unknown
     >;

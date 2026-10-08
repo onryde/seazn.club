@@ -278,7 +278,7 @@ async function runStream(
   // Tx). No writes happen here — a throw just rolls back reads.
   const [stage] = await sql<{ kind: string; config: Record<string, unknown> | null }[]>`
     select kind, config from stages where id = ${fixture.stage_id}`;
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage?.config);
+  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
   // Same field names appendEventInTx assigns, so the fold sees exactly what
   // the writer will later hand it (seq 1..n, gapless). `id` is deliberately
   // just the array index as a string: on an EngineError the engine echoes the

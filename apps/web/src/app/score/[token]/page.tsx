@@ -265,7 +265,8 @@ export default async function ScorePadPage({
   // cannot see a stage overlay. `loadFixturePadCfg` resolves all three inputs;
   // `read` is a session-shaped ctx by construction above, so the API-surface
   // device-link refusal does not apply to it.
-  const padCfg = await loadFixturePadCfg(read, fixture.id);
+  // W2a: `{ cfg, stageKind }` — the pad reads the cfg here; Task 12 threads the stage kind on to it.
+  const padCfg = (await loadFixturePadCfg(read, fixture.id)).cfg;
   // R7 B2 — per-config catalog (see the fixture console page). Still the raw
   // DIVISION config, deliberately: the catalog's inputs are teamSize /
   // playersPerSide / goalkeeper, which no sport in scope can override per

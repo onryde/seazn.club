@@ -325,7 +325,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         resolveFixtureCfg(
           f.config_snapshot,
           division.config,
-          stage.config as Record<string, unknown> | null,
+          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
+          sportModule,
         ),
         ctx,
         f.state,
@@ -347,7 +348,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         resolveFixtureCfg(
           f.config_snapshot,
           division.config,
-          stage.config as Record<string, unknown> | null,
+          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
+          sportModule,
         ),
         ctx,
         pointsRule,

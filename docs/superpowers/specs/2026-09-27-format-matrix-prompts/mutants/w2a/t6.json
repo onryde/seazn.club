@@ -1,0 +1,287 @@
+[
+  {
+    "id": "overlay-off",
+    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "find": "  if (!forbidsLevelResult(stage?.kind)) return scoped;\n",
+    "replace": "  return scoped;\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/fixture-cfg.test.ts"
+        ],
+        "name": "BG-KO-1: every bracket kind gets the sport's declared overlay; every other kind gets none"
+      }
+    ]
+  },
+  {
+    "id": "freeze-loses",
+    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "find": "if (hasFrozenCfg(snapshot)) return snapshot;",
+    "replace": "if (false) return snapshot;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/fixture-cfg.test.ts"
+        ],
+        "name": "Review Focus 4: a frozen snapshot without deciders keeps them out — the freeze wins over the overlay"
+      }
+    ]
+  },
+  {
+    "id": "overlay-first",
+    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "find": "{ ...(scoped as Record<string, unknown>), ...overlay }",
+    "replace": "{ ...overlay, ...(scoped as Record<string, unknown>) }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/fixture-cfg.test.ts"
+        ],
+        "name": "CA-KO-1: the overlay wins over the division and the stage overlay \\(right answer differs from the division's 'draw'\\)"
+      }
+    ]
+  },
+  {
+    "id": "parse-throws",
+    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "find": "  const parsed = module.configSchema.safeParse(scoped);\n  const overlay = module.bracketDeciders((parsed.success ? parsed.data : scoped) as never);\n",
+    "replace": "  const overlay = module.bracketDeciders((module.configSchema as unknown as { parse(v: unknown): unknown }).parse(scoped) as never);\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/fixture-cfg.test.ts"
+        ],
+        "name": "a live cfg the sport's schema refuses still resolves and still gets the overlay — the read path is never stricter than the fold"
+      }
+    ]
+  },
+  {
+    "id": "empty-overlay-copies",
+    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "find": "Object.keys(overlay).length === 0 ? scoped : ",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/fixture-cfg.test.ts"
+        ],
+        "name": "a sport that declares \\{\\} returns the stage-scoped cfg itself in a bracket \\(no copy, nothing added\\)"
+      }
+    ]
+  },
+  {
+    "id": "json-null",
+    "file": "apps/web/src/server/engine-db/fixture-cfg.ts",
+    "find": "  if (scoped === null || typeof scoped !== \"object\" || Array.isArray(scoped)) return scoped; // a JSON-null division config stays as it is\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/fixture-cfg.test.ts"
+        ],
+        "name": "a non-object live cfg \\(a JSON null division config\\) passes through untouched rather than throwing in parse"
+      }
+    ]
+  },
+  {
+    "id": "fold-kind-dropped",
+    "file": "apps/web/src/server/engine-db/fold.ts",
+    "find": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule)",
+    "replace": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage && { kind: null, config: stage.config }, sportModule)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "fold\\.ts loadFoldInputs"
+      }
+    ]
+  },
+  {
+    "id": "append-kind-dropped",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule)",
+    "replace": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage && { kind: null, config: stage.config }, sportModule)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "append-event\\.ts appendEvent: the first event freezes the overlay into config_snapshot"
+      }
+    ]
+  },
+  {
+    "id": "import-kind-dropped",
+    "file": "apps/web/src/server/usecases/event-import.ts",
+    "find": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule)",
+    "replace": "resolveFixtureCfg(fixture.config_snapshot, division.config, stage && { kind: null, config: stage.config }, sportModule)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/event-import-dryrun.test.ts"
+        ],
+        "name": "event-import\\.ts importEvents"
+      }
+    ]
+  },
+  {
+    "id": "competition-delta-kind-dropped",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f.config_snapshot,\n          division.config,\n          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        f.state,",
+    "replace": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f.config_snapshot,\n          division.config,\n          { kind: null, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        f.state,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "competition\\.ts loadStageInputs: both knockout calls \\(a decided game, a seeded bye\\) get the overlay"
+      }
+    ]
+  },
+  {
+    "id": "competition-bye-kind-dropped",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f.config_snapshot,\n          division.config,\n          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        pointsRule,",
+    "replace": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f.config_snapshot,\n          division.config,\n          { kind: null, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        pointsRule,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "competition\\.ts loadStageInputs: both knockout calls \\(a decided game, a seeded bye\\) get the overlay"
+      }
+    ]
+  },
+  {
+    "id": "match-centre-kind-dropped",
+    "file": "apps/web/src/server/public-site/match-centre-load.ts",
+    "find": "    configRows.stage,\n    sportModule,\n  );",
+    "replace": "    configRows.stage && { kind: null, config: configRows.stage.config },\n    sportModule,\n  );",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-load-feeder-read.test.ts"
+        ],
+        "name": "match-centre-load\\.ts loadMatchCentre"
+      }
+    ]
+  },
+  {
+    "id": "pad-kind-dropped",
+    "file": "apps/web/src/server/usecases/fixtures.ts",
+    "find": "{ kind: row.stage_kind, config: row.stage_config },",
+    "replace": "{ kind: null, config: row.stage_config },",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "fixtures\\.ts loadFixturePadCfg \\(feeds the console pad and the device pad\\)"
+      }
+    ]
+  },
+  {
+    "id": "player-stats-kind-dropped",
+    "file": "apps/web/src/server/usecases/player-stats.ts",
+    "find": "info ? stageById.get(info.stage_id) : undefined,",
+    "replace": "info ? { kind: null, config: stageById.get(info.stage_id)?.config } : undefined,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "player-stats\\.ts computePlayerStats"
+      }
+    ]
+  },
+  {
+    "id": "admin-panel-kind-dropped",
+    "file": "apps/web/src/server/usecases/admin-fixture-config.ts",
+    "find": "  const live = resolveFixtureCfg(\n    null,\n    row.division_config,\n    { kind: row.stage_kind, config: row.stage_config },",
+    "replace": "  const live = resolveFixtureCfg(\n    null,\n    row.division_config,\n    { kind: null, config: row.stage_config },",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "admin-fixture-config\\.ts panel and resnapshot"
+      }
+    ]
+  },
+  {
+    "id": "admin-resnapshot-kind-dropped",
+    "file": "apps/web/src/server/usecases/admin-fixture-config.ts",
+    "find": "    const live = resolveFixtureCfg(\n      null,\n      row.division_config,\n      { kind: row.stage_kind, config: row.stage_config },",
+    "replace": "    const live = resolveFixtureCfg(\n      null,\n      row.division_config,\n      { kind: null, config: row.stage_config },",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "admin-fixture-config\\.ts panel and resnapshot"
+      }
+    ]
+  },
+  {
+    "id": "org-posts-kind-dropped",
+    "file": "apps/web/src/server/usecases/org-posts.ts",
+    "find": "      stageCfgRow,\n      resolveModule(fx.sport_key, fx.module_version),",
+    "replace": "      stageCfgRow && { kind: null, config: stageCfgRow.config },\n      resolveModule(fx.sport_key, fx.module_version),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/org-posts-enrichment-sources.test.ts"
+        ],
+        "name": "org-posts\\.ts draftPostsForDecidedFixture"
+      }
+    ]
+  },
+  {
+    "id": "ledger",
+    "file": "apps/web/src/server/engine-db/__tests__/bracket-overlay-callers.test.ts",
+    "find": "  { file: \"apps/web/src/server/engine-db/fold.ts\", count: 1, case: \"fold.ts loadFoldInputs\" },\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "the site ledger is exact: 11 production calls, and none unlisted"
+      }
+    ]
+  },
+  {
+    "id": "ledger-reads-comments",
+    "file": "apps/web/src/server/engine-db/__tests__/bracket-overlay-callers.test.ts",
+    "find": "const n = [...stripComments(readFileSync(f, \"utf8\")).matchAll(CALL)].length;",
+    "replace": "const n = [...readFileSync(f, \"utf8\").matchAll(CALL)].length;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/bracket-overlay-callers.test.ts"
+        ],
+        "name": "the site ledger is exact: 11 production calls, and none unlisted"
+      }
+    ]
+  }
+]
