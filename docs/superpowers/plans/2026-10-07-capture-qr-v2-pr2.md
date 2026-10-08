@@ -71,6 +71,8 @@ PR-1 plan (house style, FP numbering continues its habit but restarts at FP1 her
 | R-2 | The "Phone not ready" debounce (FP16): show only after it has held `PHONE_NOT_READY_SHOW_AFTER_SECONDS` = 20 (about 2 beats). | **Owner ruling, 2026-10-07.** One named constant; not an open question. |
 | Q-D | **Details disclosure (FP22).** Data used and app version have no home in Option A outside Live. Plan: put them in the existing Details disclosure, which exists only in Live/Ending. Should the app version also show while merely paired? | **Owner ruling, 2026-10-07: Live/Ending only** — no app version while merely paired. |
 | R-3 | Do any other stop paths count as "an organiser Stop" for A12 (FP12)? Plan: only `stopSession` on a non-terminal session. | **Controller ruling, 2026-10-07:** only `stopSession` on a non-terminal session. |
+| R-4 | **Score-correction edge (B3 review):** after revert → re-finish, a broadcast created between the two finishes reads `created_at < new finished_at` and IS auto-stopped (the spec's literal predicate). | **Owner ruling, 2026-10-08: accepted, leave it.** Pinned in `stream-auto-model.test.ts`. |
+| X-1 | **Executor model:** Sonnet hit its weekly limit 2026-10-08; owner: continue on **Opus** implementers and reviewers. B6 (T8) and B7 (T10–T12) run in parallel in worktrees `capture-pr2-b6` / `capture-pr2-b7`, merged back before T9/T13. | **Owner, 2026-10-08.** |
 
 Nothing in this plan is an owner ruling unless its row says so (AGENTS.md #17). Never relay R-1, R-3 and Q-D to a peer session as the
 owner's word.
