@@ -445,6 +445,34 @@ function sourceFilesUnder(dir: string, exts: string[]): string[] {
   return out;
 }
 
+describe.skipIf(!HAS_DB)("firstResult and the held status (W2a T8, spec §5.4.4)", () => {
+  it("X-BR-2: a held fixture does not count as a first result; its settle does", async () => {
+    // Football with no extra time and no shootout: a 0–0 full time in a KNOCKOUT is a level result with no decider,
+    // held as needs_decision (ruling 79). The witness is the "fixture decided" line — the one consumer of
+    // firstResult this file can observe (PostHog's capture reads the same value, append-event.ts).
+    const s = await seedFootball(football.configSchema.parse({ extraTime: { enabled: false, halfMinutes: 15 }, shootout: false }));
+    await sql`update stages set kind = 'knockout' where id = ${s.stageId}`;
+    let seq = 0;
+    const post = async (type: string, payload: unknown) => {
+      const r = await appendEvent(s.orgId, s.fixtureId, seq, { type, payload });
+      seq += 1;
+      return r;
+    };
+    await post("core.start", {});
+    await post("football.period", { phase: "HT" });
+    lines.length = 0;
+    const ft = await post("football.period", { phase: "FT" });
+    expect(ft.status).toBe("needs_decision");
+    expect(linesNamed("fixture decided")).toHaveLength(0); // held: not a result yet
+    lines.length = 0;
+    const settled = await post("core.settle", { winner: s.home, method: "organiser" });
+    expect(settled.status).toBe("decided");
+    const decided = linesNamed("fixture decided");
+    expect(decided).toHaveLength(1); // the settle IS the first result, though fixture.outcome was already set
+    expect(decided[0]).toMatchObject({ fixtureId: s.fixtureId, kind: "win", method: "settled_organiser" });
+  });
+});
+
 describe("no logger outside the sanctioned funnel (R3.5 Task K, K6/K7)", () => {
   it("K6: no v3 skin imports @/server/** (a client-component build failure tsc cannot see)", () => {
     const files = sourceFilesUnder(V3_DIR, [".ts", ".tsx"]);

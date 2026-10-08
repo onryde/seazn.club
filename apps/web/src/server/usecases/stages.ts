@@ -54,6 +54,7 @@ import { resolveModule } from "@/server/engine-db";
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
 import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
+import { assertNoLevelSeat } from "@/server/engine-db/level-seat";
 import {
   isSwissBoardSeated,
   latestSeatedSwissRound,
@@ -4078,12 +4079,17 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
       away_entrant_id: string | null;
       outcome: unknown;
       ext_key: string | null;
+      stage_kind: string;
     }[]
   >`
-    select id, round_no, status, home_entrant_id, away_entrant_id, outcome, ext_key
-    from fixtures where stage_id = ${stageId}
-    order by round_no, seq_in_round`;
+    select f.id, f.round_no, f.status, f.home_entrant_id, f.away_entrant_id, f.outcome, f.ext_key,
+           s.kind as stage_kind
+    from fixtures f join stages s on s.id = f.stage_id
+    where f.stage_id = ${stageId}
+    order by f.round_no, f.seq_in_round`;
   return rows.map((f) => {
+    // X-BR-1: the completed-bracket rebuild seats from these rows too (level-seat.ts).
+    assertNoLevelSeat({ fixtureId: f.id, stageKind: f.stage_kind, status: f.status, outcome: f.outcome });
     const { bracket, thirdPlace } = parseExtKey(f.ext_key);
     const { winner, loser } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
     return {

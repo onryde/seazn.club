@@ -11,6 +11,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
+import { createPerson } from "@/server/usecases/persons";
 import { startDivision } from "@/server/usecases/schedule";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 
@@ -42,6 +43,8 @@ export async function seedBracket(opts: {
   stageKind: StageKind;
   entrants: number;
   divisionConfig?: Record<string, unknown>;
+  /** The stage's own config; a swiss stage must declare `rounds` (assertSwissRoundsDeclared). */
+  stageConfig?: Record<string, unknown>;
 }): Promise<SeededBracket> {
   const variant = declaredVariant(opts.sport, opts.variant);
   const sportModule = builtinModules.find((x) => x.key === opts.sport)!;
@@ -63,13 +66,35 @@ export async function seedBracket(opts: {
   });
   // The entrant kind the sport DECLARES as its default (engine `entrantModel`), never a typed list of team sports.
   const kind = sportModule.entrantModel?.defaultKind ?? "individual";
+  // americano pairs individuals on the fly, and only individuals with a linked person (stages.ts americanoGen).
+  const member = async (name: string) =>
+    opts.stageKind !== "americano"
+      ? []
+      : [
+          {
+            person_id: (await createPerson(auth, { full_name: name, consent: {}, dob: null, gender: null, external_ref: null })).id,
+            is_captain: false,
+            roles: [],
+            default_position_key: null,
+            squad_number: null,
+          },
+        ];
   await createEntrants(
     auth,
     division.id,
-    Array.from({ length: opts.entrants }, (_, i) => ({ kind, display_name: `B${i + 1}`, seed: i + 1, members: [] })),
+    await Promise.all(
+      Array.from({ length: opts.entrants }, async (_, i) => ({
+        kind,
+        display_name: `B${i + 1}`,
+        seed: i + 1,
+        members: await member(`B${i + 1}`),
+      })),
+    ),
   );
-  const [stage] = await createStages(auth, division.id, { seq: 1, kind: opts.stageKind, name: "S1", config: {}, progression: null });
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind: opts.stageKind, name: "S1", config: opts.stageConfig ?? {}, progression: null });
   await generateStageFixtures(auth, stage!.id);
+  // swiss: the first generate plants empty round shells; the second pairs round 1 (stages.ts swissGen).
+  if (opts.stageKind === "swiss") await generateStageFixtures(auth, stage!.id);
   // `scoreEvent` refuses a division that has not started (division-phase.ts); appendEvent does not ask.
   await startDivision(auth, division.id);
   const rows = await sql<{ id: string }[]>`

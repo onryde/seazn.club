@@ -11,10 +11,6 @@ import { ID, REPO, ROW_HEADER, RULES_DIR, STATUS, allRows, fileExists, hasToken,
  *  this map to be EMPTY. A row not named here must already be proved. */
 const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
   ["BG-KO-2", "Task 12"],
-  ["X-BR-2", "Task 7"],
-  ["X-BR-1", "Task 8"],
-  ["GN-KO-1", "Task 8"],
-  ["CK-KO-1", "Task 8"],
   ["X-ST-2", "Task 9"],
 ]);
 

@@ -15,6 +15,7 @@ import { EngineError } from "@seazn/engine/core";
 import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
 import { recomputeStandings } from "@/server/engine-db";
 import { advancingSides } from "@/server/engine-db/fed-seats";
+import { assertNoLevelSeat } from "@/server/engine-db/level-seat";
 import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -291,7 +292,8 @@ export async function scoreEvent(
   let advanced: readonly string[] = result.released;
   try {
     // A decision (or a void that may have erased one) moves brackets/standings.
-    if (result.outcome !== null || input.type === "core.void") {
+    // W2a (spec §5.4.4): a HELD fixture (needs_decision) seats nobody, so onDecided is not called for it.
+    if ((result.outcome !== null && result.status !== "needs_decision") || input.type === "core.void") {
       const filled = await onDecided(auth, fixtureId);
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
       await refreshDiscipline(auth, fixtureId);
@@ -705,6 +707,7 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     const [fixture] = await tx<
       {
         outcome: unknown;
+        status: string;
         stage_id: string;
         pool_id: string | null;
         winner_to_fixture: string | null;
@@ -717,12 +720,14 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         division_id: string;
       }[]
     >`
-      select f.outcome, f.stage_id, f.pool_id, f.winner_to_fixture, f.winner_to_slot,
+      select f.outcome, f.status, f.stage_id, f.pool_id, f.winner_to_fixture, f.winner_to_slot,
              f.loser_to_fixture, f.loser_to_slot, s.kind, f.ext_key,
              s.config as stage_config, s.division_id
       from fixtures f join stages s on s.id = f.stage_id
       where f.id = ${fixtureId}`;
     if (!fixture) return null;
+    // X-BR-1: a level outcome under a seating status in a bracket is the bug shape (level-seat.ts).
+    assertNoLevelSeat({ fixtureId, stageKind: fixture.kind, status: fixture.status, outcome: fixture.outcome });
     // One reading of who advances, shared with the un-fill (fed-seats.ts), so
     // the two can never disagree about which name a decision put where.
     const { winner, loser } = advancingSides(fixture.outcome);

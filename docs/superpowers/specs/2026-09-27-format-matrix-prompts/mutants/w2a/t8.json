@@ -1,0 +1,293 @@
+[
+  {
+    "id": "generic-refusal-off",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (division.sport_key === \"generic\") {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "GN-KO-1: a generic draw in a bracket is refused LEVEL_RESULT_IN_BRACKET and leaves the ledger untouched"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/draw-guard.test.ts"
+        ],
+        "name": "GN-KO-1: a level generic knockout result is refused LEVEL_RESULT_IN_BRACKET \\(enter the winner\\) and leaves the ledger untouched"
+      }
+    ]
+  },
+  {
+    "id": "hold-not-refuse",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "    if (forbidsLevelResult(stageKind)) {\n      if (division.sport_key",
+    "replace": "    if (false) {\n      if (division.sport_key",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-2: a level football knockout result is held — needs_decision, nobody seated in the final, onDecided not run; the settle runs it"
+      }
+    ]
+  },
+  {
+    "id": "ondecided-gate",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "result.status !== \"needs_decision\"",
+    "replace": "true",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-2: a level football knockout result is held — needs_decision, nobody seated in the final, onDecided not run; the settle runs it"
+      }
+    ]
+  },
+  {
+    "id": "seat-assert-off",
+    "file": "apps/web/src/server/engine-db/level-seat.ts",
+    "find": "if (isBugShape(f)) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: a level outcome under a seating status in a bracket throws LEVEL_RESULT_SEATED, per level kind and per seating status"
+      }
+    ]
+  },
+  {
+    "id": "seat-assert-draw",
+    "file": "apps/web/src/server/engine-db/level-seat.ts",
+    "find": "isLevelOutcome(f.outcome as never)",
+    "replace": "((f.outcome as { kind?: string })?.kind === \"tie\" || (f.outcome as { kind?: string })?.kind === \"no_result\")",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: a level outcome under a seating status in a bracket throws LEVEL_RESULT_SEATED, per level kind and per seating status"
+      }
+    ]
+  },
+  {
+    "id": "seat-status-forfeited",
+    "file": "apps/web/src/server/engine-db/level-seat.ts",
+    "find": "[\"decided\", \"forfeited\", \"finalized\"]",
+    "replace": "[\"decided\", \"finalized\"]",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: a level outcome under a seating status in a bracket throws LEVEL_RESULT_SEATED, per level kind and per seating status"
+      }
+    ]
+  },
+  {
+    "id": "first-result-held",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": " && status !== \"needs_decision\"\n",
+    "replace": "\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/append-event.test.ts"
+        ],
+        "name": "X-BR-2: a held fixture does not count as a first result; its settle does"
+      }
+    ]
+  },
+  {
+    "id": "settle-withdrawn",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (w?.status === \"withdrawn\") {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-ST-1 \\(ruling C17, Review Focus 5\\): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\), and a settle for the remaining one seats them"
+      }
+    ]
+  },
+  {
+    "id": "finalize-held",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (candidate.type === \"core.finalize\" && forbidsLevelResult(stageKind)) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: a HELD level result \\(needs_decision\\) cannot be finalized; once settled it can"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "finding 27: a football level abandon \\(no_result\\) is refused finalize, and accepted once settled"
+      }
+    ]
+  },
+  {
+    "id": "finalize-is-level-outcome",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (settleApplies(sportModule, facts)) {",
+    "replace": "if (isLevelOutcome(facts.outcome)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: an abandon with NO outcome cannot be finalized \\(isLevelOutcome alone would let it through\\); once settled it can"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: a chess game with its tie-break PENDING cannot be finalized"
+      }
+    ]
+  },
+  {
+    "id": "finalize-abandoned",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "abandoned: resolveVoids(prior).some((e) => e.type === \"core.abandon\"),",
+    "replace": "abandoned: false,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: an abandon with NO outcome cannot be finalized \\(isLevelOutcome alone would let it through\\); once settled it can"
+      }
+    ]
+  },
+  {
+    "id": "finalize-folds-candidate",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "foldMatchWithStoppage(sportModule, cfg, lineups, prior, { strictFromSeq: candidate.seq })",
+    "replace": "foldMatchWithStoppage(sportModule, cfg, lineups, stream, { strictFromSeq: candidate.seq })",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: an abandon with NO outcome cannot be finalized \\(isLevelOutcome alone would let it through\\); once settled it can"
+      }
+    ]
+  },
+  {
+    "id": "first-result-settle",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "(fixture.outcome === null || fixture.status === \"needs_decision\") && outcome",
+    "replace": "fixture.outcome === null && outcome",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/append-event.test.ts"
+        ],
+        "name": "X-BR-2: a held fixture does not count as a first result; its settle does"
+      }
+    ]
+  },
+  {
+    "id": "settle-not-bracket",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "    if (!forbidsLevelResult(stageKind)) {\n      throw new EngineError(\"SETTLE_NOT_APPLICABLE\"",
+    "replace": "    if (false) {\n      throw new EngineError(\"SETTLE_NOT_APPLICABLE\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "SETTLE_NOT_APPLICABLE \\(not_bracket\\) in every DRAW kind: the ledger is untouched and the draw stays the result"
+      }
+    ]
+  },
+  {
+    "id": "seat-ondecided",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "    assertNoLevelSeat({ fixtureId, stageKind: fixture.kind, status: fixture.status, outcome: fixture.outcome });\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: onDecided refuses a level knockout row stored decided, and seats nobody"
+      }
+    ]
+  },
+  {
+    "id": "seat-competition",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "  assertNoLevelSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome }); // X-BR-1\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: the bracket completion read \\(completeStageIfReady → toBracketFixture\\) refuses the forced shape"
+      }
+    ]
+  },
+  {
+    "id": "seat-competition-kind",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "toBracketFixture(f, inputs.kind)",
+    "replace": "toBracketFixture(f, \"league\")",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: the bracket completion read \\(completeStageIfReady → toBracketFixture\\) refuses the forced shape"
+      }
+    ]
+  },
+  {
+    "id": "seat-stages",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "    assertNoLevelSeat({ fixtureId: f.id, stageKind: f.stage_kind, status: f.status, outcome: f.outcome });\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: the completed-bracket rebuild read \\(stages\\.ts loadBracketFixtures\\) refuses the forced shape; a held row reads clean"
+      }
+    ]
+  }
+]

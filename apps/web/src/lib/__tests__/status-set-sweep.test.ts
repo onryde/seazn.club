@@ -91,11 +91,13 @@ describe("spec §5.4.6: every fixture-status set is found, classified, and agree
     expect(files.length).toBeGreaterThan(0);
     expect(found.length).toBeGreaterThan(0);
     const keys = new Set(STATUS_SET_LEDGER.map(key));
-    expect(found.filter((s) => !keys.has(key(s))).map(key)).toEqual([]);
+    const unclassified = found.filter((s) => !keys.has(key(s))).map(key);
+    expect(unclassified, `unclassified sets (add a ledger row):\n${unclassified.join("\n")}`).toEqual([]);
   });
   it("every ledger row is still found (a stale row is a failure), and no row is listed twice", () => {
     const keys = new Set(found.map(key));
-    expect(STATUS_SET_LEDGER.filter((r) => !keys.has(key(r))).map(key)).toEqual([]);
+    const stale = STATUS_SET_LEDGER.filter((r) => !keys.has(key(r))).map(key);
+    expect(stale, `stale ledger rows:\n${stale.join("\n")}`).toEqual([]);
     expect(new Set(STATUS_SET_LEDGER.map(key)).size).toBe(STATUS_SET_LEDGER.length);
   });
   it("each set holds needs_decision exactly when its class says it must", () => {

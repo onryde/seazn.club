@@ -2,7 +2,7 @@
 // every found set's use site; each row's class was decided by READING that site (never by a set's name alone,
 // AGENTS class 5). A later loop that adds a set adds its row here with a `why` read at its use site.
 //
-// The spec's classification is "played, not finished, needs attention". Reading the 124 sets showed that three
+// The spec's classification is "played, not finished, needs attention". Reading the 124 sets found at W2a T7 showed that three
 // words cannot carry the question honestly — a write-lock set and a void set are neither "played" nor "not
 // finished", yet must both leave `needs_decision` OUT — so the ledger names the question each set asks:
 //
@@ -92,6 +92,7 @@ export const STATUS_SET_LEDGER: readonly StatusSetRow[] = [
   { file: "apps/web/src/server/engine-db/append-event.ts", anchor: "ReadonlySet<string> = new Set( :: cancelled,finalized", class: "locked", why: "LOCKED_FIXTURE_STATUSES: needs_decision must accept settle and void" },
   { file: "apps/web/src/server/engine-db/append-event.ts", anchor: "map Kind: string | null, ): string :: forfeited,in_play", class: "not-a-set", why: "the status rule's own ternary returns inside fixtureStatusFromFold, not a status set" },
   { file: "apps/web/src/server/engine-db/competition.ts", anchor: "chain tatus(f.status); return status :: in_play,scheduled", class: "other-vocabulary", why: "engine FixtureStatus after toEngineStatus; engineFixtureStatus maps needs_decision to in_play, so a held fixture is open here" },
+  { file: "apps/web/src/server/engine-db/level-seat.ts", anchor: "ReadonlySet<string> = new Set( :: decided,finalized,forfeited", class: "played", why: "SEATING_STATUSES (W2a T8, X-BR-1): the statuses whose outcome seats someone; a held fixture seats nobody, and with needs_decision IN every held fixture would throw LEVEL_RESULT_SEATED" },
   { file: "apps/web/src/server/og/match-poster.tsx", anchor: "chain hPosterVariant = header.status :: decided,in_play", class: "other-vocabulary", why: "MatchCentreHeader status (in_play/decided/scheduled/other), not fixtures.status" },
   { file: "apps/web/src/server/og/model.ts", anchor: "chain ? \"live\" : input.fixtureStatus :: decided,finalized", class: "played", why: "the OG card's 'result' variant needs a result; a held fixture has none (its card wording is Task 13's)" },
   { file: "apps/web/src/server/public-site/champion.ts", anchor: "ReadonlySet<string> = new Set( :: decided,finalized,forfeited", class: "played", why: "BRACKET_SETTLED: a fixture with a winner; a held fixture names none, so no champion" },
