@@ -649,11 +649,17 @@ conformanceSuite(boardgame);
 
 padSpecConformanceSuite(boardgame, { cfg: {}, lineups, label: "default (colours on)" });
 padSpecConformanceSuite(boardgame, { cfg: { colors: false }, lineups, label: "colours off" });
+// W2a BG-KO-1 — the bracket overlay adds the tie-break panel; its action must build schema-valid payloads too.
+padSpecConformanceSuite(boardgame, { cfg: { tiebreak: true }, lineups, label: "bracket (tie-break)" });
 
 describe("boardgame padSpec — action coverage", () => {
-  it("every registered event type is reachable from some action (single cfg — no cfg-mutual-exclusivity in this module)", () => {
-    const specs = [padSpec(boardgame.configSchema.parse({})), padSpec(boardgame.configSchema.parse({ colors: false }))];
+  it("every registered event type is reachable from some action, across the division cfgs and the bracket overlay (W2a: boardgame.tiebreak is offered in a bracket only)", () => {
+    const division = boardgame.configSchema.parse({});
+    const bracket = boardgame.configSchema.parse({ ...division, ...boardgame.bracketDeciders(division) });
+    const specs = [padSpec(division), padSpec(boardgame.configSchema.parse({ colors: false })), padSpec(bracket)];
     expect(checkActionCoverage(specs, BOARDGAME_EVENT_SCHEMAS)).toEqual([]);
+    // The positive pair's negative: the division cfgs alone leave exactly the bracket-only type unreached.
+    expect(checkActionCoverage(specs.slice(0, 2), BOARDGAME_EVENT_SCHEMAS)).toEqual([expect.stringContaining('"boardgame.tiebreak"')]);
   });
 });
 

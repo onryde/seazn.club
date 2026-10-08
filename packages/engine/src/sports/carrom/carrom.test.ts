@@ -170,6 +170,19 @@ describe("carrom golden: best-of-3 with a tie-board", () => {
     expect([home.points, away.points]).toEqual([1, 1]);
     expect(home).toMatchObject({ drawn: 1, metrics: { sets_won: 1, sets_lost: 1 } });
   });
+
+  it("CA-KO-1: in a bracket the overlay plays the extra board even when the division says tieBoard 'draw'", () => {
+    const division = carrom.configSchema.parse({ tieBoard: "draw" });
+    const bracket = carrom.configSchema.parse({ ...division, ...carrom.bracketDeciders(division) });
+    const tied = stream(["core.start"], ...boards(...tiedEight)); // 12–12 after maxBoards (8) boards
+    expect(fold(tied, division).gamesDrawn).toBe(1); // the division's own rule drew the game
+    const asBracket = fold(tied, bracket);
+    expect(asBracket.gamesDrawn).toBe(0); // the bracket did not: the game is still live
+    expect(asBracket.games[0]!.winner).toBeNull();
+    const extra = fold(stream(["core.start"], ...boards(...tiedEight, ["H", 1])), bracket);
+    expect(extra.gamesWon.home).toBe(1); // the extra board decided it (Law 56b)
+    expect(extra.games[0]!.boards).toHaveLength(division.maxBoards + 1);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -828,6 +828,10 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   metrics: MetricSpec[]; // ledger fields this sport maintains (gd, nrr, set_ratio…)
   defaultTiebreakers: TiebreakerKey[]; // sport's official cascade (doc 05 §4)
   supportsDraws(cfg: Cfg, stage: StageKind): boolean; // knockout football: no
+  // W2a (spec §5.2, ruling 76) — the cfg changes a BRACKET stage applies on top
+  // of the resolved cfg (resolveFixtureCfg merges it by stage kind; the V347
+  // freeze then carries it). `{}` is a legal declaration.
+  bracketDeciders(cfg: Cfg): Partial<Cfg>;
 
   // §9.3 — allowed per-fixture point totals under cfg (football {3, 2}, …);
   // the conformance kit checks Σ points of both deltas is in this set.

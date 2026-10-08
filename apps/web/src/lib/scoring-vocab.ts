@@ -104,6 +104,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
 
   "boardgame.pairing": "event.boardgame.pairing",
   "boardgame.result": "event.boardgame.result",
+  "boardgame.tiebreak": "event.boardgame.tiebreak", // W2a BG-KO-1 (ruling D-C4)
 
   "carrom.board.summary": "event.carrom.board.summary",
   "carrom.game.adjust": "event.carrom.game.adjust",
@@ -552,6 +553,13 @@ const SANCTION_KEY: Record<string, MessageKey> = {
 const COURT_KEY: Record<string, MessageKey> = {
   deuce: "court.deuce", ad: "court.ad",
 };
+// W2a BG-KO-1 (ruling D-C4) — boardgame.tiebreak's `rung`. The pad's tie-break
+// sheet (Task 12) labels its rung step with these same keys.
+const RUNG_KEY: Record<string, MessageKey> = {
+  rapid: "pad.boardgame.tiebreak.rung.rapid",
+  blitz: "pad.boardgame.tiebreak.rung.blitz",
+  armageddon: "pad.boardgame.tiebreak.rung.armageddon",
+};
 
 /**
  * Enum field name → the vocabularies that can label its members. A field maps
@@ -571,6 +579,7 @@ export const ENUM_VOCAB: Record<string, readonly Record<string, MessageKey>[]> =
   level: [SANCTION_KEY],
   receiverSide: [COURT_KEY],
   offence: [OFFENCE_KEY], // S4 (#428) — FootballPenalty.offence
+  rung: [RUNG_KEY], // W2a — BoardgameTiebreak.rung
 };
 
 /**
@@ -771,9 +780,11 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.boardgame.action.draw",
   "pad.boardgame.action.pairing",
   "pad.boardgame.action.result",
+  "pad.boardgame.action.tiebreak", // W2a BG-KO-1: bracket cfg only (ruling D-C4)
   "pad.boardgame.panel.draw",
   "pad.boardgame.panel.pre",
   "pad.boardgame.panel.result",
+  "pad.boardgame.panel.tiebreak", // W2a BG-KO-1: bracket cfg only (ruling D-C4)
   // R7/A2 — the v3 boardgame skin's own ribbon copy. Registered HERE, not
   // only in the four dictionaries, for the identical reason badminton's own
   // ribbon keys above are: `ribbon.ts`'s `buildRibbon` gates its per-sport
@@ -784,6 +795,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // them, since every panel `padSpec` declares is dedicated by a tile.
   "pad.boardgame.ribbon.pairing",
   "pad.boardgame.ribbon.result",
+  "pad.boardgame.ribbon.tiebreak", // W2a BG-KO-1 (ruling D-C4)
   // R7/A2 rework — tapModel S's own scorebug hint, on the identical
   // `padLabel()`/PAD_LABEL_KEYS gate as every other model-S sport's
   // (badminton, table tennis, tennis and generic all register theirs).

@@ -3967,6 +3967,9 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     return cfg.inningsPerSide === 2 && DRAW_KINDS.has(stage);
   },
 
+  // W2a: none (cricket's deciders stay organiser-configured until W2c, spec §5.2)
+  bracketDeciders: () => ({}),
+
   // §9.3 — {win+loss, 2·tie, 2·noResult, 2·draw}.
   declaredPointsSets(cfg) {
     return [

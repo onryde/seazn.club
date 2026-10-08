@@ -2647,6 +2647,9 @@ export function makePeriodModule(
       return DRAW_KINDS.has(stage) && cfg.overtime === null && cfg.shootout === null;
     },
 
+    // W2a: none (hockey/ice hockey deciders stay organiser-configured until W2c, spec §5.2)
+    bracketDeciders: () => ({}),
+
     declaredPointsSets(cfg) {
       const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];
       if (cfg.points.otWin !== undefined || cfg.points.otLoss !== undefined) {

@@ -121,11 +121,15 @@ export interface Settlement {
 /** THE settle precondition (spec §5.1 as amended by controller ruling C12). One predicate for the kernel and the
  *  console (through the server's `settle_applies`): a level outcome, or nothing decided while the match is abandoned
  *  or a module-declared decider is pending (chess phase "tiebreak": lots is the organiser's settle, ruling 73).
- *  `outcome` is the EFFECTIVE outcome, so an active settle reads as a win and is not settleable again. */
+ *  `outcome` is the EFFECTIVE outcome — `outcomeOf(module, folded)`, never `module.outcome(state)` — so an active
+ *  settle reads as a win and is not settleable again. Ruling D-C5: a decided outcome (any win or award, settled_* and
+ *  tiebreak_* included) answers false whatever the module phase still says; after a settle in chess phase "tiebreak"
+ *  the module state is untouched and its hook still says pending. */
 export interface SettleFacts { readonly outcome: MatchOutcome | null; readonly abandoned: boolean; readonly state: unknown }
 export function settleApplies(module: { awaitingDecider?(state: never): boolean }, f: SettleFacts): boolean {
   if (isLevelOutcome(f.outcome)) return true;
-  return f.outcome === null && (f.abandoned || module.awaitingDecider?.(f.state as never) === true);
+  if (f.outcome !== null) return false; // decided (D-C5): never re-settled, whatever the phase
+  return f.abandoned || module.awaitingDecider?.(f.state as never) === true;
 }
 
 /** THE outcome of a fold. A settlement outranks the module's own outcome (a
@@ -139,6 +143,16 @@ export function outcomeOf<Cfg, State>(
   const s = folded.settlement;
   if (s !== null) return { kind: "win", winner: s.winner, loser: s.loser, method: settledMethod(s.method) };
   return module.outcome(folded.state);
+}
+
+/** Ruling D-C5 — a module-declared decider is still OWED: the module's hook says one is pending AND the fold is not
+ *  decided (no outcome and no active settle). A surface offering the decider (the chess pad's tie-break panel) gates
+ *  on THIS, never on the module phase alone: a settle in phase "tiebreak" leaves the module state as it was. */
+export function deciderPending<Cfg, State>(
+  module: Pick<FoldableModule<Cfg, State>, "outcome" | "awaitingDecider">,
+  folded: { readonly state: State; readonly settlement: Settlement | null },
+): boolean {
+  return module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;
 }
 
 export const CORE_EVENT_SCHEMAS = {

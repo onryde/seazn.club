@@ -274,6 +274,9 @@ function declaredPositionKeys(): { keys: Set<string>; projecting: number } {
 interface PadModule {
   key: string;
   variants?: Record<string, Record<string, unknown>>;
+  // W2a (spec §5.2) — the cfg overlay a BRACKET stage applies. Part of the cfg space: boardgame's tie-break panel
+  // exists only under it (`tiebreak` is optional with no default, so the boolean leaf walk below never reaches it).
+  bracketDeciders?: (cfg: unknown) => Record<string, unknown>;
   configSchema?: { safeParse(value: unknown): { success: boolean; data?: unknown } };
   padSpec?: (cfg: unknown) => {
     panels: readonly {
@@ -350,6 +353,7 @@ function declaredPadLabels(): Map<string, { label: string; sport: string }> {
     for (const base of bases) {
       const parsed = configSchema.safeParse({ ...base });
       if (!parsed.success) continue;
+      if (sport.bracketDeciders) cfgs.push({ ...(parsed.data as Json), ...sport.bracketDeciders(parsed.data) });
       for (const [id, values] of leaves) {
         for (const value of values) {
           cfgs.push(deepMerge(parsed.data as Json, setPath({}, id.split("."), value)));
@@ -391,6 +395,7 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
       "pad.football.panel.shootout", // needs a non-null shootout cfg
       "pad.generic.panel.draw", // needs allowDraws: true
       "pad.badminton.action.timeout", // needs records.timeouts: true (BWF has none by default)
+      "pad.boardgame.panel.tiebreak", // needs the bracket overlay (bracketDeciders, BG-KO-1)
     ]) {
       expect([...declared.keys()], `cfg-space walk never produced "${key}"`).toContain(key);
     }
@@ -406,6 +411,28 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
         expect(dict, `missing ${locale} copy for pad label "${key}" ("${label}")`).toHaveProperty(key);
       }
     }
+  });
+
+  it("ruling D-C4: the bracket-only boardgame labels render as each locale's copy, never the engine's English or the raw dotted key", () => {
+    // Derived: the labels padSpec emits under the bracket overlay and under no division cfg. padLabel serves a key it
+    // does not hold as the engine's baked English, so fr/es/nl witness a missing PAD_LABEL_KEYS entry; en cannot.
+    const bg = builtinModules.find((m) => m.key === "boardgame")!;
+    const labelsOf = (cfg: unknown) => bg.padSpec!(cfg as never).panels.flatMap((p) => [p.labelKey, ...p.actions.map((a) => a.labelKey)]);
+    const division = bg.configSchema.parse({});
+    const divisionKeys = new Set(labelsOf(division).map((l) => l.key));
+    const bracketOnly = labelsOf({ ...(division as object), ...bg.bracketDeciders(division as never) }).filter((l) => !divisionKeys.has(l.key));
+    expect(bracketOnly.map((l) => l.key).sort()).toEqual(["pad.boardgame.action.tiebreak", "pad.boardgame.panel.tiebreak"]);
+    let checked = 0;
+    for (const { key, label } of bracketOnly) {
+      for (const [locale, dict] of Object.entries(LOCALES)) {
+        const shown = padLabel(key, (k) => dict[k] ?? "", label);
+        expect(shown, `${locale} ${key}`).toBe(dict[key]);
+        expect(shown, `${locale} ${key}`).not.toBe(key);
+        if (locale !== "en") expect(shown, `${locale} ${key} shows the engine's English`).not.toBe(label);
+        checked++;
+      }
+    }
+    expect(checked).toBe(bracketOnly.length * Object.keys(LOCALES).length);
   });
 
   it("declares no key the engine cannot emit (the list does not rot the other way)", () => {
@@ -795,7 +822,8 @@ describe("scoring-vocab covers what the engine declares", () => {
     expect([...enums.keys()].sort()).toEqual(
       // S4 (#428) — `offence` joined this list: FootballPenalty.offence, the
       // Law 12 offence that conceded the kick.
-      ["color", "elected", "kind", "level", "method", "offence", "outcome", "phase", "reason", "receiverSide"],
+      // W2a — `rung` joined it: BoardgameTiebreak.rung (BG-KO-1).
+      ["color", "elected", "kind", "level", "method", "offence", "outcome", "phase", "reason", "receiverSide", "rung"],
     );
     // W4a's own additions, one per sport that grew an enum.
     expect([...(enums.get("method") ?? [])]).toEqual(

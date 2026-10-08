@@ -2669,6 +2669,9 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     return DRAW_KINDS.has(stage);
   },
 
+  // W2a: none (football's deciders stay organiser-configured until W2c, spec §5.2)
+  bracketDeciders: () => ({}),
+
   // §9.3 — {win+loss, 2·draw} plus the optional shootout split total.
   declaredPointsSets(cfg) {
     const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];

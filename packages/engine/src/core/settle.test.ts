@@ -100,6 +100,9 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
       ["win after an abandon that awarded a result", { outcome: { kind: "win", winner: H, loser: A }, abandoned: true, state: {} }, plain, false],
       ["award after an abandon", { outcome: { kind: "award", winner: H }, abandoned: true, state: {} }, plain, false],
       ["win while the hook says a decider is pending", { outcome: { kind: "win", winner: H, loser: A }, abandoned: false, state: { phase: "tiebreak" } }, hooked, false],
+      // Ruling D-C5: decided by a settle or by the decider itself, whatever the module phase still says.
+      ["settled win while the module phase still says tiebreak", { outcome: { kind: "win", winner: H, loser: A, method: "settled_lot" }, abandoned: false, state: { phase: "tiebreak" } }, hooked, false],
+      ["tie-break win, abandoned and hooked at once", { outcome: { kind: "win", winner: H, loser: A, method: "tiebreak_rapid" }, abandoned: true, state: { phase: "tiebreak" } }, hooked, false],
     ];
     let checked = 0;
     for (const [name, facts, module, expected] of rows) {

@@ -988,6 +988,9 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     return cfg.tieBoard === "draw" && DRAW_KINDS.has(stage);
   },
 
+  // CA-KO-1 (ICF Law 56)
+  bracketDeciders: () => ({ tieBoard: "extra" as const }),
+
   // §9.3 — {win+loss (win & walkover), 2·draw (drawn match & no_result)}.
   declaredPointsSets(cfg) {
     return [...new Set([cfg.points.win + cfg.points.loss, cfg.points.draw * 2])];

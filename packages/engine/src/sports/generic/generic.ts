@@ -657,6 +657,9 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     return cfg.allowDraws && DRAW_KINDS.has(stage);
   },
 
+  // W2a: none (spec §5.2)
+  bracketDeciders: () => ({}),
+
   // §9.3 — decisive total w+l; shared total 2d (draw/tie/no_result — abandon
   // can produce no_result even when allowDraws is false).
   declaredPointsSets(cfg) {
