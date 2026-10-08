@@ -12,7 +12,9 @@ export type ChainWord =
   | "notConnected" | "ready" | "notLive" | "inUse" | "waiting" | "connected" | "receiving" | "live" | "connecting"
   | "notReceiving" | "noSignal" | "ending"
   // Capture QR v2 §6.12 (T11): the phone node's own words once the phone has a read model.
-  | "paired" | "notAnswering" | "starting" | "reconnecting";
+  | "paired" | "notAnswering" | "starting" | "reconnecting"
+  // Owner ruling 2026-10-08: the Seazn node while the server's health verdict is `stalled` (live, the input up).
+  | "waitingVideo";
 export interface ChainNode { tone: NodeTone; word: ChainWord; mark: "dot" | "bang" | null }
 export interface Chain { phone: ChainNode; link1: LinkStyle; seazn: ChainNode; link2: LinkStyle; dest: ChainNode }
 
@@ -52,7 +54,14 @@ function capturePhone(view: ChainView | null, row: Chain, capture: CaptureFacts)
       if (capture.countdown?.kind === "live") return node("amber", "reconnecting", "bang");
       return capture.countdown?.reason === "phone_lost" ? node("amber", "notAnswering", "bang") : node("amber", "starting");
     case "live": {
-      if (!phoneNoSignal(view)) return row.phone;
+      // PR-2 §7.4 (Option A states 5, 8): the input is up — the SERVER's health verdict moves the node. Not responding is
+      // the silence word with the "!"; stalled keeps the row's word with the "!"; hot and battery low are the strip's alone.
+      if (!phoneNoSignal(view)) {
+        const health = capture.phone?.health ?? null;
+        if (health === "not_responding") return node("amber", "notAnswering", "bang");
+        if (health === "stalled") return node("amber", row.phone.word, "bang");
+        return row.phone;
+      }
       const bang = capture.countdown !== null || (d3Warning(view) === "phone" && reconnectReasonOf(capture.phone) === null);
       return node("amber", "reconnecting", bang ? "bang" : null);
     }
@@ -74,6 +83,8 @@ export function phoneDot({ phone, countdown }: CaptureFacts): PhoneDot {
   if (countdown?.reason === "phone_lost") return "amber";
   if (!phone) return "slate";
   if (countdown) return "lime";
+  // PR-2 §7.4: a HELD phone the server calls not responding is amber here too — the node says "Not answering" (W8 warns).
+  if (phone.health === "not_responding") return "amber";
   return phone.present ? "lime" : "amber";
 }
 
@@ -99,8 +110,24 @@ function destinationHalf(view: ChainView): Pick<Chain, "link2" | "dest"> {
 export function chainFor(view: ChainView | null, opts: { destInUse?: boolean; capture?: CaptureFacts } = {}): Chain | null {
   const row = tableRow(view, opts);
   return row && opts.capture
-    ? { ...row, phone: capturePhone(view, row, opts.capture), link1: captureLink1(view, row, opts.capture) }
+    ? {
+        ...row,
+        phone: capturePhone(view, row, opts.capture),
+        link1: captureLink1(view, row, opts.capture),
+        seazn: captureSeazn(view, row, opts.capture),
+      }
     : row;
+}
+
+/**
+ * The Seazn node over §3.2's row (owner ruling 2026-10-08, B7 fix round 1): live with the input up, while the SERVER's
+ * health verdict says the video is not reaching Seazn (`stalled`), it does not claim "Receiving" — amber "Waiting for
+ * video", no mark (the "!" is the phone's). The same verdict the phone node and the strip read; never a client reading of
+ * `delivery`. Every other state, and every other verdict, keeps the row's node.
+ */
+function captureSeazn(view: ChainView | null, row: Chain, capture: CaptureFacts): ChainNode {
+  if (view?.state !== "live" || phoneNoSignal(view)) return row.seazn;
+  return capture.phone?.health === "stalled" ? node("amber", "waitingVideo") : row.seazn;
 }
 
 /**

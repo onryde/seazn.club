@@ -484,6 +484,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // A12's block by the panel's Stop (alone, against the phone's own stop), A15, a refused start's retry, and the
   // switch's API answers.
   "capture-auto.spec.ts",
+  // Capture QR v2 PR-2 (T10–T12) — the organiser panel's PR-2 surface through real beats: the automatic-streaming switch
+  // (the DB re-read at three widths, the entitlement denied and granted), the live auto-stop line, the phone-health line
+  // and each amber the server names, the beat-confirmed "Phone not ready", the automatic start's refusal, and the
+  // takeover notice (dismissed across a reload, gone after Revoke & reissue, naming Stop while live).
+  "capture-panel-pr2.spec.ts",
 ];
 
 afterEach(() => {

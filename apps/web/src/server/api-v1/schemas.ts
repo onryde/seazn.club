@@ -1542,7 +1542,16 @@ export const StreamPhone = z
      *  it. `saved`: the fixture's choice; `default`: nothing chosen yet, so the org's oldest. Null: no live destination,
      *  or a choice that was cleared or archived (never swapped for another). */
     destination: z.object({ id: z.string(), label: z.string(), source: z.enum(["saved", "default"]) }).strict().nullable(),
-    lastTakeover: z.object({ at: z.string(), model: z.string().nullable() }).strict().nullable(),
+    lastTakeover: z
+      .object({
+        at: z.string(),
+        model: z.string().nullable(),
+        /** PR-2 T12 (§7.5): `now − at` on the SERVER's clock at this response (the D3 M6 rule), clamped at 0 — the panel's
+         *  "for 30 min after a takeover" notice is judged on it, never on the browser's clock against a server stamp. */
+        elapsedMs: z.number().int().nonnegative(),
+      })
+      .strict()
+      .nullable(),
     /** PR-2 T6 (§7.1, §7.2): the automatic-streaming state from the fixture's settings row — null when it has none (the
      *  switch was never touched and no organiser Stop has stamped one). `refusal` and `refusalAt` are served ONLY while an
      *  automatic start could still fire (the auto-start predicate, less the phone's presence and the retry spacing): the stored
@@ -1557,6 +1566,11 @@ export const StreamPhone = z
         refusal: z.enum(AUTO_START_REFUSALS).nullable(),
         /** The refused attempt's instant (`auto_start_attempted_at`); null whenever `refusal` is. */
         refusalAt: z.string().nullable(),
+        /** B7 review M-3: whether §7.3's automatic stop will ever end the fixture's OPEN session (`autoStopApplies` over the
+         *  same facts the tick judges, its pre/post-result comparison made in SQL) — the switch on, the session's phone
+         *  automatic, and the session created before any result (A15). Null with no open session. The panel's live line
+         *  "stops about N minutes after the result" is shown only on `true`. */
+        stopApplies: z.boolean().nullable(),
       })
       .strict()
       .nullable(),

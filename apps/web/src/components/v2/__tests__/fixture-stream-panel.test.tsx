@@ -50,10 +50,13 @@ import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import {
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
+  HEALTH_KEYS,
   STREAM_POLL_MS,
+  TAKEOVER_NOTICE_MS,
   TARGET_REMOVED,
   type StreamSessionView,
 } from "@/lib/stream-session-view";
+import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
 import { StreamLostCountdown, StreamTargetKind, type StreamPhone, type StreamTarget } from "@/server/api-v1/schemas";
 import { resolveStreamTarget, type SavedStreamTarget } from "@/lib/stream-destinations";
 import { STREAM_TARGET_TABLE, STREAM_TARGET_TABLE_ROWS, rowName } from "@/lib/__tests__/_stream-target-table";
@@ -197,6 +200,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     overlayKeys: { [FIXTURE.id]: "KEY_for-f-1_0123456789" },
     phoneCapture: true,
     phoneLostMinutes: 20,
+    autoStopMinutes: 3,
     ...o,
   };
 }
@@ -718,12 +722,16 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
 
   it("with streaming.relay it mounts the container with THIS row's fixture and the page's org, balance and plan", () => {
     const split = { monthly: 1, pack: 3, total: 4 };
-    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, currency: "inr", phoneLostMinutes: 7 }).tree();
+    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, currency: "inr", phoneLostMinutes: 7, autoStopMinutes: 9 }).tree();
     expect(byTestId(tree, "stream-switched-off"), "no refusal once entitled").toBeUndefined();
     const tab = tree.find((el) => el.type === PhoneTab);
     expect(tab, "the Phone tab body is not the container").toBeDefined();
     // Each value differs from ctx()'s default, so a prop wired to the wrong field (or a constant) cannot pass.
     expect(propsOf(tab!)).toMatchObject({ fixtureId: FIXTURE.id, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, currency: "inr", phoneLostMinutes: 7 });
+    // PR-2 T10/T12: the auto stop's delay (the server's, through the context loader) and the venue zone (the takeover's
+    // clock) — each a value ctx()'s default cannot produce.
+    expect(ctx().autoStopMinutes, "premise: the default differs").not.toBe(9);
+    expect(propsOf(tab!)).toMatchObject({ autoStopMinutes: 9, tz: TZ });
   });
 
   it("buying is the EMBEDDED checkout in the repo's Modal, never a navigation (owner ruling 8) — the source half", () => {
@@ -989,7 +997,8 @@ const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, phone: readModel(), code: { status: "loading" }, codeOpen: false, now: NOW, copied: false, showBuy: false,
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null, pickFailed: false,
-  phoneLostMinutes: 20,
+  phoneLostMinutes: 20, autoStopMinutes: 3, autoPending: null, autoFailed: false, takeoverDismissedAt: null, tz: "Europe/London",
+  onToggleAuto: () => {}, onDismissTakeover: () => {},
   onSelectTarget: () => {}, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
   onShowBuy: () => {}, onTileIntent: () => {},
@@ -1058,6 +1067,12 @@ function bodyStates(): [string, ReactElement[]][] {
     ["live, paused (O5)", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: readModel({ phone: facts({ notReady: "camera", state: "publishing" }) }) })],
     ["live, a legacy session", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: LEGACY })],
     ["live", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", fixtureDecided: true, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } }), balance: 1 })],
+    // PR-2 (Option A): the switch on, a refused automatic start, a takeover notice, the live line + Details data, an amber.
+    ["ready, the switch on", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null } }) })],
+    ["ready, the automatic start refused", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: "no_destination", refusalAt: "2026-09-14T11:59:00Z", stopApplies: null } }) })],
+    ["ready, a takeover notice", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ lastTakeover: { at: "2026-09-14T11:50:00.000Z", model: "Pixel 8", elapsedMs: 600_000 } }) })],
+    ["live, automatic, Details data, a takeover", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } }), balance: 1, phone: readModel({ auto: { enabled: true, startedAt: "2026-09-14T11:50:00Z", blocked: false, refusal: null, refusalAt: null, stopApplies: true }, lastTakeover: { at: "2026-09-14T11:55:00.000Z", model: null, elapsedMs: 300_000 }, phone: facts({ state: "publishing", mode: "automatic", appVersion: "1.4.0", beat: { battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 245 } }) }) })],
+    ["live, the battery low (amber)", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } }), balance: 1, phone: readModel({ phone: facts({ state: "publishing", health: "battery_low", beat: { battery: { percent: 14, charging: false, drainPctPerHour: 9 }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 12 } }) }) })],
     ["ending", body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), balance: 1 })],
     ["ended", body({ view: session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", replayUrl: "https://www.youtube.com/watch?v=abc", endReason: "stopped", creditUsed: true }), balance: 1 })],
     ["failed", body({ view: session({ state: "failed", failReason: "no_credits" }), balance: 0 })],
@@ -1298,22 +1313,32 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(onRetryCode).toHaveBeenCalledTimes(1);
   });
 
-  it("Ready, paired: the card folds to one line — a lime dot, 'Paired · Show the code again' — Go live ENABLED, no strip; opened, the same code body inside", () => {
+  it("Ready, paired: the card folds to one line — a lime dot, 'Paired · Pixel 8', Show the code again — Go live ENABLED, the strip names the phone (Option A); opened, the same code body inside", () => {
     const onToggleCode = vi.fn();
     const folded = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", onToggleCode });
     expect(byTestId(folded, "stream-code-card"), "no card: the phone is paired").toBeUndefined();
     const d = byTestId(folded, "stream-code-disclosure")!;
     expect(d.type).toBe("details");
     expect(attr(d, "open")).toBe(false);
-    expect(textOf(d).replace(/\s+/g, " ")).toContain(`${m("stream.code.paired")} · ${m("stream.code.showAgain")}`);
+    // PR-2 T12 (§7.5, Option A state 1): the fold names the phone — its model beside Paired, Show the code again after.
+    expect(textOf(d).replace(/\s+/g, " ")).toContain(`${m("stream.code.paired")} · Pixel 8 ${m("stream.code.showAgain")}`);
     expect(walk(propsOf(d).children as ReactElement).find((el) => attr(el, "data-tone") !== undefined && el.type === "span")?.props).toMatchObject({ "data-tone": "lime" });
     expect(byTestId(folded, "stream-qr-text"), "folded: the code is not even in the DOM").toBeUndefined();
     (attr(d, "onToggle") as (e: unknown) => void)({ currentTarget: { open: true } });
     expect(onToggleCode).toHaveBeenCalledWith(true);
     expect(attr(byTestId(folded, "stream-go-live")!, "disabled")).toBe(false);
-    expect(attr(byTestId(folded, "stream-go-live")!, "aria-describedby"), "nothing to say: no strip").toBeUndefined();
-    expect(folded.find((el) => el.type === PhoneStripView)).toBeUndefined();
+    // PR-2 (Option A state 1): the strip says which phone, and how it will start — Go live names it.
+    expect(attr(byTestId(folded, "stream-go-live")!, "aria-describedby")).toBe("stream-why-f-1");
+    expect(propsOf(folded.find((el) => el.type === PhoneStripView)!).strip).toEqual({
+      tone: "slate", icon: "phone", lead: null, body: null, line: [{ kind: "model", text: "Pixel 8" }, { kind: "mode", mode: "operator" }],
+    });
     expect(chainOf(folded)?.chain?.phone).toEqual({ tone: "lime", word: "paired", mark: null });
+    // The EMPTY case: a phone that named neither model nor mode — no strip, nothing for Go live to name, and the fold
+    // says Paired alone (no dangling "·").
+    const anon = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: facts({ model: null, mode: null }) }) });
+    expect(anon.find((el) => el.type === PhoneStripView)).toBeUndefined();
+    expect(attr(byTestId(anon, "stream-go-live")!, "aria-describedby"), "nothing to say: no strip").toBeUndefined();
+    expect(textOf(byTestId(anon, "stream-code-disclosure")!).replace(/\s+/g, " ").trim()).toBe(`${m("stream.code.paired")} ${m("stream.code.showAgain")}`);
     const opened = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", codeOpen: true, code: { status: "ok", text: CODE_TEXT, image: SYMBOL } });
     expect(attr(byTestId(opened, "stream-code-disclosure")!, "open")).toBe(true);
     expect(attr(byTestId(opened, "stream-qr-text")!, "value")).toBe(CODE_TEXT);
@@ -2325,6 +2350,296 @@ describe("PhoneTabBody — the T9b frame: one credits line, Ready's order, the i
   });
 });
 
+// ─── PR-2 (spec §7.1, §7.4, §7.5) — Option A, owner-approved 2026-10-07 ─────────────────────────────────────────────
+// Every expected sentence below is the SPEC's (and the mockup's) English, typed here — never read back through the code
+// under test; every verdict is the read model's own field (`auto.enabled`, `phone.health`, `notReadyShown`,
+// `auto.refusal`, `lastTakeover.elapsedMs`).
+describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the takeover and Details (Option A)", () => {
+  type Auto = NonNullable<StreamPhone["auto"]>;
+  const auto = (over: Partial<Auto> = {}): Auto => ({ enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null, ...over });
+  const READY = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" } as const;
+  const LIVE = session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" }, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } });
+  /** §7.1's caption and Live's line, the figure filled — singular at 1 (the plural key's `one`). */
+  const caption = (n: number) => `Starts when the match starts. Stops about ${n} ${n === 1 ? "minute" : "minutes"} after the result.`;
+  const liveLine = (n: number) => `Automatic: stops about ${n} ${n === 1 ? "minute" : "minutes"} after the result`;
+  const stripOf = (tree: ReactElement[]) => {
+    const el = tree.find((e) => e.type === PhoneStripView);
+    return el ? (propsOf(el) as { strip: Record<string, unknown>; onBuy?: () => void; caret: boolean }) : undefined;
+  };
+
+  it("T10: the switch sits under the destination picker in Ready — role=switch, checked from the read model's auto.enabled (no settings row: off)", () => {
+    const rows: [string, StreamPhone["auto"], boolean][] = [["no settings row", null, false], ["off", auto({ enabled: false }), false], ["on", auto(), true]];
+    let checked = 0;
+    for (const [name, a, on] of rows) {
+      const tree = body({ ...READY, phone: readModel({ auto: a }) });
+      const sw = byTestId(tree, "stream-auto-switch");
+      expect(sw, name).toBeDefined();
+      expect([sw!.type, attr(sw!, "role"), attr(sw!, "aria-checked")], name).toEqual(["button", "switch", on]);
+      expect(tree.indexOf(byTestId(tree, "stream-target")!), `${name}: under the picker`).toBeLessThan(tree.indexOf(sw!));
+      expect(tree.indexOf(sw!), `${name}: above Go live`).toBeLessThan(tree.indexOf(byTestId(tree, "stream-go-live")!));
+      expect(textAt(tree, "stream-auto-switch"), name).toContain("Stream the match automatically");
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("T10: the caption names the SERVER's delay (autoStopMinutes) only while on — 5 reads 5, 1 reads the singular", () => {
+    let checked = 0;
+    for (const n of [5, 1]) {
+      expect(textAt(body({ ...READY, phone: readModel({ auto: auto() }), autoStopMinutes: n }), "stream-auto-hint"), `${n}`).toBe(caption(n));
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(byTestId(body({ ...READY, phone: readModel({ auto: auto({ enabled: false }) }), autoStopMinutes: 5 }), "stream-auto-hint")).toBeUndefined();
+  });
+
+  it("T10: a tap asks for the flip (onToggleAuto(!checked)); a flip in flight shows the asked state and holds the switch; a failed save says so", () => {
+    const onToggleAuto = vi.fn();
+    click(byTestId(body({ ...READY, phone: readModel({ auto: auto({ enabled: false }) }), onToggleAuto }), "stream-auto-switch"));
+    click(byTestId(body({ ...READY, phone: readModel({ auto: auto() }), onToggleAuto }), "stream-auto-switch"));
+    click(byTestId(body({ ...READY, phone: readModel({ auto: null }), onToggleAuto }), "stream-auto-switch"));
+    expect(onToggleAuto.mock.calls).toEqual([[true], [false], [true]]);
+    const pending = body({ ...READY, phone: readModel({ auto: auto({ enabled: false }) }), autoPending: true });
+    expect([attr(byTestId(pending, "stream-auto-switch")!, "aria-checked"), attr(byTestId(pending, "stream-auto-switch")!, "disabled")]).toEqual([true, true]);
+    expect(byTestId(pending, "stream-auto-error")).toBeUndefined();
+    const failed = body({ ...READY, phone: readModel({ auto: auto({ enabled: false }) }), autoFailed: true });
+    expect(attr(byTestId(failed, "stream-auto-switch")!, "aria-checked"), "back to the server's answer").toBe(false);
+    expect(attr(byTestId(failed, "stream-auto-error")!, "role")).toBe("alert");
+    expect(textAt(failed, "stream-auto-error")).toBe(m("stream.error.failed"));
+  });
+
+  // Owner-approved copy 2026-10-08: the switch on and the paired phone (the beat's mode) in Operator — it won't start on its own.
+  it("T10: the operator hint sits under the switch ONLY when the switch is on and the phone is in Operator — on+automatic, off+operator and no phone hide it; the switch names it", () => {
+    const HINT = "The phone is set to Operator, so it won't start on its own. Switch it to Automatic in the app.";
+    const rows: [string, StreamPhone, boolean][] = [
+      ["on + operator", readModel({ auto: auto(), phone: facts({ state: "paired", mode: "operator" }) }), true],
+      ["on + automatic", readModel({ auto: auto(), phone: facts({ state: "paired", mode: "automatic" }) }), false],
+      ["off + operator", readModel({ auto: auto({ enabled: false }), phone: facts({ state: "paired", mode: "operator" }) }), false],
+      ["on, no phone", readModel({ auto: auto(), phone: null }), false],
+      ["no settings row + operator", readModel({ auto: null, phone: facts({ state: "paired", mode: "operator" }) }), false],
+    ];
+    let checked = 0;
+    for (const [name, phone, shown] of rows) {
+      const tree = body({ ...READY, phone });
+      const hint = byTestId(tree, "stream-auto-operator");
+      expect(hint !== undefined, name).toBe(shown);
+      const described = String(attr(byTestId(tree, "stream-auto-switch")!, "aria-describedby") ?? "");
+      expect(described.includes("stream-auto-operator-"), `${name}: the switch names the hint`).toBe(shown);
+      if (shown) {
+        expect(textAt(tree, "stream-auto-operator"), name).toBe(HINT);
+        expect(described.split(" ")).toContain(attr(hint!, "id"));
+        expect(tree.indexOf(byTestId(tree, "stream-auto-switch")!), `${name}: under the switch`).toBeLessThan(tree.indexOf(hint!));
+      }
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    // A flip in flight to ON with an operator phone shows it at once (the switch as the panel shows it).
+    const flipping = body({ ...READY, phone: readModel({ auto: auto({ enabled: false }), phone: facts({ state: "paired", mode: "operator" }) }), autoPending: true });
+    expect(byTestId(flipping, "stream-auto-operator")).toBeDefined();
+  });
+
+  it("T10: the switch is Ready's alone — every body state that draws Ready's grid has exactly one; every other state has none", () => {
+    let withSwitch = 0;
+    let without = 0;
+    for (const [name, tree] of bodyStates()) {
+      const ready = byTestId(tree, "stream-ready") !== undefined;
+      expect(allTestIds(tree, "stream-auto-switch").length, name).toBe(ready ? 1 : 0);
+      if (ready) withSwitch++;
+      else without++;
+    }
+    expect(withSwitch, "anti-vacuity: Ready states were read").toBeGreaterThan(0);
+    expect(without, "anti-vacuity: other states were read").toBeGreaterThan(0);
+  });
+
+  it("T10: Live's read-only line names the server's figure — only live, and only on the server's stopApplies (B7 review M-3); above Stop", () => {
+    const autoPhone = readModel({ auto: auto({ stopApplies: true }), phone: facts({ mode: "automatic", state: "publishing" }) });
+    const tree = body({ view: LIVE, balance: 1, phone: autoPhone, autoStopMinutes: 4 });
+    expect(textAt(tree, "stream-auto-live")).toBe(liveLine(4));
+    expect(tree.indexOf(byTestId(tree, "stream-auto-live")!)).toBeLessThan(tree.indexOf(byTestId(tree, "stream-stop")!));
+    expect(textAt(body({ view: LIVE, balance: 1, phone: autoPhone, autoStopMinutes: 1 }), "stream-auto-live")).toBe(liveLine(1));
+    const rows: [string, PhoneTabBodyProps["view"], StreamPhone][] = [
+      ["the switch off", LIVE, readModel({ auto: auto({ enabled: false, stopApplies: false }), phone: facts({ mode: "automatic" }) })],
+      ["the phone in operator mode", LIVE, readModel({ auto: auto({ stopApplies: false }), phone: facts({ mode: "operator" }) })],
+      // A15: a broadcast created after the result — the switch on and the phone automatic, but the tick never stops it.
+      ["a post-result broadcast (switch on, phone automatic, stopApplies false)", LIVE, readModel({ auto: auto({ stopApplies: false }), phone: facts({ mode: "automatic" }) })],
+      ["stopApplies unknown (null)", LIVE, readModel({ auto: auto(), phone: facts({ mode: "automatic" }) })],
+      ["no settings row", LIVE, readModel({ auto: null, phone: facts({ mode: "automatic" }) })],
+      ["ending", session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), autoPhone],
+      ["waiting", session(), autoPhone],
+      ["ready", null, autoPhone],
+    ];
+    let checked = 0;
+    for (const [name, view, phone] of rows) {
+      expect(byTestId(body({ view, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone }), "stream-auto-live"), name).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("T11: live, the strip is the phone-health line (Option A state 4) — the read model's readings, wired as the builder answers", () => {
+    const f = facts({ state: "publishing", elapsedMs: 4_000, beat: { battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 12 } });
+    const tree = body({ view: LIVE, balance: 1, phone: readModel({ phone: f }) });
+    expect(stripOf(tree)?.strip).toEqual({
+      tone: "slate", icon: "phone", lead: null, body: null,
+      line: [{ kind: "phone" }, { kind: "battery", percent: 78, charging: true }, { kind: "bitrate", kbps: 2400 }, { kind: "heard", elapsedMs: 4_000 }],
+    });
+    expect(stripOf(tree)?.caret, "inside the chain, caret on the phone").toBe(true);
+  });
+
+  it("T11: each reason the SERVER names turns the live strip amber with its sentence; the Phone node agrees for not-responding and stalled (W24)", () => {
+    let checked = 0;
+    for (const health of HEALTH_REASONS) {
+      const tree = body({ view: LIVE, balance: 1, phone: readModel({ phone: facts({ state: "publishing", health, elapsedMs: 52_000, beat: { battery: { percent: 14, charging: false, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "stalled", thermal: 4, dataUsedMB: 1 } }) }) });
+      expect(stripOf(tree)?.strip, health).toMatchObject({ tone: "amber", icon: "alert", lead: HEALTH_KEYS[health] });
+      const node = chainOf(tree)?.chain?.phone;
+      expect(node?.mark ?? null, `${health}: the node's "!"`).toBe(health === "not_responding" || health === "stalled" ? "bang" : null);
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length);
+  });
+
+  it("T11: waiting — 'Phone not ready' only with the server's notReadyShown; 'Couldn't start on the phone' from startFailed", () => {
+    const flap = body({ view: session(), balance: 2, phone: readModel({ phone: facts({ notReady: "camera", notReadyShown: false, mode: "automatic" }) }) });
+    expect(stripOf(flap)?.strip).toMatchObject({ tone: "slate", lead: "stream.phone.waitingVideo" });
+    const held = body({ view: session(), balance: 2, phone: readModel({ phone: facts({ notReady: "camera", notReadyShown: true, mode: "automatic" }) }) });
+    expect(stripOf(held)?.strip).toMatchObject({ tone: "amber", lead: "stream.phone.notReady.line", leadVars: { reason: "stream.phone.notReady.reason.camera" } });
+    const failed = body({ view: session(), balance: 2, phone: readModel({ phone: facts({ startFailed: "start-error" }) }) });
+    expect(stripOf(failed)?.strip).toMatchObject({ tone: "amber", lead: "stream.phone.startFailed" });
+  });
+
+  it("T11: Ready, the automatic start refused — the strip carries it (Option A state 10); Buy credits opens the chooser; Go live names it", () => {
+    const onShowBuy = vi.fn();
+    const refused = readModel({ auto: auto({ refusal: "no_credit", refusalAt: "2026-09-14T11:59:00Z" }) });
+    const tree = body({ ...READY, phone: refused, onShowBuy });
+    expect(stripOf(tree)?.strip).toMatchObject({ tone: "amber", lead: "stream.auto.refused", leadVars: { reason: "stream.auto.refusal.no_credit" }, remedy: "buy" });
+    stripOf(tree)!.onBuy!();
+    expect(onShowBuy).toHaveBeenCalledTimes(1);
+    expect(attr(byTestId(tree, "stream-go-live")!, "aria-describedby")).toBe("stream-why-f-1");
+    // The chooser already open (Buy more): the remedy is not offered twice.
+    expect(stripOf(body({ ...READY, phone: refused, showBuy: true }))?.onBuy).toBeUndefined();
+    // Credits only (B3): the refusal still says why nothing started — no chain, no caret, and the tiles ARE the remedy.
+    const forced = body({ view: null, balance: 0, targets: TARGETS, selectedTargetId: "t1", phone: refused });
+    expect(chainOf(forced)).toBeUndefined();
+    expect(stripOf(forced)?.strip).toMatchObject({ lead: "stream.auto.refused" });
+    expect([stripOf(forced)?.caret, stripOf(forced)?.onBuy]).toEqual([false, undefined]);
+    // The EMPTY case: credits only with no refusal stays the heading and the card alone.
+    expect(stripOf(body({ view: null, balance: 0, targets: TARGETS, selectedTargetId: "t1" }))).toBeUndefined();
+  });
+
+  it("T11 (FP22, owner ruling Q-D): Details carries data used and the app version AFTER the runner's chips, each omitted when null", () => {
+    const withData = (dataUsedMB: number | null, appVersion: string | null) =>
+      readModel({ phone: facts({ state: "publishing", appVersion, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB } }) });
+    const tree = body({ view: LIVE, balance: 1, phone: withData(1234.5, "1.4.0") });
+    expect(textAt(tree, "stream-phone-data-used")).toBe("1,234.5 MB used");
+    expect(textAt(tree, "stream-phone-app-version")).toBe("App 1.4.0");
+    const runner = allTestIds(tree, "stream-health-chip");
+    expect(runner.length, "premise: the runner's chips rendered").toBeGreaterThan(0);
+    expect(tree.indexOf(runner.at(-1)!)).toBeLessThan(tree.indexOf(byTestId(tree, "stream-phone-data-used")!));
+    expect(tree.indexOf(byTestId(tree, "stream-phone-data-used")!)).toBeLessThan(tree.indexOf(byTestId(tree, "stream-phone-app-version")!));
+    expect(tree.indexOf(byTestId(tree, "stream-details")!), "inside Details").toBeLessThan(tree.indexOf(runner[0]!));
+    const rows: [string, number | null, string | null, string[]][] = [
+      ["no data reading", null, "1.4.0", ["stream-phone-app-version"]],
+      ["no app version", 12, null, ["stream-phone-data-used"]],
+      ["a real 0 MB", 0, null, ["stream-phone-data-used"]],
+      ["neither", null, null, []],
+    ];
+    let checked = 0;
+    for (const [name, mb, v, ids] of rows) {
+      const t = body({ view: LIVE, balance: 1, phone: withData(mb, v) });
+      expect(["stream-phone-data-used", "stream-phone-app-version"].filter((id) => byTestId(t, id)), name).toEqual(ids);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    expect(textAt(body({ view: LIVE, balance: 1, phone: withData(0, null) }), "stream-phone-data-used")).toBe("0 MB used");
+    expect(byTestId(body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: withData(12, "1.4.0") }), "stream-phone-app-version"), "Ending keeps Details").toBeDefined();
+  });
+
+  it("T11 (Q-D): NOT pre-live — with both readings set, no Ready, waiting or summary state shows either chip (nor Details)", () => {
+    const data = readModel({ phone: facts({ appVersion: "1.4.0", beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: 245 } }) });
+    const rows: [string, ReactElement[]][] = [
+      ["ready, paired", body({ ...READY, phone: data })],
+      ["ready, paired, the code open", body({ ...READY, phone: data, codeOpen: true, code: { status: "ok", text: CODE_TEXT, image: SYMBOL } })],
+      ["provisioning", body({ view: session({ state: "provisioning" }), balance: 2, phone: data })],
+      ["warming", body({ view: session(), balance: 2, phone: data })],
+      ["ended", body({ view: session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" }), balance: 1, phone: data })],
+    ];
+    let checked = 0;
+    for (const [name, tree] of rows) {
+      for (const id of ["stream-details", "stream-phone-data-used", "stream-phone-app-version"]) expect(byTestId(tree, id), `${name}: ${id}`).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  const AT = "2026-09-14T11:32:00.000Z"; // 12:32 in Europe/London (BST), 17:02 in Asia/Kolkata
+  const took = (elapsedMs: number, model: string | null = "Pixel 8", at = AT) => readModel({ lastTakeover: { at, model, elapsedMs } });
+
+  it("T12: a takeover inside 30 min — the amber notice with the model and the VENUE's time, after the chain; Stop named only live", () => {
+    const ready = body({ ...READY, phone: took(60_000) });
+    expect(textAt(ready, "stream-takeover-text")).toBe("The camera moved to another phone (Pixel 8) at 12:32. Not yours? Revoke & reissue");
+    expect(attr(byTestId(ready, "stream-takeover")!, "role")).toBe("status");
+    expect(ready.indexOf(ready.find((e) => e.type === SignalChain)!)).toBeLessThan(ready.indexOf(byTestId(ready, "stream-takeover")!));
+    expect(textAt(body({ ...READY, phone: took(60_000), tz: "Asia/Kolkata" }), "stream-takeover-text"), "the venue's zone").toContain("at 17:02.");
+    expect(textAt(body({ ...READY, phone: took(60_000, null) }), "stream-takeover-text")).toBe("The camera moved to another phone at 12:32. Not yours? Revoke & reissue");
+    const live = body({ view: LIVE, balance: 1, phone: took(60_000) });
+    expect(textAt(live, "stream-takeover-text")).toBe("The camera moved to another phone (Pixel 8) at 12:32. Not yours? Stop the stream, then Revoke & reissue");
+    // Owner ruling 2026-10-08 (B7 review M-2): waiting names Cancel, live names Stop, ready names neither — and the button
+    // the sentence names is the one that state DRAWS (its own testid), so the copy can never point at an absent control.
+    const views: [string, PhoneTabBodyProps["view"], "cancel" | "stop" | null][] = [
+      ["ready", null, null], ["provisioning", session({ state: "provisioning" }), "cancel"], ["warming", session(), "cancel"], ["live", LIVE, "stop"],
+    ];
+    const NAMES = { cancel: "Cancel the stream, then", stop: "Stop the stream, then" } as const;
+    let checked = 0;
+    for (const [name, view, act] of views) {
+      const tree = body({ view, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: took(60_000) });
+      const t = textAt(tree, "stream-takeover-text");
+      expect([t.includes(NAMES.cancel), t.includes(NAMES.stop)], name).toEqual([act === "cancel", act === "stop"]);
+      expect(t.endsWith("Not yours? " + (act ? NAMES[act] + " " : "") + "Revoke & reissue"), `${name}: "${t}"`).toBe(true);
+      if (act) expect(byTestId(tree, act === "cancel" ? "stream-cancel" : "stream-stop"), `${name}: the named button is drawn`).toBeDefined();
+      checked++;
+    }
+    expect(checked).toBe(views.length);
+  });
+
+  it("T12: the 30-minute window is the SERVER's elapsedMs — 29:59 shown, 30:00 not", () => {
+    expect(TAKEOVER_NOTICE_MS).toBe(30 * 60_000);
+    expect(byTestId(body({ ...READY, phone: took(30 * 60_000 - 1_000) }), "stream-takeover")).toBeDefined();
+    expect(byTestId(body({ ...READY, phone: took(30 * 60_000) }), "stream-takeover")).toBeUndefined();
+  });
+
+  it("T12: the X (44px on a phone) dismisses THIS takeover; a dismissed instant hides it; another instant shows again", () => {
+    const onDismissTakeover = vi.fn();
+    const tree = body({ ...READY, phone: took(60_000), onDismissTakeover });
+    const x = byTestId(tree, "stream-takeover-dismiss")!;
+    expect([x.type, attr(x, "type"), attr(x, "aria-label")]).toEqual(["button", "button", m("stream.takeover.dismiss")]);
+    expect(String(attr(x, "className"))).toMatch(/(^|\s)h-11(\s|$)/);
+    click(x);
+    expect(onDismissTakeover).toHaveBeenCalledWith(AT);
+    expect(byTestId(body({ ...READY, phone: took(60_000), takeoverDismissedAt: AT }), "stream-takeover")).toBeUndefined();
+    expect(byTestId(body({ ...READY, phone: took(60_000, "Galaxy S24", "2026-09-14T11:45:00.000Z"), takeoverDismissedAt: AT }), "stream-takeover")).toBeDefined();
+  });
+
+  it("T12: no notice where Revoke & reissue is out of reach — credits only, the match over, a legacy session, Ending, the ended and failed cards", () => {
+    // B7 review M-1: Ending and the failed card draw no code fold, so the notice's advice has nothing to press there.
+    expect(byTestId(body({ view: LIVE, balance: 1, phone: took(60_000) }), "stream-code-disclosure"), "PREMISE: live draws the fold").toBeDefined();
+    expect(byTestId(body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: took(60_000) }), "stream-code-disclosure"), "PREMISE: no fold in Ending").toBeUndefined();
+    const rows: [string, ReactElement[]][] = [
+      ["ending", body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: took(60_000) })],
+      ["failed", body({ view: session({ state: "failed", failReason: "no_credits" }), balance: 1, phone: took(60_000) })],
+      ["credits only", body({ view: null, balance: 0, phone: took(60_000) })],
+      ["the match over", body({ ...READY, phone: { ...MATCH_OVER, lastTakeover: { at: AT, model: "Pixel 8", elapsedMs: 60_000 } } })],
+      ["legacy", body({ view: LIVE, balance: 1, phone: { ...LEGACY, lastTakeover: { at: AT, model: "Pixel 8", elapsedMs: 60_000 } } })],
+      ["ended", body({ view: session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" }), balance: 1, phone: took(60_000) })],
+    ];
+    let checked = 0;
+    for (const [name, tree] of rows) {
+      expect(byTestId(tree, "stream-takeover"), name).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+});
+
 describe("PhoneTab — fetch, poll, reveal and every action, through the real v1 paths", () => {
   type Server = {
     current: StreamSessionView | null;
@@ -2347,11 +2662,16 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     openSession?: string | null;
     /** Called with a pick's target before it is saved; a throw is the PUT's failure (a network error, a refusal). */
     failSettings?: (targetId: string | null) => void;
+    /** PR-2 T10: the fixture's saved switch (`fixture_stream_settings.auto_stream`) — unset: no row (the read model's
+     *  `auto` as `phone` gives it). A PUT `{ autoStream }` writes it, as the route does. */
+    autoStream?: boolean;
+    /** The switch's PUT fails (a network error) while set. */
+    failAuto?: boolean;
     /** The stream-code ensure (T5). Unset: the active code, as the route re-shows it. */
     code?: () => unknown;
     reissue?: () => unknown;
   };
-  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20 };
+  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const, phoneLostMinutes: 20, autoStopMinutes: 3, tz: "Europe/London" };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
   const PHONE = "GET /api/v1/fixtures/f-1/stream-phone";
   const ENSURE = "POST /api/v1/fixtures/f-1/stream-code";
@@ -2385,13 +2705,21 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
         return structuredClone({
           ...(s.phone ?? readModel()),
           destination: pick === null ? null : { id: pick.id, label: pick.label, source: pick.source },
+          ...(s.autoStream !== undefined ? { auto: { enabled: s.autoStream, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null } } : {}),
           session: s.openSession !== undefined ? (s.openSession === null ? null : { id: s.openSession }) : open ? { id: s.current!.id } : null,
         });
       }
       if (key === ENSURE) return s.code ? s.code() : { qr: { ...CODE_QR, exp: 1_900_000_000 }, issuedAt: (s.phone ?? readModel()).code?.issuedAt ?? "2026-09-14T11:00:00.000Z" };
       if (key === REISSUE) return s.reissue!();
       if (key === SETTINGS) {
-        const targetId = (options?.json as { targetId: string | null }).targetId;
+        const json = options?.json as { targetId?: string | null; autoStream?: boolean };
+        if (json.autoStream !== undefined) {
+          // The PR-2 body names the switch ALONE (the route writes only the fields a PUT names) — the pick is untouched.
+          if (s.failAuto) throw new TypeError("Failed to fetch");
+          s.autoStream = json.autoStream;
+          return { targetId: null, autoStream: json.autoStream };
+        }
+        const targetId = json.targetId as string | null;
         s.failSettings?.(targetId);
         s.saved = { row: true, targetId };
         return { targetId };
@@ -3486,6 +3814,77 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     // The loader module is in the panel's STATIC graph, so it must carry nothing but the dynamic import.
     expect(loaderSrc).not.toMatch(/^\s*import\s/m);
     expect(src, "the chooser-open warm-up is gone").not.toMatch(/chooserOpen/);
+  });
+
+  // ─── PR-2 T10 / T12: the switch's write, and the takeover notice's dismissal ─────────────────────────────────────────
+  const settingsBodies = () => apiV1.mock.calls.filter(([url, o]) => `${o?.method ?? "GET"} ${url}` === SETTINGS).map(([, o]) => o?.json);
+
+  it("T10: the container hands the body the auto stop's delay and the venue zone, untouched — values the defaults cannot produce", async () => {
+    serve({ current: null, targets: TARGETS });
+    const island = track(renderIsland(PhoneTab, { ...TAB, autoStopMinutes: 7, tz: "Asia/Kolkata" }));
+    await settle();
+    expect([TAB.autoStopMinutes, TAB.tz], "premise: the defaults differ").not.toEqual([7, "Asia/Kolkata"]);
+    expect([bodyOf(island).autoStopMinutes, bodyOf(island).tz]).toEqual([7, "Asia/Kolkata"]);
+  });
+
+  it("T10: a flip writes PUT stream-settings { autoStream } — that field ALONE — then re-reads the read model; the switch follows the SERVER", async () => {
+    const s = serve({ current: null, targets: TARGETS });
+    const island = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(bodyOf(island).phone?.auto ?? null, "premise: no settings row").toBeNull();
+    const reads = phoneReads();
+    bodyOf(island).onToggleAuto(true);
+    expect(bodyOf(island).autoPending, "the asked state shows while the save is in flight").toBe(true);
+    await settle();
+    expect(settingsBodies()).toEqual([{ autoStream: true }]);
+    expect(phoneReads(), "the read model is read again after the save").toBeGreaterThan(reads);
+    expect(bodyOf(island).phone?.auto?.enabled).toBe(true);
+    expect([bodyOf(island).autoPending, bodyOf(island).autoFailed]).toEqual([null, false]);
+    expect(s.saved, "the pick is left alone").toBeUndefined();
+    // The sequence: back off — a second write, the server's answer again.
+    bodyOf(island).onToggleAuto(false);
+    await settle();
+    expect(settingsBodies()).toEqual([{ autoStream: true }, { autoStream: false }]);
+    expect(bodyOf(island).phone?.auto?.enabled).toBe(false);
+  });
+
+  it("T10: a failed save goes back to the server's answer and says so; the next flip clears the line", async () => {
+    const s = serve({ current: null, targets: TARGETS, autoStream: false, failAuto: true });
+    const island = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    bodyOf(island).onToggleAuto(true);
+    await settle();
+    expect([bodyOf(island).autoPending, bodyOf(island).autoFailed, bodyOf(island).phone?.auto?.enabled]).toEqual([null, true, false]);
+    s.failAuto = false;
+    bodyOf(island).onToggleAuto(true);
+    expect(bodyOf(island).autoFailed, "a new attempt retires the old failure").toBe(false);
+    await settle();
+    expect([bodyOf(island).autoFailed, bodyOf(island).phone?.auto?.enabled]).toEqual([false, true]);
+  });
+
+  it("T12: the X remembers THIS takeover's instant for this fixture (localStorage), read back on the next mount; a storage that throws still dismisses", async () => {
+    const AT = "2026-09-14T11:32:00.000Z";
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) });
+    serve({ current: null, targets: TARGETS, phone: readModel({ lastTakeover: { at: AT, model: "Pixel 8", elapsedMs: 60_000 } }) });
+    const a = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(bodyOf(a).takeoverDismissedAt, "nothing dismissed yet").toBeNull();
+    bodyOf(a).onDismissTakeover(AT);
+    expect(bodyOf(a).takeoverDismissedAt).toBe(AT);
+    expect([...store.entries()]).toEqual([["seazn.stream.takeoverDismissed.f-1", AT]]);
+    const b = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(bodyOf(b).takeoverDismissedAt, "read back on the next mount").toBe(AT);
+    const boom = () => {
+      throw new Error("SecurityError");
+    };
+    vi.stubGlobal("localStorage", { getItem: boom, setItem: boom });
+    const c = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(bodyOf(c).takeoverDismissedAt, "an unreadable store reads as nothing dismissed").toBeNull();
+    bodyOf(c).onDismissTakeover(AT);
+    expect(bodyOf(c).takeoverDismissedAt, "…and the X still works for this view").toBe(AT);
   });
 
   describe("PhoneStopProbe — an org without the relay can still stop what is on air (G2)", () => {

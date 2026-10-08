@@ -14,7 +14,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AUTO_START_RETRY_SECONDS, AUTO_STOP_AFTER_RESULT_SECONDS } from "../../config";
 import {
-  AUTO_START_CONJUNCTS, AUTO_START_REFUSALS, AUTO_STOP_CONJUNCTS, autoStartVerdict, autoStopVerdict,
+  AUTO_START_CONJUNCTS, AUTO_START_REFUSALS, AUTO_STOP_CONJUNCTS, autoStartVerdict, autoStopApplies, autoStopVerdict,
   type AutoStartFacts, type AutoStopFacts,
 } from "../auto-stream";
 
@@ -231,5 +231,39 @@ describe("autoStopVerdict (§7.3)", () => {
     const first = autoStopVerdict(facts, NOW, AUTO_STOP_AFTER_RESULT_SECONDS);
     expect(autoStopVerdict(facts, NOW, AUTO_STOP_AFTER_RESULT_SECONDS)).toEqual(first);
     expect(first).toEqual({ due: true, failed: [] });
+  });
+});
+
+// B7 review M-3: the panel's live line ("stops about N minutes after the result") is a promise about THIS session, so the
+// server says whether §7.3 will ever apply to it — every conjunct but the two that wait for the result to stand and age.
+describe("autoStopApplies (B7 review M-3: will §7.3 ever stop THIS session?)", () => {
+  /** The rulebook's two timing conjuncts (§7.3: a result stands, its delay has passed) — the only ones that may still be
+   *  false while the stop "applies". Named here from the spec, never read back off the table under test. */
+  const WAITS_FOR_THE_RESULT = new Set(["fixture_finished", "delay_elapsed"]);
+
+  it("the base facts apply; so does a live session with NO result yet (the line's whole point), and one inside the delay", () => {
+    expect(autoStopApplies(STOP_BASE)).toBe(true);
+    expect(autoStopApplies({ ...STOP_BASE, finishedAt: null, sessionPredatesResult: false })).toBe(true);
+    expect(autoStopApplies({ ...STOP_BASE, finishedAt: ago(1_000) })).toBe(true);
+  });
+
+  it("every conjunct falsified alone: the timing two still apply, every other one does not — and every conjunct is swept", () => {
+    let checked = 0;
+    for (const row of STOP_FALSIFY) {
+      expect(autoStopApplies({ ...STOP_BASE, ...row.patch }), row.conjunct + JSON.stringify(row.patch)).toBe(WAITS_FOR_THE_RESULT.has(row.conjunct));
+      checked++;
+    }
+    expect(checked).toBe(STOP_FALSIFY.length);
+    expect(new Set(STOP_FALSIFY.map((r) => r.conjunct))).toEqual(new Set(AUTO_STOP_CONJUNCTS.map((c) => c.name)));
+    for (const name of WAITS_FOR_THE_RESULT) expect(AUTO_STOP_CONJUNCTS.some((c) => c.name === name), name).toBe(true);
+  });
+
+  it("A15's post-result broadcast: a session created after the result never applies, though the switch and the phone say yes", () => {
+    expect(autoStopApplies({ ...STOP_BASE, sessionPredatesResult: false })).toBe(false);
+    expect(autoStopVerdict({ ...STOP_BASE, sessionPredatesResult: false }, NOW, AUTO_STOP_AFTER_RESULT_SECONDS).due, "the verdict agrees").toBe(false);
+  });
+
+  it("EMPTY: no switch, no phone mode, no result → does not apply", () => {
+    expect(autoStopApplies({ autoStream: false, phoneMode: null, finishedAt: null, sessionPredatesResult: false })).toBe(false);
   });
 });

@@ -32,7 +32,7 @@ import {
   type Command, type Decision, type Effect, type HoldState, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
 import { isPresent } from "@/server/relay/domain/pairing";
-import { autoStopVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
+import { autoStopApplies, autoStopVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
@@ -1832,6 +1832,15 @@ async function autoStopFactsOf(exec: Tx | typeof sql, sessionId: string): Promis
   return f ?? null;
 }
 const phoneModeOf = (mode: string | null): PhoneMode | null => (mode === "automatic" || mode === "operator" ? mode : null);
+/** B7 review M-3: whether §7.3 will ever stop this session (`autoStopApplies`), read from the SAME facts `autoStopDue` judges
+ *  (one statement, the pre/post-result comparison in SQL) — the organiser panel's read model serves it, so the panel's
+ *  "stops about N minutes after the result" line can never promise a stop the tick will not make. False for a session gone. */
+export async function autoStopAppliesTo(sessionId: string): Promise<boolean> {
+  const f = await autoStopFactsOf(sql, sessionId);
+  return f !== null && autoStopApplies({
+    autoStream: f.auto_stream, phoneMode: phoneModeOf(f.mode), finishedAt: f.finished_at, sessionPredatesResult: f.session_predates_result,
+  });
+}
 function autoStopDue(f: AutoStopFacts, now: Date): boolean {
   return autoStopVerdict({
     autoStream: f.auto_stream, phoneMode: phoneModeOf(f.mode), finishedAt: f.finished_at, sessionPredatesResult: f.session_predates_result,
