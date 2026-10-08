@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
+import { EngineError, forbidsLevelResult, type MatchOutcome, type StageKind } from "@seazn/engine/core";
 import { generateDoubleElim, generatePagePlayoff, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
@@ -349,6 +349,11 @@ export class FakeLeagueDriver implements OrganiserDriver {
       // harness fault, so it surfaces as itself, never as an engine refusal.
       if (!EngineError.is(e)) throw e;
       throw new RefusedCall("POST", `/api/v1/fixtures/${f.id}/events`, engineHttpStatus(e.code), e.code, e.message);
+    }
+    // W2a (GN-KO-1, spec §5.4 item 3): a WRITE guard of the product (append-event.ts), not a fold refusal — a generic
+    // draw in a bracket kind is refused and nothing is written. Every other level result is accepted and held.
+    if (this.sport === "generic" && kind !== null && forbidsLevelResult(kind as StageKind) && folded.outcome?.kind === "draw") {
+      throw new RefusedCall("POST", `/api/v1/fixtures/${f.id}/events`, 409, "LEVEL_RESULT_IN_BRACKET", "A knockout match can't end level — enter the winner.");
     }
     f.events = next;
     f.outcome = folded.outcome;

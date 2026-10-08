@@ -6,7 +6,13 @@ import type { OrganiserDriver } from "../driver/types.ts";
 import type { ObservedRun } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 
-export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF";
+/** W2a (Task 14): the opt-in bracket-finish scenarios. They are planned ONLY when `--set w1-driving --scenario <key>`
+ *  names one, so no committed plan holds them. Defined here, beside the type that names them, so the key list has
+ *  one authority (w2a-bracket-finish.ts re-exports it as W2A_SCENARIOS). */
+export const W2A_SCENARIO_KEYS = ["BRACKET_SETTLE_LEVEL", "BRACKET_SETTLE_ABANDON", "BRACKET_TIEBREAK", "BRACKET_EXTRA_BOARD", "BRACKET_NO_DRAW_GENERIC"] as const;
+export type W2aScenarioKey = (typeof W2A_SCENARIO_KEYS)[number];
+
+export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey;
 
 /** `row` is any catalogue row, API-only ones included (W1b Task 3 carry):
  *  stagesForRow builds every one. `deny` (ruling 24) lists the feature keys

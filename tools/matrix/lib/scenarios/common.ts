@@ -106,7 +106,13 @@ export class StageTrack {
 }
 
 /** What decideFixture needs to finish a fixture the scenario already started (Recorder.resumed). */
-export interface Resumed { readonly outcome: RequestedOutcome; readonly live: number; readonly voidedType: string }
+export interface Resumed {
+  readonly outcome: RequestedOutcome;
+  readonly live: number;
+  /** The type of the event that was voided, which the stream must send next; null where nothing was voided (a probe the
+   *  product REFUSED after the first `live` events were accepted — BRACKET_NO_DRAW_GENERIC). */
+  readonly voidedType: string | null;
+}
 
 /** A fixture the scenario started was resumed over a stream that is not the one it began: its live events are not
  *  the generated stream's leading events, or the event it voided is not the next one the stream sends. Posting
@@ -535,7 +541,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     const live = liveEvents(prior).map((e) => e.type);
     const lead = generated.slice(0, resumed.live).map((e) => e.type);
     if (resumed.live < 1 || live.join(",") !== lead.join(",")) throw new ResumeMismatch(f.id, `its live events are [${live.join(", ")}], the generated stream leads with [${lead.join(", ")}] (${resumed.live} claimed live)`);
-    if (generated[resumed.live]?.type !== resumed.voidedType) throw new ResumeMismatch(f.id, `the event it voided was ${resumed.voidedType}, the stream's next is ${generated[resumed.live]?.type ?? "nothing"}`);
+    if (resumed.voidedType !== null && generated[resumed.live]?.type !== resumed.voidedType) throw new ResumeMismatch(f.id, `the event it voided was ${resumed.voidedType}, the stream's next is ${generated[resumed.live]?.type ?? "nothing"}`);
   }
   const fresh = resumed === undefined ? generated : generated.slice(resumed.live);
   // What the driver actually sends: a forfeit on a fixture already under way
@@ -618,10 +624,16 @@ export async function dateFirstRound(ctx: ScenarioContext, rec: Recorder, setup:
 
 export type RoundHook = (round: number, batch: FixtureRow[]) => Promise<void>;
 
+/** W2a (Task 14): a scenario's own choice of outcome for a BRACKET fixture, in place of bracketPolicy's. `n` counts
+ *  bracket fixtures (Recorder.bracketOrdinal), `higher` is the better seed's side, `cfg` is the stage-overlaid cfg the
+ *  product folds the fixture under. Absent, every bracket fixture is asked by bracketPolicy, byte for byte. */
+export type BracketPick = (f: FixtureRow, n: number, higher: Side, cfg: unknown) => RequestedOutcome;
+export interface RoundHooks { beforeRound?: RoundHook; afterRound?: RoundHook; bracketPick?: BracketPick }
+
 /** One round's batch, decided in fixture order between the round hooks —
  *  playStage's own, lifted to take the stage (W1-driving Task 8) so the
  *  americano loops decide a round exactly as every other loop does. */
-export async function decideRound(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, round: number, batch: FixtureRow[], hooks: { beforeRound?: RoundHook; afterRound?: RoundHook }): Promise<void> {
+export async function decideRound(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, round: number, batch: FixtureRow[], hooks: RoundHooks): Promise<void> {
   const drawOk = stageDrawsOk(ctx, stage);
   // W2a: a bracket stage is asked for the hard path every third fixture (bracketPolicy); every other stage keeps the
   // table policy, byte for byte.
@@ -629,7 +641,11 @@ export async function decideRound(ctx: ScenarioContext, rec: Recorder, setup: Di
   const bracketCfgOf = bracket ? stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind) : null;
   await hooks.beforeRound?.(round, batch);
   for (const f of [...batch].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))) {
-    const outcome = bracket ? bracketPolicy(setup, f, ctx.spec.sport, rec.bracketOrdinal++, bracketCfgOf) : defaultPolicy(setup, f, drawOk, rec.decided);
+    const n = rec.bracketOrdinal;
+    if (bracket) rec.bracketOrdinal++;
+    const higher: Side = setup.seedOf(f.home_entrant_id!) <= setup.seedOf(f.away_entrant_id!) ? "home" : "away";
+    const outcome = !bracket ? defaultPolicy(setup, f, drawOk, rec.decided)
+      : hooks.bracketPick !== undefined ? hooks.bracketPick(f, n, higher, bracketCfgOf) : bracketPolicy(setup, f, ctx.spec.sport, n, bracketCfgOf);
     await decideFixture(ctx, rec, setup, f, outcome, stage);
   }
   await hooks.afterRound?.(round, batch);
@@ -650,7 +666,7 @@ export function drawsDeclaredOnReached(ctx: ScenarioContext, plays: readonly Sta
 
 /** Plays one stage to its loop exit. `stage` (W1-driving Task 6) defaults to
  *  the root; the exit lands on the stage's own track and on the run alike. */
-export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: { beforeRound?: RoundHook; afterRound?: RoundHook } = {}, stage: StageRef = setup.stage): Promise<void> {
+export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: RoundHooks = {}, stage: StageRef = setup.stage): Promise<void> {
   // W1-driving Task 7 (D8): a ladder generates nothing (stages.ts ladder gen
   // is []); it is driven through challenges.
   if (stage.kind === "ladder") return playLadder(ctx, rec, setup, stage, hooks);
@@ -723,7 +739,7 @@ const worstExit = (exits: readonly (LoopExit | null)[]): LoopExit | null => (exi
  *  after a commit. */
 export async function playDivision(
   ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
-  hooks: { beforeRound?: RoundHook; afterRound?: RoundHook; beforeComplete?: (stage: StageRef) => Promise<void> } = {},
+  hooks: RoundHooks & { beforeComplete?: (stage: StageRef) => Promise<void> } = {},
 ): Promise<StagePlay[]> {
   for (const s of setup.stages.slice(1)) await recordGenerate(ctx, rec, s.id);
   const plays: StagePlay[] = [];

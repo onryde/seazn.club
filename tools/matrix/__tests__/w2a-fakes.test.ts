@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { commandOf, newModelState, type ModelState } from "../lib/model/commands.ts";
-import { resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
+import { drawsAllowed, resolveSportCfg, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import type { RequestedOutcome } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -112,7 +112,7 @@ describe("the model fake serves the W2a status and seats (X-BR-1, X-BR-2, X-ST-1
     const driver = new FakeKnockoutDriver();
     const spec: CaseSpec = { caseId: "knockout|football|LIFECYCLE", row: "knockout", sport: SPORT, variant, scenario: "LIFECYCLE", canary: false };
     const ctx = { driver, spec, orgSlug: "o", cfg: resolveSportCfg(SPORT, variant), tag: "t", denied: [] };
-    const setup = await setUpDivision(ctx, new Recorder(), 4);
+    await setUpDivision(ctx, new Recorder(), 4);
     await driver.start();
     const first = driver.fixtures.find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null && f.round_no === 1)!;
     const level = stream(driver as never, first.id, "knockout", { kind: "level" });
@@ -122,5 +122,31 @@ describe("the model fake serves the W2a status and seats (X-BR-1, X-BR-2, X-ST-1
     await driver.postStream(first.id, [{ type: "core.settle", payload: { winner: first.home_entrant_id!, method: "higher_seed" } }]);
     expect(first.status).toBe("decided");
     expect(driver.fixtures.filter((f) => f.round_no === 2).some((f) => f.home_entrant_id === first.home_entrant_id || f.away_entrant_id === first.home_entrant_id), "the settled winner advances").toBe(true);
+  });
+
+  it("GN-KO-1: a generic draw in a knockout is REFUSED (409 LEVEL_RESULT_IN_BRACKET) and the result is not written; the same draw in a league is decided, and a football level result in the same knockout is accepted and held", async () => {
+    let checked = 0;
+    for (const v of variantKeys("generic")) {
+      const cfg = resolveSportCfg("generic", v);
+      if (!drawsAllowed("generic", cfg, "league")) continue; // no draw stream exists to refuse
+      const driver = new FakeKnockoutDriver();
+      const spec: CaseSpec = { caseId: `knockout|generic|${v}|LIFECYCLE`, row: "knockout", sport: "generic", variant: v, scenario: "LIFECYCLE", canary: false };
+      await setUpDivision({ driver, spec, orgSlug: "o", cfg, tag: "t", denied: [] }, new Recorder(), 4);
+      await driver.start();
+      const first = driver.fixtures.find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null && f.round_no === 1)!;
+      const draw = generateStream({ sportKey: "generic", cfg, stageKind: "league", home: first.home_entrant_id!, away: first.away_entrant_id!, outcome: { kind: "draw" } });
+      const refused = await driver.postStream(first.id, draw).then(() => null, (e: unknown) => e);
+      expect(refused, v).toBeInstanceOf(RefusedCall);
+      expect(refused, v).toMatchObject({ status: 409, code: "LEVEL_RESULT_IN_BRACKET" });
+      expect(first.status, `${v}: START was accepted, the draw was not`).toBe("in_play");
+      expect(first.outcome, v).toBeNull();
+      expect(driver.fixtures.filter((f) => f.round_no === 2).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x) => x !== null), `${v}: nobody advanced`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "no generic variant draws in a league: nothing was refused").toBeGreaterThan(0);
+    // the positive pairs: the same draw is fine in a league (the bracket is the whole difference), and another sport's level result is held
+    const leagueGeneric = await bracket("league", "generic");
+    await leagueGeneric.d.postStream(leagueGeneric.sf1, stream(leagueGeneric.d, leagueGeneric.sf1, "league", { kind: "draw" }, "generic"));
+    expect(row(leagueGeneric.d, leagueGeneric.sf1)).toMatchObject({ status: "decided", outcome: { kind: "draw" } });
   });
 });
