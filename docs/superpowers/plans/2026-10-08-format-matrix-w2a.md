@@ -3993,7 +3993,9 @@ There is no report-only read-path form: ruling 82's backfill (V431) removes the 
   // Finding 27: finalizing a level bracket result would store `finalized` + a level outcome — the very shape
   // LEVEL_RESULT_SEATED exists to catch, and a lock no settle could then open. Refused until it is settled.
   // (No "and not settled" clause: `outcome` is outcomeOf's, so a settled fixture's outcome is a win — preflight C20.)
-  if (candidate.type === "core.finalize" && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) {
+  // Ruling P2-7: settleApplies, not isLevelOutcome — an abandon with no outcome or a pending chess tie-break must
+  // not finalize either (spec §5.4 item 3 = §5.5). Add a test case for each, and a mutant reverting to isLevelOutcome.
+  if (candidate.type === "core.finalize" && forbidsLevelResult(stageKind) && settleApplies(module, { outcome, abandoned, state })) { // controller ruling P2-7: same predicate as the console block
     throw new EngineError("LEVEL_RESULT_IN_BRACKET", "settle the match before finalizing — a knockout match can't end level", { fixtureId, stage: stageKind });
   }
   // Controller ruling C17: a settle may not advance an entrant who has withdrawn. The organiser settles for the
