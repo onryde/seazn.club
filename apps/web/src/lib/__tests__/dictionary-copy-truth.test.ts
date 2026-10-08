@@ -4177,3 +4177,21 @@ describe("every locale carries the same keys, file for file", () => {
     });
   }
 });
+
+// Final review m-7 (capture QR v2 PR-2): the Seazn node's stalled word (owner ruling 2026-10-08) is the chain's OWN waiting
+// word plus what it waits for — "Waiting" → "Waiting for video" — in every locale, so the node reads as a kind of the waiting
+// it sits beside. nl once said "Wacht op video" (a finite verb) beside "Wachten" (the chain's infinitive). Derived from the
+// sibling key, never a literal: a change to the waiting word moves the expectation with it.
+describe("the chain's 'Waiting for video' extends its own waiting word, in every locale", () => {
+  it("stream.chain.word.waitingVideo starts with stream.chain.word.waiting and a space", () => {
+    let checked = 0;
+    for (const { locale, value: waiting } of across("ui", "stream.chain.word.waiting")) {
+      const video = load(locale, "ui")["stream.chain.word.waitingVideo"] ?? "";
+      expect(waiting, `${locale}: PREMISE — the waiting word exists`).not.toBe("");
+      expect(video.startsWith(`${waiting} `), `${locale}: "${video}" extends "${waiting}"`).toBe(true);
+      expect(video.length, `${locale}: it says what it waits for`).toBeGreaterThan(waiting.length + 1);
+      checked++;
+    }
+    expect(checked).toBe(DICTIONARY_LOCALES.length);
+  });
+});

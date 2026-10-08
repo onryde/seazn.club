@@ -240,8 +240,10 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
   const destination = await fixtureStreamTarget(sql, { orgId: auth.orgId, fixtureId });
 
   // --- the last takeover (§7.5): a pairing ended `replaced` by ANOTHER phone's, on the fixture's CURRENT (active) code ---
-  // B7 review I-2: Revoke & reissue is the organiser's answer to a takeover, so a takeover on a code since reissued (or
-  // expired) is never served — the read model stays the one authority, and the panel's notice goes with the old code.
+  // B7 review I-2: Revoke & reissue is the organiser's answer to a takeover, so a takeover on a code that has ENDED
+  // (`ended_at` set: reissued, revoked, or an expiry already written) is never served — the read model stays the one
+  // authority, and the panel's notice goes with the old code. The query keys on `ended_at` alone: expiry is written lazily
+  // (`wipeStreamCodeTok`, on the next mint or read), so a code past its grace that nothing has expired yet still serves it.
   let lastTakeover: StreamPhone["lastTakeover"] = null;
   if (!legacy) {
     const [t] = await sql<{ at: Date; model: string | null }[]>`
