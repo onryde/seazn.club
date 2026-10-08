@@ -67,7 +67,8 @@ type Facts = {
  *     conditions, so two beats, or a beat and a sweep, cannot both go on — the loser is `claim_lost`;
  *  4. `startBroadcast` on the fixture's resolved destination, attributed to the pairing's code issuer (the guard in
  *     `startBroadcast` refuses anyone else);
- *  5. success stamps `auto_started_at` / `auto_start_session_id` and clears the refusal; a mapped refusal stores its code and
+ *  5. success stamps `auto_started_at` / `auto_start_session_id` and clears the refusal — INSIDE `startBroadcast`'s
+ *     transaction, with the session row (final review m-1: never one without the other); a mapped refusal stores its code and
  *     NEVER `auto_started_at` (it is retried after AUTO_START_RETRY_SECONDS); `already_running` stores no code and CLEARS the
  *     earlier attempt's; anything unmapped clears it too and rethrows (the beat reports it and answers regardless — the claim
  *     already spaces the retry). A stored code is always the latest attempt's own.
@@ -123,11 +124,9 @@ export async function maybeAutoStart(
     const { sessionId } = await startBroadcast(
       { userId: facts.issued_by, orgId: a.orgId, source: "auto", pairingId: a.pairingId },
       a.fixtureId,
-      { targetId: pick.id, startCause: "automatic", phonePresent: true },
+      { targetId: pick.id, startCause: "automatic", phonePresent: true, autoStartedAt: now },
       deps,
     );
-    await sql`update fixture_stream_settings set auto_started_at = ${now}, auto_start_session_id = ${sessionId}, auto_start_refusal = null
-               where fixture_id = ${a.fixtureId}`;
     return { fired: true, sessionId };
   } catch (err) {
     const mapped = autoStartRefusalOf(err);

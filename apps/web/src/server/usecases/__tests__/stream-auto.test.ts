@@ -876,8 +876,74 @@ describe.skipIf(!HAS_DB)("startBroadcast refuses an automatic start attributed t
       .rejects.toThrow(/attributed to its stream code's issuer/);
     expect(await sessionsOf(r.fixtureId)).toHaveLength(0);
     const issuer = await issuerOf(r.fixtureId);
-    const ok = await startBroadcast({ userId: issuer, orgId: r.auth.orgId, source: "auto", pairingId }, r.fixtureId, { targetId: r.target.id, startCause: "automatic", phonePresent: true }, r.deps);
+    const ok = await startBroadcast({ userId: issuer, orgId: r.auth.orgId, source: "auto", pairingId }, r.fixtureId, { targetId: r.target.id, startCause: "automatic", phonePresent: true, autoStartedAt: r.now() }, r.deps);
     expect((await sessionsOf(r.fixtureId)).find((s) => s.id === ok.sessionId)).toMatchObject({ start_cause: "automatic", created_by: issuer });
+  });
+});
+
+// Final review m-1: "once per match" rests on `auto_started_at`. It was stamped in a statement of its own AFTER
+// startBroadcast's transaction committed, so a failure (or a dead process) between the two left an automatic session with
+// no stamp, and once that session ended without video the next beat past the retry spacing started a SECOND one. The stamp
+// now commits WITH the session row: neither exists without the other, in either direction.
+describe.skipIf(!HAS_DB)("final review m-1 — the automatic start's stamp commits with its session, never apart", () => {
+  it("a failure INSIDE the start transaction after the session insert (the stamp refused): no session row, no input, no stamp — and the retry after the spacing starts ONE session that carries the stamp", async () => {
+    const { r, phone } = await autoRig();
+    // Injected where the stamp is written: a constraint scoped to THIS fixture's settings row (no other suite is touched).
+    const name = `stream_auto_m1_${r.fixtureId.replace(/-/g, "")}`;
+    await sql.unsafe(`alter table fixture_stream_settings add constraint ${name} check (fixture_id <> '${r.fixtureId}' or auto_started_at is null) not valid`);
+    let answer: Awaited<ReturnType<typeof beat>>;
+    try {
+      answer = await beat(r, phone);
+    } finally {
+      await sql.unsafe(`alter table fixture_stream_settings drop constraint ${name}`);
+    }
+    expect(sentry.captureError, "PREMISE: the injected failure was reached and reported").toHaveBeenCalledTimes(1);
+    expect(String(sentry.captureError.mock.calls[0]![0]), "PREMISE: it is the injected one").toMatch(new RegExp(name));
+    expect(await sessionsOf(r.fixtureId), "no session row survives a stamp that failed").toHaveLength(0);
+    expect(answer.state, "so the beat answers waiting, never go-live on an unstamped session").toBe("waiting");
+    expect((await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_stream_inputs i join fixture_stream_sessions s on s.id = i.session_id
+       where s.fixture_id = ${r.fixtureId}`)[0]!.n, "no input either").toBe(0);
+    expect(await settingsOf(r.fixtureId)).toMatchObject({ auto_started_at: null, auto_start_session_id: null, auto_start_attempted_at: r.now() });
+    // The positive pair on the SAME rig, the injection undone: the retry at the declared spacing starts, stamped with its own id.
+    r.tick(AUTO_START_RETRY_SECONDS * SEC);
+    await beat(r, phone);
+    const auto = await autoSessionsOf(r.fixtureId);
+    expect(auto, "the retry starts ONE session").toHaveLength(1);
+    expect(await settingsOf(r.fixtureId)).toMatchObject({ auto_started_at: r.now(), auto_start_session_id: auto[0]!.id });
+  });
+
+  it("the reverse — a start whose provisioning fails deletes its session AND its stamp: no stamp outlives its session, the refusal is stored, and the retry after the spacing still starts (the stamp does not block it)", async () => {
+    const { r, phone } = await autoRig();
+    vi.spyOn(r.ingest, "createLiveInput").mockRejectedValueOnce(new Error("provider down"));
+    const answer = await beat(r, phone);
+    expect(answer.state, "the beat still answers").toBe("waiting");
+    expect(r.ingest.createLiveInput, "PREMISE: provisioning was reached (the session row was written first)").toHaveBeenCalledTimes(1);
+    expect(await sessionsOf(r.fixtureId), "the failed provisioning removed its session").toHaveLength(0);
+    expect(await settingsOf(r.fixtureId)).toMatchObject({ auto_started_at: null, auto_start_session_id: null, auto_start_refusal: "unavailable" });
+    r.tick(AUTO_START_RETRY_SECONDS * SEC);
+    await beat(r, phone);
+    const auto = await autoSessionsOf(r.fixtureId);
+    expect(auto, "the retry starts ONE session").toHaveLength(1);
+    expect(await settingsOf(r.fixtureId)).toMatchObject({ auto_started_at: r.now(), auto_start_session_id: auto[0]!.id, auto_start_refusal: null });
+  });
+
+  it("an assumption made a guard: an automatic start without its stamp instant, or a non-automatic start with one, is refused by name before anything is written", async () => {
+    const { r, phone } = await autoRig();
+    const pairingId = await pairingIdOf(r, phone);
+    const issuer = await issuerOf(r.fixtureId);
+    const cases: [string, Parameters<typeof startBroadcast>[0], Parameters<typeof startBroadcast>[2]][] = [
+      ["auto, no instant", { userId: issuer, orgId: r.auth.orgId, source: "auto", pairingId }, { targetId: r.target.id, startCause: "automatic", phonePresent: true }],
+      ["phone, an instant", { userId: issuer, orgId: r.auth.orgId, source: "phone", pairingId }, { targetId: r.target.id, startCause: "operator", phonePresent: true, autoStartedAt: r.now() }],
+    ];
+    let checked = 0;
+    for (const [label, actor, opts] of cases) {
+      await expect(startBroadcast(actor, r.fixtureId, opts, r.deps), label).rejects.toThrow(/startBroadcast: .*auto_started_at/);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(await sessionsOf(r.fixtureId)).toHaveLength(0);
+    expect((await settingsOf(r.fixtureId))!.auto_started_at).toBeNull();
   });
 });
 

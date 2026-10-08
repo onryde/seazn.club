@@ -1252,7 +1252,12 @@ export async function createSession(
 export async function startBroadcast(
   actor: StartActor,
   fixtureId: string,
-  opts: { targetId: string; startCause: StartCause; phonePresent: boolean; mode?: CreateStreamSession["mode"]; themeId?: string | null },
+  opts: {
+    targetId: string; startCause: StartCause; phonePresent: boolean; mode?: CreateStreamSession["mode"]; themeId?: string | null;
+    /** The automatic start's instant (§7.2, final review m-1): stamped as `auto_started_at` IN the insert's transaction, so
+     *  the session and "once per match" commit together. Given exactly when `actor.source` is `auto`. */
+    autoStartedAt?: Date;
+  },
   deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
   const { orgId, competitionId } = await fixtureContext(fixtureId);
@@ -1278,6 +1283,14 @@ export async function startBroadcast(
     if (actor.userId !== pairing.issued_by) {
       throw new Error(`startBroadcast: a ${actor.source} start is attributed to its stream code's issuer, not to user ${actor.userId}`);
     }
+  }
+  // Final review m-1, an assumption made a guard: the automatic start's stamp rides its own transaction below, so an auto
+  // start that brings no instant (it would commit a session with no stamp — the second-start defect) and any other start
+  // that brings one (it would mark a hand start as the match's automatic one) are caller bugs, refused before anything is
+  // weighed or written. After the attribution guard, so that guard keeps answering first. Witness: "an automatic start
+  // without its stamp instant, or a non-automatic start with one, is refused by name".
+  if ((actor.source === "auto") !== (opts.autoStartedAt !== undefined)) {
+    throw new Error(`startBroadcast: auto_started_at is stamped by an auto start and only by one (a ${actor.source} start ${opts.autoStartedAt === undefined ? "brought none" : "brought one"}) on fixture ${fixtureId}`);
   }
   // R5 (Task 14b): a production deployment with no RELAY_DRIVERS has no relay (drivers.ts `disabledRelayDrivers`).
   // Refused with the ingest's own 503 BEFORE anything else — no expiry, no provider call, no monthly grant, no row —
@@ -1434,6 +1447,16 @@ export async function startBroadcast(
       returning id`;
     const sid = s!.id;
     await tx`insert into fixture_stream_inputs (session_id, slot) values (${sid}, 0)`;   // M3: same transaction
+    // Final review m-1: "once per match" commits WITH the session it records — never in a statement of its own after this
+    // transaction, where a failure (or a dead process) left an automatic session with no stamp, and the next beat past the
+    // retry spacing started a second one. The claim's row (`maybeAutoStart`) is the one stamped; a start that finds none
+    // is refused by name, and the whole transaction with it.
+    if (opts.autoStartedAt !== undefined) {
+      const stamped = await tx`update fixture_stream_settings
+                                  set auto_started_at = ${opts.autoStartedAt}, auto_start_session_id = ${sid}, auto_start_refusal = null
+                                where fixture_id = ${fixtureId}`;
+      if (stamped.count !== 1) throw new Error(`startBroadcast: an auto start found no settings row to stamp auto_started_at on fixture ${fixtureId}`);
+    }
     await recordStorageSnapshot(tx, { ...snapshot, sessionId: sid });
     await recordEvent(tx, { sessionId: sid, orgId, source: START_EVENT_SOURCE[actor.source], kind: "action", type: "create", actorUserId, occurredAt: deps.now(),
       payload: { mode: body.mode, targetId: body.targetId, headroomMinutes: headroom, credits: balance, startCause: opts.startCause, pairingId: actor.pairingId } });
@@ -1470,7 +1493,14 @@ async function provisionSession(sessionId: string, deps: SessionDeps): Promise<v
     creds = await recordEffect(provisioning, "create_live_input", "ingest", () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0 }), { slot: 0 });
   } catch (err) {
     log.error({ sid: sessionId, err }, "stream session: ingest create failed");
-    await sql`delete from fixture_stream_sessions where id = ${sessionId}`;   // no §6.4 reason fits; no dead row (E5's logic) — the events cascade with it (the ONE delete the append-only trigger allows)
+    // No §6.4 reason fits; no dead row (E5's logic) — the events cascade with it (the ONE delete the append-only trigger
+    // allows). Final review m-1: an automatic start's stamp goes WITH its session, in one transaction — the FK's
+    // `on delete set null` would clear only the id and leave `auto_started_at`, so a start that never existed would block
+    // every retry of the match.
+    await sql.begin(async (tx) => {
+      await tx`update fixture_stream_settings set auto_started_at = null, auto_start_session_id = null where auto_start_session_id = ${sessionId}`;
+      await tx`delete from fixture_stream_sessions where id = ${sessionId}`;
+    });
     throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
   }
   await sql.begin(async (tx) => {
