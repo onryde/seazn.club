@@ -221,7 +221,11 @@ export function isCoreEventType(type: string): type is CoreEventType {
 // forwarded `core.settle` made every sport throw INVALID_EVENT on every settled
 // fixture. `core.void` is absent on purpose: `resolveVoids` strips it before
 // any dispatch, so it never reaches this question.
-const KERNEL_OWNED_CORE: readonly string[] = ["core.suspend", "core.resume", "core.settle"];
+//
+// Exported for ONE reader beyond this file: the fold's invariant test (review
+// N1) injects a type with no kernel branch here to reach the dispatch's final
+// `else`, which throws. Nothing in production may mutate it.
+export const KERNEL_OWNED_CORE: readonly string[] = ["core.suspend", "core.resume", "core.settle"];
 
 /** True for a type the kernel always folds itself: suspend, resume, settle and the lineup family. */
 export function isKernelOwnedEventType(type: string): boolean {
@@ -896,11 +900,21 @@ export function foldMatchWithStoppage<Cfg, State>(
         if (module.onLineup !== undefined) state = module.onLineup(state, squads);
       }
       // kernel-owned: the module never sees it
-    } else {
+    } else if (event.type === "core.finalize") {
       // kernelOwnsEvent's one CONDITIONAL member — core.finalize on a settled
       // fixture the module has not decided (a settled abandon, a settled pending
       // tie-break): modules refuse to finalize an undecided state (plan finding 21).
       // kernel-owned: the module never sees it
+    } else {
+      // Review N1: an assumption is a guard. kernelOwnsEvent claimed this type and
+      // no branch above folds it — a type added to KERNEL_OWNED_CORE without its
+      // branch. Silently dropping it would fold the ledger as if the event never
+      // happened. A plain Error, not an EngineError: only a bug reaches it, so it
+      // must surface as a 500 rather than a refusal a scorer is asked to fix.
+      throw new Error(
+        `foldMatchWithStoppage: kernelOwnsEvent claims "${event.type}" but no kernel branch folds "${event.type}" — ` +
+          "a type added to KERNEL_OWNED_CORE owes its branch in the fold's dispatch",
+      );
     }
     // ONE call site, below every branch, so a kernel-owned event is observed
     // exactly like a module event — see `FoldOptions.onFolded`.

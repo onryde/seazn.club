@@ -511,8 +511,8 @@
   {
     "id": "minor7-second-kernel-finalize-refused",
     "file": "packages/engine/src/core/events.ts",
-    "find": "      // kernel-owned: the module never sees it\n    }\n    // ONE call site, below every branch",
-    "replace": "      if (event.type === \"core.finalize\" && events.slice(0, events.indexOf(event)).some((e) => e.type === \"core.finalize\" && active.includes(e))) throw new EngineError(\"WRONG_PHASE\", \"already finalized\");\n      // kernel-owned: the module never sees it\n    }\n    // ONE call site, below every branch",
+    "find": "    } else if (event.type === \"core.finalize\") {\n",
+    "replace": "    } else if (event.type === \"core.finalize\") {\n      if (events.slice(0, events.indexOf(event)).some((e) => e.type === \"core.finalize\" && active.includes(e))) throw new EngineError(\"WRONG_PHASE\", \"already finalized\");\n",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -520,6 +520,51 @@
           "src/core/settle.test.ts"
         ],
         "name": "review Minor 7: a SECOND finalize after a settled abandon"
+      }
+    ]
+  },
+  {
+    "id": "n1-kernel-fallback-silent",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "      throw new Error(\n        `foldMatchWithStoppage: kernelOwnsEvent claims \"${event.type}\" but no kernel branch folds \"${event.type}\" — ` +\n          \"a type added to KERNEL_OWNED_CORE owes its branch in the fold's dispatch\",\n      );\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "review N1: a type kernelOwnsEvent claims but no kernel branch folds is an invariant failure naming it"
+      }
+    ]
+  },
+  {
+    "id": "n1-kernel-finalize-falls-into-the-throw",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    } else if (event.type === \"core.finalize\") {\n",
+    "replace": "    } else if (false) {\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "Review Focus 3: finalize after settling an abandon succeeds for EVERY sport|review Minor 7: a SECOND finalize after a settled abandon"
+      }
+    ]
+  },
+  {
+    "id": "n2-sport-receiver-replay-loop-unguarded",
+    "file": "tools/matrix/lib/fold.ts",
+    "find": "  return { home: h.points, away: a.points, forOutcome: folded.outcome };\n}\n",
+    "replace": "  return { home: h.points, away: a.points, forOutcome: folded.outcome };\n}\n\nexport function replayAll(sport: { apply(s: unknown, e: unknown): unknown }, events: readonly unknown[]): unknown {\n  let s: unknown = null;\n  for (const e of events) s = sport.apply(s, e);\n  return s;\n}\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
       }
     ]
   }
