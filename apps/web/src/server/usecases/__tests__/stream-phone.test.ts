@@ -234,6 +234,27 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     expect(v.lastTakeover).toEqual({ at: tookAt.toISOString(), model: "Phone B", elapsedMs: 1_000 });
   });
 
+  it("B7 review I-2: a takeover on a code the organiser has since REISSUED is not served — Revoke & reissue is the answer to it; a takeover on the NEW code is (the sequence: take, reissue, take again)", async () => {
+    const r = await captureRig();
+    await beat(r, phoneId("a"), { claim: "new", device: { model: "Phone A" } });
+    r.tick(2_000);
+    await beat(r, phoneId("b"), { claim: "new", device: { model: "Phone B" } });
+    expect((await readRig(r)).lastTakeover?.model, "PREMISE: B's takeover is served").toBe("Phone B");
+
+    const fresh = await reissueStreamCode(r.auth, r.fixtureId);
+    r.tick(1_000);
+    expect((await readRig(r)).lastTakeover, "the reissued code's takeover is answered — not served").toBeNull();
+
+    // The positive pair: the NEW code's own takeover is served, at its own instant.
+    const via = { code: fresh.qr.code, tok: fresh.qr.tok };
+    await beat(r, phoneId("c"), { claim: "new", device: { model: "Phone C" } }, via);
+    r.tick(2_000);
+    await beat(r, phoneId("d"), { claim: "new", device: { model: "Phone D" } }, via);
+    const tookAt = r.now();
+    r.tick(500);
+    expect((await readRig(r)).lastTakeover).toEqual({ at: tookAt.toISOString(), model: "Phone D", elapsedMs: 500 });
+  });
+
   it("T21: the operator's Stop ENDS the phone's pairing — with no other phone the read has none (and no takeover)", async () => {
     const r = await captureRig();
     const a = phoneId("a");
@@ -496,7 +517,8 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     expect((await readRig(r)).auto, "a second read").toBeNull();
     expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${r.fixtureId}`, "the reads wrote no row").toHaveLength(0);
     await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
-    const off = { enabled: false, startedAt: null, blocked: false, refusal: null, refusalAt: null };
+    // `stopApplies` is null throughout: no session is open (B7 review M-3).
+    const off = { enabled: false, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null };
     expect((await readRig(r)).auto, "a row made by a destination pick has the switch off").toEqual(off);
     await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
     const on = { ...off, enabled: true };
@@ -509,7 +531,8 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     const answer = await beat(r, phone, { mode: "automatic" });
     expect(answer, "PREMISE: the beat started the broadcast").toMatchObject({ state: "go-live", startedBy: "automatic" });
     expect((await settingsOf(r)).auto_start_attempted_at, "PREMISE: the attempt is stamped, so a refusalAt that ignored `refusal` would be non-null").not.toBeNull();
-    const started = { enabled: true, startedAt: r.now().toISOString(), blocked: false, refusal: null, refusalAt: null };
+    // B7 review M-3: the automatic start's own session — switch on, phone automatic, no result yet — will be stopped by §7.3.
+    const started = { enabled: true, startedAt: r.now().toISOString(), blocked: false, refusal: null, refusalAt: null, stopApplies: true };
     expect((await readRig(r)).auto).toEqual(started);
     expect((await readRig(r)).auto, "a second read").toEqual(started);
     const sid = (answer as { sid: string }).sid;
@@ -526,7 +549,46 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     await sql`delete from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
     expect((await readRig(r)).auto, "PREMISE: no row before the Stop").toBeNull();
     await stopSession(r.auth, r.fixtureId, sid, r.deps);
-    expect((await readRig(r)).auto).toEqual({ enabled: false, startedAt: null, blocked: true, refusal: null, refusalAt: null });
+    const after = await readRig(r);
+    // B7 review M-3: the Stop closed the session (the fake ends it at once), so nothing is open for a stop to apply to.
+    expect(after.session, "PREMISE: the stopped session is closed").toBeNull();
+    expect(after.auto).toEqual({ enabled: false, startedAt: null, blocked: true, refusal: null, refusalAt: null, stopApplies: null });
+  });
+
+  // B7 review M-3: `stopApplies` — the panel's "stops about N minutes after the result" is a promise about the session on air,
+  // so it is the tick's own answer (same facts, same predicate), in each direction.
+  it("stopApplies, the sequence: null with no open session; TRUE for the automatic start's session (switch on, phone automatic), still true once the result stands AFTER it; false with the phone switched to Operator, true back in Automatic; false with the switch off", async () => {
+    const { r, phone } = await autoRig();
+    expect((await readRig(r)).auto?.stopApplies, "no open session").toBeNull();
+    const answer = await beat(r, phone, { mode: "automatic" });
+    expect(answer, "PREMISE: the beat started the broadcast").toMatchObject({ state: "go-live", startedBy: "automatic" });
+    expect((await readRig(r)).auto?.stopApplies, "the automatic start's session").toBe(true);
+    await sql`update fixtures set status = 'decided' where id = ${r.fixtureId}`;
+    const [{ predates }] = await sql<{ predates: boolean }[]>`
+      select s.created_at < f.finished_at as predates from fixture_stream_sessions s join fixtures f on f.id = s.fixture_id
+       where s.id = ${(answer as { sid: string }).sid}`;
+    expect(predates, "PREMISE: the result stands, after the session began").toBe(true);
+    expect((await readRig(r)).auto?.stopApplies, "a result after the session: the stop is coming").toBe(true);
+    await beat(r, phone, { mode: "operator", sid: (answer as { sid: string }).sid, state: "publishing", transport: "srt" });
+    expect((await readRig(r)).auto?.stopApplies, "the session's phone in Operator: no automatic stop (A4)").toBe(false);
+    await beat(r, phone, { mode: "automatic", sid: (answer as { sid: string }).sid, state: "publishing", transport: "srt" });
+    expect((await readRig(r)).auto?.stopApplies, "back in Automatic").toBe(true);
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: false });
+    expect((await readRig(r)).auto?.stopApplies, "the switch off").toBe(false);
+  });
+
+  it("stopApplies is FALSE for A15's post-result broadcast — the switch on and the phone automatic, but the session was created after the result, so the tick never stops it", async () => {
+    const { r, phone } = await autoRig();
+    await sql`update fixtures set status = 'decided' where id = ${r.fixtureId}`;
+    await beat(r, phone, { mode: "automatic" });   // no automatic start: the match is not in play
+    expect((await readRig(r)).session, "PREMISE: the beat started nothing").toBeNull();
+    const { sessionId } = await createSession(r.auth, r.fixtureId, { mode: "passthrough", targetId: r.target.id }, r.deps);
+    const [{ predates }] = await sql<{ predates: boolean }[]>`
+      select s.created_at < f.finished_at as predates from fixture_stream_sessions s join fixtures f on f.id = s.fixture_id where s.id = ${sessionId}`;
+    expect(predates, "PREMISE: the session began after the result").toBe(false);
+    const v = await readRig(r);
+    expect([v.auto?.enabled, v.phone?.mode, v.session?.id], "PREMISE: the switch on, the phone automatic, the session open").toEqual([true, "automatic", sessionId]);
+    expect(v.auto?.stopApplies).toBe(false);
   });
 
   // One scenario per code AUTO_START_REFUSALS declares — the T4 test's own arrangements, through the REAL beat.
@@ -550,7 +612,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
       const { r, phone } = await autoRig({ credits: sc.credits ?? 3 });
       await sc.arrange(r);
       await beat(r, phone, { mode: "automatic" });
-      const want = { enabled: true, startedAt: null, blocked: false, refusal: code, refusalAt: r.now().toISOString() };
+      const want = { enabled: true, startedAt: null, blocked: false, refusal: code, refusalAt: r.now().toISOString(), stopApplies: null };
       expect((await readRig(r)).auto, code).toEqual(want);
       expect((await readRig(r)).auto, `${code}: a second read`).toEqual(want);
       reached++;
@@ -636,7 +698,7 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     await beat(r, phone, { mode: "automatic" });
     const done = await readRig(r);
     expect(done.auto, "started: no refusal, no refusalAt, startedAt is the retry's instant").toEqual({
-      enabled: true, startedAt: r.now().toISOString(), blocked: false, refusal: null, refusalAt: null,
+      enabled: true, startedAt: r.now().toISOString(), blocked: false, refusal: null, refusalAt: null, stopApplies: true,
     });
     expect(done.session, "PREMISE: a session opened").not.toBeNull();
   });

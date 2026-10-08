@@ -13,11 +13,11 @@ import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-s
 import { platformName } from "@/components/v2/stream-platform-mark";
 import { chainFor, type Chain } from "@/lib/stream-chain";
 import { messages } from "@/lib/messages";
-import { HEALTH_KEYS, OUTPUT_WARNING_AFTER_MS, phoneStrip, type PhoneStrip } from "@/lib/stream-session-view";
+import { HEALTH_KEYS, OUTPUT_WARNING_AFTER_MS, phoneStrip, type PhoneLinePart, type PhoneStrip } from "@/lib/stream-session-view";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
 import type { StreamPhone, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { StreamTargetKind } from "@/server/api-v1/schemas";
-import type { Dict, Locale } from "@/lib/i18n-constants";
+import { LOCALES, type Dict, type Locale } from "@/lib/i18n-constants";
 
 const W = OUTPUT_WARNING_AFTER_MS;
 const view = (state: string, ingest: string | null, output: string | null, elapsedMs = 0) =>
@@ -228,6 +228,37 @@ describe("SignalChain (spec §3.2)", () => {
     expect(html).toContain(`>${fr["stream.chain.phone"]}<`);
     expect(html).not.toContain(">Not receiving<");
   });
+
+  // Owner ruling 2026-10-08 (B7 fix round 1, B): stalled → the Seazn node says "Waiting for video" in the viewer's locale;
+  // healthy → "Receiving". Both directions, all four locales, from the chain the server's verdict draws.
+  it("the Seazn node's stalled word, in every locale: 'Waiting for video' while the server says stalled, 'Receiving' when it does not", () => {
+    const facts = (health: "stalled" | null) => ({
+      present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: null, mode: "automatic" as const, state: "publishing" as const,
+      notReady: null, notReadyForMs: null, notReadyShown: false, health, startFailed: null, lastBeatAt: "2026-10-08T12:00:00Z",
+      elapsedMs: 4_000, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false,
+    });
+    const seaznOf = (health: "stalled" | null, locale: Locale) => {
+      const h = renderToStaticMarkup(
+        <DictProvider dict={dict(locale)} locale={locale}>
+          <SignalChain chain={chainFor(liveOk, { capture: { phone: facts(health), countdown: null } })!} destination={DEST} />
+        </DictProvider>,
+      );
+      return h.split(/(?=data-node=")/).find((x) => x.startsWith('data-node="seazn"'))!;
+    };
+    expect(messages["stream.chain.word.waitingVideo"]).toBe("Waiting for video");
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const d = dict(locale);
+      expect(d["stream.chain.word.waitingVideo"], locale).toBeTruthy();
+      expect(d["stream.chain.word.waitingVideo"], `${locale}: its own word`).not.toBe(d["stream.chain.word.receiving"]);
+      expect(seaznOf("stalled", locale), `${locale} stalled`).toContain(`>${d["stream.chain.word.waitingVideo"]}<`);
+      expect(seaznOf("stalled", locale), `${locale} stalled`).not.toContain(`>${d["stream.chain.word.receiving"]}<`);
+      expect(seaznOf(null, locale), `${locale} healthy`).toContain(`>${d["stream.chain.word.receiving"]}<`);
+      expect(seaznOf(null, locale), `${locale} healthy`).not.toContain(`>${d["stream.chain.word.waitingVideo"]}<`);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
 });
 
 describe("D3Warning (D3; I-1 — the cause decides the sentence)", () => {
@@ -397,12 +428,40 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     expect(checked).toBe(HEALTH_REASONS.length);
   });
 
-  it("m-5 holds for PR-2: only the moving seconds are aria-live=off (the heard part, the not-responding count) — the box stays the status region", () => {
-    const healthy = html(phoneStrip(readModel(facts()), live)!);
+  it("m-5 holds for PR-2, and B7 review M-4: the WHOLE health line is aria-live=off (every reading ticks), the not-responding count is — the box stays the status region", () => {
+    const healthy = html(phoneStrip(readModel(facts({ beat: { battery: BAT, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 3 } })), live)!);
     expect(healthy).toMatch(/^<div id="w" data-testid="stream-phone-strip"[^>]* role="status"/);
     expect([...healthy.matchAll(/aria-live="([^"]+)"/g)].map((m) => m[1])).toEqual(["off"]);
+    expect(healthy, "the off is the LINE's own").toMatch(/<p data-testid="stream-phone-line" aria-live="off"/);
+    const line = /<p data-testid="stream-phone-line"[^>]*>([\s\S]*?)<\/p>/.exec(healthy)![1]!;
+    expect(text(line), "PREMISE: the line carries the ticking readings").toBe("Phone · 78% charging · 2.4 Mbps · heard 4 s ago");
+    const lead = html(phoneStrip(readModel(facts({ health: "stalled" })), live)!);
+    expect([...lead.matchAll(/aria-live="([^"]+)"/g)].map((m) => m[1]), "a lead above the line: only the line is off").toEqual(["off"]);
+    expect(lead).toMatch(/<p data-testid="stream-phone-line" aria-live="off"/);
     const silent = html(phoneStrip(readModel(facts({ health: "not_responding", elapsedMs: 52_000 })), live)!);
     expect([...silent.matchAll(/aria-live="([^"]+)"/g)].map((m) => m[1])).toEqual(["off"]);
+  });
+
+  it("B7 review M-5: every READING on the line is one unbroken unit (nowrap) — only the model and the waiting sentence may wrap; every part kind is swept", () => {
+    // One part of EVERY kind — `satisfies Record<kind, …>` makes a new kind a tsc error here until it is classed.
+    const EVERY = {
+      phone: { kind: "phone" }, model: { kind: "model", text: "Pixel 8" }, mode: { kind: "mode", mode: "automatic" },
+      battery: { kind: "battery", percent: 78, charging: true }, bitrate: { kind: "bitrate", kbps: 2400 },
+      heard: { kind: "heard", elapsedMs: 4_000 }, waiting: { kind: "waiting" },
+    } satisfies { [K in PhoneLinePart["kind"]]: Extract<PhoneLinePart, { kind: K }> };
+    const h = html({ tone: "slate", icon: "phone", lead: null, body: null, line: Object.values(EVERY) });
+    const parts = [...h.matchAll(/<span data-line-part="([a-z]+)"( class="([^"]*)")?>/g)].map((m) => [m[1]!, m[3] ?? ""] as const);
+    const WRAPS = new Set(["model", "waiting"]);
+    let checked = 0;
+    for (const [kind, cls] of parts) {
+      expect(cls.split(" ").includes("whitespace-nowrap"), kind).toBe(!WRAPS.has(kind));
+      checked++;
+    }
+    expect(parts.map(([k]) => k), "every kind rendered, once, in order").toEqual(Object.keys(EVERY));
+    expect(checked).toBe(Object.keys(EVERY).length);
+    // The builder's own healthy line: its readings are the nowrap ones.
+    const real = html(phoneStrip(readModel(facts({ beat: { battery: BAT, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 3 } })), live)!);
+    expect(real).toMatch(/<span data-line-part="bitrate" class="whitespace-nowrap">2.4 Mbps<\/span>/);
   });
 
   it("Ready, paired: the model, then the mode (muted) — Option A state 1", () => {
@@ -411,7 +470,7 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
   });
 
   it("the refusal: the reason sentence, and its remedy — Buy credits only with a handler (a button), Manage destinations a new-tab link to Directory → Streaming", () => {
-    const auto = (refusal: "no_credit" | "no_destination" | "unavailable") => ({ enabled: true, startedAt: null, blocked: false, refusal, refusalAt: "2026-10-08T12:00:00Z" });
+    const auto = (refusal: "no_credit" | "no_destination" | "unavailable") => ({ enabled: true, startedAt: null, blocked: false, refusal, refusalAt: "2026-10-08T12:00:00Z", stopApplies: null });
     const noCredit = phoneStrip(readModel(facts({ state: "paired" }), { auto: auto("no_credit") }), null)!;
     const withBuy = html(noCredit, "en", () => {});
     expect(text(withBuy)).toBe("Automatic start couldn't begin: You need a match credit to go live. Buy credits");
@@ -422,6 +481,9 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     expect(text(manage)).toBe("Automatic start couldn't begin: This match has no destination to stream to. Manage destinations");
     const none = html(phoneStrip(readModel(facts({ state: "paired" }), { auto: auto("unavailable") }), null)!, "en", () => {});
     expect(none).not.toMatch(/stream-auto-remedy/);
-    expect(text(html(noCredit, "es", () => {}))).toBe("El inicio automático no pudo empezar: Necesitas un crédito para emitir. Comprar créditos");
+    // B7 review M-6: the reason follows a colon mid-sentence — lower case in es/fr/nl, and "Automatic start" said naturally.
+    expect(text(html(noCredit, "es", () => {}))).toBe("No se pudo iniciar automáticamente: necesitas un crédito para emitir. Comprar créditos");
+    expect(text(html(noCredit, "fr", () => {}))).toBe("Impossible de démarrer automatiquement : il vous faut un crédit pour passer en direct. Acheter des crédits");
+    expect(text(html(noCredit, "nl", () => {}))).toBe("Automatisch starten lukte niet: je hebt een tegoed nodig om live te gaan. Tegoed kopen");
   });
 });

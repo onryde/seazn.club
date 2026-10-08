@@ -24,6 +24,7 @@ import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { fixtureStreamTarget, requireSessionEditor } from "./stream-codes";
+import { autoStopAppliesTo } from "./stream-sessions";
 
 /** PR-1 carries one camera: the panel reads slot 0. */
 const SLOT = 0;
@@ -104,7 +105,7 @@ type SettingsFacts = {
  * makes it hold) and the phone's presence (a silent phone returns and the retry fires; `phonePresent: true`).
  */
 function autoOf(
-  st: SettingsFacts & { status: string }, c: { phoneMode: PhoneMode | null; openSession: boolean }, now: Date,
+  st: SettingsFacts & { status: string }, c: { phoneMode: PhoneMode | null; openSession: boolean; stopApplies: boolean | null }, now: Date,
 ): StreamPhone["auto"] {
   if (st.settings_id === null) return null;
   const refusal = word({ options: AUTO_START_REFUSALS }, st.auto_start_refusal);
@@ -125,6 +126,7 @@ function autoOf(
     blocked: st.auto_start_blocked_at !== null,
     refusal: couldStillFire ? refusal : null,
     refusalAt: couldStillFire && st.auto_start_attempted_at !== null ? new Date(st.auto_start_attempted_at).toISOString() : null,
+    stopApplies: c.stopApplies,
   };
 }
 
@@ -135,12 +137,14 @@ function autoOf(
  *  - `destination`: `fixtureStreamTarget`'s — the target the phone's own start opens on (B8 review I-1), so the panel's
  *    picker shows exactly that: the saved choice, or with none saved the oldest (`source: "default"`); none when the
  *    choice was cleared or archived (T36, n1). Read, never written: opening the panel saves nothing;
- *  - `lastTakeover`: the latest time ANOTHER phone took the slot (§7.5, T2/T4) — read from the pairings, because a
+ *  - `lastTakeover`: the latest time ANOTHER phone took the slot ON THE ACTIVE CODE (§7.5, T2/T4; B7 review I-2: a reissue
+ *    answers the takeovers before it) — read from the pairings, because a
  *    takeover on a slot with no session has no session to carry a `phone_takeover` event. The session's phone re-seated
  *    onto a reissued code (B6 I-2) is the same phone moving, never a takeover. `elapsedMs` (PR-2 T12) is its age on the
  *    server's clock, for the panel's 30-minute notice;
  *  - `auto` (PR-2 T6): the fixture's settings row as the panel's switch and strips read it — null with no row. Its `refusal` is
  *    served only while `autoStartVerdict` could still pass (`autoOf`): the stored code can outlive the attempt it belonged to;
+ *    `stopApplies` (B7 review M-3) is whether §7.3 will ever stop the open session — the tick's own facts and predicate;
  *  - `phone.health` (PR-2 T6): domain/phone-health.ts's one derivation over the stored beat — withheld while the phone is silent
  *    (its readings are stale; `not_responding` still names a held one); `phone.notReadyForMs` / `notReadyShown` (FP16, owner
  *    ruling R-2): the debounce of the flapping `notReady`, from the pairing's `not_ready_since`, shown only once a BEAT a
@@ -235,7 +239,9 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
   // --- the destination: the one the phone's start would open on (T36: a choice archived reads as none) ---
   const destination = await fixtureStreamTarget(sql, { orgId: auth.orgId, fixtureId });
 
-  // --- the last takeover (§7.5): a pairing ended `replaced` by ANOTHER phone's ---
+  // --- the last takeover (§7.5): a pairing ended `replaced` by ANOTHER phone's, on the fixture's CURRENT (active) code ---
+  // B7 review I-2: Revoke & reissue is the organiser's answer to a takeover, so a takeover on a code since reissued (or
+  // expired) is never served — the read model stays the one authority, and the panel's notice goes with the old code.
   let lastTakeover: StreamPhone["lastTakeover"] = null;
   if (!legacy) {
     const [t] = await sql<{ at: Date; model: string | null }[]>`
@@ -243,15 +249,19 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
         from fixture_stream_pairings old
         join fixture_stream_codes c on c.id = old.code_id
         join fixture_stream_pairings nxt on nxt.id = old.replaced_by
-       where c.fixture_id = ${fixtureId} and old.end_cause = 'replaced' and nxt.phone <> old.phone
+       where c.fixture_id = ${fixtureId} and c.ended_at is null
+         and old.end_cause = 'replaced' and nxt.phone <> old.phone
        order by old.ended_at desc, old.id desc limit 1`;
     // PR-2 T12: the notice's age on the server's clock (§7.5's 30 min); a stamp past `now` (skew) reads 0.
     if (t) lastTakeover = { at: new Date(t.at).toISOString(), model: t.model, elapsedMs: Math.max(0, now.getTime() - new Date(t.at).getTime()) };
   }
 
+  // B7 review M-3: will §7.3 ever stop the OPEN session? The tick's own facts and predicate (null with none, or no settings row).
+  const stopApplies = openId === null || fx.settings_id === null ? null : await autoStopAppliesTo(openId);
+
   return {
     code, phone, destination, lastTakeover,
-    auto: autoOf(fx, { phoneMode, openSession: openId !== null }, now),
+    auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies }, now),
     legacy, finished: fx.finished_at !== null, session: openId === null ? null : { id: openId },
   };
 }

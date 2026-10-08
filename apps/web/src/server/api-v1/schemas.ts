@@ -1566,6 +1566,11 @@ export const StreamPhone = z
         refusal: z.enum(AUTO_START_REFUSALS).nullable(),
         /** The refused attempt's instant (`auto_start_attempted_at`); null whenever `refusal` is. */
         refusalAt: z.string().nullable(),
+        /** B7 review M-3: whether §7.3's automatic stop will ever end the fixture's OPEN session (`autoStopApplies` over the
+         *  same facts the tick judges, its pre/post-result comparison made in SQL) — the switch on, the session's phone
+         *  automatic, and the session created before any result (A15). Null with no open session. The panel's live line
+         *  "stops about N minutes after the result" is shown only on `true`. */
+        stopApplies: z.boolean().nullable(),
       })
       .strict()
       .nullable(),

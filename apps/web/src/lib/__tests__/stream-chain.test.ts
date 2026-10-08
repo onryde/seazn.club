@@ -454,16 +454,46 @@ describe("PR-2 §7.4 — the Phone node reads the server's health verdict, live 
       const capture = { phone: beating({ health }), countdown: null };
       const c = chainFor(liveUp, { capture })!;
       expect(c.phone, health).toEqual(WANT[health]);
-      expect({ ...c, phone: null }, `${health}: nothing else moves`).toEqual({ ...chainFor(liveUp)!, phone: null });
+      // Owner ruling 2026-10-08: stalled also moves the SEAZN node (below) — nothing else moves for any reason.
+      expect({ ...c, phone: null, seazn: null }, `${health}: nothing else moves`).toEqual({ ...chainFor(liveUp)!, phone: null, seazn: null });
       expect(phoneDot(capture), `${health}: the fold's dot`).toBe(health === "not_responding" ? "amber" : "lime");
       checked++;
     }
     expect(checked).toBe(HEALTH_REASONS.length);
   });
 
+  // Owner ruling 2026-10-08 (B7 fix round 1, B): while the server says the video is not reaching Seazn, the Seazn node does
+  // not claim "Receiving" — it says "Waiting for video" (amber, as every waiting word on the chain is). The SAME verdict,
+  // never a client reading: `delivery: "stalled"` with health null moves nothing (the empty case below).
+  it("the Seazn node: stalled → amber 'Waiting for video', no mark; every other verdict (and none) → the row's lime Receiving", () => {
+    const row = chainFor(liveUp)!.seazn;
+    expect(row, "PREMISE: the row's live Seazn node").toEqual(n("lime", "receiving"));
+    let checked = 0;
+    for (const health of [...HEALTH_REASONS, null]) {
+      const c = chainFor(liveUp, { capture: { phone: beating({ health }), countdown: null } })!;
+      expect(c.seazn, String(health)).toEqual(health === "stalled" ? n("amber", "waitingVideo") : row);
+      checked++;
+    }
+    expect(checked).toBe(HEALTH_REASONS.length + 1);
+    expect(HEALTH_REASONS, "PREMISE: the domain declares stalled").toContain("stalled");
+    expect(chainFor(liveUp, { capture: { phone: null, countdown: null } })!.seazn, "no phone facts").toEqual(row);
+  });
+
+  it("the Seazn node's stalled word is LIVE-with-the-input-up only: waiting, live with no signal and Ending keep the row's word", () => {
+    const capture = { phone: beating({ health: "stalled" }), countdown: null };
+    const rows = [v("warming", "disconnected", null), v("live", "disconnected", "unknown", W), v("ending", "connected", "ok")];
+    let checked = 0;
+    for (const view of rows) {
+      expect(chainFor(view, { capture })!.seazn, view.state + " " + view.ingest?.state).toEqual(chainFor(view)!.seazn);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
   it("the EMPTY case and the client-threshold mutant: health null with readings past every W9 limit → the row's lime node, the dot lime", () => {
     const scorching = beating({ health: null, beat: { battery: { percent: 1, charging: false, drainPctPerHour: 50 }, bitrateKbps: 1, delivery: "stalled", thermal: 6, dataUsedMB: 1 } });
     expect(chainFor(liveUp, { capture: { phone: scorching, countdown: null } })!.phone).toEqual(chainFor(liveUp)!.phone);
+    expect(chainFor(liveUp, { capture: { phone: scorching, countdown: null } })!.seazn, "delivery stalled, no verdict: Receiving").toEqual(chainFor(liveUp)!.seazn);
     expect(phoneDot({ phone: scorching, countdown: null })).toBe("lime");
   });
 

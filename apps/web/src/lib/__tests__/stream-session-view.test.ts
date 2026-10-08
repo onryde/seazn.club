@@ -37,8 +37,8 @@ import {
   TARGET_REMOVED, canGoLive, countdownKey, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning,
   destinationWarning, durationLabel, elapsedLabel, healthChips, outputElapsedMs, phoneNoSignal, phoneStrip, phoneTabState,
   readyStateOf, reconnectReasonOf, restartLine,
-  AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoRefusalStrip, autoStopLine,
-  healthLine, phoneDetails, takeoverNotice, type PhoneLinePart,
+  AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoOperatorHint, autoRefusalStrip, autoStopLine,
+  healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
 } from "../stream-session-view";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
@@ -1067,24 +1067,57 @@ describe("PR-2 §7.4 — the automatic start's refusal (served only while it cou
     };
     let checked = 0;
     for (const r of AUTO_START_REFUSALS) {
-      const strip = autoRefusalStrip(readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: r, refusalAt: "2026-09-14T12:00:00Z" } }))!;
+      const strip = autoRefusalStrip(readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: r, refusalAt: "2026-09-14T12:00:00Z", stopApplies: null } }))!;
       expect([strip.tone, strip.lead, strip.remedy], r).toEqual(["amber", "stream.auto.refused", SPEC[r]![1]]);
       expect(msg(strip.lead!, { reason: msg((strip.leadVars as { reason: string }).reason) }), r).toBe(`Automatic start couldn't begin: ${SPEC[r]![0]}`);
       expect(AUTO_REFUSAL_REMEDY[r], r).toBe(SPEC[r]![1]);
       checked++;
     }
     expect(checked).toBe(AUTO_START_REFUSALS.length);
-    expect(inEveryLocale(["stream.auto.refused", "stream.auto.buyCredits", ...new Set(Object.values(AUTO_REFUSAL_KEYS))])).toBeGreaterThan(0);
+    // B7 review M-7: the exact count — the lead, the remedy and one distinct key per refusal, in every locale.
+    const keys = ["stream.auto.refused", "stream.auto.buyCredits", ...new Set(Object.values(AUTO_REFUSAL_KEYS))];
+    expect(keys.length, "one distinct reason key per refusal").toBe(2 + AUTO_START_REFUSALS.length);
+    expect(inEveryLocale(keys)).toBe(7 * LOCALES.length);
+  });
+
+  // B7 review M-6: the reason follows "…couldn't begin:" mid-sentence — es/fr/nl open it in lower case; English reads the
+  // manual refusal's own sentence. The manual keys are the source of truth for the words; only the first letter moves.
+  it("each reason is the MANUAL refusal's sentence — verbatim in English, its first letter lowered in es/fr/nl (a mid-sentence clause); the lead reads naturally", () => {
+    const MANUAL: Partial<Record<(typeof AUTO_START_REFUSALS)[number], string>> = {
+      no_credit: "stream.error.no_credits",
+      not_entitled: "stream.error.plan_lacks_relay",
+      destination_in_use: "stream.error.target_in_use.unknown",
+      unavailable: "stream.error.ingest_unavailable",
+    };
+    const lowerFirst = (x: string) => x.charAt(0).toLocaleLowerCase() + x.slice(1);
+    let checked = 0;
+    for (const l of LOCALES) {
+      const d = dict(l);
+      for (const r of AUTO_START_REFUSALS) {
+        const reason = d[AUTO_REFUSAL_KEYS[r]]!;
+        const manual = MANUAL[r];
+        if (manual) expect(reason, `${l} ${r}`).toBe(l === "en" ? d[manual] : lowerFirst(d[manual]!));
+        // Every reason: capitalised in English (its own sentence there), lower case elsewhere.
+        const first = reason.charAt(0);
+        expect(first === first.toLocaleLowerCase() && first !== first.toLocaleUpperCase(), `${l} ${r}: "${reason}"`).toBe(l !== "en");
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * AUTO_START_REFUSALS.length);
+    const lead = (l: string) => dict(l as (typeof LOCALES)[number])["stream.auto.refused"];
+    expect([lead("es"), lead("fr"), lead("nl")]).toEqual([
+      "No se pudo iniciar automáticamente: {reason}", "Impossible de démarrer automatiquement : {reason}", "Automatisch starten lukte niet: {reason}",
+    ]);
   });
 
   it("the EMPTY cases: no read model, no settings row (`auto: null`), and a row with no refusal → no strip", () => {
     expect(autoRefusalStrip(null)).toBeNull();
     expect(autoRefusalStrip(readModel({ auto: null }))).toBeNull();
-    expect(autoRefusalStrip(readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null } }))).toBeNull();
+    expect(autoRefusalStrip(readModel({ auto: { enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null } }))).toBeNull();
   });
 
   it("Ready, paired: the refusal takes the strip; silent keeps the phone's own strip; a session in flight shows none", () => {
-    const auto = { enabled: true, startedAt: null, blocked: false, refusal: "no_destination" as const, refusalAt: "2026-09-14T12:00:00Z" };
+    const auto = { enabled: true, startedAt: null, blocked: false, refusal: "no_destination" as const, refusalAt: "2026-09-14T12:00:00Z", stopApplies: null };
     expect(phoneStrip(readModel({ auto }), null)?.lead).toBe("stream.auto.refused");
     expect(phoneStrip(readModel({ auto, phone: SILENT }), null)?.body?.key).toBe("stream.phone.silent");
     expect(phoneStrip(readModel({ auto }), view({ state: "warming", ingest: { state: "disconnected", protocol: "srt" } }))?.lead).toBe("stream.phone.waitingVideo");
@@ -1114,20 +1147,51 @@ describe("PR-2 §7.5 — the takeover notice: 30 min on the SERVER's clock, dism
     expect(checked).toBe(rows.length);
   });
 
-  it("names Stop ONLY while the session is live — every other tab state does not", () => {
-    const states: PhoneTabState[] = ["idle", "provisioning", "warming", "live", "ending", "ended", "failed"];
+  // Owner ruling 2026-10-08 (B7 review M-2): the button to press BEFORE Revoke & reissue is the one the state shows —
+  // Stop live, Cancel while the session waits, neither with no session.
+  it("names Stop ONLY live, Cancel ONLY while waiting (provisioning, warming), neither otherwise — every tab state swept", () => {
+    const WANT: Record<PhoneTabState, TakeoverAct> = {
+      idle: null, provisioning: "cancel", warming: "cancel", live: "stop", ending: null, ended: null, failed: null,
+    };
+    const states = Object.keys(WANT) as PhoneTabState[];
+    expect(states.sort(), "PREMISE: every tab state").toEqual(Object.keys(STATE_PILL_KEYS).sort());
     let checked = 0;
     for (const st of states) {
-      expect(takeoverNotice(took(1_000), st, null)?.namesStop, st).toBe(st === "live");
+      expect(takeoverNotice(took(1_000), st, null)?.act, st).toBe(WANT[st]);
       checked++;
     }
-    expect(checked).toBe(states.length);
+    expect(checked).toBe(7);
+  });
+
+  it("the sentence each act picks: waiting names Cancel, live names Stop, ready names neither — with and without the model", () => {
+    const rows: [TakeoverAct, boolean, string][] = [
+      ["cancel", true, "The camera moved to another phone (Pixel 8) at 14:32. Not yours? Cancel the stream, then Revoke & reissue"],
+      ["cancel", false, "The camera moved to another phone at 14:32. Not yours? Cancel the stream, then Revoke & reissue"],
+      ["stop", true, "The camera moved to another phone (Pixel 8) at 14:32. Not yours? Stop the stream, then Revoke & reissue"],
+      ["stop", false, "The camera moved to another phone at 14:32. Not yours? Stop the stream, then Revoke & reissue"],
+      [null, true, "The camera moved to another phone (Pixel 8) at 14:32. Not yours? Revoke & reissue"],
+      [null, false, "The camera moved to another phone at 14:32. Not yours? Revoke & reissue"],
+    ];
+    let checked = 0;
+    for (const [act, withModel, want] of rows) {
+      expect(msg(takeoverLineKey(act, withModel), { model: "Pixel 8", time: "14:32" }), `${act} ${withModel}`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    // In every locale the waiting sentence names the panel's OWN Revoke & reissue label, and differs from the live one.
+    for (const l of LOCALES) {
+      const d = dict(l);
+      for (const k of ["stream.takeover.lineWaiting", "stream.takeover.lineWaitingNoModel"]) {
+        expect(d[k], `${l} ${k}`).toContain(d["stream.code.reissue"]);
+        expect(d[k], `${l} ${k}`).not.toBe(d[k.replace("Waiting", "Live")]);
+      }
+    }
   });
 
   it("dismissed for THIS takeover's instant hides it; a NEW takeover (another instant) shows again; the model is carried as given (null too)", () => {
     expect(takeoverNotice(took(1_000), "idle", AT)).toBeNull();
-    expect(takeoverNotice(took(1_000, "Galaxy S24", "2026-09-14T11:55:00.000Z"), "idle", AT)).toEqual({ at: "2026-09-14T11:55:00.000Z", model: "Galaxy S24", namesStop: false });
-    expect(takeoverNotice(took(1_000, null), "live", null)).toEqual({ at: AT, model: null, namesStop: true });
+    expect(takeoverNotice(took(1_000, "Galaxy S24", "2026-09-14T11:55:00.000Z"), "idle", AT)).toEqual({ at: "2026-09-14T11:55:00.000Z", model: "Galaxy S24", act: null });
+    expect(takeoverNotice(took(1_000, null), "live", null)).toEqual({ at: AT, model: null, act: "stop" });
   });
 
   it("the copy: the spec's sentence with and without Stop, with and without a model, in all four locales", () => {
@@ -1135,31 +1199,58 @@ describe("PR-2 §7.5 — the takeover notice: 30 min on the SERVER's clock, dism
     expect(msg("stream.takeover.lineLive", { model: "Pixel 8", time: "14:32" })).toBe("The camera moved to another phone (Pixel 8) at 14:32. Not yours? Stop the stream, then Revoke & reissue");
     expect(msg("stream.takeover.lineNoModel", { time: "14:32" })).toBe("The camera moved to another phone at 14:32. Not yours? Revoke & reissue");
     expect(msg("stream.takeover.lineLiveNoModel", { time: "14:32" })).toBe("The camera moved to another phone at 14:32. Not yours? Stop the stream, then Revoke & reissue");
-    expect(inEveryLocale(["stream.takeover.line", "stream.takeover.lineLive", "stream.takeover.lineNoModel", "stream.takeover.lineLiveNoModel", "stream.takeover.dismiss"])).toBe(5 * LOCALES.length);
+    expect(inEveryLocale([
+      "stream.takeover.line", "stream.takeover.lineLive", "stream.takeover.lineNoModel", "stream.takeover.lineLiveNoModel",
+      "stream.takeover.lineWaiting", "stream.takeover.lineWaitingNoModel", "stream.takeover.dismiss",
+    ])).toBe(7 * LOCALES.length);
   });
 });
 
 describe("PR-2 §7.1 — Live's read-only line, and §7.4's Details data (owner ruling Q-D: Live/Ending only)", () => {
-  const auto = (enabled: boolean) => ({ enabled, startedAt: null, blocked: false, refusal: null, refusalAt: null });
+  const auto = (enabled: boolean, stopApplies: boolean | null = null) => ({ enabled, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies });
 
-  it("the line shows only LIVE, with the switch on AND the session's phone automatic (A4: both switches) — the empty cases first", () => {
+  // B7 review M-3: the line is the SERVER's `stopApplies` (the tick's own predicate: switch, phone mode AND the session
+  // created before any result), never re-derived from the switch and the mode — a post-result broadcast has both on and
+  // is never stopped, so the rows that matter are the ones where the two answers DIFFER.
+  it("the line shows only LIVE and only on the server's stopApplies — the empty cases first; switch+mode on with stopApplies false (A15's post-result broadcast) hides it", () => {
     expect(autoStopLine(null, "live")).toBe(false);
     expect(autoStopLine(readModel({ auto: null }), "live"), "no settings row").toBe(false);
-    const rows: [boolean, "automatic" | "operator" | null, PhoneTabState, boolean][] = [
-      [true, "automatic", "live", true],
-      [false, "automatic", "live", false],
-      [true, "operator", "live", false],
-      [true, null, "live", false],
-      [true, "automatic", "idle", false],
-      [true, "automatic", "warming", false],
-      [true, "automatic", "ending", false],
+    const rows: [boolean, "automatic" | "operator" | null, boolean | null, PhoneTabState, boolean][] = [
+      [true, "automatic", true, "live", true],
+      [true, "automatic", false, "live", false],   // A15: the switch and the phone say yes, the server says the stop never applies
+      [true, "automatic", null, "live", false],    // no open session on the server's side
+      [true, "operator", true, "live", true],      // the server's word stands — the client does not second-guess it
+      [false, "automatic", false, "live", false],
+      [true, "automatic", true, "idle", false],
+      [true, "automatic", true, "warming", false],
+      [true, "automatic", true, "ending", false],
     ];
     let checked = 0;
-    for (const [enabled, mode, st, want] of rows) {
-      expect(autoStopLine(readModel({ auto: auto(enabled), phone: phoneFacts({ mode }) }), st), `${enabled} ${mode} ${st}`).toBe(want);
+    for (const [enabled, mode, applies, st, want] of rows) {
+      expect(autoStopLine(readModel({ auto: auto(enabled, applies), phone: phoneFacts({ mode }) }), st), `${enabled} ${mode} ${applies} ${st}`).toBe(want);
       checked++;
     }
     expect(checked).toBe(rows.length);
+  });
+
+  // Owner-approved 2026-10-08: the operator hint under the switch.
+  it("the operator hint: shown ONLY with the switch on and the paired phone in Operator — on+automatic, off+operator, no phone and no mode yet hide it", () => {
+    const rows: [string, StreamPhone | null, boolean, boolean][] = [
+      ["on + operator", readModel({ phone: phoneFacts({ mode: "operator" }) }), true, true],
+      ["on + automatic", readModel({ phone: phoneFacts({ mode: "automatic" }) }), true, false],
+      ["off + operator", readModel({ phone: phoneFacts({ mode: "operator" }) }), false, false],
+      ["on, no phone", readModel({ phone: null }), true, false],
+      ["on, no read model", null, true, false],
+      ["on, no mode reported yet", readModel({ phone: phoneFacts({ mode: null }) }), true, false],
+    ];
+    let checked = 0;
+    for (const [name, phone, on, want] of rows) {
+      expect(autoOperatorHint(phone, on), name).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    expect(msg("stream.auto.operatorHint")).toBe("The phone is set to Operator, so it won't start on its own. Switch it to Automatic in the app.");
+    expect(inEveryLocale(["stream.auto.operatorHint"])).toBe(LOCALES.length);
   });
 
   it("Details: data used and the app version, each OMITTED when null — and none at all without a phone", () => {

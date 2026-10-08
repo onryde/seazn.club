@@ -46,6 +46,7 @@ const WORD_KEYS: Record<ChainWord, MessageKey> = {
   notAnswering: "stream.chain.word.notAnswering",
   starting: "stream.chain.word.starting",
   reconnecting: "stream.chain.word.reconnecting",
+  waitingVideo: "stream.chain.word.waitingVideo",
 };
 
 const ICON = "h-5 w-5";
@@ -277,6 +278,11 @@ function valueSentence(msg: ReturnType<typeof useMsg>, key: MessageKey, vars: Ph
 /** One part of the strip's line (§7.4 "Phone · 78% charging · 2.4 Mbps · heard 4 s ago"; Option A state 1 "Pixel 8 ·
  *  Operator"). A null reading has no part to draw (`healthLine` omitted it), so nothing here can print "0 Mbps" or "null".
  *  The bitrate is the server's kbps in the ACTIVE locale (a decimal comma in es/fr/nl), as the Details chip draws it. */
+/** B7 review M-5: which parts of the phone line may break across lines — free text only; every reading is nowrap. */
+const LINE_PART_WRAPS: Record<PhoneLinePart["kind"], boolean> = {
+  phone: false, model: true, mode: false, battery: false, bitrate: false, heard: false, waiting: true,
+};
+
 function linePart(msg: ReturnType<typeof useMsg>, locale: string, part: PhoneLinePart, muted: boolean): ReactNode {
   switch (part.kind) {
     case "phone": return msg("stream.phoneLine.phone");
@@ -291,7 +297,7 @@ function linePart(msg: ReturnType<typeof useMsg>, locale: string, part: PhoneLin
     case "heard": {
       const S = String.fromCharCode(1);
       return msg("stream.phoneLine.heard", { s: S }).split(S).map((txt, i) =>
-        i === 0 ? txt : [<span key={i} aria-live="off" className="tabular-nums">{Math.floor(part.elapsedMs / 1000)}</span>, txt],
+        i === 0 ? txt : [<span key={i} className="tabular-nums">{Math.floor(part.elapsedMs / 1000)}</span>, txt],
       );
     }
     case "waiting": return msg("stream.phone.waitingVideo");
@@ -312,9 +318,17 @@ export function PhoneStripView({ id, strip, caret, onBuy }: { id: string; strip:
   const tone = STRIP_TONE[strip.tone];
   const sentence = strip.body ? timedSentence(msg, locale, strip.body) : null;
   const main = !strip.lead && !sentence;
+  // B7 review M-4: the line is re-read on every beat (battery, bitrate, heard seconds) — the WHOLE line is aria-live=off,
+  // so the status box announces its lead and sentence, never a ticking reading. M-5: each reading is one unbroken unit
+  // ("2.4 Mbps", "78% charging"); only the model (up to 80 characters) and the waiting sentence may wrap.
   const line = strip.line && strip.line.length > 0 && (
-    <p data-testid="stream-phone-line" className={main ? undefined : "mt-0.5 text-xs text-slate-600"}>
-      {strip.line.map((part, i) => [i > 0 && " · ", <span key={i}>{linePart(msg, locale, part, main)}</span>])}
+    <p data-testid="stream-phone-line" aria-live="off" className={main ? undefined : "mt-0.5 text-xs text-slate-600"}>
+      {strip.line.map((part, i) => [
+        i > 0 && " · ",
+        <span key={i} data-line-part={part.kind} className={LINE_PART_WRAPS[part.kind] ? undefined : "whitespace-nowrap"}>
+          {linePart(msg, locale, part, main)}
+        </span>,
+      ])}
     </p>
   );
   const remedy =

@@ -80,6 +80,16 @@ export const AUTO_STOP_CONJUNCTS: readonly StopConjunct[] = [
   { name: "session_predates_result", holds: (f) => f.finishedAt === null || f.sessionPredatesResult },
 ];
 
+/** B7 review M-3: whether §7.3 will ever stop THIS session — every conjunct of the table above except the two that wait for
+ *  the result to stand and age (`fixture_finished`, `delay_elapsed`). The panel's live line ("stops about N minutes after
+ *  the result") is a promise about the session on air, so it is shown only on this answer: never for A15's post-result
+ *  broadcast, a switch turned off, or a phone in Operator. The same facts the tick judges, so the two cannot disagree. */
+const WAITS_FOR_THE_RESULT: ReadonlySet<string> = new Set(["fixture_finished", "delay_elapsed"]);
+export function autoStopApplies(f: AutoStopFacts): boolean {
+  // The remaining conjuncts read neither the clock nor the delay; they are given neutral ones.
+  return AUTO_STOP_CONJUNCTS.every((c) => WAITS_FOR_THE_RESULT.has(c.name) || c.holds(f, new Date(0), 0));
+}
+
 /** Due when every conjunct holds; `failed` names each one that does not, in table order. */
 export function autoStopVerdict(f: AutoStopFacts, now: Date, delaySeconds: number): { due: boolean; failed: string[] } {
   const failed = AUTO_STOP_CONJUNCTS.filter((c) => !c.holds(f, now, delaySeconds)).map((c) => c.name);

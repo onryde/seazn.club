@@ -71,11 +71,13 @@ import {
   createErrorText,
   d3Warning,
   autoRefusalStrip,
+  autoOperatorHint,
   autoStopLine,
   elapsedLabel,
   healthChips,
   phoneDetails,
   phoneStrip,
+  takeoverLineKey,
   takeoverNotice,
   phoneTabState,
   readyStateOf,
@@ -1846,11 +1848,11 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // remedy, so the strip offers no second Buy credits.
   const strip = matchOver ? null : creditsOnly ? autoRefusalStrip(p.phone) : phoneStrip(p.phone, p.view);
   const stripBuy = buyCard ? undefined : p.onShowBuy;
-  // PR-2 T12 (§7.5): the takeover notice — the server's 30 minutes, this viewer's dismissal, Stop named only live. Only
-  // where Revoke & reissue is in reach (the fold or the code card): not credits only, a match over, a legacy session, or
-  // the ended and failed cards.
+  // PR-2 T12 (§7.5): the takeover notice — the server's 30 minutes, this viewer's dismissal, the button to press first
+  // (Stop live, Cancel while waiting). Only where Revoke & reissue is in reach (the fold or the code card): not credits
+  // only, a match over, a legacy session, Ending (B7 review M-1: the fold is not drawn there), or the ended and failed cards.
   const takeover =
-    legacy || creditsOnly || matchOver || state === "ended" || state === "failed"
+    legacy || creditsOnly || matchOver || state === "ending" || state === "ended" || state === "failed"
       ? null
       : takeoverNotice(p.phone, state, p.takeoverDismissedAt);
   const stripId = `stream-why-${p.fixtureId}`;
@@ -2016,6 +2018,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const autoOn = p.autoPending ?? p.phone?.auto?.enabled ?? false;
   const autoTitleId = `stream-auto-title-${p.fixtureId}`;
   const autoHintId = `stream-auto-hint-${p.fixtureId}`;
+  // Owner-approved 2026-10-08: the switch on, the paired phone in Operator (the beat's mode) — it will not start on its own.
+  const operatorHint = autoOperatorHint(p.phone, autoOn);
+  const autoOperatorId = `stream-auto-operator-${p.fixtureId}`;
   const autoSwitch = (
     <div data-testid="stream-auto" className="mt-3">
       <button
@@ -2024,7 +2029,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         data-testid="stream-auto-switch"
         aria-checked={autoOn}
         aria-labelledby={autoTitleId}
-        aria-describedby={autoOn ? autoHintId : undefined}
+        aria-describedby={autoOn ? (operatorHint ? `${autoHintId} ${autoOperatorId}` : autoHintId) : undefined}
         disabled={p.autoPending !== null}
         onClick={() => p.onToggleAuto(!autoOn)}
         className="flex min-h-11 w-full items-start gap-3 rounded-lg bg-white p-3 text-left ring-1 ring-purple-100 disabled:cursor-wait"
@@ -2048,6 +2053,12 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           )}
         </span>
       </button>
+      {operatorHint && (
+        <p id={autoOperatorId} data-testid="stream-auto-operator" className="mt-1 flex gap-1.5 px-1 text-xs text-amber-800">
+          <TriangleAlert aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-amber-600" strokeWidth={1.8} />
+          <span className="min-w-0">{msg("stream.auto.operatorHint")}</span>
+        </p>
+      )}
       {p.autoFailed && (
         <p data-testid="stream-auto-error" role="alert" className="mt-1 text-sm text-red-700">
           {msg("stream.error.failed")}
@@ -2055,7 +2066,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       )}
     </div>
   );
-  // §7.1: Live's read-only line — the switch on AND the phone automatic (A4), the server's delay.
+  // §7.1: Live's read-only line — only when the server says §7.3 will stop this session (B7 review M-3), the server's delay.
   const autoLive = state === "live" && autoStopLine(p.phone, state);
   // §7.4 "behind a tap" (Q-D): the phone's data used and app version, after the runner's chips in Details (Live/Ending).
   const extraChips = phoneDetails(p.phone);
@@ -2084,8 +2095,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           <TriangleAlert aria-hidden className="mt-px h-4 w-4 shrink-0 text-amber-600" strokeWidth={1.8} />
           <p data-testid="stream-takeover-text" className="min-w-0 flex-1">
             {takeover.model !== null
-              ? msg(takeover.namesStop ? "stream.takeover.lineLive" : "stream.takeover.line", { model: takeover.model, time: fmtTime(p.tz, takeover.at) })
-              : msg(takeover.namesStop ? "stream.takeover.lineLiveNoModel" : "stream.takeover.lineNoModel", { time: fmtTime(p.tz, takeover.at) })}
+              ? msg(takeoverLineKey(takeover.act, true), { model: takeover.model, time: fmtTime(p.tz, takeover.at) })
+              : msg(takeoverLineKey(takeover.act, false), { time: fmtTime(p.tz, takeover.at) })}
           </p>
           <button
             type="button"

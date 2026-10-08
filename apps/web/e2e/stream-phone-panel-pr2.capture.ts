@@ -177,7 +177,7 @@ async function pairPhone(baseURL: string, qrText: string): Promise<{ stop: () =>
 }
 
 type Json = Record<string, unknown>;
-const AUTO_ON = { enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null };
+const AUTO_ON = { enabled: true, startedAt: null, blocked: false, refusal: null, refusalAt: null, stopApplies: null };
 const HEALTHY_BEAT = { battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 245.3 };
 /** The read model's phone, with only `over` changed (the rest is the server's REAL answer). */
 const phoneWith = (r: Json, over: Json): Json => ({ ...r, phone: { ...(r.phone as Json), ...over } });
@@ -287,7 +287,7 @@ test.describe("capture QR v2 PR-2 — the organiser panel's Option A states", ()
       await expect(scope.getByTestId("stream-stop")).toBeVisible({ timeout: 60_000 });
 
       // 4. Live, healthy (STAGED readings; the switch REALLY on, the phone's mode staged automatic): the line, and §7.1's.
-      const live = (over: Json) => (r: Json) => ({ ...phoneWith(r, { mode: "automatic", elapsedMs: 4_000, health: null, beat: HEALTHY_BEAT, ...over }), auto: AUTO_ON });
+      const live = (over: Json) => (r: Json) => ({ ...phoneWith(r, { mode: "automatic", elapsedMs: 4_000, health: null, beat: HEALTHY_BEAT, ...over }), auto: { ...AUTO_ON, stopApplies: true } });
       undo = await stage(page, PHONE, live({}));
       await expect(scope.getByTestId("stream-auto-live")).toBeVisible({ timeout: POLL_WAIT_MS });
       await expect(strip).toContainText("2.4 Mbps", { timeout: POLL_WAIT_MS });

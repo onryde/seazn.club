@@ -45333,6 +45333,16 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "stopApplies": {
+                                  "anyOf": [
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -45340,7 +45350,8 @@
                                 "startedAt",
                                 "blocked",
                                 "refusal",
-                                "refusalAt"
+                                "refusalAt",
+                                "stopApplies"
                               ],
                               "additionalProperties": false
                             },
@@ -45444,7 +45455,8 @@
                       "startedAt": "example",
                       "blocked": true,
                       "refusal": "no_destination",
-                      "refusalAt": "example"
+                      "refusalAt": "example",
+                      "stopApplies": true
                     },
                     "legacy": true,
                     "finished": true,

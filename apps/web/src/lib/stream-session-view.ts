@@ -440,12 +440,14 @@ export const NOT_READY_KEYS: Record<NotReadyReason, MessageKey> = {
 
 /** §7.4: "Automatic start couldn't begin: {reason}" — the reason is the MANUAL refusal's own sentence wherever the panel
  *  has one, so a refusal reads the same whichever start met it. */
+// B7 review M-6: the reasons are their OWN keys — they follow "…couldn't begin:" in a sentence, so es/fr/nl open them in
+// lower case, which the manual refusals (sentences of their own) must not. In English they read as the manual ones do.
 export const AUTO_REFUSAL_KEYS: Record<AutoRefusal, MessageKey> = {
-  no_credit: "stream.error.no_credits",
+  no_credit: "stream.auto.refusal.no_credit",
   no_destination: "stream.auto.refusal.no_destination",
-  not_entitled: "stream.error.plan_lacks_relay",
-  destination_in_use: "stream.error.target_in_use.unknown",
-  unavailable: "stream.error.ingest_unavailable",
+  not_entitled: "stream.auto.refusal.not_entitled",
+  destination_in_use: "stream.auto.refusal.destination_in_use",
+  unavailable: "stream.auto.refusal.unavailable",
 };
 
 /** §7.4: "the same remedies as the manual refusals (Buy credits, Manage destinations)" — the two that have one. */
@@ -517,20 +519,43 @@ function liveHealthStrip(f: PhoneFacts): PhoneStrip {
 /** §7.5: "for 30 min after a takeover" — judged on the server's `lastTakeover.elapsedMs` (T12), never the browser's clock. */
 export const TAKEOVER_NOTICE_MS = 30 * 60_000;
 
+/** Which of the panel's own buttons the takeover notice tells the organiser to press BEFORE Revoke & reissue: Stop while
+ *  live, Cancel while the session waits (the button those states show — owner ruling 2026-10-08, B7 review M-2), and
+ *  neither with no session (Revoke alone). */
+export type TakeoverAct = "stop" | "cancel" | null;
+const TAKEOVER_ACT: Record<PhoneTabState, TakeoverAct> = {
+  idle: null, provisioning: "cancel", warming: "cancel", live: "stop", ending: null, ended: null, failed: null,
+};
+
 /** §7.5's notice: shown while the latest takeover is younger than 30 min on the server's clock and the viewer has not
- *  dismissed THIS takeover (its instant); it names Stop only while the session is live. */
+ *  dismissed THIS takeover (its instant); `act` names the button to press first (`TAKEOVER_ACT`). */
 export function takeoverNotice(
   phone: StreamPhone | null, state: PhoneTabState, dismissedAt: string | null,
-): { at: string; model: string | null; namesStop: boolean } | null {
+): { at: string; model: string | null; act: TakeoverAct } | null {
   const t = phone?.lastTakeover ?? null;
   if (t === null || t.elapsedMs >= TAKEOVER_NOTICE_MS || t.at === dismissedAt) return null;
-  return { at: t.at, model: t.model, namesStop: state === "live" };
+  return { at: t.at, model: t.model, act: TAKEOVER_ACT[state] };
 }
 
-/** §7.1: Live's read-only "Automatic: stops about N minutes after the result" — only while live, with the switch on AND
- *  the session's phone in automatic mode (A4: the automatic stop needs both; with either off it would not happen). */
+/** The notice's sentence key: with or without the model, naming `act`'s button. */
+export function takeoverLineKey(act: TakeoverAct, withModel: boolean): MessageKey {
+  if (act === "stop") return withModel ? "stream.takeover.lineLive" : "stream.takeover.lineLiveNoModel";
+  if (act === "cancel") return withModel ? "stream.takeover.lineWaiting" : "stream.takeover.lineWaitingNoModel";
+  return withModel ? "stream.takeover.line" : "stream.takeover.lineNoModel";
+}
+
+/** §7.1: Live's read-only "Automatic: stops about N minutes after the result" — only while live, and only when the SERVER
+ *  says §7.3 will stop this session (`auto.stopApplies`, B7 review M-3: the switch on, the session's phone automatic — A4
+ *  — and the session created before any result, A15). The tick's own facts and predicate, never re-derived here. */
 export function autoStopLine(phone: StreamPhone | null, state: PhoneTabState): boolean {
-  return state === "live" && phone?.auto?.enabled === true && phone.phone?.mode === "automatic";
+  return state === "live" && phone?.auto?.stopApplies === true;
+}
+
+/** Owner-approved 2026-10-08: under the switch, while it is ON and the paired phone (the beat's `mode`) is in Operator —
+ *  the phone will not start on its own, so the organiser is told where to change it. Hidden with no phone, a phone in
+ *  Automatic (or with no mode reported yet), or the switch off. `autoOn` is the switch as the panel shows it. */
+export function autoOperatorHint(phone: StreamPhone | null, autoOn: boolean): boolean {
+  return autoOn && phone?.phone?.mode === "operator";
 }
 
 /** §7.4 "behind a tap" (FP22, owner ruling Q-D): the Details disclosure's phone data — data used and the app version, each
