@@ -101,8 +101,11 @@ Premises from the brainstorming document that these falsify or qualify:
 Seven components. Nothing long-lived.
 
 ### 3.1 Link
-Lichess OAuth (PKCE, built) now requests **`board:play` + `challenge:write`** instead of
-no scopes. The token is **stored encrypted at rest**, reusing the sealed-secret pattern
+Lichess OAuth (PKCE, built) now requests **`board:play` + `challenge:write` +
+`challenge:read`** instead of no scopes. `challenge:read` exists for one reason: after a
+crash between Lichess creating White's challenge and our commit, recovery lists White's
+outgoing challenges before deciding whether to re-create (Task 9, I2) — without it that
+lookup is a measured 403 and every such recovery would park on the organiser. The token is **stored encrypted at rest**, reusing the sealed-secret pattern
 the device link uses (V417), and revoked on unlink.
 
 This reverses the earlier identity-only decision, which revoked the token immediately
