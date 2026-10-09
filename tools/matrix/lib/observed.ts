@@ -212,6 +212,9 @@ export const LOCKED_STATUSES: readonly string[] = Object.freeze(["finalized", "c
  *  (withdrawal.ts:213-217): pending fixtures are voided, nothing forfeited.
  *  ladder-loop.test.ts holds it equal to the product's two sets, read as text. */
 export const FORFEIT_MODEL_KINDS: readonly string[] = Object.freeze(["league", "group", "swiss", "knockout", "double_elim", "stepladder"]);
+/** W2b X-WD-2 (ruling 90): the open formats whose withdrawal walks the remaining fixtures over as knockout does, never
+ *  voiding them — named by the rule row, so the harness expects it before the product's kind sets move (loop F). */
+export const X_WD_2_KINDS: readonly string[] = Object.freeze(["page_playoff", "ladder"]);
 /** W1-driving Task 7: entrant statuses that have LEFT the field (stages.ts
  *  departedEntrantIds) — off the live ladder, refused as a challenge side. */
 export const DEPARTED_STATUSES: readonly string[] = Object.freeze(["withdrawn", "disqualified"]);

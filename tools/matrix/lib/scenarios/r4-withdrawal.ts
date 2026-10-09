@@ -35,7 +35,7 @@
 import type { CheckResult } from "../results.ts";
 import type { FixtureRow } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
-import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, sameResult, snap, toObservedOutcome, winnerOf, type CompleteObs, type FixtureSnap, type ObservedFixture, type ObservedStage, type WithdrawalObs } from "../observed.ts";
+import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, X_WD_2_KINDS, sameResult, snap, toObservedOutcome, winnerOf, type CompleteObs, type FixtureSnap, type ObservedFixture, type ObservedStage, type WithdrawalObs } from "../observed.ts";
 import { routeTo } from "../routing.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
@@ -51,31 +51,41 @@ const LOCKED = new Set(["finalized", "cancelled"]);
 /** One pending fixture judged under a walkover: its item, and whether the
  *  cascade forfeited or voided (abandoned) it. */
 interface WalkoverJudgement { readonly item: Item; readonly forfeited: boolean; readonly voided: boolean }
-type WalkoverModel = (b: FixtureSnap, a: ObservedFixture, w: string) => WalkoverJudgement;
+/** `tbd`: the fixture's opponent seat was still empty when the withdrawal answered (W2b X-WD-3). */
+type WalkoverModel = (b: FixtureSnap, a: ObservedFixture, w: string, tbd: boolean) => WalkoverJudgement;
 /** A fixture the cascade itself abandoned (withdrawal.ts applyUpdate counts
  *  `voided` once per core.abandon it posts, so one already abandoned before
  *  the withdrawal is not one of them). */
 const voidedBy = (b: FixtureSnap, a: ObservedFixture) => a.status === "abandoned" && b.status !== "abandoned";
 
-/** W1-driving Task 7 (false premise 16): how a walkover treats a pending
- *  fixture, by family.
- *  - forfeit (table and bracket kinds): forfeited to the OPPONENT, or voided
- *    (abandoned) when that seat is still TBD;
- *  - abandon (every other kind — ladder, page playoff, americano: the
- *    open-format branch, withdrawal.ts:213-217): voided, never forfeited. */
+/** W1-driving Task 7 (false premise 16), re-keyed by W2b (X-WD-2, X-WD-3): how a walkover treats a pending fixture,
+ *  by family.
+ *  - forfeit (table and bracket kinds, and — X-WD-2 — page playoff and ladder): forfeited to the OPPONENT. A seat whose
+ *    opponent was still TBD is never voided (X-WD-3): the withdrawn seat is dead, and the opponent who ARRIVES there is
+ *    walked over — it is not one of the cascade's own walkovers (nothing could be forfeited when it answered); one who
+ *    never arrived leaves the fixture pending;
+ *  - abandon (every other kind — americano: the open-format branch): voided, never forfeited.
+ *  A chess fixture not started is a pending one like any other: walked over (BG-WO-2), never refused. */
 export const WALKOVER_MODEL: Readonly<Record<"forfeit" | "abandon", WalkoverModel>> = Object.freeze({
-  forfeit: (b, a, w) => {
-    const opponent = a.home === w ? a.away : a.home;
-    if (opponent === null) {
-      return { item: { ok: a.status === "abandoned", note: `${b.id}: ${a.status} after walkover with a TBD opponent, expected abandoned` }, forfeited: false, voided: voidedBy(b, a) };
+  forfeit: (b, a, w, tbd) => {
+    // The side that is not the withdrawn entrant — the product may clear a dead seat, so w need not still be seated.
+    const opponent = [a.home, a.away].find((s) => s !== null && s !== w) ?? null;
+    if (tbd || opponent === null) {
+      if (opponent === null) return { item: { ok: PENDING_STATUSES.includes(a.status), note: `${b.id}: ${a.status} after walkover with a TBD opponent that never arrived, expected still pending — the dead seat is never voided (X-WD-3)` }, forfeited: false, voided: voidedBy(b, a) };
+      const arrived = a.status === "forfeited" && winnerOf(a.outcome) === opponent;
+      return { item: { ok: arrived, note: `${b.id}: ${a.status}/${winnerOf(a.outcome)} after walkover with a TBD opponent, expected the arriving ${opponent} walked over (X-WD-3)` }, forfeited: false, voided: voidedBy(b, a) };
     }
     const ok = a.status === "forfeited" && winnerOf(a.outcome) === opponent;
     return { item: { ok, note: `${b.id}: ${a.status}/${winnerOf(a.outcome)} after walkover, expected forfeited/${opponent}` }, forfeited: ok, voided: false };
   },
   abandon: (b, a) => ({ item: { ok: a.status === "abandoned", note: `${b.id}: ${a.status} after an open-format walkover, expected abandoned` }, forfeited: false, voided: voidedBy(b, a) }),
 });
-/** The walkover model a stage kind's withdrawal takes. */
-export const walkoverModelFor = (kind: string): keyof typeof WALKOVER_MODEL => (FORFEIT_MODEL_KINDS.includes(kind) ? "forfeit" : "abandon");
+/** The walkover model a stage kind's withdrawal takes (W2b: X-WD-2's open formats walk over as knockout does). */
+export const walkoverModelFor = (kind: string): keyof typeof WALKOVER_MODEL => (FORFEIT_MODEL_KINDS.includes(kind) || X_WD_2_KINDS.includes(kind) ? "forfeit" : "abandon");
+/** Which POLICY rule a kind's withdrawal answers by — the product's table/bracket branch (never "none" for an entrant
+ *  with fixtures in the stage), or the open-format rule (ruling 53: "walkover" only when something was pending). X-WD-2
+ *  moves the open formats' cascade, not this answer: a ladder entrant with nothing pending still owes "none". */
+export const policyFamilyFor = (kind: string): "table-bracket" | "open" => (FORFEIT_MODEL_KINDS.includes(kind) ? "table-bracket" : "open");
 
 /** What each policy implies for the withdrawn entrant's fixtures
  *  (withdrawal.ts:1-17 and 130-232, engine stage.ts withdrawTableEntrant):
@@ -85,7 +95,7 @@ export const walkoverModelFor = (kind: string): keyof typeof WALKOVER_MODEL => (
  *  and the reported walkover count equals the forfeits observed, and the
  *  reported voided count equals the fixtures the cascade itself abandoned.
  *  `kind`: the stage kind the fixtures belong to. */
-export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before: readonly FixtureSnap[], after: readonly ObservedFixture[], walkoversReported: number, voidedReported: number, kind: string): Item[] {
+export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before: readonly FixtureSnap[], after: readonly ObservedFixture[], walkoversReported: number, voidedReported: number, kind: string, tbd: ReadonlySet<string> = new Set()): Item[] {
   const items: Item[] = [];
   let forfeitedByCascade = 0;
   let voidedByCascade = 0;
@@ -94,7 +104,7 @@ export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before:
     const a = after.find((x) => x.id === b.id);
     if (a === undefined) { items.push({ ok: false, note: `${b.id}: vanished` }); continue; }
     if (policy === "walkover" && PENDING_STATUSES.includes(b.status)) {
-      const j = walkover(b, a, w);
+      const j = walkover(b, a, w, tbd.has(b.id));
       if (j.forfeited) forfeitedByCascade++;
       if (j.voided) voidedByCascade++;
       items.push(j.item);
@@ -349,7 +359,10 @@ export const r4Withdrawal: Scenario = {
       const note = keptPlayingNote(w, setup.persons.get(w.entrantId) ?? [], observed.stages[0]);
       if (note !== null) rec.notes.push(note);
     }
-    const mine = observed.stages[0].fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
+    // Every fixture of the stage, looked up by id: a dead seat the product cleared (X-WD-3) no longer seats w.
+    const stageRows = observed.stages[0].fixtures;
+    // W2b X-WD-3: the fixtures whose opponent seat was still empty when the withdrawal answered.
+    const tbd = new Set(atWithdrawal.filter((f) => (f.home === w.entrantId && f.away === null) || (f.away === w.entrantId && f.home === null)).map((f) => f.id));
     // Canary: ALSO judge the cascade against the OPPOSITE policy (m-1).
     const opposite = w.policy === "walkover" ? "expunge" : "walkover";
     const later = observed.stages[0].fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && f.home !== null && f.away !== null);
@@ -363,7 +376,7 @@ export const r4Withdrawal: Scenario = {
       : { want: expectedPolicy(w.before), pending: w.before.filter((b) => PENDING_STATUSES.includes(b.status)).length };
     const policyAbstain = "abstain" in derived ? derived.abstain : null;
     const policyItems: Item[] = "abstain" in derived ? []
-      : walkoverModelFor(kind) === "abandon"
+      : policyFamilyFor(kind) === "open"
         ? withCanary(
           [{ ok: w.policy === derived.want, note: kind === "americano"
             // W1d item 24: the persons' COUNT, never their ids (a team's roster is its persons, every one of them).
@@ -391,8 +404,8 @@ export const r4Withdrawal: Scenario = {
         resultsAsPosted(rec, observed),
         assertion("r4-policy-reported", policyItems, policyAbstain),
         assertion("r4-cascade-consistent", withCanary(
-          [...cascadeItems(w.policy, w.entrantId, w.before, mine, w.walkovers, w.voided, kind), skippedItem(w.policy, w.before, w.skippedFinalized)],
-          [...cascadeItems(opposite, w.entrantId, w.before, mine, w.walkovers, w.voided, kind), skippedItem(opposite, w.before, w.skippedFinalized)],
+          [...cascadeItems(w.policy, w.entrantId, w.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(w.policy, w.before, w.skippedFinalized)],
+          [...cascadeItems(opposite, w.entrantId, w.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(opposite, w.before, w.skippedFinalized)],
           ctx.spec.canary,
         )),
         assertion("r4-not-paired-later",

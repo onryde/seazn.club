@@ -309,7 +309,7 @@ describe("FakeLadderDriver mirrors issueChallenge (stages.ts:5503-5657)", () => 
     // Reach counts LIVE rungs (F7): with s3 gone, s4 → s2 is one place.
     expect(await code(d.challenge(setup.stage.id, s4!, s2!))).toBe("issued");
     expect(d.ladderOrder()).toEqual([s1, s2, s3, s4]); // raw, never pruned
-    expect(d.fixtures.map((f) => [f.home_entrant_id, f.away_entrant_id, f.round_no, f.status])).toEqual([[s4, s3, 1, "abandoned"], [s4, s2, 2, "scheduled"]]);
+    expect(d.fixtures.map((f) => [f.home_entrant_id, f.away_entrant_id, f.round_no, f.status])).toEqual([[s4, s3, 1, "forfeited"], [s4, s2, 2, "scheduled"]]); // W2b X-WD-2: walked over, never voided
     expect(d.refusedChallenges().map((r) => r.code)).toEqual(["LADDER_ENTRANT_FOREIGN", "LADDER_CHALLENGE_NOT_UPWARD", "LADDER_CHALLENGE_OUT_OF_RANGE", "LADDER_ENTRANT_WITHDRAWN"]);
   });
 });
@@ -460,17 +460,19 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     expect(checks.find((c) => c.id === "I9-ladder-order-is-the-field")).toMatchObject({ verdict: "pass", checked: driver.entrants.length });
   });
 
-  it("R4 on a ladder with a PENDING challenge at withdrawal (fake option withdrawWhilePending): walkover by abandon, never by forfeit", async () => {
+  it("R4 on a ladder with a PENDING challenge at withdrawal (fake option withdrawWhilePending): walked over to the opponent, never voided (W2b X-WD-2)", async () => {
     // withdrawWhilePending: seed 3's first challenge is issued and the hook withdraws BEFORE its result lands.
     // The differing case: the right answer ("walkover") differs from the D8 default ("none"), so a hard-coded "none" is killed.
     const driver = new FakeLadderDriver({ challengeRange: 3, withdrawWhilePending: true });
     const { out, checks } = await runOn(driver, "R4", { row: "ladder" });
     const w = out.observed.withdrawal!;
     expect(w.before.filter((f) => PENDING.has(f.status)).length).toBe(1);
-    expect([w.policy, w.walkovers, w.voided]).toEqual(["walkover", 0, 1]);          // open-format branch: abandon + voided, no forfeit
+    expect([w.policy, w.walkovers, w.voided]).toEqual(["walkover", 1, 0]);          // X-WD-2: one walkover, nothing voided
     const pending = out.observed.stages[0]!.fixtures.find((f) => f.id === w.before.find((b) => PENDING.has(b.status))!.id)!;
-    expect(pending.status).toBe("abandoned");
-    expect(out.observed.stages[0]!.fixtures.filter((f) => f.status === "forfeited")).toEqual([]);
+    const opponent = pending.home === w.entrantId ? pending.away : pending.home;
+    expect(opponent).not.toBeNull();
+    expect([pending.status, pending.outcome?.kind, (pending.outcome as { winner?: string } | null)?.winner]).toEqual(["forfeited", "award", opponent]);
+    expect(out.observed.stages[0]!.fixtures.filter((f) => f.status === "abandoned")).toEqual([]);
     expect(checks.find((c) => c.id === "r4-policy-reported")?.verdict).toBe("pass");
     expect(checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");  // kind-aware (false premise 16)
     expect(checks.find((c) => c.id === "r4-not-challenged-later")?.verdict).toBe("pass");
@@ -494,7 +496,7 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     expect(notChallengedLater({ ...base, later: ["f-gone"] })).toMatchObject({ verdict: "fail", checked: 3, evidence: ["f-gone: a later challenge the division no longer lists"] });
   });
 
-  it("cascadeItems is kind-aware (false premise 16): open-format walkover = every pending abandoned and counted voided; table/bracket unchanged", () => {
+  it("cascadeItems is kind-aware (false premise 16; W2b X-WD-2): open-format walkover = every pending abandoned and counted voided; table/bracket and X-WD-2's page playoff and ladder forfeit to the opponent", () => {
     // Plan review 3 I-3: product-shaped, typed fixtures, no `as never`. winnerOf reads only outcome.kind ∈ {win, award}
     // (observed.ts), and sameResult reads `before[].outcome`, so both must be real.
     const fx = (id: string, status: string, outcome: ObservedOutcome | null, home: string, away: string): ObservedFixture =>
@@ -506,10 +508,14 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     const failing = (items: { ok: boolean; note: string }[]) => items.filter((i) => !i.ok).map((i) => i.note);
     // m-9: the open kinds are every engine stage kind (StageKind.options) outside the product's pinned union — derived, so a
     // new open kind is judged here the day the engine declares it. Each list asserted non-empty, and together they cover the engine.
-    const forfeitKinds = [...TABLE_KINDS_PINNED, ...BRACKET_KINDS_PINNED];
-    const openKinds = StageKind.options.filter((k) => !TABLE_KINDS_PINNED.has(k) && !BRACKET_KINDS_PINNED.has(k));
+    // W2b X-WD-2 (ruling 90): "a withdrawal from page_playoff or ladder walks the remaining fixtures over, as knockout
+    // does; it never voids them" — the two kinds typed from the rule row, never read back from the harness.
+    const xwd2 = ["page_playoff", "ladder"];
+    const forfeitKinds = [...TABLE_KINDS_PINNED, ...BRACKET_KINDS_PINNED, ...xwd2];
+    const openKinds = StageKind.options.filter((k) => !TABLE_KINDS_PINNED.has(k) && !BRACKET_KINDS_PINNED.has(k) && !xwd2.includes(k));
     expect(forfeitKinds.filter((k) => !(StageKind.options as readonly string[]).includes(k)), "a pinned kind the engine does not declare").toEqual([]);
-    expect(openKinds).toContain("ladder");
+    expect(openKinds).not.toContain("ladder");
+    expect(openKinds).not.toContain("page_playoff");
     expect(openKinds.length).toBeGreaterThan(0);
     expect(forfeitKinds.length).toBeGreaterThan(0);
     expect(openKinds.length + forfeitKinds.length).toBe(StageKind.options.length);

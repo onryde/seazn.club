@@ -1999,22 +1999,32 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     expect(cascadeItems("expunge", "w", before, after2, 0, 2, "league").at(-1)).toEqual({ ok: false, note: "reported 2 voided, observed 1" });
   });
 
-  it("walkover: a pending game goes to the OPPONENT; a TBD seat is voided; the reported count must match", () => {
+  it("walkover: a pending game goes to the OPPONENT; a TBD seat goes dead and the ARRIVING opponent is walked over, never voided (W2b X-WD-3); the reported count must match", () => {
     const before = [
       { id: "a", status: "decided", outcome: { kind: "win" as const, winner: "w" } },
       { id: "b", status: "scheduled", outcome: null },
       { id: "t", status: "scheduled", outcome: null },
     ];
-    const good = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("t", "abandoned", null, "w", null)];
-    // …then the walkover count, then the voided count (the TBD seat).
-    expect(ok(cascadeItems("walkover", "w", before, good, 1, 1, "league"))).toEqual([true, true, true, true, true]);
-    expect(ok(cascadeItems("walkover", "w", before, good, 2, 1, "league"))).toEqual([true, true, true, false, true]);
-    expect(ok(cascadeItems("walkover", "w", before, good, 1, 0, "league"))).toEqual([true, true, true, true, false]);
+    const tbd = new Set(["t"]); // t's opponent seat was empty when the withdrawal answered
+    // y arrived at t later; the product walked it over (the dead seat cleared — w no longer seated there).
+    const good = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("t", "forfeited", { kind: "award", winner: "y", loser: null, reason: "walkover" }, null, "y")];
+    // …then the walkover count (the cascade's OWN: t's arrival is not one), then the voided count (none: X-WD-3).
+    expect(ok(cascadeItems("walkover", "w", before, good, 1, 0, "league", tbd))).toEqual([true, true, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, good, 2, 0, "league", tbd))).toEqual([true, true, true, false, true]);
+    expect(ok(cascadeItems("walkover", "w", before, good, 1, 1, "league", tbd))).toEqual([true, true, true, true, false]);
+    // W1's shape — the TBD seat voided — is now the defect X-WD-3 names.
+    const voided = [good[0]!, good[1]!, after("t", "abandoned", null, "w", null)];
+    expect(ok(cascadeItems("walkover", "w", before, voided, 1, 1, "league", tbd))).toEqual([true, true, false, true, true]);
+    // The arrival walked over to the withdrawn side, or never walked over at all: red.
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!, after("t", "forfeited", { kind: "award", winner: "w", loser: null, reason: "walkover" }, "w", "y")], 1, 0, "league", tbd))).toEqual([true, true, false, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!, after("t", "scheduled", null, "w", "y")], 1, 0, "league", tbd))).toEqual([true, true, false, true, true]);
+    // An opponent that never arrived leaves t pending — the positive pair of the voided red.
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!, after("t", "scheduled", null, "w", null)], 1, 0, "league", tbd))).toEqual([true, true, true, true, true]);
     const toW = [good[0]!, after("b", "forfeited", { kind: "award", winner: "w", loser: null, reason: "walkover" }), good[2]!];
-    expect(ok(cascadeItems("walkover", "w", before, toW, 0, 1, "league"))).toEqual([true, false, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, toW, 0, 0, "league", tbd))).toEqual([true, false, true, true, true]);
     const toThirdParty = [good[0]!, after("b", "forfeited", { kind: "award", winner: "z", loser: null, reason: "walkover" }), good[2]!];
-    expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0, 1, "league"))).toEqual([true, false, true, true, true]);
-    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1, 1, "league"))).toEqual([true, true, false, true, false]);
+    expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0, 0, "league", tbd))).toEqual([true, false, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1, 0, "league", tbd))).toEqual([true, true, false, true, true]);
   });
 });
 
@@ -2185,7 +2195,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     await expect(runOn(driver, "F1", ppRow)).rejects.toThrow(NoFieldSize);
     expect(driver.calls).toEqual([]);
   });
-  it("R4 once it seeds 4 (plan review 1 m-5, review 2 I-1): seed 3 wins pp-elim, withdraws, pp-q2 is ABANDONED, nothing forfeited, pp-final never seated, /complete asked once", async () => {
+  it("R4 once it seeds 4 (plan review 1 m-5, review 2 I-1; W2b X-WD-2): seed 3 wins pp-elim, withdraws, pp-q2 is WALKED OVER to seed 2 (never voided), so pp-final is seated and played and the stage completes", async () => {
     const driver = new FakeKnockoutDriver({ pagePlayoff: true });
     const r = await runOn(driver, "R4", ppRow);
     const seed = (n: number) => driver.entrants.find((e) => e.seed === n)!.id;
@@ -2193,15 +2203,15 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     // Seed 3 plays pp-elim in round 1 against seed 4 and, as the better seed, wins it.
     expect(fx("pp-elim")).toMatchObject({ roundNo: 1, home: seed(3), away: seed(4), status: "decided", outcome: { kind: "win", winner: seed(3) } });
     // So it is seated in pp-q2 (away: winnerOf pp-elim) against the loser of pp-q1 when it withdraws.
-    expect(fx("pp-q2")).toMatchObject({ home: seed(2), away: seed(3), status: "abandoned" });
+    // X-WD-2: a page playoff withdrawal walks the pending fixture over to the opponent, as knockout does.
+    expect(fx("pp-q2")).toMatchObject({ home: seed(2), away: seed(3), status: "forfeited", outcome: { kind: "award", winner: seed(2) } });
     const w = r.out.observed.withdrawal!;
-    expect(w).toMatchObject({ entrantId: seed(3), afterRound: 1, policy: "walkover", walkovers: 0, voided: 1, skippedFinalized: 0 });
-    expect(r.out.observed.stages[0]!.fixtures.filter((f) => f.status === "forfeited")).toEqual([]);
-    // pp-final's away seat is winnerOf("pp-q2"), which never comes.
-    expect(fx("pp-final")).toMatchObject({ home: seed(1), away: null, status: "scheduled" });
-    expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(1);
-    expect(r.out.observed.stages[0]!.complete).toMatchObject({ status: 200, code: null, completed: false });
-    // W1-driving Task 7 (false premise 16): the open-format cascade is judged by the abandon model, not the forfeit one.
+    expect(w).toMatchObject({ entrantId: seed(3), afterRound: 1, policy: "walkover", walkovers: 1, voided: 0, skippedFinalized: 0 });
+    expect(r.out.observed.stages[0]!.fixtures.filter((f) => f.status === "abandoned")).toEqual([]);
+    // pp-final's away seat is winnerOf("pp-q2") — seed 2, by the walkover — so the final is played.
+    expect(fx("pp-final")).toMatchObject({ home: seed(1), away: seed(2), status: "decided" });
+    expect(r.out.observed.stages[0]!.complete).toMatchObject({ status: 200, code: null, completed: true });
+    // The open-format cascade is now judged by the forfeit model (X-WD-2), and holds.
     expect(r.checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");
   });
 });

@@ -674,6 +674,8 @@ export class FakeLadderDriver extends FakeLeagueDriver {
   readonly #withdrawals: LadderWithdrawal[] = [];
   /** withdrawWhilePending: the challenge whose result is withheld. */
   #held: string | null = null;
+  /** W2b X-WD-2: the withdrawal's own walkover is written, not withheld — the hold ends with the withdrawal. */
+  #released = false;
   constructor(opts: FakeLadderOptions = {}, orgId = "org-fake") {
     super(orgId);
     this.opts = opts;
@@ -758,7 +760,7 @@ export class FakeLadderDriver extends FakeLeagueDriver {
   }
   /** withdrawWhilePending: seed 3's FIRST challenge, still open. */
   #withholds(f: FakeFixture): boolean {
-    if (this.opts.withdrawWhilePending !== true || PLAYED.has(f.status) || f.status === "abandoned") return false;
+    if (this.opts.withdrawWhilePending !== true || this.#released || PLAYED.has(f.status) || f.status === "abandoned") return false;
     if (this.#held !== null) return this.#held === f.id;
     const seed3 = this.entrants.find((e) => e.seed === 3)?.id;
     if (seed3 === undefined || (f.home_entrant_id !== seed3 && f.away_entrant_id !== seed3)) return false;
@@ -796,14 +798,22 @@ export class FakeLadderDriver extends FakeLeagueDriver {
     const e = this.entrants.find((x) => x.id === entrantId);
     if (e === undefined) throw new RefusedCall("POST", path, 404, wireCodeFor(404), "entrant not found");
     if (e.status === "withdrawn") throw new RefusedCall("POST", path, 409, wireCodeFor(409), "entrant is already withdrawn");
-    let voided = 0;
+    // W2b X-WD-2 (ruling 90): a ladder withdrawal walks a pending challenge over to the opponent, as knockout does —
+    // never voids it. A challenge always seats both sides.
+    this.#released = true;
+    let walkovers = 0;
     for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && PENDING.has(x.status))) {
-      await this.abandonFixture(f);
-      voided++;
+      if (f.id === this.#held) {
+        // The withheld challenge's result never reached the product (its events are the fake's bookkeeping only): the
+        // walkover is written as the product leaves it, an award to the opponent, without folding the withheld result.
+        const opponent = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+        Object.assign(f, { status: "forfeited", outcome: { kind: "award", winner: opponent, loser: entrantId, reason: "withdrew" } });
+      } else await this.walkoverFixture(f, entrantId);
+      walkovers++;
     }
     e.status = "withdrawn";
     this.#withdrawals.push({ entrantId, afterStep: this.#issued.length, rawOrder: [...(this.#raw ?? [])] });
-    return { entrant_id: entrantId, status: "withdrawn", policy: voided > 0 ? "walkover" : "none", walkovers: 0, voided, skipped_finalized: 0 };
+    return { entrant_id: entrantId, status: "withdrawn", policy: walkovers > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0 };
   }
   override completeStage(): Promise<CompleteOut> {
     return settle(() => {

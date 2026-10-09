@@ -23,7 +23,7 @@ const req = (sportKey: string, outcome: unknown): StreamRequest =>
 
 describe("W2b generator breadth (spec §5.6)", () => {
   it("empty case first: a walkover request before start posts no core.start", () => {
-    const s = generateStream({ sportKey: "generic", cfg: {}, stageKind: "league", home: "H", away: "A", outcome: { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" } } as never);
+    const s = generateStream({ sportKey: "generic", cfg: {}, stageKind: "league", home: "H", away: "A", outcome: { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" } });
     expect(s.map((e) => e.type)).toEqual(["core.forfeit"]);
   });
 

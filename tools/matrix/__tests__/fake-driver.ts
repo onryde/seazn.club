@@ -811,16 +811,23 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner } });
     this.feed(target);
   }
+  /** W2b X-WD-2 / X-WD-3 (ruling 90): a page playoff withdrawal walks its pending fixtures over to the opponent, as
+   *  knockout does, and never voids one; a seat whose opponent is still TBD goes dead, so the opponent who arrives
+   *  there is walked over (fill → awardThrough). */
   override async withdraw(entrantId: string): Promise<WithdrawOut> {
     if (!this.pagePlayoff) return super.withdraw(entrantId);
     this.log("withdraw");
-    let voided = 0;
+    let walkovers = 0;
+    let pending = 0;
     for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && PENDING.has(x.status))) {
-      await this.abandonFixture(f);
-      voided++;
+      pending++;
+      const mine: Slot = f.home_entrant_id === entrantId ? "home_entrant_id" : "away_entrant_id";
+      const opponent = mine === "home_entrant_id" ? f.away_entrant_id : f.home_entrant_id;
+      if (opponent !== null) { await this.walkoverFixture(f, entrantId); walkovers++; continue; }
+      this.deadSlots.add(`${f.id}:${mine}`);
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy: voided > 0 ? "walkover" : "none", walkovers: 0, voided, skipped_finalized: 0 };
+    return { entrant_id: entrantId, status: "withdrawn", policy: pending > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0 };
   }
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     const out = await super.postStream(id, events, prefix);
