@@ -29,6 +29,7 @@ import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { SIDE_SIZE_ROUTE, entrantName, rosterSize } from "../lib/scenarios/rosters.ts";
 import { entrantInput } from "../lib/model/state.ts";
 import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
+import { W2A_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
@@ -72,7 +73,8 @@ const failed = (checks: { id: string; verdict: string }[]) => checks.filter((c) 
  *  VOIDPROOF (W1d Task 14) voids a first score event that leaves the match open,
  *  which generic's one-result match does not (refused by name: VoidProofUnfit);
  *  void-proof.test.ts is its suite. */
-const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF");
+// The slice's scripts: not the gated ones, and not the W2a bracket-finish scenarios (opt-in, bracket cells only: w2a-scenarios.test.ts).
+const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF" && !(W2A_SCENARIO_KEYS as readonly string[]).includes(k));
 
 describe("assertion helper — empty first (R25)", () => {
   it("zero items is a fail, abstain carries a reason, one bad item fails", () => {
@@ -479,10 +481,10 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
 describe("each scenario's assertion set is exactly its own (dropping one is caught)", () => {
   it.each([
     // W1-driving T6: every scenario judges the seed advance and (T45-R1) the lineups owed on team fixtures.
-    ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
-    ["M1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
-    ["R4", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "r4-not-challenged-later", "r4-not-seated-later", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
-    ["F1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "f1-ladder-sweep", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-bracket-decider-exercised", "life-reference-bracket-finish", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["M1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-bracket-decider-exercised", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["R4", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "r4-not-challenged-later", "r4-not-seated-later", "life-bracket-decider-exercised", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["F1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "f1-ladder-sweep", "life-bracket-decider-exercised", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
   ] as const)("%s", async (k, ids) => {
     expect((await runFake(k)).out.assertions.map((a) => a.id)).toEqual(ids);
   });
@@ -948,7 +950,7 @@ describe("pilots on the fake league", () => {
     expect(r.checks.find((c) => c.id === "f1-everyone-drawn")).toMatchObject({ verdict: "fail", checked: 7, evidence: [`${driver.entrants.at(-1)!.id} appears in no fixture`] });
   });
   it("every scenario is registered under its own key and the three pilots name their canary check", () => {
-    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF"]);
+    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF", ...W2A_SCENARIO_KEYS].sort());
     expect(SCENARIO_KEYS.sort()).toEqual(["F1", "LIFECYCLE", "M1", "R4"]);
     for (const k of Object.keys(SCENARIOS) as ScenarioKey[]) expect(SCENARIOS[k].key).toBe(k);
     expect(SCENARIOS.LIFECYCLE.canaryCheck).toBeNull();
@@ -2134,6 +2136,38 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
     const none = await runOn(new ThroughAnswersNone({ pagePlayoff: true }), "R4", ppR4);
     expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; withdrawal.ts open-format rule)"] });
+  });
+  // Whole-branch review I-3: the product seats a page playoff walkover's loser NOWHERE (pp-q2 becomes a bye award that never
+  // reaches a batch). The fake does the same, whichever of the two matches that feed pp-q2 finishes first - the order M1
+  // plays (walkover, then pp-elim) and the other one (pp-elim, then the walkover).
+  it("the fake seats a page playoff walkover's loser nowhere: pp-q2 is awarded through to pp-elim's winner and pp-final is seated, in either order", async () => {
+    let judged = 0;
+    for (const elimFirst of [false, true]) {
+      const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+      const ctx = ctxFor(driver, "M1", ppRow);
+      const rec = new Recorder();
+      const setup = await setUpDivision(ctx, rec, ppField);
+      const rows = await driver.listFixtures();
+      const rowOf = (ext: string) => rows.find((r) => r.id === driver.extIds.get(ext))!;
+      const q1 = rowOf("pp-q1");
+      const elim = rowOf("pp-elim");
+      const walkover = () => decideFixture(ctx, rec, setup, q1, { kind: "forfeit", by: "away", reason: "walkover" });
+      const playElim = () => decideFixture(ctx, rec, setup, elim, { kind: "win", winner: "home" });
+      if (elimFirst) { await playElim(); await walkover(); } else { await walkover(); await playElim(); }
+      const fx = (ext: string) => driver.fixtures.find((f) => f.id === driver.extIds.get(ext))!;
+      const shape = generatePagePlayoff({ entrants: ids(ppField) }).fixtures;
+      // The engine's wiring: pp-q2 is fed by pp-q1's LOSER and pp-elim's winner; pp-final by pp-q1's winner and pp-q2's winner.
+      const q2 = shape.find((g) => [g.homeFrom, g.awayFrom].some((r) => r?.fixtureId === "pp-q1" && r.side === "loser"))!;
+      expect(q2.id, "the engine feeds pp-q1's loser to pp-q2").toBe("pp-q2");
+      const home = q1.home_entrant_id!;
+      const elimWinner = elim.home_entrant_id!;
+      expect(fx("pp-q1"), `elimFirst ${elimFirst}`).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: home } });
+      expect(fx("pp-q2"), `elimFirst ${elimFirst}: the walkover's loser is not seated, so the other seat is awarded through`).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: elimWinner } });
+      expect(fx("pp-q2").home_entrant_id === q1.away_entrant_id || fx("pp-q2").away_entrant_id === q1.away_entrant_id, `elimFirst ${elimFirst}: the absent side is nowhere in pp-q2`).toBe(false);
+      expect([fx("pp-final").home_entrant_id, fx("pp-final").away_entrant_id].sort(), `elimFirst ${elimFirst}`).toEqual([home, elimWinner].sort());
+      judged++;
+    }
+    expect(judged).toBe(2);
   });
   it("M1 and R4 seed the same 4 there", async () => {
     for (const k of ["M1", "R4"] as const) {

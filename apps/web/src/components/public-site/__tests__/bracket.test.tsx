@@ -871,3 +871,71 @@ describe("public Bracket — a card footer's Live / TBD are the org locale's wor
     });
   });
 });
+
+// W2a Task 13 (spec §5.5; addendum 6) — a held fixture (`needs_decision`: a bracket game that ended level, or an
+// abandon that decided nobody) is neither live nor finished. The card says so with the held chip, keeps the level score
+// the board recorded, and never highlights a winner — even one a stray outcome names.
+describe("public Bracket — a held fixture (W2a)", () => {
+  const render = (fixtures: ReturnType<typeof F>[], copy: BracketCopy = enCopy) =>
+    renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy, tz: "UTC", locale: "en" }),
+    );
+  const held = (outcome: { kind?: string; winner?: string } | null) => ({
+    ...F("f1", 0, 1, "a", "b", outcome, "needs_decision"),
+    summary: { headline: "1–1" },
+  });
+
+  it("empty case first: a scheduled card shows no held chip", () => {
+    const html = render([F("f1", 0, 1, "a", "b", null)]);
+    expect(html).not.toContain('data-held="true"');
+    expect(html).not.toContain(enCopy.held);
+  });
+
+  it("shows the held chip AND the level score, and names no winner", () => {
+    const html = render([held({ kind: "draw" })]);
+    expect(html).toContain('data-held="true"');
+    expect(html).toContain(enCopy.held);
+    expect(enCopy.held).toBe("Level — winner to be decided"); // ruling D-H3 (fix round 1)
+    expect(html, "the level score stays").toContain("1–1");
+    expect(html).not.toContain("truncate font-semibold text-ink");
+    expect(html).not.toContain(enCopy.live);
+  });
+
+  it("never highlights a winner on a held card, even one a stray outcome names (the guard)", () => {
+    const html = render([held({ kind: "win", winner: "a" })]);
+    expect(html).toContain('data-held="true"');
+    expect(html).not.toContain("truncate font-semibold text-ink");
+    // The positive pair: the same outcome on a DECIDED card does highlight.
+    expect(render([F("f1", 0, 1, "a", "b", { kind: "win", winner: "a" }, "decided")])).toContain("truncate font-semibold text-ink");
+  });
+
+  it("the held word is the org locale's own, in every locale", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const copy = publicScheduleCopy(await getDictionary(locale, "public"), (k) => msgFor(locale, k));
+      expect(copy.held, locale).toBe(t(await getDictionary(locale, "public"), "matchCentre.status.needs_decision"));
+      expect(render([held({ kind: "draw" })], copy), locale).toContain(copy.held);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("loop R M7(b): the held note and the level score share ONE row — the note wraps as a block, never as a two-line pill", () => {
+    // The held words ("Level — winner to be decided", 28–35 characters in the four locales) do not fit a 188px node on
+    // one line. In a rounded-full pill on a wrapping row they broke inside the pill AND pushed the score to a third line,
+    // past the node's height. The row no longer wraps: the note takes the room left of the score and wraps inside a
+    // block (rounded-md, balanced lines); the score never shrinks or breaks.
+    const html = render([held({ kind: "draw" })]);
+    const row = /<span data-held="true" class="([^"]*)">/.exec(html)?.[1]?.split(/\s+/);
+    expect(row, "the held row renders").toBeDefined();
+    expect(row).toContain("flex");
+    expect(row, "the row does not wrap the score under the note").not.toContain("flex-wrap");
+    const note = new RegExp(`<span class="([^"]*)">${enCopy.held}</span>`).exec(html)?.[1]?.split(/\s+/);
+    expect(note, "the note renders the held words").toBeDefined();
+    expect(note).not.toContain("rounded-full");
+    expect(note).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "rounded-md", "text-balance"]));
+    const score = /<span class="([^"]*)">1–1<\/span>/.exec(html)?.[1]?.split(/\s+/);
+    expect(score, "the level score renders").toBeDefined();
+    expect(score).toEqual(expect.arrayContaining(["shrink-0", "whitespace-nowrap"]));
+  });
+});

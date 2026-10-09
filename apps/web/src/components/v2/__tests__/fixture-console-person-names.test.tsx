@@ -105,6 +105,8 @@ function consoleHtml(home: SideInfo, away: SideInfo): string {
       initialState={live}
       initialEvents={[{ ...GOAL, payload: { by: home.id } }]}
       canEdit
+      canOrganise
+      stageKind={null}
       viewerPlan="community"
     />,
   );
@@ -179,11 +181,39 @@ describe("the console renders people, not entry labels (D-6)", () => {
         initialState={live}
         initialEvents={[GOAL]}
         canEdit
+        canOrganise
+        stageKind={null}
         viewerPlan="community"
       />,
     );
     expect(html).toContain("Ada Okonkwo");
     expect(html).not.toContain("Entry 3");
+  });
+
+  it("W2a: a chess tie-break's recorded score reaches the console's decided sentence (spec §5.5)", () => {
+    const live: LiveState = {
+      status: "decided",
+      last_seq: 3,
+      summary: { headline: "½ — ½", detail: { tiebreak: { rung: "rapid", score: "1½–½" } } },
+      state: {},
+      outcome: { kind: "win", winner: "e-home", method: "tiebreak_rapid" },
+    };
+    const html = renderToStaticMarkup(
+      <FixtureConsole
+        fixture={{ id: "f1", status: "decided", scheduled_at: null, venue_name: null, court_name: null, round_no: 1 }}
+        sport={sport}
+        home={SINGLES}
+        away={PAIR}
+        initialState={live}
+        initialEvents={[GOAL]}
+        canEdit
+        canOrganise
+        stageKind="knockout"
+        viewerPlan="community"
+      />,
+    );
+    // Fix round 1 (M1): the score is glued (a nowrap span) so it never splits across lines on a phone.
+    expect(html).toContain('Ada Okonkwo won on rapid tie-break (<span class="whitespace-nowrap">1½–½</span>)');
   });
 
   it("still shows a football team by its team name", () => {
@@ -243,6 +273,8 @@ describe("the forfeit picker, opened (D-6)", () => {
       } satisfies LiveState,
       initialEvents: [GOAL],
       canEdit: true,
+      canOrganise: true,
+      stageKind: null,
       viewerPlan: "community",
     });
     const el = console_

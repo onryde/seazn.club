@@ -79,7 +79,7 @@ interface Props {
 }
 
 /** The two schedule-rail words a bracket card's footer shows. */
-export type BracketCopy = Pick<ScheduleCopy, "live" | "tbd">;
+export type BracketCopy = Pick<ScheduleCopy, "live" | "tbd" | "held">;
 
 function sideLabel(
   entrantId: string | null,
@@ -118,7 +118,11 @@ function FixtureCard({
   tz: string;
   locale: string;
 }) {
-  const winner = fixture.outcome?.winner;
+  // W2a (spec §5.5): a held fixture (`needs_decision` — a bracket game that ended level) has no winner until the
+  // organiser settles it, whatever a stray outcome says: the card never highlights one. (A recorded abandon that decided
+  // nobody is ALSO held, but it is stored `abandoned` — this status test does not see it, and its card reads abandoned.)
+  const held = fixture.status === "needs_decision";
+  const winner = held ? undefined : fixture.outcome?.winner;
   const side = (id: string | null, slotLabel: SlotLabel | null) => {
     const badge = id ? entrantLogos?.[id] : null;
     const label = sideLabel(id, entrantNames, fixture.stage_id, slotLabel, lookup, slotText);
@@ -153,6 +157,7 @@ function FixtureCard({
     >
       {winner ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-accent" /> : null}
       {live ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-emerald-400" /> : null}
+      {held ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-amber-400" /> : null}
       <div className="flex flex-col gap-0.5">
         {side(fixture.home_entrant_id, fixture.home_slot_label)}
         {side(fixture.away_entrant_id, fixture.away_slot_label)}
@@ -163,6 +168,17 @@ function FixtureCard({
             {/* `shrink-0`: the rail's dot's squeeze class (N1h h1, review-n1g G1). */}
             <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
             {copy.live}
+          </span>
+        ) : held ? (
+          // The held note, and the level score the board recorded beside it — the score stays; only the verdict waits.
+          // Loop R M7(b): ONE row that never wraps. The held words (28–35 characters across the four locales) do not fit
+          // the 188px node on one line, so the note is a block that wraps inside itself (rounded-md, balanced lines) to
+          // the left of the score — never a rounded-full pill broken in two with the score pushed to a third line.
+          <span data-held="true" className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 flex-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-semibold leading-tight text-balance text-amber-800">{copy.held}</span>
+            {fixture.summary?.headline ? (
+              <span className="shrink-0 whitespace-nowrap font-display text-sm font-semibold tabular-nums text-ink">{fixture.summary.headline}</span>
+            ) : null}
           </span>
         ) : fixture.summary?.headline ? (
           <span className="font-display text-sm font-semibold tabular-nums text-accent-strong">

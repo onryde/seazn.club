@@ -265,7 +265,9 @@ export default async function ScorePadPage({
   // cannot see a stage overlay. `loadFixturePadCfg` resolves all three inputs;
   // `read` is a session-shaped ctx by construction above, so the API-surface
   // device-link refusal does not apply to it.
-  const padCfg = await loadFixturePadCfg(read, fixture.id);
+  // W2a: `{ cfg, stageKind }` — the cfg drives the pad; the stage kind rides the bootstrap to it (Task 12: a bracket
+  // offers no level result). Never discarded: a kind read and dropped is the inert seam (addendum 4).
+  const { cfg: padCfg, stageKind } = await loadFixturePadCfg(read, fixture.id);
   // R7 B2 — per-config catalog (see the fixture console page). Still the raw
   // DIVISION config, deliberately: the catalog's inputs are teamSize /
   // playersPerSide / goalkeeper, which no sport in scope can override per
@@ -332,6 +334,7 @@ export default async function ScorePadPage({
     hasFeatureFn: (key) => hasFeature(link.org_id, key, fixture.competition_id),
     initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
     identity: { recordedBy: link.issued_by, deviceLinkId: link.id },
+    stageKind,
   });
 
   return (

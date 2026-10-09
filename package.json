@@ -53,6 +53,7 @@
     "sim:replay": "npm run sim:replay --workspace packages/engine --",
     "engine:boundary": "node --experimental-strip-types scripts/engine-boundary.ts",
     "reference:boundary": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts scripts/reference-boundary.ts",
+    "mutate": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts scripts/mutate.ts",
     "db:apply": "bash scripts/flyway.sh migrate",
     "db:info": "bash scripts/flyway.sh info",
     "db:validate": "bash scripts/flyway.sh validate",

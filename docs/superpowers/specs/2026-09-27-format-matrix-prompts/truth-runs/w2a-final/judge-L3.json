@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "mode": "regression",
+  "exit": 1,
+  "layer": "L3",
+  "runs": [
+    "ci-37916609028-1-l3"
+  ],
+  "plannedNotRun": null,
+  "compared": 937,
+  "faults": [],
+  "differing": [],
+  "missing": [],
+  "regressed": [
+    {
+      "caseId": "page_playoff_only|football|11-a-side|M1",
+      "was": "works",
+      "now": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    },
+    {
+      "caseId": "page_playoff_only|cricket|t20|M1",
+      "was": "works",
+      "now": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    },
+    {
+      "caseId": "page_playoff_only|carrom|club-29|M1",
+      "was": "works",
+      "now": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    },
+    {
+      "caseId": "page_playoff_only|volleyball|beach|M1",
+      "was": "works",
+      "now": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    },
+    {
+      "caseId": "page_playoff_only|badminton|bwf|M1",
+      "was": "works",
+      "now": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    },
+    {
+      "caseId": "page_playoff_only|tabletennis|bo5|M1",
+      "was": "works",
+      "now": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    },
+    {
+      "caseId": "page_playoff_only|tennis|tour|M1",
+      "was": "works",
+      "now": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    },
+    {
+      "caseId": "page_playoff_only|icehockey|iihf|M1",
+      "was": "works",
+      "now": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    },
+    {
+      "caseId": "page_playoff_only|hockey|fih-outdoor|M1",
+      "was": "works",
+      "now": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    }
+  ],
+  "absent": []
+}

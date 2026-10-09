@@ -64,10 +64,11 @@ function fx(o: Partial<RunSheetFixture> = {}): RunSheetFixture {
   };
 }
 
-function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | null): string {
+function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | null, awaitsSettle = false): string {
   return renderToStaticMarkup(
     <RunSheetRow
       fixture={fixture}
+      awaitsSettle={awaitsSettle}
       href="/f/1"
       tz={TZ}
       orgTz={TZ}
@@ -199,6 +200,87 @@ describe("a voided row says WHY it is struck through", () => {
 // forfeited+award sit-out used to print only "{name} has a bye" and hide the
 // walkover. Pin both halves — bye label AND won (w/o) — derived from the same
 // helpers the row uses.
+// W2a Task 11 (finding 25): a held bracket fixture says so on the run sheet — a chip in the red attention tone — and
+// its one action is Settle, which opens the fixture page where the "Needs a decision" block lives.
+describe("a held fixture (needs_decision) reads Needs a decision and offers Settle", () => {
+  const HELD = fx({ status: "needs_decision", outcome: { kind: "draw" } });
+
+  it("shows the held chip and the decide action to an editor", () => {
+    const html = rowHtml(HELD);
+    expectRowRendered(html);
+    expect(html).toContain('data-testid="run-sheet-held-chip"');
+    expect(html).toContain(">Needs a decision<");
+    expect(rowAction(html)).toBe("decide");
+    expect(html).toContain(">Settle<");
+  });
+
+  it("a read-only viewer still sees the chip, and only views", () => {
+    const html = rowHtml(HELD, false);
+    expect(html).toContain('data-testid="run-sheet-held-chip"');
+    expect(rowAction(html)).toBe("view");
+  });
+
+  it("M10 (fix round 1): a recorded abandon awaiting its settle — stored `abandoned` — is held too: chip and Settle", () => {
+    const abandoned = fx({ status: "abandoned", outcome: null });
+    const held = rowHtml(abandoned, true, undefined, true);
+    expectRowRendered(held);
+    expect(held).toContain('data-testid="run-sheet-held-chip"');
+    expect(rowAction(held)).toBe("decide");
+    // The positive pair: the generator's void (abandoned, nothing owed) is a result with no chip.
+    const voided = rowHtml(abandoned, true, undefined, false);
+    expectRowRendered(voided);
+    expect(voided).not.toContain('data-testid="run-sheet-held-chip"');
+    expect(rowAction(voided)).not.toBe("decide");
+  });
+
+  it("M10 (fix round 1): a held abandon's names are NOT struck through — the row is owed work, not a void; the void keeps its strike", () => {
+    // Seen on the 320/1280 crops: a struck-through pair beside "Needs a decision" and Settle read as two contradicting
+    // facts in one row (the void says "does not count"; the settle seats a winner). The reason line still says abandoned.
+    const abandoned = fx({ status: "abandoned", outcome: null });
+    const held = rowHtml(abandoned, true, undefined, true);
+    const voided = rowHtml(abandoned, true, undefined, false);
+    expectRowRendered(held);
+    expectRowRendered(voided);
+    expect(voided, "the positive pair: a void is struck").toContain("line-through");
+    expect(held).not.toContain("line-through");
+    expect(held, "the reason line stays").toContain(fixtureStatusLabel(msg, "abandoned"));
+    // And a played row is never struck, held flag or not.
+    const played = rowHtml(fx({ status: "decided", outcome: { kind: "win", winner: "e1", loser: "e2" } }));
+    expectRowRendered(played);
+    expect(played).not.toContain("line-through");
+  });
+
+  it("the positive pair: a decided row carries no held chip", () => {
+    const html = rowHtml(fx({ status: "decided", outcome: { kind: "win", winner: "e1", loser: "e2" } }));
+    expectRowRendered(html);
+    expect(html).not.toContain('data-testid="run-sheet-held-chip"');
+  });
+
+  it("loop R M7(d): on a phone a held row gives its meta line a line of its own, so 'abandoned' is never truncated away", () => {
+    // At 320 line 2 held the meta text, the held chip and Settle: the chip and the action took the room and the meta
+    // truncated to "Round 1 · …", hiding the reason. A held row's meta now takes the whole line (max-md:basis-full) and
+    // the chip and Settle wrap below it; any other row keeps the two-line composition (Task 9, A3).
+    const phoneMeta = (html: string) => /<p class="([^"]*\bmd:hidden\b[^"]*)">([^<]*)<\/p>/.exec(html);
+    const abandoned = fx({ status: "abandoned", outcome: null });
+    const rows = [
+      { name: "held abandon", html: rowHtml(abandoned, true, undefined, true), own: true },
+      { name: "needs_decision", html: rowHtml(HELD), own: true },
+      { name: "a void (no chip)", html: rowHtml(abandoned, true, undefined, false), own: false },
+      { name: "a decided row", html: rowHtml(fx({ status: "decided", outcome: { kind: "win", winner: "e1", loser: "e2" } })), own: false },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      expectRowRendered(r.html);
+      const m = phoneMeta(r.html);
+      expect(m, `${r.name}: the phone meta paragraph renders`).not.toBeNull();
+      expect(m![1]!.split(/\s+/).includes("max-md:basis-full"), r.name).toBe(r.own);
+      checked++;
+    }
+    expect(phoneMeta(rows[0]!.html)![2], "the held abandon's meta still carries the reason").toContain(fixtureStatusLabel(msg, "abandoned"));
+    expect(checked).toBe(rows.length);
+  });
+});
+
 describe("an awarded bye names the sit-out AND the walkover", () => {
   it("shows schedule.bye and schedule.outcome.wonWo for a one-sided award", () => {
     const outcome = { kind: "award" as const, winner: "e1" };

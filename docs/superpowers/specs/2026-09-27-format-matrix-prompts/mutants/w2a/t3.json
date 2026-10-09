@@ -1,0 +1,219 @@
+[
+  {
+    "id": "draw-kinds-drop-americano",
+    "file": "packages/engine/src/core/types.ts",
+    "find": "  \"league\", \"group\", \"swiss\", \"americano\",\n]);",
+    "replace": "  \"league\", \"group\", \"swiss\",\n]);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: the cases the old deny-list got wrong \\(generic page_playoff/ladder/americano, boardgame knockout\\)|X-DR-1: outside DRAW_KINDS no sport allows a draw; inside, the sport's own rule over its declared cfg decides"
+      }
+    ]
+  },
+  {
+    "id": "bracket-kinds-drop-ladder",
+    "file": "packages/engine/src/core/types.ts",
+    "find": "  \"knockout\", \"double_elim\", \"stepladder\", \"page_playoff\", \"ladder\",\n]);",
+    "replace": "  \"knockout\", \"double_elim\", \"stepladder\", \"page_playoff\",\n]);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/stage-kind-sets.test.ts"
+        ],
+        "name": "BRACKET_KINDS and DRAW_KINDS are disjoint and together are every StageKind the engine declares|BRACKET_KINDS is the bracket-shape set plus ladder \\(finding 5\\)"
+      }
+    ]
+  },
+  {
+    "id": "is-level-outcome-drop-no-result",
+    "file": "packages/engine/src/core/types.ts",
+    "find": "(outcome.kind === \"draw\" || outcome.kind === \"tie\" || outcome.kind === \"no_result\")",
+    "replace": "(outcome.kind === \"draw\" || outcome.kind === \"tie\")",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/stage-kind-sets.test.ts"
+        ],
+        "name": "isLevelOutcome is true exactly for draw, tie and no_result"
+      }
+    ]
+  },
+  {
+    "id": "boardgame-supports-draws-always-true",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "    return DRAW_KINDS.has(stage);\n  },",
+    "replace": "    return true;\n  },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: outside DRAW_KINDS no sport allows a draw; inside, the sport's own rule over its declared cfg decides"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/boardgame.test.ts"
+        ],
+        "name": "X-DR-1: draws only in DRAW_KINDS — a drawn bracket game goes to the tie-break \\(BG-KO-1\\)"
+      }
+    ]
+  },
+  {
+    "id": "generic-drop-allow-draws",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "return cfg.allowDraws && DRAW_KINDS.has(stage);",
+    "replace": "return DRAW_KINDS.has(stage);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/generic/generic.test.ts"
+        ],
+        "name": "X-DR-1: supports draws only in DRAW_KINDS, and only with allowDraws"
+      }
+    ]
+  },
+  {
+    "id": "carrom-drop-tieboard-draw",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "return cfg.tieBoard === \"draw\" && DRAW_KINDS.has(stage);",
+    "replace": "return DRAW_KINDS.has(stage);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: outside DRAW_KINDS no sport allows a draw; inside, the sport's own rule over its declared cfg decides"
+      }
+    ]
+  },
+  {
+    "id": "period-drop-shootout-null",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "return DRAW_KINDS.has(stage) && cfg.overtime === null && cfg.shootout === null;",
+    "replace": "return DRAW_KINDS.has(stage) && cfg.overtime === null;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: outside DRAW_KINDS no sport allows a draw; inside, the sport's own rule over its declared cfg decides"
+      }
+    ]
+  },
+  {
+    "id": "football-old-list-without-americano",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "  supportsDraws(_cfg, stage: StageKind) {\n    return DRAW_KINDS.has(stage);\n  },",
+    "replace": "  supportsDraws(_cfg, stage: StageKind) {\n    return stage === \"league\" || stage === \"group\" || stage === \"swiss\";\n  },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: outside DRAW_KINDS no sport allows a draw; inside, the sport's own rule over its declared cfg decides"
+      }
+    ]
+  },
+  {
+    "id": "cricket-drop-two-innings",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "return cfg.inningsPerSide === 2 && DRAW_KINDS.has(stage);",
+    "replace": "return DRAW_KINDS.has(stage);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: outside DRAW_KINDS no sport allows a draw; inside, the sport's own rule over its declared cfg decides"
+      }
+    ]
+  },
+  {
+    "id": "carrom-tieboard-check-false",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "return cfg.tieBoard === \"draw\" && DRAW_KINDS.has(stage);",
+    "replace": "return false && DRAW_KINDS.has(stage);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: organiser cfgs no variant declares \\(carrom's tieBoard 'draw'; a period overtime with no shoot-out\\) answer by the same rule rows"
+      }
+    ]
+  },
+  {
+    "id": "carrom-tieboard-literal-empty",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "return cfg.tieBoard === \"draw\" && DRAW_KINDS.has(stage);",
+    "replace": "return cfg.tieBoard === \"\" && DRAW_KINDS.has(stage);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: organiser cfgs no variant declares \\(carrom's tieBoard 'draw'; a period overtime with no shoot-out\\) answer by the same rule rows"
+      }
+    ]
+  },
+  {
+    "id": "period-overtime-check-true",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "return DRAW_KINDS.has(stage) && cfg.overtime === null && cfg.shootout === null;",
+    "replace": "return DRAW_KINDS.has(stage) && true && cfg.shootout === null;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/supports-draws.test.ts"
+        ],
+        "name": "X-DR-1: organiser cfgs no variant declares \\(carrom's tieBoard 'draw'; a period overtime with no shoot-out\\) answer by the same rule rows"
+      }
+    ]
+  },
+  {
+    "id": "declared-cfgs-unconditional-default",
+    "file": "packages/engine/src/testkit/declared-cfgs.ts",
+    "find": "if (bare.success) out.unshift",
+    "replace": "out.unshift",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/testkit/declared-cfgs.test.ts"
+        ],
+        "name": "every sport yields every declared variant by name, and the schema default only where \\{\\} parses"
+      }
+    ]
+  },
+  {
+    "id": "declared-cfgs-never-refuses-empty",
+    "file": "packages/engine/src/testkit/declared-cfgs.ts",
+    "find": "if (out.length === 0) throw",
+    "replace": "if (false) throw",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/testkit/declared-cfgs.test.ts"
+        ],
+        "name": "empty case first: a module that declares nothing is refused, never an empty sweep"
+      }
+    ]
+  }
+]

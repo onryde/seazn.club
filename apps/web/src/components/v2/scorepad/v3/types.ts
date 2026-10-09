@@ -682,7 +682,14 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * with no override renders the app's daylight signal pair. Absent means the
  * plain option button every pre-B4 step already rendered.
  */
-export interface SheetChoiceStep { id: string; kind: "choice"; title: MessageKey; options: { id: string; label: string; tone?: readonly SportTone[] }[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
+export interface SheetChoiceStep { id: string; kind: "choice"; title: MessageKey; options: SheetChoiceOption[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked }
+/**
+ * One option of a choice step. `label` is a dictionary KEY the chassis resolves (`t(label)`). `labelText`, when
+ * present, is an already-resolved string that WINS over the key — the convention `TileSpec.labelText` set for a value
+ * no dictionary can hold (a person's name). W2a Task 12: the chess tie-break's winner step names the two players; the
+ * key stays the canonical fallback ("Home"/"Away"), so a sweep collecting every key still sees one per option.
+ */
+export interface SheetChoiceOption { id: string; label: string; labelText?: string; tone?: readonly SportTone[] }
 /**
  * R2/task A5 (`_INDEX.md` R1 "owed by later waves", closed here): `side` is
  * REQUIRED, not optional-with-a-default. Cricket's wicket flow needs the
@@ -1408,6 +1415,31 @@ export interface PadHostView {
   readonly squads: SquadState;
   readonly events: readonly EventEnvelope[];
   readonly contextOverrides: Readonly<Record<string, string>>;
+  /**
+   * W2a Task 12 (spec §5.5; addendum 4) — the fixture's stage kind, or null for a fixture with no stage (a pre-W2a
+   * bootstrap). Loaded by `loadFixturePadCfg` and threaded through `ScorePadBootstrap`; a skin reads it through
+   * `forbidsLevelResult` (a bracket kind) and never re-derives it. Required: a forgotten producer must not read as
+   * "not a bracket" by accident.
+   */
+  readonly stageKind: string | null;
+  /**
+   * W2a (owner ruling D-O1; addendum 2) — the viewer is an ORGANISER (owner/admin) on the console. False for an
+   * official scorer and for every device link. An organiser-only write (`isOrganiserOnlyEvent`: settle, forfeit,
+   * abandon, chess's forfeit/double-forfeit result) is refused to anyone else on the server, so the chassis drops a
+   * dock chip that would write one (`dockFor`, pad-host.tsx). Required, never defaulted: a missing value must not
+   * fail open.
+   */
+  readonly canOrganise: boolean;
+  /**
+   * W2a fix round 1 (I2; spec §5.5 "two entrants, always"), fix round 2 (N1) — what each side is CALLED, resolved by
+   * `entrantDisplayName` (lib/entrant-name.ts, D-6): the same name the console heading and the device-link header show.
+   * For a singles entrant that is its one member ("Ada Okonkwo"), never the `entrants.display_name` snapshot
+   * ("Entry 3"). `personNames` cannot answer this on its own: it is keyed by person id and only names someone a lineup
+   * or pairing card seats, so a chess knockout with no pairing card read "Home"/"Away" on its tie-break winner step.
+   * Built once by `entrantNamesFrom` (registry.tsx). Required so a forgotten producer is a tsc error; a side with no
+   * name (`{}` in a test view) falls back to the skin's own key.
+   */
+  readonly entrantNames: Readonly<Partial<Record<"home" | "away", string>>>;
   /**
    * R6 fix pass 2 (gap 2) — THE HOST CLOCK'S LIVE READING, so a skin can show a
    * number that changes between events.

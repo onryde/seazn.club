@@ -26,6 +26,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { isValidElement } from "react";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { builtinModules } from "@seazn/engine/sports";
+import { foldMatch } from "@seazn/engine/core";
+import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import { messages } from "@/lib/messages";
 import type { EventIn, FixtureStreamMount, LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
@@ -97,12 +99,19 @@ type ConsoleOver = {
     away?: SideInfo | null;
     /** The console's OWN canEdit (`canScore && !frozen`) — false is the read-only (frozen) shape. */
     canEdit?: boolean;
+    /** W2a X-ST-2 — the viewer is an organiser (owner/admin). False is an accepted official scorer: may score, but
+     *  settle/forfeit/abandon are refused to them on the server. */
+    canOrganise?: boolean;
+    /** W2a Task 11 — the fixture's stage kind; a bracket kind is what makes a level result HELD. */
+    stageKind?: string | null;
     /** Spec 2026-09-30 §2 — the page's stream mount and its `?stream=open`. */
     stream?: FixtureStreamMount;
     streamReturn?: boolean;
     /** T9b: the page's shared stream session, seeded through `StreamSessionProvider`'s test seam (the server never
      *  passes it). The console's own provider for the same fixture adds nothing beneath it, so this IS what it reads. */
     streamView?: StreamSessionView | null;
+    /** W2a fix round 1 (I1) — a fixture of ANOTHER sport: its SportInfo, folded state, ledger and pad pin. */
+    other?: { sport: SportInfo; state: unknown; events: EventIn[]; moduleVersion: string; resolvedConfig: unknown };
 };
 /** The console element the page renders for `over` (no outer provider). */
 function consoleTree(over: ConsoleOver = {}) {
@@ -111,7 +120,10 @@ function consoleTree(over: ConsoleOver = {}) {
     status,
     last_seq: 2,
     summary: { headline: "1 — 0" },
-    state: {},
+    // P1 follow-up: a SCHEDULED fixture has no match_states row, so the page serves `state: null`
+    // (getFixtureState: `row.state ?? null`). This harness used to pass `{}` for every fixture, so no console test
+    // ever rendered the shape a scheduled fixture really has — and a scheduled chess knockout crashed in production.
+    state: over.other !== undefined ? over.other.state : status === "scheduled" ? null : {},
     outcome: over.outcome ?? null,
   };
   const tree = (
@@ -124,21 +136,24 @@ function consoleTree(over: ConsoleOver = {}) {
         court_name: null,
         round_no: 1,
       }}
-      sport={sport}
+      sport={over.other?.sport ?? sport}
       home={over.home !== undefined ? over.home : side("e-home", "Riverside FC")}
       away={over.away !== undefined ? over.away : side("e-away", "Summit Athletic")}
       initialState={live}
-      initialEvents={status === "scheduled" ? [] : EVENTS}
+      initialEvents={status === "scheduled" ? [] : (over.other?.events ?? EVENTS)}
       canEdit={over.canEdit ?? true}
+      canOrganise={over.canOrganise ?? true}
+      stageKind={over.stageKind ?? null}
       deviceHandover={over.deviceHandover ?? true}
       stream={over.stream}
       streamReturn={over.streamReturn}
       recorderNames={{ "user-1": "Dana Okafor" }}
       scorePadV2={{
-        moduleVersion: football.version,
-        resolvedConfig: CFG,
+        moduleVersion: over.other?.moduleVersion ?? football.version,
+        resolvedConfig: over.other?.resolvedConfig ?? CFG,
         initialEvents: [],
         entitlements: {},
+        stageKind: null,
         identity: { recordedBy: "user-1", deviceLinkId: null },
       }}
       viewerPlan="community"
@@ -272,6 +287,194 @@ describe("the authority band (D-12)", () => {
     expect(scheduled).toContain("Start match");
     // ...and it is NOT in the authority band, which is outlined throughout.
     expect(bandHtml(scheduled)).not.toContain("Start match");
+  });
+});
+
+describe("W2a: held bracket fixtures and organiser-only actions (finding 11, finding 27, X-ST-2, ruling C12)", () => {
+  const HELD = { status: "needs_decision", outcome: { kind: "draw" }, stageKind: "knockout" } as const;
+  const BLOCK = 'data-testid="needs-decision"';
+  const FINALIZE = 'data-testid="score-finalize"';
+
+  it("X-ST-2: an organiser is offered Forfeit and Abandon; an official scorer (canOrganise false) is offered neither", () => {
+    const organiser = bandHtml(consoleHtml({ canOrganise: true }));
+    expect(organiser).toContain('data-testid="score-forfeit"');
+    expect(organiser).toContain(">Abandon…<");
+    const scorer = consoleHtml({ canOrganise: false });
+    expect(scorer).not.toContain('data-testid="score-forfeit"');
+    expect(scorer).not.toContain(">Abandon…<");
+    // Nothing left to offer ⇒ no empty "Match actions" container either.
+    expect(scorer).not.toContain('data-role="match-actions"');
+  });
+
+  it("a scorer still finalizes a decided match: Finalize is not organiser-only", () => {
+    expect(bandHtml(consoleHtml({ canOrganise: false, outcome: { kind: "win", winner: "e-home" } }))).toContain(FINALIZE);
+  });
+
+  it("finding 27 + C12: a held knockout fixture shows the block and hides Finalize, for the organiser", () => {
+    const html = consoleHtml(HELD);
+    expect(html).toContain(BLOCK);
+    expect(html, "D-H3: a level result says so").toContain('data-cause="level"');
+    expect(html).toContain('data-testid="settle-open"');
+    expect(html).not.toContain(FINALIZE);
+  });
+
+  it("the positive pair: the same level result in a LEAGUE is a result — no block, Finalize offered", () => {
+    const html = consoleHtml({ ...HELD, status: "decided", stageKind: "league" });
+    expect(html).not.toContain(BLOCK);
+    expect(html).toContain(FINALIZE);
+  });
+
+  /** The REAL fold of a drawn chess knockout game (I1's rig): phase "tiebreak", status in_play, outcome null. */
+  function chessTiebreak() {
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    const ko = chess.configSchema.parse({ ...chess.bracketDeciders!(chess.configSchema.parse({})) });
+    const lineups = defaultLineupPair(chess.positions);
+    const ledger = [
+      makeEnvelope(1, { type: "core.start", payload: {} } as never),
+      makeEnvelope(2, { type: "boardgame.result", payload: { winner: null, method: "agreement" } } as never),
+    ];
+    const state = foldMatch(chess, ko, lineups, ledger);
+    expect((state as { phase?: string }).phase, "the rig must reach the tie-break").toBe("tiebreak");
+    const events: EventIn[] = ledger.map((e, i) => ({ ...EVENTS[0]!, id: `ev-${i + 1}`, seq: i + 1, type: e.type, payload: e.payload as Record<string, unknown> }));
+    return { sport: { ...sport, key: "boardgame", scorerLabel: "Arbiter", lineupSize: 1 }, state, events, moduleVersion: chess.version, resolvedConfig: ko };
+  }
+
+  it("I1: a chess knockout in its tie-break is HELD — the organiser gets the block and NO Forfeit/Abandon (held: the settle is the way out — the engine refuses forfeit WRONG_PHASE but would take an abandon)", () => {
+    // The REAL fold: a drawn knockout game opens phase "tiebreak" with status in_play and outcome null — not `decided`,
+    // so only the held gate keeps the band's two organiser writes off it (boardgame.ts refuses a forfeit in this phase;
+    // an abandon it accepts — tiebreak.test.ts — so the gate, not the engine, keeps Abandon off a held match).
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    const ko = chess.configSchema.parse({ ...chess.bracketDeciders!(chess.configSchema.parse({})) });
+    const lineups = defaultLineupPair(chess.positions);
+    const ledger = [
+      makeEnvelope(1, { type: "core.start", payload: {} } as never),
+      makeEnvelope(2, { type: "boardgame.result", payload: { winner: null, method: "agreement" } } as never),
+    ];
+    const state = foldMatch(chess, ko, lineups, ledger);
+    expect((state as { phase?: string }).phase, "the rig must reach the tie-break").toBe("tiebreak");
+    const events: EventIn[] = ledger.map((e, i) => ({ ...EVENTS[0]!, id: `ev-${i + 1}`, seq: i + 1, type: e.type, payload: e.payload as Record<string, unknown> }));
+    const other = {
+      sport: { ...sport, key: "boardgame", scorerLabel: "Arbiter", lineupSize: 1 },
+      state,
+      events,
+      moduleVersion: chess.version,
+      resolvedConfig: ko,
+    };
+    const held = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other });
+    expect(held, "the tie-break is owed: the block shows").toContain(BLOCK);
+    expect(held, "D-H3: and says the tie-break is what is owed").toContain('data-cause="tiebreak"');
+    expect(held).not.toContain('data-testid="score-forfeit"');
+    expect(held).not.toContain(">Abandon…<");
+    // The positive pair: the SAME chess game in play, before the draw, still offers both to the organiser.
+    const live = foldMatch(chess, ko, lineups, ledger.slice(0, 1));
+    const open = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", other: { ...other, state: live, events: events.slice(0, 1) } });
+    expect(open).not.toContain(BLOCK);
+    expect(bandHtml(open)).toContain('data-testid="score-forfeit"');
+    expect(bandHtml(open)).toContain(">Abandon…<");
+  });
+
+  it("P1 follow-up: a SCHEDULED chess knockout renders its console — not held, Start match offered (the page serves state null before kickoff)", () => {
+    const rig = chessTiebreak();
+    const html = consoleHtml({ status: "scheduled", outcome: null, stageKind: "knockout", other: { ...rig, state: null, events: [] } });
+    expect(html).toContain("Start match");
+    expect(html, "nothing is owed before the game is played").not.toContain(BLOCK);
+    expect(html).not.toContain(FINALIZE);
+    // The positive pair is I1 above: the same sport, stage kind and module pin, drawn, IS held.
+  });
+
+  it("an official scorer on a held fixture sees no block and no Settle (the settle is organiser-only)", () => {
+    const html = consoleHtml({ ...HELD, canOrganise: false });
+    expect(html, "the scorer still sees the fixture is held — its status reads so").toContain(">Needs a decision<");
+    // Fix round 1 (M6): `.badge` is `capitalize` (globals.css), which Title-Cased the localised word ("Needs A
+    // Decision") — a textContent assertion is blind to it, so the class is pinned on the badge that carries the word.
+    expect(html).toMatch(/<span class="badge [^"]*\bnormal-case\b[^"]*">Needs a decision<\/span>/);
+    expect(html).not.toContain(BLOCK);
+    expect(html).not.toContain('data-testid="settle-open"');
+    expect(html).not.toContain(FINALIZE);
+  });
+
+  it("M7: the official scorer on a held fixture is told WHY it is held — one line; the organiser (who has the block) and a scorer on a live match are not", () => {
+    const NOTE = 'data-testid="held-note"';
+    const WAITING = messages["score.needsDecision.waiting"];
+    const scorer = consoleHtml({ ...HELD, canOrganise: false });
+    expect(scorer).toContain(NOTE);
+    expect(scorer).toContain(WAITING);
+    expect(consoleHtml(HELD), "the organiser has the block instead").not.toContain(NOTE);
+    expect(consoleHtml({ canOrganise: false }), "a scorer on a live match").not.toContain(NOTE);
+  });
+
+  it("N2 (fix round 2): an official on a chess TIE-BREAK is told to record it on the pad — never to wait for the organiser; level and abandoned holds keep the organiser line", () => {
+    const NOTE = /<p data-testid="held-note" data-cause="([a-z]+)"[^>]*>([^<]*)<\/p>/;
+    const WAITING = messages["score.needsDecision.waiting"];
+    const TIEBREAK = messages["score.needsDecision.waiting.tiebreak"];
+    // Empty case first: the two lines are different words (a key that fell back to the other would pass on its inversion).
+    expect(TIEBREAK).toBeTypeOf("string");
+    expect(TIEBREAK).not.toBe(WAITING);
+    const note = (html: string) => {
+      const m = NOTE.exec(html);
+      return m === null ? null : { cause: m[1], text: m[2]!.replaceAll("&#x27;", "'") };
+    };
+    // The REAL fold (I1's rig) at canOrganise false: in_play, outcome null, held by the pending tie-break.
+    const tiebreak = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", canOrganise: false, other: chessTiebreak() });
+    expect(note(tiebreak)).toEqual({ cause: "tiebreak", text: TIEBREAK });
+    expect(tiebreak, "the organiser's line is not shown on a tie-break").not.toContain(WAITING);
+    // The organiser line stays where the organiser IS what happens next: a level result, and an abandon that decided nobody.
+    const abandoned = consoleHtml({
+      status: "abandoned",
+      outcome: null,
+      stageKind: "knockout",
+      canOrganise: false,
+      other: { ...chessTiebreak(), events: [{ ...EVENTS[0]! }, { ...EVENTS[0]!, id: "ev-2", seq: 2, type: "core.abandon", payload: { reason: "rain" } }] },
+    });
+    const rows = [
+      { name: "level", html: consoleHtml({ ...HELD, canOrganise: false }), want: { cause: "level", text: WAITING } },
+      { name: "abandoned", html: abandoned, want: { cause: "abandoned", text: WAITING } },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      expect(note(r.html), r.name).toEqual(r.want);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("m5 (fix round 2): the official's held note sits straight under the Scoring card — above the ledger and the lineups", () => {
+    const html = consoleHtml({ ...HELD, canOrganise: false });
+    const scoring = html.indexOf('data-role="console-scoring"');
+    const note = html.indexOf('data-testid="held-note"');
+    const ledger = html.indexOf('data-role="v3-activity"');
+    const lineups = html.indexOf('data-testid="lineup-editor"');
+    expect(scoring).toBeGreaterThan(-1);
+    expect(note, "the note follows the Scoring card").toBeGreaterThan(scoring);
+    expect(ledger, "the rig renders the ledger").toBeGreaterThan(-1);
+    expect(lineups, "the rig renders the lineups").toBeGreaterThan(-1);
+    expect(note, "above the ledger").toBeLessThan(ledger);
+    expect(note, "above the lineups").toBeLessThan(lineups);
+  });
+  it("loop R M7(a): an official on a held fixture gets NO empty Scoring card at any width — and the card stays wherever it holds something", () => {
+    // At 1280 and 768 the card rendered its "Scoring" heading over nothing (no pad once held, no hand-over, no stream):
+    // the phone gate (`consoleScoringEmptyOnPhone`) hid it below md only. The class token is read exactly — "hidden",
+    // never the phone-only "max-md:hidden".
+    const tokens = (html: string) => /<section class="([^"]*)" data-role="console-scoring"/.exec(html)?.[1]?.split(/\s+/) ?? null;
+    // Empty case first: nothing in the card at ANY width.
+    const empty = tokens(consoleHtml({ ...HELD, canOrganise: false, deviceHandover: false }));
+    expect(empty, "the section still renders, hidden, so the held note keeps its place after it").not.toBeNull();
+    expect(empty).toContain("hidden");
+    // Each thing that does fill the card keeps it shown — one row per content source.
+    const rows: [string, string][] = [
+      ["organiser (hand-over button)", consoleHtml(HELD)],
+      ["official with the hand-over", consoleHtml({ ...HELD, canOrganise: false })],
+      ["official with a stream", consoleHtml({ ...HELD, canOrganise: false, deviceHandover: false, stream: PANEL_MOUNT })],
+      ["official on a live match (the pad)", consoleHtml({ canOrganise: false, deviceHandover: false })],
+    ];
+    let checked = 0;
+    for (const [name, html] of rows) {
+      const t = tokens(html);
+      expect(t, name).not.toBeNull();
+      expect(t!.includes("hidden"), name).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
   });
 });
 

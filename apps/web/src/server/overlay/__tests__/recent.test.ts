@@ -13,8 +13,9 @@
 // absent" case below is written against RAW envelopes so that guard is
 // exercised rather than assumed: a caller holding an unresolved ledger must not
 // publish a struck event.
-import { describe, expect, it } from "vitest";
-import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
+import { describe, expect, it, vi } from "vitest";
+import { foldMatch, foldMatchWithStoppage, isLevelOutcome, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
+import { log } from "@/server/logger";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
 import {
@@ -442,6 +443,54 @@ describe("replayDerived", () => {
       active: active("badminton", [["core.start", {}], ...points(3, "H")]),
     });
     expect(replay.complete).toBe(false);
+  });
+
+  it("W2a I-1: a SETTLED fixture replays to the end in every sport — core.settle (and a settled abandon's finalize) is the kernel's, never the module's — with no degrade warning", () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      let sports = 0;
+      let settled = 0;
+      const replays = (key: string, cfg: unknown, stream: readonly (readonly [string, unknown])[]) => {
+        const mod = moduleFor(key);
+        const lineups = defaultLineupPair(mod.positions);
+        const events = stream.map(([type, payload], i) => ({ ...makeEnvelope(i + 1, { type, payload } as never), recordedAt: WALL }));
+        // Legal on the WRITE path first, so a red below is this replay's, never the ledger's.
+        foldMatchWithStoppage(mod as never, cfg as never, lineups, events, { strictFromSeq: 0 });
+        return replayDerived({ sportKey: key, module: mod as never, cfg: cfg as never, lineups, active: events }).complete;
+      };
+      for (const mod of builtinModules) {
+        sports++;
+        const cfg = cfgFor(mod.key);
+        const lineups = defaultLineupPair(mod.positions);
+        const base = [["core.start", {}], ["core.abandon", { reason: "floodlights" }]] as const;
+        const baseEvents = base.map(([type, payload], i) => makeEnvelope(i + 1, { type, payload } as never));
+        const o = outcomeOf(mod as never, foldMatchWithStoppage(mod as never, cfg as never, lineups, baseEvents));
+        if (!(o === null || isLevelOutcome(o))) continue; // this cfg's abandon awards a winner: nothing to settle (X-ST-1)
+        const stream = [...base, ["core.settle", { winner: lineups.home.entrantId, method: "organiser" }], ["core.finalize", {}]] as const;
+        expect(replays(mod.key, cfg, stream), mod.key).toBe(true);
+        settled++;
+      }
+      // Chess in a bracket (BG-KO-1): drawn, tie-break pending, settled by lot, finalized by the kernel.
+      const bg = cfgFor("boardgame");
+      const ko = moduleFor("boardgame").configSchema.parse({ ...(bg as object), tiebreak: true });
+      const drawn = [["core.start", {}], ["boardgame.result", { winner: null, method: "agreement" }]] as const;
+      const close = (winner: string) => [["core.settle", { winner, method: "lot" }], ["core.finalize", {}]] as const;
+      expect(replays("boardgame", ko, [...drawn, ...close("A")])).toBe(true);
+      // A settled league DRAW: the module has an outcome, so that finalize is the module's own.
+      expect(replays("boardgame", bg, [...drawn, ...close("H")])).toBe(true);
+      expect(sports).toBe(builtinModules.length);
+      expect(settled, `${settled} of ${sports} sports settled`).toBeGreaterThan(0);
+      expect(warn).not.toHaveBeenCalled();
+      // The positive pair: the spy does see the degrade warning, so its silence above is evidence.
+      const mod = moduleFor("badminton");
+      const exploding = { ...(mod as object), apply: () => { throw new Error("refused"); } } as never;
+      const lineups = defaultLineupPair(mod.positions);
+      const refused = replayDerived({ sportKey: "badminton", module: exploding, cfg: cfgFor("badminton") as never, lineups, active: active("badminton", [["core.start", {}], ...points(3, "H")]) });
+      expect(refused.complete).toBe(false);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

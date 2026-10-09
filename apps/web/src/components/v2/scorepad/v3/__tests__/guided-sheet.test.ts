@@ -27,6 +27,8 @@
 // proves it through ContextStrip/SwapSheet rather than re-deriving
 // resolvePool's own already-tested behaviour.
 import { describe, it, expect } from "vitest";
+import { createElement, Fragment } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { SideSquad, SquadMember } from "@seazn/engine/core";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { SPORT_TONE_CLASSES } from "../tokens";
@@ -36,6 +38,7 @@ import type { MessageKey } from "@/lib/messages";
 import { resolvePool } from "../context-strip";
 import {
   GuidedSheet,
+  keepHyphenatedWordsWhole,
   answerStep,
   backStep,
   currentStep,
@@ -389,6 +392,27 @@ describe("GuidedSheet rendering", () => {
   // in `rerender` and rejects every real call site.
   const optionButton = (tree: ReturnType<typeof walk>, id: string) =>
     tree.find((el) => propsOf(el)["data-choice-option-id"] === id)!;
+
+  it("W2a: an option's labelText (a name no dictionary holds) wins over its key; an option without one renders its key", () => {
+    const named: GuidedSheetSpec = {
+      event: "boardgame.tiebreak",
+      steps: [
+        {
+          id: "winner",
+          kind: "choice",
+          title: K("winner.title"),
+          options: [
+            { id: "home", label: "scorepad.attribution.home", labelText: "Magnus Carlsen" },
+            { id: "away", label: "scorepad.attribution.away" },
+          ],
+        },
+      ],
+      buildPayload: (answers) => ({ winner: answers.winner }),
+    };
+    const island = renderIsland(GuidedSheet, { spec: named, views, personNames: names, t, onComplete: () => {} });
+    expect(textOf(optionButton(island.tree(), "home"))).toBe("Magnus Carlsen");
+    expect(textOf(optionButton(island.tree(), "away"))).toBe("scorepad.attribution.away");
+  });
 
   it("washes a toned option in its OUTCOME tone and stamps a locale-independent data hook", () => {
     const island = renderIsland(GuidedSheet, { spec: tonedSpec, views, personNames: names, t, onComplete: () => {} });
@@ -1293,3 +1317,75 @@ describe("GuidedSheet rendering — R2c SheetChoiceStep.blocked", () => {
     expect(propsOf(home)["data-blocked"]).toBeUndefined();
   });
 });
+
+// Loop R M7(c) — at 320 the tie-break winner step split its heading "TIE-" / "BREAK?" and wrapped Back onto a line of its
+// own ABOVE the options (the header row was `flex-wrap`: a title that fills the width pushes Back down). The header no
+// longer wraps — the title shrinks and wraps beside Back — and a hyphenated word is one unbreakable run.
+describe("loop R M7(c): the step header keeps Back beside its title, and never splits a hyphenated word", () => {
+  it("keepHyphenatedWordsWhole: each hyphenated word becomes one nowrap run; a plain title and the empty title pass through", () => {
+    const html = (s: string) => renderToStaticMarkup(createElement(Fragment, null, keepHyphenatedWordsWhole(s)));
+    const rows: [string, string][] = [
+      ["Who won the tie-break?", 'Who won the <span class="whitespace-nowrap">tie-break?</span>'],
+      ["Sous-titre co-équipier", '<span class="whitespace-nowrap">Sous-titre</span> <span class="whitespace-nowrap">co-équipier</span>'],
+      ["No hyphen here", "No hyphen here"],
+      ["", ""],
+    ];
+    let checked = 0;
+    for (const [input, want] of rows) {
+      expect(html(input), JSON.stringify(input)).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("on a later step the header row does not wrap: the title shrinks beside Back, its hyphenated word whole; Back stays out of the options", () => {
+    const twoStep: GuidedSheetSpec = {
+      event: "boardgame.tiebreak",
+      steps: [
+        { id: "rung", kind: "choice", title: K("pad.sheet.rung.title"), options: [{ id: "rapid", label: K("pad.sheet.rung.rapid") }] },
+        {
+          id: "winner",
+          kind: "choice",
+          title: K("Who won the tie-break?"),
+          options: [
+            { id: "home", label: K("pad.sheet.winner.home") },
+            { id: "away", label: K("pad.sheet.winner.away") },
+          ],
+        },
+      ],
+      buildPayload: (answers) => ({ ...answers }),
+    };
+    const island = renderIsland(GuidedSheet, {
+      spec: twoStep,
+      views: candidatesViews,
+      personNames: {},
+      t,
+      onComplete: () => {},
+    });
+    // Empty case first: step 1 has no Back, so the header holds the title alone.
+    expect(buttonsOf(island.tree()).some((b) => textOf(b) === "pad.sheet.back")).toBe(false);
+    click(findByText(buttonsOf(island.tree()), "pad.sheet.rung.rapid"));
+    const tree = island.tree();
+    const back = findByText(buttonsOf(tree), "pad.sheet.back");
+    const title = tree.find((el) => el.type === "p" && String(propsOf(el).className ?? "").split(/\s+/).includes("mk-eyebrow"));
+    expect(title, "the step title renders").toBeDefined();
+    expect(renderToStaticMarkup(title!)).toContain('Who won the <span class="whitespace-nowrap">tie-break?</span>');
+    // `.mk-eyebrow` is an inline-flex: every child is its own flex item, so loose words beside the nowrap run stacked
+    // out of order at 320 ("WHO" / "WON TIE-BREAK?" / "THE"). The words are ONE child.
+    const items = ([] as unknown[]).concat(propsOf(title!).children as unknown).filter((c) => c !== null && c !== false && c !== "");
+    expect(items, "one flex item for the whole title").toHaveLength(1);
+    const header = tree.find((el) => {
+      const kids = ([] as unknown[]).concat(propsOf(el).children as unknown);
+      return el.type === "div" && kids.includes(title) && kids.some((k) => k === back);
+    });
+    expect(header, "the title and Back share one header row").toBeDefined();
+    const cls = (el: (typeof tree)[number]) => String(propsOf(el).className ?? "").split(/\s+/);
+    expect(cls(header!)).toContain("flex");
+    expect(cls(header!), "a wrapping header pushes Back above the options at 320").not.toContain("flex-wrap");
+    expect(cls(title!)).toEqual(expect.arrayContaining(["min-w-0", "flex-1"]));
+    expect(cls(back)).toContain("shrink-0");
+    const whole = walk(title!).find((el) => el.type === "span" && cls(el).includes("whitespace-nowrap"));
+    expect(whole && textOf(whole), "the hyphenated word is one unbreakable run").toBe("tie-break?");
+  });
+});
+

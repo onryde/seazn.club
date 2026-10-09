@@ -128,7 +128,7 @@ re-scanning, and see from the panel whether the phone is healthy.
 | **open session** | A session in an ACTIVE state (`requested`, `provisioning`, `warming`, `live`, `ending`). |
 | **live slot** | The slot whose open session has received ingest (`first_ingest_at` is not null). |
 | **present / silent** | Whether the current phone's last beat is recent (§6.9). |
-| **finished** | A fixture status in {`decided`, `finalized`, `forfeited`, `abandoned`, `cancelled`}. The owner's word "void" is `cancelled`. |
+| **finished** | A fixture status in {`decided`, `finalized`, `forfeited`, `abandoned`, `cancelled`, `needs_decision`}. The owner's word "void" is `cancelled`. `needs_decision` (format matrix W2a: a level bracket result, held for the organiser's settle) joined by controller ruling D-M1 (2026-10-09, owner-delegated): no play remains, so it arms the automatic stop like the others; V432 redefines `fixtures_track_finished` to match. |
 
 ---
 

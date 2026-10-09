@@ -8,8 +8,9 @@
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
 import {
-  foldMatch,
+  foldMatchWithStoppage,
   isStrictFold,
+  outcomeOf,
   resolveVoids,
   type CoreEv,
   type EventEnvelope,
@@ -18,6 +19,7 @@ import {
 import type { Rng } from "../../core/rng.ts";
 import { currentUnit, unitNumber, unitSegment, type MatchPosition } from "../../core/position.ts";
 import {
+  DRAW_KINDS,
   EntrantId,
   type DisciplineCard,
   type LineupPair,
@@ -782,8 +784,10 @@ function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldC
       away: { entrantId: away.id, slots: [] },
     };
     try {
-      const state = foldMatch(carrom, cfgParsed.data, lineups, events);
-      const outcome = state.outcome;
+      // W2a (ruling D-C3): the outcome of a fold is outcomeOf — a settle lives
+      // beside module state, so `state.outcome` would credit a settled level
+      // match as a draw.
+      const outcome = outcomeOf(carrom, foldMatchWithStoppage(carrom, cfgParsed.data, lineups, events));
       if (outcome !== null && (outcome.kind === "win" || outcome.kind === "award")) {
         const winnerIsHome = outcome.winner === home.id;
         creditEach(home, "wins", winnerIsHome ? 1 : 0);
@@ -979,13 +983,13 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
   defaultTiebreakers: CARROM_TIEBREAKERS,
 
   // Drawn matches exist only under the tieBoard 'draw' house rule, and only in
-  // table stages — ICF play ('extra') always produces a winner.
+  // DRAW_KINDS (X-DR-1, ruling 78) — ICF play ('extra') always produces a winner.
   supportsDraws(cfg, stage: StageKind) {
-    return (
-      cfg.tieBoard === "draw" &&
-      (stage === "league" || stage === "group" || stage === "swiss")
-    );
+    return cfg.tieBoard === "draw" && DRAW_KINDS.has(stage);
   },
+
+  // CA-KO-1 (ICF Law 56)
+  bracketDeciders: () => ({ tieBoard: "extra" as const }),
 
   // §9.3 — {win+loss (win & walkover), 2·draw (drawn match & no_result)}.
   declaredPointsSets(cfg) {

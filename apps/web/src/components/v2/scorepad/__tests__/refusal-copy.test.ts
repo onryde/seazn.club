@@ -35,6 +35,26 @@ describe("refusalText", () => {
     );
   });
 
+  it("M-1: a LEVEL_RESULT_IN_BRACKET refusal reads its reason (finalize asks for a settle; a generic draw for the winner)", () => {
+    expect(refusalText({ code: "LEVEL_RESULT_IN_BRACKET", message: "raw", reason: "finalize_unsettled" }, identityMsg)).toBe(
+      "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled",
+    );
+    expect(refusalText({ code: "LEVEL_RESULT_IN_BRACKET", message: "raw", reason: "generic_draw" }, identityMsg)).toBe(
+      "engineError.LEVEL_RESULT_IN_BRACKET",
+    );
+    expect(refusalText({ code: "LEVEL_RESULT_IN_BRACKET", message: "raw" }, identityMsg)).toBe("engineError.LEVEL_RESULT_IN_BRACKET");
+  });
+
+  it("D-R8: a SETTLE_NOT_APPLICABLE refusal for a withdrawn winner reads its own copy (the pad's tie-break path); any other keeps the code's", () => {
+    expect(refusalText({ code: "SETTLE_NOT_APPLICABLE", message: "raw", reason: "withdrawn" }, identityMsg)).toBe(
+      "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn",
+    );
+    expect(refusalText({ code: "SETTLE_NOT_APPLICABLE", message: "raw" }, identityMsg)).toBe("engineError.SETTLE_NOT_APPLICABLE");
+    expect(refusalText({ code: "SETTLE_NOT_APPLICABLE", message: "raw", reason: "not_bracket" }, identityMsg)).toBe(
+      "engineError.SETTLE_NOT_APPLICABLE",
+    );
+  });
+
   it("gives a known wire code the pad's own words", () => {
     expect(refusalText({ code: "PAYMENT_REQUIRED", message: "Plan upgrade required: x" }, identityMsg)).toBe(
       "scorepad.refusal.planLocked",

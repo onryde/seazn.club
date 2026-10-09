@@ -3,13 +3,19 @@ import { randomUUID } from "node:crypto";
 import { withTenant, type Tx } from "@/lib/db";
 import {
   EngineError,
-  foldMatch,
+  foldMatchWithStoppage,
+  forbidsLevelResult,
+  isLevelOutcome,
+  outcomeOf,
   resolveVoids,
+  settleApplies,
   type EventEnvelope,
   type MatchOutcome,
   type ScoreSummary,
   type StageKind,
 } from "@seazn/engine/core";
+import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
+import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
@@ -101,6 +107,8 @@ interface EventRow {
 // thing the snapshot exists to prevent, so the two guards may not drift apart.
 export const LOCKED_FIXTURE_STATUSES: ReadonlySet<string> = new Set(["finalized", "cancelled"]);
 const LOCKED = LOCKED_FIXTURE_STATUSES;
+/** The shape of `entrants.id` (a Postgres uuid) — the C17/D-R7 winner lookup runs only on it (review N2). */
+const ENTRANT_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Map the folded ledger onto the fixtures.status enum. Derived from the
 // ACTIVE (void-resolved) events, not from event-type transitions: a void can
@@ -118,9 +126,10 @@ export function nextStatus(
   candidateType: string,
   outcome: MatchOutcome | null,
   active: readonly EventEnvelope[],
+  stageKind: string | null,
 ): string {
   if (candidateType === "core.finalize") return "finalized";
-  return fixtureStatusFromFold(outcome, active);
+  return fixtureStatusFromFold(outcome, active, stageKind);
 }
 
 /**
@@ -139,11 +148,19 @@ export function nextStatus(
 export function fixtureStatusFromFold(
   outcome: MatchOutcome | null,
   active: readonly EventEnvelope[],
+  stageKind: string | null,
 ): string {
   const has = (type: string) => active.some((event) => event.type === type);
-  // Abandon first: cricket abandon folds to a no_result OUTCOME, but the
-  // fixture status stays "abandoned" (replay policy owns it from here).
+  // W2a D3 (spec §5.4.2), in this order. 1: the organiser's settle decides,
+  // even an abandoned match (X-ST-1).
+  if (has("core.settle")) return "decided";
+  // 2: abandon first otherwise (unchanged): cricket abandon folds to a
+  // no_result OUTCOME, but the fixture status stays "abandoned" — the
+  // 2026-09-21 "stuck and visible" ruling for an abandon nobody has settled.
   if (has("core.abandon")) return "abandoned";
+  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided,
+  // nobody seated, closed by the organiser's core.settle.
+  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) return "needs_decision";
   if (outcome !== null) return has("core.forfeit") ? "forfeited" : "decided";
   return has("core.start") ? "in_play" : "scheduled";
 }
@@ -267,7 +284,7 @@ export async function appendEventInTx(
   // the division up must have the format they choose apply. See
   // `fixture-cfg.ts` for the full rationale; it is the single reader of the
   // column, shared with `fold.ts` so the two folds cannot drift apart.
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage?.config);
+  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
   // Take it on the FIRST event only. The advisory lock above is held to
   // commit, so no concurrent appender can interleave between this decision
   // and the write below — the snapshot is taken exactly once.
@@ -292,9 +309,64 @@ export async function appendEventInTx(
   // runs inside `tx`, where a throw aborts the transaction before any write
   // (PROMPT-61, above) — that must keep happening exactly as it does today,
   // so the catch below re-throws unchanged and never touches SQL itself.
-  const state = (() => {
+  const stageKind = stage?.kind ?? null;
+  // W2a (spec §5.4.3). The settle and finalize guards read the ledger BEFORE the candidate, so they run ahead of
+  // the fold: a sport module refuses a finalize of an undecided fixture itself (WRONG_PHASE) inside the fold, which
+  // would otherwise answer first for an abandon with no outcome and for a pending chess tie-break.
+  if (candidate.type === "core.settle") {
+    // Loop-F addendum 3: the engine's settle precondition is not stage-aware (spec §5.1), and a league, group,
+    // swiss or americano draw is a RESULT that standings credit — a settle there would turn it into a win.
+    if (!forbidsLevelResult(stageKind)) {
+      throw new EngineError("SETTLE_NOT_APPLICABLE", "only a knockout match is settled — a draw here is a result", {
+        fixtureId,
+        reason: "not_bracket",
+        stage: stageKind,
+      });
+    }
+  }
+  // Controller ruling C17, widened by D-R7: no event that names a DECIDER WINNER may advance an entrant who has
+  // withdrawn — the organiser's core.settle, and every decider event the sport declares (`deciderTypes`: chess's
+  // boardgame.tiebreak), which a scorer may record on a held tie-break. The settle or the decider goes to the remaining
+  // entrant; the auto-walkover of a held fixture is W2b's (spec §2.3).
+  if (candidate.type === "core.settle" || (sportModule.deciderTypes ?? []).includes(candidate.type)) {
+    const winner = (candidate.payload as { winner?: unknown } | null)?.winner;
+    // Review N2: `entrants.id` is a uuid, so a malformed winner never reaches the lookup (Postgres 22P02 → a 500). It
+    // names no entrant either way; the fold refuses it below with its own 4xx, as before D-R7.
+    if (typeof winner === "string" && ENTRANT_ID_SHAPE.test(winner)) {
+      const [w] = await tx<{ status: string }[]>`select status from entrants where id = ${winner}`;
+      if (w?.status === "withdrawn") {
+        throw new EngineError("SETTLE_NOT_APPLICABLE", "that entrant has withdrawn — settle for the remaining entrant", {
+          fixtureId,
+          reason: SETTLE_REFUSAL_REASON.withdrawn,
+          winner,
+        });
+      }
+    }
+  }
+  // Finding 27 + controller ruling P2-7: finalizing a bracket fixture that still needs a decision would store
+  // `finalized` + a level outcome (the shape LEVEL_RESULT_SEATED exists to catch, behind a lock no settle could then
+  // open). Refused whenever `settleApplies` holds — a level outcome, an abandon with no outcome, a pending chess
+  // tie-break — the same predicate as the console's block (§5.5). A finalize changes no module state, so the ledger
+  // without the candidate is exactly the fixture the finalize would lock. Settled ⇒ outcomeOf is a win ⇒ false.
+  if (candidate.type === "core.finalize" && forbidsLevelResult(stageKind)) {
+    const before = foldMatchWithStoppage(sportModule, cfg, lineups, prior, { strictFromSeq: candidate.seq });
+    const facts = {
+      outcome: outcomeOf(sportModule, before),
+      abandoned: resolveVoids(prior).some((e) => e.type === "core.abandon"),
+      state: before.state,
+    };
+    if (settleApplies(sportModule, facts)) {
+      throw new EngineError("LEVEL_RESULT_IN_BRACKET", "settle the match before finalizing — a knockout match can't end level", {
+        fixtureId,
+        stage: stageKind,
+        reason: LEVEL_RESULT_REASON.finalizeUnsettled, // review M-1: its own copy (settle, or record the decider)
+      });
+    }
+  }
+
+  const folded = (() => {
     try {
-      return foldMatch(sportModule, cfg, lineups, stream, {
+      return foldMatchWithStoppage(sportModule, cfg, lineups, stream, {
         strictFromSeq: candidate.seq,
       });
     } catch (error) {
@@ -325,24 +397,38 @@ export async function appendEventInTx(
       throw error;
     }
   })();
+  const state = folded.state;
   const summary = sportModule.summary(state);
-  const outcome = sportModule.outcome(state);
+  // W2a finding 1: a settle lives beside module state (outcomeOf).
+  const outcome = outcomeOf(sportModule, folded);
   const active = resolveVoids(stream);
 
-  // PROMPT-61: a stage that cannot end level refuses to finalize a draw —
-  // the throw aborts the tx before insert, so the bracket never silently
-  // stalls on an outcome with no winner to advance.
-  if (
-    outcome !== null &&
-    (outcome as { kind?: string }).kind === "draw" &&
-    stage !== undefined &&
-    !sportModule.supportsDraws(cfg as never, stage.kind as StageKind)
-  ) {
-    throw new EngineError(
-      "DRAW_NOT_ALLOWED",
-      "this stage cannot end level — decide it by extra time or a shootout",
-      { fixtureId, stage: stage.kind },
-    );
+  // W2a (spec §5.4.3, ruling 79). In a bracket: a GENERIC draw is refused — generic has no decider, so the scorer
+  // enters the winner (GN-KO-1); every other level result is ACCEPTED and held as needs_decision (X-BR-2), closed
+  // by the organiser's core.settle. Outside a bracket: a draw the sport refuses is DRAW_NOT_ALLOWED, as before
+  // (PROMPT-61) — the throw aborts the tx before insert.
+  if (outcome !== null && (outcome as { kind?: string }).kind === "draw") {
+    if (forbidsLevelResult(stageKind)) {
+      // Controller ruling D-F1: a core.void is exempt, on every generic row. Two ways a void leaves a draw in the
+      // fold: it uncovers one stored before W2a (V432 holds that row; voiding its settle returns it to needs_decision),
+      // or it MAKES a new one in score mode — a result card with no scores settles from the running tally, so voiding
+      // a point under it (H, A, H, card = 2–1; void the second H) re-folds the stored card level. Either way the void
+      // is accepted and the row is held (needs_decision), for the organiser to settle or to void again; refusing it
+      // would leave a wrong point unremovable.
+      if (division.sport_key === "generic" && candidate.type !== "core.void") {
+        throw new EngineError("LEVEL_RESULT_IN_BRACKET", "a knockout match can't end level — enter the winner", {
+          fixtureId,
+          stage: stageKind,
+          reason: LEVEL_RESULT_REASON.genericDraw,
+        });
+      }
+    } else if (stage !== undefined && !sportModule.supportsDraws(cfg as never, stage.kind as StageKind)) {
+      throw new EngineError(
+        "DRAW_NOT_ALLOWED",
+        "this stage cannot end level — decide it by extra time or a shootout",
+        { fixtureId, stage: stage.kind },
+      );
+    }
   }
 
   // Owner ruling 2026-09-23: a write that takes back a decision (a void,
@@ -383,7 +469,7 @@ export async function appendEventInTx(
       summary = excluded.summary, updated_at = now()
   `;
 
-  const status = nextStatus(candidate.type, outcome, active);
+  const status = nextStatus(candidate.type, outcome, active, stageKind);
   // Fire once, on the transition from no-result to a decided result. F9
   // (R3.5 review) — this used to be the trigger for a "fixture decided"
   // `log.info` call right here, before the fixtures update, the pg_notify,
@@ -392,8 +478,10 @@ export async function appendEventInTx(
   // here: `appendEvent`'s PostHog capture and `event-import.ts`'s own
   // per-fixture handling both still need it from this same computation, so
   // the two can never disagree about when a fixture was decided.
+  // W2a (spec §5.4.4): a HELD fixture is not yet a result, and its settle is — so a fixture leaving
+  // needs_decision with an outcome fires once more, and entering it fires nothing.
   const firstResult: FirstResult | null =
-    fixture.outcome === null && outcome !== null
+    (fixture.outcome === null || fixture.status === "needs_decision") && outcome !== null && status !== "needs_decision"
       ? {
           distinctId: candidate.recordedBy ?? `org:${orgId}`,
           sportKey: division.sport_key,

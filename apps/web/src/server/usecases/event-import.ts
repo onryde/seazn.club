@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
-import { EngineError, foldMatch, type EventEnvelope } from "@seazn/engine/core";
+import { EngineError, foldMatchWithStoppage, outcomeOf, type EventEnvelope, type Settlement } from "@seazn/engine/core";
 import { resolveModule, resolveFixtureCfg } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { appendEventInTx, type AppendResult, type FirstResult } from "@/server/engine-db/append-event";
@@ -278,7 +278,7 @@ async function runStream(
   // Tx). No writes happen here — a throw just rolls back reads.
   const [stage] = await sql<{ kind: string; config: Record<string, unknown> | null }[]>`
     select kind, config from stages where id = ${fixture.stage_id}`;
-  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage?.config);
+  const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage, sportModule);
   // Same field names appendEventInTx assigns, so the fold sees exactly what
   // the writer will later hand it (seq 1..n, gapless). `id` is deliberately
   // just the array index as a string: on an EngineError the engine echoes the
@@ -294,16 +294,16 @@ async function runStream(
     recordedBy: auth.userId,
   }));
 
-  let state: unknown;
+  let folded: { readonly state: unknown; readonly settlement: Settlement | null };
   try {
-    state = await withTenant(auth.orgId, async (tx) => {
+    folded = await withTenant(auth.orgId, async (tx) => {
       const lineups = await loadLineupPair(
         tx,
         fixtureId,
         fixture.home_entrant_id!,
         fixture.away_entrant_id!,
       );
-      return foldMatch(sportModule, cfg, lineups, envelopes, { strictFromSeq: 1 });
+      return foldMatchWithStoppage(sportModule, cfg, lineups, envelopes, { strictFromSeq: 1 });
     });
   } catch (err) {
     if (err instanceof EngineError) {
@@ -321,7 +321,8 @@ async function runStream(
     }
     throw err;
   }
-  if (sportModule.outcome(state) === null) {
+  // W2a finding 1: a settle lives beside module state (outcomeOf).
+  if (outcomeOf(sportModule, folded) === null) {
     return {
       fixture: fixtureId,
       status: "rejected",
@@ -419,10 +420,10 @@ async function runStream(
   }
 
   // 8. After commit — never inside it — the same decided side effects
-  // scoreEvent fires, in the same order (scoring.ts:129-133). Unconditional
-  // here: the dry run already proved this stream decides, and import never
-  // carries a core.void, so there is no "outcome erased by an undo" case to
-  // special-case the way scoreEvent's own condition does.
+  // scoreEvent fires, in the same order (scoring.ts:129-133). The dry run
+  // already proved this stream reaches an outcome, and import never carries a
+  // core.void, so there is no "outcome erased by an undo" case to special-case
+  // the way scoreEvent's own condition does — only its held arm (W2a, below).
   //
   // Guarded as a block, and the guard is load-bearing: every line below runs
   // AFTER the transaction committed, so the events and the receipt are already
@@ -434,9 +435,13 @@ async function runStream(
   // that fails is a stale standings table, not a failed import; log it and
   // report the truth.
   try {
-    await onDecided(auth, fixtureId);
-    await refreshDiscipline(auth, fixtureId);
-    await refreshNews(auth, fixtureId);
+    // W2a (spec §5.4.4, review M-2): a HELD fixture (needs_decision) seats nobody — the same skip as scoreEvent's
+    // (scoring.ts): onDecided, discipline and news wait for the organiser's settle.
+    if (last.status !== "needs_decision") {
+      await onDecided(auth, fixtureId);
+      await refreshDiscipline(auth, fixtureId);
+      await refreshNews(auth, fixtureId);
+    }
     if (firstResult) {
       await captureServer({
         event: EVENTS.RESULT_ENTERED,

@@ -23,7 +23,15 @@ vi.mock("@/lib/i18n", async (importOriginal) => {
   return { ...actual, getDictionary };
 });
 
+// W2a Task 6 — a passthrough spy on the real resolver, for the bracket-overlay case at the end of this file.
+vi.mock("@/server/engine-db/fixture-cfg", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/engine-db/fixture-cfg")>();
+  return { ...real, resolveFixtureCfg: vi.fn(real.resolveFixtureCfg) };
+});
+
 import { sql } from "@/lib/db";
+import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
+import { insertLegacyEvents, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -170,5 +178,41 @@ describe.skipIf(!HAS_DB)("loadMatchCentre reads the stage only for a side still 
     expect(waitingName).not.toBe(resolveSlotLabel(label, ctx.slotLabelLookup, "schedule.tbd"));
     // The set side is its entrant.
     expect(["A", "B", "C"]).toContain(names(doc)[1 - waitingSide]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1, W2a Task 6)", () => {
+  it("match-centre-load.ts loadMatchCentre", async () => {
+    // A boardgame knockout fixture with pre-V347 history (no snapshot), so the public read resolves LIVE cfg — the
+    // one shape in which this site's overlay is observable.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
+    await insertLegacyEvents(s.fixtureIds[0]!, [{ type: "core.start", payload: {} }]);
+    const [fixture] = await sql<PublicFixture[]>`
+      select id, division_id, stage_id, pool_id, round_no, seq_in_round,
+             home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
+             scheduled_at, venue, court_label,
+             status, outcome, summary, last_seq,
+             lane, is_final, third_place, conditional, stream_url
+      from public_fixtures_v where id = ${s.fixtureIds[0]!}`;
+    expect(fixture, "the public view serves the seeded fixture").toBeDefined();
+    const [div] = await sql<{ module_version: string }[]>`select module_version from divisions where id = ${s.divisionId}`;
+    const ctx: MatchCentreLoadCtx = {
+      orgTz: null,
+      division: { sportKey: "boardgame", moduleVersion: div!.module_version, formatLabel: "classical", tz: null, youth: false, playerNameDisplay: null },
+      locale: "en",
+      hrefs: { division: "/d", competition: "/c", calendar: null },
+      stage: { name: "Knockout", roundLabel: null },
+      slotLabelLookup: (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars),
+    };
+    const spy = vi.mocked(resolveFixtureCfg);
+    spy.mockClear();
+    await loadMatchCentre(sql, fixture!, ctx);
+    const calls = spy.mock.calls.map((c, i) => ({
+      kind: (c[2] as { kind?: string } | null | undefined)?.kind ?? null,
+      out: spy.mock.results[i]!.value as Record<string, unknown> | null,
+    }));
+    expect(calls.length, "the entry never called resolveFixtureCfg").toBeGreaterThan(0);
+    expect(calls.some((c) => c.kind === "knockout" && c.out?.tiebreak === true), JSON.stringify(calls)).toBe(true);
   });
 });

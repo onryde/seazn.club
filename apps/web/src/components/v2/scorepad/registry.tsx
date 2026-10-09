@@ -18,6 +18,7 @@ import type { EventEnvelope, Lineup, LineupPair, LineupSlot } from "@seazn/engin
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { MemberIn, SideInfo, LineupSlotIn } from "@/components/v2/fixture-console";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { entrantDisplayName } from "@/lib/entrant-name";
 import type { MessageKey } from "@/lib/messages";
 import { resolveModuleClient } from "./module-client";
 import { deviceLinkTransport, sessionTransport, type PadAuthMode } from "./transport";
@@ -162,6 +163,17 @@ export function personNamesFrom(home: SideInfo, away: SideInfo): Readonly<Record
   return names;
 }
 
+/**
+ * W2a fix round 1 (I2), fix round 2 (N1) — what each side is CALLED, for `PadHostView.entrantNames`: the same
+ * `entrantDisplayName` (lib/entrant-name.ts, D-6) the console heading and the device-link header render, so the pad's
+ * "who advances" options name the two entrants exactly as the screen around them does (spec §5.5). Never the raw
+ * `SideInfo.name` (`entrants.display_name`): for a singles entrant that snapshot can be "Entry 3" while the heading,
+ * resolving the roster, reads "Ada Okonkwo".
+ */
+export function entrantNamesFrom(home: SideInfo, away: SideInfo): Readonly<Record<"home" | "away", string>> {
+  return { home: entrantDisplayName(home), away: entrantDisplayName(away) };
+}
+
 // ---------------------------------------------------------------------------
 // <ScorePad/> — the single mount both dispatchers use
 // ---------------------------------------------------------------------------
@@ -189,6 +201,9 @@ export interface ScorePadBootstrap {
   // `resolveInitialBand`). Nothing server-side resolves a band any more.
   entitlements: Readonly<Record<string, boolean>>;
   identity: OwnIdentity;
+  /** W2a Task 12 (addendum 4) — the fixture's stage kind from `loadFixturePadCfg`, never discarded: the pad reads it
+   *  as `PadHostView.stageKind` (a bracket hides a level result). Null for a fixture with no stage. */
+  stageKind: string | null;
 }
 
 export interface ScorePadProps {
@@ -223,6 +238,10 @@ export interface ScorePadProps {
   onPartialResolver?: (resolve: (eventType: string, payload: Record<string, unknown>) => boolean) => void;
   identity: OwnIdentity;
   entitlements: Readonly<Record<string, boolean>>;
+  /** W2a Task 12 — forwarded to `PadHostV3.stageKind`. */
+  stageKind: string | null;
+  /** W2a D-O1 — forwarded to `PadHostV3.canOrganise`: the console passes its organiser flag, the device pad `false`. */
+  canOrganise: boolean;
 }
 
 type ModuleResolution = { ok: true; module: AnySportModule } | { ok: false; message: string };
@@ -257,6 +276,7 @@ export function ScorePad(props: ScorePadProps) {
 
   const lineups = useMemo(() => lineupPairFrom(props.home, props.away), [props.home, props.away]);
   const personNames = useMemo(() => personNamesFrom(props.home, props.away), [props.home, props.away]);
+  const entrantNames = useMemo(() => entrantNamesFrom(props.home, props.away), [props.home, props.away]);
   const transport = useMemo(
     () => (props.auth.kind === "device_link" ? deviceLinkTransport(props.auth.token) : sessionTransport()),
     [props.auth],
@@ -294,6 +314,9 @@ export function ScorePad(props: ScorePadProps) {
     <PadHostV3
       module={resolution.module}
       cfg={props.resolvedConfig}
+      stageKind={props.stageKind}
+      canOrganise={props.canOrganise}
+      entrantNames={entrantNames}
       fixtureId={props.fixtureId}
       lineups={lineups}
       identity={props.identity}

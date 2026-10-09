@@ -30,11 +30,29 @@ describe("resolveScorePadBootstrap", () => {
       hasFeatureFn: async () => true,
       initialEvents: [],
       identity: IDENTITY,
+      stageKind: null,
     });
     expect(result).not.toBeNull();
     expect(result!.moduleVersion).toBe(generic.version);
     expect(result!.resolvedConfig).toEqual(GENERIC_CFG);
     expect(result!.identity).toBe(IDENTITY);
+  });
+
+  it("W2a Task 12: carries the fixture's stage kind to the pad unchanged (addendum 4 — never read and dropped)", async () => {
+    let checked = 0;
+    for (const stageKind of ["knockout", "league", null]) {
+      const result = await resolveScorePadBootstrap({
+        sportModule: generic,
+        rawConfig: GENERIC_CFG,
+        hasFeatureFn: async () => true,
+        initialEvents: [],
+        identity: IDENTITY,
+        stageKind,
+      });
+      expect(result?.stageKind, String(stageKind)).toBe(stageKind);
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("degrades to null — never throws — when the raw config fails configSchema.parse", async () => {
@@ -45,6 +63,7 @@ describe("resolveScorePadBootstrap", () => {
       hasFeatureFn,
       initialEvents: [],
       identity: IDENTITY,
+      stageKind: null,
     });
     expect(result).toBeNull();
   });
@@ -67,6 +86,7 @@ describe("resolveScorePadBootstrap", () => {
       hasFeatureFn: async () => true,
       initialEvents: events,
       identity: IDENTITY,
+      stageKind: null,
     });
     expect(result!.initialEvents).toBe(events);
   });
@@ -84,6 +104,7 @@ describe("resolveScorePadBootstrap", () => {
       hasFeatureFn,
       initialEvents: [],
       identity: IDENTITY,
+      stageKind: null,
     });
     expect(result).not.toBeNull();
     expect(result!.entitlements["scoring.swap_off_step_enforcement"]).toBe(false);
@@ -106,6 +127,7 @@ describe("resolveScorePadBootstrap", () => {
       hasFeatureFn,
       initialEvents: [],
       identity: IDENTITY,
+      stageKind: null,
     });
     expect(result).not.toBeNull();
     expect(hasFeatureFn).toHaveBeenCalledTimes(1);

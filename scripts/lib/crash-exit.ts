@@ -1,7 +1,7 @@
 // Preloaded (node --import) by every matrix CLI's package script — matrix:l3,
 // matrix:browser, matrix:render, matrix:catalogue, matrix:single-sport,
 // matrix:model, matrix:parity, matrix:lock-check, matrix:merge, matrix:judge,
-// matrix:pr-rows, matrix:shards, matrix:summary, matrix:staleness, matrix:sample, matrix:triage, matrix:ledger, matrix:backlog — and by reference:boundary
+// matrix:pr-rows, matrix:shards, matrix:summary, matrix:staleness, matrix:sample, matrix:triage, matrix:ledger, matrix:backlog — and by reference:boundary and mutate
 // (W1b final batch F-6; W1c added browser and parity; W1d added lock-check, merge, judge,
 // pr-rows, the three CI helpers, the per-PR sample's driver, the triage and audit-ledger tools, and the per-wave backlog writer). The list is held to package.json by tools/matrix/__tests__/crash-exit.test.ts:
 // a script that preloads this file and is not named here reds it.

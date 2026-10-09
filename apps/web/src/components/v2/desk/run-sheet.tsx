@@ -109,6 +109,7 @@ export function RunSheet({
   boardSlotOptions,
   onRescheduled,
   streamStates,
+  awaitingSettle,
   feedLabels,
 }: {
   blocks: RunSheetBlock[];
@@ -160,6 +161,9 @@ export function RunSheet({
   /** Spec 2026-09-30 §2 (T6) — each fixture's stream hold state (`openStreamStates`), keyed by fixture id; every row
    *  gets ITS OWN entry as `streamState` (its "● Live" / "● Waiting for phone" chip). Absent = no chips. */
   streamStates?: Record<string, HoldState>;
+  /** W2a fix round 1 (M10) — ids of the recorded abandons awaiting their settle (the division page's
+   *  `listFixturesAwaitingSettle`); each such row is held (chip + Settle). Absent = none. */
+  awaitingSettle?: readonly string[];
   /** Feeder labels for unfilled bracket seats, keyed by fixture id —
    *  `feedLabels()`'s output (lib/schedule-board.ts). Threaded straight
    *  through to every `RunSheetRow` below and never read here, exactly as
@@ -179,6 +183,8 @@ export function RunSheet({
   // used above: these islands are rendered bare, with no provider, in this
   // repo's component tests, and the throwing hook reddens them.
   const locale = useLocaleOrDefault();
+  // M10 — read once, for every row mount below (four of them, one per block shape).
+  const settleIds = new Set(awaitingSettle ?? []);
 
   // Review finding m2, CLOSED (W4). The offset used to be the literal
   // `top-[86px]` — 56 plus a day header height ASSUMED to be 30px at one
@@ -347,6 +353,7 @@ export function RunSheet({
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
                 streamState={streamStates?.[f.id]}
+                awaitsSettle={settleIds.has(f.id)}
                 feedLabels={feedLabels}
               />
             ))}
@@ -430,6 +437,7 @@ export function RunSheet({
                     boardSlotOptions={boardSlotOptions}
                     onRescheduled={onRescheduled}
                     streamState={streamStates?.[f.id]}
+                    awaitsSettle={settleIds.has(f.id)}
                     feedLabels={feedLabels}
                   />
                 ))}
@@ -467,6 +475,7 @@ export function RunSheet({
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
                 streamState={streamStates?.[f.id]}
+                awaitsSettle={settleIds.has(f.id)}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
               />
@@ -507,6 +516,7 @@ export function RunSheet({
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
                 streamState={streamStates?.[f.id]}
+                awaitsSettle={settleIds.has(f.id)}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
               />
@@ -739,6 +749,8 @@ function RowWithNow({
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
   streamState?: HoldState;
+  /** M10 — survives `...rest` into `RunSheetRow`, like `streamState`. */
+  awaitsSettle?: boolean;
   /** Declared here only so it survives `...rest` into `RunSheetRow` — this
    *  wrapper reads nothing off it (same posture as `streamState`/`venues`). */
   feedLabels?: Record<string, FeedLabelPair>;

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { EngineError, EngineErrorCode } from "@seazn/engine/core";
+import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { getRequestContext } from "@/server/request-context";
 import { setRateLimitInfo } from "../context";
@@ -80,6 +81,12 @@ describe("v1 envelope", () => {
     ["UNKNOWN_PHASE", 422],
     // S5 (#431) — tennis game-penalty award refused mid-tie-break.
     ["GAME_AWARD_DURING_TIEBREAK", 422],
+    // W2a — the four codes and the statuses the design's §7 error table gives
+    // them (docs/superpowers/specs/2026-10-08-format-matrix-w2a-design.md §7).
+    ["SETTLE_NOT_APPLICABLE", 409],
+    ["TIEBREAK_NOT_APPLICABLE", 409],
+    ["LEVEL_RESULT_IN_BRACKET", 409],
+    ["LEVEL_RESULT_SEATED", 500], // an assertion: only reachable through a bug
   ] as const)("maps EngineError %s → %d", async (code, status) => {
     const res = await v1(async () => {
       throw new EngineError(code, "boom");
@@ -210,6 +217,50 @@ describe("v1 envelope", () => {
       stageId: "s2",
       previousStageId: "s1",
     });
+  });
+
+  // W2a fix round 1 (review M-1): LEVEL_RESULT_IN_BRACKET has two emitters asking for different things, so its
+  // reason reaches the wire — and only a reason this codebase names (lib/level-result-reason.ts).
+  it("M-1: LEVEL_RESULT_IN_BRACKET forwards each named reason, and nothing else from .data", async () => {
+    let checked = 0;
+    for (const reason of Object.values(LEVEL_RESULT_REASON)) {
+      const res = await v1(async () => {
+        throw new EngineError("LEVEL_RESULT_IN_BRACKET", "m", { fixtureId: "f1", stage: "knockout", reason });
+      });
+      expect(res.status, reason).toBe(409);
+      expect((await body(res)).error, reason).toEqual({ code: "LEVEL_RESULT_IN_BRACKET", message: "m", reason });
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The empty case: no reason, or one this codebase does not name, forwards code + message only.
+    for (const data of [{ fixtureId: "f1" }, { fixtureId: "f1", reason: "made_up" }]) {
+      const res = await v1(async () => {
+        throw new EngineError("LEVEL_RESULT_IN_BRACKET", "m", data);
+      });
+      expect((await body(res)).error).toEqual({ code: "LEVEL_RESULT_IN_BRACKET", message: "m" });
+    }
+  });
+
+  // W2a ruling D-R8: a settle or a decider naming a withdrawn winner (C17, D-R7) is refused SETTLE_NOT_APPLICABLE
+  // with reason "withdrawn", and that reason reaches the wire so the copy can say so — the code's own copy ("it isn't
+  // level, or it's already settled") is false for it.
+  it("D-R8: SETTLE_NOT_APPLICABLE forwards reason withdrawn, and nothing else from .data", async () => {
+    const res = await v1(async () => {
+      throw new EngineError("SETTLE_NOT_APPLICABLE", "m", { fixtureId: "f1", reason: "withdrawn", winner: "e1" });
+    });
+    expect(res.status).toBe(409);
+    expect((await body(res)).error).toEqual({ code: "SETTLE_NOT_APPLICABLE", message: "m", reason: "withdrawn" });
+    // The positive pair: every other SETTLE_NOT_APPLICABLE (the not-a-bracket refusal, the kernel's own precondition
+    // with no reason) keeps forwarding code + message only, so it keeps the code's own copy.
+    let checked = 0;
+    for (const data of [{ fixtureId: "f1", reason: "not_bracket", stage: "league" }, { fixtureId: "f1" }, { reason: "made_up" }]) {
+      const r = await v1(async () => {
+        throw new EngineError("SETTLE_NOT_APPLICABLE", "m", data);
+      });
+      expect((await body(r)).error, JSON.stringify(data)).toEqual({ code: "SETTLE_NOT_APPLICABLE", message: "m" });
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   // The empty case of the block above: every OTHER STAGE_NOT_READY (Swiss

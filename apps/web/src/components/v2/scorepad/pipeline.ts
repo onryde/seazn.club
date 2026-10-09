@@ -164,7 +164,7 @@ export type AppendCallResult =
   /** Any other rejection (422-class: INVALID_EVENT, WRONG_PHASE, …) — the
    *  module deterministically refused this payload. Retrying it verbatim
    *  gets the same refusal, so this is permanent, not transient. */
-  | { kind: "rejected"; code: string; message: string; nextMatch?: NextMatchRef }
+  | { kind: "rejected"; code: string; message: string; nextMatch?: NextMatchRef; reason?: string }
   /** 429. Transient by the server's own definition, so the tap is KEPT — but
    *  it is not a connectivity failure, and telling the scorer they are offline
    *  when the venue wifi is fine sends them to fix the wrong thing. The bucket
@@ -340,10 +340,10 @@ export function throttleBackoffMs(sendsAlreadyMade: number, retryAfterMs: number
 }
 
 
-/** A rejection's `nextMatch`, spread in only when present — so every other
- *  refusal keeps exactly its old shape (no `nextMatch: undefined` key). */
-function refOf(r: { nextMatch?: NextMatchRef }): { nextMatch?: NextMatchRef } {
-  return r.nextMatch ? { nextMatch: r.nextMatch } : {};
+/** A rejection's `nextMatch` and `reason` (W2a M-1), each spread in only when present — so every other refusal
+ *  keeps exactly its old shape (no `nextMatch: undefined` key). */
+function refOf(r: { nextMatch?: NextMatchRef; reason?: string }): { nextMatch?: NextMatchRef; reason?: string } {
+  return { ...(r.nextMatch ? { nextMatch: r.nextMatch } : {}), ...(r.reason ? { reason: r.reason } : {}) };
 }
 /**
  * Drive ONE pending event through the transport, applying the full

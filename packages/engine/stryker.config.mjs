@@ -3,13 +3,16 @@
 // incremental file. Run it through `pnpm mutation` (package.json), from packages/engine.
 import { availableParallelism, totalmem } from "node:os";
 import process from "node:process";
+import { parseMutateRanges } from "./scripts/stryker-changed.mjs";
 import { resolveGroup } from "./scripts/stryker-cuts.mjs";
 import { STRYKER_GROUPS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "./stryker.groups.mjs";
 
 /** @type {Record<string, string[] | undefined>} */
 const groups = STRYKER_GROUPS;
-const group = process.env.STRYKER_GROUP;
-if (!group || groups[group] === undefined) throw new Error(`STRYKER_GROUP must be one of ${Object.keys(groups).join(", ")}`);
+// W2a Task 0b: STRYKER_MUTATE (changed-lines) wins over STRYKER_GROUP. Unset, the config is the group config, unchanged.
+const changed = process.env.STRYKER_MUTATE;
+const group = changed === undefined ? process.env.STRYKER_GROUP : "changed";
+if (changed === undefined && (!group || groups[group] === undefined)) throw new Error(`STRYKER_GROUP must be one of ${Object.keys(groups).join(", ")}`);
 
 /** D14's dry-run floor in seconds: the figure the sizing (test/stryker-sizing.test.ts) takes a leg's first, whole test run to
  *  be at least, measured on CI. */
@@ -22,7 +25,8 @@ export default {
   testRunner: "vitest",
   plugins: ["@stryker-mutator/vitest-runner"],
   // A leg's parts of a split file (`file#N`) become Stryker's `file:a-b` here, from the statements the TypeScript parser reads.
-  mutate: resolveGroup(group),
+  // Changed-lines (STRYKER_MUTATE): exactly the ranges it names, checked by scripts/stryker-changed.mjs.
+  mutate: changed === undefined ? resolveGroup(group) : parseMutateRanges(changed, import.meta.dirname),
   // Stryker's default for the initial test run is 5 minutes, below D14's own 344 s floor for it on CI, so a normal dry run would
   // be abandoned as hung. Allow the floor times the CI slowdown: 344 s x 8 = 45.9 minutes, 46. The job's own timeout
   // (stryker-timeouts.json) still bounds the whole run; this only decides when a HUNG dry run is given up on.
@@ -36,7 +40,8 @@ export default {
   vitest: { related: true, configFile: "vitest.stryker.config.ts" },
   // The vitest runner ignores this and always uses perTest; the config states what it gets.
   coverageAnalysis: "perTest",
-  incremental: true,
+  // A changed-lines run is never incremental: it reads no leg's incremental file and writes none.
+  incremental: changed === undefined,
   incrementalFile: `reports/mutation/${group}.incremental.json`,
   reporters: ["json", "clear-text", "progress"],
   jsonReporter: { fileName: `reports/mutation/${group}.json` },

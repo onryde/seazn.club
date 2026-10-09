@@ -233,11 +233,12 @@ async function loadMatchCentreBefore(q: Sql, fixture: PublicFixture, ctx: MatchC
     select config from divisions where id = ${fixture.division_id}`;
   const [stageRow] = await q<{ config: Record<string, unknown> | null; kind: string }[]>`
     select config, kind from stages where id = ${fixture.stage_id}`;
-  const rawCfg = resolveFixtureCfg(fixtureRow?.config_snapshot, divisionRow?.config, stageRow?.config);
   const sportModule =
     ctx.division.moduleVersion !== null
       ? resolveModule(ctx.division.sportKey, ctx.division.moduleVersion)
       : resolveLatestModule(ctx.division.sportKey);
+  // W2a: resolveFixtureCfg takes the stage row (kind + config) and the module (the bracket overlay).
+  const rawCfg = resolveFixtureCfg(fixtureRow?.config_snapshot, divisionRow?.config, stageRow, sportModule);
   const parsedCfg = sportModule.configSchema.safeParse(rawCfg);
   const cfg = parsedCfg.success ? parsedCfg.data : rawCfg;
   // main's per-stage format label (c86254b6a), which landed after the freeze.
@@ -482,6 +483,9 @@ async function loadMatchPosterModelBefore(orgSlug: string, competitionSlug: stri
     divisionName: division.name,
     stageName: stageRow?.name ?? null,
     header,
+    // W2a Task 13: a field the poster input gained after this copy was frozen — the loader's own expression, so the
+    // diff below still isolates what T4 changed.
+    held: fixture.status === "needs_decision",
     activeIndex,
     setLine: setLineOfBefore(matchCentre.sets),
     topPerformers: matchCentre.cricket?.topPerformers ?? null,

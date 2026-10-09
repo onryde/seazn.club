@@ -431,6 +431,59 @@ describe("409 classification", () => {
     },
   );
 
+  // W2a fix round 1 (review M-1): the W2a engine codes are 409s the server refuses whatever seq is sent. Filed as a
+  // "conflict" they were renegotiated, refused identically and parked at the queue head (QUEUE_STALLED) — the
+  // scorer never saw "Enter the winner". Derived from http.ts's own ENGINE_HTTP table (read as text: the pad may not
+  // import server code): every engine code the server answers 409 is terminal on the pad, except the two that
+  // are not about this write's content — SEQ_CONFLICT (the renegotiation itself) and SCHEDULE_CONFLICT (the
+  // schedule board's, never sent by the append route).
+  it("M-1: every engine 409 but SEQ_CONFLICT/SCHEDULE_CONFLICT is terminal, and LEVEL_RESULT_IN_BRACKET carries its reason", async () => {
+    const src = readFileSync(join(process.cwd(), "src/server/api-v1/http.ts"), "utf8");
+    const table = /export const ENGINE_HTTP[^=]*=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1];
+    expect(table, "ENGINE_HTTP found in http.ts").toBeDefined();
+    const engine409 = [...table!.matchAll(/^\s*([A-Z_]+):\s*409,/gm)].map((m) => m[1]!);
+    const terminal = engine409.filter((c) => c !== "SEQ_CONFLICT" && c !== "SCHEDULE_CONFLICT");
+    expect(terminal.length, "at least the three W2a codes").toBeGreaterThanOrEqual(3);
+    let checked = 0;
+    for (const code of terminal) {
+      const { fn } = fakeFetch(() => fakeResponse(409, body(code, { reason: "finalize_unsettled" })));
+      const outcome = await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY);
+      expect(outcome, code).toMatchObject({ kind: "rejected", code });
+      checked++;
+    }
+    expect(checked).toBe(terminal.length);
+    const { fn } = fakeFetch(() => fakeResponse(409, body("LEVEL_RESULT_IN_BRACKET", { reason: "finalize_unsettled" })));
+    expect(await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY)).toEqual({
+      kind: "rejected",
+      code: "LEVEL_RESULT_IN_BRACKET",
+      message: "nope",
+      reason: "finalize_unsettled",
+    });
+    // The empty case: an unnamed reason is not carried.
+    const { fn: fn2 } = fakeFetch(() => fakeResponse(409, body("LEVEL_RESULT_IN_BRACKET", { reason: "made_up" })));
+    expect(await sessionTransport({ fetchFn: fn2 }).appendEvent("fx-1", BODY)).toEqual({
+      kind: "rejected",
+      code: "LEVEL_RESULT_IN_BRACKET",
+      message: "nope",
+    });
+  });
+
+  it("D-R8: a SETTLE_NOT_APPLICABLE refusal carries reason withdrawn to the pad; any other reason is not carried", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(409, body("SETTLE_NOT_APPLICABLE", { reason: "withdrawn" })));
+    expect(await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY)).toEqual({
+      kind: "rejected",
+      code: "SETTLE_NOT_APPLICABLE",
+      message: "nope",
+      reason: "withdrawn",
+    });
+    const { fn: fn2 } = fakeFetch(() => fakeResponse(409, body("SETTLE_NOT_APPLICABLE", { reason: "not_bracket" })));
+    expect(await sessionTransport({ fetchFn: fn2 }).appendEvent("fx-1", BODY)).toEqual({
+      kind: "rejected",
+      code: "SETTLE_NOT_APPLICABLE",
+      message: "nope",
+    });
+  });
+
   // The positive pair. Without it, "terminal" would also pass if EVERY 409
   // became terminal — which would silently break the replay ruling and drop
   // real writes.
@@ -512,10 +565,12 @@ describe("409 classification", () => {
   // The list is not a hand-typed table: it is pinned against the codes the
   // server actually throws as terminal 409s, so a new terminal refusal added
   // there without a client entry fails HERE rather than wedging a queue in a
-  // venue. Two producers: scoring.ts's undo path (the UNDO_* codes), and
+  // venue. Three producers: scoring.ts's undo path (the UNDO_* codes),
   // fed-seats.ts's next-match refusal (its code lives in the import-free
   // `lib/next-match-started.ts`, so it is read from THERE, and fed-seats.ts is
-  // checked to throw it as a 409).
+  // checked to throw it as a 409), and (W2a review M-1) every engine code
+  // http.ts's ENGINE_HTTP answers 409 except SEQ_CONFLICT (the renegotiation
+  // itself) and SCHEDULE_CONFLICT (the schedule board's, never an append).
   it("TERMINAL_CONFLICT_CODES is exactly the set of terminal 409s the server throws", () => {
     // Read as TEXT, not imported: `@/server/**` is banned from this bundle by
     // the pad's purity gate (`__tests__/server-boundary.test.ts`) — the same
@@ -530,6 +585,11 @@ describe("409 classification", () => {
     const code = /NEXT_MATCH_STARTED_CODE = "([A-Z_]+)"/.exec(read("src/lib/next-match-started.ts"))?.[1];
     expect(code).toBeDefined();
     thrown.add(code!);
+    const table = /export const ENGINE_HTTP[^=]*=\s*\{([\s\S]*?)\n\};/.exec(read("src/server/api-v1/http.ts"))?.[1];
+    expect(table, "ENGINE_HTTP found in http.ts").toBeDefined();
+    const engine409 = [...table!.matchAll(/^\s*([A-Z_]+):\s*409,/gm)].map((m) => m[1]!);
+    expect(engine409).toEqual(expect.arrayContaining(["SEQ_CONFLICT", "SCHEDULE_CONFLICT"]));
+    for (const c of engine409) if (c !== "SEQ_CONFLICT" && c !== "SCHEDULE_CONFLICT") thrown.add(c);
     expect([...TERMINAL_CONFLICT_CODES].sort()).toEqual([...thrown].sort());
   });
 });

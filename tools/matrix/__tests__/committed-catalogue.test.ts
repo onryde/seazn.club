@@ -26,7 +26,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import type * as TS from "typescript";
-import { EngineError, type StageKind } from "@seazn/engine/core";
+import { EngineError, StageKind, forbidsLevelResult } from "@seazn/engine/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { RULES, decide, gapReason, planL3 } from "../lib/applicability.ts";
@@ -117,6 +117,13 @@ function generatorClosure(): string[] {
 
 // --- an independent generate-and-fold of one variant case ---------------------
 type VariantClass = "scorable" | "engine" | "generator";
+const STAGE_KINDS = StageKind.options;
+/** W2a: the cfg a fixture folds under in `stageKind` - in a bracket the module's own overlay (boardgame's tie-break,
+ *  carrom's extra board) over the variant's cfg, read straight from the engine's declaration and not through the
+ *  harness's stageCfg (which scorable() uses); a table stage keeps its cfg. Pinned on witnessed values below. */
+function foldCfgOf(sport: string, cfg: unknown, stageKind: StageKind): unknown {
+  return forbidsLevelResult(stageKind) ? { ...(cfg as object), ...(sportModule(sport).bracketDeciders(cfg as never) as object) } : cfg;
+}
 /** Win for each side on the row's first stage kind, generated then folded by
  *  the REAL engine: the engine's refusal (its configSchema, or an EngineError
  *  from the fold) is "engine"; the stream registry's GeneratorUnsupported is
@@ -130,10 +137,11 @@ function independentClass(vc: VariantCase): VariantClass {
     throw e;
   }
   const stageKind = stagesForRow(vc.row)[0]!.kind as StageKind;
+  const foldCfg = foldCfgOf(vc.sport, cfg, stageKind);
   for (const winner of ["home", "away"] as const) {
     try {
-      const events = generateStream({ sportKey: vc.sport, cfg, stageKind, home: "H", away: "A", outcome: { kind: "win", winner } });
-      const out = foldStream(sportModule(vc.sport), cfg, "H", "A", events).outcome;
+      const events = generateStream({ sportKey: vc.sport, cfg: foldCfg, stageKind, home: "H", away: "A", outcome: { kind: "win", winner } });
+      const out = foldStream(sportModule(vc.sport), foldCfg, "H", "A", events).outcome;
       expect(out, `${vc.id} win-${winner}`).toMatchObject({ kind: "win", winner: winner === "home" ? "H" : "A" });
     } catch (e) {
       if (e instanceof GeneratorUnsupported) return "generator";
@@ -316,6 +324,30 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(Object.keys(c.drops.byScenario)).toEqual(L3_IDS);
     expect(Object.values(c.drops.byScenario).reduce((a, b) => a + b, 0)).toBe(c.drops.total);
     for (const id of L3_IDS) expect(c.drops.byScenario[id]! + floors.perScenarioL3[id]!, id).toBe(CELLS);
+  });
+
+  it("the independent classifier folds a BRACKET under the engine's overlay and a table stage under the bare cfg — anchored on the rulebook's witnessed values (CA-KO-1 extra board, BG-KO-1 tie-break), not on how the merge is spelled", () => {
+    const carrom = resolveSportCfg("carrom", offlineBuilderDefault("carrom"), { tieBoard: "draw" }) as { tieBoard?: string };
+    expect(carrom.tieBoard, "premise: the cfg draws on a tied board").toBe("draw");
+    // A bracket stage: carrom plays the ICF extra board instead of drawing; the overlay beats the cfg's own value.
+    expect((foldCfgOf("carrom", carrom, "knockout") as { tieBoard?: string }).tieBoard).toBe("extra");
+    // A table stage is untouched (the same cfg, not a copy with the overlay on it).
+    expect(foldCfgOf("carrom", carrom, "league")).toBe(carrom);
+    const chess = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")) as { tiebreak?: boolean };
+    expect((foldCfgOf("boardgame", chess, "knockout") as { tiebreak?: boolean }).tiebreak).toBe(true);
+    expect((foldCfgOf("boardgame", chess, "league") as { tiebreak?: boolean }).tiebreak, "a table stage keeps its drawn games").not.toBe(true);
+    // A sport with no overlay folds a bracket under its own cfg.
+    const football = resolveSportCfg("football", offlineBuilderDefault("football"));
+    expect(foldCfgOf("football", football, "knockout")).toEqual(football);
+    // Every bracket kind takes the overlay, every table kind does not (the engine's own split, counted).
+    let judged = 0;
+    for (const kind of STAGE_KINDS) {
+      const isBracket = forbidsLevelResult(kind);
+      expect((foldCfgOf("carrom", carrom, kind) as { tieBoard?: string }).tieBoard, kind).toBe(isBracket ? "extra" : "draw");
+      judged++;
+    }
+    expect(judged).toBe(STAGE_KINDS.length);
+    expect(judged).toBeGreaterThan(0);
   });
 
   it("variant cases split scorable / engine-unscorable (W2) / generator-unsupported (W2, generator breadth; none since ruling 44) — every case re-classified by an independent generate-and-fold, counted (I-1)", () => {

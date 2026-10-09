@@ -43,6 +43,8 @@ import {
   DRAW_TILE_ID,
   EVENT_BAND,
   PAIRING_TILE_ID,
+  TIEBREAK_TILE_ID,
+  TIEBREAK_TYPE,
   PAIRING_TYPE,
   RESULT_HINT_KEY,
   RESULT_TYPE,
@@ -134,6 +136,9 @@ function view(opts: ViewOpts = {}): PadHostView {
     squads: initSquads(lineups),
     events,
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
+    entrantNames: {},
   };
 }
 
@@ -152,6 +157,9 @@ function degenerateView(over: Partial<PadHostView> = {}): PadHostView {
     squads: initSquads(SOLO),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
+    entrantNames: {},
     ...over,
   };
 }
@@ -426,6 +434,26 @@ describe("the chassis's own More sheet never has anything left to offer", () => 
       }
     }
   });
+
+  it("W2a: a bracket cfg's tie-break — owed, settled, and recorded — leaves the More sheet empty too", () => {
+    // padSpec gates its tie-break panel on module phase "tiebreak", which a SETTLE leaves in place: a pad that only
+    // hid its own tile would leak the decider into More, where every tap is refused (addendum 1).
+    const TB = boardgame.configSchema.parse({ tiebreak: true });
+    const drawn = result({ winner: null, method: "agreement" });
+    let checked = 0;
+    for (const band of [0, 1, 3] as FidelityBand[]) {
+      for (const events of [
+        stream(start(), drawn),
+        stream(start(), drawn, ["core.settle", { winner: "H", method: "lot" }]),
+        stream(start(), drawn, [TIEBREAK_TYPE, { rung: "rapid", winner: "A" }]),
+      ]) {
+        const v = view({ cfg: TB, band, events });
+        expect(realMoreActions(v), `phase=${resolvePhase(v)} band=${band} events=${events.length}`).toEqual([]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(9);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -472,8 +500,10 @@ describe("buildSheets — the pairing card", () => {
     }
   });
 
-  it("is the ONLY sheet this skin declares — the decisive/drawn result is a tap and a dock now, never a sheet", () => {
-    expect(Object.keys(buildSheets(view({ events: stream(start()) }), t))).toEqual([PAIRING_TILE_ID]);
+  it("declares the pairing card and (W2a) the tie-break, and nothing else — the decisive/drawn result is a tap and a dock now, never a sheet", () => {
+    const sheets = buildSheets(view({ events: stream(start()) }), t);
+    expect(Object.keys(sheets)).toEqual([PAIRING_TILE_ID, TIEBREAK_TILE_ID]);
+    expect(Object.values(sheets).map((sheet) => sheet.event)).not.toContain(RESULT_TYPE);
   });
 
   // R7 follow-ups item 3 — `pairingSheet` used to pre-resolve its steps'

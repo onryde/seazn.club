@@ -22,6 +22,7 @@ import type { TakeRule } from "@seazn/engine/competition";
 // resolution, so a `@/...` import throws ERR_MODULE_NOT_FOUND there even
 // though it resolves fine under tsc/Next.js/vitest.
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
+import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
 // The entrant name limit, shared with the console's Name field (entrants-panel.tsx).
 import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
 // The player name limit, shared with the directory's rename field (persons-panel.tsx).
@@ -1433,6 +1434,10 @@ export const StreamSessionCurrent = z
     replayUrl: z.string().nullable(),
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
+    /** W2a loop R, M2: the fixture is HELD (`needs_decision` — a level bracket result awaiting the organiser's settle).
+     *  It arms the automatic stop like a decided one (ruling D-M1) but is NOT decided, so it has its own flag and its own
+     *  Phone-tab chip. Never true together with `fixtureDecided`. */
+    fixtureHeld: z.boolean(),
     endReason: StreamEndReason.nullable(),
     /** True iff THIS session's own consume still stands: the sum of its `consume` + `refund` credit rows is below zero.
      *  A restart inside the reuse window consumed nothing, and a refund linked to the session nets its consume out —
@@ -1708,7 +1713,8 @@ export const Fixture = z.object({
   venue_id: VenueId.nullable(),
   venue_name: z.string().nullable(),
   officials: z.array(z.unknown()),
-  status: z.enum(["scheduled", "in_play", "decided", "finalized", "abandoned", "forfeited", "cancelled"]),
+  // W2a: every fixtures.status value, `needs_decision` included (spec §5.4.6; plan finding 8).
+  status: z.enum(FIXTURE_STATUSES),
   outcome: z.unknown().nullable(),
   schedule_source: z.enum(["none", "auto", "manual", "ai"]),
   schedule_locked: z.boolean(),

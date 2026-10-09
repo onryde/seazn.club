@@ -62,6 +62,7 @@ const COPY: ScheduleCopy = {
   live: "(live)",
   ended: "(ended)",
   tbd: "(tbd)",
+  held: "(held)",
   filterLabel: "(filter)",
   viewLabel: "(view)",
   viewDay: "(day)",

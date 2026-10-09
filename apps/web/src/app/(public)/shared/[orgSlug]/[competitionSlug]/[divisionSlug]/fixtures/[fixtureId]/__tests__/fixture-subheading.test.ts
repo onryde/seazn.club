@@ -240,3 +240,34 @@ describe("fixtureSubheadingLine — the line derives from the live document", ()
     expect(fixtureSubheadingLine(undefined, "in_play", LABELS)).toBeNull();
   });
 });
+
+// W2a Task 13 (addendum 6) — a HELD fixture (`needs_decision`) has been PLAYED: the board recorded a level game or an
+// abandon, and only the verdict waits on the organiser. "Time TBD" promised a future match. The document folds
+// `needs_decision` into "other" (`statusOf`), so the line reads the payload's raw status for this one case — the same
+// live snapshot the document arrives on, so the two cannot be a tick apart.
+describe("fixtureSubheading — a held fixture (W2a)", () => {
+  it("empty case first: a scheduled fixture with no time still says Time TBD (no document, and with one)", () => {
+    expect(fixtureSubheadingLine(undefined, "scheduled", LABELS)).toBe("Time TBD");
+    expect(fixtureSubheadingLine(docFor({ scheduled_at: null, venue_name: null, court_name: null }), "scheduled", LABELS)).toBe("Time TBD");
+  });
+
+  it("a held fixture with no time says the time was NOT RECORDED — bare status, no document, and the folded document", () => {
+    expect(fixtureSubheading("needs_decision", null)).toBe("Time not recorded");
+    expect(fixtureSubheadingLine(undefined, "needs_decision", LABELS)).toBe("Time not recorded");
+    const doc = docFor({ status: "needs_decision", scheduled_at: null, venue_name: null, court_name: null });
+    expect(doc.header.status, "the document folds the held status away").toBe("other");
+    expect(fixtureSubheadingLine(doc, "needs_decision", LABELS)).toBe("Time not recorded");
+  });
+
+  it("the positive pair: an ABANDONED fixture on the same folded document keeps Time TBD", () => {
+    const doc = docFor({ status: "abandoned", scheduled_at: null, venue_name: null, court_name: null });
+    expect(doc.header.status).toBe("other");
+    expect(fixtureSubheadingLine(doc, "abandoned", LABELS)).toBe("Time TBD");
+  });
+
+  it("a held fixture WITH a start time shows the time, like any other", () => {
+    expect(fixtureSubheadingLine(docFor({ status: "needs_decision" }), "needs_decision", LABELS)).toBe(
+      "20 Jul 2026, 14:30 · Riverside Sports Hall · Court 3",
+    );
+  });
+});

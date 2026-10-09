@@ -8,6 +8,8 @@ import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
 import * as Sentry from "@sentry/nextjs";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
+import { isLevelResultReason } from "@/lib/level-result-reason";
+import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { log } from "@/server/logger";
@@ -69,6 +71,12 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   // what matters independent of that: 422, never the 500 an unmapped code
   // would otherwise risk.
   SEEDING_MAP_SOURCE_AMBIGUOUS: 422,
+  // W2a (spec §7) — brackets always finish.
+  SETTLE_NOT_APPLICABLE: 409,
+  TIEBREAK_NOT_APPLICABLE: 409,
+  LEVEL_RESULT_IN_BRACKET: 409,
+  // An assertion (X-BR-1): reaching it is a server bug, so it surfaces as one.
+  LEVEL_RESULT_SEATED: 500,
 };
 
 // HTTP status → stable machine code for non-engine errors.
@@ -222,6 +230,18 @@ async function v1Inner<T>(
       ) {
         const d = err.data as { stageId: string; previousStageId: string };
         extra = { reason: "previous_stage_incomplete", stageId: d.stageId, previousStageId: d.previousStageId };
+      }
+      // W2a fix round 1 (review M-1): LEVEL_RESULT_IN_BRACKET has two emitters asking for different things (enter
+      // the winner; settle before finalizing), so the copy branches on the reason — forwarded only when named.
+      if (err.code === "LEVEL_RESULT_IN_BRACKET") {
+        const reason = (err.data as { reason?: unknown } | undefined)?.reason;
+        if (isLevelResultReason(reason)) extra = { reason };
+      }
+      // W2a ruling D-R8: SETTLE_NOT_APPLICABLE for a withdrawn winner (C17, D-R7) has its own copy; every other
+      // SETTLE_NOT_APPLICABLE keeps the code's — so only a reason this codebase names is forwarded.
+      if (err.code === "SETTLE_NOT_APPLICABLE") {
+        const reason = (err.data as { reason?: unknown } | undefined)?.reason;
+        if (isSettleRefusalReason(reason)) extra = { reason };
       }
       return errorResponse(requestId, status, err.code, err.message, extra);
     }

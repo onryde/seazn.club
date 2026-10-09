@@ -12,8 +12,17 @@
 // (a genuine postgres type error, or the same malformed-JSON class already
 // proven for standingsMoves) through the exported assembly functions —
 // never a mock that resolves to undefined.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+
+// W2a Task 6 — a passthrough spy on the real resolver, for the bracket-overlay case at the end of this file.
+vi.mock("@/server/engine-db/fixture-cfg", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/engine-db/fixture-cfg")>();
+  return { ...real, resolveFixtureCfg: vi.fn(real.resolveFixtureCfg) };
+});
+import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
+import { appendEvent } from "@/server/engine-db";
+import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql, withTenant } from "@/lib/db";
 import { hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -370,5 +379,28 @@ describe.skipIf(!HAS_DB)("P3 review finding 3 — genuine-throw fail-open, per s
     expect(post.bodyMd).toContain("À déterminer");
     expect(post.bodyMd).not.toContain("Round of 4");
     expect(post.bodyMd).not.toMatch(/\bTBD\b/);
+  });
+});
+
+describe.skipIf(!HAS_DB)("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1, W2a Task 6)", () => {
+  it("org-posts.ts draftPostsForDecidedFixture", async () => {
+    // A decided boardgame knockout fixture in an auto-posting division, its snapshot nulled (the legacy shape) so
+    // the result draft's scorer fold (`extractScorers`) resolves LIVE cfg — where this site's overlay is observable.
+    const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
+    await sql`update divisions set auto_posts = true where id = ${s.divisionId}`;
+    const id = s.fixtureIds[0]!;
+    const [f] = await sql<{ home_entrant_id: string }[]>`select home_entrant_id from fixtures where id = ${id}`;
+    await appendEvent(s.auth.orgId, id, 0, { type: "core.start", payload: {} });
+    await appendEvent(s.auth.orgId, id, 1, { type: "boardgame.result", payload: { winner: f!.home_entrant_id, method: "checkmate" } });
+    await sql`update fixtures set config_snapshot = null where id = ${id}`;
+    const spy = vi.mocked(resolveFixtureCfg);
+    spy.mockClear();
+    await withTenant(s.auth.orgId, (tx) => draftPostsForDecidedFixture(tx, id, true));
+    const calls = spy.mock.calls.map((c, i) => ({
+      kind: (c[2] as { kind?: string } | null | undefined)?.kind ?? null,
+      out: spy.mock.results[i]!.value as Record<string, unknown> | null,
+    }));
+    expect(calls.length, "the entry never called resolveFixtureCfg").toBeGreaterThan(0);
+    expect(calls.some((c) => c.kind === "knockout" && c.out?.tiebreak === true), JSON.stringify(calls)).toBe(true);
   });
 });

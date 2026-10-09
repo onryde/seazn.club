@@ -29,9 +29,12 @@
 // from `builtinModules` and reds if `SPORT_KEY` ever carries more, fewer, or
 // different keys than the engine ships.
 import type { MessageKey } from "@/lib/messages";
-import type { EngineErrorCode, SquadProvenance, SquadRole } from "@seazn/engine/core";
+import type { EngineErrorCode, SettleMethod, SquadProvenance, SquadRole } from "@seazn/engine/core";
+import type { TIEBREAK_RUNGS as ENGINE_TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { swatchName } from "@/lib/brand-palette";
 import { interpolate } from "@/lib/i18n-runtime";
+import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
+import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { NEXT_MATCH_STARTED_CODE, ROUND_CODE_KEYS, nextMatchLabel, nextMatchRefOf } from "@/lib/next-match-started";
 
 export type WicketKind =
@@ -83,6 +86,8 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "core.finalize": "event.core.finalize", "core.note": "event.core.note",
   "core.award": "event.core.award", "core.suspend": "event.core.suspend",
   "core.resume": "event.core.resume",
+  // W2a (X-ST-1): the organiser's settle of a level bracket result.
+  "core.settle": "event.core.settle",
   // S3/W4b (#426) — the lineup family. `replacement` is the exemptible one
   // (concussion / injury / COVID), which is why fr distinguishes it from a
   // plain `substitution`: both are "remplacement" in football French and a
@@ -102,6 +107,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
 
   "boardgame.pairing": "event.boardgame.pairing",
   "boardgame.result": "event.boardgame.result",
+  "boardgame.tiebreak": "event.boardgame.tiebreak", // W2a BG-KO-1 (ruling D-C4)
 
   "carrom.board.summary": "event.carrom.board.summary",
   "carrom.game.adjust": "event.carrom.game.adjust",
@@ -550,6 +556,13 @@ const SANCTION_KEY: Record<string, MessageKey> = {
 const COURT_KEY: Record<string, MessageKey> = {
   deuce: "court.deuce", ad: "court.ad",
 };
+// W2a BG-KO-1 (ruling D-C4) — boardgame.tiebreak's `rung`. The pad's tie-break
+// sheet (Task 12) labels its rung step with these same keys.
+const RUNG_KEY: Record<string, MessageKey> = {
+  rapid: "pad.boardgame.tiebreak.rung.rapid",
+  blitz: "pad.boardgame.tiebreak.rung.blitz",
+  armageddon: "pad.boardgame.tiebreak.rung.armageddon",
+};
 
 /**
  * Enum field name → the vocabularies that can label its members. A field maps
@@ -569,6 +582,7 @@ export const ENUM_VOCAB: Record<string, readonly Record<string, MessageKey>[]> =
   level: [SANCTION_KEY],
   receiverSide: [COURT_KEY],
   offence: [OFFENCE_KEY], // S4 (#428) — FootballPenalty.offence
+  rung: [RUNG_KEY], // W2a — BoardgameTiebreak.rung
 };
 
 /**
@@ -614,6 +628,11 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   // closed 13-code allowlist, THIS map has no such ruling — every
   // EngineErrorCode needs an entry here regardless.
   SEEDING_MAP_SOURCE_AMBIGUOUS: "engineError.SEEDING_MAP_SOURCE_AMBIGUOUS",
+  // W2a (spec §7) — brackets always finish.
+  SETTLE_NOT_APPLICABLE: "engineError.SETTLE_NOT_APPLICABLE",
+  TIEBREAK_NOT_APPLICABLE: "engineError.TIEBREAK_NOT_APPLICABLE",
+  LEVEL_RESULT_IN_BRACKET: "engineError.LEVEL_RESULT_IN_BRACKET",
+  LEVEL_RESULT_SEATED: "engineError.LEVEL_RESULT_SEATED",
 };
 
 /**
@@ -764,9 +783,11 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.boardgame.action.draw",
   "pad.boardgame.action.pairing",
   "pad.boardgame.action.result",
+  "pad.boardgame.action.tiebreak", // W2a BG-KO-1: bracket cfg only (ruling D-C4)
   "pad.boardgame.panel.draw",
   "pad.boardgame.panel.pre",
   "pad.boardgame.panel.result",
+  "pad.boardgame.panel.tiebreak", // W2a BG-KO-1: bracket cfg only (ruling D-C4)
   // R7/A2 — the v3 boardgame skin's own ribbon copy. Registered HERE, not
   // only in the four dictionaries, for the identical reason badminton's own
   // ribbon keys above are: `ribbon.ts`'s `buildRibbon` gates its per-sport
@@ -777,6 +798,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // them, since every panel `padSpec` declares is dedicated by a tile.
   "pad.boardgame.ribbon.pairing",
   "pad.boardgame.ribbon.result",
+  "pad.boardgame.ribbon.tiebreak", // W2a BG-KO-1 (ruling D-C4)
   // R7/A2 rework — tapModel S's own scorebug hint, on the identical
   // `padLabel()`/PAD_LABEL_KEYS gate as every other model-S sport's
   // (badminton, table tennis, tennis and generic all register theirs).
@@ -1279,9 +1301,29 @@ export const squadProvenanceLabel = (provenance: string, m: MsgFn): string =>
 export const configLabel = (key: string, m: MsgFn): string | null =>
   key in CONFIG_KEY ? m(CONFIG_KEY[key]) : null;
 
+/**
+ * W2a fix round 1 (review M-1): an engine code whose emitters ask for different things carries a `reason`
+ * (`EngineError.data.reason`, forwarded on the wire by http.ts), and the copy branches on it. A reason absent here —
+ * or no reason at all, from an older server — reads the code's own copy (ENGINE_ERROR_KEY).
+ */
+export const ENGINE_ERROR_REASON_KEY: Partial<Record<EngineErrorCode, Readonly<Record<string, MessageKey>>>> = {
+  // The generic-draw reason keeps the code's own "Enter the winner" copy.
+  LEVEL_RESULT_IN_BRACKET: {
+    [LEVEL_RESULT_REASON.finalizeUnsettled]: "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled",
+  },
+  // W2a ruling D-R8: a settle or a decider naming a withdrawn winner — the code's own copy says "isn't level".
+  SETTLE_NOT_APPLICABLE: {
+    [SETTLE_REFUSAL_REASON.withdrawn]: "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn",
+  },
+};
+
 /** Localized copy for an engine refusal; null when the code isn't an engine one. */
-export const engineErrorLabel = (code: string, m: MsgFn): string | null =>
-  code in ENGINE_ERROR_KEY ? m(ENGINE_ERROR_KEY[code as EngineErrorCode]) : null;
+export const engineErrorLabel = (code: string, m: MsgFn, reason?: unknown): string | null => {
+  if (!(code in ENGINE_ERROR_KEY)) return null;
+  const byReason = ENGINE_ERROR_REASON_KEY[code as EngineErrorCode];
+  if (byReason && typeof reason === "string" && Object.hasOwn(byReason, reason)) return m(byReason[reason]!);
+  return m(ENGINE_ERROR_KEY[code as EngineErrorCode]);
+};
 
 /**
  * R3.5/Task G — a decided fixture's own `MatchOutcome` (kind/winner/loser/
@@ -1296,12 +1338,47 @@ export const engineErrorLabel = (code: string, m: MsgFn): string | null =>
  * deliberate, not a gap: the winner is still true even when the copy for HOW
  * isn't, and a method's raw token must never leak onto the page.
  */
+const camel = (s: string) => s.replace(/_(.)/g, (_, c: string) => c.toUpperCase());
+
+// W2a fix round 1 (M4) — the engine's two decider tuples and its settled-method namer, RESTATED rather than imported.
+// This module ships in the public live-score island, and a value import of `@seazn/engine/sports/boardgame` put the
+// whole boardgame module (its zod schemas) and core's barrel into that client chunk: measured on the public match
+// page's client JS (prod build), 450,468 B gz over 24 files with the imports against 295,410 B gz over 20 without —
+// 155 KB gz for six string literals. The file's own posture already restates engine facts and pins them
+// (`SPORT_KEY` above); scoring-vocab.test.ts pins these three against the engine's own declarations, so a fourth
+// settle method or rung reds there instead of drifting.
+export const SETTLE_METHOD_IDS = ["lot", "higher_seed", "organiser"] as const satisfies readonly SettleMethod[];
+export const TIEBREAK_RUNG_IDS = ["rapid", "blitz", "armageddon"] as const satisfies typeof ENGINE_TIEBREAK_RUNGS;
+export const settledMethodId = <M extends SettleMethod>(m: M) => `settled_${m}` as const;
+
 const DECIDED_METHOD_KEY: Record<string, MessageKey> = {
   shootout: "fixture.decidedBy.shootout",
   super_over: "fixture.decidedBy.superOver",
   boundary_count: "fixture.decidedBy.boundaryCount",
   extra_time: "fixture.decidedBy.extraTime",
+  // W2a (spec §5.5, D5): a bracket decided by an organiser's settle, or by a chess tie-break rung. DERIVED from the
+  // engine's own tuples — `settledMethod` is the one function that names a settled outcome's method — so a fourth
+  // settle method or rung arrives here with no edit, and its missing key reds the dictionary gate rather than
+  // shipping the plain sentence.
+  ...Object.fromEntries(SETTLE_METHOD_IDS.map((m) => [settledMethodId(m), `fixture.decidedBy.settled.${camel(m)}` as MessageKey])),
+  ...Object.fromEntries(TIEBREAK_RUNG_IDS.map((r) => [`tiebreak_${r}`, `fixture.decidedBy.tiebreak.${r}` as MessageKey])),
 };
+
+/** The tie-break method prefix: `tiebreak_<rung>` is what the boardgame module names a tie-break win
+ *  (`boardgame.ts`'s outcome on a `boardgame.tiebreak` event). */
+const TIEBREAK_METHOD_PREFIX = "tiebreak_";
+
+/** W2a — every `outcome.method` a bracket decider can write: the settle methods (named by the engine's own
+ *  `settledMethod`) and the chess tie-break rungs. Exported for the match centre's `RESULT_KINDS`, so the public result
+ *  line and this module's sentence map read ONE list off the engine. */
+export const BRACKET_DECIDER_METHODS: readonly (ReturnType<typeof settledMethodId> | `tiebreak_${(typeof TIEBREAK_RUNG_IDS)[number]}`)[] = [
+  ...SETTLE_METHOD_IDS.map(settledMethodId),
+  ...TIEBREAK_RUNG_IDS.map((r) => `tiebreak_${r}` as const),
+];
+
+/** W2a — the rungs whose sentence can carry a match score ("won on rapid tie-break (1½–½)"). Armageddon is ONE game,
+ *  so it has no match score to state; a score written to it anyway (the schema allows one) reads the unscored line. */
+export const TIEBREAK_SCORED_RUNGS: readonly string[] = TIEBREAK_RUNG_IDS.filter((r) => r !== "armageddon");
 
 /** The minimal slice of `MatchOutcome` this module needs — structural rather
  *  than importing the engine's own type, the same posture the pad chassis
@@ -1341,6 +1418,9 @@ export interface DecidedOutcomeTemplates {
    */
   shootoutPlain: string;
   byMethod: Record<string, string>;
+  /** W2a — per scored rung (`TIEBREAK_SCORED_RUNGS`), the tie-break sentence that names the match score. Optional so a
+   *  templates object built before W2a (a cached client prop) still renders: it falls back to `byMethod`. */
+  tiebreakScored?: Record<string, string>;
 }
 
 /**
@@ -1377,11 +1457,14 @@ export function decidedOutcomeTemplates(m: MsgFn, sportKey?: string): DecidedOut
   for (const [method, key] of Object.entries(DECIDED_METHOD_KEY)) {
     byMethod[method] = method === "shootout" && skated ? m("fixture.decidedBy.shootoutHockey") : m(key);
   }
+  const tiebreakScored: Record<string, string> = {};
+  for (const rung of TIEBREAK_SCORED_RUNGS) tiebreakScored[rung] = m(`fixture.decidedBy.tiebreakScored.${rung}` as MessageKey);
   return {
     tie: m("fixture.decidedBy.tie"),
     plain: m("fixture.decidedBy.plain"),
     shootoutPlain: skated ? m("fixture.decidedBy.shootoutHockeyPlain") : m("fixture.decidedBy.shootoutPlain"),
     byMethod,
+    tiebreakScored,
   };
 }
 
@@ -1402,6 +1485,9 @@ export function renderDecidedOutcome(
   entrantNames: Record<string, string>,
   templates: DecidedOutcomeTemplates,
   shootoutScore?: { home: number; away: number } | null,
+  /** W2a — the chess tie-break's match score, read by the caller off `summary.detail` (`tiebreakScoreFromDetail`).
+   *  Printed only on a tie-break win whose rung has a scored sentence; never invented when absent. */
+  tiebreakScore?: string | null,
 ): string | null {
   if (!outcome) return null;
   if (outcome.kind === "tie") return interpolate(templates.tie);
@@ -1423,6 +1509,10 @@ export function renderDecidedOutcome(
     // not be thrown away just because the score is unknown.
     if (templates.shootoutPlain) return interpolate(templates.shootoutPlain, { winner });
     return interpolate(templates.plain, { winner });
+  }
+  if (outcome.method?.startsWith(TIEBREAK_METHOD_PREFIX) && tiebreakScore) {
+    const scored = templates.tiebreakScored?.[outcome.method.slice(TIEBREAK_METHOD_PREFIX.length)];
+    if (scored) return interpolate(scored, { winner, score: tiebreakScore });
   }
   if (template) return interpolate(template, { winner });
   return interpolate(templates.plain, { winner });
@@ -1453,8 +1543,10 @@ export function decidedOutcomeText(
   shootoutScore?: { home: number; away: number } | null,
   /** See `decidedOutcomeTemplates` — omitting it keeps football's wording. */
   sportKey?: string,
+  /** See `renderDecidedOutcome` — W2a's chess tie-break score. */
+  tiebreakScore?: string | null,
 ): string | null {
-  return renderDecidedOutcome(outcome, entrantNames, decidedOutcomeTemplates(m, sportKey), shootoutScore);
+  return renderDecidedOutcome(outcome, entrantNames, decidedOutcomeTemplates(m, sportKey), shootoutScore, tiebreakScore);
 }
 
 /**
@@ -1470,6 +1562,19 @@ export function shootoutScoreFromDetail(detail: unknown): { home: number; away: 
   if (!shootout || typeof shootout !== "object") return null;
   const { home, away } = shootout as Record<string, unknown>;
   return typeof home === "number" && typeof away === "number" ? { home, away } : null;
+}
+
+/**
+ * W2a — `shootoutScoreFromDetail`'s chess sibling: the tie-break's match score ("1½–½") off the boardgame summary's
+ * `detail.tiebreak.score`, which the module sets only when the recorded tie-break carried one. Null for anything else
+ * — a pending tie-break (`tiebreak: {}`), a settle, every other sport — so no caller can invent a score.
+ */
+export function tiebreakScoreFromDetail(detail: unknown): string | null {
+  if (!detail || typeof detail !== "object") return null;
+  const tiebreak = (detail as Record<string, unknown>).tiebreak;
+  if (!tiebreak || typeof tiebreak !== "object") return null;
+  const { score } = tiebreak as Record<string, unknown>;
+  return typeof score === "string" && score !== "" ? score : null;
 }
 
 /**
@@ -1494,7 +1599,7 @@ export function scoringErrorText(
   fallback: MessageKey,
   extra?: Record<string, unknown> | null,
 ): string {
-  const engine = code ? engineErrorLabel(code, m) : null;
+  const engine = code ? engineErrorLabel(code, m, extra?.reason) : null;
   if (engine !== null) return engine;
   if (code === NEXT_MATCH_STARTED_CODE) {
     const ref = nextMatchRefOf(extra);
@@ -1510,6 +1615,7 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(WICKET_KEY), ...Object.values(EXTRA_KEY),
   ...Object.values(SPORT_KEY), ...Object.values(SWATCH_KEY),
   ...Object.values(EVENT_KEY), ...Object.values(ENGINE_ERROR_KEY),
+  ...Object.values(ENGINE_ERROR_REASON_KEY).flatMap((byReason) => Object.values(byReason ?? {})),
   ...Object.values(POSITION_KEY), ...Object.values(PLAYER_STAT_KEY),
   ...Object.values(AWARD_KEY),
   ...Object.values(SQUAD_ROLE_KEY), ...Object.values(SQUAD_PROVENANCE_KEY),

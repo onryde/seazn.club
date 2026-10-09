@@ -98,6 +98,8 @@ export async function loadMatchPosterModel(
     divisionName: division.name,
     stageName: stageName ?? null,
     header,
+    // W2a: the raw status, which the header folds away (see `MatchPosterInput.held`).
+    held: fixture.status === "needs_decision",
     activeIndex,
     setLine: setLineOf(matchCentre.sets),
     topPerformers: matchCentre.cricket?.topPerformers ?? null,

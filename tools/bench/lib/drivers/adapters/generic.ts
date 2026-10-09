@@ -6,8 +6,10 @@
 // task's own ruling — "an event the adapter cannot map becomes a finding,
 // never a fallback").
 //
-// tools/bench never imports apps/web in PRODUCTION code (Global
-// Constraint, R39 — see `scorer.ts`'s header). Every constant/behaviour
+// tools/bench production code cannot import `generic.tsx`: it reaches `@/`
+// imports, which do not resolve outside Next's build (R39). (An import-free
+// product module IS read directly — `scorer.ts` reads `organiser-only-events.ts`,
+// `import.ts` reads `import-caps.ts`.) Every constant/behaviour
 // below is a LOCAL restatement of
 // `apps/web/src/components/v2/scorepad/v3/skins/generic.tsx`'s own, cited by
 // file:line, and pinned EQUAL to the real module by

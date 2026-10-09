@@ -107,6 +107,8 @@ function consoleHtml(over: {
       initialState={live}
       initialEvents={ROWS}
       canEdit
+      canOrganise
+      stageKind={null}
       recorderNames={{ "user-1": "Dana Okafor" }}
       audit={over.audit === undefined ? { verified: true, tamperedSeq: null, entitled: true } : over.audit}
       scorePadV2={{
@@ -114,6 +116,7 @@ function consoleHtml(over: {
         resolvedConfig: CFG,
         initialEvents: ENVELOPES,
         entitlements: {},
+        stageKind: null,
         identity: { recordedBy: "user-1", deviceLinkId: null },
       }}
       viewerPlan="community"

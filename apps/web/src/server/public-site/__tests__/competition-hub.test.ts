@@ -15,6 +15,7 @@
 // is ENUMERATED — over the whole wire status vocabulary, read out of
 // `schemas.ts` so a status added to the wire reds this file.
 import { readFileSync } from "node:fs";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // `unstable_cache` is a Next server-runtime API with no incrementalCache
@@ -135,26 +136,16 @@ const enCaptions = (stage: string, keys: string[] = ["A", "B"]) =>
 // ---------------------------------------------------------------------------
 
 // The v1 wire vocabulary for a fixture's status (`Fixture.status`,
-// `server/api-v1/schemas.ts`). Inline `z.enum`, not a named export, so it is
-// read out of the source text below — the same drift guard
-// `lib/__tests__/matches-hub.test.ts` uses, for the same reason.
-const STATUSES = [
-  "scheduled",
-  "in_play",
-  "decided",
-  "finalized",
-  "abandoned",
-  "forfeited",
-  "cancelled",
-] as const;
+// `server/api-v1/schemas.ts`). W2a: that enum is `z.enum(FIXTURE_STATUSES)`, so
+// this list IS the wire vocabulary; the guard below reads the source text to
+// prove schemas.ts still uses it (the matches-hub.test.ts guard's twin).
+const STATUSES = FIXTURE_STATUSES;
 
 describe("hubLiveness — the ONE liveness derivation", () => {
-  it("the hand-written STATUSES list still matches the enum in server/api-v1/schemas.ts", () => {
+  it("the STATUSES list still matches the enum in server/api-v1/schemas.ts (FIXTURE_STATUSES)", () => {
     const src = readFileSync(new URL("../../api-v1/schemas.ts", import.meta.url), "utf8");
-    const line = src.split("\n").find((l) => /status: z\.enum\(\[.*"forfeited".*\]\)/.test(l));
-    expect(line, 'no `status: z.enum([… "forfeited" …])` line found in schemas.ts').toBeDefined();
-    const declared = [...line!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
-    expect(declared.sort()).toEqual([...STATUSES].sort());
+    expect(src.split("\n").filter((l) => /status: z\.enum\(FIXTURE_STATUSES\)/.test(l))).toHaveLength(1);
+    expect(src.split("\n").filter((l) => /status: z\.enum\(\[.*"forfeited".*\]\)/.test(l))).toEqual([]);
   });
 
   it("maps every declared wire status to its bucket, header state and live flag", () => {
@@ -166,6 +157,8 @@ describe("hubLiveness — the ONE liveness derivation", () => {
       abandoned: { bucket: "completed", status: "other", live: false },
       forfeited: { bucket: "completed", status: "other", live: false },
       cancelled: { bucket: "completed", status: "other", live: false },
+      // W2a: held — played level, listed under Completed, its own status line on the `other` header.
+      needs_decision: { bucket: "completed", status: "other", live: false },
     });
   });
 
@@ -558,6 +551,18 @@ describe("hubHeader — all eleven fields, from the summary alone", () => {
       expect(header.status).toBe("other");
     },
   );
+
+  it("W2a: a held fixture's status line is the held one — D-H3's 'Level — winner to be decided' (never the 'Not played' fallback)", () => {
+    // Expected copy is the spec's own (§5.5 public surfaces), read from the en dictionary.
+    const header = hubHeader(F({ id: "f1", status: "needs_decision" }), SIDES(), "football", "T");
+    expect(header.status).toBe("other");
+    expect(header.statusLine).toEqual({ key: "matchCentre.status.needs_decision" });
+    const en = JSON.parse(
+      readFileSync(new URL("../../../dictionaries/en/public.json", import.meta.url), "utf8"),
+    ) as Record<string, string>;
+    expect(en[header.statusLine!.key]).toBe("Level — winner to be decided");
+    expect(en["matchCentre.status.other"]).not.toBe("Level — winner to be decided"); // the two answers differ
+  });
 
   it("a status with no dictionary sentence falls back to matchCentre.status.other", () => {
     // Never a dotted key on the page: `t()` renders a missing key as itself.
@@ -2320,6 +2325,29 @@ describe("loadCompetitionHub — a FINALIZED fixture is a decided one", () => {
       ),
     );
     expect(match.resultLine).toContain("Red Rockets");
+  });
+
+  it("W2a: a chess tie-break's recorded score reaches the hub's result line (spec §5.5)", async () => {
+    const tiebreak = F({
+      id: "fx-tiebreak",
+      status: "decided",
+      round_no: 1,
+      home_entrant_id: "e1",
+      away_entrant_id: "e2",
+      scheduled_at: "2026-09-03T14:00:00.000Z",
+      outcome: { kind: "win", winner: "e2", loser: "e1", method: "tiebreak_rapid" },
+      summary: {
+        perSide: [
+          { entrantId: "e1", line: "½" },
+          { entrantId: "e2", line: "½" },
+        ],
+        detail: { tiebreak: { rung: "rapid", score: "1½–½" } },
+      },
+    });
+    getPublicDivisionMock.mockResolvedValue(divisionDetail({ fixtures: [tiebreak], standings: [] }));
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    const match = doc.matches.find((m) => m.fixtureId === "fx-tiebreak")!;
+    expect(match.resultLine).toBe("Red Rockets won on rapid tie-break (1½–½)");
   });
 });
 

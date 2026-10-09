@@ -7107,7 +7107,8 @@
                               "finalized",
                               "abandoned",
                               "forfeited",
-                              "cancelled"
+                              "cancelled",
+                              "needs_decision"
                             ]
                           },
                           "outcome": {
@@ -21523,7 +21524,8 @@
                                   "finalized",
                                   "abandoned",
                                   "forfeited",
-                                  "cancelled"
+                                  "cancelled",
+                                  "needs_decision"
                                 ]
                               },
                               "outcome": {
@@ -22392,7 +22394,8 @@
                                   "finalized",
                                   "abandoned",
                                   "forfeited",
-                                  "cancelled"
+                                  "cancelled",
+                                  "needs_decision"
                                 ]
                               },
                               "outcome": {
@@ -25338,7 +25341,8 @@
                                   "finalized",
                                   "abandoned",
                                   "forfeited",
-                                  "cancelled"
+                                  "cancelled",
+                                  "needs_decision"
                                 ]
                               },
                               "outcome": {
@@ -36389,7 +36393,8 @@
                             "finalized",
                             "abandoned",
                             "forfeited",
-                            "cancelled"
+                            "cancelled",
+                            "needs_decision"
                           ]
                         },
                         "outcome": {
@@ -36961,7 +36966,8 @@
                             "finalized",
                             "abandoned",
                             "forfeited",
-                            "cancelled"
+                            "cancelled",
+                            "needs_decision"
                           ]
                         },
                         "outcome": {
@@ -38735,6 +38741,9 @@
                             "fixtureDecided": {
                               "type": "boolean"
                             },
+                            "fixtureHeld": {
+                              "type": "boolean"
+                            },
                             "endReason": {
                               "anyOf": [
                                 {
@@ -38889,6 +38898,7 @@
                             "replayUrl",
                             "target",
                             "fixtureDecided",
+                            "fixtureHeld",
                             "endReason",
                             "creditUsed",
                             "restart",
@@ -38941,6 +38951,7 @@
                       "label": "example"
                     },
                     "fixtureDecided": true,
+                    "fixtureHeld": true,
                     "endReason": "stopped",
                     "creditUsed": true,
                     "restart": {
@@ -39437,6 +39448,9 @@
                         "fixtureDecided": {
                           "type": "boolean"
                         },
+                        "fixtureHeld": {
+                          "type": "boolean"
+                        },
                         "endReason": {
                           "anyOf": [
                             {
@@ -39591,6 +39605,7 @@
                         "replayUrl",
                         "target",
                         "fixtureDecided",
+                        "fixtureHeld",
                         "endReason",
                         "creditUsed",
                         "restart",
@@ -39638,6 +39653,7 @@
                       "label": "example"
                     },
                     "fixtureDecided": true,
+                    "fixtureHeld": true,
                     "endReason": "stopped",
                     "creditUsed": true,
                     "restart": {
@@ -64034,7 +64050,8 @@
                             "finalized",
                             "abandoned",
                             "forfeited",
-                            "cancelled"
+                            "cancelled",
+                            "needs_decision"
                           ]
                         },
                         "outcome": {

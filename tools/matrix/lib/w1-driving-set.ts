@@ -17,9 +17,10 @@ import { z } from "zod";
 import { ROW_KEYS, SPORT_KEYS, type RowKey } from "./catalogue.ts";
 import { requireScorable } from "./probe-set.ts";
 import { HARNESS_SCENARIO, LIFECYCLE_ID } from "./scenario-catalogue.ts";
-import type { CaseSpec, ScenarioKey } from "./scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, type CaseSpec, type ScenarioKey, type W2aScenarioKey } from "./scenarios/types.ts";
 import { UnknownFilter, checkCellFilter } from "./slice.ts";
 import { scorable, type VariantCase } from "./variants.ts";
+import { w2aCells } from "./w2a-cells.ts";
 // Type-only: run.ts value-imports this module, and an erased import cannot cycle.
 import type { PlanCases } from "../run.ts";
 
@@ -125,15 +126,17 @@ export interface W1DrivingDeps {
 }
 
 interface Selection {
-  readonly cells: readonly { readonly row: RowKey; readonly sport: string; readonly scenario: W1DrivingScenario }[];
+  readonly cells: readonly { readonly row: RowKey; readonly sport: string; readonly scenario: W1DrivingScenario | W2aScenarioKey }[];
   readonly tests: readonly VariantCase[];
 }
 
-const scenarioOf = (s: string): W1DrivingScenario => {
-  const k = W1_DRIVING_SCENARIOS.find((x) => x === s);
-  if (k === undefined) throw new UnknownFilter("--scenario", s, W1_DRIVING_SCENARIOS);
+/** The four scripts, or (W2a, opt-in) one of the bracket-finish scenarios — which only an explicit `--scenario` plans. */
+const scenarioOf = (s: string): W1DrivingScenario | W2aScenarioKey => {
+  const k = [...W1_DRIVING_SCENARIOS, ...W2A_SCENARIO_KEYS].find((x) => x === s);
+  if (k === undefined) throw new UnknownFilter("--scenario", s, [...W1_DRIVING_SCENARIOS, ...W2A_SCENARIO_KEYS]);
   return k;
 };
+const isW2a = (s: W1DrivingScenario | W2aScenarioKey): s is W2aScenarioKey => (W2A_SCENARIO_KEYS as readonly string[]).includes(s);
 
 /** Everything but the variant names: checked filters, the drops applied, the
  *  bound test cases re-scored — all before the DB, at planner construction. */
@@ -142,8 +145,17 @@ function select(filter: W1DrivingFilter, deps: W1DrivingDeps): Selection {
   const scenario = filter.scenario === undefined ? null : scenarioOf(filter.scenario);
   const atoms = atomsOf();
   const drops = (deps.drops ?? readDropIndex)();
-  const cells: { row: RowKey; sport: string; scenario: W1DrivingScenario }[] = [];
+  const cells: { row: RowKey; sport: string; scenario: W1DrivingScenario | W2aScenarioKey }[] = [];
   const reasons: string[] = [];
+  // W2a (Task 14): a bracket-finish scenario is planned on ITS cells (w2a-cells.ts), less LIFECYCLE's drops — and only
+  // when named. No scenario filter plans the four scripts, so every committed plan is unchanged.
+  if (scenario !== null && isW2a(scenario)) {
+    for (const c of w2aCells(scenario, (row, sport) => drops.has(atoms.LIFECYCLE, row, sport))) {
+      if (cell === null || (cell.row === c.row && cell.sport === c.sport)) cells.push({ ...c, scenario });
+    }
+    if (cells.length === 0) throw new W1DrivingPlansNothing(filter, reasons);
+    return { cells, tests: [] };
+  }
   for (const row of ROW_KEYS) for (const sport of SPORT_KEYS) {
     if (cell !== null && (cell.row !== row || cell.sport !== sport)) continue;
     for (const s of W1_DRIVING_SCENARIOS) {

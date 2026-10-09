@@ -9,7 +9,7 @@ import { EngineError, type StageKind } from "@seazn/engine/core";
 import { SPORT_RULES, buildRuleOverride, visibleRuleFields, type RuleField } from "../../../apps/web/src/lib/match-rules.ts";
 import { ROW_KEYS, builderDefaultVariant, stagesForRow, type RowKey } from "./catalogue.ts";
 import { foldStream } from "./fold.ts";
-import { CfgInvalid, resolveSportCfg, sportModule, variantKeys } from "./sport-cfg.ts";
+import { CfgInvalid, resolveSportCfg, sportModule, stageCfg, variantKeys } from "./sport-cfg.ts";
 import { generateStream, matchesRequest } from "./streams/index.ts";
 import { GeneratorUnsupported } from "./streams/types.ts";
 
@@ -279,11 +279,15 @@ export function scorable(vc: VariantCase, deps: { generate?: typeof generateStre
     return `cfg: ${errText(e)}`;
   }
   const stageKind = stagesForRow(vc.row)[0].kind as StageKind;
+  // W2a: a bracket fixture is generated and folded under the cfg the product folds it under - the stage's own overlay
+  // (boardgame's tie-break, carrom's extra board) on top of the resolved cfg. A bare cfg here asks a carrom knockout
+  // for a plain win, which the overlay makes a different game.
+  const foldCfg = stageCfg(vc.sport, cfg, stageKind);
   for (const winner of ["home", "away"] as const) {
-    const req = { sportKey: vc.sport, cfg, stageKind, home: "matrix-home", away: "matrix-away", outcome: { kind: "win", winner } as const };
+    const req = { sportKey: vc.sport, cfg: foldCfg, stageKind, home: "matrix-home", away: "matrix-away", outcome: { kind: "win", winner } as const };
     try {
       const events = generate(req);
-      const out = foldStream(sportModule(vc.sport), cfg, req.home, req.away, events).outcome;
+      const out = foldStream(sportModule(vc.sport), foldCfg, req.home, req.away, events).outcome;
       if (matchesRequest(req, out) !== "match") return `win-${winner}: folded ${JSON.stringify(out)}`;
     } catch (e) {
       if (!SCORABLE_REFUSALS.some((C) => e instanceof C)) throw e;

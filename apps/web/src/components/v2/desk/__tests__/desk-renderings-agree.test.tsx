@@ -84,6 +84,9 @@ const UNREACHABLE: Record<string, string> = {
   // pair the two would be a stage owing work as well — and that raises a RED
   // row, which leads instead.
   "setting_up/result_missing": "a dated fixture is answered by rule 3 or 5, never rule 6's setting_up",
+  // W2a (addendum 9): a HELD fixture — `needs_decision`, or a recorded abandon awaiting its settle — is live
+  // (`isLiveFixture`), so rule 2 refuses `finished` while one exists. That is the whole point of the row.
+  "finished/needs_decision": "a held fixture is live, which blocks rule 2",
 };
 
 type Shape = {
@@ -113,7 +116,7 @@ const drawableStage = (o: Partial<PhaseStage> = {}) =>
        timing: "setup", sourceReady: true, ...o });
 const fxt = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
   id: "f1", status: "decided", scheduledAt: FUTURE, startedAt: null, eventCount: 0, matchMinutes: 90,
-  hasScorer: true, stageId: "s1", awaitsSeedDraw: false, ...o,
+  hasScorer: true, stageId: "s1", awaitsSeedDraw: false, awaitsSettle: false, ...o,
 });
 const awaitsDraw = (o: Partial<PhaseFixture> = {}) =>
   fxt({ id: "tbd1", stageId: "fin", awaitsSeedDraw: true, status: "scheduled", scheduledAt: null, ...o });
@@ -215,6 +218,36 @@ const SHAPES: Shape[] = [
     stages: [st()],
     fixtures: [fxt({ id: "a", status: "in_play", hasScorer: true })],
   },
+  // W2a (addendum 9): a held bracket fixture, in each phase it can sit beside. Both held shapes are used: the level
+  // result (`needs_decision`) and the recorded abandon awaiting its settle (stored `abandoned`, `awaitsSettle`).
+  // Fix round 1 (ruling D-H2): a held fixture counts as PLAYED, so a level final alone in its division is in progress
+  // (`scheduled`), and `setting_up` beside a held fixture is reached only through rule 4 — an earlier open stage that
+  // still owes its fixtures. That stage raises a red `needs_fixtures` (ordered before `needs_decision`) in every
+  // division status but `setup`, whose gate keeps it quiet — so the held row leads only there.
+  {
+    why: "scheduled/needs_decision — a two-entrant final ended level and nothing else has been played (D-H2)",
+    stages: [st({ id: "ko", name: "Final" })],
+    fixtures: [fxt({ id: "a", stageId: "ko", status: "needs_decision", scheduledAt: null })],
+  },
+  {
+    why: "setting_up/needs_decision — a setup division: an earlier stage still owes its fixtures while a later stage's match ended level",
+    stages: [st({ id: "pl", name: "Plate", seq: 1, status: "pending", hasFixtures: false }), st({ id: "ko", name: "Final", seq: 2 })],
+    fixtures: [fxt({ id: "a", stageId: "ko", status: "needs_decision", scheduledAt: null })],
+    divisionStatus: "setup",
+  },
+  {
+    why: "scheduled/needs_decision — a semi-final abandoned with nobody decided, the other semi played, the final dated",
+    stages: [st({ id: "ko", name: "Knockout" })],
+    fixtures: [fxt({ id: "a", stageId: "ko" }),
+               fxt({ id: "b", stageId: "ko", status: "abandoned", awaitsSettle: true, scheduledAt: null }),
+               fxt({ id: "c", stageId: "ko", status: "scheduled", scheduledAt: FUTURE })],
+  },
+  {
+    why: "match_day/needs_decision — one quarter-final ended level while another is being played",
+    stages: [st({ id: "ko", name: "Knockout" })],
+    fixtures: [fxt({ id: "a", stageId: "ko", status: "needs_decision", scheduledAt: null }),
+               fxt({ id: "b", stageId: "ko", status: "in_play", hasScorer: true })],
+  },
   {
     why: "finished/registrations_waiting — the season is over and an entry was never dealt with",
     stages: [st({ status: "complete" })],
@@ -229,7 +262,8 @@ const SHAPES: Shape[] = [
   },
 ];
 
-const PLAYED = new Set(["decided", "finalized"]);
+// card-stats.ts's PLAYED, mirrored (it is what the desk's "N of M played" counts) — with D-H2's held level result.
+const PLAYED = new Set(["decided", "finalized", "needs_decision"]);
 
 function resolve(shape: Shape) {
   const input: PhaseInput = {

@@ -11,9 +11,13 @@ import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 // usecases/stages.ts; the local name is kept so the call sites read as before.
 import { engineFixtureStatus as toEngineStatus } from "@/lib/fixture-engine-status";
 import { log } from "@/server/logger";
+import { assertNoLevelSeat } from "./level-seat";
+import { bracketEngineStatus, hasActiveAbandonSql } from "./recorded-abandon";
+import { inTheField } from "@/lib/entrant-field";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
   PointsRule,
+  SETTLED_FIXTURE_STATUSES,
   applyPointsRule,
   completeBracketStage,
   completeTableStage,
@@ -145,9 +149,10 @@ export function parseExtKey(extKey: string | null): { bracket?: "WB" | "LB" | "G
 // (spec 03 §3 MatchOutcome). `win` names both directly; `award` (walkover/
 // forfeit, spec 05 §5) names only the winner — the loser is whichever side
 // isn't them, the same derivation testkit/simulation.ts uses for its own
-// award-outcome replay. draw/tie/no_result never reach a bracket fixture (a
-// stage that forbids draws refuses to finalize one, DRAW_NOT_ALLOWED), so
-// they resolve to neither side rather than guessing.
+// award-outcome replay. draw/tie/no_result: a bracket fixture holding one is
+// needs_decision (W2a X-BR-2) and seats nobody, so they resolve to neither side
+// here; a level outcome under a SEATING status is the bug shape, and the
+// callers that know the stage kind assert it (level-seat.ts, X-BR-1).
 export function bracketWinnerLoser(
   outcome: unknown,
   home: string | null,
@@ -176,14 +181,16 @@ export function bracketWinnerLoser(
 // the grand final depending on array order. thirdPlace status is structural
 // (parsed from ext_key, never guessed) and settles it unconditionally: a
 // thirdPlace fixture is never the decider, full stop.
-function toBracketFixture(f: FixtureRow): BracketFixture {
+function toBracketFixture(f: FixtureRow, stageKind: string): BracketFixture {
+  assertNoLevelSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome }); // X-BR-1
   const { bracket, thirdPlace } = parseExtKey(f.ext_key);
   const { winner, loser } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
   return {
     id: f.id,
     round: f.round_no,
     isFinal: !thirdPlace,
-    status: toEngineStatus(f.status),
+    // D-G1: a recorded abandon that decided nobody is in play, never the generator's void (recorded-abandon.ts).
+    status: bracketEngineStatus(f),
     ...(bracket !== undefined ? { bracket } : {}),
     ...(thirdPlace ? { thirdPlace: true } : {}),
     ...(f.home_entrant_id !== null ? { home: f.home_entrant_id } : {}),
@@ -235,6 +242,9 @@ interface FixtureRow {
   /** L3/#414 pass 2 — see parseExtKey: the only surviving record of a bracket
    *  fixture's lane and thirdPlace status. */
   ext_key: string | null;
+  /** W2a D-G1: abandoned with an ACTIVE `core.abandon` (recorded-abandon.ts) — read by the bracket and ladder
+   *  completion branches through `bracketEngineStatus`. */
+  has_active_abandon: boolean;
 }
 
 interface StageInputs {
@@ -249,6 +259,9 @@ interface StageInputs {
   tableFixtures: TableFixture[];
   entrants: string[];
   seeds: Map<string, number>;
+  /** W2a D-G1: the entrants still in the competing field (`inTheField`) — the bracket guard's exemption is for the
+   *  departed alone. */
+  field: Set<string>;
 }
 
 // Load a stage's fixtures and turn each decided fixture into a StandingsDelta
@@ -272,7 +285,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
 
   const fixtures = await tx<FixtureRow[]>`
     select f.id, f.status, f.round_no, f.pool_id, f.home_entrant_id, f.away_entrant_id,
-           f.outcome, f.config_snapshot, f.ext_key, m.state
+           f.outcome, f.config_snapshot, f.ext_key, m.state,
+           ${hasActiveAbandonSql(tx)} as has_active_abandon
     from fixtures f left join match_states m on m.fixture_id = f.id
     where f.stage_id = ${stageId}
     order by f.round_no, f.seq_in_round
@@ -325,7 +339,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         resolveFixtureCfg(
           f.config_snapshot,
           division.config,
-          stage.config as Record<string, unknown> | null,
+          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
+          sportModule,
         ),
         ctx,
         f.state,
@@ -347,7 +362,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
         resolveFixtureCfg(
           f.config_snapshot,
           division.config,
-          stage.config as Record<string, unknown> | null,
+          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
+          sportModule,
         ),
         ctx,
         pointsRule,
@@ -366,11 +382,15 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   const entrants = [...entrantSet];
 
   const seeds = new Map<string, number>();
+  const field = new Set<string>();
   if (entrants.length > 0) {
-    const seedRows = await tx<{ id: string; seed: number | null }[]>`
-      select id, seed from entrants where id in ${tx(entrants)}
+    const seedRows = await tx<{ id: string; seed: number | null; status: string }[]>`
+      select id, seed, status from entrants where id in ${tx(entrants)}
     `;
-    for (const r of seedRows) if (r.seed != null) seeds.set(r.id, r.seed);
+    for (const r of seedRows) {
+      if (r.seed != null) seeds.set(r.id, r.seed);
+      if (inTheField(r)) field.add(r.id);
+    }
   }
 
   return {
@@ -385,6 +405,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
     tableFixtures,
     entrants,
     seeds,
+    field,
   };
 }
 
@@ -597,7 +618,8 @@ export async function completeStageIfReady(
       // to rank, and config.ladder_order isn't even set until the first
       // issueChallenge.
       const open = inputs.fixtures.some((f) => {
-        const status = toEngineStatus(f.status);
+        // D-G1: an abandoned challenge nobody settled is still open (recorded-abandon.ts), not the void it used to read as.
+        const status = bracketEngineStatus(f);
         return status === "scheduled" || status === "in_play";
       });
       if (inputs.fixtures.length === 0 || open) {
@@ -629,7 +651,7 @@ export async function completeStageIfReady(
         kind: inputs.kind,
         ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
       };
-      const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f));
+      const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind));
       // Refine: only fixtures with no onward winner feed are finals (a
       // fixture whose winner feeds nowhere is the bracket's deciding game).
       const feeders = await tx<{ id: string }[]>`
@@ -640,6 +662,31 @@ export async function completeStageIfReady(
 
       if (!isBracketStageComplete(bracketStage, bracketFixtures)) {
         return { completed: false, events: [] };
+      }
+      // D-G1 guard. bracketRanks orders an entrant who never lost a settled fixture by elimination round −1: LAST.
+      // Right for a departed entrant whose line the generator voided (F14, walkoverDepartedQualifiers); wrong for
+      // anyone still in the field — an unbeaten field entrant who won no final means the deciding game decided
+      // nobody, and the loop G review measured exactly that: an abandoned final ranked its two finalists 3rd and
+      // 4th behind the semi-final losers. A recorded abandon now holds the stage open (bracketEngineStatus), so
+      // that path no longer reaches here. One PRODUCT path still does (loop G re-review, probe P2; ruling D-G3,
+      // deferred to W2b): a stepladder qualifier who departs before the draw has her FINAL voided by the generator
+      // with no event (F14), fillSlot then seats the climber into that void row, and the field entrants are
+      // unbeaten — refused at generation and after every rung until the organiser forfeits the departed seed in
+      // the final (dead-feeder-cascade.test.ts pins it). Refuse, never snapshot a champion last.
+      const lost = new Set<string>();
+      const finalWinners = new Set<string>();
+      for (const bf of bracketFixtures) {
+        if (!SETTLED_FIXTURE_STATUSES.has(bf.status)) continue;
+        if (bf.loser !== undefined) lost.add(bf.loser);
+        if (bf.isFinal === true && bf.winner !== undefined) finalWinners.add(bf.winner);
+      }
+      const unranked = inputs.entrants.filter((id) => inputs.field.has(id) && !lost.has(id) && !finalWinners.has(id));
+      if (unranked.length > 0) {
+        throw new EngineError(
+          "CONFIG_INVALID",
+          `bracket stage ${stageId} would rank ${unranked.length} unbeaten entrant(s) still in the field last: its deciding game decided nobody`,
+          { stageId, entrants: unranked },
+        );
       }
       // completeBracketStage = bracketRanks (stage.ts — already handles
       // losers, third-place, DE-reset and page-playoff with no algorithm

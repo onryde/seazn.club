@@ -25,15 +25,27 @@
 // ever made eager.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import { BRACKET_KINDS, SETTLE_METHODS, type StageKind } from "@seazn/engine/core";
 import { generateSingleElim } from "@seazn/engine/scheduling";
+import { builtinModules } from "@seazn/engine/sports";
+import { forEachSportAsync } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { getFixtureState } from "../fixtures";
+import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { completeStage, createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
+import {
+  completeStage,
+  createStages,
+  generateStageFixtures,
+  issueChallenge,
+  rebuildStageFixtures,
+  resolveBracketSeats,
+} from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -705,5 +717,848 @@ describe.skipIf(!HAS_DB)("a seat fed by a LOSER edge is cascaded too (N1)", () =
     expect(labelled(farTarget), "cross-stage feeder: the seat is NOT stamped").toEqual([]);
     expect(farTarget.status, "and it is NOT settled as a walkover").toBe("scheduled");
     expect(farTarget.outcome).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2a Task 10 — NEW-H1 (spec §5.4.7, plan D4; reproduced at W2a Task 1 by
+// apps/web/e2e/bracket-new-h1.spec.ts). In most sports a scorer's
+// `core.abandon` folds to `outcome: null` — the SAME row shape the generator
+// and this cascade write for their own event-less voids — so `feederIsDead`
+// read a rained-off semi-final as a void and walked the other semi-finalist
+// through the final. The 2026-09-21 ruling above says an abandoned match is
+// stuck and visible. The line between the two is the ledger: an abandon that
+// someone recorded is an ACTIVE `core.abandon`; a generator void has no event
+// at all. The way out of "stuck" is the organiser's `core.settle` (X-ST-1:
+// settle applies to an abandon with no outcome).
+// ---------------------------------------------------------------------------
+
+/** The engine's own settle vocabulary; a rename there reds here by name. */
+const SETTLE_BY_ORGANISER = (() => {
+  const m = SETTLE_METHODS.find((x) => x === "organiser");
+  if (m === undefined) throw new Error("the engine declares no 'organiser' settle method");
+  return m;
+})();
+
+async function fixtureRow(id: string): Promise<Row> {
+  const [r] = await sql<Row[]>`
+    select id, ext_key, round_no, seq_in_round, home_entrant_id, away_entrant_id,
+           home_slot_label, away_slot_label, status, outcome,
+           winner_to_fixture, winner_to_slot, loser_to_fixture, loser_to_slot
+    from fixtures where id = ${id}`;
+  if (!r) throw new Error(`no fixture ${id}`);
+  return r;
+}
+
+async function post(auth: AuthCtx, id: string, type: string, payload: unknown = {}) {
+  const [tip] = await sql<{ s: number }[]>`
+    select coalesce(max(seq), 0)::int as s from score_events where fixture_id = ${id}`;
+  return scoreEvent(auth, id, { expected_seq: tip!.s, type, payload } as never);
+}
+
+/** A feed edge names seat 1 or 2; anything else is a broken graph, not "no seat". */
+function seatOf(r: Row, slot: number | null): string | null {
+  if (slot === 1) return r.home_entrant_id;
+  if (slot === 2) return r.away_entrant_id;
+  throw new Error(`fixture ${r.id}: a feed edge names slot ${slot}`);
+}
+function seatLabelOf(r: Row, slot: number | null): string | null {
+  if (slot === 1) return r.home_slot_label?.key ?? null;
+  if (slot === 2) return r.away_slot_label?.key ?? null;
+  throw new Error(`fixture ${r.id}: a feed edge names slot ${slot}`);
+}
+const otherSlot = (slot: number | null): 1 | 2 => (slot === 1 ? 2 : 1);
+
+/** A scorer's abandon, the shape the console's "Abandon…" control writes: started, then abandoned. */
+async function scorerAbandon(auth: AuthCtx, id: string): Promise<void> {
+  await post(auth, id, "core.start");
+  await post(auth, id, "core.abandon", { reason: "rain" });
+}
+
+/** Decide a fixture for its home side by the away side's forfeit — `core.forfeit` is a core event every module folds. */
+async function walkoverForHome(auth: AuthCtx, id: string): Promise<void> {
+  const r = await fixtureRow(id);
+  await post(auth, id, "core.start");
+  await post(auth, id, "core.forfeit", { by: r.away_entrant_id, reason: "walkover" });
+}
+
+/** Decide a chess game for home over the board: a real `win` with a LOSER (a forfeit's award seats no loser). */
+async function chessWinForHome(auth: AuthCtx, id: string): Promise<void> {
+  const r = await fixtureRow(id);
+  await post(auth, id, "core.start");
+  await post(auth, id, "boardgame.result", { winner: r.home_entrant_id, method: "checkmate" });
+}
+
+/** Play every line an organiser could put on a court, except `skip`, until none is left. Returns how many. */
+async function playOutExcept(
+  auth: AuthCtx,
+  stageId: string,
+  decide: (auth: AuthCtx, id: string) => Promise<void>,
+  skip: ReadonlySet<string>,
+): Promise<number> {
+  let played = 0;
+  for (let guard = 0; guard < 16; guard++) {
+    const open = (
+      await sql<{ id: string }[]>`
+        select id from fixtures where stage_id = ${stageId} and status = 'scheduled'
+          and home_entrant_id is not null and away_entrant_id is not null
+        order by round_no, seq_in_round`
+    ).filter((r) => !skip.has(r.id));
+    if (open.length === 0) return played;
+    for (const f of open) {
+      await decide(auth, f.id);
+      played++;
+    }
+  }
+  throw new Error("playOutExcept did not converge");
+}
+
+/** A later cascade pass, whatever triggers it (another decision, a void): the cascade's own entry point. */
+const cascadePass = (stageId: string) => sql.begin((tx) => resolveBracketSeats(tx, stageId));
+
+/** The two first-round lines that feed ONE later seat pair, and a first-round line elsewhere — from the generated
+ *  feed graph, never from a typed seed list. */
+async function quarterFinals(stageId: string): Promise<{ qa: Row; qb: Row; elsewhere: Row; semiId: string }> {
+  const rows = await rowsOf(stageId);
+  const first = Math.min(...rows.map((r) => r.round_no));
+  const r1 = rows.filter((r) => r.round_no === first && r.home_entrant_id && r.away_entrant_id);
+  const semiId = r1[0]?.winner_to_fixture;
+  const pair = r1.filter((r) => r.winner_to_fixture === semiId);
+  const elsewhere = r1.find((r) => r.winner_to_fixture !== semiId);
+  if (!semiId || pair.length !== 2 || !elsewhere) throw new Error("the draw has no two seated lines feeding one semi");
+  return { qa: pair[0]!, qb: pair[1]!, elsewhere, semiId };
+}
+
+/** The ladder: no generated fixture, no feed edge. A challenge is created on demand and feeds nobody. Its scorer
+ *  abandons it unless `abandon: false` (the withdrawal characterisation abandons it through the withdrawal instead). */
+async function ladderAbandonedChallenge(opts: { abandon?: boolean } = {}): Promise<{
+  stageId: string;
+  challengeId: string;
+  auth: AuthCtx;
+  /** The four entrants in seed order (L1 = seed 1, the holder the challenge was issued against). */
+  bySeed: string[];
+}> {
+  // single-sport: chess, the kinds sweep's sport (its scorer abandon folds to outcome null, the NEW-H1 shape).
+  const sport = "boardgame";
+  const sportModule = builtinModules.find((m) => m.key === sport)!;
+  const variant = declaredVariant(sport, "classical");
+  const { auth } = await seedOrg("pro");
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: "H1 ladder " + randomUUID().slice(0, 6),
+    visibility: "private",
+    branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open-" + randomUUID().slice(0, 6),
+    sport_key: sport,
+    variant_key: variant,
+    config: sportModule.variants[variant] as Record<string, unknown>,
+  });
+  const entrants = await createEntrants(
+    auth,
+    division.id,
+    Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `L${i + 1}`, seed: i + 1, members: [] })),
+  );
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind: "ladder" as never, name: "Ladder", config: {} });
+  await generateStageFixtures(auth, stage!.id);
+  expect(await rowsOf(stage!.id), "a ladder generates nothing up front").toEqual([]);
+  await startDivision(auth, division.id);
+  const { fixture_id } = await issueChallenge(auth, stage!.id, {
+    challenger_id: entrants[1]!.id,
+    opponent_id: entrants[0]!.id,
+  });
+  if (opts.abandon !== false) await scorerAbandon(auth, fixture_id);
+  return { stageId: stage!.id, challengeId: fixture_id, auth, bySeed: entrants.map((e) => e.id) };
+}
+
+const PER_SPORT_MS = 1_000;
+const SPORT_SWEEP_BUDGET_MS = Math.max(30_000, builtinModules.length * PER_SPORT_MS * 5);
+const PER_SHAPE_MS = 3_000;
+interface KindShape {
+  kind: StageKind;
+  stageConfig: Record<string, unknown>;
+}
+/** Every bracket kind the engine declares, plus the knockout's third-place line (the one knockout LOSER edge). */
+const KIND_SHAPES: readonly KindShape[] = [...BRACKET_KINDS].flatMap((kind): KindShape[] =>
+  kind === "knockout"
+    ? [
+        { kind, stageConfig: {} },
+        { kind, stageConfig: { thirdPlace: true } },
+      ]
+    : [{ kind, stageConfig: {} }],
+);
+const KIND_SWEEP_BUDGET_MS = Math.max(30_000, KIND_SHAPES.length * PER_SHAPE_MS * 5);
+
+describe.skipIf(!HAS_DB)("NEW-H1: a scorer's abandon is not a generator void (spec §5.4.7, D4)", () => {
+  it("NEW-H1: a scorer's abandon (an active core.abandon, outcome null) is NOT a dead feeder — the final stays stuck and visible", async () => {
+    // single-sport: badminton is the probe's sport (bracket-new-h1.spec.ts) and folds a scorer's abandon to outcome null — asserted below; every sport is swept further down.
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const [sf1, sf2] = s.fixtureIds;
+    await scoreEvent(s.auth, sf1!, { expected_seq: 0, type: "core.start", payload: {} } as never);
+    await scoreEvent(s.auth, sf1!, { expected_seq: 1, type: "core.abandon", payload: { reason: "injury" } } as never);
+    const abandoned = await fixtureRow(sf1!);
+    expect(abandoned.status).toBe("abandoned");
+    expect(abandoned.outcome, "the NEW-H1 shape: abandoned with NO outcome").toBeNull();
+    const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
+    await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "walkover" } } as never);
+    const [fin] = await sql<{ status: string; outcome: unknown }[]>`select status, outcome from fixtures where id = ${r2!.winner_to_fixture}`;
+    expect(fin).toEqual({ status: "scheduled", outcome: null });
+    // The positive pair: the seat WAS actionable (its sibling filled), so the cascade really did look at it.
+    const final = await fixtureRow(r2!.winner_to_fixture);
+    const decided = await fixtureRow(sf2!);
+    expect(seatOf(final, decided.winner_to_slot), "the other semi's winner took her seat").toBe(decided.outcome!.winner);
+    expect(seatOf(final, abandoned.winner_to_slot), "the abandoned semi's seat is still empty").toBeNull();
+    expect(seatLabelOf(final, abandoned.winner_to_slot), "and it is NOT stamped as a bye").not.toBe(BYE_KEY);
+  });
+
+  it("NEW-H1: the generator's own void (abandoned, outcome null, NO core.abandon event) is still dead — the walkover still happens", async () => {
+    // single-sport: badminton, the same rig as the case above; the raw-SQL void is the event-less shape the existing dead-feeder cases build.
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const [sf1, sf2] = s.fixtureIds;
+    await sql`update fixtures set status = 'abandoned', outcome = null where id = ${sf1!}`;
+    const [events] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${sf1!}`;
+    expect(events!.n, "premise: the generator's void has no ledger at all").toBe(0);
+    const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
+    await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "walkover" } } as never);
+    const [fin] = await sql<{ status: string }[]>`select status from fixtures where id = ${r2!.winner_to_fixture}`;
+    expect(fin!.status).toBe("forfeited");
+  });
+
+  it("NEW-H1: a VOIDED scorer abandon is not active — a feeder the generator later voids is dead and the walkover happens", async () => {
+    // single-sport: badminton, the same rig as the cases above.
+    // preflight C22: this case asserts the feeder's seat outcome (the final's status), not only the feeder's status.
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const [sf1, sf2] = s.fixtureIds;
+    await scoreEvent(s.auth, sf1!, { expected_seq: 0, type: "core.start", payload: {} } as never);
+    await scoreEvent(s.auth, sf1!, { expected_seq: 1, type: "core.abandon", payload: { reason: "injury" } } as never);
+    const [ab] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${sf1!} and type = 'core.abandon'`;
+    await scoreEvent(s.auth, sf1!, { expected_seq: 2, type: "core.void", payload: { event_id: ab!.id } } as never);
+    const [live] = await sql<{ status: string }[]>`select status from fixtures where id = ${sf1!}`;
+    expect(live!.status).toBe("in_play"); // the abandon is gone; the match is live again
+    // The generator's void, written without an event (the raw-SQL shape the existing dead-feeder cases use).
+    await sql`update fixtures set status = 'abandoned', outcome = null where id = ${sf1!}`;
+    const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
+    await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "walkover" } } as never);
+    const [fin] = await sql<{ status: string }[]>`select status from fixtures where id = ${r2!.winner_to_fixture}`;
+    expect(fin!.status).toBe("forfeited"); // feederIsDead(sf1) === true: the voided abandon did not count as active
+  });
+
+  it("NEW-H1: reverse order — the sibling decided FIRST, then the abandon, then a decision elsewhere runs the cascade: the seat still waits", async () => {
+    // single-sport: badminton, the NEW-H1 shape. An abandon alone runs no cascade (onDecided needs an outcome), so the
+    // pass that would have walked the sibling through comes from ANOTHER line's decision — the order Task 1 left undriven.
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 8 });
+    const { qa, qb, elsewhere, semiId } = await quarterFinals(s.stageId);
+    await walkoverForHome(s.auth, qb.id);
+    await scorerAbandon(s.auth, qa.id);
+    expect((await fixtureRow(qa.id)).outcome, "premise: the NEW-H1 shape").toBeNull();
+    await walkoverForHome(s.auth, elsewhere.id); // onDecided → resolveBracketSeats over the whole stage
+    const semi = await fixtureRow(semiId);
+    expect(seatOf(semi, qb.winner_to_slot), "the sibling's winner holds her seat").toBe(qb.home_entrant_id);
+    expect(seatOf(semi, qa.winner_to_slot), "the abandoned line's seat waits").toBeNull();
+    expect(seatLabelOf(semi, qa.winner_to_slot)).not.toBe(BYE_KEY);
+    expect([semi.status, semi.outcome]).toEqual(["scheduled", null]);
+    // A second pass, whatever triggers it, has nothing to do.
+    expect(await cascadePass(s.stageId)).toEqual([]);
+  });
+
+  it(
+    "NEW-H1: every sport — a scorer-abandoned semi never walks the other semi-finalist through the final, whatever its abandon folds to",
+    async () => {
+      let nullShape = 0;
+      let outcomeShape = 0;
+      const checked = await forEachSportAsync(async ({ key, module: sportModule }) => {
+        // The sport's FIRST declared variant: an engine declaration, never a guessed key.
+        const variant = Object.keys(sportModule.variants)[0];
+        if (variant === undefined) throw new Error(`${key} declares no variant`);
+        const s = await seedBracket({ sport: key, variant: declaredVariant(key, variant), stageKind: "knockout", entrants: 4 });
+        const [sf1, sf2] = s.fixtureIds;
+        if (!sf1 || !sf2) throw new Error(`${key}: a 4-draw knockout seats two semis`);
+        await scorerAbandon(s.auth, sf1);
+        const abandoned = await fixtureRow(sf1);
+        expect(abandoned.status, key).toBe("abandoned"); // D3 order 2: an active abandon is abandoned, whatever it folds to
+        if (abandoned.outcome === null) nullShape++;
+        else outcomeShape++;
+        await walkoverForHome(s.auth, sf2);
+        const decided = await fixtureRow(sf2);
+        const winner = decided.outcome?.winner;
+        expect(winner, `${key}: the sibling semi produced a winner`).toBeTruthy();
+        expect(decided.winner_to_fixture, `${key}: both semis feed one final`).toBe(abandoned.winner_to_fixture);
+        const final = await fixtureRow(abandoned.winner_to_fixture!);
+        expect(seatOf(final, decided.winner_to_slot), `${key}: the sibling's winner is seated`).toBe(winner);
+        expect(seatOf(final, abandoned.winner_to_slot), `${key}: the abandoned semi's seat waits`).toBeNull();
+        expect(seatLabelOf(final, abandoned.winner_to_slot), `${key}: and is not a bye`).not.toBe(BYE_KEY);
+        expect([final.status, final.outcome], key).toEqual(["scheduled", null]);
+        expect(await cascadePass(s.stageId), `${key}: a later pass has nothing to do`).toEqual([]);
+      });
+      expect(checked).toBe(builtinModules.length);
+      expect(nullShape + outcomeShape).toBe(checked);
+      expect(nullShape, "the NEW-H1 shape (abandon → outcome null) was reached").toBeGreaterThan(0);
+      expect(outcomeShape, "the 2026-09-21 shape (abandon → an outcome) was reached too").toBeGreaterThan(0);
+    },
+    SPORT_SWEEP_BUDGET_MS,
+  );
+
+  it(
+    "NEW-H1 / X-ST-1: every bracket kind — the seats an abandoned feeder feeds wait unstamped while the rest plays out; the organiser's settle fills both edges and the bracket finishes",
+    async () => {
+      // single-sport: chess — its scorer abandon folds to outcome null (the NEW-H1 shape, asserted per kind) and one
+      // boardgame.result is a real win with a LOSER, so every loser edge is driven; every sport is swept above.
+      let kinds = 0;
+      let edges = 0;
+      let loserEdges = 0;
+      const actionableByShape: Record<string, number> = {};
+      for (const { kind, stageConfig } of KIND_SHAPES) {
+        const label = `${kind}${stageConfig.thirdPlace ? "+third-place" : ""}`;
+        if (kind === "ladder") {
+          // The empty case: a ladder wires no feed edge, so an abandoned challenge strands no seat and the cascade
+          // has nothing to judge. Proven on a real challenge, not assumed.
+          const l = await ladderAbandonedChallenge();
+          const rows = await rowsOf(l.stageId);
+          expect(rows.map((r) => r.id), label).toEqual([l.challengeId]);
+          expect(rows.filter((r) => r.winner_to_fixture || r.loser_to_fixture), `${label}: no feed edge`).toEqual([]);
+          expect([rows[0]!.status, rows[0]!.outcome], label).toEqual(["abandoned", null]);
+          expect(await cascadePass(l.stageId), label).toEqual([]);
+          actionableByShape[label] = 0;
+          kinds++;
+          continue;
+        }
+        const s = await seedBracket({ sport: "boardgame", variant: declaredVariant("boardgame", "classical"), stageKind: kind, entrants: 4, stageConfig });
+        const feeder = (await rowsOf(s.stageId)).find(
+          (r) => r.home_entrant_id && r.away_entrant_id && (r.winner_to_fixture || r.loser_to_fixture),
+        );
+        if (!feeder) throw new Error(`${label}: no seated line feeds a seat`);
+        const out = [
+          { via: "winner" as const, to: feeder.winner_to_fixture, slot: feeder.winner_to_slot },
+          { via: "loser" as const, to: feeder.loser_to_fixture, slot: feeder.loser_to_slot },
+        ].filter((e): e is { via: "winner" | "loser"; to: string; slot: number | null } => e.to !== null);
+        await scorerAbandon(s.auth, feeder.id);
+        const abandoned = await fixtureRow(feeder.id);
+        expect([abandoned.status, abandoned.outcome], `${label}: the NEW-H1 shape`).toEqual(["abandoned", null]);
+
+        await playOutExcept(s.auth, s.stageId, chessWinForHome, new Set([feeder.id]));
+        expect(await cascadePass(s.stageId), `${label}: a later pass has nothing to do`).toEqual([]);
+        actionableByShape[label] = 0;
+        for (const e of out) {
+          const t = await fixtureRow(e.to);
+          const where = `${label}, ${e.via} edge`;
+          expect(seatOf(t, e.slot), `${where}: the seat waits`).toBeNull();
+          expect(seatLabelOf(t, e.slot), `${where}: not a bye`).not.toBe(BYE_KEY);
+          expect([t.status, t.outcome], `${where}: not walked over`).toEqual(["scheduled", null]);
+          // Actionable = its sibling seat is filled, the state in which the cascade WOULD stamp a dead feeder's seat.
+          if (seatOf(t, otherSlot(e.slot)) !== null) actionableByShape[label]++;
+          edges++;
+          if (e.via === "loser") loserEdges++;
+        }
+        expect(actionableByShape[label], `${label}: at least one seat was actionable, so the cascade really looked`).toBeGreaterThan(0);
+        expect((await completeStage(s.auth, s.stageId)).completed, `${label}: the stage waits for the organiser`).toBe(false);
+
+        // The way out: the organiser settles the abandoned line; both of its edges fill (a settle is a win, X-ST-1).
+        await post(s.auth, feeder.id, "core.settle", { winner: feeder.home_entrant_id, method: SETTLE_BY_ORGANISER });
+        for (const e of out) {
+          expect(seatOf(await fixtureRow(e.to), e.slot), `${label}, ${e.via} edge after the settle`).toBe(
+            e.via === "winner" ? feeder.home_entrant_id : feeder.away_entrant_id,
+          );
+        }
+        await playOutExcept(s.auth, s.stageId, chessWinForHome, new Set());
+        expect((await completeStage(s.auth, s.stageId)).completed, `${label}: the bracket finishes`).toBe(true);
+        kinds++;
+      }
+      expect(kinds).toBe(KIND_SHAPES.length);
+      expect(Object.keys(actionableByShape).sort()).toEqual(
+        KIND_SHAPES.map(({ kind, stageConfig }) => `${kind}${stageConfig.thirdPlace ? "+third-place" : ""}`).sort(),
+      );
+      expect(edges, "feed edges checked across the bracket kinds").toBeGreaterThan(0);
+      expect(loserEdges, "loser edges checked (third place, double_elim, page_playoff): both edges, not one").toBeGreaterThan(0);
+      expect(loserEdges, "and winner edges too").toBeLessThan(edges);
+    },
+    KIND_SWEEP_BUDGET_MS,
+  );
+
+  it("NEW-H1 / X-BR-2: a HELD feeder (needs_decision) is not dead either — neither of its seats is stamped, and the settle fills both", async () => {
+    // single-sport: football — a 0–0 full time is a play-produced level result, held in a bracket (X-BR-2). W2b's
+    // "decided, nobody advances" clause will sit beside the abandon clause and must not sweep a held row in.
+    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+    const [sf1, sf2] = s.fixtureIds;
+    await post(s.auth, sf1!, "core.start");
+    await post(s.auth, sf1!, "football.period", { phase: "HT" });
+    await post(s.auth, sf1!, "football.period", { phase: "FT" });
+    const held = await fixtureRow(sf1!);
+    expect([held.status, held.outcome?.kind], "premise: held").toEqual(["needs_decision", "draw"]);
+    // sf2 by walkover: its award seats a winner in the final and drops NO loser, so the third-place line ends up with
+    // one dead feeder (sf2, an award) beside the held one — a held feeder read as dead would void that line.
+    await walkoverForHome(s.auth, sf2!);
+    expect(await cascadePass(s.stageId)).toEqual([]);
+    const final = await fixtureRow(held.winner_to_fixture!);
+    expect(seatOf(final, otherSlot(held.winner_to_slot)), "the final's other seat is filled: actionable").not.toBeNull();
+    expect(seatOf(final, held.winner_to_slot)).toBeNull();
+    expect(seatLabelOf(final, held.winner_to_slot)).not.toBe(BYE_KEY);
+    expect([final.status, final.outcome]).toEqual(["scheduled", null]);
+    const third = await fixtureRow(held.loser_to_fixture!);
+    expect([third.status, third.outcome], "the third-place line is not voided").toEqual(["scheduled", null]);
+    expect(seatLabelOf(third, held.loser_to_slot)).not.toBe(BYE_KEY);
+
+    await post(s.auth, sf1!, "core.settle", { winner: held.home_entrant_id, method: SETTLE_BY_ORGANISER });
+    expect(seatOf(await fixtureRow(final.id), held.winner_to_slot)).toBe(held.home_entrant_id);
+    expect(seatOf(await fixtureRow(third.id), held.loser_to_slot)).toBe(held.away_entrant_id);
+  });
+
+  it("NEW-H1 (after a withdrawal): a page-playoff withdrawal's own abandon holds the line like a scorer's — her opponent is settled through, never eliminated by an invented walkover (X-ST-1, ruling C17)", async () => {
+    // single-sport: badminton, where the withdrawal's core.abandon folds to outcome null — the NEW-H1 shape (generic's
+    // folds to no_result and was already held under the 2026-09-21 ruling).
+    // page_playoff is the bracket kind whose withdrawal WRITES an abandon: it is not in BRACKET_WALKOVER_KINDS, so
+    // withdrawal.ts voids the departed entrant's pending lines with core.abandon (the open-format branch). The walkover
+    // kinds never do on a seated line — their planner names the opponent and writes core.forfeit.
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "page_playoff", entrants: 4 });
+    const rows = await rowsOf(s.stageId);
+    const q1 = rows.find((r) => r.home_entrant_id && r.away_entrant_id && r.winner_to_fixture && r.loser_to_fixture);
+    const elim = rows.find((r) => r.home_entrant_id && r.away_entrant_id && r.id !== q1?.id);
+    if (!q1 || !elim) throw new Error("page_playoff: no seated qualifier with both edges beside a seated eliminator");
+    const departing = q1.home_entrant_id!;
+    const opponent = q1.away_entrant_id!;
+    await withdrawEntrantCascade(s.auth, departing);
+    const voided = await fixtureRow(q1.id);
+    expect([voided.status, voided.outcome], "premise: the withdrawal abandoned the line, outcome null").toEqual(["abandoned", null]);
+    const active = await sql<{ reason: string }[]>`
+      select a.payload->>'reason' as reason from score_events a
+      where a.fixture_id = ${q1.id} and a.type = 'core.abandon'
+        and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)`;
+    expect(active.map((r) => r.reason), "premise: an ACTIVE core.abandon, written by the withdrawal").toEqual(["entrant withdrew"]);
+
+    await walkoverForHome(s.auth, elim.id); // the eliminator's winner reaches qualifier 2, beside q1's LOSER seat
+    const q2 = await fixtureRow(q1.loser_to_fixture!);
+    expect(seatOf(q2, otherSlot(q1.loser_to_slot)), "q2's other seat is filled: actionable").not.toBeNull();
+    expect(seatOf(q2, q1.loser_to_slot), "q1's loser seat waits").toBeNull();
+    expect(seatLabelOf(q2, q1.loser_to_slot)).not.toBe(BYE_KEY);
+    expect([q2.status, q2.outcome], "the eliminator's winner is NOT walked through q2").toEqual(["scheduled", null]);
+    const final = await fixtureRow(q1.winner_to_fixture!);
+    expect([final.home_entrant_id, final.away_entrant_id, final.status], "nobody walked into the final").toEqual([null, null, "scheduled"]);
+    expect(await cascadePass(s.stageId)).toEqual([]);
+
+    // The organiser's way through: never for the departed entrant (C17); for her opponent it seats them in the final.
+    await expect(post(s.auth, q1.id, "core.settle", { winner: departing, method: SETTLE_BY_ORGANISER })).rejects.toMatchObject({
+      code: "SETTLE_NOT_APPLICABLE",
+    });
+    await post(s.auth, q1.id, "core.settle", { winner: opponent, method: SETTLE_BY_ORGANISER });
+    expect(seatOf(await fixtureRow(final.id), q1.winner_to_slot), "her opponent goes through").toBe(opponent);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2a Task 10, fix round 1 (loop G review). The cascade above holds a recorded
+// abandon's SEATS; the minors below pin what its first build left unwitnessed.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("NEW-H1 fix round 1: the clauses and sequences the first build left unwitnessed", () => {
+  it("NEW-H1 (M1): an event-less abandoned feeder that CARRIES an outcome (no_result) is not dead — the seat waits", async () => {
+    // single-sport: badminton, the probe's rig. The row is the generator's event-less shape given the no_result a
+    // cricket, carrom or generic abandon folds to: with no ledger, `has_active_abandon` cannot answer for it, so the
+    // `outcome === null` clause must.
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const [sf1, sf2] = s.fixtureIds;
+    await sql`update fixtures set status = 'abandoned', outcome = ${sql.json({ kind: "no_result" } as never)} where id = ${sf1!}`;
+    const [events] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${sf1!}`;
+    expect(events!.n, "premise: no ledger at all").toBe(0);
+    await walkoverForHome(s.auth, sf2!);
+    const fed = await fixtureRow(sf1!);
+    const final = await fixtureRow(fed.winner_to_fixture!);
+    expect(seatOf(final, otherSlot(fed.winner_to_slot)), "the sibling's winner is seated: actionable").not.toBeNull();
+    expect(seatOf(final, fed.winner_to_slot), "the no-result line's seat waits").toBeNull();
+    expect(seatLabelOf(final, fed.winner_to_slot)).not.toBe(BYE_KEY);
+    expect([final.status, final.outcome], "nobody walked through the final").toEqual(["scheduled", null]);
+  });
+
+  it("NEW-H1 (M2): abandon → settle → void of the settle — the line is abandoned again with its abandon active, and the seat the settle filled is released and waits", async () => {
+    // single-sport: badminton, the probe's sport (abandon folds to outcome null).
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const [sf1, sf2] = s.fixtureIds;
+    await scorerAbandon(s.auth, sf1!);
+    await walkoverForHome(s.auth, sf2!);
+    const fed = await fixtureRow(sf1!);
+    await post(s.auth, sf1!, "core.settle", { winner: fed.home_entrant_id, method: SETTLE_BY_ORGANISER });
+    expect((await fixtureRow(sf1!)).status, "the settle decides the line").toBe("decided");
+    expect(seatOf(await fixtureRow(fed.winner_to_fixture!), fed.winner_to_slot), "and seats its winner").toBe(fed.home_entrant_id);
+
+    const [settle] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${sf1!} and type = 'core.settle'`;
+    await post(s.auth, sf1!, "core.void", { event_id: settle!.id });
+    const back = await fixtureRow(sf1!);
+    expect([back.status, back.outcome], "back to the abandon").toEqual(["abandoned", null]);
+    const active = await sql<{ id: string }[]>`
+      select a.id from score_events a
+      where a.fixture_id = ${sf1!} and a.type = 'core.abandon'
+        and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)`;
+    expect(active.length, "the abandon is still active").toBe(1);
+    const final = await fixtureRow(fed.winner_to_fixture!);
+    expect(seatOf(final, otherSlot(fed.winner_to_slot)), "the sibling keeps her seat").not.toBeNull();
+    expect(seatOf(final, fed.winner_to_slot), "the settled winner's seat is released").toBeNull();
+    expect(seatLabelOf(final, fed.winner_to_slot), "and waits — not stamped a bye").not.toBe(BYE_KEY);
+    expect([final.status, final.outcome]).toEqual(["scheduled", null]);
+    expect(await cascadePass(s.stageId), "a later pass has nothing to do").toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("characterisation (ruling D-G2, deferred to W2b): what a withdrawal does to a held line today", () => {
+  it("characterisation (D-G2, W2b): a settle for the opponent of a page-playoff withdrawal seats the WITHDRAWN entrant on q1's loser edge in q2", async () => {
+    // single-sport: badminton, the withdrawal case's rig. Pins TODAY's behaviour so W2b changes it on purpose: whether
+    // a loser edge may seat a departed entrant is W2b's (spec §2.3, ruling D-G2).
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "page_playoff", entrants: 4 });
+    const q1 = (await rowsOf(s.stageId)).find((r) => r.home_entrant_id && r.away_entrant_id && r.winner_to_fixture && r.loser_to_fixture);
+    if (!q1) throw new Error("page_playoff: no seated qualifier with both edges");
+    const departing = q1.home_entrant_id!;
+    await withdrawEntrantCascade(s.auth, departing);
+    await post(s.auth, q1.id, "core.settle", { winner: q1.away_entrant_id, method: SETTLE_BY_ORGANISER });
+    const q2 = await fixtureRow(q1.loser_to_fixture!);
+    expect(seatOf(q2, q1.loser_to_slot), "the departed entrant is seated on the loser edge").toBe(departing);
+    const [e] = await sql<{ status: string }[]>`select status from entrants where id = ${departing}`;
+    expect(e!.status, "and she IS withdrawn").toBe("withdrawn");
+  });
+
+  it("characterisation (D-G2, W2b): a knockout line its scorer abandoned whose BOTH entrants then withdraw refuses every settle (C17) and its seat waits; the organiser's escape — void the abandon, forfeit, forfeit forward — finishes the stage", async () => {
+    // single-sport: badminton (abandon folds to outcome null). W2b's X-WD-1 / double-walkover clause owns the answer.
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const [sf1, sf2] = s.fixtureIds;
+    const r1 = await fixtureRow(sf1!);
+    await scorerAbandon(s.auth, sf1!);
+    const w1 = await withdrawEntrantCascade(s.auth, r1.home_entrant_id!);
+    const w2 = await withdrawEntrantCascade(s.auth, r1.away_entrant_id!);
+    expect([w1.walkovers, w1.voided, w2.walkovers, w2.voided], "the withdrawals leave the abandoned line alone").toEqual([0, 0, 0, 0]);
+    await walkoverForHome(s.auth, sf2!);
+    for (const who of [r1.home_entrant_id, r1.away_entrant_id]) {
+      await expect(post(s.auth, sf1!, "core.settle", { winner: who, method: SETTLE_BY_ORGANISER })).rejects.toMatchObject({
+        code: "SETTLE_NOT_APPLICABLE",
+      });
+    }
+    const final = await fixtureRow(r1.winner_to_fixture!);
+    expect(seatOf(final, otherSlot(r1.winner_to_slot)), "the other semi's winner is seated").not.toBeNull();
+    expect(seatOf(final, r1.winner_to_slot), "the abandoned line's seat waits").toBeNull();
+    expect(seatLabelOf(final, r1.winner_to_slot)).not.toBe(BYE_KEY);
+    expect((await completeStage(s.auth, s.stageId)).completed, "stuck").toBe(false);
+
+    const [ab] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${sf1!} and type = 'core.abandon'`;
+    await post(s.auth, sf1!, "core.void", { event_id: ab!.id });
+    await post(s.auth, sf1!, "core.forfeit", { by: r1.home_entrant_id, reason: "walkover" });
+    expect(seatOf(await fixtureRow(final.id), r1.winner_to_slot), "the award carries the withdrawn away entrant forward").toBe(
+      r1.away_entrant_id,
+    );
+    await post(s.auth, final.id, "core.start");
+    await post(s.auth, final.id, "core.forfeit", { by: r1.away_entrant_id, reason: "withdrawn" });
+    expect((await completeStage(s.auth, s.stageId)).completed, "the escape finishes the stage").toBe(true);
+  });
+
+  it("characterisation (D-G2, W2b): page_playoff — both q1 entrants withdraw (the first writes the abandon); every settle is refused and q2's loser seat and the final wait", async () => {
+    // single-sport: badminton. The open-format branch abandons q1 on the first withdrawal; the second finds nothing pending.
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "page_playoff", entrants: 4 });
+    const rows = await rowsOf(s.stageId);
+    const q1 = rows.find((r) => r.home_entrant_id && r.away_entrant_id && r.winner_to_fixture && r.loser_to_fixture);
+    const elim = rows.find((r) => r.home_entrant_id && r.away_entrant_id && r.id !== q1?.id);
+    if (!q1 || !elim) throw new Error("page_playoff: no seated qualifier beside a seated eliminator");
+    const w1 = await withdrawEntrantCascade(s.auth, q1.home_entrant_id!);
+    const w2 = await withdrawEntrantCascade(s.auth, q1.away_entrant_id!);
+    expect([w1.voided, w2.voided], "the first withdrawal abandons q1; the second finds nothing pending").toEqual([1, 0]);
+    await walkoverForHome(s.auth, elim.id);
+    for (const who of [q1.home_entrant_id, q1.away_entrant_id]) {
+      await expect(post(s.auth, q1.id, "core.settle", { winner: who, method: SETTLE_BY_ORGANISER })).rejects.toMatchObject({
+        code: "SETTLE_NOT_APPLICABLE",
+      });
+    }
+    const q2 = await fixtureRow(q1.loser_to_fixture!);
+    expect(seatOf(q2, q1.loser_to_slot)).toBeNull();
+    expect([q2.status, q2.outcome]).toEqual(["scheduled", null]);
+    const final = await fixtureRow(q1.winner_to_fixture!);
+    expect([final.home_entrant_id, final.away_entrant_id, final.status]).toEqual([null, null, "scheduled"]);
+    expect((await completeStage(s.auth, s.stageId)).completed, "stuck").toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2a Task 10, fix round 1 — ruling D-G1 (loop G review, measured). A recorded
+// abandon that decided nobody is not the generator's void at COMPLETION either:
+// `engineFixtureStatus` maps `abandoned` to `void`, `void` is in the engine's
+// SETTLED set, so a scorer-abandoned FINAL completed the stage and
+// `bracketRanks` ranked its two unbeaten finalists LAST (their missing loss
+// reads as elimination round −1). An abandoned ladder challenge completed the
+// ladder the same way. The stage now waits for the organiser's settle.
+// ---------------------------------------------------------------------------
+
+async function completion(auth: AuthCtx, stageId: string) {
+  const r = await completeStage(auth, stageId);
+  const done = r.events.find((e) => e.type === "stage_completed");
+  const [st] = await sql<{ status: string }[]>`select status from stages where id = ${stageId}`;
+  const [ev] = await sql<{ n: number }[]>`
+    select count(*)::int as n from division_events where type = 'stage_completed' and payload->>'stageId' = ${stageId}`;
+  return {
+    completed: r.completed,
+    ranks: done?.type === "stage_completed" ? done.finalRanks : null,
+    stageStatus: st!.status,
+    completedEvents: ev!.n,
+  };
+}
+
+/** A 4-draw knockout whose two semis are walked over for home, then whose FINAL its scorer abandons. */
+async function abandonedFinal(sport: string, variant: string) {
+  const s = await seedBracket({ sport, variant: declaredVariant(sport, variant), stageKind: "knockout", entrants: 4 });
+  const [sf1, sf2] = s.fixtureIds;
+  if (!sf1 || !sf2) throw new Error(`${sport}: a 4-draw knockout seats two semis`);
+  await walkoverForHome(s.auth, sf1);
+  await walkoverForHome(s.auth, sf2);
+  const semis = [await fixtureRow(sf1), await fixtureRow(sf2)];
+  const finalId = semis[0]!.winner_to_fixture!;
+  const final = await fixtureRow(finalId);
+  expect([final.home_entrant_id, final.away_entrant_id].sort(), `${sport}: both semi winners reached the final`).toEqual(
+    semis.map((r) => r.home_entrant_id).sort(),
+  );
+  await scorerAbandon(s.auth, finalId);
+  return { s, final, sfLosers: semis.map((r) => r.away_entrant_id!), abandoned: await fixtureRow(finalId) };
+}
+
+describe.skipIf(!HAS_DB)("D-G1: a recorded abandon that decided nobody holds stage completion (W2a T10 fix round 1)", () => {
+  it("D-G1: a scorer-abandoned FINAL holds the knockout open — completeStage answers false and ranks nobody, twice; the organiser's settle completes it with the settled winner champion", async () => {
+    // single-sport: badminton, the reviewer's probe (4 players, both semis by walkover, final abandoned); every sport is swept below.
+    const { s, final, sfLosers, abandoned } = await abandonedFinal("badminton", "bwf");
+    expect([abandoned.status, abandoned.outcome], "premise: the NEW-H1 shape on the final").toEqual(["abandoned", null]);
+    for (const call of ["first", "second"]) {
+      const c = await completion(s.auth, s.stageId);
+      expect(c, `${call} call: not complete, nothing ranked, nothing written`).toEqual({
+        completed: false,
+        ranks: null,
+        stageStatus: "active",
+        completedEvents: 0,
+      });
+    }
+    // The way out (X-ST-1): settle for the AWAY finalist, so the champion is not whoever a seed or a home seat favours.
+    await post(s.auth, final.id, "core.settle", { winner: final.away_entrant_id, method: SETTLE_BY_ORGANISER });
+    const c = await completion(s.auth, s.stageId);
+    expect([c.completed, c.stageStatus, c.completedEvents]).toEqual([true, "complete", 1]);
+    expect(c.ranks!.slice(0, 2), "champion = the settle's winner, runner-up = the other finalist").toEqual([
+      final.away_entrant_id,
+      final.home_entrant_id,
+    ]);
+    expect(new Set(c.ranks!.slice(2)), "the semi-final losers are 3rd and 4th").toEqual(new Set(sfLosers));
+    expect(c.ranks).toHaveLength(4);
+  });
+
+  it(
+    "D-G1: every sport — a final its scorer abandoned holds the stage open whatever the abandon folds to (null or no_result); the settle completes it",
+    async () => {
+      let nullShape = 0;
+      let levelShape = 0;
+      const checked = await forEachSportAsync(async ({ key, module: sportModule }) => {
+        const variant = Object.keys(sportModule.variants)[0];
+        if (variant === undefined) throw new Error(`${key} declares no variant`);
+        const { s, final, sfLosers, abandoned } = await abandonedFinal(key, variant);
+        expect(abandoned.status, key).toBe("abandoned");
+        if (abandoned.outcome === null) nullShape++;
+        else {
+          expect(abandoned.outcome.kind, `${key}: an abandon that carries an outcome carries no winner`).toBe("no_result");
+          levelShape++;
+        }
+        const held = await completion(s.auth, s.stageId);
+        expect([held.completed, held.stageStatus, held.completedEvents], `${key}: held open`).toEqual([false, "active", 0]);
+        await post(s.auth, final.id, "core.settle", { winner: final.away_entrant_id, method: SETTLE_BY_ORGANISER });
+        const done = await completion(s.auth, s.stageId);
+        expect(done.completed, `${key}: the settle completes it`).toBe(true);
+        expect(done.ranks!.slice(0, 2), key).toEqual([final.away_entrant_id, final.home_entrant_id]);
+        expect(new Set(done.ranks!.slice(2)), key).toEqual(new Set(sfLosers));
+      });
+      expect(checked).toBe(builtinModules.length);
+      expect(nullShape + levelShape).toBe(checked);
+      expect(nullShape, "abandon → outcome null was reached").toBeGreaterThan(0);
+      expect(levelShape, "abandon → no_result was reached").toBeGreaterThan(0);
+    },
+    SPORT_SWEEP_BUDGET_MS * 2,
+  );
+
+  it("D-G1: a ladder whose only challenge its scorer abandoned is not complete, twice; the settle completes it in ladder order", async () => {
+    // single-sport: chess, the ladder rig's sport (abandon folds to outcome null).
+    const l = await ladderAbandonedChallenge();
+    for (const call of ["first", "second"]) {
+      const c = await completion(l.auth, l.stageId);
+      expect(c, `${call} call`).toEqual({ completed: false, ranks: null, stageStatus: "active", completedEvents: 0 });
+    }
+    // Settle for the HOLDER (seed 1): the challenger did not climb, so the ladder keeps its seed order (Jul3/08 §6:
+    // the order is initialised from seeds and moves only when a challenger wins).
+    await post(l.auth, l.challengeId, "core.settle", { winner: l.bySeed[0], method: SETTLE_BY_ORGANISER });
+    const c = await completion(l.auth, l.stageId);
+    expect([c.completed, c.stageStatus, c.completedEvents]).toEqual([true, "complete", 1]);
+    expect(c.ranks).toEqual(l.bySeed);
+  });
+
+  it("D-G1 guard: the unbeaten default never ranks a FIELD entrant — a final settled with nobody winning while both finalists are in the field is refused CONFIG_INVALID, never snapshotted with its finalists last", async () => {
+    // single-sport: badminton, the probe's rig. The row is FORCED — the generator's event-less void given two seated
+    // FIELD finalists, the shape the reviewer's abandoned final produced before D-G1. The guard's product path (a
+    // stepladder seed departed before the draw, D-G3) is pinned by its own characterisation below; this case isolates
+    // the guard on the plainest bracket, with its departed positive pair.
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
+    const [sf1, sf2] = s.fixtureIds;
+    await walkoverForHome(s.auth, sf1!);
+    await walkoverForHome(s.auth, sf2!);
+    const semis = [await fixtureRow(sf1!), await fixtureRow(sf2!)];
+    const final = await fixtureRow(semis[0]!.winner_to_fixture!);
+    await sql`update fixtures set status = 'abandoned', outcome = null where id = ${final.id}`;
+    await expect(completeStage(s.auth, s.stageId)).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    const [st] = await sql<{ status: string }[]>`select status from stages where id = ${s.stageId}`;
+    expect(st!.status, "nothing was written").toBe("active");
+
+    // The positive pair: the same void with BOTH finalists departed is the F14 shape (walkoverDepartedQualifiers) —
+    // departed entrants are ranked by the unbeaten default, last, legitimately, and the stage completes.
+    await sql`update entrants set status = 'withdrawn' where id in ${sql([final.home_entrant_id!, final.away_entrant_id!])}`;
+    const c = await completion(s.auth, s.stageId);
+    expect(c.completed).toBe(true);
+    expect(new Set(c.ranks!.slice(0, 2)), "the semi-final losers lost later than anyone departed").toEqual(
+      new Set(semis.map((r) => r.away_entrant_id)),
+    );
+    expect(new Set(c.ranks!.slice(2)), "the departed finalists are last").toEqual(
+      new Set([final.home_entrant_id, final.away_entrant_id]),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2a Task 10, fix round 2 (loop G re-review; ruling D-G3 — both corners are
+// acceptable in W2a and deferred to W2b, spec §2.3). Characterisations pin
+// TODAY's behaviour so W2b changes it on purpose; the table-stage case pins
+// the exclusion D-G1 depends on.
+// ---------------------------------------------------------------------------
+
+/** A 4-entrant generic stepladder whose qualifiers arrive the way on_complete progression delivers them: a published
+ *  `config.qualified` draw (the reviewer's probe P2 rig, reused). */
+async function qualifiedStepladder() {
+  const { auth } = await seedOrg("pro");
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: "D-G3 " + randomUUID().slice(0, 6),
+    visibility: "private",
+    branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open-" + randomUUID().slice(0, 6),
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+  });
+  const entrants = await createEntrants(
+    auth,
+    division.id,
+    Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [] })),
+  );
+  const [stage] = await createStages(auth, division.id, [{ seq: 1, kind: "stepladder" as never, name: "Finals", config: {} }]);
+  const qualified = entrants.map((e) => e.id);
+  await sql`update stages set config = ${sql.json({ qualified } as never)} where id = ${stage!.id}`;
+  return { auth, divisionId: division.id, stageId: stage!.id, bySeed: qualified };
+}
+
+async function completionOrRefusal(auth: AuthCtx, stageId: string) {
+  try {
+    const r = await completeStage(auth, stageId);
+    const done = r.events.find((e) => e.type === "stage_completed");
+    return { completed: r.completed, ranks: done?.type === "stage_completed" ? done.finalRanks : null };
+  } catch (e) {
+    return { refused: (e as { code?: string }).code ?? String(e) };
+  }
+}
+
+describe.skipIf(!HAS_DB)("characterisation (ruling D-G3, deferred to W2b) and the table-stage exclusion (W2a T10 fix round 2)", () => {
+  it("characterisation (D-G3, W2b): a stepladder whose seed 1 departed BEFORE the draw has its final voided by the generator, the climber seated into the void, and completion refused CONFIG_INVALID at generation and after the rungs; forfeiting the departed seed in the final completes it [climber, departed, E3, E4]", async () => {
+    // single-sport: generic, the reviewer's probe P2 rig (measured). The D-G1 guard's one product path today.
+    const r = await qualifiedStepladder();
+    const [e1, e2, e3, e4] = r.bySeed;
+    await withdrawEntrantCascade(r.auth, e1!); // before the draw: a plain status flip
+    await generateStageFixtures(r.auth, r.stageId);
+    await sql`update divisions set status = 'active' where id = ${r.divisionId}`;
+    await sql`update stages set status = 'active' where id = ${r.stageId}`;
+    const gen = await rowsOf(r.stageId);
+    const final = gen.find((x) => x.winner_to_fixture === null)!;
+    const [finalEvents] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${final.id}`;
+    expect([final.status, final.outcome, final.home_entrant_id, finalEvents!.n], "premise: F14 voided the departed seed's final, no event").toEqual([
+      "abandoned",
+      null,
+      e1,
+      0,
+    ]);
+    expect(await completionOrRefusal(r.auth, r.stageId), "refused at generation").toEqual({ refused: "CONFIG_INVALID" });
+
+    // The rungs, each for HOME by the away side's forfeit: E3 beats E4, then E2 beats E3 and climbs into the final.
+    let rungs = 0;
+    for (let i = 0; i < 4; i++) {
+      const rung = (await rowsOf(r.stageId)).find(
+        (x) => x.status === "scheduled" && x.home_entrant_id && x.away_entrant_id && x.winner_to_fixture !== null,
+      );
+      if (!rung) break;
+      await walkoverForHome(r.auth, rung.id);
+      rungs++;
+    }
+    expect(rungs, "both rungs played").toBe(2);
+    const seated = await fixtureRow(final.id);
+    expect([seated.status, seated.home_entrant_id, seated.away_entrant_id], "fillSlot seats the climber into the void row").toEqual([
+      "abandoned",
+      e1,
+      e2,
+    ]);
+    expect(await completionOrRefusal(r.auth, r.stageId), "refused after the rungs").toEqual({ refused: "CONFIG_INVALID" });
+    await expect(post(r.auth, final.id, "core.settle", { winner: e2, method: SETTLE_BY_ORGANISER }), "no abandon was recorded: nothing to settle").rejects.toMatchObject({
+      code: "SETTLE_NOT_APPLICABLE",
+    });
+
+    // The escape: the organiser forfeits the departed seed in the final.
+    await post(r.auth, final.id, "core.start");
+    await post(r.auth, final.id, "core.forfeit", { by: e1, reason: "withdrawn" });
+    expect((await fixtureRow(final.id)).status).toBe("forfeited");
+    expect(await completionOrRefusal(r.auth, r.stageId), "champion the climber, runner-up the departed seed, then by rung lost").toEqual({
+      completed: true,
+      ranks: [e2, e1, e3, e4],
+    });
+  });
+
+  it("characterisation (D-G3, W2b): a ladder holder's withdrawal abandons her pending challenge (recorded) and holds ladder completion; a settle for the remaining challenger is accepted, swaps him up, and the ladder completes", async () => {
+    // single-sport: chess, the ladder rig's sport (outcome-null abandon).
+    const l = await ladderAbandonedChallenge({ abandon: false });
+    const [holder, challenger, l3, l4] = l.bySeed;
+    const w = await withdrawEntrantCascade(l.auth, holder!);
+    expect(w.voided, "the open-format branch abandons her pending challenge").toBe(1);
+    const ch = await fixtureRow(l.challengeId);
+    expect([ch.status, ch.outcome], "premise: a recorded abandon, outcome null").toEqual(["abandoned", null]);
+    for (const call of ["first", "second"]) {
+      expect(await completionOrRefusal(l.auth, l.stageId), `${call} call: held`).toEqual({ completed: false, ranks: null });
+    }
+    await expect(post(l.auth, l.challengeId, "core.settle", { winner: holder, method: SETTLE_BY_ORGANISER })).rejects.toMatchObject({
+      code: "SETTLE_NOT_APPLICABLE",
+    });
+    await post(l.auth, l.challengeId, "core.settle", { winner: challenger, method: SETTLE_BY_ORGANISER });
+    // Jul3/08 §6: the challenger taking the game takes the position — the departed holder drops one place.
+    expect(await completionOrRefusal(l.auth, l.stageId)).toEqual({ completed: true, ranks: [challenger, holder, l3, l4] });
+  });
+
+  it("table stages keep the void: a league with a scorer's abandon AND an expunge withdrawal's abandons (all recorded, outcome null) still completes — a league has no settle to wait for", async () => {
+    // single-sport: badminton — its abandon folds to outcome null, exactly the shape bracketEngineStatus would hold
+    // open; the league must not. The exclusion D-G1 rests on (competition.ts, the tableFixtures map).
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "league", entrants: 4 });
+    const bySeed = (await sql<{ id: string }[]>`select id from entrants where division_id = ${s.divisionId} order by seed`).map((r) => r.id);
+    const leaver = bySeed[3]!;
+    const rows = await rowsOf(s.stageId);
+    const rained = rows.find((r) => r.home_entrant_id && r.away_entrant_id && r.home_entrant_id !== leaver && r.away_entrant_id !== leaver)!;
+    await scorerAbandon(s.auth, rained.id);
+    const w = await withdrawEntrantCascade(s.auth, leaver);
+    expect([w.policy, w.voided], "premise: an expunge withdrawal, before the leaver played, abandons her three").toEqual(["expunge", 3]);
+    const recorded = await sql<{ id: string; status: string; outcome: unknown }[]>`
+      select f.id, f.status, f.outcome from fixtures f
+      where f.stage_id = ${s.stageId} and exists (
+        select 1 from score_events a where a.fixture_id = f.id and a.type = 'core.abandon'
+          and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))`;
+    expect(recorded.length, "four recorded abandons: the scorer's and the withdrawal's three").toBe(4);
+    expect(recorded.every((r) => r.status === "abandoned" && r.outcome === null), "every one the held-in-a-bracket shape").toBe(true);
+    await expect(post(s.auth, rained.id, "core.settle", { winner: rained.home_entrant_id, method: SETTLE_BY_ORGANISER }), "no settle outside a bracket").rejects.toMatchObject({
+      code: "SETTLE_NOT_APPLICABLE",
+    });
+    const played = await playOutExcept(s.auth, s.stageId, walkoverForHome, new Set());
+    expect(played, "the two remaining matches").toBe(2);
+    const c = await completionOrRefusal(s.auth, s.stageId);
+    expect(c.completed, "the league completes: its abandoned matches are void").toBe(true);
+    const [st] = await sql<{ status: string }[]>`select status from stages where id = ${s.stageId}`;
+    expect(st!.status).toBe("complete");
   });
 });

@@ -187,6 +187,7 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
   ],
   defaultTiebreakers: ["points", "diff", "lots"],
   supportsDraws: (_cfg, stage) => stage === "league" || stage === "group" || stage === "swiss",
+  bracketDeciders: () => ({}),
   declaredPointsSets: () => [2],
   matchPointsBounds: () => ({ max: 2, min: 0, winFloor: 2, lossCeil: 0, winsOnly: false }), // a draw pays 1
   // W1 (scoring free) ruling: every SportModule the conformance identity

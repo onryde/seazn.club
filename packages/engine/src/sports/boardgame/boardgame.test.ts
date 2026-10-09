@@ -1,7 +1,7 @@
 // Board-game goldens + conformance — spec 04 §6, PROMPT-07.
 import { describe, expect, it } from "vitest";
 import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts";
-import type { LineupPair, StageCtx } from "../../core/types.ts";
+import { DRAW_KINDS, StageKind, type LineupPair, type StageCtx } from "../../core/types.ts";
 import {
   aggregatePlayerStats,
   playerStatsKeyCollisions,
@@ -156,10 +156,13 @@ describe("boardgame: a competition-layer award (bye / walkover)", () => {
 });
 
 describe("boardgame contract declarations", () => {
-  it("always allows draws, even in knockout (KO ties resolve via mini-matches)", () => {
-    for (const stage of ["league", "group", "swiss", "knockout", "double_elim"] as const) {
-      expect(boardgame.supportsDraws(cfg, stage)).toBe(true);
+  it("X-DR-1: draws only in DRAW_KINDS — a drawn bracket game goes to the tie-break (BG-KO-1)", () => {
+    let checked = 0;
+    for (const stage of StageKind.options) {
+      expect(boardgame.supportsDraws(cfg, stage), stage).toBe(DRAW_KINDS.has(stage));
+      checked++;
     }
+    expect(checked).toBe(StageKind.options.length);
   });
 
   it("declares the FIDE cascade and {2, 0} point totals", () => {
@@ -646,11 +649,17 @@ conformanceSuite(boardgame);
 
 padSpecConformanceSuite(boardgame, { cfg: {}, lineups, label: "default (colours on)" });
 padSpecConformanceSuite(boardgame, { cfg: { colors: false }, lineups, label: "colours off" });
+// W2a BG-KO-1 — the bracket overlay adds the tie-break panel; its action must build schema-valid payloads too.
+padSpecConformanceSuite(boardgame, { cfg: { tiebreak: true }, lineups, label: "bracket (tie-break)" });
 
 describe("boardgame padSpec — action coverage", () => {
-  it("every registered event type is reachable from some action (single cfg — no cfg-mutual-exclusivity in this module)", () => {
-    const specs = [padSpec(boardgame.configSchema.parse({})), padSpec(boardgame.configSchema.parse({ colors: false }))];
+  it("every registered event type is reachable from some action, across the division cfgs and the bracket overlay (W2a: boardgame.tiebreak is offered in a bracket only)", () => {
+    const division = boardgame.configSchema.parse({});
+    const bracket = boardgame.configSchema.parse({ ...division, ...boardgame.bracketDeciders(division) });
+    const specs = [padSpec(division), padSpec(boardgame.configSchema.parse({ colors: false })), padSpec(bracket)];
     expect(checkActionCoverage(specs, BOARDGAME_EVENT_SCHEMAS)).toEqual([]);
+    // The positive pair's negative: the division cfgs alone leave exactly the bracket-only type unreached.
+    expect(checkActionCoverage(specs.slice(0, 2), BOARDGAME_EVENT_SCHEMAS)).toEqual([expect.stringContaining('"boardgame.tiebreak"')]);
   });
 });
 

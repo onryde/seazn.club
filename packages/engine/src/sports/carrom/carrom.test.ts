@@ -3,7 +3,7 @@
 // carrom.md §1–7 carries the verified text.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
-import { foldMatch, type EventEnvelope } from "../../core/events.ts";
+import { foldMatch, SETTLE_METHODS, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
 import {
   aggregatePlayerStats,
@@ -169,6 +169,19 @@ describe("carrom golden: best-of-3 with a tie-board", () => {
     const [home, away] = carrom.standingsDelta(state.outcome!, drawCfg, league, state);
     expect([home.points, away.points]).toEqual([1, 1]);
     expect(home).toMatchObject({ drawn: 1, metrics: { sets_won: 1, sets_lost: 1 } });
+  });
+
+  it("CA-KO-1: in a bracket the overlay plays the extra board even when the division says tieBoard 'draw'", () => {
+    const division = carrom.configSchema.parse({ tieBoard: "draw" });
+    const bracket = carrom.configSchema.parse({ ...division, ...carrom.bracketDeciders(division) });
+    const tied = stream(["core.start"], ...boards(...tiedEight)); // 12–12 after maxBoards (8) boards
+    expect(fold(tied, division).gamesDrawn).toBe(1); // the division's own rule drew the game
+    const asBracket = fold(tied, bracket);
+    expect(asBracket.gamesDrawn).toBe(0); // the bracket did not: the game is still live
+    expect(asBracket.games[0]!.winner).toBeNull();
+    const extra = fold(stream(["core.start"], ...boards(...tiedEight, ["H", 1])), bracket);
+    expect(extra.gamesWon.home).toBe(1); // the extra board decided it (Law 56b)
+    expect(extra.games[0]!.boards).toHaveLength(division.maxBoards + 1);
   });
 });
 
@@ -518,6 +531,30 @@ describe("carrom: boards_won + folded matches/wins, resolved from entrant attrib
     const rows = aggregatePlayerStats(events, carrom.playerStats!, undefined, ctx);
     expect(rows.find((r) => r.personId === "H-p1")?.stats.wins).toBe(0);
     expect(rows.find((r) => r.personId === "A-p1")?.stats.wins).toBe(0);
+  });
+
+  it("X-ST-1 (ruling D-C3): a SETTLED drawn match credits the settle's winner the win — never wins:0 for both", () => {
+    const drawCfg = carrom.configSchema.parse({ gameTo: 100, maxBoards: 1, bestOf: 1, tieBoard: "draw" });
+    const ctx = ctxFor(
+      [
+        { id: "H", persons: ["H-p1"] },
+        { id: "A", persons: ["A-p1"] },
+      ],
+      drawCfg,
+    );
+    const drawn: Array<[type: string, payload?: unknown]> = [
+      ["core.start"],
+      ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 0, queenTo: null }],
+    ];
+    // Positive pair first: unsettled, the drawn match credits nobody a win.
+    const level = aggregatePlayerStats(stream(...drawn), carrom.playerStats!, undefined, ctx);
+    expect([level.find((r) => r.personId === "H-p1")?.stats.wins, level.find((r) => r.personId === "A-p1")?.stats.wins]).toEqual([0, 0]);
+    // Settled for the AWAY side (not home by default), whichever settle method closed it.
+    for (const method of SETTLE_METHODS) {
+      const rows = aggregatePlayerStats(stream(...drawn, ["core.settle", { winner: "A", method }]), carrom.playerStats!, undefined, ctx);
+      expect([rows.find((r) => r.personId === "H-p1")?.stats.wins, rows.find((r) => r.personId === "A-p1")?.stats.wins], method).toEqual([0, 1]);
+      expect(rows.find((r) => r.personId === "A-p1")?.stats.matches, method).toBe(1);
+    }
   });
 
   it("a team entrant is credited no matches or wins either, in a mixed team/individual fixture", () => {

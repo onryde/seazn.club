@@ -54,6 +54,8 @@ import { resolveModule } from "@/server/engine-db";
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
 import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
+import { assertNoLevelSeat } from "@/server/engine-db/level-seat";
+import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import {
   isSwissBoardSeated,
   latestSeatedSwissRound,
@@ -611,7 +613,7 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
     }
     const [played] = await tx`
       select 1 from fixtures
-      where stage_id = ${stageId} and status in ('in_play', 'decided', 'finalized') limit 1`;
+      where stage_id = ${stageId} and status in ('in_play', 'decided', 'finalized', 'needs_decision') limit 1`;
     if (played) {
       throw new HttpError(409, "stage has played fixtures and cannot be deleted");
     }
@@ -2799,9 +2801,11 @@ export { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible };
 const NO_ATTACHMENTS = { officials: 0, lineups: 0, deviceLinks: 0 } as const;
 
 /** The two `fixtures.status` values that still expect their entrants to turn
- *  up. The full vocabulary is seven: the other five — `decided`, `finalized`,
- *  `abandoned`, `forfeited`, `cancelled` — are history or never-to-be-played,
- *  so a name on one of them is a RECORD, not an outstanding obligation. Same
+ *  up. The full vocabulary is eight (`FIXTURE_STATUSES`, lib/fixture-status.ts):
+ *  the other six — `decided`, `finalized`, `abandoned`, `forfeited`,
+ *  `cancelled`, and W2a's `needs_decision` (played, waiting on the organiser's
+ *  settle, not on its entrants) — are history or never-to-be-played, so a name
+ *  on one of them is a RECORD, not an outstanding obligation. Same
  *  membership as `withdrawal.ts`'s `PENDING` (which decides whether a
  *  withdrawal walks a fixture over or voids it) and `venues.ts`'s
  *  `UNPLAYED_FIXTURE_STATUSES`, kept local for the same reason those are:
@@ -3653,10 +3657,32 @@ async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
  *  production reference reads it. It is a valid value in the v1 output schema,
  *  so it may arrive on an import path, and the clause is pinned by a test that
  *  inserts the row through raw SQL and says so. Do not assume coverage from a
- *  product path — there is none. */
-function feederIsDead(f: { status: string; outcome: { winner?: string } | null }): boolean {
+ *  product path — there is none.
+ *
+ *  W2a NEW-H1 (D4, reproduced by apps/web/e2e/bracket-new-h1.spec.ts):
+ *  `abandoned` with NO outcome is ALSO what a recorded abandon folds to in most
+ *  sports (`dead-feeder-cascade.test.ts` sweeps the registry and counts both
+ *  shapes) — a match that was played and stopped, which the ruling above says
+ *  stays stuck and visible until the organiser settles it (X-ST-1). The
+ *  generator and this cascade write their voids WITHOUT an event; a recorded
+ *  abandon is an ACTIVE `core.abandon` in the ledger (voids are not voidable,
+ *  core/events.ts `resolveVoids`, so "active" is "no row voids it"). That is
+ *  the line between them (`engine-db/recorded-abandon.ts`, read by stage
+ *  completion too, ruling D-G1). A withdrawal's own abandon (withdrawal.ts, the
+ *  open-format branch page_playoff takes) is a recorded one too: its line
+ *  waits for the settle instead of eliminating the departed entrant's opponent.
+ *
+ *  `needs_decision` (a held level result, X-BR-2) is not dead either: it is
+ *  neither decided nor void. A future "decided, nobody advances" outcome
+ *  belongs in its OWN clause beside these two, never folded into the abandon
+ *  test. */
+function feederIsDead(f: {
+  status: string;
+  outcome: { winner?: string } | null;
+  has_active_abandon: boolean;
+}): boolean {
   if (f.status === "cancelled") return true;
-  return f.status === "abandoned" && f.outcome === null;
+  return f.status === "abandoned" && f.outcome === null && !f.has_active_abandon;
 }
 
 /** A feeder that can never hand a LOSER onward (review round 5, N1). There are
@@ -3688,6 +3714,7 @@ function feederIsDead(f: { status: string; outcome: { winner?: string } | null }
 function loserFeederIsDead(f: {
   status: string;
   outcome: { kind?: string; winner?: string } | null;
+  has_active_abandon: boolean;
 }): boolean {
   if (feederIsDead(f)) return true;
   return f.outcome?.kind === "award";
@@ -3726,6 +3753,9 @@ interface SeatRow {
   winner_to_slot: number | null;
   loser_to_fixture: string | null;
   loser_to_slot: number | null;
+  /** W2a NEW-H1 (D4): abandoned, and the ledger holds a `core.abandon` no `core.void` targets — ONE definition,
+   *  `hasActiveAbandonSql` (engine-db/recorded-abandon.ts), shared with stage completion (D-G1). See `feederIsDead`. */
+  has_active_abandon: boolean;
 }
 
 /** Push the winners of the lines `awardSeededByes` just settled into the seats
@@ -3834,7 +3864,8 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
     const rows = await tx<SeatRow[]>`
       select id, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
              status, outcome, winner_to_fixture, winner_to_slot,
-             loser_to_fixture, loser_to_slot
+             loser_to_fixture, loser_to_slot,
+             ${hasActiveAbandonSql(tx, "fixtures")} as has_active_abandon
       from fixtures where stage_id = ${stageId}`;
     const feederOf = new Map<string, FeederEdge>();
     for (const r of rows) {
@@ -4078,12 +4109,17 @@ export async function loadBracketFixtures(tx: Tx, stageId: string): Promise<Brac
       away_entrant_id: string | null;
       outcome: unknown;
       ext_key: string | null;
+      stage_kind: string;
     }[]
   >`
-    select id, round_no, status, home_entrant_id, away_entrant_id, outcome, ext_key
-    from fixtures where stage_id = ${stageId}
-    order by round_no, seq_in_round`;
+    select f.id, f.round_no, f.status, f.home_entrant_id, f.away_entrant_id, f.outcome, f.ext_key,
+           s.kind as stage_kind
+    from fixtures f join stages s on s.id = f.stage_id
+    where f.stage_id = ${stageId}
+    order by f.round_no, f.seq_in_round`;
   return rows.map((f) => {
+    // X-BR-1: the completed-bracket rebuild seats from these rows too (level-seat.ts).
+    assertNoLevelSeat({ fixtureId: f.id, stageKind: f.stage_kind, status: f.status, outcome: f.outcome });
     const { bracket, thirdPlace } = parseExtKey(f.ext_key);
     const { winner, loser } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
     return {

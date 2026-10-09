@@ -92,6 +92,7 @@
 // and then falsified by the very commit that added `match_day`.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { describe, expect, it } from "vitest";
 import {
   bucketFixture,
@@ -111,20 +112,11 @@ import {
   MatchBucketSchema,
 } from "@/server/public-site/competition-hub-schema";
 
-// The v1 wire vocabulary for a fixture's status — `Fixture.status`,
-// `server/api-v1/schemas.ts:1195` (inside `export const Fixture`, line 1161).
-// It is an INLINE `z.enum`, not a named export, so it cannot be imported; the
-// guard below reads it out of the source text instead, which is what makes
-// this hand-written list a real drift alarm rather than a copy that rots.
-const STATUSES = [
-  "scheduled",
-  "in_play",
-  "decided",
-  "finalized",
-  "abandoned",
-  "forfeited",
-  "cancelled",
-] as const;
+// The v1 wire vocabulary for a fixture's status — `Fixture.status` in
+// `server/api-v1/schemas.ts`. W2a: that enum is now `z.enum(FIXTURE_STATUSES)`
+// (`lib/fixture-status.ts`, client-safe), so this list IS the wire vocabulary;
+// the guard below reads the source text to prove schemas.ts still uses it.
+const STATUSES = FIXTURE_STATUSES;
 
 describe("bucketFixture — every status the wire schema declares has a bucket", () => {
   it("the hand-written STATUSES list still matches the enum in server/api-v1/schemas.ts", () => {
@@ -132,10 +124,10 @@ describe("bucketFixture — every status the wire schema declares has a bucket",
     // 2026-09-08). Reading the source rather than importing keeps this pure
     // lib test free of `schemas.ts`'s engine import graph.
     const src = readFileSync(new URL("../../server/api-v1/schemas.ts", import.meta.url), "utf8");
-    const line = src.split("\n").find((l) => /status: z\.enum\(\[.*"forfeited".*\]\)/.test(l));
-    expect(line, 'no `status: z.enum([… "forfeited" …])` line found in schemas.ts').toBeDefined();
-    const declared = [...line!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
-    expect(declared.sort()).toEqual([...STATUSES].sort());
+    // W2a: the Fixture status enum is `z.enum(FIXTURE_STATUSES)`; a literal list
+    // holding "forfeited" anywhere else in the file would be a second, drifting copy.
+    expect(src.split("\n").filter((l) => /status: z\.enum\(FIXTURE_STATUSES\)/.test(l))).toHaveLength(1);
+    expect(src.split("\n").filter((l) => /status: z\.enum\(\[.*"forfeited".*\]\)/.test(l))).toEqual([]);
   });
 
   it("in_play is the ONLY live status; terminal statuses are completed; the rest are upcoming", () => {
@@ -148,6 +140,10 @@ describe("bucketFixture — every status the wire schema declares has a bucket",
       abandoned: "completed",
       forfeited: "completed",
       cancelled: "completed",
+      // W2a: held — played, its result awaits the organiser. Listed under
+      // Completed with its own status line ("Needs a decision"), never as an
+      // upcoming match nobody will play.
+      needs_decision: "completed",
     });
   });
 

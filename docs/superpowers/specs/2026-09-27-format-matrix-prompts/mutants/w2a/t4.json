@@ -1,0 +1,630 @@
+[
+  {
+    "id": "settle-precondition-skipped",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (!settleApplies(module, { outcome: effective,",
+    "replace": "if (false && !settleApplies(module, { outcome: effective,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: is refused on a live fixture with no outcome and no abandon, and on a decided win"
+      }
+    ]
+  },
+  {
+    "id": "settle-reads-module-outcome",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "const effective = outcomeOf(module, { state, settlement });",
+    "replace": "const effective = module.outcome(state);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: a second settle is refused \\(Review Focus 2\\)"
+      }
+    ]
+  },
+  {
+    "id": "level-outcome-only-draw",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (isLevelOutcome(f.outcome)) return true;",
+    "replace": "if (f.outcome?.kind === \"draw\") return true;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/cricket/cricket.test.ts",
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1 \\(C11\\): a league tie folds to \\{kind:'tie'\\} and an organiser settle turns it into a settled win|C11: the kernel's precondition per outcome kind"
+      }
+    ]
+  },
+  {
+    "id": "abandoned-dropped-from-precondition",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return f.abandoned || (f.state != null && module.awaitingDecider",
+    "replace": "  return (f.state != null && module.awaitingDecider",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: closes an abandon whose module outcome is null"
+      }
+    ]
+  },
+  {
+    "id": "decider-never-pending",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "module.awaitingDecider?.(f.state as never) === true",
+    "replace": "false",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "C12: a module with a pending decider accepts settle|C12: settleApplies is THE precondition"
+      }
+    ]
+  },
+  {
+    "id": "settle-not-during-stoppage",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  // W2a finding 4: a settle closes an abandon that left the stoppage open.\n  \"core.settle\",\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "finding 4: settle is accepted while play is suspended"
+      }
+    ]
+  },
+  {
+    "id": "settle-not-post-decision",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "[\"core.note\", \"core.finalize\", \"core.award\", \"core.settle\"]",
+    "replace": "[\"core.note\", \"core.finalize\", \"core.award\"]",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: on a draw it gives win\\{winner, loser, settled_<method>\\}"
+      }
+    ]
+  },
+  {
+    "id": "kernel-finalize-branch-deleted",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return event.type === \"core.finalize\" && folded.settled && module.outcome(folded.state) === null;",
+    "replace": "  return false;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "Review Focus 3: finalize after settling an abandon succeeds for EVERY sport|W2a I-1: kernelOwnsEvent is spec §5\\.1's kernel-owned set"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/boardgame/tiebreak.test.ts"
+        ],
+        "name": "rule 10: any sequence of results, tie-breaks, settles, abandons, finalizes and void-last in a bracket keeps the invariants after every step"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts",
+          "src/server/overlay/__tests__/recent.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
+      }
+    ]
+  },
+  {
+    "id": "outcomeof-ignores-settlement",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  if (s !== null) return { kind: \"win\", winner: s.winner, loser: s.loser, method: settledMethod(s.method) };\n  return module.outcome(folded.state);",
+    "replace": "  void s;\n  return module.outcome(folded.state);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: on a draw it gives win\\{winner, loser, settled_<method>\\}"
+      }
+    ]
+  },
+  {
+    "id": "settle-winner-unchecked",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (p.winner !== home && p.winner !== away) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: a winner who is neither side is refused"
+      }
+    ]
+  },
+  {
+    "id": "fold-ts-bare-outcome",
+    "file": "apps/web/src/server/engine-db/fold.ts",
+    "find": "    outcome: outcomeOf(sportModule, folded),",
+    "replace": "    outcome: sportModule.outcome(state),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "no bare <module>\\.outcome\\(state\\) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers"
+      }
+    ]
+  },
+  {
+    "id": "abandon-never-marked-active",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "      if (event.type === \"core.abandon\") abandonActive = true;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "X-ST-1: closes an abandon whose module outcome is null"
+      }
+    ]
+  },
+  {
+    "id": "append-event-bare-outcome",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "const outcome = outcomeOf(sportModule, folded);",
+    "replace": "const outcome = sportModule.outcome(state);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "no bare <module>\\.outcome\\(state\\) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers"
+      }
+    ]
+  },
+  {
+    "id": "event-import-bare-outcome",
+    "file": "apps/web/src/server/usecases/event-import.ts",
+    "find": "if (outcomeOf(sportModule, folded) === null) {",
+    "replace": "if (sportModule.outcome(folded.state) === null) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "no bare <module>\\.outcome\\(state\\) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers"
+      }
+    ]
+  },
+  {
+    "id": "carrom-stats-property-read",
+    "file": "packages/engine/src/sports/carrom/carrom.ts",
+    "find": "const outcome = outcomeOf(carrom, foldMatchWithStoppage(carrom, cfgParsed.data, lineups, events));",
+    "replace": "const outcome = foldMatchWithStoppage(carrom, cfgParsed.data, lineups, events).state.outcome;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/carrom/carrom.test.ts"
+        ],
+        "name": "X-ST-1 \\(ruling D-C3\\): a SETTLED drawn match credits the settle's winner the win"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "ruling D-C3: no fold result's outcome is read as a PROPERTY"
+      }
+    ]
+  },
+  {
+    "id": "generic-stats-property-read",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "const outcome = outcomeOf(generic, folded);",
+    "replace": "const outcome = folded.state.outcome;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/generic/generic.test.ts"
+        ],
+        "name": "X-ST-1 \\(ruling D-C3\\): a SETTLED level result credits the settle's winner a win"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "ruling D-C3: no fold result's outcome is read as a PROPERTY"
+      }
+    ]
+  },
+  {
+    "id": "timeline-settle-method-ignored",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "      ? `timeline.core.settle.${payload.method}`",
+    "replace": "      ? null",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts"
+        ],
+        "name": "X-ST-1: a settle line names the side that advances and the engine's settle method, in all four locales"
+      }
+    ]
+  },
+  {
+    "id": "timeline-settle-side-dropped",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "\"core.settle\": (c) => ({ side: sideNameOf(c) }),",
+    "replace": "\"core.settle\": () => ({}),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts"
+        ],
+        "name": "X-ST-1: a settle line names the side that advances and the engine's settle method, in all four locales"
+      }
+    ]
+  },
+  {
+    "id": "event-copy-settle-method-ignored",
+    "file": "apps/web/src/lib/event-copy.ts",
+    "find": "const key = (typeof p.method === \"string\" && SETTLED_KEY[p.method]) || \"eventCopy.settled\";",
+    "replace": "const key: MessageKey = \"eventCopy.settled\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/event-copy.test.ts"
+        ],
+        "name": "X-ST-1: core\\.settle says who advances and how, for every engine settle method, in all four locales"
+      }
+    ]
+  },
+  {
+    "id": "event-copy-settle-note-dropped",
+    "file": "apps/web/src/lib/event-copy.ts",
+    "find": "const note = typeof p.note === \"string\" && p.note ? ` — ${p.note}` : \"\";",
+    "replace": "const note = \"\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/event-copy.test.ts"
+        ],
+        "name": "X-ST-1: core\\.settle says who advances and how, for every engine settle method, in all four locales"
+      }
+    ]
+  },
+  {
+    "id": "i1-kernel-owned-drops-settle",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "const KERNEL_OWNED_CORE: readonly string[] = [\"core.suspend\", \"core.resume\", \"core.settle\"];",
+    "replace": "const KERNEL_OWNED_CORE: readonly string[] = [\"core.suspend\", \"core.resume\"];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "W2a I-1: kernelOwnsEvent is spec §5\\.1's kernel-owned set|finding 2: core\\.settle never reaches module\\.apply"
+      }
+    ]
+  },
+  {
+    "id": "i1-kernel-owned-drops-lineup",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return KERNEL_OWNED_CORE.includes(type) || isLineupEventType(type);",
+    "replace": "  return KERNEL_OWNED_CORE.includes(type);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "W2a I-1: kernelOwnsEvent is spec §5\\.1's kernel-owned set"
+      }
+    ]
+  },
+  {
+    "id": "i1-fold-gate-never-settled",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    if (!kernelOwnsEvent(module, event, { state, settled: settlement !== null })) {",
+    "replace": "    if (!kernelOwnsEvent(module, event, { state, settled: false })) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "Review Focus 3: finalize after settling an abandon succeeds for EVERY sport"
+      }
+    ]
+  },
+  {
+    "id": "i1-timeline-skip-is-the-old-list",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "      if (kernelOwnsEvent(module, event, { state, settled })) {",
+    "replace": "      if (event.type === \"core.suspend\" || event.type === \"core.resume\" || isLineupEventType(event.type)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "i1-timeline-skip-is-the-old-list-scan-only",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "      if (kernelOwnsEvent(module, event, { state, settled })) {",
+    "replace": "      if (event.type === \"core.suspend\" || event.type === \"core.resume\" || isLineupEventType(event.type)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "i1-recent-skip-is-the-old-list",
+    "file": "apps/web/src/server/overlay/recent.ts",
+    "find": "      if (kernelOwnsEvent(module, event, { state, settled })) {",
+    "replace": "      if (event.type === \"core.suspend\" || event.type === \"core.resume\" || isLineupEventType(event.type)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/overlay/__tests__/recent.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "i1-recent-skip-is-the-old-list-scan-only",
+    "file": "apps/web/src/server/overlay/recent.ts",
+    "find": "      if (kernelOwnsEvent(module, event, { state, settled })) {",
+    "replace": "      if (event.type === \"core.suspend\" || event.type === \"core.resume\" || isLineupEventType(event.type)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "i1-timeline-settled-never-set",
+    "file": "apps/web/src/server/public-site/timeline.ts",
+    "find": "        if (event.type === \"core.settle\") settled = true;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/timeline.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
+      }
+    ]
+  },
+  {
+    "id": "i1-recent-settled-never-set",
+    "file": "apps/web/src/server/overlay/recent.ts",
+    "find": "        if (event.type === \"core.settle\") settled = true;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/overlay/__tests__/recent.test.ts"
+        ],
+        "name": "W2a I-1: a SETTLED fixture replays to the end in every sport"
+      }
+    ]
+  },
+  {
+    "id": "minor2-bare-read-with-another-name",
+    "file": "tools/matrix/lib/fold.ts",
+    "find": "  return { outcome: outcomeOf(module, folded), state: folded.state as unknown };",
+    "replace": "  const finalState = folded.state;\n  return { outcome: outcomeOf(module, folded) && module.outcome(finalState), state: folded.state as unknown };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "no bare <module>\\.outcome\\(state\\) outside the allowed list"
+      }
+    ]
+  },
+  {
+    "id": "minor3-tiebreak-not-applicable-422",
+    "file": "apps/web/src/server/api-v1/http.ts",
+    "find": "  TIEBREAK_NOT_APPLICABLE: 409,",
+    "replace": "  TIEBREAK_NOT_APPLICABLE: 422,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/api-v1/__tests__/http.test.ts"
+        ],
+        "name": "maps EngineError TIEBREAK_NOT_APPLICABLE → 409"
+      }
+    ]
+  },
+  {
+    "id": "minor7-second-kernel-finalize-refused",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    } else if (event.type === \"core.finalize\") {\n",
+    "replace": "    } else if (event.type === \"core.finalize\") {\n      if (events.slice(0, events.indexOf(event)).some((e) => e.type === \"core.finalize\" && active.includes(e))) throw new EngineError(\"WRONG_PHASE\", \"already finalized\");\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "review Minor 7: a SECOND finalize after a settled abandon"
+      }
+    ]
+  },
+  {
+    "id": "n1-kernel-fallback-silent",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "      throw new Error(\n        `foldMatchWithStoppage: kernelOwnsEvent claims \"${event.type}\" but no kernel branch folds \"${event.type}\" — ` +\n          \"a type added to KERNEL_OWNED_CORE owes its branch in the fold's dispatch\",\n      );\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "review N1: a type kernelOwnsEvent claims but no kernel branch folds is an invariant failure naming it"
+      }
+    ]
+  },
+  {
+    "id": "n1-kernel-finalize-falls-into-the-throw",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "    } else if (event.type === \"core.finalize\") {\n",
+    "replace": "    } else if (false) {\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "Review Focus 3: finalize after settling an abandon succeeds for EVERY sport|review Minor 7: a SECOND finalize after a settled abandon"
+      }
+    ]
+  },
+  {
+    "id": "n2-sport-receiver-replay-loop-unguarded",
+    "file": "tools/matrix/lib/fold.ts",
+    "find": "  return { home: h.points, away: a.points, forOutcome: folded.outcome };\n}\n",
+    "replace": "  return { home: h.points, away: a.points, forOutcome: folded.outcome };\n}\n\nexport function replayAll(sport: { apply(s: unknown, e: unknown): unknown }, events: readonly unknown[]): unknown {\n  let s: unknown = null;\n  for (const e of events) s = sport.apply(s, e);\n  return s;\n}\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/outcome-readers.test.ts"
+        ],
+        "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "p1-settle-applies-null-guard-dropped",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return f.abandoned || (f.state != null && module.awaitingDecider?.(f.state as never) === true);",
+    "replace": "  return f.abandoned || module.awaitingDecider?.(f.state as never) === true;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "P1 follow-up: a SCHEDULED fixture has no fold \\(getFixtureState serves state null\\)"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "P1 follow-up — empty case, every sport, every bracket kind: a SCHEDULED fixture"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "P1 follow-up: a SCHEDULED chess knockout renders its console"
+      }
+    ]
+  },
+  {
+    "id": "p1-settle-applies-null-guard-eats-the-abandon-arm",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return f.abandoned || (f.state != null && module.awaitingDecider?.(f.state as never) === true);",
+    "replace": "  return f.state != null && (f.abandoned || module.awaitingDecider?.(f.state as never) === true);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "P1 follow-up: a SCHEDULED fixture has no fold \\(getFixtureState serves state null\\)"
+      }
+    ]
+  },
+  {
+    "id": "p1-decider-pending-null-guard-dropped",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return folded.state != null && module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;",
+    "replace": "  return module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "P1 follow-up: a SCHEDULED fixture has no fold \\(getFixtureState serves state null\\)"
+      }
+    ]
+  }
+]

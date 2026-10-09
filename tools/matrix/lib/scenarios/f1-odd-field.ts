@@ -27,7 +27,7 @@ import type { CompleteObs, ObservedFixture } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { americanoRoundSize } from "./americano-loop.ts";
-import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, seatsEntrant, stageCompleted, withCanary } from "./assertions.ts";
+import { assertion, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, seatsEntrant, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
 import { BRACKET_OF } from "./terminal-finals.ts";
 import type { Scenario } from "./types.ts";
@@ -124,6 +124,8 @@ export const f1OddField: Scenario = {
           ctx.spec.canary,
         ), sizeAbstain),
         ladderSweep(setup.stage.kind, [...setup.entrants].sort((a, b) => setup.seedOf(a.id) - setup.seedOf(b.id)).map((e) => e.id), rec.ladderSteps, s.fixtures, s.complete),
+        // W2a (M-6): a bracket stage in this run (a knockout row, or the knockout stage of a league_ko row) owes a decider.
+        bracketDeciderExercised(rec, observed),
         stageCompleted(observed),
         loopBounded(rec, observed),
         advanceSeededAsDeclared(plays, observed, rec.withdrawn),

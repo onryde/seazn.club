@@ -2,7 +2,8 @@
 // the harness did and saw into an ObservedRun. Expected values are derived
 // (R9): points from the module's standingsDelta over the folded stream, draw
 // reachability from supportsDraws.
-import { EngineError, type MatchOutcome, type StageCtx, type StageKind } from "@seazn/engine/core";
+import { EngineError, SETTLE_METHODS, forbidsLevelResult, type MatchOutcome, type StageCtx, type StageKind } from "@seazn/engine/core";
+import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import { templateBodies, templateField, templateRow } from "../templates.ts";
 import {
@@ -16,9 +17,10 @@ import {
   type CaseFact, type CompleteObs, type ConfigEditObs, type GenerateObs, type LoopExit, type ObservedDeclared, type ObservedFixture,
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
-import { drawsAllowed, entrantKindFor, sportModule } from "../sport-cfg.ts";
-import { generateStream, matchesRequest, type RequestMatch } from "../streams/index.ts";
-import { START, type RequestedOutcome, type StreamEvent } from "../streams/types.ts";
+import { drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
+import { generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
+import { START, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
+import { levelKindOf, loserSeatOf, type BracketDrive } from "../reference-bracket.ts";
 import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
@@ -104,7 +106,13 @@ export class StageTrack {
 }
 
 /** What decideFixture needs to finish a fixture the scenario already started (Recorder.resumed). */
-export interface Resumed { readonly outcome: RequestedOutcome; readonly live: number; readonly voidedType: string }
+export interface Resumed {
+  readonly outcome: RequestedOutcome;
+  readonly live: number;
+  /** The type of the event that was voided, which the stream must send next; null where nothing was voided (a probe the
+   *  product REFUSED after the first `live` events were accepted — BRACKET_NO_DRAW_GENERIC). */
+  readonly voidedType: string | null;
+}
 
 /** A fixture the scenario started was resumed over a stream that is not the one it began: its live events are not
  *  the generated stream's leading events, or the event it voided is not the next one the stream sends. Posting
@@ -198,6 +206,23 @@ export class Recorder {
   /** W1-driving Task 4: lineup PUTs made, one per division-entrant side. */
   lineupsPut = 0;
   drawsPosted = 0;
+  /** W2a (finding 16): the hard-path streams the harness posted into a BRACKET stage. life-bracket-decider-exercised
+   *  reads their sum: a run with a bracket stage that posted none exercised no decider (zero is a failure, R25). */
+  tiebreaksPosted = 0;
+  settlesPosted = 0;
+  /** W2a: bracket fixtures the policy has been asked about, run-wide. bracketPolicy counts in THIS, not in `decided`:
+   *  `decided` also counts the table stages played before a bracket, so a bracket that opens on a 2-in-3 offset (or
+   *  has fewer than three fixtures) would never be asked for a decider. */
+  bracketOrdinal = 0;
+  /** W2a review I-3: the fixtures bracketPolicy asked a HARD path of (a settle or a tie-break), in the order decideRound
+   *  reached them, and those of them decideFixture then found already finished - a walkover the scenario recorded, or a
+   *  recorded withdrawal's cascade. A hard-path slot a walkover consumed is not a decider the run still owes:
+   *  life-bracket-decider-exercised reads both, so "owed" comes from the run's own record, not from a table of rows. */
+  readonly hardPathSlots: string[] = [];
+  readonly hardPathPassedOver = new Set<string>();
+  /** W2a (ruling T15-R3): every bracket fixture the harness drove, with what the product answered — what
+   *  life-reference-bracket-finish judges against the reference family. */
+  readonly bracketDrives: BracketDrive[] = [];
   decided = 0;
   events = 0;
   /** W1-driving Task 6: stage id → its own loop record. */
@@ -463,6 +488,30 @@ export function defaultPolicy(setup: DivisionSetup, f: FixtureRow, drawOk: boole
   return { kind: "win", winner: setup.seedOf(f.home_entrant_id!) <= setup.seedOf(f.away_entrant_id!) ? "home" : "away" };
 }
 
+/** W2a (finding 16): in a bracket, every third fixture asks for the HARD path — a level result (held as
+ *  needs_decision, then settled), a chess tie-break, or an abandon at a real score then settled — so a run that
+ *  turns green cannot have done so without a single decider having run. `ordinal` counts bracket fixtures
+ *  (Recorder.bracketOrdinal) and the hard path is the FIRST of each three, so even a one-fixture bracket exercises
+ *  one; counters feed life-bracket-decider-exercised. Which path a sport can take is the generator's own answer:
+ *  chess takes the tie-break (BG-KO-1), generic can only abandon (GN-KO-1: it refuses a draw), and a sport with a
+ *  level stream under this cfg alternates level and abandon (levelReachable) — everything else abandons at score. */
+export function bracketPolicy(setup: DivisionSetup, f: FixtureRow, sport: string, ordinal: number, cfg: unknown): RequestedOutcome {
+  const higher: Side = setup.seedOf(f.home_entrant_id!) <= setup.seedOf(f.away_entrant_id!) ? "home" : "away";
+  if (ordinal % 3 !== 0) return { kind: "win", winner: higher };
+  return hardPath(sport, cfg, Math.floor(ordinal / 3), higher);
+}
+
+/** The `n`th (0-based) HARD-path request a bracket stage makes, ending in a win by `winner`: chess takes its tie-break
+ *  (BG-KO-1), and everything else a settle — after a level result where the sport's generator can build one under this
+ *  (stage-overlaid) cfg, alternating with an abandon at score, and after an abandon alone where it cannot (generic,
+ *  GN-KO-1). The method and rung rotate through the engine's own lists. Shared by the fixture policy and the ladder loop,
+ *  so a ladder (a bracket kind played through challenges) owes its deciders by the same rule. */
+export function hardPath(sport: string, cfg: unknown, n: number, winner: Side): RequestedOutcome {
+  if (sport === "boardgame") return { kind: "tiebreak", rung: TIEBREAK_RUNGS[n % TIEBREAK_RUNGS.length], winner };
+  const level = levelReachable(sport, cfg, "knockout") && n % 2 === 0;
+  return { kind: "settle", then: winner, method: SETTLE_METHODS[n % SETTLE_METHODS.length], after: level ? "level" : "abandon" };
+}
+
 const stageCtx = (kind: string, f: { pool_id: string | null; round_no: number | null }): StageCtx =>
   ({ kind: kind as StageKind, ...(f.pool_id ? { poolId: f.pool_id } : {}), ...(f.round_no ? { roundNo: f.round_no } : {}) });
 
@@ -477,7 +526,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     // a RECORDED withdrawal's cascade may have finished it. Anything else is a
     // result nobody the harness can name wrote — a failing parity item, never
     // a silent return.
-    if (rec.streams.has(f.id) || rec.withdrawn.has(home) || rec.withdrawn.has(away)) return;
+    if (rec.streams.has(f.id) || rec.withdrawn.has(home) || rec.withdrawn.has(away)) { rec.hardPathPassedOver.add(f.id); return; }
     rec.parity.push({ fixtureId: f.id, local: null, product: toObservedOutcome(state.outcome), foreign: state.last_seq, finishedBefore: state.status, request: null });
     rec.notes.push(`${f.id}: already ${state.status} before the harness posted`);
     return;
@@ -488,13 +537,17 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // W1d Task 14: a fixture the scenario already started is finished as it was started (Recorder.resumed).
   const resumed = rec.resumed.get(f.id);
   const asked = resumed === undefined ? outcome : resumed.outcome;
-  const generated = generateStream({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked });
+  // W2a (finding 16): the cfg the PRODUCT folds this fixture under — a bracket stage's overlay (bracketDeciders:
+  // a chess tie-break, carrom's extra board) on top of the division's. Generation, the local fold, the request match
+  // and the declared points all read it, so parity holds on every boardgame and carrom bracket.
+  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind);
+  const generated = generateStream({ sportKey: ctx.spec.sport, cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked });
   const prior = rec.streams.get(f.id) ?? [];
   if (resumed !== undefined) {
     const live = liveEvents(prior).map((e) => e.type);
     const lead = generated.slice(0, resumed.live).map((e) => e.type);
     if (resumed.live < 1 || live.join(",") !== lead.join(",")) throw new ResumeMismatch(f.id, `its live events are [${live.join(", ")}], the generated stream leads with [${lead.join(", ")}] (${resumed.live} claimed live)`);
-    if (generated[resumed.live]?.type !== resumed.voidedType) throw new ResumeMismatch(f.id, `the event it voided was ${resumed.voidedType}, the stream's next is ${generated[resumed.live]?.type ?? "nothing"}`);
+    if (resumed.voidedType !== null && generated[resumed.live]?.type !== resumed.voidedType) throw new ResumeMismatch(f.id, `the event it voided was ${resumed.voidedType}, the stream's next is ${generated[resumed.live]?.type ?? "nothing"}`);
   }
   const fresh = resumed === undefined ? generated : generated.slice(resumed.live);
   // What the driver actually sends: a forfeit on a fixture already under way
@@ -519,6 +572,21 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   rec.events += now.length;
   rec.decided++;
   if (asked.kind === "draw") rec.drawsPosted++;
+  // W2a: the deciders, counted where they are posted (life-bracket-decider-exercised). A settle is posted by the
+  // organiser through the API (X-ST-2); a tie-break is the scorer's, recorded on the pad.
+  if (asked.kind === "settle") rec.settlesPosted++;
+  if (asked.kind === "tiebreak") rec.tiebreaksPosted++;
+  if (forbidsLevelResult(stage.kind)) {
+    // The loser line is read AFTER the post (the product seats it as it decides), from the stage's own rows.
+    const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((r) => r.stage_id === stage.id);
+    const row = rows.find((r) => r.id === f.id);
+    rec.bracketDrives.push({
+      fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked,
+      levelAs: levelKindOf(ctx.spec.sport, cfg, home, away, asked, generated),
+      status: posted.at(-1)?.status ?? null, outcome: productOutcome,
+      loser: row === undefined ? { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } : loserSeatOf(stage.kind, stage.config, row, rows),
+    });
+  }
   const foreign = state.last_seq - prior.length;
   if (foreign !== 0) {
     rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign, finishedBefore: null, request: null });
@@ -526,10 +594,10 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     return;
   }
   const m = sportModule(ctx.spec.sport);
-  const folded = foldStream(m, ctx.cfg, home, away, whole).outcome;
-  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked }, folded);
+  const folded = foldStream(m, cfg, home, away, whole).outcome;
+  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked }, folded);
   rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(folded), product: productOutcome, foreign: 0, finishedBefore: null, request });
-  const dp = declaredPoints(m, ctx.cfg, stageCtx(stage.kind, f), home, away, whole);
+  const dp = declaredPoints(m, cfg, stageCtx(stage.kind, f), home, away, whole);
   if (dp !== null) rec.declared.set(f.id, { home: dp.home, away: dp.away, forOutcome: toObservedOutcome(dp.forOutcome)! });
 }
 
@@ -562,14 +630,33 @@ export async function dateFirstRound(ctx: ScenarioContext, rec: Recorder, setup:
 
 export type RoundHook = (round: number, batch: FixtureRow[]) => Promise<void>;
 
+/** W2a (Task 14): a scenario's own choice of outcome for a BRACKET fixture, in place of bracketPolicy's. `n` counts
+ *  bracket fixtures run-wide (Recorder.bracketOrdinal), `higher` is the side the pick should make win — the better
+ *  seed's in a bracket, the SCRIPTED winner's on a ladder (D8 scripts who wins, so the order it expects holds) — and
+ *  `cfg` is the stage-overlaid cfg the product folds the fixture under. It decides EVERY bracket match of the run, in
+ *  every stage and on a ladder (playDivision, playLadder), unlike the round hooks; absent, every bracket fixture is
+ *  asked by bracketPolicy, byte for byte. */
+export type BracketPick = (f: FixtureRow, n: number, higher: Side, cfg: unknown) => RequestedOutcome;
+export interface RoundHooks { beforeRound?: RoundHook; afterRound?: RoundHook; bracketPick?: BracketPick }
+
 /** One round's batch, decided in fixture order between the round hooks —
  *  playStage's own, lifted to take the stage (W1-driving Task 8) so the
  *  americano loops decide a round exactly as every other loop does. */
-export async function decideRound(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, round: number, batch: FixtureRow[], hooks: { beforeRound?: RoundHook; afterRound?: RoundHook }): Promise<void> {
+export async function decideRound(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, round: number, batch: FixtureRow[], hooks: RoundHooks): Promise<void> {
   const drawOk = stageDrawsOk(ctx, stage);
+  // W2a: a bracket stage is asked for the hard path every third fixture (bracketPolicy); every other stage keeps the
+  // table policy, byte for byte.
+  const bracket = forbidsLevelResult(stage.kind);
+  const bracketCfgOf = bracket ? stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind) : null;
   await hooks.beforeRound?.(round, batch);
   for (const f of [...batch].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))) {
-    await decideFixture(ctx, rec, setup, f, defaultPolicy(setup, f, drawOk, rec.decided), stage);
+    const n = rec.bracketOrdinal;
+    if (bracket) rec.bracketOrdinal++;
+    const higher: Side = setup.seedOf(f.home_entrant_id!) <= setup.seedOf(f.away_entrant_id!) ? "home" : "away";
+    const outcome = !bracket ? defaultPolicy(setup, f, drawOk, rec.decided)
+      : hooks.bracketPick !== undefined ? hooks.bracketPick(f, n, higher, bracketCfgOf) : bracketPolicy(setup, f, ctx.spec.sport, n, bracketCfgOf);
+    if (bracket && (outcome.kind === "settle" || outcome.kind === "tiebreak")) rec.hardPathSlots.push(f.id);
+    await decideFixture(ctx, rec, setup, f, outcome, stage);
   }
   await hooks.afterRound?.(round, batch);
 }
@@ -589,7 +676,7 @@ export function drawsDeclaredOnReached(ctx: ScenarioContext, plays: readonly Sta
 
 /** Plays one stage to its loop exit. `stage` (W1-driving Task 6) defaults to
  *  the root; the exit lands on the stage's own track and on the run alike. */
-export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: { beforeRound?: RoundHook; afterRound?: RoundHook } = {}, stage: StageRef = setup.stage): Promise<void> {
+export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: RoundHooks = {}, stage: StageRef = setup.stage): Promise<void> {
   // W1-driving Task 7 (D8): a ladder generates nothing (stages.ts ladder gen
   // is []); it is driven through challenges.
   if (stage.kind === "ladder") return playLadder(ctx, rec, setup, stage, hooks);
@@ -662,7 +749,7 @@ const worstExit = (exits: readonly (LoopExit | null)[]): LoopExit | null => (exi
  *  after a commit. */
 export async function playDivision(
   ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
-  hooks: { beforeRound?: RoundHook; afterRound?: RoundHook; beforeComplete?: (stage: StageRef) => Promise<void> } = {},
+  hooks: RoundHooks & { beforeComplete?: (stage: StageRef) => Promise<void> } = {},
 ): Promise<StagePlay[]> {
   for (const s of setup.stages.slice(1)) await recordGenerate(ctx, rec, s.id);
   const plays: StagePlay[] = [];
@@ -699,7 +786,9 @@ export async function playDivision(
         continue;
       }
     }
-    await playStage(ctx, rec, setup, i === 0 ? hooks : {}, stage); // D12: hooks on stage 1 only
+    // D12: the round hooks run on stage 1 only; the bracket pick is the scenario's rule for every bracket match, so it
+    // goes to each stage (a later stage it does not apply to — a table — never asks it).
+    await playStage(ctx, rec, setup, i === 0 ? hooks : hooks.bracketPick === undefined ? {} : { bracketPick: hooks.bracketPick }, stage);
     if (i === 0) await hooks.beforeComplete?.(stage);
     const complete = await finishStage(ctx, rec, stage.id);
     plays.push({ stage, field, advance, complete });

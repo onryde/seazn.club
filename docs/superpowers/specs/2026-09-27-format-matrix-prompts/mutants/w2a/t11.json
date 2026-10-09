@@ -1,0 +1,405 @@
+[
+  {
+    "id": "kind-gate",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "  if (!forbidsLevelResult(f.stageKind)) return false;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "a level outcome needs a decision in every bracket kind, and never outside brackets"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "the positive pair: the same level result in a LEAGUE is a result"
+      }
+    ]
+  },
+  {
+    "id": "active-abandon",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "!events.some((v) => v.voids_event_id === e.id)",
+    "replace": "true",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "the generator's void .* and a voided abandon need nothing"
+      }
+    ]
+  },
+  {
+    "id": "decider-hook",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "return settleApplies(module, {",
+    "replace": "return settleApplies({}, {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "C12: a chess knockout in phase tiebreak"
+      }
+    ]
+  },
+  {
+    "id": "double-submit",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "s.winner === null || s.method === null || s.sending;",
+    "replace": "s.winner === null || s.method === null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "confirmBlocked: blocked until a winner AND a method are chosen"
+      }
+    ]
+  },
+  {
+    "id": "finalize-hidden",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "s.decided && !s.held;",
+    "replace": "s.decided;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "finalizeVisible: Finalize shows for a decided fixture and never while it is held"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "finding 27 \\+ C12: a held knockout fixture shows the block and hides Finalize"
+      }
+    ]
+  },
+  {
+    "id": "console-organiser-gate",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "const offerOrganiserActions = !decided && !held && canOrganise;",
+    "replace": "const offerOrganiserActions = !decided && !held;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "X-ST-2: an organiser is offered Forfeit and Abandon; an official scorer \\(canOrganise false\\) is offered neither"
+      }
+    ]
+  },
+  {
+    "id": "console-block-organiser-gate",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "{scoring && home && away && canOrganise && held && (",
+    "replace": "{scoring && home && away && held && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "an official scorer on a held fixture sees no block and no Settle"
+      }
+    ]
+  },
+  {
+    "id": "console-finalize-wiring",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "const offerFinalize = finalizeVisible({ decided, held });",
+    "replace": "const offerFinalize = decided;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "finding 27 \\+ C12: a held knockout fixture shows the block and hides Finalize"
+      }
+    ]
+  },
+  {
+    "id": "row-decide",
+    "file": "apps/web/src/lib/fixture-row-action.ts",
+    "find": "if (status === \"needs_decision\" || awaitsSettle) return canEdit ? { kind: \"decide\" } : { kind: \"view\" };",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/fixture-row-action.test.ts"
+        ],
+        "name": "offers Settle \\(decide\\) to an editor, timed or not, today or not"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "shows the held chip and the decide action to an editor"
+      }
+    ]
+  },
+  {
+    "id": "row-decide-editor-gate",
+    "file": "apps/web/src/lib/fixture-row-action.ts",
+    "find": "return canEdit ? { kind: \"decide\" } : { kind: \"view\" };",
+    "replace": "return { kind: \"decide\" };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/fixture-row-action.test.ts"
+        ],
+        "name": "a viewer who cannot edit only views it"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "a read-only viewer still sees the chip, and only views"
+      }
+    ]
+  },
+  {
+    "id": "row-held-chip",
+    "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+    "find": "          {held && (",
+    "replace": "          {false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "shows the held chip and the decide action to an editor"
+      }
+    ]
+  },
+  {
+    "id": "r1-i1-held-hides-organiser-actions",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "  const offerOrganiserActions = !decided && !held && canOrganise;",
+    "replace": "  const offerOrganiserActions = !decided && canOrganise;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "I1: a chess knockout in its tie-break is HELD"
+      }
+    ]
+  },
+  {
+    "id": "r1-m6-console-status-badge-normal-case",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "          <span className={`badge normal-case ${STATUS_STYLE[live.status] ?? \"\"}`}>",
+    "replace": "          <span className={`badge ${STATUS_STYLE[live.status] ?? \"\"}`}>",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "an official scorer on a held fixture sees no block and no Settle"
+      }
+    ]
+  },
+  {
+    "id": "r1-m7-held-note-scorer-only",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "      {scoring && home && away && !canOrganise && held && (",
+    "replace": "      {scoring && home && away && held && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "M7: the official scorer on a held fixture is told WHY"
+      }
+    ]
+  },
+  {
+    "id": "r1-m7-held-note-held-only",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "      {scoring && home && away && !canOrganise && held && (",
+    "replace": "      {scoring && home && away && !canOrganise && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "M7: the official scorer on a held fixture is told WHY"
+      }
+    ]
+  },
+  {
+    "id": "r1-dh3-held-cause-abandon-first",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "  if (hasActiveAbandon(f.events)) return \"abandoned\";",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "each held shape names its own cause"
+      }
+    ]
+  },
+  {
+    "id": "r1-dh3-held-cause-tiebreak",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "  return f.outcome == null ? \"tiebreak\" : \"level\";",
+    "replace": "  return \"level\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "each held shape names its own cause"
+      }
+    ]
+  },
+  {
+    "id": "r1-dh3-block-body-by-cause",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "          {msg(BODY_KEY[props.cause])}",
+    "replace": "          {msg(\"score.needsDecision.body\")}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "the block says the cause's own sentence"
+      }
+    ]
+  },
+  {
+    "id": "r1-dh3-console-passes-cause",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "          cause={heldCause({ outcome: live.outcome, events })}",
+    "replace": "          cause=\"level\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "I1: a chess knockout in its tie-break is HELD"
+      }
+    ]
+  },
+  {
+    "id": "r1-m12-settle-names-wrap",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "                <span className=\"min-w-0 break-words\">{e.name}</span>",
+    "replace": "                <span className=\"min-w-0 truncate\">{e.name}</span>",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "each winner button carries its whole name, wrapping"
+      }
+    ]
+  },
+  {
+    "id": "r2-n2-tiebreak-note-key",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "  tiebreak: \"score.needsDecision.waiting.tiebreak\",",
+    "replace": "  tiebreak: \"score.needsDecision.waiting\",",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "N2 \\(fix round 2\\): an official on a chess TIE-BREAK"
+      }
+    ]
+  },
+  {
+    "id": "r2-n2-console-passes-note-cause",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "        <HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} />",
+    "replace": "        <HeldNote msg={msg} cause=\"level\" />",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "N2 \\(fix round 2\\): an official on a chess TIE-BREAK"
+      }
+    ]
+  },
+  {
+    "id": "rR-m7a-empty-card-shown",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "${consoleScoringEmpty ? \" hidden\" : consoleScoringEmptyOnPhone ? \" max-md:hidden\" : \"\"}",
+    "replace": "${consoleScoringEmptyOnPhone ? \" max-md:hidden\" : \"\"}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "loop R M7\\(a\\)"
+      }
+    ]
+  },
+  {
+    "id": "rR-m7a-stream-keeps-card",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "  const consoleScoringEmpty = consoleScoringEmptyOnPhone && !stream && !canHandOver;",
+    "replace": "  const consoleScoringEmpty = consoleScoringEmptyOnPhone && !canHandOver;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "loop R M7\\(a\\)"
+      }
+    ]
+  },
+  {
+    "id": "rR-m7d-meta-own-line",
+    "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+    "find": "${held ? \" max-md:basis-full\" : \"\"}",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "loop R M7\\(d\\)"
+      }
+    ]
+  }
+]

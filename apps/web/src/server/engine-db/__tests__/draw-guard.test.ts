@@ -108,7 +108,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("knockout draw guard (PROMPT-61)", () => {
-  it("rejects finalizing a level generic knockout fixture and leaves the ledger untouched", async () => {
+  it("GN-KO-1: a level generic knockout result is refused LEVEL_RESULT_IN_BRACKET (enter the winner) and leaves the ledger untouched", async () => {
     const s = await seedFixture({ sport: "generic", stageKind: "knockout" });
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
     await expect(
@@ -116,7 +116,7 @@ describe.skipIf(!HAS_DB)("knockout draw guard (PROMPT-61)", () => {
         type: "generic.result",
         payload: { p1Score: 1, p2Score: 1 },
       }),
-    ).rejects.toMatchObject({ code: "DRAW_NOT_ALLOWED" });
+    ).rejects.toMatchObject({ code: "LEVEL_RESULT_IN_BRACKET" });
     expect(await eventCount(s.fixtureId)).toBe(1); // the drawing event never landed
 
     const [fixture] = await sql<{ status: string; outcome: unknown }[]>`
@@ -136,7 +136,7 @@ describe.skipIf(!HAS_DB)("knockout draw guard (PROMPT-61)", () => {
     expect(r.status).toBe("decided");
   });
 
-  it("rejects a level football knockout full-time when no decider is configured", async () => {
+  it("X-BR-2: holds a level football knockout full-time as needs_decision when no decider is configured (never DRAW_NOT_ALLOWED)", async () => {
     const s = await seedFixture({ sport: "football", stageKind: "knockout" });
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
     await appendEvent(s.orgId, s.fixtureId, 1, {
@@ -151,13 +151,14 @@ describe.skipIf(!HAS_DB)("knockout draw guard (PROMPT-61)", () => {
       type: "football.goal",
       payload: { by: s.away, minute: 71 },
     });
-    await expect(
-      appendEvent(s.orgId, s.fixtureId, 4, {
-        type: "football.period",
-        payload: { phase: "FT" },
-      }),
-    ).rejects.toMatchObject({ code: "DRAW_NOT_ALLOWED" });
-    expect(await eventCount(s.fixtureId)).toBe(4);
+    const ft = await appendEvent(s.orgId, s.fixtureId, 4, {
+      type: "football.period",
+      payload: { phase: "FT" },
+    });
+    // Ruling 79: accepted and HELD — the level result is the record, nobody advances until the organiser settles.
+    expect(ft.outcome).toEqual({ kind: "draw" });
+    expect(ft.status).toBe("needs_decision");
+    expect(await eventCount(s.fixtureId)).toBe(5);
   });
 
   it("a knockout STAGE config shootout:true routes a level FT into the shootout, not a draw", async () => {

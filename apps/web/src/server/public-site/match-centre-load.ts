@@ -424,16 +424,17 @@ export async function loadMatchCentre(
   }));
   const events = resolveVoids(envelopes);
 
-  const rawCfg = resolveFixtureCfg(
-    configRows.fixture?.config_snapshot,
-    configRows.division?.config,
-    configRows.stage?.config,
-  );
-
   const sportModule =
     ctx.division.moduleVersion !== null
       ? resolveModule(ctx.division.sportKey, ctx.division.moduleVersion)
       : resolveLatestModule(ctx.division.sportKey);
+  // W2a: the stage row carries its kind, so a bracket fixture gets the sport's deciders (fixture-cfg.ts).
+  const rawCfg = resolveFixtureCfg(
+    configRows.fixture?.config_snapshot,
+    configRows.division?.config,
+    configRows.stage,
+    sportModule,
+  );
   // Resolved module's own configSchema — "the same cfg the pad scored
   // with" (contract notes), normalising a frozen snapshot taken under an
   // older schema version rather than trusting the raw jsonb shape as-is.

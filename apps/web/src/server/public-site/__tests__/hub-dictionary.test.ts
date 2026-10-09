@@ -79,6 +79,8 @@ export const W2_KEYS = [
   // also fine right up until it was not. Final review C7.
   "matchCentre.status.abandoned", "matchCentre.status.cancelled", "matchCentre.status.forfeited",
   "matchCentre.status.postponed", "matchCentre.status.walkover", "matchCentre.status.other",
+  // W2a: STATUS_LINE_KEYS gains `needs_decision` (a held bracket fixture), so the builder can emit it.
+  "matchCentre.status.needs_decision",
   // NO `matchesHub.startsAt`. It was `"{when}"` — byte-identical in all four
   // locales, because a template that is nothing but its own argument cannot
   // differ by locale. A dictionary round trip that returns its input is not a

@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "expected": 77,
+  "read": 2897,
+  "found": 77,
+  "works": 69,
+  "pinnedRed": [
+    {
+      "caseId": "double_elim|boardgame|blitz|R4",
+      "now": "CD-T13",
+      "wave": "W2b"
+    },
+    {
+      "caseId": "knockout_third_place|boardgame|blitz|R4",
+      "now": "CD-T13",
+      "wave": "W2b"
+    },
+    {
+      "caseId": "knockout|boardgame|blitz|R4",
+      "now": "CD-T13",
+      "wave": "W2b"
+    },
+    {
+      "caseId": "ko_plate|boardgame|blitz|F1",
+      "now": "FX-G14",
+      "wave": "W4"
+    },
+    {
+      "caseId": "ko_plate|boardgame|blitz|R4",
+      "now": "CD-T13",
+      "wave": "W2b"
+    },
+    {
+      "caseId": "qualifying_main|boardgame|blitz|R4",
+      "now": "CD-T13",
+      "wave": "W2b"
+    }
+  ],
+  "greened": [],
+  "unexpectedRed": [
+    {
+      "caseId": "page_playoff_only|generic|score|M1",
+      "state": "red",
+      "reason": "life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)"
+    },
+    {
+      "caseId": "swiss_playoff|generic|score|R4",
+      "state": "red",
+      "reason": "I4-nothing-ends-stuck: stage 1: round 5 paired nobody (SW-H1); life-bracket-decider-exercised: 1 bracket stage(s) and no decider posted (0 settles, 0 tie-breaks); life-loop-bounded: play loop exited empty_pair_round"
+    }
+  ],
+  "wrongReason": [],
+  "exit": 1
+}

@@ -47,7 +47,7 @@ import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/
 import { EXIT, NOTES_CAP, PlanStageCapTooLow, SETS, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, planOf, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type DbFactories, type PlanCases, type PlanLayers, type RunDeps } from "../run.ts";
 import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
-import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
+import { FakeDeniedDriver, FakeKnockoutDriver, FakeLeagueDriver } from "./fake-driver.ts";
 import { ALL_GATES, deps, fakeBrowserRun, type Deps } from "./run-deps.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -2361,7 +2361,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(opened()).toBe(1);
   }, 120_000);
 
-  it("--layer L2 --scope grid, through the real planner and runner: 1,731 runs at their own widths — 62 driven, 164 🚫, 1,505 ░ — each recording the pair-run it is", async () => {
+  it("--layer L2 --scope grid, through the real planner and runner: 1,729 runs at their own widths — 62 driven, 164 🚫, 1,503 ░ — each recording the pair-run it is", async () => {
     capture();
     const dir = dirFor();
     const { d, reads } = gridDeps();
@@ -2370,10 +2370,11 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(r.cases).toHaveLength(RAW_RUNS.length);
     expect(r.cases.every((c) => c.layer === "L2" && c.l2 !== undefined)).toBe(true);
     expect(new Set(r.cases.map((c) => c.l2!.n)).size).toBe(RAW_RUNS.length);
+    // X-DR-1 (W2a): 1,731 -> 1,729 runs; driven 62 and 🚫 164 unchanged, ░ 1,503 (layers-grid.test.ts:183).
     expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(62);
     expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(164);
-    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1505);
-    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(164 + 1505);
+    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1503);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(164 + 1503);
     // Only the driven runs' sports were asked for: a planned run posts nothing.
     expect(reads.length).toBeGreaterThan(0);
     expect(reads.length).toBeLessThan(SPORT_KEYS.length + 1);
@@ -3005,6 +3006,27 @@ describe("runSlice — --only on a catalogue cell outside the slice, and --set w
     expect(d.orgs).toHaveLength(4);
     const raw = JSON.parse(readFileSync(join(dir, "c2", "results.json"), "utf8")) as RunResults;
     expect(raw.plan).toBe(`--set ${W1_DRIVING_SET} --only league|cricket --scenario LIFECYCLE`);
+  });
+  it("W2a: --set w1-driving --scenario <bracket-finish key> runs the opt-in scenario end to end on a knockout fake, and the plan records the filters", async () => {
+    capture();
+    const dir = dirFor();
+    const d = deps({ driverFor: () => new FakeKnockoutDriver() });
+    d.openDb = catalogueOrder(deps());
+    expect(await runSlice(d, ["--set", W1_DRIVING_SET, "--only", "knockout|boardgame", "--scenario", "BRACKET_TIEBREAK", "--run-id", "w2a1", "--report-dir", dir])).toBe(0);
+    const r = resultsIn(dir, "w2a1");
+    expect(r.cases.map((c) => c.caseId)).toEqual([`knockout|boardgame|${offlineBuilderDefault("boardgame")}|BRACKET_TIEBREAK`]);
+    expect(r.cases.map((c) => c.state)).toEqual(["works"]);
+    const own = r.cases[0]!.checks.find((c) => c.id === "w2a-every-match-tiebroken");
+    expect(own).toMatchObject({ verdict: "pass" });
+    expect(own!.checked).toBeGreaterThan(0);
+    expect((JSON.parse(readFileSync(join(dir, "w2a1", "results.json"), "utf8")) as RunResults).plan).toBe(`--set ${W1_DRIVING_SET} --only knockout|boardgame --scenario BRACKET_TIEBREAK`);
+  });
+  it("W2a: a bracket-finish key the SLICE does not hold is still refused outside w1-driving (the slice's keys are the four), before the DB", async () => {
+    const io = capture();
+    const d = deps({ env: { SMOKE_BASE: "http://localhost:3999" } });
+    expect(await runSlice(d, ["--scenario", "BRACKET_TIEBREAK", "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toMatch(/UnknownFilter: slice: unknown --scenario 'BRACKET_TIEBREAK'/);
   });
   it("a slice cell still plans exactly as before: the same 4 ids, generic's and badminton's orders read", async () => {
     capture();

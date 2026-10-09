@@ -56,6 +56,8 @@ describe("FixtureConsole SSR determinism", () => {
           },
         ]}
         canEdit={false}
+        canOrganise={false}
+        stageKind={null}
         viewerPlan="community"
       />,
     );

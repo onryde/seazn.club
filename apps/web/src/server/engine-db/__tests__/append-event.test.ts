@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { football } from "@seazn/engine/sports/football";
-import { foldMatch } from "@seazn/engine/core";
+import { foldMatchWithStoppage } from "@seazn/engine/core";
 import { sql, withTenant } from "@/lib/db";
 import { appendEvent } from "../index";
 import { appendEventInTx } from "../append-event";
@@ -23,18 +23,19 @@ import { appendEventInTx } from "../append-event";
 // F10 (R3.5 review) — the fold's catch only instrumented the EngineError
 // (422) case; a TypeError/RangeError from inside a sport module, or a Zod
 // issue surfacing as a plain Error, re-threw with NOTHING logged. Proving
-// that deterministically needs a non-EngineError thrown FROM `foldMatch`
-// itself. Real sport-module internals that happen to crash today are out of
+// that deterministically needs a non-EngineError thrown FROM the fold
+// itself (`foldMatchWithStoppage` since W2a: append-event reads the settle
+// beside module state through `outcomeOf`). Real sport-module internals that happen to crash today are out of
 // this task's lane (packages/engine/**) and would make the test depend on
 // incidental engine behaviour rather than on append-event.ts's own catch, so
-// this wraps the imported `foldMatch` instead. `importActual` keeps every
-// OTHER export (EngineError, resolveVoids, …) real, and `foldMatch` itself
+// this wraps the imported `foldMatchWithStoppage` instead. `importActual` keeps every
+// OTHER export (EngineError, resolveVoids, …) real, and the fold itself
 // defaults to the real implementation — every test in this file still folds
 // for real — except the one call in K8 below that overrides it with
 // `mockImplementationOnce`.
 vi.mock("@seazn/engine/core", async () => {
   const actual = await vi.importActual<typeof import("@seazn/engine/core")>("@seazn/engine/core");
-  return { ...actual, foldMatch: vi.fn(actual.foldMatch) };
+  return { ...actual, foldMatchWithStoppage: vi.fn(actual.foldMatchWithStoppage) };
 });
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -169,7 +170,7 @@ beforeEach(() => {
 afterEach(() => {
   // K8's mockImplementationOnce is self-clearing after one call, but guard
   // against a failed assertion leaving it queued for the NEXT test anyway.
-  vi.mocked(foldMatch).mockClear();
+  vi.mocked(foldMatchWithStoppage).mockClear();
 });
 
 describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
@@ -196,7 +197,7 @@ describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
 
     // A second core.start replays [core.start, core.start] through the fold —
     // every module refuses a double start with WRONG_PHASE, thrown from
-    // INSIDE foldMatch, which is exactly the scope Task K's try/catch covers.
+    // INSIDE the fold, which is exactly the scope Task K's try/catch covers.
     await expect(
       appendEvent(s.orgId, s.fixtureId, 1, { type: "core.start", payload: {} }),
     ).rejects.toMatchObject({ code: "WRONG_PHASE" });
@@ -216,7 +217,7 @@ describe.skipIf(!HAS_DB)("appendEvent logging (R3.5 Task K)", () => {
   it("K8 (F10, R3.5 review): a non-EngineError from the fold is logged with ID-only fields, and re-thrown UNCHANGED", async () => {
     const s = await seed();
     const boom = new TypeError("cannot read properties of undefined (reading 'x')");
-    vi.mocked(foldMatch).mockImplementationOnce(() => {
+    vi.mocked(foldMatchWithStoppage).mockImplementationOnce(() => {
       throw boom;
     });
 
@@ -443,6 +444,34 @@ function sourceFilesUnder(dir: string, exts: string[]): string[] {
   }
   return out;
 }
+
+describe.skipIf(!HAS_DB)("firstResult and the held status (W2a T8, spec §5.4.4)", () => {
+  it("X-BR-2: a held fixture does not count as a first result; its settle does", async () => {
+    // Football with no extra time and no shootout: a 0–0 full time in a KNOCKOUT is a level result with no decider,
+    // held as needs_decision (ruling 79). The witness is the "fixture decided" line — the one consumer of
+    // firstResult this file can observe (PostHog's capture reads the same value, append-event.ts).
+    const s = await seedFootball(football.configSchema.parse({ extraTime: { enabled: false, halfMinutes: 15 }, shootout: false }));
+    await sql`update stages set kind = 'knockout' where id = ${s.stageId}`;
+    let seq = 0;
+    const post = async (type: string, payload: unknown) => {
+      const r = await appendEvent(s.orgId, s.fixtureId, seq, { type, payload });
+      seq += 1;
+      return r;
+    };
+    await post("core.start", {});
+    await post("football.period", { phase: "HT" });
+    lines.length = 0;
+    const ft = await post("football.period", { phase: "FT" });
+    expect(ft.status).toBe("needs_decision");
+    expect(linesNamed("fixture decided")).toHaveLength(0); // held: not a result yet
+    lines.length = 0;
+    const settled = await post("core.settle", { winner: s.home, method: "organiser" });
+    expect(settled.status).toBe("decided");
+    const decided = linesNamed("fixture decided");
+    expect(decided).toHaveLength(1); // the settle IS the first result, though fixture.outcome was already set
+    expect(decided[0]).toMatchObject({ fixtureId: s.fixtureId, kind: "win", method: "settled_organiser" });
+  });
+});
 
 describe("no logger outside the sanctioned funnel (R3.5 Task K, K6/K7)", () => {
   it("K6: no v3 skin imports @/server/** (a client-component build failure tsc cannot see)", () => {

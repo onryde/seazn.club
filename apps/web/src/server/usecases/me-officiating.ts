@@ -76,7 +76,7 @@ export interface MyBlackout {
 export interface MyOfficiating {
   /** The signed-in person is linked to at least one officials row. */
   is_official: boolean;
-  /** Outstanding duties: still scheduled or in_play (any date). */
+  /** Outstanding duties: still scheduled, in_play or held for a decision (any date). */
   assignments: MyOfficiatingAssignment[];
   /** Finished matches (decided/finalized/abandoned/forfeited/cancelled), most
    *  recent first — surfaced behind a "completed" disclosure in the lane. */
@@ -129,7 +129,10 @@ export async function getMyOfficiating(userId: string): Promise<MyOfficiating> {
       -- floor: a match still 'scheduled' or 'in_play' is a pending duty even if
       -- its scheduled time has already passed (an in_play match must always
       -- show). A previous scheduled_at-in-the-future filter wrongly hid these.
-      and f.status in ('scheduled', 'in_play')
+      -- W2a (ruling D-F3): a HELD fixture (needs_decision) is assigned and not finished — played level, waiting for
+      -- the organiser's settle — so it stays here; FINISHED_STATUSES never holds it, and without this arm it was in
+      -- neither list.
+      and f.status in ('scheduled', 'in_play', 'needs_decision')
     order by f.scheduled_at nulls last, f.id, fo.role_key
     limit 100`;
 

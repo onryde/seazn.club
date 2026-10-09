@@ -15,6 +15,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { sql } from "@/lib/db";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { log } from "@/server/logger";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
 import { pairPresentPhone } from "@/server/relay/__tests__/_session-rig";
@@ -354,23 +355,27 @@ describe.skipIf(!HAS_DB)("automatic stop — the predicate through the use-case 
 
 // ---------------------------------------------------------------------------------------------------------------------
 describe.skipIf(!HAS_DB)("automatic stop — every fixture status the database admits (test 3b: another status, a withdrawal, a void)", () => {
-  // The two lists are the DATABASE's declarations: the status check constraint, and the finished set in V430's trigger.
+  // The vocabulary is the DATABASE's own (the status check constraint), held to the app's one list (FIXTURE_STATUSES).
+  // The finished set is spec §3's "finished" row (the design of record, amended by controller ruling D-M1 on
+  // 2026-10-09: W2a's held needs_decision is finished, no play remains) — never the trigger or the sweep under test.
   const declaredStatuses = async (): Promise<string[]> => {
     const [c] = await sql<{ def: string }[]>`select pg_get_constraintdef(oid) as def from pg_constraint where conname = 'fixtures_status_check'`;
     return [...c!.def.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]!);
   };
   const finishedStatuses = (): string[] => {
-    const sqlText = readFileSync(resolve(import.meta.dirname, "../../../../../../db/migration/deltas/V430__capture_stream_codes.sql"), "utf8");
-    const list = /if new\.status in \(([^)]*)\) then/.exec(sqlText)![1]!;
-    return [...list.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
+    const spec = readFileSync(resolve(import.meta.dirname, "../../../../../../docs/superpowers/specs/2026-10-01-capture-qr-v2-design.md"), "utf8");
+    const row = /^\| \*\*finished\*\* \| A fixture status in \{([^}]*)\}/m.exec(spec)?.[1] ?? "";
+    return [...row.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]!);
   };
 
-  it("every FINISHED status (decided, finalized, forfeited, abandoned, cancelled) arms the stop at finished_at + delay; scheduled and in_play never do — 7 statuses", async () => {
+  it("every FINISHED status (spec §3: decided, finalized, forfeited, abandoned, cancelled and, by ruling D-M1, needs_decision) arms the stop at finished_at + delay; scheduled and in_play never do — every status the constraint admits", async () => {
     const all = await declaredStatuses();
     const finished = finishedStatuses();
-    expect(all.length, "PREMISE: the constraint admits 7 statuses").toBe(7);
-    expect(finished.length, "PREMISE: five are finished").toBe(5);
+    expect([...all].sort(), "PREMISE: the constraint admits exactly FIXTURE_STATUSES").toEqual([...FIXTURE_STATUSES].sort());
+    expect(finished.length, "PREMISE: spec §3's finished row was read").toBeGreaterThan(0);
+    expect(finished, "ruling D-M1: a held fixture arms the stop").toContain("needs_decision");
     expect(finished.every((st) => all.includes(st))).toBe(true);
+    expect(all.filter((st) => !finished.includes(st)).sort(), "PREMISE: the rest is exactly the open pair").toEqual(["in_play", "scheduled"]);
     let checked = 0;
     for (const status of all) {
       const { r, sid } = await liveRig();
@@ -716,5 +721,42 @@ describe.skipIf(!HAS_DB)("automatic stop — a composed (runner) session ends th
     const s = await sessionOf(sid);
     expect(["ending", "completed"], s.state).toContain(s.state);
     expect(s.end_reason).toBe("auto_stopped");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("the organiser's poll names a HELD fixture before the stop it arms (W2a loop R, M2)", () => {
+  // Ruling D-M1 arms the automatic stop on a held `needs_decision` fixture, and the Phone tab's chip ("Match decided —
+  // still streaming") read decided/finalized only: the organiser had no warning before the stop. A held fixture is not
+  // decided (its winner awaits the settle), so it gets its own flag, never `fixtureDecided`. The vocabulary is the app's
+  // one list; the two chip sets are named by the status they read.
+  it("every status the app declares: fixtureHeld iff needs_decision, fixtureDecided iff decided or finalized — one rig, each status in turn", async () => {
+    const { r } = await liveRig();
+    let checked = 0;
+    for (const status of FIXTURE_STATUSES) {
+      await setStatus(r.fixtureId, status);
+      const view = await currentSession(r.auth, r.fixtureId, r.deps);
+      expect(view?.state, `${status}: PREMISE — the session is still live at this instant`).toBe("live");
+      expect({ held: view!.fixtureHeld, decided: view!.fixtureDecided }, status).toEqual({
+        held: status === "needs_decision",
+        decided: status === "decided" || status === "finalized",
+      });
+      checked++;
+    }
+    expect(checked).toBe(FIXTURE_STATUSES.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("the sequence: in play → held → settled (decided) flips the flag from held to decided, never both", async () => {
+    const { r } = await liveRig();
+    const read = async () => {
+      const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      return { held: v.fixtureHeld, decided: v.fixtureDecided };
+    };
+    expect(await read()).toEqual({ held: false, decided: false });
+    await setStatus(r.fixtureId, "needs_decision");
+    expect(await read()).toEqual({ held: true, decided: false });
+    await setStatus(r.fixtureId, "decided");
+    expect(await read()).toEqual({ held: false, decided: true });
   });
 });

@@ -346,7 +346,7 @@ describe("fixture console phone classes — the empty scoring section hides itse
   };
   const side = (id: string, name: string): SideInfo => ({ id, name, members: [], lineup: [] });
 
-  function consoleHtml(over: { status: string; outcome: unknown }): string {
+  function consoleHtml(over: { status: string; outcome: unknown; deviceHandover?: boolean }): string {
     const live: LiveState = {
       status: over.status,
       last_seq: 1,
@@ -363,6 +363,9 @@ describe("fixture console phone classes — the empty scoring section hides itse
         initialState={live}
         initialEvents={[]}
         canEdit
+        canOrganise
+        stageKind={null}
+        deviceHandover={over.deviceHandover ?? false}
         recorderNames={{}}
         audit={null}
         scorePadV2={{
@@ -370,6 +373,7 @@ describe("fixture console phone classes — the empty scoring section hides itse
           resolvedConfig: CFG,
           initialEvents: [],
           entitlements: {},
+          stageKind: null,
           identity: { recordedBy: "user-1", deviceLinkId: null },
         }}
         viewerPlan="community"
@@ -377,13 +381,26 @@ describe("fixture console phone classes — the empty scoring section hides itse
     );
   }
 
-  it("decided + started: the section still RENDERS (audit/void history lives beside it) but is max-md:hidden", () => {
+  // Loop R M7(a) re-pin: with no Remote scoring button and no Stream either, the md+ header row holds only the
+  // "Scoring" heading, so the card is empty at EVERY width and is `hidden` (a superset of the phone-only class this test
+  // first pinned). The phone-only branch stays, and is pinned on the case that still needs it: the md+ button.
+  const tokens = (html: string) => /<section class="([^"]*)" data-role="console-scoring">/.exec(html)?.[1]?.split(/\s+/) ?? null;
+  it("decided + started, nothing in the card at any width: the section still RENDERS (audit/void history lives beside it) but is hidden at every width", () => {
     const html = consoleHtml({ status: "decided", outcome: { kind: "win", winner: "e-home" } });
-    const section = html.match(/<section class="[^"]*" data-role="console-scoring">/);
+    const section = tokens(html);
     expect(section, "the section is gone entirely, not just hidden").not.toBeNull();
-    expect(section![0]).toMatch(/class="[^"]*\bmax-md:hidden\b/);
-    // and it is genuinely empty on a phone: no header text, no pad
+    expect(section).toContain("hidden");
+    // and it is genuinely empty: no pad, no Remote scoring button
     expect(html).not.toContain('data-testid="score-pad"');
+    expect(html).not.toContain('data-role="device-handover"');
+  });
+
+  it("decided + started WITH the Remote scoring button (md+ only): hidden on a phone only — max-md:hidden, never hidden", () => {
+    const html = consoleHtml({ status: "decided", outcome: { kind: "win", winner: "e-home" }, deviceHandover: true });
+    const section = tokens(html);
+    expect(html, "premise: the md+ button renders").toContain('data-role="device-handover"');
+    expect(section).toContain("max-md:hidden");
+    expect(section).not.toContain("hidden");
   });
 
   it("in_play + not decided: the section is visible on phones (the pad itself renders inside it)", () => {

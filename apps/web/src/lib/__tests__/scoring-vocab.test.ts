@@ -6,14 +6,17 @@ import {
   decidedOutcomeText, shootoutScoreFromDetail, decidedOutcomeTemplates, renderDecidedOutcome,
   EVENT_KEY, ENUM_VOCAB, ENGINE_ERROR_KEY, POSITION_KEY, PAD_LABEL_KEYS,
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
+  SETTLE_METHOD_IDS, TIEBREAK_RUNG_IDS, settledMethodId,
 } from "@/lib/scoring-vocab";
 import { interpolate } from "@/lib/i18n-runtime";
 import { matchRef } from "@/lib/slot-label";
 import { buildRibbon, ribbonKeyFor, CORE_RIBBON_KEY } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
-import { CORE_EVENT_SCHEMAS, EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
+import { CORE_EVENT_SCHEMAS, EngineErrorCode, matchPositionOf, SquadRole, SETTLE_METHODS as ENGINE_SETTLE_METHODS, settledMethod as engineSettledMethod } from "@seazn/engine/core";
+import { TIEBREAK_RUNGS as ENGINE_TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { buildStream, defaultLineupPair } from "@seazn/engine/testkit";
 import uiEn from "@/dictionaries/en/ui.json";
+import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
@@ -274,6 +277,9 @@ function declaredPositionKeys(): { keys: Set<string>; projecting: number } {
 interface PadModule {
   key: string;
   variants?: Record<string, Record<string, unknown>>;
+  // W2a (spec §5.2) — the cfg overlay a BRACKET stage applies. Part of the cfg space: boardgame's tie-break panel
+  // exists only under it (`tiebreak` is optional with no default, so the boolean leaf walk below never reaches it).
+  bracketDeciders?: (cfg: unknown) => Record<string, unknown>;
   configSchema?: { safeParse(value: unknown): { success: boolean; data?: unknown } };
   padSpec?: (cfg: unknown) => {
     panels: readonly {
@@ -350,6 +356,7 @@ function declaredPadLabels(): Map<string, { label: string; sport: string }> {
     for (const base of bases) {
       const parsed = configSchema.safeParse({ ...base });
       if (!parsed.success) continue;
+      if (sport.bracketDeciders) cfgs.push({ ...(parsed.data as Json), ...sport.bracketDeciders(parsed.data) });
       for (const [id, values] of leaves) {
         for (const value of values) {
           cfgs.push(deepMerge(parsed.data as Json, setPath({}, id.split("."), value)));
@@ -391,6 +398,7 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
       "pad.football.panel.shootout", // needs a non-null shootout cfg
       "pad.generic.panel.draw", // needs allowDraws: true
       "pad.badminton.action.timeout", // needs records.timeouts: true (BWF has none by default)
+      "pad.boardgame.panel.tiebreak", // needs the bracket overlay (bracketDeciders, BG-KO-1)
     ]) {
       expect([...declared.keys()], `cfg-space walk never produced "${key}"`).toContain(key);
     }
@@ -406,6 +414,28 @@ describe("scoring-vocab covers every PadSpec label key the engine declares (#427
         expect(dict, `missing ${locale} copy for pad label "${key}" ("${label}")`).toHaveProperty(key);
       }
     }
+  });
+
+  it("ruling D-C4: the bracket-only boardgame labels render as each locale's copy, never the engine's English or the raw dotted key", () => {
+    // Derived: the labels padSpec emits under the bracket overlay and under no division cfg. padLabel serves a key it
+    // does not hold as the engine's baked English, so fr/es/nl witness a missing PAD_LABEL_KEYS entry; en cannot.
+    const bg = builtinModules.find((m) => m.key === "boardgame")!;
+    const labelsOf = (cfg: unknown) => bg.padSpec!(cfg as never).panels.flatMap((p) => [p.labelKey, ...p.actions.map((a) => a.labelKey)]);
+    const division = bg.configSchema.parse({});
+    const divisionKeys = new Set(labelsOf(division).map((l) => l.key));
+    const bracketOnly = labelsOf({ ...(division as object), ...bg.bracketDeciders(division as never) }).filter((l) => !divisionKeys.has(l.key));
+    expect(bracketOnly.map((l) => l.key).sort()).toEqual(["pad.boardgame.action.tiebreak", "pad.boardgame.panel.tiebreak"]);
+    let checked = 0;
+    for (const { key, label } of bracketOnly) {
+      for (const [locale, dict] of Object.entries(LOCALES)) {
+        const shown = padLabel(key, (k) => dict[k] ?? "", label);
+        expect(shown, `${locale} ${key}`).toBe(dict[key]);
+        expect(shown, `${locale} ${key}`).not.toBe(key);
+        if (locale !== "en") expect(shown, `${locale} ${key} shows the engine's English`).not.toBe(label);
+        checked++;
+      }
+    }
+    expect(checked).toBe(bracketOnly.length * Object.keys(LOCALES).length);
   });
 
   it("declares no key the engine cannot emit (the list does not rot the other way)", () => {
@@ -795,7 +825,8 @@ describe("scoring-vocab covers what the engine declares", () => {
     expect([...enums.keys()].sort()).toEqual(
       // S4 (#428) — `offence` joined this list: FootballPenalty.offence, the
       // Law 12 offence that conceded the kick.
-      ["color", "elected", "kind", "level", "method", "offence", "outcome", "phase", "reason", "receiverSide"],
+      // W2a — `rung` joined it: BoardgameTiebreak.rung (BG-KO-1).
+      ["color", "elected", "kind", "level", "method", "offence", "outcome", "phase", "reason", "receiverSide", "rung"],
     );
     // W4a's own additions, one per sport that grew an enum.
     expect([...(enums.get("method") ?? [])]).toEqual(
@@ -896,6 +927,48 @@ describe("scoring-vocab covers what the engine declares", () => {
     for (const code of EngineErrorCode.options) {
       expect(ENGINE_ERROR_KEY, `no copy for EngineErrorCode ${code}`).toHaveProperty([code]);
     }
+  });
+
+  it("M-1: LEVEL_RESULT_IN_BRACKET reads its reason — the finalize refusal asks for a settle, the generic draw for the winner, in every locale", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const m: MsgFn = (k) => dict[k]!;
+      const draw = engineErrorLabel("LEVEL_RESULT_IN_BRACKET", m, LEVEL_RESULT_REASON.genericDraw);
+      const fin = engineErrorLabel("LEVEL_RESULT_IN_BRACKET", m, LEVEL_RESULT_REASON.finalizeUnsettled);
+      expect(draw, `${locale} generic draw`).toBe(dict["engineError.LEVEL_RESULT_IN_BRACKET"]);
+      expect(fin, `${locale} finalize`).toBe(dict["engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled"]);
+      expect(fin, `${locale}: two refusals, two sentences`).not.toBe(draw);
+      expect(typeof fin === "string" && fin.length > 0, locale).toBe(true);
+      // The empty case: no reason (an older server) or an unknown one reads the code's own copy.
+      expect(engineErrorLabel("LEVEL_RESULT_IN_BRACKET", m), locale).toBe(draw);
+      expect(engineErrorLabel("LEVEL_RESULT_IN_BRACKET", m, "made_up"), locale).toBe(draw);
+      // The console and the device pad resolve through scoringErrorText with the envelope's extras.
+      expect(scoringErrorText("LEVEL_RESULT_IN_BRACKET", "raw", m, "score.failed", { reason: "finalize_unsettled" }), locale).toBe(fin);
+      // A reason on another code changes nothing.
+      expect(engineErrorLabel("WRONG_PHASE", m, "finalize_unsettled"), locale).toBe(dict["engineError.WRONG_PHASE"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("D-R8: SETTLE_NOT_APPLICABLE for a withdrawn winner says so in every locale; every other settle refusal keeps the code's own copy", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const m: MsgFn = (k) => dict[k]!;
+      const generic = dict["engineError.SETTLE_NOT_APPLICABLE"];
+      const withdrawn = dict["engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn"];
+      expect(typeof withdrawn === "string" && withdrawn.length > 0, `${locale} has the copy`).toBe(true);
+      expect(withdrawn, `${locale}: two refusals, two sentences`).not.toBe(generic);
+      expect(engineErrorLabel("SETTLE_NOT_APPLICABLE", m, "withdrawn"), locale).toBe(withdrawn);
+      // The console's settle dialog and the device pad resolve through scoringErrorText with the envelope's extras.
+      expect(scoringErrorText("SETTLE_NOT_APPLICABLE", "raw", m, "score.failed", { reason: "withdrawn" }), locale).toBe(withdrawn);
+      // The positive pair: no reason, the not-a-bracket reason, or an unknown one reads the code's own copy.
+      expect(engineErrorLabel("SETTLE_NOT_APPLICABLE", m), locale).toBe(generic);
+      expect(engineErrorLabel("SETTLE_NOT_APPLICABLE", m, "not_bracket"), locale).toBe(generic);
+      expect(scoringErrorText("SETTLE_NOT_APPLICABLE", "raw", m, "score.failed", {}), locale).toBe(generic);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("resolves the new W4a vocabulary against the real en dictionary", () => {
@@ -1227,5 +1300,22 @@ describe("shootoutScoreFromDetail — narrows ScoreSummary.detail without an eng
     expect(shootoutScoreFromDetail(undefined)).toBeNull();
     expect(shootoutScoreFromDetail("nope")).toBeNull();
     expect(shootoutScoreFromDetail({ shootout: { home: "3", away: 0 } })).toBeNull();
+  });
+});
+
+// W2a fix round 1 (M4): the decider tuples are RESTATED in scoring-vocab.ts (a value import put the boardgame module
+// into the public live-score chunk). Pinned here against the engine's own declarations — never a table typed into the
+// test — so a fourth settle method or rung reds this file instead of shipping the plain sentence.
+describe("the restated decider tuples equal the engine's (M4)", () => {
+  it("settle methods, the settled-method namer and the tie-break rungs are the engine's, in its order", () => {
+    expect([...SETTLE_METHOD_IDS]).toEqual([...ENGINE_SETTLE_METHODS]);
+    expect([...TIEBREAK_RUNG_IDS]).toEqual([...ENGINE_TIEBREAK_RUNGS]);
+    let checked = 0;
+    for (const m of ENGINE_SETTLE_METHODS) {
+      expect(settledMethodId(m), m).toBe(engineSettledMethod(m));
+      checked++;
+    }
+    expect(checked).toBe(ENGINE_SETTLE_METHODS.length);
+    expect(checked).toBeGreaterThan(0);
   });
 });

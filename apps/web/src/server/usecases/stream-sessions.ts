@@ -2035,6 +2035,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     replayUrl: fx?.stream_url ?? null,
     target: { id: target!.id, kind: target!.kind, label: target!.label },
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
+    fixtureHeld: fx?.status === "needs_decision",
     endReason: row.end_reason,
     creditUsed: spend!.net < 0,
     // I-1 + W23 (T6b, A9(a)): admission's own question, on admission's own clock (startBroadcast asks `restartAllowance`

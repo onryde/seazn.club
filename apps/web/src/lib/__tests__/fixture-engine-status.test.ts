@@ -4,11 +4,14 @@
 // the third); a copy that drifts lets the standings fold and the qualification
 // status disagree about whether a match counts as played. The table is pinned
 // whole, so a changed row reds here before it reds in a standings suite.
+// W2a: the default now THROWS (finding 18), so an unknown status is a loud
+// failure rather than an unplayed match.
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../fixture-engine-status";
+import { FIXTURE_STATUSES } from "../fixture-status";
 
 describe("engineFixtureStatus — DB fixtures.status → engine FixtureStatus", () => {
-  it("maps every DB status the fixtures table writes", () => {
+  it("maps every DB status the fixtures table writes (the table is held to FIXTURE_STATUSES)", () => {
     const table: Record<string, string> = {
       scheduled: "scheduled",
       in_play: "in_play",
@@ -17,11 +20,20 @@ describe("engineFixtureStatus — DB fixtures.status → engine FixtureStatus", 
       forfeited: "walkover",
       abandoned: "void",
       cancelled: "void",
+      // W2a (finding 18): held — played, not finished, nobody seated; open to the fold.
+      needs_decision: "in_play",
     };
-    for (const [db, engine] of Object.entries(table)) expect(engineFixtureStatus(db), db).toBe(engine);
+    expect(Object.keys(table).sort()).toEqual([...FIXTURE_STATUSES].sort());
+    let checked = 0;
+    for (const db of FIXTURE_STATUSES) {
+      expect(engineFixtureStatus(db), db).toBe(table[db]);
+      checked++;
+    }
+    expect(checked).toBe(FIXTURE_STATUSES.length);
   });
-  it("an unknown status reads as unplayed, never as settled", () => {
-    expect(engineFixtureStatus("postponed")).toBe("scheduled");
-    expect(engineFixtureStatus("")).toBe("scheduled");
+  it("needs_decision maps to in_play, and an unknown status throws (never a silent \"scheduled\")", () => {
+    expect(engineFixtureStatus("needs_decision")).toBe("in_play");
+    expect(() => engineFixtureStatus("postponed")).toThrow(/unknown fixtures.status "postponed"/);
+    expect(() => engineFixtureStatus("")).toThrow(/unknown fixtures.status ""/);
   });
 });

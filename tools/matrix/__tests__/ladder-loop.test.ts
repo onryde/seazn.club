@@ -12,7 +12,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { StageKind } from "@seazn/engine/core";
+import { SETTLE_METHODS, StageKind } from "@seazn/engine/core";
+import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
@@ -21,7 +22,7 @@ import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, snap, type FixtureSnap, type ObservedFixture, type ObservedOutcome } from "../lib/observed.ts";
 import { decideState, type CheckResult } from "../lib/results.ts";
-import { Recorder, decideFixture, setUpDivision, type DivisionSetup } from "../lib/scenarios/common.ts";
+import { Recorder, decideFixture, setUpDivision, type BracketPick, type DivisionSetup } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ladderSchedule, playLadder } from "../lib/scenarios/ladder-loop.ts";
 import { cascadeItems, notChallengedLater } from "../lib/scenarios/r4-withdrawal.ts";
@@ -235,9 +236,9 @@ describe("ladderSchedule and playLadder — D8 (ruling 52)", () => {
     });
   });
 
-  it("a second sport, the registry swept: every sport plays the same sweep to the same rule order, and a draw is posted on the first non-climbing step exactly where the engine declares draws on a ladder", async () => {
+  it("a second sport, the registry swept: every sport plays the same sweep to the same rule order; a ladder is a bracket kind (X-DR-1) so NO sport posts a draw, and the hard path (a settle, a chess tie-break) is posted on the first climb and the first non-climbing step", async () => {
     let judged = 0;
-    const declaring: string[] = [];
+    let deciders = 0;
     for (const sport of SPORT_KEYS) {
       const driver = new FakeLadderDriver();
       const { out, state, checks } = await runOn(driver, "LIFECYCLE", { row: "ladder", sport });
@@ -245,23 +246,38 @@ describe("ladderSchedule and playLadder — D8 (ruling 52)", () => {
       expect(failing, sport).toEqual([]);
       expect(state, sport).toBe("works");
       expect(driver.ladderOrder(), sport).toEqual(swapRule(driver.entrantsBySeed()));
-      // m-9: the engine's own declaration (supportsDraws, called directly) and D8's rule — never ladderSchedule, the code under test.
-      const declares = sportModule(sport).supportsDraws(resolveSportCfg(sport, variantFor(sport)), "ladder");
-      expect(declares, `${sport}: drawsAllowed is the engine's declaration`).toBe(drawsAllowed(sport, resolveSportCfg(sport, variantFor(sport)), "ladder"));
-      const drawStep = firstNonClimb(driver.entrants.length);
-      expect(drawStep, sport).not.toBeNull();
-      const draws = driver.decidedChallenges().filter((c) => c.kind === "draw");
-      expect(draws.map((c) => c.step), sport).toEqual(declares ? [drawStep] : []);
-      expect(out.observed.stages[0]!.fixtures.filter((f) => f.outcome?.kind === "draw").length, sport).toBe(declares ? 1 : 0);
-      if (declares) declaring.push(sport);
+      // X-DR-1, from the engine's own declaration (supportsDraws, called directly): a ladder declares no draw, in any sport.
+      const cfg = resolveSportCfg(sport, variantFor(sport));
+      expect(sportModule(sport).supportsDraws(cfg, "ladder"), `${sport}: supportsDraws on a ladder`).toBe(false);
+      expect(drawsAllowed(sport, cfg, "ladder"), `${sport}: drawsAllowed on a ladder`).toBe(false);
+      const loss = firstNonClimb(driver.entrants.length);
+      expect(loss, sport).not.toBeNull();
+      const hardSteps = [1, loss!];
+      const byStep = new Map(driver.issuedChallenges().map((c) => [c.step, driver.fixtures.find((f) => f.id === c.fixtureId)!.outcome as { kind: string; method?: string } | null]));
+      expect(driver.decidedChallenges().filter((c) => c.kind === "draw"), sport).toEqual([]);
+      expect(byStep.size, sport).toBe(driver.entrants.length - 1);
+      for (const [step, o] of byStep) {
+        expect(o?.kind, `${sport} step ${step}`).toBe("win"); // every step ends in a WIN: never a draw, never undecided
+        const method = o?.method ?? "";
+        if (hardSteps.includes(step)) {
+          // The hard path leaves its method on the outcome: a settle's (SETTLE_METHODS) or a chess tie-break's rung (TIEBREAK_RUNGS).
+          const prefix = sport === "boardgame" ? "tiebreak_" : "settled_";
+          const rest = method.slice(prefix.length);
+          expect(method.startsWith(prefix) && (sport === "boardgame" ? TIEBREAK_RUNGS : SETTLE_METHODS).includes(rest as never), `${sport} step ${step}: method ${method}`).toBe(true);
+          deciders++;
+        } else {
+          expect(method.startsWith("settled_") || method.startsWith("tiebreak_"), `${sport} step ${step}: a plain step is a plain win`).toBe(false);
+        }
+      }
+      expect(out.observed.stages[0]!.fixtures.filter((f) => f.outcome?.kind === "draw").length, sport).toBe(0);
       judged++;
     }
-    process.stdout.write(`ladder registry sweep: ${judged} sports judged, ${declaring.length} declare draws on a ladder (${declaring.join(", ")})\n`);
+    process.stdout.write(`ladder registry sweep: ${judged} sports judged, ${deciders} deciders\n`);
     expect(judged).toBe(SPORT_KEYS.length);
     expect(judged).toBeGreaterThan(0);
-    // The differing case exists on both sides: some sport declares draws, some does not.
-    expect(declaring.length).toBeGreaterThan(0);
-    expect(declaring.length).toBeLessThan(judged);
+    expect(deciders).toBe(judged * 2); // anti-vacuity: the two hard steps ran in every sport
+    // The positive pair, so the declaration is not a constant false: a table stage still declares draws for a sport.
+    expect(SPORT_KEYS.some((sport) => drawsAllowed(sport, resolveSportCfg(sport, variantFor(sport)), "league"))).toBe(true);
   });
 });
 
@@ -299,7 +315,7 @@ describe("FakeLadderDriver mirrors issueChallenge (stages.ts:5503-5657)", () => 
 });
 
 describe("FakeLadderDriver's swap (usecases/scoring.ts:774-786)", () => {
-  it("only a decided WIN by the lower player swaps: an award to the challenger (a walkover) and a draw move nobody — each the differing case against a swap", async () => {
+  it("only a decided WIN by the lower player swaps: an award to the challenger (a walkover) and a settled loss move nobody — each the differing case against a swap", async () => {
     const d = new FakeLadderDriver();
     const ctx = ctxFor(d, "LIFECYCLE");
     const rec = new Recorder();
@@ -314,10 +330,11 @@ describe("FakeLadderDriver's swap (usecases/scoring.ts:774-786)", () => {
     await decideFixture(ctx, rec, setup, walkover, { kind: "forfeit", by: "away", reason: "walkover" });
     expect([d.decidedChallenges().at(-1)!.kind, d.decidedChallenges().at(-1)!.winner]).toEqual(["award", s3]);
     expect(d.ladderOrder()).toEqual([s1, s2, s3]);
-    // A draw (generic score declares draws on a ladder).
-    expect(drawsAllowed("generic", ctx.cfg, "ladder")).toBe(true);
-    await decideFixture(ctx, rec, setup, await issue(), { kind: "draw" });
-    expect([d.decidedChallenges().at(-1)!.kind, d.ladderOrder()]).toEqual(["draw", [s1, s2, s3]]);
+    // A settled loss for the challenger (a ladder is a bracket kind, X-DR-1: no draw exists here; the hard path is a settle).
+    expect(drawsAllowed("generic", ctx.cfg, "ladder")).toBe(false);
+    await decideFixture(ctx, rec, setup, await issue(), { kind: "settle", then: "away", method: "lot", after: "abandon" });
+    const settledLoss = d.decidedChallenges().at(-1)!;
+    expect([settledLoss.kind, settledLoss.winner, d.ladderOrder()]).toEqual(["win", s2, [s1, s2, s3]]);
     // The positive pair: the challenger's WIN swaps.
     await decideFixture(ctx, rec, setup, await issue(), { kind: "win", winner: "home" });
     expect(d.ladderOrder()).toEqual([s1, s3, s2]);
@@ -734,5 +751,45 @@ describe("playLadder's guards and the fake's refusals (review m-2, m-6)", () => 
     expect(driver.issuedChallenges()[0]).toMatchObject({ challenger: seeds.at(-1), opponent: seeds.at(-2) });
     expect(driver.ladderOrder()).toEqual(swapRule(seeds));
     expect(state).toBe("works");
+  });
+});
+
+// W2a Task 14, phase 3: a ladder is a bracket kind (X-DR-1), so a bracket-finish scenario's pick owes it too. playLadder
+// asked its own hardPath on step 1 and the first non-climb and a plain win elsewhere, never the pick, so the 16 ladder
+// cells of the settle, tie-break and extra-board scenarios (11 + 3 + 1 + 1) reddened on the scenario's own check. The pick is told
+// the SCRIPTED winner's side in its `higher` slot (D8 scripts who wins, not the seeds), so the order D8 expects survives.
+describe("W2a: a scenario's bracketPick decides every ladder step (playLadder)", () => {
+  async function playWith(pick: BracketPick | undefined) {
+    const driver = new FakeLadderDriver({ challengeRange: 3 });
+    const ctx = ctxFor(driver, "LIFECYCLE");
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 8);
+    await playLadder(ctx, rec, setup, setup.stage, pick === undefined ? {} : { bracketPick: pick });
+    return { driver, rec, setup };
+  }
+  it("every step is asked by the pick, n counts from 0, and the final order is still the adjacent-swap rule (the pick's winner is the scripted one)", async () => {
+    const calls: { n: number; higher: string }[] = [];
+    // Every step an abandoned-then-settled match: the plain win stepOutcome asks on steps 2.. is a different kind.
+    const settleEvery: BracketPick = (_f, n, higher) => { calls.push({ n, higher }); return { kind: "settle", then: higher, method: SETTLE_METHODS[n % SETTLE_METHODS.length]!, after: "abandon" }; };
+    const { driver, rec } = await playWith(settleEvery);
+    const steps = ladderSchedule(8);
+    expect(steps.length).toBe(7);
+    expect(calls.map((c) => c.n)).toEqual(steps.map((_, i) => i));
+    expect(rec.bracketDrives.length).toBe(steps.length);
+    rec.bracketDrives.forEach((d, i) => {
+      expect(d.asked, `step ${i + 1}`).toEqual({ kind: "settle", then: calls[i]!.higher, method: SETTLE_METHODS[i % SETTLE_METHODS.length], after: "abandon" });
+      expect(d.status, `step ${i + 1}`).toBe("decided");
+      expect(d.outcome, `step ${i + 1}`).toMatchObject({ kind: "win", method: `settled_${SETTLE_METHODS[i % SETTLE_METHODS.length]}` });
+    });
+    // The scripted winner is the challenger on odd steps (D8): the order is the rule's, not the seeds'.
+    expect(driver.ladderOrder()).toEqual(swapRule(driver.entrantsBySeed()));
+    expect(rec.exit).toBe("drained");
+  });
+  it("no pick: the ladder asks its own hardPath on the first step and the first non-climb and a plain win elsewhere, and counts no bracket ordinal", async () => {
+    const { rec } = await playWith(undefined);
+    expect(rec.bracketDrives.length).toBe(7);
+    const hard = rec.bracketDrives.map((d, i) => [i + 1, d.asked.kind] as const).filter(([, k]) => k !== "win").map(([s]) => s);
+    expect(hard).toEqual([1, firstNonClimb(8)]);
+    expect(rec.bracketOrdinal).toBe(0);
   });
 });

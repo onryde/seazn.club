@@ -274,6 +274,9 @@ export type SendOutcome =
       /** NEXT_MATCH_STARTED only: the match to void first, so the pad can
        *  name it in the scorer's language (`refusal-copy.ts`). */
       nextMatch?: NextMatchRef;
+      /** LEVEL_RESULT_IN_BRACKET only (W2a review M-1): which refusal it is — a generic draw or a finalize of a
+       *  fixture that still needs a decision — so the pad's copy can tell them apart (`refusal-copy.ts`). */
+      reason?: string;
     }
   | {
       kind: "stayed-queued";

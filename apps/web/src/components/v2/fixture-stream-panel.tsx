@@ -2130,12 +2130,14 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         </div>
       )}
 
-      {p.view?.fixtureDecided && (state === "live" || state === "ending") && (
+      {(p.view?.fixtureDecided || p.view?.fixtureHeld) && (state === "live" || state === "ending") && (
+        // W2a loop R, M2: a held fixture arms the automatic stop too (ruling D-M1), so it warns with its own words —
+        // "Match decided" would be false while the winner awaits the settle.
         <p
-          data-testid="stream-decided-chip"
+          data-testid={p.view.fixtureHeld ? "stream-held-chip" : "stream-decided-chip"}
           className="mt-2 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800"
         >
-          {msg("stream.phone.decided")}
+          {msg(p.view.fixtureHeld ? "stream.phone.held" : "stream.phone.decided")}
         </p>
       )}
 

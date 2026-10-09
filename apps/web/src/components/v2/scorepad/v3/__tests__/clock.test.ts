@@ -323,7 +323,7 @@ describe("stampPayload asks the ENGINE whether a stamp is legal, and never mirro
   // under test, and it was wrong about the lineup family until this ran.
   // Enumerated rather than sampled (AGENTS.md failure class 7).
   const CORE_TAKES_AT = ["core.suspend", "core.resume", "core.lineup.substitution", "core.lineup.replacement", "core.lineup.position", "core.lineup.retirement", "core.lineup.entry"] as const;
-  const CORE_REFUSES_AT = ["core.start", "core.void", "core.forfeit", "core.abandon", "core.finalize", "core.note", "core.award"] as const;
+  const CORE_REFUSES_AT = ["core.start", "core.void", "core.forfeit", "core.abandon", "core.finalize", "core.note", "core.award", "core.settle"] as const;
 
   it("covers every core type — the two arms partition CORE_EVENT_SCHEMAS with nothing left over", () => {
     expect([...CORE_TAKES_AT, ...CORE_REFUSES_AT].sort()).toEqual(Object.keys(CORE_EVENT_SCHEMAS).sort());
@@ -357,6 +357,7 @@ describe("stampPayload asks the ENGINE whether a stamp is legal, and never mirro
       "core.finalize": {},
       "core.note": { text: "n" },
       "core.award": { person: "p1", key: "motm" },
+      "core.settle": { winner: "H", method: "lot" },
     }[type] as Record<string, unknown>;
     expect(stampPayload(body, stamp, CORE_EVENT_SCHEMAS[type])).toBe(body); // by reference
     expect(CORE_EVENT_SCHEMAS[type].safeParse({ ...body, at: stamp }).success).toBe(false);
@@ -392,6 +393,9 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
       squads: { home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} }, away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } },
       events: [],
       contextOverrides: {},
+      stageKind: null,
+      canOrganise: true,
+      entrantNames: {},
     };
     const skin = footballSkinV3((key: string) => key);
     const goalTile = skin.tiles(view).find((tile) => "event" in tile.action && tile.action.event.type === "football.goal");
@@ -419,6 +423,9 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
         squads: { home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} }, away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } },
         events: [],
         contextOverrides: {},
+        stageKind: null,
+        canOrganise: true,
+        entrantNames: {},
       },
       (key: string) => key,
     ).strip ?? [];
@@ -531,6 +538,9 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
       squads: { home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} }, away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } },
       events: [],
       contextOverrides: {},
+      stageKind: null,
+      canOrganise: true,
+      entrantNames: {},
     });
     const built = slots[0]!.buildEvent("p-off", "p-on");
     expect(built.payload).toMatchObject({ at: { period: "H1", elapsed: 761 } });
@@ -563,6 +573,9 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
         squads: { home: { entrantId: "H", members: [], subsUsed: 0, exemptUsed: {} }, away: { entrantId: "A", members: [], subsUsed: 0, exemptUsed: {} } },
         events: [],
         contextOverrides: {},
+        stageKind: null,
+        canOrganise: true,
+        entrantNames: {},
       })
       .find((tile) => "event" in tile.action && tile.action.event.type === "football.goal")!;
     expect(tap.payload).toEqual((untouched.action as { event: { payload: unknown } }).event.payload);

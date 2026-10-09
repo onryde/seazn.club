@@ -147,7 +147,11 @@ const CI_CONCURRENCY = strykerConcurrency({ cores: 4, memBytes: 16 * GB, workers
 const estimateMinutes = (mutants: number): number => Math.ceil((DRY_RUN_FLOOR_SECONDS + (mutants * RUNNER_SECONDS_PER_MUTANT) / CI_CONCURRENCY) / 60);
 
 // ---- what the full run measured: packages/engine/stryker-measured.json (GitHub run 37371368951, sha 78c7ef3e6) -----------------
-interface MeasuredLeg { mutants: number; wallSeconds: number; dryRunSeconds: number; phaseSeconds: number }
+/** A leg the first run measured, or one MEASURED AGAIN since: because its count moved past the drift (W2a: core-2,
+ *  sports-other-1), or because it outran its timeout at the same count (W2a: modules-7, cancelled at its 10-minute floor in
+ *  dispatch 37923872826). A re-measured leg names the run and job that measured it (`run`), so its figures are never typed
+ *  without a source. */
+interface MeasuredLeg { mutants: number; wallSeconds: number; dryRunSeconds: number; phaseSeconds: number; run?: Source }
 interface CancelledLeg { mutants: number; dryRunSeconds: number; rate: number; attempts: Record<string, { tested: number; phaseSeconds: number; lastHourTested: number }> }
 /** Where a measurement comes from: the workflow run, the job in it (its log has the dry run, the phase and the wall), the commit it ran. */
 interface Source { id: number; job: number; sha: string }
@@ -737,6 +741,18 @@ describe("stryker-timeouts.json is the rule applied to what the full run measure
       checked++;
     }
     expect(checked, "measured legs checked").toBe(66);
+    // a leg measured AGAIN after the first run (its count moved past COUNT_DRIFT, or it outran its timeout) names the run and job that measured it: another
+    // run of the workflow, never the first one, so the figures it carries have a log behind them
+    let remeasured = 0;
+    for (const [g, m] of Object.entries(MEASURED.measured)) {
+      if (m.run === undefined) continue;
+      expect(Number.isInteger(m.run.id) && m.run.id > 0, `${g}: a run id`).toBe(true);
+      expect(Number.isInteger(m.run.job) && m.run.job > 0, `${g}: a job id`).toBe(true);
+      expect(m.run.sha, `${g}: the commit it ran`).toMatch(/^[0-9a-f]{9}$/);
+      expect(m.run.id, `${g}: a re-measure comes from a later run than the first`).not.toBe(MEASURED.run.id);
+      remeasured++;
+    }
+    expect(remeasured, "legs re-measured after the first run").toBeGreaterThan(0);
     // the re-run of the parts (T20 step 2b): their runs are other runs of the same workflow on later commits, on the same runner
     const sources = new Set<number>();
     for (const s of Object.values(MEASURED.split)) {

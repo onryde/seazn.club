@@ -38,7 +38,7 @@ import { fieldSizeFor } from "../field-size.ts";
 import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, sameResult, snap, toObservedOutcome, winnerOf, type CompleteObs, type FixtureSnap, type ObservedFixture, type ObservedStage, type WithdrawalObs } from "../observed.ts";
 import { routeTo } from "../routing.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
-import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
+import { assertion, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
 import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -400,6 +400,8 @@ export const r4Withdrawal: Scenario = {
           setup.stage.kind === "swiss" ? null : "not a swiss stage"),
         challenged,
         notSeatedLater({ kind, entrantId: w.entrantId, afterRound: w.afterRound, mine: setup.persons.get(w.entrantId) ?? [], stage: observed.stages[0] }),
+        // W2a (M-6): a bracket stage in this run owes a decider; one the withdrawal then struck is explained by the cascade.
+        bracketDeciderExercised(rec, observed),
         stageCompleted(observed),
         loopBounded(rec, observed),
         advanceSeededAsDeclared(plays, observed, rec.withdrawn),

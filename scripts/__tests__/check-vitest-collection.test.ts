@@ -155,6 +155,9 @@ const REST = [
   // Pool captions from the pool KEY in the reader's locale (table.poolLabel,
   // PR #923). Begins with "p", so it belongs here rather than in C_GLOBBED.
   "src/server/public-site/__tests__/pool-label-db.test.ts",
+  // W2a (format matrix, #931): every settle method's and tie-break rung's decided sentence on the match centre.
+  // Begins with "m", so it belongs here rather than in C_GLOBBED.
+  "src/server/public-site/__tests__/match-centre-w2a-deciders.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

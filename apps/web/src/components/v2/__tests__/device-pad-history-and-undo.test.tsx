@@ -94,6 +94,7 @@ function deviceHtml(events: readonly EventEnvelope[]): string {
         resolvedConfig: CFG,
         initialEvents: events,
         entitlements: {},
+        stageKind: null,
         identity: { recordedBy: null, deviceLinkId: "link-1" },
       }}
     />,
@@ -186,6 +187,18 @@ describe("ribbon undo cannot target a void (C4, ruling R7-5)", () => {
     // the whole point: two controls that both write `core.void` on one screen
     // must not disagree.
     expect(html).not.toContain('data-role="v3-activity-void"');
+  });
+
+  it("fix round 1 (pad ribbon): the ribbon's sentence wraps to two lines on a phone rather than truncating", () => {
+    // W2a made the ribbon standing context — "Result recorded — tie-break owed…" sits there for the whole tie-break —
+    // and `truncate` cut it at 320 to a word and an ellipsis. Two lines, clamped, with the min-w-0 chain kept.
+    const html = deviceHtml([START, GOAL]);
+    const span = /<div data-role="v3-ribbon"[^>]*>\s*<span class="([^"]*)">/.exec(html);
+    expect(span, "the ribbon's text span").not.toBeNull();
+    const classes = span![1]!.split(/\s+/);
+    expect(classes).toContain("line-clamp-2");
+    expect(classes).toContain("min-w-0");
+    expect(classes).not.toContain("truncate");
   });
 
   it("withdraws undo once the newest event is itself a core.void", () => {

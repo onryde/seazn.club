@@ -32,7 +32,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
+import { foldMatch, isLevelOutcome, MatchOutcome, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
 import { V3_SKINS } from "@/components/v2/scorepad/v3/registry";
@@ -412,6 +412,30 @@ describe("overlayModel — decided", () => {
     expect(model.sides[1].led).toBe(false);
   });
 
+  it("W2a: a chess tie-break's recorded score reaches BOTH decided sentences (band and short form), off the real fold's detail", () => {
+    const data = payload("boardgame", [
+      ["core.start", {}],
+      ["boardgame.result", { winner: null, method: "agreement" }],
+      ["boardgame.tiebreak", { rung: "rapid", winner: "A", score: "1½–½" }],
+    ], "decided", { kind: "win", winner: "A", method: "tiebreak_rapid" }, { tiebreak: true });
+    const templates: DecidedOutcomeTemplates = {
+      ...TEMPLATES,
+      byMethod: { ...TEMPLATES.byMethod, tiebreak_rapid: "TB {winner}" },
+      tiebreakScored: { rapid: "TB {winner} ({score})" },
+    };
+    const model = overlayModel({
+      sportKey: "boardgame",
+      data: { lastSeq: null, venueTz: "UTC", ...data } as OverlayLiveData,
+      sides: SIDES,
+      startLabel: null,
+      clockLabel: null,
+      msg: keyMsg,
+      decidedTemplates: templates,
+    });
+    expect(model.result).toBe("TB Northbridge Athletic (1½–½)");
+    expect(model.header.period, "the short form carries the same score").toBe("TB NOR (1½–½)");
+  });
+
   it("carries ended-card highlights from the overlay poll payload, not a page prop", () => {
     const data: OverlayLiveData = {
       status: "decided",
@@ -566,6 +590,74 @@ describe("overlayModel — the decided/void three-case split (fix round 3, F1)",
     const model = project("icehockey", data);
     expect(model.voided).toBe(true);
     expect(model.detail, "no detail band on a void-no-verdict frame, even with a real discipline entry").toEqual([]);
+  });
+});
+
+// W2a loop R, M1 — a level result in a bracket is held `needs_decision` (`fixtureStatusFromFold`), and the overlay
+// read it as LIVE: `ENDED_STATUSES` left it out, so `headerContext` fell through to `overlay.header.live` on a match
+// whose play had stopped. The level kinds are the ENGINE's (`isLevelOutcome` over `MatchOutcome`'s own kinds), never
+// a list typed here.
+const LEVEL_KINDS = MatchOutcome.options
+  .map((o) => o.shape.kind.value)
+  .filter((kind) => isLevelOutcome({ kind } as MatchOutcome));
+
+describe("overlayModel — a held fixture (needs_decision, W2a M1)", () => {
+  it("every sport × every level outcome: the held word, never 'Live', no live dot, no clock, no LED", () => {
+    expect(LEVEL_KINDS.length, "anti-vacuity: the engine declares level kinds").toBeGreaterThan(0);
+    let checked = 0;
+    for (const mod of builtinModules) {
+      for (const kind of LEVEL_KINDS) {
+        const model = project(mod.key, { status: "needs_decision", summary: null, outcome: { kind } }, null, "12:34");
+        const at = `${mod.key} / ${kind}`;
+        expect(model.header.context, at).toBe("overlay.status.held");
+        expect(model.live, at).toBe(false);
+        expect(model.header.clock, `${at}: a held fixture has no play running, so no clock`).toBeUndefined();
+        expect(model.sides.map((s) => s.led), at).toEqual([false, false]);
+        checked++;
+      }
+    }
+    expect(checked, "every registry sport × every level kind").toBe(builtinModules.length * LEVEL_KINDS.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a held cricket tie with an OPEN innings: no stale batting LED and no chase line (the differential)", () => {
+    // Without `needs_decision` in the ended set, `ledEntrantId` falls through to the open innings' batting side and
+    // `chaseNeed` still reads a chase off the frozen summary — both on a match nobody is playing.
+    const data: OverlayLiveData = {
+      status: "needs_decision",
+      summary: {
+        headline: "120/8 (20) — 120/6 (20)",
+        perSide: [{ entrantId: "H", line: "120/8 (20)" }, { entrantId: "A", line: "120/6 (19)" }],
+        detail: {
+          innings: [
+            { entrantId: "H", runs: 120, wickets: 8, legalBalls: 120, closed: true },
+            { entrantId: "A", runs: 120, wickets: 6, legalBalls: 114, closed: false },
+          ],
+        },
+      },
+      outcome: { kind: "tie" },
+      lastSeq: null,
+      venueTz: "UTC",
+    };
+    const live = project("cricket", { ...data, status: "in_play", outcome: null });
+    expect(live.sides.map((s) => s.led), "positive pair: the same payload LIVE lights the batting side").toEqual([false, true]);
+    const held = project("cricket", data);
+    expect(held.header.context).toBe("overlay.status.held");
+    expect(held.sides.map((s) => s.led)).toEqual([false, false]);
+    expect(held.chase).toBeUndefined();
+  });
+
+  it("the sequence: the same fixture live, then held, then settled — Live, the held word, then no word", () => {
+    const stream = [["core.start", {}], ["football.goal", { by: "H" }], ["football.goal", { by: "A" }]] as const;
+    expect(project("football", payload("football", stream, "in_play")).header.context).toBe("overlay.header.live");
+    expect(project("football", payload("football", stream, "needs_decision", { kind: "draw" })).header.context).toBe(
+      "overlay.status.held",
+    );
+    // A settle decides it (`outcomeOf`: a win with method `settled_lot`) and the status goes to decided: the plain decided
+    // frame has no word.
+    const settled = project("football", payload("football", stream, "decided", { kind: "win", winner: "A", method: "settled_lot" }));
+    expect(settled.header.context).toBe("");
+    expect(settled.decided).toBe(true);
   });
 });
 

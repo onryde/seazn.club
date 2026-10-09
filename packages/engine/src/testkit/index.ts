@@ -12,3 +12,5 @@ export * from "./simulation.ts";
 export * from "./stoppages.ts";
 // R26 (format-matrix W1b) — the shared sport sweep. Pure, so it belongs here.
 export * from "./for-each-sport.ts";
+// W2a (preflight C7) — the declared cfgs every W2a sport sweep walks. Pure.
+export * from "./declared-cfgs.ts";

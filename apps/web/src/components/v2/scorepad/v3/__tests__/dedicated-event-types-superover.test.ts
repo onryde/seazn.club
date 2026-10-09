@@ -95,7 +95,7 @@ function foldCricket(cfg: CricketCfg, specs: readonly [type: string, payload?: u
 function view(cfg: CricketCfg, state: CricketState): PadHostView {
   return {
     cfg, state, summary: {}, phase: "live", band: 3, entitlements: {},
-    personNames: {}, squads: initSquads(lineups()), events: [], contextOverrides: {},
+    personNames: {}, squads: initSquads(lineups()), events: [], contextOverrides: {}, stageKind: null, canOrganise: true, entrantNames: {},
   };
 }
 

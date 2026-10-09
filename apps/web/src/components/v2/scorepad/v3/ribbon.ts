@@ -115,6 +115,8 @@ export const CORE_RIBBON_KEY: Readonly<Record<string, MessageKey>> = {
   "core.award": "pad.ribbon.core.award",
   "core.suspend": "pad.ribbon.core.suspend",
   "core.resume": "pad.ribbon.core.resume",
+  // W2a (X-ST-1). Like core.forfeit's line, no name: this path takes no params.
+  "core.settle": "pad.ribbon.core.settle",
   "core.lineup.substitution": "pad.ribbon.core.lineup.substitution",
   "core.lineup.replacement": "pad.ribbon.core.lineup.replacement",
   "core.lineup.position": "pad.ribbon.core.lineup.position",

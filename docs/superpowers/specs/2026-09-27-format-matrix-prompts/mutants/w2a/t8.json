@@ -1,0 +1,611 @@
+[
+  {
+    "id": "generic-refusal-off",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (division.sport_key === \"generic\" && candidate.type !== \"core.void\") {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "GN-KO-1: a generic draw in a bracket is refused LEVEL_RESULT_IN_BRACKET and leaves the ledger untouched"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/draw-guard.test.ts"
+        ],
+        "name": "GN-KO-1: a level generic knockout result is refused LEVEL_RESULT_IN_BRACKET \\(enter the winner\\) and leaves the ledger untouched"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "GN-KO-1 \\(legacy\\): a held generic draw refuses a later non-settle event with LEVEL_RESULT_IN_BRACKET, and the ledger is untouched"
+      }
+    ]
+  },
+  {
+    "id": "hold-not-refuse",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "    if (forbidsLevelResult(stageKind)) {\n      // Controller ruling D-F1",
+    "replace": "    if (false) {\n      // Controller ruling D-F1",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-2: a level football knockout result is held — needs_decision, nobody seated in the final, onDecided not run; the settle runs it"
+      }
+    ]
+  },
+  {
+    "id": "ondecided-gate",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "result.status !== \"needs_decision\"",
+    "replace": "true",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-2: a level football knockout result is held — needs_decision, nobody seated in the final, onDecided not run; the settle runs it"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "X-BR-2: a held fixture's discipline and news refreshes wait for the settle; the settle runs both"
+      }
+    ]
+  },
+  {
+    "id": "seat-assert-off",
+    "file": "apps/web/src/server/engine-db/level-seat.ts",
+    "find": "if (isBugShape(f)) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: a level outcome under a seating status in a bracket throws LEVEL_RESULT_SEATED, per level kind and per seating status"
+      }
+    ]
+  },
+  {
+    "id": "seat-assert-draw",
+    "file": "apps/web/src/server/engine-db/level-seat.ts",
+    "find": "isLevelOutcome(f.outcome as never)",
+    "replace": "((f.outcome as { kind?: string })?.kind === \"tie\" || (f.outcome as { kind?: string })?.kind === \"no_result\")",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: a level outcome under a seating status in a bracket throws LEVEL_RESULT_SEATED, per level kind and per seating status"
+      }
+    ]
+  },
+  {
+    "id": "seat-status-forfeited",
+    "file": "apps/web/src/server/engine-db/level-seat.ts",
+    "find": "[\"decided\", \"forfeited\", \"finalized\"]",
+    "replace": "[\"decided\", \"finalized\"]",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: a level outcome under a seating status in a bracket throws LEVEL_RESULT_SEATED, per level kind and per seating status"
+      }
+    ]
+  },
+  {
+    "id": "first-result-held",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": " && status !== \"needs_decision\"\n",
+    "replace": "\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/append-event.test.ts"
+        ],
+        "name": "X-BR-2: a held fixture does not count as a first result; its settle does"
+      }
+    ]
+  },
+  {
+    "id": "settle-withdrawn",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (w?.status === \"withdrawn\") {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-ST-1 \\(ruling C17, Review Focus 5\\): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\), and a settle for the remaining one seats them"
+      }
+    ]
+  },
+  {
+    "id": "decider-withdrawn-settle-only",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (candidate.type === \"core.settle\" || (sportModule.deciderTypes ?? []).includes(candidate.type)) {",
+    "replace": "if (candidate.type === \"core.settle\") {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "D-R7: every engine decider event naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\) and writes nothing; naming the remaining entrant is accepted and seats them — for a scorer and for the organiser"
+      }
+    ]
+  },
+  {
+    "id": "http-settle-withdrawn-unforwarded",
+    "file": "apps/web/src/server/api-v1/http.ts",
+    "find": "if (isSettleRefusalReason(reason)) extra = { reason };",
+    "replace": "if (false) extra = { reason };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/api-v1/__tests__/http.test.ts"
+        ],
+        "name": "D-R8: SETTLE_NOT_APPLICABLE forwards reason withdrawn, and nothing else from \\.data"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "D-R8: the REAL refusal \\(a scorer's tie-break, the organiser's settle\\) crosses the v1 envelope with reason withdrawn and reads as the withdrawn copy on the console \\(apiV1 → scoringErrorText\\) and on the pad \\(transport → refusalText\\)"
+      }
+    ]
+  },
+  {
+    "id": "transport-settle-withdrawn-dropped",
+    "file": "apps/web/src/components/v2/scorepad/transport.ts",
+    "find": "...(isLevelResultReason(reason) || isSettleRefusalReason(reason) ? { reason } : {}),",
+    "replace": "...(isLevelResultReason(reason) ? { reason } : {}),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/transport.test.ts"
+        ],
+        "name": "D-R8: a SETTLE_NOT_APPLICABLE refusal carries reason withdrawn to the pad; any other reason is not carried"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "D-R8: the REAL refusal \\(a scorer's tie-break, the organiser's settle\\) crosses the v1 envelope with reason withdrawn and reads as the withdrawn copy on the console \\(apiV1 → scoringErrorText\\) and on the pad \\(transport → refusalText\\)"
+      }
+    ]
+  },
+  {
+    "id": "vocab-settle-withdrawn-generic",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "  SETTLE_NOT_APPLICABLE: {\n    [SETTLE_REFUSAL_REASON.withdrawn]: \"engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn\",\n  },\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/scoring-vocab.test.ts"
+        ],
+        "name": "D-R8: SETTLE_NOT_APPLICABLE for a withdrawn winner says so in every locale; every other settle refusal keeps the code's own copy"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/refusal-copy.test.ts"
+        ],
+        "name": "D-R8: a SETTLE_NOT_APPLICABLE refusal for a withdrawn winner reads its own copy \\(the pad's tie-break path\\); any other keeps the code's"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "D-R8: the REAL refusal \\(a scorer's tie-break, the organiser's settle\\) crosses the v1 envelope with reason withdrawn and reads as the withdrawn copy on the console \\(apiV1 → scoringErrorText\\) and on the pad \\(transport → refusalText\\)"
+      }
+    ]
+  },
+  {
+    "id": "winner-lookup-unshaped",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (typeof winner === \"string\" && ENTRANT_ID_SHAPE.test(winner)) {",
+    "replace": "if (typeof winner === \"string\") {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "N2: a malformed winner on core\\.settle and on every decider event is a 4xx refusal \\(never a 500\\) that writes nothing; a uuid of no entrant keeps its refusal; the withdrawn winner is still SETTLE_NOT_APPLICABLE withdrawn"
+      }
+    ]
+  },
+  {
+    "id": "winner-shape-unanchored",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "const ENTRANT_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;",
+    "replace": "const ENTRANT_ID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "N2: a malformed winner on core\\.settle and on every decider event is a 4xx refusal \\(never a 500\\) that writes nothing; a uuid of no entrant keeps its refusal; the withdrawn winner is still SETTLE_NOT_APPLICABLE withdrawn"
+      }
+    ]
+  },
+  {
+    "id": "finalize-held",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (candidate.type === \"core.finalize\" && forbidsLevelResult(stageKind)) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: a HELD level result \\(needs_decision\\) cannot be finalized; once settled it can"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "finding 27: a football level abandon \\(no_result\\) is refused finalize, and accepted once settled"
+      }
+    ]
+  },
+  {
+    "id": "finalize-is-level-outcome",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (settleApplies(sportModule, facts)) {",
+    "replace": "if (isLevelOutcome(facts.outcome)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: an abandon with NO outcome cannot be finalized \\(isLevelOutcome alone would let it through\\); once settled it can"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: a chess game with its tie-break PENDING cannot be finalized"
+      }
+    ]
+  },
+  {
+    "id": "finalize-abandoned",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "abandoned: resolveVoids(prior).some((e) => e.type === \"core.abandon\"),",
+    "replace": "abandoned: false,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: an abandon with NO outcome cannot be finalized \\(isLevelOutcome alone would let it through\\); once settled it can"
+      }
+    ]
+  },
+  {
+    "id": "finalize-folds-candidate",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "foldMatchWithStoppage(sportModule, cfg, lineups, prior, { strictFromSeq: candidate.seq })",
+    "replace": "foldMatchWithStoppage(sportModule, cfg, lineups, stream, { strictFromSeq: candidate.seq })",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "P2-7: an abandon with NO outcome cannot be finalized \\(isLevelOutcome alone would let it through\\); once settled it can"
+      }
+    ]
+  },
+  {
+    "id": "first-result-settle",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "(fixture.outcome === null || fixture.status === \"needs_decision\") && outcome",
+    "replace": "fixture.outcome === null && outcome",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/append-event.test.ts"
+        ],
+        "name": "X-BR-2: a held fixture does not count as a first result; its settle does"
+      }
+    ]
+  },
+  {
+    "id": "settle-not-bracket",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "    if (!forbidsLevelResult(stageKind)) {\n      throw new EngineError(\"SETTLE_NOT_APPLICABLE\"",
+    "replace": "    if (false) {\n      throw new EngineError(\"SETTLE_NOT_APPLICABLE\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "SETTLE_NOT_APPLICABLE \\(not_bracket\\) in every DRAW kind: the ledger is untouched and the draw stays the result"
+      }
+    ]
+  },
+  {
+    "id": "seat-ondecided",
+    "file": "apps/web/src/server/usecases/scoring.ts",
+    "find": "    assertNoLevelSeat({ fixtureId, stageKind: fixture.kind, status: fixture.status, outcome: fixture.outcome });\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: onDecided refuses a level knockout row stored decided, and seats nobody"
+      }
+    ]
+  },
+  {
+    "id": "seat-competition",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "  assertNoLevelSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome }); // X-BR-1\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: the bracket completion read \\(completeStageIfReady → toBracketFixture\\) refuses the forced shape"
+      }
+    ]
+  },
+  {
+    "id": "seat-competition-kind",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "toBracketFixture(f, inputs.kind)",
+    "replace": "toBracketFixture(f, \"league\")",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: the bracket completion read \\(completeStageIfReady → toBracketFixture\\) refuses the forced shape"
+      }
+    ]
+  },
+  {
+    "id": "seat-stages",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "    assertNoLevelSeat({ fixtureId: f.id, stageKind: f.stage_kind, status: f.status, outcome: f.outcome });\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/settle-seating.test.ts"
+        ],
+        "name": "X-BR-1: the completed-bracket rebuild read \\(stages\\.ts loadBracketFixtures\\) refuses the forced shape; a held row reads clean"
+      }
+    ]
+  },
+  {
+    "id": "void-exempt-off",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (division.sport_key === \"generic\" && candidate.type !== \"core.void\") {",
+    "replace": "if (division.sport_key === \"generic\") {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "D-F1: the organiser can undo a settle on a legacy generic held row — the void is accepted and the row is held again"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "D-F1 \\(review N1\\): in score mode a void CAN make a new draw — voiding a point under a stored tally card re-folds it level; the void is accepted, the row is held, and the settle closes it"
+      }
+    ]
+  },
+  {
+    "id": "import-held-skip-off",
+    "file": "apps/web/src/server/usecases/event-import.ts",
+    "find": "if (last.status !== \"needs_decision\") {",
+    "replace": "if (true) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/event-import-held.test.ts"
+        ],
+        "name": "X-BR-2: an imported stream ending HELD \\(a chess double forfeit in a knockout\\) lands, and runs no decided side effect"
+      }
+    ]
+  },
+  {
+    "id": "reason-finalize-drop",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "        reason: LEVEL_RESULT_REASON.finalizeUnsettled,",
+    "replace": "        reason: LEVEL_RESULT_REASON.genericDraw,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "M-1: each LEVEL_RESULT_IN_BRACKET emitter names its reason — a generic draw asks for the winner, a finalize of a held fixture for a settle"
+      }
+    ]
+  },
+  {
+    "id": "reason-generic-drop",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "          reason: LEVEL_RESULT_REASON.genericDraw,",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/held-behaviours.test.ts"
+        ],
+        "name": "M-1: each LEVEL_RESULT_IN_BRACKET emitter names its reason — a generic draw asks for the winner, a finalize of a held fixture for a settle"
+      }
+    ]
+  },
+  {
+    "id": "http-reason-drop",
+    "file": "apps/web/src/server/api-v1/http.ts",
+    "find": "if (isLevelResultReason(reason)) extra = { reason };",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/api-v1/__tests__/http.test.ts"
+        ],
+        "name": "M-1: LEVEL_RESULT_IN_BRACKET forwards each named reason, and nothing else from \\.data"
+      }
+    ]
+  },
+  {
+    "id": "vocab-reason-ignored",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "  if (byReason && typeof reason === \"string\" && Object.hasOwn(byReason, reason)) return m(byReason[reason]!);",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/scoring-vocab.test.ts"
+        ],
+        "name": "M-1: LEVEL_RESULT_IN_BRACKET reads its reason — the finalize refusal asks for a settle, the generic draw for the winner, in every locale"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/refusal-copy.test.ts"
+        ],
+        "name": "M-1: a LEVEL_RESULT_IN_BRACKET refusal reads its reason \\(finalize asks for a settle; a generic draw for the winner\\)"
+      }
+    ]
+  },
+  {
+    "id": "transport-level-renegotiated",
+    "file": "apps/web/src/components/v2/scorepad/transport.ts",
+    "find": "  \"LEVEL_RESULT_IN_BRACKET\",\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/transport.test.ts"
+        ],
+        "name": "M-1: every engine 409 but SEQ_CONFLICT/SCHEDULE_CONFLICT is terminal, and LEVEL_RESULT_IN_BRACKET carries its reason"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/transport.test.ts"
+        ],
+        "name": "TERMINAL_CONFLICT_CODES is exactly the set of terminal 409s the server throws"
+      }
+    ]
+  },
+  {
+    "id": "transport-reason-drop",
+    "file": "apps/web/src/components/v2/scorepad/transport.ts",
+    "find": "            ...(isLevelResultReason(reason) || isSettleRefusalReason(reason) ? { reason } : {}),",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/transport.test.ts"
+        ],
+        "name": "M-1: every engine 409 but SEQ_CONFLICT/SCHEDULE_CONFLICT is terminal, and LEVEL_RESULT_IN_BRACKET carries its reason"
+      }
+    ]
+  },
+  {
+    "id": "pipeline-reason-drop",
+    "file": "apps/web/src/components/v2/scorepad/pipeline.ts",
+    "find": ", ...(r.reason ? { reason: r.reason } : {}) };",
+    "replace": " };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/pipeline.test.ts"
+        ],
+        "name": "M-1: a LEVEL_RESULT_IN_BRACKET refusal keeps its reason in the outcome"
+      }
+    ]
+  },
+  {
+    "id": "hook-reason-drop",
+    "file": "apps/web/src/components/v2/scorepad/use-pad-pipeline.ts",
+    "find": "            ...(outcome.reason ? { reason: outcome.reason } : {}),",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/use-pad-pipeline.test.tsx"
+        ],
+        "name": "M-1: keeps a LEVEL_RESULT_IN_BRACKET refusal's reason, so the pad's copy can tell a finalize from a generic draw"
+      }
+    ]
+  },
+  {
+    "id": "refusal-copy-reason-drop",
+    "file": "apps/web/src/components/v2/scorepad/refusal-copy.ts",
+    "find": "engineErrorLabel(rejection.code, m, rejection.reason)",
+    "replace": "engineErrorLabel(rejection.code, m)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/refusal-copy.test.ts"
+        ],
+        "name": "M-1: a LEVEL_RESULT_IN_BRACKET refusal reads its reason \\(finalize asks for a settle; a generic draw for the winner\\)"
+      }
+    ]
+  }
+]

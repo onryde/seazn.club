@@ -30,6 +30,7 @@ function row(over: Partial<RowActionInput> = {}): RowActionInput {
     tz: TZ,
     nowMs: NOW,
     awaitingDraw: false,
+    awaitsSettle: false,
     ...over,
   };
 }
@@ -75,6 +76,36 @@ describe("fixtureRowAction — the enumerated table", () => {
 
   it("an unknown status never crashes and never invites scoring", () => {
     expect(fixtureRowAction(row({ status: "teleported" })).kind).toBe("view");
+  });
+});
+
+// W2a Task 11 (finding 25; addendum 3): a HELD bracket fixture (`needs_decision` — a level result in a knockout) is
+// neither a result nor open scoring: it is owed the organiser's settle, and that is the row's one action.
+describe("fixtureRowAction — a held fixture (W2a, needs_decision)", () => {
+  it("offers Settle (decide) to an editor, timed or not, today or not", () => {
+    let checked = 0;
+    for (const scheduledAt of [TODAY_1500, TOMORROW_1000, null]) {
+      for (const hasOfficials of [true, false]) {
+        expect(fixtureRowAction(row({ status: "needs_decision", scheduledAt, hasOfficials })).kind, String(scheduledAt)).toBe("decide");
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("M10 (fix round 1): a recorded abandon awaiting its settle (stored `abandoned`) is held too — Settle, not a result", () => {
+    expect(fixtureRowAction(row({ status: "abandoned", awaitsSettle: true })).kind).toBe("decide");
+    expect(fixtureRowAction(row({ status: "abandoned", awaitsSettle: true, canEdit: false })).kind).toBe("view");
+    // The positive pair: the generator's void (abandoned, nothing owed) stays a result.
+    expect(fixtureRowAction(row({ status: "abandoned", awaitsSettle: false })).kind).toBe("result");
+  });
+
+  it("a viewer who cannot edit only views it — the settle is organiser-only on the server", () => {
+    expect(fixtureRowAction(row({ status: "needs_decision", canEdit: false })).kind).toBe("view");
+  });
+
+  it("the positive pair: the same row DECIDED is a result, never a decide", () => {
+    expect(fixtureRowAction(row({ status: "decided" })).kind).toBe("result");
   });
 });
 
@@ -267,6 +298,7 @@ describe("hasAssignedScorer — the officials cache is response-bearing", () => 
         tz: TZ,
         nowMs: NOW,
         awaitingDraw: false,
+        awaitsSettle: false,
       }),
     ).toEqual({ kind: "assign_scorer" });
     // ...and the same row with an accepted official does NOT — the pair is what
@@ -280,6 +312,7 @@ describe("hasAssignedScorer — the officials cache is response-bearing", () => 
         tz: TZ,
         nowMs: NOW,
         awaitingDraw: false,
+        awaitsSettle: false,
       }),
     ).toEqual({ kind: "score" });
   });
