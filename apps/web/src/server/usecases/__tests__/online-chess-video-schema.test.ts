@@ -142,8 +142,11 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V432)", () => {
   // shape check that also rejects an unknown kind (`else false`). Rolled back
   // so a mutant that lets it in leaves nothing behind.
   it("policy_downgrade is no longer an audit kind here — refused by the kind check", async () => {
-    // Otherwise well-formed (it has a fixture, which the shape check wants for
-    // the only kind left), so the kind check is the one that must refuse it.
+    // BOTH checks refuse this row: the kind check, and the shape check, whose
+    // CASE falls to `else false` for any kind but video_override. Postgres
+    // evaluates CHECK constraints in name order, so `online_chess_audit_kind_check`
+    // (k < s) is the one reported; dropping it would surface the shape check
+    // instead and fail this assertion.
     const ROLLBACK = new Error("rollback sentinel");
     let outcome: Outcome | undefined;
     await sql

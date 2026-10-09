@@ -996,11 +996,14 @@ export async function patchDivision(
       // AFTER the lock so a locked division keeps answering 409 for any
       // format change, never 400. Judged on the FINAL config, and only when
       // the clock or online play CHANGES against the stored row: a save that
-      // re-sends both as stored (the Entrants save re-sends the whole config,
-      // the format lock's one exception) must not be refused for a clock
-      // saved before this gate existed — on a locked division the only
-      // repair, changing the clock, is itself 409, so that save would be
-      // refused for good (review T6-I1).
+      // re-sends both as stored (the Entrants save re-sends the whole config
+      // through one of the format lock's two doors — withoutDivisionMetaKeys
+      // lets `entrants` AND `onlinePlay` change on a locked division) must not
+      // be refused for a clock saved before this gate existed: on a locked
+      // division the only repair, changing the clock, is itself 409, so that
+      // save would be refused for good (review T6-I1). The other door is why
+      // this is not simply `!locked`: online play switched ON over a stored
+      // pre-gate clock on a locked division must still be judged (N-1).
       const storedConfig = (current.config ?? {}) as Record<string, unknown>;
       const clockOrOnlineChanged =
         canonicalJson(finalConfig.clock ?? null) !== canonicalJson(storedConfig.clock ?? null) ||
