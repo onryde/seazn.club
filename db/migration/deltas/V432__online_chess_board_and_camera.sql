@@ -119,11 +119,27 @@ create table fixture_external_play (
   -- `required` (RealtimeKit unavailable). Read by preflight (T8); the human
   -- record of WHO and WHY is the online_chess_audit row beside it.
   video_override_at   timestamptz null,
+  -- D12: the round this fixture's window hangs off. Null until the organiser
+  -- presses Open round; `on delete restrict` because a round that has already
+  -- invited players cannot be un-opened by deleting its row.
+  round_open_id       uuid null references stage_round_opens(id) on delete restrict,
+  -- D12: the per-fixture record that the pairing's invite went out. One row
+  -- per fixture (fixture_id is the primary key), so "invited" is recorded
+  -- once; T13 writes it with `where invited_at is null`, which is what makes a
+  -- re-open or a retry a no-op instead of a second email to both players.
+  invited_at          timestamptz null,
   started_at          timestamptz,
   finished_at         timestamptz,
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now(),
-  check ((status = 'needs_organiser') = (needs_reason is not null))
+  check ((status = 'needs_organiser') = (needs_reason is not null)),
+  -- D12's invariant: a fixture cannot be marked invited before its round is
+  -- opened. Half of it — the other half is the round_open_id FK, which can
+  -- only name a row the organiser's press created. Two guards, deliberately
+  -- separate so each is mutable on its own; a CHECK cannot span tables, so no
+  -- single constraint can express the whole thing.
+  constraint fixture_external_play_invite_needs_open_round_check
+    check (invited_at is null or round_open_id is not null)
 );
 
 create index fixture_external_play_org_idx on fixture_external_play (org_id);
