@@ -3,7 +3,7 @@
 //
 // `page.test.ts` proves the seam (this function is mounted, its `null` really
 // suppresses the anchor, and the key really reaches the dictionary). This file
-// proves the DECISION: seven statuses, none of them left to one lucky sample
+// proves the DECISION: every status, none of them left to one lucky sample
 // (recurring class 7), and the void set held to the repo's own authority
 // rather than to three strings retyped here.
 import { describe, expect, it } from "vitest";
@@ -11,46 +11,43 @@ import { streamLinkLabelKey } from "../stream-link";
 import { VOID_STATUSES } from "@/components/v2/stages-panel";
 import { OVERLAY_VOID_STATUSES } from "@/lib/overlay-model";
 import publicEn from "@/dictionaries/en/public.json";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 
 /**
- * The closed fixture-status vocabulary, derived from `ui.json`'s own
- * `schedule.fstatus.*` family plus `scheduled` (which has no row there —
- * `fixtureStatusLabel` falls back to the raw token for it). Typed here only
- * because there is no exported enum; the VOID third of it is cross-checked
- * against the real export below, so a status moving into or out of that group
- * cannot pass unnoticed.
+ * The closed fixture-status vocabulary: `FIXTURE_STATUSES`, the app's one list
+ * (W2a; V432's migration test holds the check constraint to it). It was typed
+ * here while no export existed, and a typed copy is exactly what let W2a's
+ * eighth status, `needs_decision`, fall into the live bucket unseen. The VOID
+ * third of it is cross-checked against the real export below.
  */
-const EVERY_STATUS = [
-  "scheduled",
-  "in_play",
-  "decided",
-  "finalized",
-  "cancelled",
-  "abandoned",
-  "forfeited",
+const EVERY_STATUS = FIXTURE_STATUSES;
+
+const ROWS = [
+  ["scheduled", "overlay.watchLive"],
+  ["in_play", "overlay.watchLive"],
+  ["decided", "overlay.replay"],
+  ["finalized", "overlay.replay"],
+  ["cancelled", null],
+  ["abandoned", null],
+  ["forfeited", null],
+  // Controller ruling D-M1 (2026-10-09): a held bracket result has no play left (the stream's automatic stop
+  // arms on it), so its link is the broadcast's replay, never "Watch live". Not void: the organiser's link stays.
+  ["needs_decision", "overlay.replay"],
 ] as const;
 
 describe("streamLinkLabelKey — every fixture status, not one sample", () => {
-  it.each([
-    ["scheduled", "overlay.watchLive"],
-    ["in_play", "overlay.watchLive"],
-    ["decided", "overlay.replay"],
-    ["finalized", "overlay.replay"],
-    ["cancelled", null],
-    ["abandoned", null],
-    ["forfeited", null],
-  ] as const)("%s → %s", (status, expected) => {
+  it.each(ROWS)("%s → %s", (status, expected) => {
     expect(streamLinkLabelKey(status)).toBe(expected);
   });
 
   it("covers the whole vocabulary — no status is left unasserted", () => {
     // The row list above is typed; this is the check that it is COMPLETE, so
-    // adding an eighth status reds here instead of shipping an unlabelled one.
+    // adding a status reds here instead of shipping an unlabelled one.
     const decided = new Set(EVERY_STATUS.map(streamLinkLabelKey));
     expect(decided, "all three outcomes are actually exercised").toEqual(
       new Set(["overlay.watchLive", "overlay.replay", null]),
     );
-    expect(EVERY_STATUS.length).toBe(7);
+    expect(new Set(ROWS.map(([status]) => status)), "one row per status in FIXTURE_STATUSES").toEqual(new Set(EVERY_STATUS));
   });
 
   it("returns null for EXACTLY the console's own void statuses, and for no other", () => {
@@ -64,7 +61,7 @@ describe("streamLinkLabelKey — every fixture status, not one sample", () => {
   });
 
   it("an unknown status falls into the live bucket, never into `null`", () => {
-    // The vocabulary is closed at seven, so this is the shape of the default
+    // The vocabulary is closed (FIXTURE_STATUSES), so this is the shape of the default
     // rather than a live case — but the default matters: a status this file
     // has not heard of must not silently DELETE a link the organiser saved.
     expect(streamLinkLabelKey("postponed")).toBe("overlay.watchLive");

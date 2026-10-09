@@ -37,15 +37,24 @@ describe("V432 needs_decision", () => {
     expect(m).not.toBeNull();
     expect(literalSet(m![1]!)).toEqual(new Set(FIXTURE_STATUSES));
   });
-  it.skipIf(!HAS_DB)("the live DB accepts needs_decision, refuses an unknown status, and clears finished_at for it", async () => {
+  it.skipIf(!HAS_DB)("the live DB accepts needs_decision, refuses an unknown status, and stamps finished_at for it (ruling D-M1: no play remains, so it arms the stream's automatic stop)", async () => {
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     const id = s.fixtureIds[0]!;
-    await sql`update fixtures set status = 'decided' where id = ${id}`;
-    const [before] = await sql<{ finished_at: Date | null }[]>`select finished_at from fixtures where id = ${id}`;
-    expect(before!.finished_at).not.toBeNull(); // the positive pair: decided IS finished
+    const stampOf = async () => (await sql<{ us: string | null }[]>`
+      select (extract(epoch from finished_at) * 1000000)::bigint::text as us from fixtures where id = ${id}`)[0]!.us;
+    // Entering from an open status stamps: in_play -> needs_decision (a level result held on the pad).
+    await sql`update fixtures set status = 'in_play' where id = ${id}`;
+    expect(await stampOf(), "the negative pair: in_play is NOT finished").toBeNull();
     await sql`update fixtures set status = 'needs_decision' where id = ${id}`;
-    const [row] = await sql<{ status: string; finished_at: Date | null }[]>`select status, finished_at from fixtures where id = ${id}`;
-    expect(row).toEqual({ status: "needs_decision", finished_at: null });
+    const held = await stampOf();
+    expect(held, "in_play -> needs_decision stamps finished_at").not.toBeNull();
+    // Staying inside the set keeps the FIRST stamp: needs_decision -> decided (the organiser's settle) does not move it.
+    await sql`update fixtures set status = 'decided' where id = ${id}`;
+    expect(await stampOf(), "needs_decision -> decided keeps the held stamp").toBe(held);
+    // And the backfill's own move, decided -> needs_decision, keeps decided's stamp.
+    await sql`update fixtures set status = 'needs_decision' where id = ${id}`;
+    const [row] = await sql<{ status: string }[]>`select status from fixtures where id = ${id}`;
+    expect({ status: row!.status, stamp: await stampOf() }).toEqual({ status: "needs_decision", stamp: held });
     await expect(sql`update fixtures set status = 'needs_decisions' where id = ${id}`).rejects.toThrow(/fixtures_status_check/);
   });
   it.skipIf(!HAS_DB)("ruling 82 backfill: V432's update moves a decided level KNOCKOUT row to needs_decision and leaves a level LEAGUE row decided", async () => {

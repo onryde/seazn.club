@@ -8,12 +8,32 @@ alter table fixtures drop constraint fixtures_status_check;
 alter table fixtures add constraint fixtures_status_check check (status in
   ('scheduled','in_play','decided','finalized','abandoned','forfeited','cancelled','needs_decision'));
 
--- V430's fixtures_track_finished needs no change: needs_decision is NOT in its finished set, so the trigger
--- writes finished_at = null for it — the match is played but not finished (status-set ledger: "played").
+-- Controller ruling D-M1 (2026-10-09, owner-delegated): needs_decision JOINS V430's finished set. No play
+-- remains on a held fixture (a chess game awaiting its tie-break is NOT held: it stays in_play with no outcome),
+-- so it stamps finished_at and arms the stream's automatic stop like decided does; the capture code's expiry and
+-- the phone's finished state read the same stamp. The organiser's settle (needs_decision -> decided) stays inside
+-- the set and keeps the held stamp; a void back to in_play leaves it and clears the stamp (C5). Redefined here
+-- with create or replace, BEFORE the backfill below, so the rows it moves keep their decided stamp. V430's
+-- header (the INSERT arm keeps a supplied stamp; the trigger fires only on an update that names status) applies.
+-- Spec docs/superpowers/specs/2026-10-01-capture-qr-v2-design.md §3 "finished" carries the amended set.
+create or replace function fixtures_track_finished() returns trigger language plpgsql as $$
+begin
+  if new.status in ('decided','finalized','forfeited','abandoned','cancelled','needs_decision') then
+    if tg_op = 'INSERT' then
+      new.finished_at := coalesce(new.finished_at, now());
+    elsif old.status not in ('decided','finalized','forfeited','abandoned','cancelled','needs_decision') then
+      new.finished_at := now();
+    end if;
+  else
+    new.finished_at := null;
+  end if;
+  return new;
+end $$;
 
 -- Finding 7, ruling 82 (owner, 2026-10-08): legacy bracket rows stored decided/finalized
 -- with a level outcome move to needs_decision, so the organiser sees the block instead of an exception page.
--- The update names `status`, so fixtures_track_finished fires and clears finished_at for them.
+-- The update names `status`, so fixtures_track_finished fires; decided/finalized and needs_decision are all in
+-- its finished set (ruling D-M1, above), so the moved rows KEEP their finished_at.
 -- Review M-4: the block reports what it moved. needs_decision does not exist before this migration, so every
 -- needs_decision row after the update is one it moved; complete_stages_holding_one counts the stages already
 -- marked complete that hold such a row. stages.status is a stored flag (competition.ts completeStageIfReady writes

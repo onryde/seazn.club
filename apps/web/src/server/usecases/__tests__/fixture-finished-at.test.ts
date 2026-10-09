@@ -1,14 +1,16 @@
 // single-sport: finished_at keys on fixtures.status; no sport module writes it
 //
-// V430's `fixtures_track_finished` (capture QR v2 PR-1 T3, spec §8.1, C2/C5, ruling R8 / §17.7).
+// V430's `fixtures_track_finished` (capture QR v2 PR-1 T3, spec §8.1, C2/C5, ruling R8 / §17.7), as V432
+// redefines it: format matrix W2a's held `needs_decision` joins the finished set (controller ruling D-M1,
+// 2026-10-09: no play remains, so it arms the automatic stop like the others).
 // `finished_at` is when a fixture entered the finished set, kept in ONE place for every writer:
 // entering the set stamps it, staying inside keeps the FIRST stamp, leaving clears it. The code's
 // expiry (C2: finished_at + 120 min) reads it, so a stamp that moved on an in-set update would
 // push expiry out, and a stamp that survived a reverted result would expire a live code.
 //
 // Sources of truth — never the trigger under test:
-//   - the status vocabulary is V214's CHECK list, parsed from the file (and pinned against the
-//     live constraint);
+//   - the status vocabulary is the LATEST CHECK list, V432's (V214's seven plus needs_decision), parsed
+//     from the file (and pinned against the live constraint);
 //   - the finished set is spec §3's "finished" row, parsed from the spec.
 //
 // "Another sport" (R8, A20): no sport module writes fixtures.status, so the sweep runs over the
@@ -46,20 +48,19 @@ afterAll(async () => {
 // ---- the declarations ------------------------------------------------------------------------
 
 const quoted = (list: string): string[] => [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
-/** V214: `status text not null default 'scheduled' check (status in ('scheduled', …))`. */
-const STATUSES = quoted(
-  /\bstatus\s+text not null default 'scheduled' check \(status in\s*\(([^)]*)\)\)/
-    .exec(readFileSync(resolve(ROOT, "db/migration/v2-engine/tables/V214__fixtures.sql"), "utf8"))?.[1] ?? "",
-);
+// "" before the file exists — never a module-scope throw, which would collect zero tests and read green.
+const fileText = (rel: string): string => (existsSync(resolve(ROOT, rel)) ? readFileSync(resolve(ROOT, rel), "utf8") : "");
+/** V432's statements, comments removed: its header names the old set in prose, which must not satisfy a regex meant for SQL. */
+const V432 = fileText("db/migration/deltas/V432__fixture_status_needs_decision.sql").replace(/--.*$/gm, "");
+/** V432: `add constraint fixtures_status_check check (status in ('scheduled', …, 'needs_decision'))` — the latest vocabulary. */
+const STATUSES = quoted(/add constraint fixtures_status_check check \(status in\s*\(([^)]*)\)\)/.exec(V432)?.[1] ?? "");
 /** Spec §3: `| **finished** | A fixture status in {`decided`, `finalized`, …}. …|`. */
 const FINISHED: ReadonlySet<string> = new Set(
   [...(/^\| \*\*finished\*\* \| A fixture status in \{([^}]*)\}/m
     .exec(readFileSync(resolve(ROOT, "docs/superpowers/specs/2026-10-01-capture-qr-v2-design.md"), "utf8"))?.[1] ?? "")
     .matchAll(/`([a-z_]+)`/g)].map((m) => m[1]!),
 );
-// "" before the file exists — never a module-scope throw, which would collect zero tests and read green.
-const V430_PATH = resolve(ROOT, "db/migration/deltas/V430__capture_stream_codes.sql");
-const V430 = existsSync(V430_PATH) ? readFileSync(V430_PATH, "utf8") : "";
+const V430 = fileText("db/migration/deltas/V430__capture_stream_codes.sql");
 
 /** finished_at at MICROSECOND precision — a JS Date rounds to the millisecond, and two stamps in
  *  one millisecond would read as "kept". */
@@ -79,14 +80,27 @@ async function dbNow(): Promise<bigint> {
 }
 
 describe("the declarations the trigger is checked against", () => {
-  it("V214 declares seven statuses, spec §3's finished set is five of them, and the rest is exactly scheduled and in_play", () => {
-    expect(STATUSES).toHaveLength(7);
-    expect(FINISHED.size).toBe(5);
+  it("V432's vocabulary holds spec §3's finished set, and the rest is exactly scheduled and in_play (needs_decision is finished, ruling D-M1)", () => {
+    expect(STATUSES.length, "V432's CHECK list was read").toBeGreaterThan(0);
+    expect(FINISHED.size, "spec §3's finished row was read").toBeGreaterThan(0);
     for (const s of FINISHED) expect(STATUSES, s).toContain(s);
     expect(STATUSES.filter((s) => !FINISHED.has(s)).sort()).toEqual(["in_play", "scheduled"]);
+    expect(FINISHED.has("needs_decision"), "ruling D-M1: a held fixture is finished for the stream").toBe(true);
   });
 
-  it("V430's trigger and backfill name exactly spec §3's finished set (three lists, read off the file)", () => {
+  it("the trigger as V432 redefines it names exactly spec §3's finished set (two lists, read off the file)", () => {
+    const lists = [/if new\.status in \(([^)]*)\)/.exec(V432)?.[1], /old\.status not in \(([^)]*)\)/.exec(V432)?.[1]];
+    let checked = 0;
+    for (const l of lists) {
+      expect(l, "a list V432's fixtures_track_finished should carry").toBeDefined();
+      expect(quoted(l!).sort()).toEqual([...FINISHED].sort());
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("V430's trigger and backfill (superseded by V432) name spec §3's set WITHOUT needs_decision, which did not exist yet (three lists)", () => {
+    const before = [...FINISHED].filter((s) => s !== "needs_decision").sort();
     const lists = [
       /if new\.status in \(([^)]*)\)/.exec(V430)?.[1],
       /old\.status not in \(([^)]*)\)/.exec(V430)?.[1],
@@ -95,7 +109,7 @@ describe("the declarations the trigger is checked against", () => {
     let checked = 0;
     for (const l of lists) {
       expect(l, "a list V430 should carry").toBeDefined();
-      expect(quoted(l!).sort()).toEqual([...FINISHED].sort());
+      expect(quoted(l!).sort()).toEqual(before);
       checked++;
     }
     expect(checked).toBe(3);
@@ -103,14 +117,14 @@ describe("the declarations the trigger is checked against", () => {
 });
 
 describe.skipIf(!HAS_DB)("fixtures_track_finished — every status pair, insert, and a non-status update", () => {
-  it("V214 is still the live vocabulary: fixtures_status_check lists exactly its seven", async () => {
+  it("V432's list is the live vocabulary: fixtures_status_check lists exactly its statuses", async () => {
     const [def] = await sql<{ def: string }[]>`
       select pg_get_constraintdef(oid) as def from pg_constraint
        where conrelid = 'fixtures'::regclass and conname = 'fixtures_status_check'`;
     expect([...def!.def.matchAll(/'([^']+)'::text/g)].map((m) => m[1]!).sort()).toEqual([...STATUSES].sort());
   });
 
-  it("all 49 (A → B) pairs over V214's statuses: entering stamps, staying inside keeps the first stamp, leaving clears", async () => {
+  it(`all ${STATUSES.length ** 2} (A → B) pairs over V432's statuses: entering stamps, staying inside keeps the first stamp, leaving clears`, async () => {
     const { auth } = await seedOrg("pro");
     const { fixtureIds } = await divisionRig(auth, { entrants: 2 });
     const fx = fixtureIds[0]!;
@@ -145,7 +159,7 @@ describe.skipIf(!HAS_DB)("fixtures_track_finished — every status pair, insert,
         pairs++;
       }
     }
-    expect(pairs).toBe(49);
+    expect(pairs).toBe(STATUSES.length ** 2);
     // Each branch was walked as often as the set sizes say — none is vacuous.
     const f = FINISHED.size, n = STATUSES.length - FINISHED.size;
     expect(tally).toEqual({ stamped: n * f, kept: f * f, cleared: STATUSES.length * n });
@@ -203,7 +217,7 @@ describe.skipIf(!HAS_DB)("fixtures_track_finished — every status pair, insert,
         cleared++;
       }
     }
-    // The split is the declarations' own: §3's set against V214's vocabulary.
+    // The split is the declarations' own: §3's set against V432's vocabulary.
     expect({ kept, cleared }).toEqual({
       kept: STATUSES.filter((s) => FINISHED.has(s)).length,
       cleared: STATUSES.filter((s) => !FINISHED.has(s)).length,
