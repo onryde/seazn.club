@@ -214,6 +214,12 @@ export class Recorder {
    *  `decided` also counts the table stages played before a bracket, so a bracket that opens on a 2-in-3 offset (or
    *  has fewer than three fixtures) would never be asked for a decider. */
   bracketOrdinal = 0;
+  /** W2a review I-3: the fixtures bracketPolicy asked a HARD path of (a settle or a tie-break), in the order decideRound
+   *  reached them, and those of them decideFixture then found already finished - a walkover the scenario recorded, or a
+   *  recorded withdrawal's cascade. A hard-path slot a walkover consumed is not a decider the run still owes:
+   *  life-bracket-decider-exercised reads both, so "owed" comes from the run's own record, not from a table of rows. */
+  readonly hardPathSlots: string[] = [];
+  readonly hardPathPassedOver = new Set<string>();
   /** W2a (ruling T15-R3): every bracket fixture the harness drove, with what the product answered — what
    *  life-reference-bracket-finish judges against the reference family. */
   readonly bracketDrives: BracketDrive[] = [];
@@ -520,7 +526,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     // a RECORDED withdrawal's cascade may have finished it. Anything else is a
     // result nobody the harness can name wrote — a failing parity item, never
     // a silent return.
-    if (rec.streams.has(f.id) || rec.withdrawn.has(home) || rec.withdrawn.has(away)) return;
+    if (rec.streams.has(f.id) || rec.withdrawn.has(home) || rec.withdrawn.has(away)) { rec.hardPathPassedOver.add(f.id); return; }
     rec.parity.push({ fixtureId: f.id, local: null, product: toObservedOutcome(state.outcome), foreign: state.last_seq, finishedBefore: state.status, request: null });
     rec.notes.push(`${f.id}: already ${state.status} before the harness posted`);
     return;
@@ -649,6 +655,7 @@ export async function decideRound(ctx: ScenarioContext, rec: Recorder, setup: Di
     const higher: Side = setup.seedOf(f.home_entrant_id!) <= setup.seedOf(f.away_entrant_id!) ? "home" : "away";
     const outcome = !bracket ? defaultPolicy(setup, f, drawOk, rec.decided)
       : hooks.bracketPick !== undefined ? hooks.bracketPick(f, n, higher, bracketCfgOf) : bracketPolicy(setup, f, ctx.spec.sport, n, bracketCfgOf);
+    if (bracket && (outcome.kind === "settle" || outcome.kind === "tiebreak")) rec.hardPathSlots.push(f.id);
     await decideFixture(ctx, rec, setup, f, outcome, stage);
   }
   await hooks.afterRound?.(round, batch);

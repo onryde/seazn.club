@@ -116,6 +116,75 @@ describe("life-bracket-decider-exercised — zero is a failure, never an abstent
   });
 });
 
+// Review I-3: bracketPolicy asks the hard path of every third bracket fixture, but a walkover (M1) or a recorded
+// withdrawal can finish that fixture before decideFixture reaches it. The decider is then not owed for that slot. The
+// exemption is read from the run's own record (Recorder.hardPathSlots: the fixtures the policy asked a hard path of;
+// hardPathPassedOver: those decideFixture found already finished) and needs the record to SAY so - a run that asked no
+// slot at all (a bracket stage that was never reached) still owes the decider, because zero is a failure (R25).
+describe("life-bracket-decider-exercised - owed only if a hard-path slot reached a fixture left to decide (I-3)", () => {
+  const fx = (id: string, method?: string): ObservedFixture =>
+    ({ id, stageId: "s1", poolId: null, roundNo: 1, home: "a", away: "b", status: "decided", outcome: { kind: "win", winner: "a", ...(method === undefined ? {} : { method }) } as never, declared: null });
+  const run = (kind: string, fixtures: ObservedFixture[]): ObservedRun => ({
+    caseId: "c", facts: [], withdrawal: null, configEdit: null,
+    stages: [{ id: "s1", seq: 1, kind, config: {}, field: ["a", "b"], fieldSource: "division", fixtures, standings: [], generates: [], pairRounds: [], complete: null }],
+  });
+  const recorded = (slots: string[], passedOver: string[], posted: { settles?: number; tiebreaks?: number } = {}): Recorder => {
+    const rec = new Recorder();
+    rec.hardPathSlots.push(...slots);
+    for (const id of passedOver) rec.hardPathPassedOver.add(id);
+    rec.settlesPosted = posted.settles ?? 0;
+    rec.tiebreaksPosted = posted.tiebreaks ?? 0;
+    return rec;
+  };
+  const BRACKETS = StageKind.options.filter((k) => forbidsLevelResult(k));
+
+  it("every slot the policy asked fell on a fixture already finished, and nothing was posted: not owed - the check abstains, saying why, on every bracket kind", () => {
+    let judged = 0;
+    for (const kind of BRACKETS) {
+      const got = bracketDeciderExercised(recorded(["f1"], ["f1"]), run(kind, [fx("f1"), fx("f2")]));
+      expect(got, kind).toMatchObject({ id: "life-bracket-decider-exercised", verdict: "abstain", checked: 0 });
+      expect(got.reason, kind).toMatch(/not owed: .*1 hard-path slot/);
+      judged++;
+    }
+    expect(judged).toBe(BRACKETS.length);
+    expect(judged).toBeGreaterThan(0);
+  });
+
+  it("a slot reached a fixture left to decide and no decider was posted: owed, and it FAILS (the walkover took one slot, another was missed)", () => {
+    const got = bracketDeciderExercised(recorded(["f1", "f4"], ["f1"]), run("knockout", [fx("f1"), fx("f4")]));
+    expect(got).toMatchObject({ verdict: "fail" });
+    expect(got.evidence[0]).toMatch(/no decider posted/);
+  });
+
+  it("owed and posted: passes on counted items, and the read-back is judged as before", () => {
+    const got = bracketDeciderExercised(recorded(["f1", "f4"], ["f1"], { settles: 1 }), run("knockout", [fx("f1"), fx("f4", "settled_lot")]));
+    expect(got).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(bracketDeciderExercised(recorded(["f1", "f4"], ["f1"], { settles: 1 }), run("knockout", [fx("f1"), fx("f4")]))).toMatchObject({ verdict: "fail", evidence: [expect.stringMatching(/posted 1 settle\(s\), the product shows 0/)] });
+  });
+
+  it("every slot was passed over but a decider WAS posted (another stage's): the exemption does not apply, the read-back is still enforced", () => {
+    expect(bracketDeciderExercised(recorded(["f1"], ["f1"], { tiebreaks: 1 }), run("knockout", [fx("f1"), fx("f2", "tiebreak_rapid")]))).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(bracketDeciderExercised(recorded(["f1"], ["f1"], { tiebreaks: 1 }), run("knockout", [fx("f1"), fx("f2")]))).toMatchObject({ verdict: "fail" });
+  });
+
+  it("no slot asked at all (a bracket stage never reached) is NOT an exemption: zero is a failure, on every bracket kind", () => {
+    let judged = 0;
+    for (const kind of BRACKETS) {
+      const got = bracketDeciderExercised(recorded([], []), run(kind, [fx("f1")]));
+      expect(got, kind).toMatchObject({ verdict: "fail" });
+      expect(got.evidence[0], kind).toMatch(/no decider posted/);
+      judged++;
+    }
+    expect(judged).toBe(BRACKETS.length);
+  });
+
+  it("a slot passed over that the policy never asked is no exemption either: only an asked slot can be consumed", () => {
+    expect(bracketDeciderExercised(recorded([], ["f9"]), run("knockout", [fx("f1")]))).toMatchObject({ verdict: "fail" });
+    // …and an unasked pass-over cannot stand in for an asked slot that was reached (f4 is still owed).
+    expect(bracketDeciderExercised(recorded(["f1", "f4"], ["f1", "f9"]), run("knockout", [fx("f1"), fx("f4")]))).toMatchObject({ verdict: "fail", evidence: [expect.stringMatching(/no decider posted/)] });
+  });
+});
+
 describe("life-bracket-decider-exercised — a settle the recorded withdrawal struck is explained, not a missing read-back (M-6, R4 on a bracket)", () => {
   const settledFx = (id: string, status: string, method?: string): ObservedFixture =>
     ({ id, stageId: "s1", poolId: null, roundNo: 1, home: "a", away: "b", status, outcome: method === undefined ? null : ({ kind: "win", winner: "a", method } as never), declared: null });
@@ -247,11 +316,15 @@ describe("F1, M1 and R4 on a bracket row play THROUGH a decider too (M-6)", () =
     expect(judged).toBe(3 * SPORT_KEYS.length);
   });
 
-  // Review minor 2: the walkover takes ordinal 0 of the run's bracket fixtures, the policy's next hard-path slot is
-  // ordinal 3. The smallest bracket root is a page playoff of 4 entrants (the engine's generatePagePlayoff: q1, elim, q2,
-  // final): there the slot lands on the FINAL, so M1's check is not vacuous on the smallest bracket - and a root with
-  // fewer than 4 fixtures would owe the decider nowhere (the check would red "no decider posted").
-  it("M1 on the smallest bracket root (page_playoff_only, 4 entrants): the walkover takes the first match, and the decider is posted at the final, on every sport", async () => {
+  // Review I-3 (whole-branch review, false premise 50). M1's walkover takes the first bracket match of the run (bracket
+  // ordinal 0), and bracketPolicy's hard path is every third ordinal from 0. The decider is owed only if a hard-path slot
+  // reached a fixture the harness then decided: the slot a walkover took is consumed. On a page playoff the walkover's
+  // LOSER is not seated in q2 (the product records q2 as a bye award, E2's read of the database and CI's 9 reds
+  // `page_playoff_only|*|M1`), so only q1, elim and the final are ever driven - ordinals 0, 1, 2 - and the only hard-path
+  // slot is the walkover's own. An earlier version of this test seated the loser (the fake did) and so found a decider at
+  // the final, a root the product never produces. Every expected number below is derived from the engine's own
+  // generatePagePlayoff shape and the policy's every-third rule, never typed.
+  it("M1 on the smallest bracket root, page_playoff_only with 4 entrants, as the product runs it: the walkover's loser is not seated, the walkover took the only hard-path slot, so no decider is owed - named, not silent - on every sport", async () => {
     let judged = 0;
     for (const sport of SPORT_KEYS) {
       const variant = offlineBuilderDefault(sport);
@@ -261,28 +334,51 @@ describe("F1, M1 and R4 on a bracket row play THROUGH a decider too (M-6)", () =
       expect(checks.filter((c) => c.verdict === "fail").map((c) => `${c.id}: ${c.reason}`), sport).toEqual([]);
       const stage = out.observed.stages[0]!;
       expect(stage.kind, sport).toBe("page_playoff");
-      // The engine's own declarations: four entrants, and the page playoff's four matches with one final.
+      // The engine's shape: the walkover is the first match; the matches its loser would have been seated in are never driven.
       const shape = generatePagePlayoff({ entrants: ["e1", "e2", "e3", "e4"] }).fixtures;
       expect(stage.field, sport).toHaveLength(4);
       expect(stage.fixtures, sport).toHaveLength(shape.length);
-      const finals = stage.fixtures.filter((f) => f.extKey != null && (stage.terminalFinals ?? []).includes(f.extKey));
-      expect(finals, `${sport}: one final`).toHaveLength(1);
-      // The walkover is the first match (q1, ordinal 0): a forfeit, no decider.
-      const forfeited = stage.fixtures.filter((f) => f.status === "forfeited");
-      expect(forfeited.map((f) => f.extKey), sport).toEqual([shape[0]!.id]);
-      // The bracket fixtures run in play order, so the final is the last: ordinal shape.length - 1, a hard-path slot.
-      expect((shape.length - 1) % 3, `${sport}: the final lands on a hard-path slot`).toBe(0);
+      const walkover = shape[0]!;
+      const fedByItsLoser = shape.filter((g) => [g.homeFrom, g.awayFrom].some((r) => r?.fixtureId === walkover.id && r.side === "loser"));
+      expect(fedByItsLoser.length, `${sport}: the page playoff's q1 loser plays on in q2`).toBeGreaterThan(0);
+      const row = (ext: string) => stage.fixtures.find((f) => f.extKey === ext)!;
+      expect(row(walkover.id).status, sport).toBe("forfeited");
+      for (const g of fedByItsLoser) expect(row(g.id).outcome?.kind, `${sport}: ${g.id} is awarded through, the walkover's loser never seated`).toBe("award");
+      // Driven = every match but the ones awarded through; the policy asks the hard path of each third one from ordinal 0.
+      const driven = shape.length - fedByItsLoser.length;
+      const hardSlots = Array.from({ length: driven }, (_, o) => o).filter((o) => o % 3 === 0);
+      expect(hardSlots, `${sport}: the walkover's own slot is the ONLY hard-path slot of the run`).toEqual([0]);
+      const owed = hardSlots.length - 1;
+      expect(owed, sport).toBe(0);
+      const deciders = stage.fixtures.filter((f) => f.outcome?.kind === "win" && /^(settled|tiebreak)_/.test((f.outcome as { method?: string }).method ?? ""));
+      expect(deciders, `${sport}: no decider was posted, none was owed`).toHaveLength(owed);
+      const check = checks.find((c) => c.id === "life-bracket-decider-exercised")!;
+      expect(check, sport).toMatchObject({ verdict: "abstain", checked: 0 });
+      expect(check.reason, sport).toMatch(/not owed/);
+      judged++;
+    }
+    expect(judged).toBe(SPORT_KEYS.length);
+    expect(judged).toBeGreaterThan(0);
+  });
+
+  it("M1 on a knockout of 8 entrants: the walkover takes slot 0 and the other hard-path slots are owed, posted and read back - the check passes on counted items, on every sport", async () => {
+    let judged = 0;
+    for (const sport of SPORT_KEYS) {
+      const { out, checks } = await play("M1", sport);
+      const stage = out.observed.stages[0]!;
+      // Derived: a knockout of n entrants plays n - 1 matches, the hard path is every third ordinal from 0, the walkover took ordinal 0.
+      const driven = out.observed.stages[0]!.fixtures.length;
+      expect(driven, sport).toBe(7);
+      const owed = Array.from({ length: driven }, (_, o) => o).filter((o) => o % 3 === 0).length - 1;
+      expect(owed, sport).toBe(2);
       const prefix = sport === "boardgame" ? "tiebreak_" : "settled_";
-      const methodOf = (f: (typeof stage.fixtures)[number]): string => (f.outcome?.kind === "win" ? ((f.outcome as { method?: string }).method ?? "") : "");
-      expect(methodOf(finals[0]!).startsWith(prefix), `${sport}: the final's method is ${methodOf(finals[0]!)}`).toBe(true);
-      // And it is the ONLY decider: q1 was forfeited, elim and q2 play out.
-      expect(stage.fixtures.filter((f) => methodOf(f).startsWith(prefix)).map((f) => f.id), sport).toEqual([finals[0]!.id]);
+      const shown = stage.fixtures.filter((f) => f.outcome?.kind === "win" && ((f.outcome as { method?: string }).method ?? "").startsWith(prefix));
+      expect(shown, `${sport}: the deciders owed are on the product's side`).toHaveLength(owed);
       const check = checks.find((c) => c.id === "life-bracket-decider-exercised")!;
       expect(check.verdict, `${sport}: ${check.reason}`).toBe("pass");
       expect(check.checked, sport).toBeGreaterThan(0);
       judged++;
     }
     expect(judged).toBe(SPORT_KEYS.length);
-    expect(judged).toBeGreaterThan(0);
   });
 });

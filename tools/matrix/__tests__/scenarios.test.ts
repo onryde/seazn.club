@@ -2137,6 +2137,38 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     const none = await runOn(new ThroughAnswersNone({ pagePlayoff: true }), "R4", ppR4);
     expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; withdrawal.ts open-format rule)"] });
   });
+  // Whole-branch review I-3: the product seats a page playoff walkover's loser NOWHERE (pp-q2 becomes a bye award that never
+  // reaches a batch). The fake does the same, whichever of the two matches that feed pp-q2 finishes first - the order M1
+  // plays (walkover, then pp-elim) and the other one (pp-elim, then the walkover).
+  it("the fake seats a page playoff walkover's loser nowhere: pp-q2 is awarded through to pp-elim's winner and pp-final is seated, in either order", async () => {
+    let judged = 0;
+    for (const elimFirst of [false, true]) {
+      const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+      const ctx = ctxFor(driver, "M1", ppRow);
+      const rec = new Recorder();
+      const setup = await setUpDivision(ctx, rec, ppField);
+      const rows = await driver.listFixtures();
+      const rowOf = (ext: string) => rows.find((r) => r.id === driver.extIds.get(ext))!;
+      const q1 = rowOf("pp-q1");
+      const elim = rowOf("pp-elim");
+      const walkover = () => decideFixture(ctx, rec, setup, q1, { kind: "forfeit", by: "away", reason: "walkover" });
+      const playElim = () => decideFixture(ctx, rec, setup, elim, { kind: "win", winner: "home" });
+      if (elimFirst) { await playElim(); await walkover(); } else { await walkover(); await playElim(); }
+      const fx = (ext: string) => driver.fixtures.find((f) => f.id === driver.extIds.get(ext))!;
+      const shape = generatePagePlayoff({ entrants: ids(ppField) }).fixtures;
+      // The engine's wiring: pp-q2 is fed by pp-q1's LOSER and pp-elim's winner; pp-final by pp-q1's winner and pp-q2's winner.
+      const q2 = shape.find((g) => [g.homeFrom, g.awayFrom].some((r) => r?.fixtureId === "pp-q1" && r.side === "loser"))!;
+      expect(q2.id, "the engine feeds pp-q1's loser to pp-q2").toBe("pp-q2");
+      const home = q1.home_entrant_id!;
+      const elimWinner = elim.home_entrant_id!;
+      expect(fx("pp-q1"), `elimFirst ${elimFirst}`).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: home } });
+      expect(fx("pp-q2"), `elimFirst ${elimFirst}: the walkover's loser is not seated, so the other seat is awarded through`).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: elimWinner } });
+      expect(fx("pp-q2").home_entrant_id === q1.away_entrant_id || fx("pp-q2").away_entrant_id === q1.away_entrant_id, `elimFirst ${elimFirst}: the absent side is nowhere in pp-q2`).toBe(false);
+      expect([fx("pp-final").home_entrant_id, fx("pp-final").away_entrant_id].sort(), `elimFirst ${elimFirst}`).toEqual([home, elimWinner].sort());
+      judged++;
+    }
+    expect(judged).toBe(2);
+  });
   it("M1 and R4 seed the same 4 there", async () => {
     for (const k of ["M1", "R4"] as const) {
       const driver = new FakeKnockoutDriver({ pagePlayoff: true });

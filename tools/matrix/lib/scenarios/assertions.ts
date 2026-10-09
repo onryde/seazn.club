@@ -223,10 +223,22 @@ export function drawPathExercised(rec: Recorder, observed: ObservedRun, drawOk: 
  *  where bracketPolicy posts settles". A decider the RECORDED withdrawal struck after it was posted (R4: an expunge
  *  abandons the unlocked fixtures of the departed entrant, the settled one among them) is explained by the cascade the
  *  way life-results-as-posted explains it (cascadeWrote), and counted, never silently dropped. BRACKET_EXTRA_BOARD is
- *  the one scenario that stays out: its extra board is the pad's and it posts no settle. */
+ *  the one scenario that stays out: its extra board is the pad's and it posts no settle.
+ *
+ *  Review I-3 (whole-branch review, false premise 50): the decider is owed only if a hard-path slot reached a fixture
+ *  the harness then decided. M1's walkover takes the first bracket match of the run - which is bracketPolicy's first
+ *  hard-path slot - and on a page playoff the walkover's loser is not seated in q2 (the product awards q2 through, so it
+ *  never reaches a batch), which leaves no other slot: nothing level-capable was left to decide and the check abstains,
+ *  naming it. "Owed" is read from the run's own record (Recorder.hardPathSlots / hardPathPassedOver), never from a table
+ *  of rows or sports, and only when the record SAYS every asked slot was consumed and nothing was posted: a run that
+ *  asked no slot at all (a bracket stage that was never reached) still owes one, because zero is a failure (R25). */
 export function bracketDeciderExercised(rec: Recorder, observed: ObservedRun): CheckResult {
   const brackets = observed.stages.filter((s) => forbidsLevelResult(s.kind as StageKind));
   if (brackets.length === 0) return assertion("life-bracket-decider-exercised", [], "no bracket stage in this run: a level result cannot stall it");
+  const reached = rec.hardPathSlots.filter((id) => !rec.hardPathPassedOver.has(id));
+  if (rec.hardPathSlots.length > 0 && reached.length === 0 && rec.settlesPosted + rec.tiebreaksPosted === 0) {
+    return assertion("life-bracket-decider-exercised", [], `not owed: the bracket policy asked for ${rec.hardPathSlots.length} hard-path slot(s) and the run had already finished every one of those fixtures (a walkover or a recorded withdrawal), so no level-capable fixture was left to decide`);
+  }
   const fixtures = brackets.flatMap((s) => s.fixtures);
   const settled = fixtures.filter((f) => f.outcome?.kind === "win" && f.outcome.method?.startsWith("settled_") === true).length;
   const tiebroken = fixtures.filter((f) => f.outcome?.kind === "win" && f.outcome.method?.startsWith("tiebreak_") === true).length;

@@ -3,6 +3,8 @@
 // variants at import, so a scorable() that forgot the overlay would crash COLLECTION there, and a suite that fails to
 // collect proves nothing (the mutation runner counts COLLECT_FAILED as no kill).
 import { describe, expect, it } from "vitest";
+import { SPORT_KEYS } from "../lib/catalogue.ts";
+import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import { scorable } from "../lib/variants.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
@@ -18,12 +20,18 @@ describe("scorable under the stage overlay (W2a, CA-KO-1, BG-KO-1)", () => {
     expect(scorable(vc("carrom", "league", { tieBoard: "draw" }))).toBeNull();
   });
 
-  it("a chess win in a knockout row folds under the tie-break cfg and is still a win; every sport the overlay touches was judged", () => {
+  it("a win in a knockout row folds under the stage overlay and is still a win; every sport the engine says the overlay touches was judged", () => {
+    // Whole-branch review M5: the list was typed (["boardgame", "carrom"]) under a title that promised "every sport the
+    // overlay touches". It is the modules whose bracketDeciders(cfg) is non-empty under their default cfg - the engine's own
+    // declaration - so a sport that gains an overlay joins the sweep, and an empty list is a failure, never a pass.
+    const touched = SPORT_KEYS.filter((sport) => Object.keys(sportModule(sport).bracketDeciders(resolveSportCfg(sport, offlineBuilderDefault(sport))) as Record<string, unknown>).length > 0);
+    expect(touched.length, "sports whose module declares a bracket overlay").toBeGreaterThan(0);
+    expect(touched.length, "an overlay is the exception, not every sport").toBeLessThan(SPORT_KEYS.length);
     let judged = 0;
-    for (const sport of ["boardgame", "carrom"]) {
+    for (const sport of touched) {
       expect(scorable(vc(sport, "knockout", {})), sport).toBeNull();
       judged++;
     }
-    expect(judged).toBe(2);
+    expect(judged).toBe(touched.length);
   });
 });
