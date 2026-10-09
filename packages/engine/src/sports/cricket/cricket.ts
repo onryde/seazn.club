@@ -18,6 +18,7 @@ import {
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
+  type ForfeitPhase,
   type MatchOutcome,
   type ScoreSummary,
   type StageCtx,
@@ -1136,6 +1137,16 @@ function applyRevise(
   // A shrunk quota or lowered target can resolve the match immediately.
   return autoClose(next);
 }
+
+/** W2b (plan D3) — the kernel's forfeit guard reads cricket's phase through this Record (closed union, so a phase
+ *  added later cannot go unclassified). Cricket has no "abandoned" phase: an abandon decides (`done`). */
+const CRICKET_FORFEIT_PHASE: Record<CricketState["phase"], ForfeitPhase> = {
+  pre: "pre",
+  live: "play",
+  super_over: "play",
+  done: "over",
+  final: "over",
+};
 
 // core.abandon — spec §2.3: no_result below the minimum, DLS par decision
 // beyond it (method 'dls'); 2-innings matches are drawn.
@@ -3775,11 +3786,15 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       case "core.forfeit": {
         if (state.phase === "done" || state.phase === "final") wrongPhase("match already over");
         const { by, reason } = forfeitOf(ev.payload);
-        const winner = opponent(sideOf(state, by));
+        // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the
+        // closed reason. The table's credit is `forfeitCredit`'s (W2b Task 4).
+        if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" }, margin: null };
+        const loser = sideOf(state, by);
+        const winner = opponent(loser);
         return {
           ...state,
           phase: "done",
-          outcome: { kind: "award", winner: state.entrants[winner], method: reason },
+          outcome: { kind: "award", winner: state.entrants[winner], loser: state.entrants[loser], reason },
           margin: null,
         };
       }
@@ -3797,6 +3812,8 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   },
 
   outcome: (state) => state.outcome,
+  // W2b (plan D3) — see CRICKET_FORFEIT_PHASE. A super over is play (ruling 102 Q5).
+  forfeitPhase: (state) => CRICKET_FORFEIT_PHASE[state.phase],
 
   // W4a (#425) T6b — the cross-sport position axis (see `cricketPosition`).
   position: cricketPosition,
@@ -4112,7 +4129,8 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     if (roll < 0.006) {
       return {
         type: "core.forfeit",
-        payload: { by: rng() < 0.5 ? state.entrants.home : state.entrants.away, reason: "walkover" },
+        // W2b D3: play has started, so a retirement or a disqualification (never a walkover), from the roll taken.
+        payload: { by: rng() < 0.5 ? state.entrants.home : state.entrants.away, reason: roll < 0.005 ? "retired" : "disqualified" },
       };
     }
     if (roll < 0.012 && state.quota !== null && state.cfg.inningsPerSide === 1) {

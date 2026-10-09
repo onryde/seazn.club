@@ -204,7 +204,7 @@ function ruleCorpus(): { outcome: MatchOutcome; pair: FixtureResult }[] {
   corpus.push(
     { outcome: { kind: "win", winner: "H", loser: "A", method: "walkover" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
     { outcome: { kind: "win", winner: "H", loser: "A", method: "forfeit" }, pair: [delta("H", 1, 0, 0, 21, 3), delta("A", 0, 0, 1, 3, 21)] },
-    { outcome: { kind: "award", winner: "H" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
+    { outcome: { kind: "award", winner: "H", loser: "A", reason: "walkover" }, pair: [delta("H", 1, 0, 0, 0, 0), delta("A", 0, 0, 1, 0, 0)] },
     { outcome: { kind: "tie" }, pair: [delta("H", 0, 1, 0, 5, 5), delta("A", 0, 1, 0, 5, 5)] },
     { outcome: { kind: "tie" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },
     { outcome: { kind: "no_result" }, pair: [blank("H", 0, 0, 0), blank("A", 0, 0, 0)] },

@@ -282,13 +282,10 @@ describe("football golden (h): summary()'s pens tally IS shootoutTally, never a 
 // PROMPT-04 §10 (c) — forfeit ⇒ award with cfg.awardScore goals.
 describe("football golden (c): forfeit award 3-0", () => {
   it("awards the tie to the opponent with the configured score", () => {
-    const state = fold(leagueCfg, stream(["core.start"], ["core.forfeit", { by: "A", reason: "no-show" }]));
-    expect(state.outcome).toEqual({
-      kind: "award",
-      winner: "H",
-      score: { home: 3, away: 0 },
-      method: "no-show",
-    });
+    // W2b: a no-show is a walkover, recorded before kick-off (the phase guard refuses one after `core.start`); the
+    // award names its loser and the closed reason, and carries no score — the 3-0 is `forfeitCredit`'s.
+    const state = fold(leagueCfg, stream(["core.forfeit", { by: "A", reason: "walkover" }]));
+    expect(state.outcome).toEqual({ kind: "award", winner: "H", loser: "A", reason: "walkover" });
     expect(football.summary(state).headline).toBe("3 — 0");
     const [home, away] = football.standingsDelta(state.outcome!, leagueCfg, league, state);
     expect(home).toMatchObject({ won: 1, points: 3, metrics: { gf: 3, ga: 0, gd: 3 } });
@@ -407,12 +404,15 @@ describe("football state machine guards (spec 04 §1.3)", () => {
     expect(football.summary(state).detail).toMatchObject({ abandoned: true });
   });
 
-  it("awards an abandoned fixture to the leader under the award policy", () => {
+  it("FB-AB-1 (W2b D8): under the award policy an abandoned fixture is the leader's win on the real score, and a level one is a draw", () => {
+    // W2b rewrites this pin (ruling 102 Q3): it was `award{winner}` for the leader and `no_result` when level. Nobody
+    // forfeited, so it is not an award; the real goals stand in state.
     const cfg = football.configSchema.parse({ abandonPolicy: "award" });
     const leader = fold(cfg, stream(["core.start"], ["football.goal", { by: "A" }], ["core.abandon", { reason: "crowd" }]));
-    expect(football.outcome(leader)).toMatchObject({ kind: "award", winner: "A" });
+    expect(football.outcome(leader)).toEqual({ kind: "win", winner: "A", loser: "H", method: "abandoned" });
+    expect(leader.goals).toEqual({ home: 0, away: 1 });
     const level = fold(cfg, stream(["core.start"], ["core.abandon", { reason: "crowd" }]));
-    expect(football.outcome(level)).toEqual({ kind: "no_result" });
+    expect(football.outcome(level)).toEqual({ kind: "draw" });
   });
 });
 

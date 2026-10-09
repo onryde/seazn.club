@@ -227,7 +227,7 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
       for (const { name, cfg } of declaredCfgs(module as never)) {
         const run = (events: EventEnvelope[]) => foldMatchWithStoppage(module, cfg as never, lineups, events);
         // The module's own answer to a second finalize, on a fixture decided by a forfeit and finalized once.
-        const forfeited = [ev(1, "core.start"), ev(2, "core.forfeit", { by: lineups.away.entrantId, reason: "no-show" }), ev(3, "core.finalize")];
+        const forfeited = [ev(1, "core.start"), ev(2, "core.forfeit", { by: lineups.away.entrantId, reason: "retired" }), ev(3, "core.finalize")];
         expect(outcomeOf(module, run(forfeited)), `${key}/${name}`).not.toBeNull();
         const moduleSecond = codeOf(() => run([...forfeited, ev(4, "core.finalize")]));
         if (moduleSecond !== null && !moduleRefusesSecond.includes(key)) moduleRefusesSecond.push(key);

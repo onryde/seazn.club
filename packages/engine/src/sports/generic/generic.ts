@@ -10,6 +10,7 @@ import {
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
+  type ForfeitPhase,
   type MatchOutcome,
   type ScoreSummary,
   type StageCtx,
@@ -74,6 +75,10 @@ export type GenericScore = z.infer<typeof GenericScore>;
 
 export const GenericEvent = z.union([GenericResult, GenericScore]);
 export type GenericEv = z.infer<typeof GenericEvent>;
+
+/** W2b (plan D3) — the kernel's forfeit guard reads generic's phase through this Record (closed union, so a phase
+ *  added later cannot go unclassified). */
+const FORFEIT_PHASE: Record<GenericState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over" };
 
 export interface GenericState {
   phase: "pre" | "live" | "done" | "final";
@@ -564,8 +569,12 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
           throw new EngineError("WRONG_PHASE", "match already over");
         }
         const { by, reason } = forfeitOf(ev.payload);
-        const winner = state.entrants[opponent(sideOf(state, by))];
-        return { ...state, phase: "done", outcome: { kind: "award", winner, method: reason } };
+        // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the
+        // closed reason. The table's credit is `forfeitCredit`'s (W2b Task 4).
+        if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
+        const loserSide = sideOf(state, by);
+        const winner = state.entrants[opponent(loserSide)];
+        return { ...state, phase: "done", outcome: { kind: "award", winner, loser: state.entrants[loserSide], reason } };
       }
       case "core.abandon": {
         if (state.phase !== "pre" && state.phase !== "live") {
@@ -586,6 +595,7 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   },
 
   outcome: (state) => state.outcome,
+  forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
 
   // §9.5 — defined at every prefix; before any result the headline is "—".
   summary(state): ScoreSummary {
@@ -704,7 +714,8 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
     const roll = rng();
     if (roll < 0.08) {
       const by = rng() < 0.5 ? state.entrants.home : state.entrants.away;
-      return { type: "core.forfeit", payload: { by, reason: "walkover" } };
+      // W2b D3: a walkover only before play; once started, a retirement or a disqualification (from the roll taken).
+      return { type: "core.forfeit", payload: { by, reason: state.phase === "pre" ? "walkover" : roll < 0.04 ? "retired" : "disqualified" } };
     }
     if (roll < 0.15) return { type: "core.abandon", payload: { reason: "rain" } };
     // W4 — a scoring action on the running tally. Person ids follow the

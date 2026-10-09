@@ -108,6 +108,7 @@ function makeFakeModule(over: Partial<SportModule<FakeCfg, FakeEv, FakeState>> =
       }
     },
     outcome: (): MatchOutcome | null => null,
+    forfeitPhase: () => "play",
     summary: (): ScoreSummary => ({ headline: "", perSide: [] }),
     standingsDelta: (): [StandingsDelta, StandingsDelta] => [
       { entrantId: "H", played: 1, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} },

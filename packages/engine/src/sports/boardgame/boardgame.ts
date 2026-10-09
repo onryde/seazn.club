@@ -16,6 +16,8 @@ import {
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
+  type ForfeitPhase,
+  type ForfeitReason,
   type MatchOutcome,
   type ScoreSummary,
   type StageKind,
@@ -289,11 +291,14 @@ function decideResult(
     ...(extra.winnerPerson === undefined ? {} : { winnerPerson: extra.winnerPerson }),
   };
   if (winner === null) {
-    // Double forfeit ⇒ no result (both default); otherwise an ordinary draw —
-    // unless this is a bracket game (BG-KO-1), which goes to the tie-break.
-    // The double forfeit is checked FIRST: it is not a drawn game, so it never
-    // opens a tie-break (controller ruling T15-R1; held needs_decision, X-BR-2).
-    if (method === "double_forfeit") return { ...base, outcome: { kind: "no_result" } };
+    // Double forfeit ⇒ a DOUBLE WALKOVER in every stage kind (W2b BG-DW-1: both
+    // players absent — nobody advances, both lose, 0 points); otherwise an
+    // ordinary draw — unless this is a bracket game (BG-KO-1), which goes to the
+    // tie-break. The double forfeit is checked FIRST: it is not a drawn game, so
+    // it never opens a tie-break. It replaces T15-R1's held `no_result`, which a
+    // settle had to close; a settle recorded over one before W2b still replays
+    // (the kernel's legacy settle, D6).
+    if (method === "double_forfeit") return { ...base, outcome: { kind: "double_walkover" } };
     if (state.cfg.tiebreak === true) return { ...base, phase: "tiebreak", outcome: null, tiebreak: {} };
     return { ...base, outcome: { kind: "draw" } };
   }
@@ -308,6 +313,38 @@ function decideResult(
     },
   };
 }
+
+// W2b (spec §5.2, chess unified) — `core.forfeit` decides the same
+// `award{winner, loser, reason}` as the other ten modules, or `double_walkover`
+// for `by: "both"`. It used to decide `win{method:"forfeit"}` and drop the
+// reason, which seated the loser in a double-elimination losers' bracket
+// (DE-RK). Recordable before the game, during it and in a pending tie-break
+// (FIDE Laws 6.7.1; R14 — the kernel's phase guard judges which reason, this
+// module only refuses a game that is over). `forfeited: true` and the method
+// enum value keep the colour history and the pad reading the game as unplayed.
+function applyForfeit(state: BoardgameState, by: string, reason: ForfeitReason): BoardgameState {
+  if (state.phase !== "pre" && state.phase !== "live" && state.phase !== "tiebreak") {
+    wrongPhase(`forfeit not allowed in phase "${state.phase}"`);
+  }
+  const base = { ...state, phase: "done" as const, forfeited: true };
+  if (by === "both") return { ...base, method: "double_forfeit", outcome: { kind: "double_walkover" } };
+  const loserSide = sideOf(state, by);
+  return {
+    ...base,
+    method: "forfeit",
+    outcome: { kind: "award", winner: state.entrants[opponent(loserSide)], loser: state.entrants[loserSide], reason },
+  };
+}
+
+/** W2b (plan D3) — the kernel's forfeit guard reads boardgame's phase through this Record (closed union). */
+const FORFEIT_PHASE: Record<BoardgameState["phase"], ForfeitPhase> = {
+  pre: "pre",
+  live: "play",
+  tiebreak: "tiebreak",
+  done: "over",
+  final: "over",
+  abandoned: "over",
+};
 
 // W4 — the arbiter's pairing card. Recordable before or during the game (an
 // arbiter corrects a mis-set board); refused once the game is over.
@@ -708,19 +745,8 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
       case BOARDGAME_TIEBREAK_TYPE:
         return applyTiebreak(state, parsePayload(BoardgameTiebreak, ev.payload, ev.type));
       case "core.forfeit": {
-        if (state.phase !== "live") wrongPhase(`forfeit not allowed in phase "${state.phase}"`);
-        // The REASON is deliberately not carried onto the outcome here, and
-        // boardgame is the only module that does not carry it. Its
-        // `outcome.method` is already a MEANINGFUL typed value — the
-        // `BoardgameMethod` enum, "forfeit" — where the other ten leave the
-        // field empty, so filling it from `core.forfeit`'s free-text reason
-        // would overwrite a classification with prose and cost more than it
-        // buys. Boardgame states a walkover through its own `boardgame.result`
-        // method enum instead (padSpec offers it; see the "single forfeit
-        // rides boardgame.result's own method enum" test). Recording the
-        // finer-grained reason for boardgame too is a separate, smaller gap.
-        const { by } = forfeitOf(ev.payload);
-        return decideResult(state, state.entrants[opponent(sideOf(state, by))], "forfeit");
+        const { by, reason } = forfeitOf(ev.payload);
+        return applyForfeit(state, by, reason);
       }
       case "core.abandon":
         if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
@@ -740,6 +766,10 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   },
 
   outcome: (state) => state.outcome,
+  forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
+  // W2b (plan D3 R2) — chess records a walkover before the game, after the session starts (FIDE Laws 6.7.1: a
+  // player absent at the default time) and in a pending tie-break (R14). The only module that widens ["pre"].
+  walkoverPhases: ["pre", "play", "tiebreak"],
 
   // §9.5 — defined at every prefix; displays points, not half-points.
   summary(state): ScoreSummary {
@@ -845,8 +875,19 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
           build("home", 0, 1, 0, cfg.scoring.draw, false),
           build("away", 0, 1, 0, cfg.scoring.draw, false),
         ];
+      case "double_walkover": {
+        // W2b X-DW-1 / BG-DW-1 — both players absent: each is charged a game played and LOST, 0 points, and nothing
+        // enters colour history (an unplayed state, as the award above). A double forfeit was a held no_result
+        // before W2b; this arm is what a `boardgame.result{double_forfeit}` now ranks as.
+        const unplayed: BoardgameState = { ...state, forfeited: true };
+        return [
+          build("home", 0, 0, 1, 0, false, unplayed),
+          build("away", 0, 0, 1, 0, false, unplayed),
+        ];
+      }
       case "no_result":
-        // Double forfeit — both default to a zero score (chess.md §7).
+        // An abandoned game that nothing settled — nobody's win, draw or loss (chess.md §7). (A double forfeit was
+        // ranked here before W2b; it is a double walkover now, above.)
         return [
           build("home", 0, 0, 0, 0, false),
           build("away", 0, 0, 0, 0, false),
@@ -970,7 +1011,10 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     if (state.phase !== "live") return null;
     const roll = rng();
     if (roll < 0.05) {
-      return { type: "core.forfeit", payload: { by: state.entrants[rng() < 0.5 ? "home" : "away"], reason: "no-show" } };
+      // W2b D3: a legal reason for the phase (chess admits a walkover after the session starts), drawn from the
+      // roll already taken so the generator's rng stream is unchanged.
+      const reason = roll < 0.02 ? "walkover" : roll < 0.035 ? "retired" : "disqualified";
+      return { type: "core.forfeit", payload: { by: state.entrants[rng() < 0.5 ? "home" : "away"], reason } };
     }
     if (roll < 0.1) {
       return { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } };

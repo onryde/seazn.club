@@ -115,8 +115,8 @@ describe("generic — score mode (v1 parity)", () => {
 
 describe("generic — core event mapping (spec 03 §2 table)", () => {
   it("maps core.forfeit to an award for the other side", () => {
-    const state = fold(winLossCfg, stream(["core.start"], ["core.forfeit", { by: "H", reason: "no-show" }]));
-    expect(state.outcome).toEqual({ kind: "award", winner: "A", method: "no-show" });
+    const state = fold(winLossCfg, stream(["core.start"], ["core.forfeit", { by: "H", reason: "retired" }]));
+    expect(state.outcome).toEqual({ kind: "award", winner: "A", loser: "H", reason: "retired" });
     const [home, away] = generic.standingsDelta(state.outcome!, winLossCfg, league, state);
     expect(home).toMatchObject({ lost: 1, points: 0 });
     expect(away).toMatchObject({ won: 1, points: 3 });
@@ -213,9 +213,10 @@ describe("generic — running tally (W4)", () => {
   it("never lets the tally override a recorded result", () => {
     const state = fold(
       scoreCfg,
-      stream(["generic.score", { by: "H", points: 4 }], ["core.forfeit", { by: "H", reason: "no-show" }]),
+      // No core.start: generic's phase is still "pre" (a tally alone does not start play), so the reason is a walkover.
+      stream(["generic.score", { by: "H", points: 4 }], ["core.forfeit", { by: "H", reason: "walkover" }]),
     );
-    expect(state.outcome).toEqual({ kind: "award", winner: "A", method: "no-show" });
+    expect(state.outcome).toEqual({ kind: "award", winner: "A", loser: "H", reason: "walkover" });
     expect(generic.summary(state).headline).toBe("L — W/O");
   });
 

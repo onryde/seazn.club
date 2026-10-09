@@ -43,11 +43,14 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     expect(Object.hasOwn(boardgame.summary(fold(league, drawn)).detail as object, "tiebreak")).toBe(false);
   });
 
-  it("BG-KO-1: a double forfeit still folds to no_result (W2b owns it), never a tie-break", () => {
-    expect(boardgame.outcome(fold(ko, [ev(1, "core.start"), ev(2, "boardgame.result", { winner: null, method: "double_forfeit" })]))).toEqual({ kind: "no_result" });
+  it("BG-DW-1 (W2b): a double forfeit folds to double_walkover in a bracket and a league alike, never a tie-break", () => {
+    // W2b retires T15-R1's held `no_result`: both players absent is a double walkover — nobody advances, both lose.
+    const df = [ev(1, "core.start"), ev(2, "boardgame.result", { winner: null, method: "double_forfeit" })];
+    expect(boardgame.outcome(fold(ko, df))).toEqual({ kind: "double_walkover" });
+    expect(boardgame.outcome(fold(league, df))).toEqual({ kind: "double_walkover" });
   });
 
-  it("T15-R1 BG-KO-1: only a game the league calls DRAWN enters the tie-break — a bracket double forfeit is held no_result, awaitingDecider false, closed by settle", () => {
+  it("BG-KO-1 / BG-DW-1: only a game the league calls DRAWN enters the tie-break — a bracket double forfeit is a double walkover, awaitingDecider false; a new settle is refused, a legacy one replays (D6)", () => {
     // Every null-winner method (and the omitted one): in a bracket, a method whose league fold is a draw goes to
     // phase tiebreak; any other folds exactly as the league does. The ruling names the one other: double_forfeit.
     const methods: (string | undefined)[] = [...BoardgameMethod.options, undefined];
@@ -72,11 +75,14 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     }
     expect(held).toEqual(["double_forfeit"]);
     expect(tiebreaks).toBe(methods.length - 1);
-    // Held, not stalled: no tie-break is accepted after it (ruling D-C7: TIEBREAK_NOT_APPLICABLE, spec §7), and settle
-    // (X-ST-1) closes it.
+    // Decided, not held: no tie-break is accepted after it (ruling D-C7: TIEBREAK_NOT_APPLICABLE, spec §7), and a
+    // NEW settle is refused (a double walkover is not level, X-BR-1). A settle recorded over one before W2b, when it
+    // was a held no_result, still replays and wins (D6) — the non-strict fold below.
     const df = [ev(1, "core.start"), ev(2, "boardgame.result", { winner: null, method: "double_forfeit" })];
     expect(codeOf(() => fold(ko, [...df, ev(3, "boardgame.tiebreak", { rung: "rapid", winner: H })]))).toBe("TIEBREAK_NOT_APPLICABLE");
-    const settled = foldMatchWithStoppage(boardgame, ko as never, lineups, [...df, ev(3, "core.settle", { winner: H, method: "organiser" })]);
+    const settle = ev(3, "core.settle", { winner: H, method: "organiser" });
+    expect(codeOf(() => foldMatchWithStoppage(boardgame, ko as never, lineups, [...df, settle], { strictFromSeq: 3 }))).toBe("SETTLE_NOT_APPLICABLE");
+    const settled = foldMatchWithStoppage(boardgame, ko as never, lineups, [...df, settle]);
     expect(outcomeOf(boardgame, settled)).toEqual({ kind: "win", winner: H, loser: A, method: "settled_organiser" });
   });
 
@@ -169,9 +175,10 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     expect(settleApplies(boardgame, facts(decided))).toBe(false);
     expect(deciderPending(boardgame, decided)).toBe(false);
     expect(run([...tb, ev(4, "core.finalize")]).state.phase).toBe("final");
-    // And the held double forfeit (T15-R1): settle applies (a level no_result), no decider is pending.
+    // And the double forfeit (W2b BG-DW-1, retiring T15-R1's held no_result): a double walkover is decided and not
+    // level, so settle does NOT apply, and no decider is pending.
     const df = run([ev(1, "core.start"), ev(2, "boardgame.result", { winner: null, method: "double_forfeit" })]);
-    expect(settleApplies(boardgame, facts(df))).toBe(true);
+    expect(settleApplies(boardgame, facts(df))).toBe(false);
     expect(deciderPending(boardgame, df)).toBe(false);
     // Nothing owed where nothing is pending: a live bracket game, and a module that declares no decider hook at all.
     expect(deciderPending(boardgame, run([ev(1, "core.start")]))).toBe(false);
@@ -197,7 +204,7 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
       ["after a win", ko, [ev(1, "core.start"), ev(2, "boardgame.result", { winner: A, method: "resign" })]],
       ["after a settle in phase tiebreak", ko, [...drawn, ev(3, "core.settle", { winner: A, method: "lot" })]],
       ["after a tie-break (a second one)", ko, [...drawn, tb(3)]],
-      ["after a held double forfeit", ko, df],
+      ["after a double forfeit (a double walkover)", ko, df],
       ["after an abandon in phase tiebreak", ko, [...drawn, ev(3, "core.abandon", { reason: "venue closed" })]],
       ["after a finalize", ko, [...drawn, tb(3), ev(4, "core.finalize")]],
     ];
@@ -215,12 +222,23 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     expect(outcomeOf(boardgame, run(ko, [...drawn, tb(3)]))).toMatchObject({ kind: "win", winner: H, method: "tiebreak_rapid" });
   });
 
-  it("BG-KO-1: a core.forfeit while the tie-break is pending is refused WRONG_PHASE — the game is over; a no-show in the tie-break is the scorer's tie-break winner or the organiser's settle", () => {
-    const refused = errOf(() => fold(ko, [...drawn, ev(3, "core.forfeit", { by: H, reason: "no-show for the rapid games" })]));
-    expect(refused.code).toBe("WRONG_PHASE");
-    expect(refused.message).toContain('forfeit not allowed in phase "tiebreak"'); // the forfeit's own guard, not the result's below it
-    // The positive pair: the same forfeit while the game is live decides it.
-    expect(boardgame.outcome(fold(ko, [ev(1, "core.start"), ev(2, "core.forfeit", { by: H, reason: "no-show" })]))).toMatchObject({ kind: "win", winner: A });
+  it("R14 (W2b): a one-side forfeit while the tie-break is pending walks the other side over, reason kept; a double walkover there is refused — the classical game was played", () => {
+    // W2b rewrites this pin. W2a refused every core.forfeit in phase "tiebreak" (WRONG_PHASE), so a tie-break no-show
+    // could only be closed by a settle — finding N1, a silent hold. R14 admits one side's forfeit (FIDE Laws 6.7.1)
+    // and refuses `both` (plan D3 R3).
+    let checked = 0;
+    for (const reason of ["walkover", "withdrew"] as const) {
+      const f = foldMatchWithStoppage(boardgame, ko as never, lineups, [...drawn, ev(3, "core.forfeit", { by: H, reason })]);
+      expect(outcomeOf(boardgame, f), reason).toEqual({ kind: "award", winner: A, loser: H, reason });
+      expect(deciderPending(boardgame, f), reason).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    const refused = errOf(() => foldMatchWithStoppage(boardgame, ko as never, lineups, [...drawn, ev(3, "core.forfeit", { by: "both", reason: "walkover" })]));
+    expect(refused.code).toBe("FORFEIT_REASON_WRONG_PHASE");
+    expect(refused.data).toMatchObject({ eventId: "e-3", phase: "tiebreak" });
+    // The positive pair: the same forfeit while the game is live decides it the same way.
+    expect(boardgame.outcome(fold(ko, [ev(1, "core.start"), ev(2, "core.forfeit", { by: H, reason: "walkover" })]))).toEqual({ kind: "award", winner: A, loser: H, reason: "walkover" });
   });
 
   it("review Minor 4: the tie-break winner is the same entrant-id schema core.settle names its winner with", () => {

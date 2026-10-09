@@ -23,6 +23,8 @@ import {
   EntrantId,
   type DisciplineCard,
   type LineupPair,
+  type ForfeitPhase,
+  type ForfeitReason,
   type MatchOutcome,
   type ScoreSummary,
   type StageKind,
@@ -450,17 +452,25 @@ function applyAdjust(
 
 // Walkover — carrom.md §7: the match is awarded to the opponent; completed
 // games stand in the ledger.
-function applyForfeit(state: CarromState, by: string, reason: string): CarromState {
-  const winnerSide = opponent(sideOf(state, by));
+function applyForfeit(state: CarromState, by: string, reason: ForfeitReason): CarromState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
+  // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
+  // reason. What the table credits is `forfeitCredit`'s (W2b Task 4), never a score written here.
+  if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
+  const loserSide = sideOf(state, by);
+  const winnerSide = opponent(loserSide);
   return {
     ...state,
     phase: "done",
-    outcome: { kind: "award", winner: state.entrants[winnerSide], method: reason },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
   };
 }
+
+/** W2b (plan D3) — the kernel's forfeit guard reads this module's phase through this Record (closed union, so a
+ *  phase added later cannot go unclassified). */
+const FORFEIT_PHASE: Record<CarromState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" };
 
 // Abandonment — PROMPT-16 §4: `no_result`, with completed games recorded (the
 // ledger metrics keep whatever was actually played).
@@ -874,6 +884,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
   },
 
   outcome: (state) => state.outcome,
+  forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
 
   // §9.5 — defined at every prefix; boards render like sets (carrom.md §6).
   // W4a (#425) T6b — the cross-sport position axis (see `carromPosition`).
@@ -1109,7 +1120,8 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
 
     const roll = rng();
     if (roll < 0.02) {
-      return { type: "core.forfeit", payload: { by: randomEntrant(), reason: "no-show" } };
+      // W2b D3: play has started, so a retirement or a disqualification (never a walkover), from the roll taken.
+      return { type: "core.forfeit", payload: { by: randomEntrant(), reason: roll < 0.01 ? "retired" : "disqualified" } };
     }
     if (roll < 0.04) {
       return { type: "core.abandon", payload: { reason: "venue closed" } };

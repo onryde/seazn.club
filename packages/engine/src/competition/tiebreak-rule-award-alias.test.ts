@@ -61,12 +61,10 @@ const played = (home: EntrantId, away: EntrantId, homeRuns: number, awayRuns: nu
     ["cricket.innings.summary", { runs: awayRuns, wickets: 10, legalBalls: 100 }],
   ]);
 
-// `away` does not turn up: a real cricket award, no innings bowled.
+// `away` does not turn up: a real cricket award, no innings bowled. W2b: a walkover is recorded before play starts
+// (the phase guard refuses one after `core.start`), with the closed reason.
 const walkover = (home: EntrantId, away: EntrantId): FixtureResult =>
-  fixture(home, away, [
-    ["core.start", {}],
-    ["core.forfeit", { by: away, reason: "no_show" }],
-  ]);
+  fixture(home, away, [["core.forfeit", { by: away, reason: "walkover" }]]);
 
 const ENTRANTS = ["A", "B", "C", "D"];
 

@@ -33,6 +33,8 @@ import {
   type DisciplineCard,
   type DisciplineModel,
   type LineupPair,
+  type ForfeitPhase,
+  type ForfeitReason,
   type MatchOutcome,
   type MetricSpec,
   type ScoreSummary,
@@ -1372,17 +1374,25 @@ function applySetSummary(
 // Forfeit / abandon — mirror setbased.
 // ---------------------------------------------------------------------------
 
-function applyForfeit(state: NestedState, by: string, reason: string): NestedState {
+function applyForfeit(state: NestedState, by: string, reason: ForfeitReason): NestedState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
-  const winnerSide = opponent(sideOf(state, by));
+  // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
+  // reason. What the table credits is `forfeitCredit`'s (W2b Task 4), never a score written here.
+  if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
+  const loserSide = sideOf(state, by);
+  const winnerSide = opponent(loserSide);
   return {
     ...state,
     phase: "done",
-    outcome: { kind: "award", winner: state.entrants[winnerSide], method: reason },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
   };
 }
+
+/** W2b (plan D3) — the kernel's forfeit guard reads this module's phase through this Record (closed union, so a
+ *  phase added later cannot go unclassified). */
+const FORFEIT_PHASE: Record<NestedState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" };
 
 function applyAbandon(state: NestedState): NestedState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
@@ -2127,6 +2137,7 @@ export function makeNestedModule(
     },
 
     outcome: (state) => state.outcome,
+    forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
 
     // W4a (#425) §7 obligation 2 — the EXPORTED function itself, handed over by
     // reference. Not a wrapper and not a copy of its output: the guard and the
@@ -2367,7 +2378,8 @@ export function makeNestedModule(
       }
       const roll = rng();
       if (roll < 0.02) {
-        return { type: "core.forfeit", payload: { by: randomEntrant(), reason: "walkover" } };
+        // W2b D3: play has started, so a retirement or a disqualification (never a walkover), from the roll taken.
+        return { type: "core.forfeit", payload: { by: randomEntrant(), reason: roll < 0.01 ? "retired" : "disqualified" } };
       }
       if (roll < 0.04) return { type: "core.abandon", payload: { reason: "rain" } };
       if (roll < 0.14) return { type: pointType, payload: pointPayload() };

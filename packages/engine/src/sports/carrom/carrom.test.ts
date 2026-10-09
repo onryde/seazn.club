@@ -192,14 +192,16 @@ describe("carrom golden: walkover", () => {
   const state = fold(
     stream(["core.start"], ...boards(["H", 5, "H"]), [
       "core.forfeit",
-      { by: "A", reason: "no-show" },
+      { by: "A", reason: "retired" },
     ]),
   );
 
   it("awards the match to the opponent", () => {
-    // `method` is the forfeit's own `reason`, carried verbatim — the field
-    // that lets a reader tell this walkover from a disqualification.
-    expect(state.outcome).toEqual({ kind: "award", winner: "H", method: "no-show" });
+    // W2b: `reason` is the forfeit's closed reason and `loser` is typed — the
+    // fields that let a reader tell this retirement from a disqualification
+    // (#772 carried free text in `method`). Games were played, so it is a
+    // retirement: the phase guard refuses a walkover after `core.start`.
+    expect(state.outcome).toEqual({ kind: "award", winner: "H", loser: "A", reason: "retired" });
   });
 
   it("pays win/loss points; the ledger keeps only what was played", () => {

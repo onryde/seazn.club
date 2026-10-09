@@ -8,13 +8,14 @@ import {
   CORE_EVENT_SCHEMAS,
   foldMatch,
   foldMatchWithStoppage,
+  forfeitOf,
   isCoreEventType,
   resolveVoids,
   validateCoreEvent,
   type EventEnvelope,
   type FoldableModule,
 } from "./events.ts";
-import type { LineupPair, MatchOutcome } from "./types.ts";
+import { FORFEIT_REASONS, type LineupPair, type MatchOutcome } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Toy coin-flip sport module. First side to `target` flips wins; `coin.stop`
@@ -95,12 +96,13 @@ const coinflip: FoldableModule<CoinCfg, CoinState> = {
         if (state.phase === "done" || state.phase === "final") {
           throw new EngineError("WRONG_PHASE", "already over");
         }
-        const by = (event.payload as { by: string }).by;
+        const { by, reason } = forfeitOf(event.payload);
+        if (by === "both") return { ...state, phase: "done", outcome: { kind: "double_walkover" } };
         if (by !== state.entrants.home && by !== state.entrants.away) {
           throw new EngineError("INVALID_EVENT", "unknown entrant");
         }
         const winner = by === state.entrants.home ? state.entrants.away : state.entrants.home;
-        return { ...state, phase: "done", outcome: { kind: "award", winner } };
+        return { ...state, phase: "done", outcome: { kind: "award", winner, loser: by, reason } };
       }
       case "core.abandon": {
         if (state.phase !== "live") throw new EngineError("WRONG_PHASE", "not live");
@@ -261,7 +263,7 @@ describe("core event payloads", () => {
   });
 
   it("accepts valid payloads and ignores non-core types", () => {
-    expect(() => validateCoreEvent(env(0, "core.forfeit", { by: "H", reason: "no-show" }))).not.toThrow();
+    expect(() => validateCoreEvent(env(0, "core.forfeit", { by: "H", reason: "walkover" }))).not.toThrow();
     expect(() => validateCoreEvent(env(0, "coin.flip", { to: "nonsense" }))).not.toThrow();
   });
 
@@ -301,9 +303,13 @@ describe("foldMatch", () => {
   });
 
   it("maps core.forfeit to an award and core.abandon to no_result", () => {
-    expect(fold(stream(START, ["core.forfeit", { by: "H", reason: "no-show" }])).outcome).toEqual({
+    // W2b: the award names its loser and the closed reason (a retirement — play has started, so a walkover is
+    // refused by the kernel's phase guard; core/forfeit-guard.test.ts owns that).
+    expect(fold(stream(START, ["core.forfeit", { by: "H", reason: "retired" }])).outcome).toEqual({
       kind: "award",
       winner: "A",
+      loser: "H",
+      reason: "retired",
     });
     expect(fold(stream(START, ["core.abandon", { reason: "rain" }])).outcome).toEqual({
       kind: "no_result",
@@ -439,9 +445,11 @@ const commandArb: fc.Arbitrary<Command> = fc.oneof(
     payload: { to },
   })),
   fc.constant<Command>({ type: "coin.stop", payload: {} }),
-  fc.constantFrom("H", "A").map((by) => ({
+  // W2b: every closed reason — the phase guard refuses the ones a phase does not admit, and the valid-stream builder
+  // below keeps only what the fold accepts.
+  fc.tuple(fc.constantFrom("H", "A"), fc.constantFrom(...FORFEIT_REASONS)).map(([by, reason]) => ({
     type: "core.forfeit",
-    payload: { by, reason: "walkover" },
+    payload: { by, reason },
   })),
   fc.constant<Command>({ type: "core.abandon", payload: { reason: "rain" } }),
   fc.constant<Command>({ type: "core.finalize", payload: {} }),
@@ -631,9 +639,9 @@ describe("core.suspend / core.resume (W4)", () => {
     const state = foldMatch(coinflip, cfg, lineups, [
       ...live,
       env(2, "core.suspend", { reason: "crowd trouble" }),
-      env(3, "core.forfeit", { by: "H", reason: "crowd trouble" }),
+      env(3, "core.forfeit", { by: "H", reason: "disqualified" }),
     ]);
-    expect(state.outcome).toEqual({ kind: "award", winner: "A" });
+    expect(state.outcome).toEqual({ kind: "award", winner: "A", loser: "H", reason: "disqualified" });
   });
 
   it("rejects a second core.suspend while already suspended (WRONG_PHASE)", () => {
@@ -709,9 +717,9 @@ describe("core.suspend / core.resume — stoppage lifetime (W4)", () => {
     const { state, stoppage } = foldMatchWithStoppage(coinflip, cfg, lineups, [
       ...live,
       env(2, "core.suspend", { reason: "crowd trouble" }),
-      env(3, "core.forfeit", { by: "H", reason: "crowd trouble" }),
+      env(3, "core.forfeit", { by: "H", reason: "disqualified" }),
     ]);
-    expect(state.outcome).toEqual({ kind: "award", winner: "A" });
+    expect(state.outcome).toEqual({ kind: "award", winner: "A", loser: "H", reason: "disqualified" });
     expect(stoppage).toBeNull();
   });
 

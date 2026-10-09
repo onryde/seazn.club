@@ -12,15 +12,17 @@ import {
 } from "./types.ts";
 
 describe("MatchOutcome", () => {
-  // spec 03 §3 — all five kinds
+  // spec 03 §3 — all six kinds (W2b: `award` names its loser and a closed reason, a bye's loser is null, and
+  // `double_walkover` is new; core/outcome-set.test.ts pins the set itself)
   it.each([
     [{ kind: "win", winner: "H", loser: "A", method: "shootout" }],
     [{ kind: "win", winner: "H", loser: "A" }],
     [{ kind: "draw" }],
     [{ kind: "tie" }],
     [{ kind: "no_result" }],
-    [{ kind: "award", winner: "A", score: { goals: [3, 0] } }],
-    [{ kind: "award", winner: "A" }],
+    [{ kind: "award", winner: "A", loser: "H", reason: "walkover" }],
+    [{ kind: "award", winner: "A", loser: null, reason: "bye" }],
+    [{ kind: "double_walkover" }],
   ])("accepts %j", (outcome) => {
     expect(MatchOutcome.parse(outcome)).toEqual(outcome);
   });
@@ -29,6 +31,7 @@ describe("MatchOutcome", () => {
     expect(MatchOutcome.safeParse({ kind: "loss" }).success).toBe(false);
     expect(MatchOutcome.safeParse({ kind: "win", winner: "H" }).success).toBe(false);
     expect(MatchOutcome.safeParse({ kind: "award" }).success).toBe(false);
+    expect(MatchOutcome.safeParse({ kind: "award", winner: "A" }).success).toBe(false); // W2b: loser and reason required
   });
 });
 

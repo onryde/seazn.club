@@ -75,6 +75,17 @@ export const EngineErrorCode = z.enum([
   "LEVEL_RESULT_IN_BRACKET",
   // Assertion: a level result reached bracket seating (X-BR-1). Only a bug reaches it.
   "LEVEL_RESULT_SEATED",
+  // W2b (spec §7) — walkover, retirement and double-walkover credit. Appended last, existing order frozen.
+  // A forfeit reason recorded in a phase it does not apply to (X-RS-1): a walkover or a double walkover after play
+  // started (chess: after the classical game), a retirement or disqualification before it. data.phase names the
+  // phase, data.allowed the reasons it admits.
+  "FORFEIT_REASON_WRONG_PHASE",
+  // A forfeit while an unvoided core.abandon is active (X-AB-4): settle to decide, or void the abandon to replay.
+  "ABANDONED_SETTLE_OR_VOID",
+  // A double walkover on a fixture that feeds no seat — a final, a last rung, a third-place match (X-DW-3).
+  "DOUBLE_WALKOVER_NO_NEXT_MATCH",
+  // A bracket or stepladder seat whose entrant departed cannot be resolved to a walkover (D-G3 corner 3).
+  "STAGE_SEAT_DEPARTED",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

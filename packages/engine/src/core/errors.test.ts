@@ -73,6 +73,11 @@ describe("EngineError", () => {
       "LEVEL_RESULT_IN_BRACKET",
       // Assertion: a level result reached bracket seating (X-BR-1). Only a bug reaches it.
       "LEVEL_RESULT_SEATED",
+      // W2b (spec §7) — appended last, existing order frozen.
+      "FORFEIT_REASON_WRONG_PHASE",
+      "ABANDONED_SETTLE_OR_VOID",
+      "DOUBLE_WALKOVER_NO_NEXT_MATCH",
+      "STAGE_SEAT_DEPARTED",
     ]);
   });
 });

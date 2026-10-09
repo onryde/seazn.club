@@ -33,6 +33,6 @@ describe("X-DR-1: stage-kind sets (spec §5.4.1, ruling 78)", () => {
     expect(isLevelOutcome({ kind: "tie" })).toBe(true);
     expect(isLevelOutcome({ kind: "no_result" })).toBe(true);
     expect(isLevelOutcome({ kind: "win", winner: "H", loser: "A" })).toBe(false);
-    expect(isLevelOutcome({ kind: "award", winner: "H" })).toBe(false);
+    expect(isLevelOutcome({ kind: "award", winner: "H", loser: "A", reason: "walkover" })).toBe(false);
   });
 });

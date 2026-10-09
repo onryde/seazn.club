@@ -347,7 +347,7 @@ const footballAdapter: TimeKernelAdapter = {
 
   decidedWhileRunning: {
     cfg: fbCfg(BIN),
-    events: [fbStart, fbBin(at("H1", 600)), { type: "core.forfeit", payload: { by: "A", reason: "walkover" } }],
+    events: [fbStart, fbBin(at("H1", 600)), { type: "core.forfeit", payload: { by: "A", reason: "retired" } }], // W2b: after the start
   },
 
   carriedPastFullTime: {
@@ -494,7 +494,7 @@ function periodAdapter(spec: PeriodAdapterSpec): TimeKernelAdapter {
 
     decidedWhileRunning: {
       cfg: cfg(),
-      events: [start, card(at(first, 100)), { type: "core.forfeit", payload: { by: home, reason: "walkover" } }],
+      events: [start, card(at(first, 100)), { type: "core.forfeit", payload: { by: home, reason: "retired" } }], // W2b: after the start
     },
 
     ...(overtime === undefined

@@ -27,6 +27,8 @@ import {
   EntrantId,
   type DisciplineCard,
   type DisciplineModel,
+  type ForfeitPhase,
+  type ForfeitReason,
   type LineupPair,
   type MatchOutcome,
   type MetricSpec,
@@ -1427,20 +1429,29 @@ function applyShot(
   return { ...state, shots: [...(state.shots ?? []), record] };
 }
 
-function applyForfeit(state: PeriodState, by: string, reason: string): PeriodState {
+/** W2b (plan D3) — the kernel's forfeit guard reads the period phase through this. The phase is a free label (P1,
+ *  Q3, OT2 …), so the classification names the non-play phases and every other label is play — the shoot-out
+ *  included (ruling 102 Q5). */
+function periodForfeitPhase(state: PeriodState): ForfeitPhase {
+  if (state.phase === "pre") return "pre";
+  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") return "over";
+  return "play";
+}
+
+// W2b (spec §5.2) — a forfeit decides `award{winner, loser, reason}`, or `double_walkover` when both sides are
+// absent. The PLAYED goals stay in state; the table's credit is `forfeitCredit`'s (W2b Task 4), read by
+// `standingsDelta` — overwriting `goals` here made a retirement's real margin unreadable (F-16).
+function applyForfeit(state: PeriodState, by: string, reason: ForfeitReason): PeriodState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
-  const winnerSide = opponent(sideOf(state, by));
-  const goals =
-    winnerSide === "home"
-      ? { home: state.cfg.awardScore.goals, away: 0 }
-      : { home: 0, away: state.cfg.awardScore.goals };
+  if (by === "both") return { ...sweepEndOfMatch(state), phase: "done", outcome: { kind: "double_walkover" } };
+  const loserSide = sideOf(state, by);
+  const winnerSide = opponent(loserSide);
   return {
     ...sweepEndOfMatch(state),
     phase: "done",
-    goals,
-    outcome: { kind: "award", winner: state.entrants[winnerSide], score: goals, method: reason },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], loser: state.entrants[loserSide], reason },
   };
 }
 
@@ -1451,13 +1462,21 @@ function applyAbandon(state: PeriodState): PeriodState {
   if (state.cfg.abandonPolicy === "replay") {
     return { ...state, phase: "abandoned", replayFlagged: true };
   }
+  // W2b D8 (ruling 102 Q3): an award-policy abandon is the leader's WIN on the real score (`method: "abandoned"`),
+  // and a level one is a DRAW on the real score. It was an `award` carrying a `score`, which W2b's award no longer
+  // has: nobody forfeited.
   const { home, away } = state.goals;
-  if (home === away) return { ...sweepEndOfMatch(state), phase: "done", outcome: { kind: "no_result" } };
+  if (home === away) return { ...sweepEndOfMatch(state), phase: "done", outcome: { kind: "draw" } };
   const winnerSide: Side = home > away ? "home" : "away";
   return {
     ...sweepEndOfMatch(state),
     phase: "done",
-    outcome: { kind: "award", winner: state.entrants[winnerSide], score: { home, away } },
+    outcome: {
+      kind: "win",
+      winner: state.entrants[winnerSide],
+      loser: state.entrants[opponent(winnerSide)],
+      method: "abandoned",
+    },
   };
 }
 
@@ -2417,8 +2436,10 @@ export function makePeriodModule(
         return applySetPiece(state, parsePayload(PeriodSetPiece, ev.payload, ev.type), strict);
       case shotType:
         return applyShot(state, parsePayload(PeriodShot, ev.payload, ev.type), shotTracking);
-      case "core.forfeit":
-        return applyForfeit(state, forfeitOf(ev.payload).by, forfeitOf(ev.payload).reason);
+      case "core.forfeit": {
+        const { by, reason } = forfeitOf(ev.payload);
+        return applyForfeit(state, by, reason);
+      }
       case "core.abandon":
         return applyAbandon(state);
       case "core.finalize":
@@ -2527,6 +2548,7 @@ export function makePeriodModule(
     },
 
     outcome: (state) => state.outcome,
+    forfeitPhase: periodForfeitPhase,
 
     // W4a (#425) T6b — the cross-sport position axis. ONE reference shared by
     // hockey and ice hockey (`position.conformance.test.ts` asserts
@@ -2759,7 +2781,8 @@ export function makePeriodModule(
 
       const roll = rng();
       if (roll < 0.02) {
-        return { type: "core.forfeit", payload: { by: sideId(randomSide()), reason: "walkover" } };
+        // W2b D3: play has started, so a retirement or a disqualification (never a walkover), from the roll taken.
+        return { type: "core.forfeit", payload: { by: sideId(randomSide()), reason: roll < 0.01 ? "retired" : "disqualified" } };
       }
       if (roll < 0.03) return { type: "core.abandon", payload: { reason: "conditions" } };
       if (roll < 0.13 && state.cfg.suspensions !== null) {
