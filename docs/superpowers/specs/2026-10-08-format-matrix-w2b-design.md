@@ -88,7 +88,7 @@ and no organiser has to fake a walkover to move a draw on.
 
 ## 3. Rulings this spec implements
 
-Signed by the owner in session f-w2b, 2026-10-08. Numbered **W2b-Rn** here; folded into `_INDEX.md` after W2a merges,
+Signed by the owner in session f-w2b, 2026-10-08/09. **Folded into `_INDEX.md` on 2026-10-09 as rulings 83–100** (R1–R11 → 83–93, UI-1 → 94, UI-2 → 95, A1 → 96, R12–R14 → 97–99, spec approval → 100); Appendix A statuses carry those numbers. Originally numbered **W2b-Rn** here; folded into `_INDEX.md` after W2a merges,
 numbered after W2a's last ruling (82 at the time of writing; W2a may add more during its build — take the next free
 number then). `_INDEX.md` is not edited before W2a merges (rule 18).
 
@@ -449,8 +449,8 @@ F; W2b does not scope them); legacy completed stages whose fixture V432 moves to
 
 ## Appendix A — Rule rows to add to `packages/engine/rules/` (at build)
 
-Format: `packages/engine/rules/README.md` on `feat/format-matrix-w2a`. Status `signed W2b-Rn` is rewritten to
-`signed <_INDEX ruling number> 2026-10-08` when the rulings are folded (§10). `enforced at` and `proved by` are filled
+Format: `packages/engine/rules/README.md` (on main since W2a, `a99147bd0`). Statuses carry the `_INDEX` ruling
+numbers (folded 2026-10-09). `enforced at` and `proved by` are filled
 at build; a signed or deviation row ships only with a proving test whose title contains the id.
 
 54 rows: cross-sport.md 23, football.md 3, hockey.md 3, icehockey.md 3, volleyball.md 2, tabletennis.md 2, tennis.md 2, badminton.md 3, cricket.md 3, boardgame.md 4, carrom.md 3, generic.md 3.
@@ -459,112 +459,112 @@ at build; a signed or deviation row ships only with a proving test whose title c
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| X-RS-1 | A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text; walkover = before play started (chess also after the session starts, FIDE 6.7.1), retired/disqualified = after. | product rule W2b-R1 | signed W2b-R1 2026-10-08 | — | — |
-| X-RS-2 | Public results name the reason: "w/o" for walkover/withdrew, "ret." for retired, "DQ" for disqualified, in all 4 locales. | product rule W2b-R1 | signed W2b-R1 2026-10-08 | — | — |
-| X-RS-3 | Every event that records a forfeit, walkover, retirement or double walkover is organiser-only, through the X-ST-2 predicate. | product rule W2a D-O1 (f-w2 owner) + W2b-R1 | signed W2b-R1 2026-10-08 | — | — |
-| X-DW-1 | A double walkover is its own outcome: both sides lose, nobody advances. | FDC 2025 Art. 28 (each side forfeits); FIDE Laws Art. 11.8 ("lost by both") | signed W2b-R2 2026-10-08 | — | — |
-| X-DW-2 | In a bracket, every seat a double walkover feeds is dead, and that seat's opponent advances by walkover; in double elimination neither side drops to the losers' bracket; a third-place feed is won by walkover by the other semi-final loser. | FDC 28; product rule W2b-R2 | signed W2b-R2 2026-10-08 | — | — |
-| X-DW-3 | A double walkover is refused where the fixture has no next match (final, last rung, third-place match) with guidance: reschedule, record a walkover if one side turned up, or settle as a last resort; the fixture stays open. A vacant title is W4 (with joint winners). | product rule W2b-R2 | signed W2b-R2 2026-10-08 | — | — |
-| X-DW-4 | In a table a double walkover is P+1, L+1, 0 points for both, no score credited, and excluded from every ratio (set/game %, NRR, goal ratios). | product rule W2b-R3 (no federation score) | signed W2b-R3 2026-10-08 | — | — |
+| X-RS-1 | A forfeit records one reason from a closed list (walkover, retired, disqualified, withdrew), never free text; walkover = before play started (chess also after the session starts, FIDE 6.7.1), retired/disqualified = after. | product rule W2b-R1 | signed 83 2026-10-08 | — | — |
+| X-RS-2 | Public results name the reason: "w/o" for walkover/withdrew, "ret." for retired, "DQ" for disqualified, in all 4 locales. | product rule W2b-R1 | signed 83 2026-10-08 | — | — |
+| X-RS-3 | Every event that records a forfeit, walkover, retirement or double walkover is organiser-only, through the X-ST-2 predicate. | product rule W2a D-O1 (f-w2 owner) + W2b-R1 | signed 83 2026-10-08 | — | — |
+| X-DW-1 | A double walkover is its own outcome: both sides lose, nobody advances. | FDC 2025 Art. 28 (each side forfeits); FIDE Laws Art. 11.8 ("lost by both") | signed 84 2026-10-08 | — | — |
+| X-DW-2 | In a bracket, every seat a double walkover feeds is dead, and that seat's opponent advances by walkover; in double elimination neither side drops to the losers' bracket; a third-place feed is won by walkover by the other semi-final loser. | FDC 28; product rule W2b-R2 | signed 84 2026-10-08 | — | — |
+| X-DW-3 | A double walkover is refused where the fixture has no next match (final, last rung, third-place match) with guidance: reschedule, record a walkover if one side turned up, or settle as a last resort; the fixture stays open. A vacant title is W4 (with joint winners). | product rule W2b-R2 | signed 84 2026-10-08 | — | — |
+| X-DW-4 | In a table a double walkover is P+1, L+1, 0 points for both, no score credited, and excluded from every ratio (set/game %, NRR, goal ratios). | product rule W2b-R3 (no federation score) | signed 85 2026-10-08 | — | — |
 | X-BR-1 (amend) | "decided only by a win" → "decided only by a win or a double walkover". | W2b-R2 amends ruling 79 | amend at build | — | — |
-| X-WO-1 | Walkover and retirement credit is derived from the stage's own cfg (best-of, target score, overs), and the same credited score is used in the table, tie-breaks, the public page and the qualification view. | product rule W2b-R4 | signed W2b-R4 2026-10-08 | — | — |
-| X-RT-1 | In-match disqualification takes the sport's retirement credit for that match (the cascade to other fixtures is W5). | product rule W2b-R5 | signed W2b-R5 2026-10-08 | — | — |
-| X-AB-1 | An abandoned match counts in a table only when the sport's rule gives it a result; otherwise it stays out and is flagged for replay or settle. | ICC 16.10.3; RBB §7 item 3; W2b-R6 | signed W2b-R6 2026-10-08 | — | — |
-| X-AB-2 | An abandoned match with a result is decided (status follows the result), shows "Abandoned — <reason>", and auto-advance treats it as finished. | product rule W2b-R6 (RB2B-33) | signed W2b-R6 2026-10-08 | — | — |
-| X-AB-3 | Abandons recorded before W2b keep their stored status (no backfill). | product rule W2b-R6 | signed W2b-R6 2026-10-08 | — | — |
-| X-AB-4 | A forfeit while an abandon is active is refused ABANDONED_SETTLE_OR_VOID with guidance (settle to decide; void the abandon first if replaying); void-then-forfeit stays allowed and is credited as a retirement (the stream keeps the pre-abandon score). | RB2A-31; product rule W2b-R7 | signed W2b-R7 2026-10-08 | — | — |
-| X-WD-1 | When a side withdraws from a held (needs_decision) bracket fixture, the fixture is walked over to the remaining side, reason "withdrew", with retirement credit (played score stands). | product rule W2b-R8 (answers C17) | signed W2b-R8 2026-10-08 | — | — |
-| X-WD-2 | A withdrawal from page_playoff or ladder walks the remaining fixtures over, as knockout does; it never voids them. | product rule W2b-R8 | signed W2b-R8 2026-10-08 | — | — |
-| X-WD-3 | A withdrawal from a bracket fixture whose opponent is not yet known marks the withdrawn seat dead, so the arriving opponent advances by walkover (reproduce before fix). | product rule W2b-R8 | signed W2b-R8 2026-10-08 | — | — |
-| X-WD-4 | When both sides of a fixture have withdrawn, the fixture is a double walkover (X-DW-*); a final goes to settle (X-DW-3). | FDC 28; product rule W2b-R8 | signed W2b-R8 2026-10-08 | — | — |
-| X-PS-1 | A walkover, withdrawal or double walkover never counts as a match played in any player's stats, and credits no personal W/L. | product rule W2b-R9 (ATP/ITF/FIDE rating practice) | signed W2b-R9 2026-10-08 | — | — |
-| X-PS-2 | A retirement, in-match DQ or abandon with a result counts as a match for both sides' players, W/L as decided; events already played stay credited. | product rule W2b-R9 | signed W2b-R9 2026-10-08 | — | — |
-| X-DE-1 | In double elimination any forfeit loser (walkover, withdrew, disqualified, retired) is out of the tournament: it never drops to the losers' bracket, its losers'-bracket opponent advances by walkover, and final ranks place it as eliminated in that round (seating and ranks agree). | product rule W2b-R11 | signed W2b-R11 2026-10-08 | — | — |
-| X-WD-5 | A withdrawn entrant is never seated on a loser edge; the seat is dead and its opponent advances by walkover. | product rule W2b-R8 (W2a D-G2) | signed W2b-R8 2026-10-08 | — | — |
-| X-BL-1 | A division's results for the quota slot exclude no-result and double-walkover fixtures; a single walkover counts. | product rule W2b-R13 | signed W2b-R13 2026-10-09 | — | — |
+| X-WO-1 | Walkover and retirement credit is derived from the stage's own cfg (best-of, target score, overs), and the same credited score is used in the table, tie-breaks, the public page and the qualification view. | product rule W2b-R4 | signed 86 2026-10-08 | — | — |
+| X-RT-1 | In-match disqualification takes the sport's retirement credit for that match (the cascade to other fixtures is W5). | product rule W2b-R5 | signed 87 2026-10-08 | — | — |
+| X-AB-1 | An abandoned match counts in a table only when the sport's rule gives it a result; otherwise it stays out and is flagged for replay or settle. | ICC 16.10.3; RBB §7 item 3; W2b-R6 | signed 88 2026-10-08 | — | — |
+| X-AB-2 | An abandoned match with a result is decided (status follows the result), shows "Abandoned — <reason>", and auto-advance treats it as finished. | product rule W2b-R6 (RB2B-33) | signed 88 2026-10-08 | — | — |
+| X-AB-3 | Abandons recorded before W2b keep their stored status (no backfill). | product rule W2b-R6 | signed 88 2026-10-08 | — | — |
+| X-AB-4 | A forfeit while an abandon is active is refused ABANDONED_SETTLE_OR_VOID with guidance (settle to decide; void the abandon first if replaying); void-then-forfeit stays allowed and is credited as a retirement (the stream keeps the pre-abandon score). | RB2A-31; product rule W2b-R7 | signed 89 2026-10-08 | — | — |
+| X-WD-1 | When a side withdraws from a held (needs_decision) bracket fixture, the fixture is walked over to the remaining side, reason "withdrew", with retirement credit (played score stands). | product rule W2b-R8 (answers C17) | signed 90 2026-10-08 | — | — |
+| X-WD-2 | A withdrawal from page_playoff or ladder walks the remaining fixtures over, as knockout does; it never voids them. | product rule W2b-R8 | signed 90 2026-10-08 | — | — |
+| X-WD-3 | A withdrawal from a bracket fixture whose opponent is not yet known marks the withdrawn seat dead, so the arriving opponent advances by walkover (reproduce before fix). | product rule W2b-R8 | signed 90 2026-10-08 | — | — |
+| X-WD-4 | When both sides of a fixture have withdrawn, the fixture is a double walkover (X-DW-*); a final goes to settle (X-DW-3). | FDC 28; product rule W2b-R8 | signed 90 2026-10-08 | — | — |
+| X-PS-1 | A walkover, withdrawal or double walkover never counts as a match played in any player's stats, and credits no personal W/L. | product rule W2b-R9 (ATP/ITF/FIDE rating practice) | signed 91 2026-10-08 | — | — |
+| X-PS-2 | A retirement, in-match DQ or abandon with a result counts as a match for both sides' players, W/L as decided; events already played stay credited. | product rule W2b-R9 | signed 91 2026-10-08 | — | — |
+| X-DE-1 | In double elimination any forfeit loser (walkover, withdrew, disqualified, retired) is out of the tournament: it never drops to the losers' bracket, its losers'-bracket opponent advances by walkover, and final ranks place it as eliminated in that round (seating and ranks agree). | product rule W2b-R11 | signed 93 2026-10-08 | — | — |
+| X-WD-5 | A withdrawn entrant is never seated on a loser edge; the seat is dead and its opponent advances by walkover. | product rule W2b-R8 (W2a D-G2) | signed 90 2026-10-08 | — | — |
+| X-BL-1 | A division's results for the quota slot exclude no-result and double-walkover fixtures; a single walkover counts. | product rule W2b-R13 | signed 98 2026-10-09 | — | — |
 
 ### `football.md (new)`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| FB-WO-1 | Football walkover = 3-0. | FDC 2025 Art. 28.1 | signed W2b-R4 2026-10-08 | — | — |
-| FB-RT-1 | Football retirement or post-start forfeit = 3-0, or the real score if it is worse for the offender. | FDC 2025 Art. 28.1 | signed W2b-R5 2026-10-08 | — | — |
-| FB-AB-1 | Football abandon under abandonPolicy award: leader wins with the real score; level = draw with the real score in draw kinds, needs_decision in brackets. | product rule W2b-R6 | signed W2b-R6 2026-10-08 | — | — |
+| FB-WO-1 | Football walkover = 3-0. | FDC 2025 Art. 28.1 | signed 86 2026-10-08 | — | — |
+| FB-RT-1 | Football retirement or post-start forfeit = 3-0, or the real score if it is worse for the offender. | FDC 2025 Art. 28.1 | signed 87 2026-10-08 | — | — |
+| FB-AB-1 | Football abandon under abandonPolicy award: leader wins with the real score; level = draw with the real score in draw kinds, needs_decision in brackets. | product rule W2b-R6 | signed 88 2026-10-08 | — | — |
 
 ### `hockey.md (new)`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| HK-WO-1 | Hockey walkover = 5-0 (default changes from 3). | FIH GTR Reg 13.1 | signed W2b-R4 2026-10-08 | — | — |
-| HK-RT-1 | Hockey retirement or post-start forfeit = 5-0, or the real score if worse for the offender. | FDC 28.1 analogue (RBB RB2B-6) | signed W2b-R5 2026-10-08 | — | — |
-| HK-AB-1 | Same as FB-AB-1 for hockey. | product rule W2b-R6 | signed W2b-R6 2026-10-08 | — | — |
+| HK-WO-1 | Hockey walkover = 5-0 (default changes from 3). | FIH GTR Reg 13.1 | signed 86 2026-10-08 | — | — |
+| HK-RT-1 | Hockey retirement or post-start forfeit = 5-0, or the real score if worse for the offender. | FDC 28.1 analogue (RBB RB2B-6) | signed 87 2026-10-08 | — | — |
+| HK-AB-1 | Same as FB-AB-1 for hockey. | product rule W2b-R6 | signed 88 2026-10-08 | — | — |
 
 ### `icehockey.md (new)`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| IH-WO-1 | Ice hockey walkover = 5-0. | product rule (IIHF Rule 66 names no score) W2b-R4 | signed W2b-R4 2026-10-08 | — | — |
-| IH-RT-1 | Ice hockey retirement or post-start forfeit = 5-0, or the real score if worse for the offender. | FDC 28.1 analogue | signed W2b-R5 2026-10-08 | — | — |
-| IH-AB-1 | Same as FB-AB-1 for ice hockey. | product rule W2b-R6 | signed W2b-R6 2026-10-08 | — | — |
+| IH-WO-1 | Ice hockey walkover = 5-0. | product rule (IIHF Rule 66 names no score) W2b-R4 | signed 86 2026-10-08 | — | — |
+| IH-RT-1 | Ice hockey retirement or post-start forfeit = 5-0, or the real score if worse for the offender. | FDC 28.1 analogue | signed 87 2026-10-08 | — | — |
+| IH-AB-1 | Same as FB-AB-1 for ice hockey. | product rule W2b-R6 | signed 88 2026-10-08 | — | — |
 
 ### `volleyball.md (new)`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| VB-WO-1 | Volleyball walkover = the sets needed to win, each 25-0. | FIVB 6.4.1 | signed W2b-R4 2026-10-08 | — | — |
-| VB-RT-1 | Volleyball retirement (incomplete team) = winner given the sets and points it needed; the retiring side keeps what it won. | FIVB 6.4.3 | signed W2b-R5 2026-10-08 | — | — |
+| VB-WO-1 | Volleyball walkover = the sets needed to win, each 25-0. | FIVB 6.4.1 | signed 86 2026-10-08 | — | — |
+| VB-RT-1 | Volleyball retirement (incomplete team) = winner given the sets and points it needed; the retiring side keeps what it won. | FIVB 6.4.3 | signed 87 2026-10-08 | — | — |
 
 ### `tabletennis.md (new)`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| TT-WO-1 | Table tennis walkover = the games needed to win, each 11-0. | ITTF Handbook 2.3.7 | signed W2b-R4 2026-10-08 | — | — |
-| TT-RT-1 | Table tennis retirement = points played stand, current game completed for the winner, remaining games 11-0. | ITTF Handbook 2.3.7 | signed W2b-R5 2026-10-08 | — | — |
+| TT-WO-1 | Table tennis walkover = the games needed to win, each 11-0. | ITTF Handbook 2.3.7 | signed 86 2026-10-08 | — | — |
+| TT-RT-1 | Table tennis retirement = points played stand, current game completed for the winner, remaining games 11-0. | ITTF Handbook 2.3.7 | signed 87 2026-10-08 | — | — |
 
 ### `tennis.md (new)`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| TN-WO-1 | Tennis walkover = straight sets for set %; the match's games excluded from game %. | ATP 4.01 C.4 | signed W2b-R4 2026-10-08 | — | — |
-| TN-RT-1 | Tennis retirement = same credit as TN-WO-1. | ATP 4.01 C.4 | signed W2b-R5 2026-10-08 | — | — |
+| TN-WO-1 | Tennis walkover = straight sets for set %; the match's games excluded from game %. | ATP 4.01 C.4 | signed 86 2026-10-08 | — | — |
+| TN-RT-1 | Tennis retirement = same credit as TN-WO-1. | ATP 4.01 C.4 | signed 87 2026-10-08 | — | — |
 
 ### `badminton.md (new)`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| BD-WO-1 | Badminton walkover = 2-0 games, each 21-0. | product rule (BWF silent) W2b-R4 | signed W2b-R4 2026-10-08 | — | — |
-| BD-WO-2 | In a badminton group stage BD-WO-1 applies instead of BWF GCR 16.2.5's delete-all-results (until W5). | BWF GCR 16.2.5 | deviation W2b-R4 2026-10-08 | — | — |
-| BD-RT-1 | Badminton retirement = points played stand, current game completed to 21, remaining games 21-0 (until W5's 16.2.5). | BWF GCR 16.2.5 | deviation W2b-R5 2026-10-08 | — | — |
+| BD-WO-1 | Badminton walkover = 2-0 games, each 21-0. | product rule (BWF silent) W2b-R4 | signed 86 2026-10-08 | — | — |
+| BD-WO-2 | In a badminton group stage BD-WO-1 applies instead of BWF GCR 16.2.5's delete-all-results (until W5). | BWF GCR 16.2.5 | deviation 86 2026-10-08 | — | — |
+| BD-RT-1 | Badminton retirement = points played stand, current game completed to 21, remaining games 21-0 (until W5's 16.2.5). | BWF GCR 16.2.5 | deviation 87 2026-10-08 | — | — |
 
 ### `cricket.md`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| CK-WO-1 | Cricket forfeit (incl. refusal to continue) = full points to the winner; the defaulter is charged its full quota at 0 runs in NRR; the winner's NRR is unaffected. | ICC T20WC PC 16.10.7, 16.2 | signed W2b-R4/R5 2026-10-08 | — | — |
-| CK-AB-1 | Cricket abandon after the minimum overs with a DLS result counts as that win/tie. | ICC T20WC PC 16.10 (DLS) | signed W2b-R6 2026-10-08 | — | — |
-| CK-AB-2 | Cricket abandon with no result = 1 point each and an NR column entry. | ICC T20WC PC 16.10.3 | signed W2b-R6 2026-10-08 | — | — |
+| CK-WO-1 | Cricket forfeit (incl. refusal to continue) = full points to the winner; the defaulter is charged its full quota at 0 runs in NRR; the winner's NRR is unaffected. | ICC T20WC PC 16.10.7, 16.2 | signed 86 2026-10-08 | — | — |
+| CK-AB-1 | Cricket abandon after the minimum overs with a DLS result counts as that win/tie. | ICC T20WC PC 16.10 (DLS) | signed 88 2026-10-08 | — | — |
+| CK-AB-2 | Cricket abandon with no result = 1 point each and an NR column entry. | ICC T20WC PC 16.10.3 | signed 88 2026-10-08 | — | — |
 
 ### `boardgame.md`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| BG-WO-1 | Chess walkover or post-start forfeit = 1-0, counts as a game for table tie-breaks, excluded from colour history. | FIDE C.07 (read, summary) | signed W2b-R4/R5 2026-10-08 | — | — |
-| BG-DW-1 | Chess double_forfeit folds to the double walkover outcome in every stage kind (retires T15-R1's hold). | FIDE Laws Art. 11.8 | signed W2b-R2 2026-10-08 | — | — |
-| BG-WO-2 | A chess forfeit is recordable before the game starts (no-show), credited as a walkover. | FIDE Laws Art. 6.7.1 | signed W2b-R8 2026-10-08 | — | — |
-| BG-WO-3 | A chess fixture whose tie-break is pending is walked over to the remaining side when one player withdraws or does not turn up for the tie-break games; the classical game stays a draw in player stats. | product rule W2b-R14 | signed W2b-R14 2026-10-09 | — | — |
+| BG-WO-1 | Chess walkover or post-start forfeit = 1-0, counts as a game for table tie-breaks, excluded from colour history. | FIDE C.07 (read, summary) | signed 86 2026-10-08 | — | — |
+| BG-DW-1 | Chess double_forfeit folds to the double walkover outcome in every stage kind (retires T15-R1's hold). | FIDE Laws Art. 11.8 | signed 84 2026-10-08 | — | — |
+| BG-WO-2 | A chess forfeit is recordable before the game starts (no-show), credited as a walkover. | FIDE Laws Art. 6.7.1 | signed 90 2026-10-08 | — | — |
+| BG-WO-3 | A chess fixture whose tie-break is pending is walked over to the remaining side when one player withdraws or does not turn up for the tie-break games; the classical game stays a draw in player stats. | product rule W2b-R14 | signed 99 2026-10-09 | — | — |
 
 ### `carrom.md`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| CA-WO-1 | Carrom walkover = games needed to win, each 25-0. | product rule (ICF silent) W2b-R4 | signed W2b-R4 2026-10-08 | — | — |
-| CA-RT-1 | Carrom retirement = completed games stand, the unfinished game 25–(opponent's score), remaining games 25-0. | product rule W2b-R5 | signed W2b-R5 2026-10-08 | — | — |
-| CA-AB-1 | Carrom abandon = replay by default (no shared points; opt-in sharing is W2c). | product rule RB2B-25 / W2b-R6 | signed W2b-R6 2026-10-08 | — | — |
+| CA-WO-1 | Carrom walkover = games needed to win, each 25-0. | product rule (ICF silent) W2b-R4 | signed 86 2026-10-08 | — | — |
+| CA-RT-1 | Carrom retirement = completed games stand, the unfinished game 25–(opponent's score), remaining games 25-0. | product rule W2b-R5 | signed 87 2026-10-08 | — | — |
+| CA-AB-1 | Carrom abandon = replay by default (no shared points; opt-in sharing is W2c). | product rule RB2B-25 / W2b-R6 | signed 88 2026-10-08 | — | — |
 
 ### `generic.md`
 
 | id | rule | citation | status | enforced at | proved by |
 |---|---|---|---|---|---|
-| GN-WO-1 | Generic walkover = win points, 0-0 (stage-level awarded score is W2c). | product rule W2b-R4 | signed W2b-R4 2026-10-08 | — | — |
-| GN-RT-1 | Generic retirement = walkover credit, keeping any recorded score. | product rule W2b-R5 | signed W2b-R5 2026-10-08 | — | — |
-| GN-AB-1 | Generic abandon = replay by default (no shared points; opt-in sharing is W2c). | product rule RB2B-25 / W2b-R6 | signed W2b-R6 2026-10-08 | — | — |
+| GN-WO-1 | Generic walkover = win points, 0-0 (stage-level awarded score is W2c). | product rule W2b-R4 | signed 86 2026-10-08 | — | — |
+| GN-RT-1 | Generic retirement = walkover credit, keeping any recorded score. | product rule W2b-R5 | signed 87 2026-10-08 | — | — |
+| GN-AB-1 | Generic abandon = replay by default (no shared points; opt-in sharing is W2c). | product rule RB2B-25 / W2b-R6 | signed 88 2026-10-08 | — | — |
