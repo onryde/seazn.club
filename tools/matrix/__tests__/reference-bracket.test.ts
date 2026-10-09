@@ -545,10 +545,10 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     const unread = drive({ fixtureId: "f5", asked: { kind: "double_walkover" }, next: { line: "unresolved", why: "fixture f5 carries no ext_key" }, status: "forfeited", outcome: { kind: "double_walkover" } });
     const both = referenceBracketFinish(rec(good, dw, wo), st);
     expect(both).toMatchObject({ verdict: "pass", checked: 3 });
-    expect(both.reason).toMatch(/W2b forfeits and double walkovers: 2 of 2 judged/);
+    expect(both.reason).toMatch(/forfeits and double walkovers: 2 of 2 judged/);
     const none = referenceBracketFinish(rec(good, unread), st);
     expect(none.verdict).toBe("fail");
-    expect(none.evidence.join("\n")).toMatch(/W2b forfeits and double walkovers: 0 of 1 judged/);
+    expect(none.evidence.join("\n")).toMatch(/forfeits and double walkovers: 0 of 1 judged/);
     // Owed: the scenario's own forfeits land on this bracket — zero driven is zero judged, a failure.
     const owed = referenceBracketFinish(rec(good), st, { forfeitsOwed: true });
     expect(owed.verdict).toBe("fail");
@@ -557,7 +557,7 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     expect(referenceBracketFinish(rec(good, wo), st, { forfeitsOwed: true })).toMatchObject({ verdict: "pass", checked: 2 });
     const plain = referenceBracketFinish(rec(good), st);
     expect(plain).toMatchObject({ verdict: "pass", checked: 1 });
-    expect(plain.reason).not.toMatch(/W2b forfeits/);
+    expect(plain.reason).not.toMatch(/forfeits and double walkovers/);
   });
 
   it("through a driver: WO-PRE and RT-PART on the knockout fake judge every forfeit they drove, over every sport, and the count is reported", async () => {
@@ -571,7 +571,7 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
         const check = out.assertions.find((c) => c.id === "life-reference-bracket-finish");
         expect(check, `${key} ${cell.sport}`).toBeDefined();
         expect(`${check!.verdict}: ${check!.reason}`, `${key} ${cell.sport}`).toMatch(/^pass/);
-        const m = /W2b forfeits and double walkovers: (\d+) of (\d+) judged/.exec(check!.reason);
+        const m = /forfeits and double walkovers: (\d+) of (\d+) judged/.exec(check!.reason);
         expect(m, `${key} ${cell.sport}: ${check!.reason}`).not.toBeNull();
         expect(Number(m![1]), `${key} ${cell.sport}`).toBe(Number(m![2]));
         expect(Number(m![1]), `${key} ${cell.sport}`).toBeGreaterThan(0);
@@ -594,7 +594,7 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     const out = await SCENARIOS["WO-PRE"].run({ driver: new RefusesForfeits(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
     const check = out.assertions.find((c) => c.id === "life-reference-bracket-finish")!;
     expect(check.verdict).toBe("fail");
-    expect(check.evidence.join("\n")).toMatch(/W2b forfeits and double walkovers: 0 of 0 judged/);
+    expect(check.evidence.join("\n")).toMatch(/forfeits and double walkovers: 0 of 0 judged/);
   });
 
   it("through a driver: a double walkover decided on the page-playoff fake carries the ENGINE's next line — pp-elim feeds pp-q2 and agrees; pp-final feeds nothing, so a product that accepted it there reds by X-DW-3", async () => {

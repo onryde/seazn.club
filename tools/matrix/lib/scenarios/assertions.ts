@@ -276,7 +276,7 @@ export function referenceBracketFinish(rec: Recorder, observed: ObservedRun, opt
   const isForfeit = rec.bracketDrives.map((d) => d.asked.kind === "forfeit" || d.asked.kind === "double_walkover");
   const forfeitsDriven = isForfeit.filter(Boolean).length;
   const forfeitsJudged = judgements.filter((j, i) => j.judged && isForfeit[i]).length;
-  const forfeitLine = forfeitsDriven > 0 || opts.forfeitsOwed === true ? `W2b forfeits and double walkovers: ${forfeitsJudged} of ${forfeitsDriven} judged` : null;
+  const forfeitLine = forfeitsDriven > 0 || opts.forfeitsOwed === true ? `forfeits and double walkovers: ${forfeitsJudged} of ${forfeitsDriven} judged` : null;
   if (forfeitLine !== null && forfeitsJudged === 0) items.push({ ok: false, note: `${forfeitLine} — zero judged is a failure (R25)` });
   const verdict = assertion("life-reference-bracket-finish", items);
   if (verdict.verdict !== "pass") return verdict;
