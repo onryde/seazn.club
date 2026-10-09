@@ -166,3 +166,83 @@ describe.skipIf(!HAS_DB)("patchDivision refuses an unplayable online clock", () 
     ).toEqual({ status: 409, code: "FORMAT_LOCKED" });
   });
 });
+
+// T6 fix round 1 (review I-1). The gate judges a CHANGE of the clock or of
+// online play, never a save that merely carries the stored ones. Otherwise a
+// locked division saved before the gate existed could never save its entrants
+// again: the Entrants save re-sends the whole stored config (the format lock's
+// one exception door), and the only repair, changing the clock, is itself 409.
+describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => {
+  // PRE-GATE LEGACY DATA. Each clock below is one the division save path now
+  // refuses for online play, so the product can no longer CREATE such a row —
+  // it is written by SQL onto an already-locked division to model one saved
+  // before the gate existed: the old seed default 15+0, a 1+0, a delay clock,
+  // and no clock at all.
+  const PRE_GATE: { label: string; clock: Clock | null }[] = [
+    { label: "15+0 (the old seed default)", clock: { base: 900, increment: 0 } },
+    { label: "1+0", clock: ONE_PLUS_ZERO },
+    { label: "a delay clock", clock: { base: 900, increment: 0, delay: 5 } },
+    { label: "no clock at all", clock: null },
+  ];
+
+  async function lockedPreGateDivision(clock: Clock | null) {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: new Date("2026-10-01T12:10:00.000Z"),
+      linked: true,
+    });
+    if (clock) {
+      await sql`
+        update divisions set config = jsonb_set(config, '{clock}', ${sql.json(clock)})
+         where id = ${s.divisionId}`;
+    } else {
+      await sql`update divisions set config = config - 'clock' where id = ${s.divisionId}`;
+    }
+    const auth = { orgId: s.orgId, via: "session", userId: s.ownerUserId, role: "owner", keyId: null } as AuthCtx;
+    const [{ locked }] = await sql<{ locked: boolean }[]>`
+      select exists(select 1 from fixtures f join stages st on st.id = f.stage_id
+                     where st.division_id = ${s.divisionId}) as locked`;
+    expect(locked, "premise: the division is format-locked (it has a fixture)").toBe(true);
+    const before = await getDivision(auth, s.divisionId);
+    expect((before.config as { clock?: unknown }).clock ?? null, "premise: the legacy clock is stored").toEqual(clock);
+    expect((before.config as { onlinePlay?: string }).onlinePlay, "premise: online play is on").toBe("lichess");
+    return { auth, divisionId: s.divisionId, before: before.config as Record<string, unknown> };
+  }
+
+  it("a locked division with a pre-gate clock can still save its entrants, for every legacy clock", async () => {
+    let checked = 0;
+    for (const { label, clock } of PRE_GATE) {
+      const { auth, divisionId, before } = await lockedPreGateDivision(clock);
+      const entrants = { kinds: ["individual"], defaultKind: "individual" };
+      const out = await patchDivision(auth, divisionId, { config: { ...before, entrants } });
+      expect((out.config as { entrants?: unknown }).entrants, label).toEqual(entrants);
+      expect((out.config as { clock?: unknown }).clock ?? null, `${label}: the clock is untouched`).toEqual(clock);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every pre-gate clock").toBe(PRE_GATE.length);
+    expect(checked, "premise: the legacy set is not empty").toBeGreaterThan(0);
+  });
+
+  it("the positive pair: on that locked division a clock CHANGE is still refused", async () => {
+    const { auth, divisionId, before } = await lockedPreGateDivision({ base: 900, increment: 0 });
+    expect(
+      await refusal(patchDivision(auth, divisionId, { config: { ...before, clock: ONE_PLUS_ZERO } })),
+    ).toEqual({ status: 409, code: "FORMAT_LOCKED" });
+  });
+
+  it("an unlocked online division changing ONLY its clock to an unplayable one is still refused", async () => {
+    // Online play is already on and stays on, so only the clock arm of the
+    // "did it change" predicate can fire here.
+    const { owner, division } = await createBoardgame("lichess", THREE_PLUS_ZERO);
+    expect(
+      await refusal(
+        patchDivision(owner, division.id, {
+          config: { variant: "classical", onlinePlay: "lichess", clock: ONE_PLUS_ZERO },
+        }),
+      ),
+    ).toEqual({ status: 400, code: "INVALID_TIME_CONTROL" });
+    const after = await getDivision(owner, division.id);
+    expect((after.config as { clock?: Clock }).clock, "nothing was written").toEqual(THREE_PLUS_ZERO);
+  });
+});
