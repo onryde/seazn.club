@@ -13,9 +13,13 @@ import "server-only";
 //       are not rate-limited at speed).
 // An unrecognised 400 is `unavailable`, never an acceptance: a body we have
 // not measured is a body we do not understand.
+//
+// Creation alone splits its failures in two (Task 3-5 review T3-I2): a 4xx is
+// lila REFUSING, so nothing exists; a timeout, network error, 5xx, or a 2xx
+// with no usable id is `outcome_unknown`, because a challenge may exist.
 import { LICHESS_TIMEOUT_MS } from "../window";
 import { assertUci } from "./uci";
-import type { BoardCall, BoardErrorCode, GameSnapshot, LichessStatus } from "../types";
+import { isLichessStatus, type BoardCall, type BoardErrorCode, type GameSnapshot } from "../types";
 
 const DEFAULT_BASE = "https://lichess.org";
 
@@ -35,6 +39,14 @@ function classifyBoardError(status: number, raw: string): BoardErrorCode {
     if (raw.includes(M6_MESSAGE)) return "not_your_turn_or_over";
   }
   return "unavailable";
+}
+
+/** Creation's failure classes. Status 0 is `call()`'s marker for a thrown
+ *  fetch — the network failing or the 10s timeout firing — and neither, nor a
+ *  5xx, proves lila did not commit the challenge before the failure. */
+function classifyCreateError(status: number, raw: string): BoardErrorCode {
+  if (status === 0 || status >= 500) return "outcome_unknown";
+  return classifyBoardError(status, raw);
 }
 
 /**
@@ -115,7 +127,7 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
         method: "POST", token: a.whiteToken, body,
       });
       if (out.status < 200 || out.status >= 300) {
-        return { ok: false, code: classifyBoardError(out.status, out.raw), raw: out.raw };
+        return { ok: false, code: classifyCreateError(out.status, out.raw), raw: out.raw };
       }
       // A 200 whose body is not a JSON object (a proxy's HTML page, a literal
       // `null`) is not a created game either — and it must not THROW: the
@@ -132,9 +144,10 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
         ? (parsed as { id?: unknown }).id
         : undefined;
       if (typeof id !== "string" || id === "") {
-        // A 200 with no id is not a created game. Returning ok here would let
-        // T9 record `challenge_id = undefined` and lose the game.
-        return { ok: false, code: "unavailable", raw: out.raw };
+        // A 200 with no id is not a game we can record — returning ok would let
+        // T9 write `challenge_id = undefined` — but Lichess DID answer 2xx, so
+        // the challenge may exist. Unknown, not a definite failure.
+        return { ok: false, code: "outcome_unknown", raw: out.raw };
       }
       return { ok: true, challengeId: id };
     },
@@ -185,8 +198,11 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
     /** The reconcile read (§3.5). `clocks=true` because M11 makes this the
      *  authority on both clocks; `pgnInJson=false` because we read `moves`.
      *  No Authorization header — the export is public. null on 404, on a 5xx,
-     *  and on any body missing id or status: a reconcile must retry rather
-     *  than write a result from a shape it did not recognise.
+     *  and on any body missing id or a string status: a reconcile must retry
+     *  rather than write a result from a shape it did not recognise. A STRING
+     *  status Lichess has not declared is not null — it comes back as
+     *  `status: "unrecognised"` with the word in `rawStatus`, because the game
+     *  is real and retrying cannot make the status known (T3-I1).
      *
      *  A game STILL IN PLAY is exported late. For a requester lila does not
      *  trust — and this call is unauthenticated — `applyDelay` withholds the
@@ -214,9 +230,9 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
       if (typeof json.id !== "string" || typeof json.status !== "string") return null;
       const clocks: unknown[] = Array.isArray(json.clocks) ? json.clocks : [];
       const moves = typeof json.moves === "string" ? json.moves.trim() : "";
-      return {
+      const status = json.status;
+      const common: Omit<GameSnapshot, "status"> = {
         gameId: json.id,
-        status: json.status as LichessStatus,
         winner: json.winner === "white" || json.winner === "black" ? json.winner : null,
         movesSan: moves === "" ? [] : moves.split(/\s+/),
         // M11: `clocks` is CENTISECONDS (`[60000,60000]` beside
@@ -226,6 +242,10 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
         blackMs: latestClockMs(clocks, 1),
         increment: typeof json.clock?.increment === "number" ? json.clock.increment : 0,
       };
+      // Validated, never cast: the 14 statuses are LICHESS_STATUSES (types.ts).
+      return isLichessStatus(status)
+        ? { ...common, status }
+        : { ...common, status: "unrecognised", rawStatus: status };
     },
   };
 }
