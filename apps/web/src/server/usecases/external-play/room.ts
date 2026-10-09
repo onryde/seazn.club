@@ -50,10 +50,6 @@ export type MatchRoomView = {
   opponent: { name: string; checkedIn: boolean };
   status: ExternalPlayStatus;
   needsReason: NeedsReason | null;
-  /** Caller's own colour's Lichess URL — only once the challenge is ready
-   *  AND the room is still inside its window (spec §12.1: expired past T+20
-   *  even with a valid token shows status/result only, never a Play link). */
-  playUrl: string | null;
   /** https://lichess.org/{challengeId} — once the game is live or finished. */
   watchUrl: string | null;
   /** Both checked in, phase open, no challenge minted yet — the client may
@@ -159,13 +155,6 @@ async function buildView(
   const status: ExternalPlayStatus = bridge?.status ?? "pending";
   const needsReason = bridge?.needs_reason ?? null;
 
-  const playUrl =
-    bridge && bridge.status === "ready" && phase === "open"
-      ? colour === "white"
-        ? bridge.url_white
-        : bridge.url_black
-      : null;
-
   const watchUrl =
     bridge && (bridge.status === "live" || bridge.status === "finished") && bridge.challenge_id !== null
       ? `https://lichess.org/${bridge.challenge_id}`
@@ -194,7 +183,6 @@ async function buildView(
     opponent: { name: opponent.displayName, checkedIn: opponentCheckedIn },
     status,
     needsReason,
-    playUrl,
     watchUrl,
     canMint,
   };
@@ -331,8 +319,7 @@ export async function mintIfReady(
     });
     const ready = await sql<{ fixture_id: string }[]>`
       update fixture_external_play
-         set status = 'ready', challenge_id = ${ch.challengeId}, url_white = ${ch.urlWhite},
-             url_black = ${ch.urlBlack}, white_side = ${whiteSide},
+         set status = 'ready', challenge_id = ${ch.challengeId}, white_side = ${whiteSide},
              white_lichess_id = ${wl.id}, black_lichess_id = ${bl.id},
              expires_at = ${deadline}, mint_claimed_at = null, last_error = null, updated_at = now()
        where fixture_id = ${f.fixtureId} and status = 'pending' and mint_claimed_at = ${now}

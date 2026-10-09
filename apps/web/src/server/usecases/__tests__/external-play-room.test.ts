@@ -299,9 +299,10 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       clock: { limit: 900, increment: 10 },
       expiresAt: windowFor(T).deadline,
     });
-    expect(v.playUrl).toBe(`https://l/${adapter.id}?color=black`); // away is Black by default
+    // V434 dropped the per-colour lichess.org links (D3); colour is what is left.
+    expect(v.you.colour).toBe("black"); // away is Black by default
     const homeView = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, now);
-    expect(homeView.playUrl).toBe(`https://l/${adapter.id}?color=white`);
+    expect(homeView.you.colour).toBe("white");
     expect(homeView.watchUrl).toBeNull(); // not live/finished yet
     expect(homeView.status).toBe("ready");
   });
@@ -447,10 +448,8 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
     );
     const homeView = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, now);
     expect(homeView.you.colour).toBe("black");
-    expect(homeView.playUrl).toBe(`https://l/${adapter.id}?color=black`);
     const awayView = await readMatchRoom({ kind: "session", userId: s.away.userId }, s.fixtureId, now);
     expect(awayView.you.colour).toBe("white");
-    expect(awayView.playUrl).toBe(`https://l/${adapter.id}?color=white`);
   });
 
   // -------------------------------------------------------------------

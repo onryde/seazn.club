@@ -29,8 +29,6 @@ export type BridgeRow = {
   status: ExternalPlayStatus;
   scheduled_at_basis: Date;
   challenge_id: string | null;
-  url_white: string | null;
-  url_black: string | null;
   white_side: Side | null;
   white_lichess_id: string | null;
   black_lichess_id: string | null;
@@ -67,8 +65,6 @@ type RawBridge = {
   status: ExternalPlayStatus;
   scheduled_at_basis: string;
   challenge_id: string | null;
-  url_white: string | null;
-  url_black: string | null;
   white_side: Side | null;
   white_lichess_id: string | null;
   black_lichess_id: string | null;
@@ -86,8 +82,6 @@ function reviveBridge(raw: RawBridge): BridgeRow {
     status: raw.status,
     scheduled_at_basis: new Date(raw.scheduled_at_basis),
     challenge_id: raw.challenge_id,
-    url_white: raw.url_white,
-    url_black: raw.url_black,
     white_side: raw.white_side,
     white_lichess_id: raw.white_lichess_id,
     black_lichess_id: raw.black_lichess_id,
@@ -191,7 +185,7 @@ export async function resetStaleBridge(f: OnlinePlayFixture): Promise<void> {
   await sql`
     update fixture_external_play
        set status = 'pending', scheduled_at_basis = ${f.scheduledAt}, challenge_id = null,
-           url_white = null, url_black = null, white_side = null, white_lichess_id = null,
+           white_side = null, white_lichess_id = null,
            black_lichess_id = null, expires_at = null, mint_claimed_at = null,
            white_emailed_at = null, black_emailed_at = null, needs_reason = null,
            started_at = null, finished_at = null,
