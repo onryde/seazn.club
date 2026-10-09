@@ -125,7 +125,7 @@ function optionsOf(h: ReturnType<typeof mount>) {
 function helpSpan(h: ReturnType<typeof mount>) {
   return h
     .tree()
-    .find((e) => e.type === "span" && propsOf(e).className === "mt-0.5 block text-[11px] text-slate-400");
+    .find((e) => e.type === "span" && propsOf(e).className === "mt-0.5 block text-[11px] text-slate-500");
 }
 
 const NON_ENGLISH = [

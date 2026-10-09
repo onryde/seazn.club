@@ -25,6 +25,18 @@ const APPROVED_PLAYER_NOTICE: Record<(typeof LOCALES)[number], string> = {
   nl: "Je camera moet de hele partij aan blijven. Gaat hij uit, of ga je uit beeld, dan leggen we dat vast voor de organisator, die beslist wat er gebeurt. Er wordt niets automatisch beslist.",
 };
 
+// Fix round (controller, 2026-10-09): the option labels are SHORT — at 320px
+// the long "Required — the camera must be live…" form clipped inside the
+// select — and the explanation lives only in the help text under it. Typed
+// from that ruling (en) and each locale's existing translation of the label
+// before its " — " (es/fr/nl), never read back from the dictionary.
+const SHORT_OPTION_LABEL: Record<(typeof LOCALES)[number], Record<(typeof CAMERA_POLICIES)[number], string>> = {
+  en: { off: "Off", optional: "Optional", required: "Required" },
+  es: { off: "Desactivada", optional: "Opcional", required: "Obligatoria" },
+  fr: { off: "Désactivée", optional: "Facultative", required: "Obligatoire" },
+  nl: { off: "Uit", optional: "Optioneel", required: "Verplicht" },
+};
+
 // "monitor" in each shipped language, plus the surveillance synonyms a
 // translator would reach for.
 const MONITORED = /monitor|surveil|vigil|bewaak|toezicht|observ/i;
@@ -51,6 +63,7 @@ describe("camera policy copy", () => {
       "divset.camera.save",
       "divset.camera.saved",
       "divset.camera.inherited",
+      "divset.camera.inheritOption",
       "divset.camera.needsOnlinePlay",
       "divset.err.cameraPolicyLocked",
       "divset.err.timeControlUnsupported",
@@ -66,6 +79,41 @@ describe("camera policy copy", () => {
       }
     }
     expect(checked, "anti-vacuity: 4 locales × every key").toBe(4 * keys.length);
+  });
+
+  it("every option label is the SHORT one, in every locale — no explanation inside the select", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      for (const p of CAMERA_POLICIES) {
+        expect(DICTS[loc][`divset.camera.${p}`], `${loc} ${p}`).toBe(SHORT_OPTION_LABEL[loc][p]);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 4 locales × every declared policy").toBe(4 * CAMERA_POLICIES.length);
+    expect(CAMERA_POLICIES.length, "premise: a policy vocabulary exists").toBeGreaterThan(0);
+  });
+
+  it("the explanation moved to the help text: it names every policy's short label, in every locale", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      for (const p of CAMERA_POLICIES) {
+        expect(DICTS[loc]["divset.camera.help"], `${loc} help explains ${p}`).toContain(SHORT_OPTION_LABEL[loc][p]);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(4 * CAMERA_POLICIES.length);
+  });
+
+  it("the return-to-inherit option names the competition's value through its {policy} slot in every locale", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const text = DICTS[loc]["divset.camera.inheritOption"];
+      expect(text, loc).toContain("{policy}");
+      expect(text.split("{policy}").length - 1, `${loc}: exactly one slot`).toBe(1);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    expect(DICTS.en["divset.camera.inheritOption"]).toBe("Use the competition setting ({policy})");
   });
 
   it("the time-control refusal names the catalogue through its {controls} slot in every locale", () => {
@@ -86,8 +134,9 @@ describe("camera policy copy", () => {
       }
     }
     // 4 locales × (label, help, playerNoticeLabel, save, saved, inherited,
-    // needsOnlinePlay, 3 options, the lock error, the notice) = 4 × 12.
-    expect(checked, "anti-vacuity: every camera sentence in every locale").toBe(48);
+    // inheritOption, needsOnlinePlay, 3 options, the lock error, the notice)
+    // = 4 × 13.
+    expect(checked, "anti-vacuity: every camera sentence in every locale").toBe(52);
   });
 
   it("the online-play help no longer promises games played on Lichess (D3 deleted that mode)", () => {

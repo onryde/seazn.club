@@ -47,6 +47,39 @@ const CAMERA_OPTION_KEY: Record<CameraPolicy, MessageKey> = {
   required: "divset.camera.required",
 };
 
+/** M-4 (fix round 2026-10-09): the select's "use the competition setting"
+ *  choice. It is not a policy: saving it sends `camera_policy: null`, which
+ *  patchDivision gates and audits on the EFFECTIVE change it makes (clearing
+ *  to inherit a stricter competition after a round opens is 409). */
+export const CAMERA_INHERIT = "inherit" as const;
+export type CameraChoice = CameraPolicy | typeof CAMERA_INHERIT;
+
+/** The division's stored value as a select choice: null is inherit. */
+export const cameraChoiceOf = (own: CameraPolicy | null): CameraChoice => own ?? CAMERA_INHERIT;
+
+/** What a save sends for a choice: inherit clears the division's own value. */
+export const cameraPatchValue = (choice: CameraChoice): CameraPolicy | null =>
+  choice === CAMERA_INHERIT ? null : choice;
+
+/** What players get under a choice at division level (a pin wins, even
+ *  downwards; inherit is the competition's value). */
+export const effectiveCameraChoice = (choice: CameraChoice, inherited: CameraPolicy): CameraPolicy =>
+  choice === CAMERA_INHERIT ? inherited : choice;
+
+/** The select's options: return-to-inherit FIRST, naming the competition's
+ *  current value, then each declared policy once by its SHORT label — the
+ *  explanation lives in the help text under the select (at 320px a long
+ *  label clipped inside it). */
+export function cameraSelectOptions(
+  inherited: CameraPolicy,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+): { value: CameraChoice; label: string }[] {
+  return [
+    { value: CAMERA_INHERIT, label: msg("divset.camera.inheritOption", { policy: msg(CAMERA_OPTION_KEY[inherited]) }) },
+    ...CAMERA_POLICIES.map((p) => ({ value: p, label: msg(CAMERA_OPTION_KEY[p]) })),
+  ];
+}
+
 export interface DivisionSettingsInfo {
   id: string;
   name: string;
@@ -89,21 +122,22 @@ function Group({
   const [open, setOpen] = useState(defaultOpen);
   return (
     <section className={`card p-0 ${danger ? "border-red-200" : ""}`}>
+      {/* Below md the summary takes a row of its own under the title (order +
+          basis-full) instead of squeezing it: at 320px a long title next to a
+          summary wrapped one word per line. md+ is one row, as before. */}
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between gap-2 px-5 py-3 text-left"
+        className="flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 px-5 py-3 text-left md:flex-nowrap md:justify-between"
       >
-        <span className={`text-sm font-semibold ${danger ? "text-red-700" : "text-slate-700"}`}>
+        <span className={`min-w-0 flex-1 text-sm font-semibold ${danger ? "text-red-700" : "text-slate-700"}`}>
           {title}
         </span>
-        <span className="flex items-center gap-2">
-          {summary && !open && (
-            <span className="max-w-48 truncate text-xs text-slate-400">{summary}</span>
-          )}
-          <span aria-hidden className="text-xs text-slate-400">{open ? "▾" : "▸"}</span>
-        </span>
+        <span aria-hidden className="order-2 text-xs text-slate-500 md:order-3">{open ? "▾" : "▸"}</span>
+        {summary && !open && (
+          <span className="order-3 basis-full truncate text-xs text-slate-500 md:order-2 md:max-w-sm md:basis-auto">{summary}</span>
+        )}
       </button>
       {open && <div className="space-y-3 px-5 pb-5">{children}</div>}
     </section>
@@ -448,17 +482,21 @@ export function DivisionSettings({
   // rather than collapsed into "off" — the server keeps that distinction.
   // Online play gates the control on its SAVED value: the camera has its own
   // Save, so an unsaved choice in the Format group must not unlock it.
+  // M-4: the select carries "use the competition setting" as its own choice,
+  // so a pinned division can go back to inheriting (saved as null).
   const ownCamera: CameraPolicy | null = division.camera_policy ?? null;
-  const shownCamera: CameraPolicy = ownCamera ?? division.inherited_camera_policy ?? "off";
+  const inheritedCamera: CameraPolicy = division.inherited_camera_policy ?? "off";
+  const storedCameraChoice = cameraChoiceOf(ownCamera);
+  const cameraOptions = cameraSelectOptions(inheritedCamera, msg);
   const onlinePlaySaved = cfg.onlinePlay === "lichess";
-  const [cameraChoice, setCameraChoice] = useState<CameraPolicy>(shownCamera);
+  const [cameraChoice, setCameraChoice] = useState<CameraChoice>(storedCameraChoice);
   // Same derive-from-props resync as the config block above: a saved change
   // (or another tab's) arrives as new props after router.refresh().
-  const cameraSignature = `${ownCamera ?? "inherit"}|${shownCamera}`;
+  const cameraSignature = `${storedCameraChoice}|${inheritedCamera}`;
   const [syncedCameraSignature, setSyncedCameraSignature] = useState(cameraSignature);
   if (cameraSignature !== syncedCameraSignature) {
     setSyncedCameraSignature(cameraSignature);
-    setCameraChoice(shownCamera);
+    setCameraChoice(storedCameraChoice);
   }
   // Entrants block (spec 2026-07-18): the ticked kinds, the default, and the
   // team extras seed from the resolved effective model.
@@ -687,10 +725,10 @@ export function DivisionSettings({
       try {
         await apiV1(`/api/v1/divisions/${division.id}`, {
           method: "PATCH",
-          json: { camera_policy: cameraChoice },
+          json: { camera_policy: cameraPatchValue(cameraChoice) },
         });
       } catch (err) {
-        setCameraChoice(shownCamera);
+        setCameraChoice(storedCameraChoice);
         throw err;
       }
     }, msg("divset.camera.saved"));
@@ -871,7 +909,7 @@ export function DivisionSettings({
         ) : (
           <>
             <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 {msg("divset.competitionFormat")}
               </p>
               <label className="block text-xs text-slate-500">
@@ -898,7 +936,7 @@ export function DivisionSettings({
                     </option>
                   ))}
                 </select>
-                <span className="mt-0.5 block text-[11px] text-slate-400">
+                <span className="mt-0.5 block text-[11px] text-slate-500">
                   {selectedTemplate && msg(`format.template.${selectedTemplate.key}.help` as MessageKey)}
                 </span>
               </label>
@@ -955,7 +993,7 @@ export function DivisionSettings({
                       <option value="points">{msg("format.carry.points")}</option>
                       <option value="full">{msg("format.carry.full")}</option>
                     </select>
-                    <span className="mt-0.5 block text-[11px] text-slate-400">{msg("format.carry.help")}</span>
+                    <span className="mt-0.5 block text-[11px] text-slate-500">{msg("format.carry.help")}</span>
                   </label>
                 )}
               </div>
@@ -975,7 +1013,7 @@ export function DivisionSettings({
               )}
             </div>
 
-            <p className="border-t border-slate-100 pt-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <p className="border-t border-slate-100 pt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
               {msg("divset.matchRules")}
             </p>
             <label className="block text-xs text-slate-500">
@@ -1009,7 +1047,7 @@ export function DivisionSettings({
                     <option value="lichess">{msg("divset.onlinePlay.lichess")}</option>
                   </select>
                 </label>
-                <p className="mt-1 text-[11px] text-slate-400">{msg("divset.onlinePlay.help")}</p>
+                <p className="mt-1 text-[11px] text-slate-500">{msg("divset.onlinePlay.help")}</p>
               </div>
             )}
 
@@ -1060,7 +1098,7 @@ export function DivisionSettings({
             )}
 
             <details>
-              <summary className="cursor-pointer text-[11px] text-slate-400">
+              <summary className="cursor-pointer text-[11px] text-slate-500">
                 {msg("divset.advanced")}
               </summary>
               <textarea
@@ -1079,7 +1117,7 @@ export function DivisionSettings({
                 {msg("divset.saveRules")}
               </button>
             )}
-            <p className="text-[11px] text-slate-400">{msg("divset.rulesNote")}</p>
+            <p className="text-[11px] text-slate-500">{msg("divset.rulesNote")}</p>
           </>
         )}
       </Group>
@@ -1088,33 +1126,36 @@ export function DivisionSettings({
           is edited mostly on divisions that already have fixtures, where the
           Format group above is read-only. */}
       {division.sport_key === "boardgame" && (
-        <Group title={msg("divset.camera.label")} summary={msg(CAMERA_OPTION_KEY[shownCamera])}>
+        <Group
+          title={msg("divset.camera.label")}
+          summary={cameraOptions.find((o) => o.value === storedCameraChoice)?.label}
+        >
           <select
             aria-label={msg("divset.camera.label")}
             disabled={!canEdit || !onlinePlaySaved}
             value={cameraChoice}
-            onChange={(e) => setCameraChoice(e.target.value as CameraPolicy)}
+            onChange={(e) => setCameraChoice(e.target.value as CameraChoice)}
             className="input w-full"
             data-testid="division-camera-policy"
           >
-            {CAMERA_POLICIES.map((p) => (
-              <option key={p} value={p}>
-                {msg(CAMERA_OPTION_KEY[p])}
+            {cameraOptions.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
               </option>
             ))}
           </select>
           {!onlinePlaySaved && (
-            <p data-testid="division-camera-needs-online" className="text-[11px] text-slate-400">
+            <p data-testid="division-camera-needs-online" className="text-[11px] text-slate-500">
               {msg("divset.camera.needsOnlinePlay")}
             </p>
           )}
           {ownCamera === null && (
-            <p data-testid="division-camera-inherited" className="text-[11px] text-slate-400">
+            <p data-testid="division-camera-inherited" className="text-[11px] text-slate-500">
               {msg("divset.camera.inherited")}
             </p>
           )}
-          <p className="text-[11px] text-slate-400">{msg("divset.camera.help")}</p>
-          {cameraChoice === "required" && (
+          <p className="text-[11px] text-slate-500">{msg("divset.camera.help")}</p>
+          {effectiveCameraChoice(cameraChoice, inheritedCamera) === "required" && (
             <div data-testid="division-camera-player-notice" className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
               <p className="font-medium text-slate-700">{msg("divset.camera.playerNoticeLabel")}</p>
               <p className="mt-1">{msg("onlineChess.camera.playerNotice")}</p>
@@ -1123,7 +1164,7 @@ export function DivisionSettings({
           {canEdit && (
             <button
               type="button"
-              disabled={busy || !onlinePlaySaved || cameraChoice === shownCamera}
+              disabled={busy || !onlinePlaySaved || cameraChoice === storedCameraChoice}
               onClick={saveCameraPolicy}
               className="btn btn-primary text-xs"
               data-testid="division-camera-save"
@@ -1145,12 +1186,12 @@ export function DivisionSettings({
             same note swapped for a quiet Reset affordance beside it. */}
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
           {entrantModelSource === "sport" ? (
-            <span className="text-slate-400" data-testid="entrants-sport-default">
+            <span className="text-slate-500" data-testid="entrants-sport-default">
               {msg("divset.entrants.sportDefault")}
             </span>
           ) : (
             <>
-              <span className="text-slate-400">{msg("divset.entrants.overridden")}</span>
+              <span className="text-slate-500">{msg("divset.entrants.overridden")}</span>
               {canEdit && (
                 <button
                   type="button"
@@ -1213,7 +1254,7 @@ export function DivisionSettings({
             is ticked (there is nothing to number or captain otherwise). */}
         {entrantKinds.includes("team") && (
           <div className="space-y-2 rounded-lg bg-slate-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               {msg("divset.entrants.teamOptions")}
             </p>
             <label className="flex items-start gap-2 text-xs text-slate-600">
@@ -1249,7 +1290,7 @@ export function DivisionSettings({
             {msg("divset.entrants.save")}
           </button>
         )}
-        <p className="text-[11px] text-slate-400">{msg("divset.entrants.note")}</p>
+        <p className="text-[11px] text-slate-500">{msg("divset.entrants.note")}</p>
       </Group>
 
       <Group
@@ -1309,7 +1350,7 @@ export function DivisionSettings({
         <p className="text-[11px] text-amber-700" data-testid="auto-posts-timing">
           {msg("divset.news.timing")}
         </p>
-        <p className="text-[11px] text-slate-400">{msg("divset.news.note")}</p>
+        <p className="text-[11px] text-slate-500">{msg("divset.news.note")}</p>
       </Group>
 
       <Group
