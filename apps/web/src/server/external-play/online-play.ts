@@ -12,6 +12,12 @@ export function readOnlinePlay(config: unknown): OnlinePlayMode {
   return "off";
 }
 
+/** The one statement of which sports can be played online. The camera policy
+ *  (camera-policy.ts) follows it: no online play ⇒ no camera to require. */
+export function supportsOnlinePlay(sportKey: string): boolean {
+  return sportKey === "boardgame";
+}
+
 /** Validate and normalise an onlinePlay patch value for a sport. */
 export function assertOnlinePlayValue(
   sportKey: string,
@@ -22,7 +28,7 @@ export function assertOnlinePlayValue(
   if (!ONLINE_PLAY_VALUES.has(mode)) {
     throw new HttpError(422, "onlinePlay must be 'off' or 'lichess'", "ONLINE_PLAY_INVALID");
   }
-  if (mode === "lichess" && sportKey !== "boardgame") {
+  if (mode === "lichess" && !supportsOnlinePlay(sportKey)) {
     throw new HttpError(
       422,
       "Online Lichess play is only available for board game divisions",

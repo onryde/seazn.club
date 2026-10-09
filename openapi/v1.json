@@ -3324,6 +3324,21 @@
                             "items": {
                               "type": "string"
                             }
+                          },
+                          "camera_policy": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "off",
+                                  "optional",
+                                  "required"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -3351,7 +3366,8 @@
                           "show_seeds",
                           "archived_at",
                           "created_at",
-                          "required_court_tags"
+                          "required_court_tags",
+                          "camera_policy"
                         ],
                         "additionalProperties": false
                       }
@@ -3394,7 +3410,8 @@
                       "created_at": "example",
                       "required_court_tags": [
                         "example"
-                      ]
+                      ],
+                      "camera_policy": "off"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -3703,6 +3720,21 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "camera_policy": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "optional",
+                          "required"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -3933,6 +3965,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -3960,7 +4007,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -4001,7 +4049,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -4467,6 +4516,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -4494,7 +4558,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -4535,7 +4600,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -4902,6 +4968,21 @@
                       "minLength": 1,
                       "maxLength": 40
                     }
+                  },
+                  "camera_policy": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "optional",
+                          "required"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -5127,6 +5208,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -5154,7 +5250,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -5195,7 +5292,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -6131,6 +6229,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -6158,7 +6271,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -6199,7 +6313,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -6619,6 +6734,21 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "camera_policy": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "optional",
+                                "required"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -6646,7 +6776,8 @@
                         "show_seeds",
                         "archived_at",
                         "created_at",
-                        "required_court_tags"
+                        "required_court_tags",
+                        "camera_policy"
                       ],
                       "additionalProperties": false
                     },
@@ -6687,7 +6818,8 @@
                     "created_at": "example",
                     "required_court_tags": [
                       "example"
-                    ]
+                    ],
+                    "camera_policy": "off"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

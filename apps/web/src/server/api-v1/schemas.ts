@@ -77,6 +77,7 @@ import { isValidIana } from "../../lib/tz.ts";
 // D6 (fixture-page stream, 2026-09-30) — the platforms a NEW destination may name. RELATIVE with `.ts`, never `@/`,
 // for the same reason as the imports above; lib/stream-destinations.ts is deliberately import-free.
 import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";
+import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -414,6 +415,11 @@ function checkAgeCutoff(
   }
 }
 
+/** Online-chess camera policy (design §5.1, V432). The vocabulary is
+ *  lib/camera-policy.ts's — one definition shared with the server ladder and
+ *  the settings control. */
+export const CameraPolicyS = z.enum(CAMERA_POLICIES);
+
 export const CreateDivision = z
   .object({
     name: z.string().min(1).max(200),
@@ -436,6 +442,11 @@ export const CreateDivision = z
     age_cutoff_month: z.number().int().min(1).max(12).nullable().optional(),
     age_cutoff_day: z.number().int().min(1).max(31).nullable().optional(),
     eligibility_note: z.string().max(2000).nullable().optional(),
+    /** Online-chess camera requirement for this division (V432
+     *  `divisions.camera_policy`). Absent or null ⇒ inherit the competition's
+     *  (NOT NULL, default 'off'); a stage may override it. Board games only —
+     *  any other sport refuses 'optional'/'required' (422 CAMERA_POLICY_SPORT). */
+    camera_policy: CameraPolicyS.nullable().optional(),
   })
   .superRefine(checkAgeBand)
   .superRefine(checkAgeCutoff);
@@ -502,6 +513,13 @@ export const PatchDivision = z
      *  `stages.required_court_tags` (V367) — that column's own CRUD still
      *  does not exist, only its read into this union. */
     required_court_tags: RequiredCourtTags,
+    /** Online-chess camera requirement (see CreateDivision). null clears this
+     *  division's own value ⇒ inherit the competition's. Once any round of the
+     *  division has been opened the EFFECTIVE requirement may only be relaxed
+     *  (D9) — a tightening is 409 POLICY_LOCKED — and every real change writes
+     *  a `chess.camera_policy_changed` competition_events row. A re-send of
+     *  the stored value is a no-op. */
+    camera_policy: CameraPolicyS.nullable(),
   })
   .partial()
   .refine((p) => Object.keys(p).length > 0, "empty patch")
@@ -539,6 +557,7 @@ export const Division = z.object({
   archived_at: z.string().nullable(), // v3/09 §4 — set = archived (hidden, restorable)
   created_at: z.string(),
   required_court_tags: z.array(z.string()), // D5/P8 candidate-court filter; see PatchDivision above
+  camera_policy: CameraPolicyS.nullable(), // V432 — null = inherit the competition's; see PatchDivision above
 });
 
 // ---------------------------------------------------------------------------
