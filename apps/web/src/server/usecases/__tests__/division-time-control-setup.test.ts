@@ -55,6 +55,14 @@ async function refusal(p: Promise<unknown>): Promise<{ status: number; code: str
 
 const ONE_PLUS_ZERO: Clock = { base: 60, increment: 0 };
 const THREE_PLUS_ZERO: Clock = { base: 180, increment: 0 };
+/** Owner ruling 2026-10-09: 10+0 and 15+0 join the ship-1 list. Typed from the
+ *  ruling (minutes x 60, no increment), not read from the catalogue. */
+const TEN_PLUS_ZERO: Clock = { base: 600, increment: 0 };
+const FIFTEEN_PLUS_ZERO: Clock = { base: 900, increment: 0 };
+/** Passes both measured rules (1200s >= 180, a multiple of 60) and is NOT on
+ *  the list: the off-list clock the legacy cases below stand on. 15+0 played
+ *  that part until the 2026-10-09 ruling made it legal. */
+const TWENTY_PLUS_ZERO: Clock = { base: 1200, increment: 0 };
 
 describe.skipIf(!HAS_DB)("createDivision refuses an unplayable online clock", () => {
   it("1+0 with online play is refused 400 INVALID_TIME_CONTROL", async () => {
@@ -73,6 +81,21 @@ describe.skipIf(!HAS_DB)("createDivision refuses an unplayable online clock", ()
     }
     expect(caught).toBeInstanceOf(HttpError);
     expect((caught as HttpError).extra).toEqual({ controls: SHIP1_TIME_CONTROLS.map((t) => t.key) });
+  });
+
+  it("10+0 and 15+0 with online play are accepted and stored (owner ruling 2026-10-09); 1+0 still is not", async () => {
+    let checked = 0;
+    for (const clock of [TEN_PLUS_ZERO, FIFTEEN_PLUS_ZERO]) {
+      const { division } = await createBoardgame("lichess", clock);
+      expect((division.config as { clock?: Clock }).clock, JSON.stringify(clock)).toEqual(clock);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both ruled-in controls").toBe(2);
+    // The pair: widening the list did not widen it to sudden-death bullet.
+    expect(await refusal(createBoardgame("lichess", ONE_PLUS_ZERO))).toEqual({
+      status: 400,
+      code: "INVALID_TIME_CONTROL",
+    });
   });
 
   it("3+0 with online play is accepted and stored", async () => {
@@ -129,6 +152,23 @@ describe.skipIf(!HAS_DB)("patchDivision refuses an unplayable online clock", () 
     expect(ok.config).toMatchObject({ onlinePlay: "lichess", clock: THREE_PLUS_ZERO });
   });
 
+  it("the SEQUENCE: an online division moves to 10+0, then a 1+0 save is refused and 10+0 stays", async () => {
+    const { owner, division } = await createBoardgame("lichess", THREE_PLUS_ZERO);
+    const moved = await patchDivision(owner, division.id, {
+      config: { variant: "classical", onlinePlay: "lichess", clock: TEN_PLUS_ZERO },
+    });
+    expect(moved.config).toMatchObject({ onlinePlay: "lichess", clock: TEN_PLUS_ZERO });
+    expect(
+      await refusal(
+        patchDivision(owner, division.id, {
+          config: { variant: "classical", onlinePlay: "lichess", clock: ONE_PLUS_ZERO },
+        }),
+      ),
+    ).toEqual({ status: 400, code: "INVALID_TIME_CONTROL" });
+    const after = await getDivision(owner, division.id);
+    expect((after.config as { clock?: Clock }).clock, "nothing was written").toEqual(TEN_PLUS_ZERO);
+  });
+
   it("turning online play ON over a stored unplayable clock is refused", async () => {
     const { owner, division } = await createBoardgame("off", ONE_PLUS_ZERO);
     expect(
@@ -176,10 +216,11 @@ describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => 
   // PRE-GATE LEGACY DATA. Each clock below is one the division save path now
   // refuses for online play, so the product can no longer CREATE such a row —
   // it is written by SQL onto an already-locked division to model one saved
-  // before the gate existed: the old seed default 15+0, a 1+0, a delay clock,
-  // and no clock at all.
+  // before the gate existed: an off-list 20+0, a 1+0, a delay clock, and no
+  // clock at all. (The old seed default 15+0 stood first here until the owner
+  // ruled it onto the list, 2026-10-09; it is no longer refused.)
   const PRE_GATE: { label: string; clock: Clock | null }[] = [
-    { label: "15+0 (the old seed default)", clock: { base: 900, increment: 0 } },
+    { label: "20+0 (passes both measured rules, off the list)", clock: TWENTY_PLUS_ZERO },
     { label: "1+0", clock: ONE_PLUS_ZERO },
     { label: "a delay clock", clock: { base: 900, increment: 0, delay: 5 } },
     { label: "no clock at all", clock: null },
@@ -225,7 +266,7 @@ describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => 
   });
 
   it("the positive pair: on that locked division a clock CHANGE is still refused", async () => {
-    const { auth, divisionId, before } = await lockedPreGateDivision({ base: 900, increment: 0 });
+    const { auth, divisionId, before } = await lockedPreGateDivision(TWENTY_PLUS_ZERO);
     expect(
       await refusal(patchDivision(auth, divisionId, { config: { ...before, clock: ONE_PLUS_ZERO } })),
     ).toEqual({ status: 409, code: "FORMAT_LOCKED" });
@@ -235,9 +276,10 @@ describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => 
     // The format lock's SECOND door (re-review N-1): withoutDivisionMetaKeys
     // strips onlinePlay as well as entrants, so a division with fixtures may
     // still switch online play on. An over-the-board division mid-season on
-    // 15+0 must not reach Lichess that way. A gate keyed on `!locked` would
-    // let it through; the change predicate's onlinePlay arm must not.
-    const { auth, divisionId } = await lockedPreGateDivision({ base: 900, increment: 0 });
+    // an off-list 20+0 must not reach Lichess that way. A gate keyed on
+    // `!locked` would let it through; the change predicate's onlinePlay arm
+    // must not.
+    const { auth, divisionId } = await lockedPreGateDivision(TWENTY_PLUS_ZERO);
     // PRE-GATE LEGACY DATA, continued: the same division saved over the board.
     await sql`update divisions set config = config - 'onlinePlay' where id = ${divisionId}`;
     const before = (await getDivision(auth, divisionId)).config as Record<string, unknown>;

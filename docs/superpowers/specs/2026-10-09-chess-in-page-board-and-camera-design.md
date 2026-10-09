@@ -211,7 +211,8 @@ never an automatic sanction.
 The organiser picks from a curated list, validated at **tournament setup** — creation
 succeeding proves nothing about playability (M12). Permitted entries must satisfy both
 `limit + 40 × increment ≥ 180` (M13) and a `clock.limit` value Lichess accepts (M14).
-Ship-1 list: **3+0, 3+2, 5+0, 5+3, 10+5, 15+10**. Each is verified by the test in §8.
+Ship-1 list: **3+0, 3+2, 5+0, 5+3, 10+0, 10+5, 15+0, 15+10** (10+0 and 15+0 added by owner
+ruling 2026-10-09; both measured playable, `b3-spike`). Each is verified by the test in §8.
 
 ---
 
@@ -449,4 +450,3 @@ retired. Variants other than standard.
 - Penalty wording for a camera that goes dark: ruled as **flag, organiser decides** (D10);
   the player-facing sentence still needs writing in four locales.
 - W2b's merge date, which gates the no-show path.
-- Whether the ship-1 time-control list should include anything slower than 15+10.

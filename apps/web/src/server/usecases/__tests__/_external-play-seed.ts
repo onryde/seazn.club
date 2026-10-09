@@ -89,7 +89,8 @@ export type SeedOnlineChessFixtureOpts = {
   /** Defaults to 15+10 (900s base, 10s increment) — a ship-1 curated control
    *  (time-controls.ts), because createDivision now REFUSES an online clock
    *  outside the catalogue (T6). The default used to be 15+0, which the
-   *  setup gate refuses. A clock the gate refuses (a delay, 1+0) can no
+   *  gate refused until the owner ruled it onto the list (2026-10-09); the
+   *  default stays 15+10. A clock the gate refuses (a delay, 1+0) can no
    *  longer be built through this helper with onlinePlay 'lichess': write it
    *  by SQL after a valid create, and say it models pre-gate legacy data. */
   clock?: { base: number; increment?: number; delay?: number };
