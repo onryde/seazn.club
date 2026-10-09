@@ -2574,7 +2574,6 @@ by a named step below; none may be left for later.
     src/server/usecases/__tests__/external-play-guard.test.ts \
     src/server/usecases/__tests__/external-play-room.test.ts \
     src/server/usecases/__tests__/external-play-prepare.test.ts \
-    src/server/usecases/__tests__/external-play-escalate.test.ts \
     src/server/usecases/__tests__/external-play-happy-path.test.ts \
     src/server/usecases/__tests__/external-play-sync.test.ts \
     src/app/api/auth/lichess/__tests__/lichess-oauth-routes.test.ts \
@@ -4521,7 +4520,6 @@ cd $WT/apps/web && DATABASE_URL=postgresql://postgres@127.0.0.1:54890/seazn_ches
   src/server/usecases/__tests__/external-play-guard.test.ts \
   src/server/usecases/__tests__/external-play-room.test.ts \
   src/server/usecases/__tests__/external-play-prepare.test.ts \
-  src/server/usecases/__tests__/external-play-escalate.test.ts \
   src/server/usecases/__tests__/external-play-happy-path.test.ts \
   src/server/usecases/__tests__/external-play-sync.test.ts \
   src/server/external-play/__tests__/secrets.test.ts \
