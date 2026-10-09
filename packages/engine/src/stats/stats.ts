@@ -15,7 +15,7 @@
 // stays outside the engine's logging carve-out (only
 // `packages/engine/src/scheduling/**` may log), so the counters are the
 // closest this fold may come to logging itself. See `PlayerStatsDiagnostics`.
-import { resolveVoids, type EventEnvelope } from "../core/events.ts";
+import { CoreForfeit, resolveVoids, type EventEnvelope } from "../core/events.ts";
 import type { LineupPair } from "../core/types.ts";
 
 /**
@@ -90,6 +90,12 @@ export interface PlayerStatMetric {
    * shipped three times already). Returning `0` records a real zero.
    */
   value?: (payload: Record<string, unknown>) => number | undefined;
+  /**
+   * W2b (X-PS-1) — this metric counts an APPEARANCE (chess's "games", one per pairing card). It is not credited in a
+   * fixture whose ledger is a forfeit nobody played — a walkover, a withdrawal, a double walkover — even when the
+   * card it counts was recorded before the no-show. See `PlayerStatsModel.unplayed`.
+   */
+  appearance?: true;
 }
 
 export interface PlayerStatDerive {
@@ -105,6 +111,12 @@ export interface PlayerAwardSpec {
 
 export interface PlayerStatsModel {
   metrics: PlayerStatMetric[];
+  /**
+   * W2b (X-PS-1) — whether a fixture's (void-resolved) ledger is a forfeit nobody played, which skips every
+   * `appearance` metric. Absent ⇒ `forfeitStatsRole(events) === "unplayed"`. A sport whose result can stand BEFORE a
+   * forfeit supplies its own (chess: the classical game before a tie-break walkover stays played, ruling D-C6).
+   */
+  unplayed?: (events: readonly EventEnvelope[]) => boolean;
   derived?: PlayerStatDerive[];
   awards?: PlayerAwardSpec[];
   /**
@@ -467,6 +479,41 @@ export interface PlayerStatsDiagnostics {
 }
 
 /**
+ * W2b (spec §5.2 W2b-R9; Appendix A X-PS-1, X-PS-2) — how a fixture's ACTIVE `core.forfeit` reads for player stats.
+ *
+ * - `"unplayed"`: a walkover, a withdrawal or a double walkover over a match nothing had decided — not a match anybody
+ *   played: no appearance, no personal win or loss (X-PS-1).
+ * - `"played"`: a retirement or an in-match disqualification — a match for both sides' players, the W/L as decided,
+ *   the events already played still credited (X-PS-2).
+ * - `null`: no active forfeit; a payload that is not a W2b forfeit (a pre-W2b free-text reason, read as before); or a
+ *   forfeit after `decidedBefore` saw a result stand (chess: the classical game, D-C6 / BG-WO-3) — that result keeps
+ *   its credit and the forfeit adds none.
+ *
+ * `events` must already be void-resolved (`aggregatePlayerStats` hands every fold that list), so the last forfeit in
+ * it is the effective one.
+ */
+export function forfeitStatsRole(
+  events: readonly EventEnvelope[],
+  decidedBefore?: (event: EventEnvelope) => boolean,
+): "unplayed" | "played" | null {
+  let decided = false;
+  let role: "unplayed" | "played" | null = null;
+  for (const event of events) {
+    if (decidedBefore?.(event) === true) decided = true;
+    if (event.type !== "core.forfeit") continue;
+    const forfeit = CoreForfeit.safeParse(event.payload);
+    if (!forfeit.success) {
+      role = null;
+      continue;
+    }
+    const { by, reason } = forfeit.data;
+    if (decided) role = null;
+    else role = by === "both" || reason === "walkover" || reason === "withdrew" ? "unplayed" : "played";
+  }
+  return role;
+}
+
+/**
  * Fold one fixture's event ledger into per-person stat contributions
  * (Jul3/07 §3), plus the `PlayerStatsDiagnostics` described above.
  * `core.void` drops the voided event entirely — a voided goal takes its
@@ -520,10 +567,17 @@ export function aggregatePlayerStatsWithDiagnostics(
   const unknownEntrants = new Set<string>();
   const teamEntrantsSkipped = new Set<string>();
 
+  // W2b (X-PS-1): an appearance metric is not credited in a fixture nobody played. Asked once, and only of a model
+  // that declares one.
+  const unplayed =
+    model.metrics.some((metric) => metric.appearance === true) &&
+    (model.unplayed?.(active) ?? forfeitStatsRole(active) === "unplayed");
+
   for (const event of active) {
     const payload = event.payload as Record<string, unknown>;
     for (const metric of model.metrics) {
       if (event.type !== metric.from) continue;
+      if (unplayed && metric.appearance === true) continue;
       if (metric.when !== undefined && !metric.when(payload)) continue;
       const resolution = resolveMetricPersons(payload, metric, ctx);
       const persons = resolution.persons;

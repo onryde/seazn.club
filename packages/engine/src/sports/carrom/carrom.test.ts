@@ -204,19 +204,28 @@ describe("carrom golden: walkover", () => {
     expect(state.outcome).toEqual({ kind: "award", winner: "H", loser: "A", reason: "retired" });
   });
 
-  it("pays win/loss points; the ledger keeps only what was played", () => {
+  // W2b CA-RT-1 (product rule W2b-R5) — until W2b this pinned "the ledger keeps only what was played" (sets_won 0,
+  // points_won 8). A retirement is now credited: completed games stand (none here), the unfinished game is gameTo to
+  // the retiree's score in it (A scored nothing), and the remaining games up to the majority are gameTo-0. Boards are
+  // what was played.
+  it("pays win/loss points; a retirement credits the match to the winner (CA-RT-1)", () => {
     const [home, away] = carrom.standingsDelta(state.outcome!, cfg, league, state);
     expect(home).toMatchObject({ won: 1, points: 2 });
     expect(away).toMatchObject({ lost: 1, points: 0 });
-    expect(home.metrics).toMatchObject({ boards_won: 1, points_won: 8, sets_won: 0 });
+    const games = Math.ceil(cfg.bestOf / 2); // 2 of a default best of 3
+    expect(home.metrics).toMatchObject({ boards_won: 1, sets_won: games, sets_lost: 0, points_won: games * cfg.gameTo, points_lost: 0 });
+    expect(away.metrics).toMatchObject({ boards_won: 0, sets_won: 0, sets_lost: games, points_won: 0, points_lost: games * cfg.gameTo });
     expect(home.points + away.points).toBe(2); // inside declaredPointsSets
   });
 });
 
 // ---------------------------------------------------------------------------
-// Abandonment — PROMPT-16 §4: no_result, completed games recorded.
+// Abandonment — W2b CA-AB-1 (product rule RB2B-25 / W2b-R6): a replay. Until W2b
+// this was PROMPT-16 §4's no_result with shared points; the abandoned match now
+// has no result at all (no shared points; opt-in sharing is W2c), and the
+// completed game stays recorded on the state.
 // ---------------------------------------------------------------------------
-describe("carrom: abandonment → no_result", () => {
+describe("carrom: abandonment → replay (CA-AB-1)", () => {
   const game1: BoardSpec[] = [["H", 9], ["H", 9], ["H", 9]]; // H takes game 1
   const state = fold(
     stream(["core.start"], ...boards(...game1, ["A", 4]), [
@@ -225,11 +234,13 @@ describe("carrom: abandonment → no_result", () => {
     ]),
   );
 
-  it("records no_result with the completed game in the ledger", () => {
-    expect(state.outcome).toEqual({ kind: "no_result" });
+  it("records no result (a replay) with the completed game kept on the state", () => {
+    expect(state.outcome).toBeNull();
+    expect(state.phase).toBe("abandoned");
     expect(state.gamesWon).toEqual({ home: 1, away: 0 });
-    const [home, away] = carrom.standingsDelta(state.outcome!, cfg, league, state);
-    expect([home.points, away.points]).toEqual([1, 1]); // shared draw points
+    // A legacy `no_result` (an abandon folded before W2b) still ranks as it did: shared draw points, played ledger.
+    const [home, away] = carrom.standingsDelta({ kind: "no_result" }, cfg, league, state);
+    expect([home.points, away.points]).toEqual([1, 1]);
     expect(home.metrics).toMatchObject({ sets_won: 1, boards_won: 3, boards_lost: 1 });
     expect(away.metrics).toMatchObject({ sets_won: 0, boards_won: 1 });
   });

@@ -801,10 +801,10 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
    * W2b (plan D9; spec §5.2) — what an `award` (or a double walkover) credits this sport's table, computed from cfg
    * and the folded state alone (best-of, set targets, overs, `awardScore`), never a literal. `by` is the OFFENDING
    * side, "both" the double walkover. `reason` "bye" returns exactly the delta a bye got before W2b (C-5). Its
-   * `standingsDelta` reads this for `award` instead of the played ledger. Required once every module implements it
-   * (W2b Task 4).
+   * `standingsDelta` reads this for `award` instead of the played ledger, and for `double_walkover` (nothing credited,
+   * every metric excluded, X-DW-4).
    */
-  forfeitCredit?(cfg: Cfg, state: State, reason: AwardReason, by: ForfeitBy): ForfeitCredit;
+  forfeitCredit(cfg: Cfg, state: State, reason: AwardReason, by: ForfeitBy): ForfeitCredit;
 
   /**
    * W4a (#425) T6b — WHERE IN THE MATCH we are: set 2, game 4, 30–15 · over

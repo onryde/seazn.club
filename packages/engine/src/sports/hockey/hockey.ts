@@ -131,7 +131,9 @@ export const hockey = makePeriodModule({
     strength: { base: 11, min: 7 }, // players on the pitch; cards reduce
     goalKinds: ["fg", "pc", "stroke", "og"],
     assists: false,
-    awardScore: { goals: 3 },
+    // HK-WO-1 (W2b): FIH General Tournament Regulations 13 award a walkover 5-0 (3 before W2b). A cfg frozen with 3
+    // keeps its 3 — the credit reads the stage's own cfg (X-WO-1).
+    awardScore: { goals: 5 },
     abandonPolicy: "replay",
   },
   variants: {

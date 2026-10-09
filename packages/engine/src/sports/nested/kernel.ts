@@ -33,6 +33,9 @@ import {
   type DisciplineCard,
   type DisciplineModel,
   type LineupPair,
+  type AwardReason,
+  type ForfeitBy,
+  type ForfeitCredit,
   type ForfeitPhase,
   type ForfeitReason,
   type MatchOutcome,
@@ -43,6 +46,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   FidelityBand,
   ModuleEvent,
@@ -55,6 +59,7 @@ import type {
 } from "../../sport/module.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import {
+  forfeitStatsRole,
   personsForEntrant,
   type PlayerStatMetric,
   type PlayerStatRow,
@@ -1903,7 +1908,10 @@ function nestedMatchOutcomesFold(
         rows.set(personId, stats);
       };
 
-      if (played) {
+      // W2b (X-PS-1/2): a walkover, a withdrawal or a double walkover is no match for anybody, even after a rally;
+      // a retirement or an in-match disqualification is one for both sides, even before the first rally.
+      const forfeit = forfeitStatsRole(events);
+      if ((played && forfeit !== "unplayed") || forfeit === "played") {
         for (const p of personsFor(idX)) bump(p, "matches", 1);
         for (const p of personsFor(idY)) bump(p, "matches", 1);
       }
@@ -2059,6 +2067,22 @@ export function makeNestedModule(
     };
   };
 
+  /**
+   * W2b (spec §5.2; TN-WO-1, TN-RT-1) — a walkover, a retirement, an in-match disqualification and a withdrawal all
+   * credit the same: straight sets (⌈bestOf/2⌉-0) for set %, and the match's games EXCLUDED from game % (read 0 for
+   * this match on both sides). Points won stay as played — a ledger record, and no ratio of tennis's reads it.
+   */
+  const nestedForfeitCredit = (cfg: NestedCfg, state: NestedState, reason: AwardReason, by: ForfeitBy): ForfeitCredit => {
+    const played = [sideMetrics(state, "home"), sideMetrics(state, "away")] as const;
+    if (by === "both") return doubleWalkoverCredit(played[0], played[1], METRICS.map((m) => m.key));
+    if (reason === "bye") return { perSide: played, excluded: [] };
+    const need = majority(cfg.bestOf);
+    return {
+      perSide: creditFor(by, { sets_won: need, sets_lost: 0 }, { sets_won: 0, sets_lost: need }),
+      excluded: ["games_won", "games_lost"],
+    };
+  };
+
   return {
     key: preset.key,
     version: preset.version,
@@ -2138,6 +2162,8 @@ export function makeNestedModule(
 
     outcome: (state) => state.outcome,
     forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
+    // W2b (spec §5.2) — see nestedForfeitCredit.
+    forfeitCredit: nestedForfeitCredit,
 
     // W4a (#425) §7 obligation 2 — the EXPORTED function itself, handed over by
     // reference. Not a wrapper and not a copy of its output: the guard and the
@@ -2216,12 +2242,30 @@ export function makeNestedModule(
         metrics: sideMetrics(state, side),
       });
       switch (outcome.kind) {
-        case "win":
-        case "award": {
+        case "win": {
           const winnerSide = sideOf(state, outcome.winner);
           const winner = build(winnerSide, 1, 0, cfg.points.win);
           const loser = build(opponent(winnerSide), 0, 1, cfg.points.loss);
           return winnerSide === "home" ? [winner, loser] : [loser, winner];
+        }
+        case "award": {
+          // W2b (spec §5.2): the credited sets (`nestedForfeitCredit`) over the played ledger.
+          const winnerSide = sideOf(state, outcome.winner);
+          const offender = opponent(winnerSide);
+          const credit = nestedForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
+          const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
+            ...build(side, w, l, pts),
+            metrics: creditedMetrics(sideMetrics(state, side), credit, side),
+          });
+          const winner = at(winnerSide, 1, 0, cfg.points.win);
+          const loser = at(offender, 0, 1, cfg.points.loss);
+          return winnerSide === "home" ? [winner, loser] : [loser, winner];
+        }
+        case "double_walkover": {
+          // X-DW-4: both played and lost, no points, no score, out of every ratio.
+          const credit = nestedForfeitCredit(cfg, state, "walkover", "both");
+          const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side), credit, side) });
+          return [at("home"), at("away")];
         }
         default:
           invalid(`nested module cannot rank outcome "${outcome.kind}"`);

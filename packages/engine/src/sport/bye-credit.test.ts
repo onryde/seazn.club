@@ -27,7 +27,11 @@ type Snapshot = Record<string, Record<string, Record<(typeof SEATS)[number], [St
  *  `init` state with the phantom opposite the winner, stage ctx swiss (the commonest bye), outcome a bye award. The
  *  outcome carries W2b's `loser: null, reason: "bye"`; the pre-W2b modules read only `winner`, so the same call
  *  is valid on both sides of the change. */
-function byeDeltas(): { snap: Snapshot; checked: number } {
+const W2B_BYE = { kind: "award", winner: WINNER, loser: null, reason: "bye" };
+/** The award the server's bye writers built before W2b: a winner and nothing else (no `loser`, no `reason`). */
+const LEGACY_BYE = { kind: "award", winner: WINNER };
+
+function byeDeltas(award: Record<string, unknown> = W2B_BYE): { snap: Snapshot; checked: number } {
   const snap: Snapshot = {};
   let checked = 0;
   forEachSport(({ key, module: m }) => {
@@ -39,8 +43,8 @@ function byeDeltas(): { snap: Snapshot; checked: number } {
           home: { entrantId: seat === "home" ? WINNER : BYE_PHANTOM, slots: [] },
           away: { entrantId: seat === "home" ? BYE_PHANTOM : WINNER, slots: [] },
         });
-        const outcome = { kind: "award", winner: WINNER, loser: null, reason: "bye" } as never;
-        perSeat[seat] = m.standingsDelta(outcome, cfg, { kind: "swiss" }, state) as [StandingsDelta, StandingsDelta];
+        const outcome = award as never;
+        perSeat[seat] = m.standingsDelta(outcome, cfg, { kind: "swiss" }, state);
         checked++;
       }
       snap[key][name] = perSeat;
@@ -79,6 +83,22 @@ describe("C-5: a bye credits exactly today's bye delta, per sport (spec §5.1)",
       }
     }
     expect(compared).toBe(checked); // no sport, cfg or seat appeared or vanished since the snapshot
+    expect(compared).toBeGreaterThanOrEqual(11 * 2);
+  });
+
+  it("C-5: a legacy award with no reason and no loser (a bye written before W2b) ranks as the same bye delta", () => {
+    const snap = JSON.parse(readFileSync(FIXTURE, "utf8")) as Snapshot;
+    const { snap: now, checked } = byeDeltas(LEGACY_BYE);
+    let compared = 0;
+    for (const [key, cfgs] of Object.entries(snap)) {
+      for (const [name, seats] of Object.entries(cfgs)) {
+        for (const seat of SEATS) {
+          expect(now[key]?.[name]?.[seat], `${key}/${name}/${seat}`).toEqual(seats[seat]);
+          compared++;
+        }
+      }
+    }
+    expect(compared).toBe(checked);
     expect(compared).toBeGreaterThanOrEqual(11 * 2);
   });
 });

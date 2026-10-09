@@ -10,12 +10,15 @@
 // tiebreakers.ts).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { CoreForfeit, forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
+  type AwardReason,
+  type ForfeitBy,
+  type ForfeitCredit,
   type ForfeitPhase,
   type ForfeitReason,
   type MatchOutcome,
@@ -25,6 +28,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -34,7 +38,7 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import { personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
+import { forfeitStatsRole, personsForEntrant, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §6.1
@@ -168,6 +172,16 @@ export const BoardgameResult = z
   })
   .refine((result) => Object.values(result).some((value) => value !== undefined), {
     message: "a result must record at least one fact",
+  })
+  // W2b (spec §5.2, f-w2): the method and the winner must agree. A double forfeit has no winner (an omitted `winner`
+  // reads as null, as for every null-winner method); a single forfeit names one.
+  .refine((result) => result.method !== "double_forfeit" || result.winner == null, {
+    message: "a double forfeit has no winner",
+    path: ["winner"],
+  })
+  .refine((result) => result.method !== "forfeit" || typeof result.winner === "string", {
+    message: "a forfeit names its winner",
+    path: ["winner"],
   });
 export type BoardgameResult = z.infer<typeof BoardgameResult>;
 
@@ -423,6 +437,24 @@ function sideMetrics(state: BoardgameState, side: Side, won: boolean): Record<st
   };
 }
 
+/**
+ * W2b (spec §5.2; BG-WO-1, BG-WO-2) — every chess forfeit credits the same: 1-0 (the winner's win, from cfg's scoring
+ * in `standingsDelta`), counted as a game for the table's tie-breaks and OUT of colour history — nobody sat at a board,
+ * or the game was not finished, so "Games as White/Black" must not move (an unplayed state, as `colorOf` already
+ * reads a forfeit). A bye is today's bye delta (C-5), which is the same unplayed 1-0; a double walkover credits nothing.
+ */
+function boardgameForfeitCredit(_cfg: BoardgameCfg, state: BoardgameState, reason: AwardReason, by: ForfeitBy): ForfeitCredit {
+  const unplayed: BoardgameState = { ...state, forfeited: true };
+  if (by === "both") {
+    return doubleWalkoverCredit(sideMetrics(unplayed, "home", false), sideMetrics(unplayed, "away", false), ["wins", "white", "black"]);
+  }
+  const winner = opponent(by);
+  return {
+    perSide: creditFor(by, sideMetrics(unplayed, winner, true), sideMetrics(unplayed, by, false)),
+    excluded: reason === "bye" ? [] : ["white", "black"],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Positions — spec 04 §6 / chess.md §5 (team chess uses board order later)
 // ---------------------------------------------------------------------------
@@ -479,10 +511,15 @@ const BOARD_MAX = 200; // team-match board-number sentinel
 // none — `decideResult` refuses `winnerPerson` whenever winner is null, so
 // the two actions below never share a field. "adjudication" appears in BOTH:
 // an arbiter's discretionary ruling (FIDE Art. 5.2) can go either way.
-const DECISIVE_METHODS = ["checkmate", "resign", "time", "forfeit", "adjudication", "illegal_move"] as const;
+//
+// W2b (spec §5.2 "Chess forfeit paths", plan D15): `forfeit` and `double_forfeit` are no longer offered. A forfeit is
+// `core.forfeit` with its reason, in chess as in the other ten sports (award, credit, stats skip and public tag alike);
+// `boardgame.result{forfeit | double_forfeit}` stays readable only for streams written before W2b, and the append
+// guard refuses it on write. The schema's method/winner refinement would also refuse a winnerless "forfeit".
+const DECISIVE_METHODS = ["checkmate", "resign", "time", "adjudication", "illegal_move"] as const;
 const DRAWN_METHODS = [
   "agreement", "stalemate", "insufficient", "adjudication",
-  "repetition", "fifty_move", "dead_position", "double_forfeit",
+  "repetition", "fifty_move", "dead_position",
 ] as const;
 
 export function padSpec(cfg: BoardgameCfg): PadSpec {
@@ -540,9 +577,9 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
   // which declares zero `core.*` actions. Match lifecycle (start / forfeit /
   // abandon / finalize) is IDENTICAL shape across all eleven sports, so it
   // reads as universal renderer chrome (S10), not per-module declarative
-  // data — the one boardgame-specific exception is a single forfeit, which
-  // already has a native path: `boardgame.result` with `method: "forfeit"`
-  // (decisive action above) or `"double_forfeit"` (drawn action above).
+  // data. (Until W2b chess's single forfeit was the exception, riding
+  // `boardgame.result` with `method: "forfeit"` / `"double_forfeit"`; W2b
+  // unified it on `core.forfeit` — see DECISIVE_METHODS.)
 
   // W2a BG-KO-1 — the tie-break, offered only in a bracket cfg and only in
   // phase "tiebreak"; the result panels are then gated to phase "live", so a
@@ -622,6 +659,15 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
 // roster person with a stray row — exactly the case the acceptance suite
 // pins ("the entrant's own roster person gets no row at all"). Only ever
 // crediting the side a fact concretely applies to avoids that.
+/** The classical game's result — a `boardgame.result` — stands before any later forfeit (ruling D-C6, BG-WO-3). */
+const isGameResult = (event: EventEnvelope): boolean => event.type === "boardgame.result";
+
+/** W2b (X-PS-1) — a chess fixture nobody played: a walkover, a withdrawal or a double walkover before any game result.
+ *  A forfeit after the classical game (a tie-break walkover) leaves that game played. */
+function boardgameUnplayed(events: readonly EventEnvelope[]): boolean {
+  return forfeitStatsRole(events, isGameResult) === "unplayed";
+}
+
 function foldBoardgameStats(
   events: readonly EventEnvelope[],
   ctx: PlayerStatsFoldCtx,
@@ -678,6 +724,17 @@ function foldBoardgameStats(
     // the OTHER side(s) their "losses".
     for (const entrant of ctx.entrants) {
       if (entrant.id !== winner) creditEach(entrant, "losses");
+    }
+  }
+
+  // W2b (X-PS-2): a retirement or an in-match disqualification BEFORE any game result is a game both players played,
+  // decided against the offender — its win (the plain metric's key, shared below) and its loss. Since W2b chess folds a
+  // forfeit through `core.forfeit` (no `boardgame.result`), this is the only place it is credited.
+  if (forfeitStatsRole(events, isGameResult) === "played") {
+    const forfeit = [...events].reverse().find((event) => event.type === "core.forfeit");
+    const parsed = forfeit === undefined ? undefined : CoreForfeit.safeParse(forfeit.payload);
+    if (parsed?.success === true) {
+      for (const entrant of ctx.entrants) creditEach(entrant, entrant.id === parsed.data.by ? "losses" : "wins");
     }
   }
 
@@ -770,6 +827,8 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   // W2b (plan D3 R2) — chess records a walkover before the game, after the session starts (FIDE Laws 6.7.1: a
   // player absent at the default time) and in a pending tie-break (R14). The only module that widens ["pre"].
   walkoverPhases: ["pre", "play", "tiebreak"],
+  // W2b (spec §5.2) — see boardgameForfeitCredit.
+  forfeitCredit: boardgameForfeitCredit,
 
   // §9.5 — defined at every prefix; displays points, not half-points.
   summary(state): ScoreSummary {
@@ -842,32 +901,26 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
       }
       case "award": {
-        // A bye or a walkover — a fixture nobody played. THIS KERNEL NEVER
-        // EMITS IT: boardgame's own `core.forfeit` decides a `win` with
-        // method "forfeit" (decideResult above), which is why this case was
-        // missing until 2026-09-20 and why chess/draughts/go threw
-        // INVALID_EVENT the moment a competition-layer bye reached the table
-        // (Swiss odd-field sit-out, knockout seeded bye — apps/web
-        // engine-db/competition.ts `awardByeDelta`). The other seven modules
-        // all handle it because their kernels DO fold a forfeit to an award.
+        // A bye, a walkover or a forfeit after the game started (BG-WO-1). Until W2b this kernel decided its own
+        // `core.forfeit` as a `win` with method "forfeit", and only a competition-layer bye reached this arm (Swiss
+        // odd-field sit-out, knockout seeded bye — apps/web engine-db/competition.ts `awardByeDelta`, which threw
+        // INVALID_EVENT here until 2026-09-20). W2b unified chess on the award every other sport folds a forfeit to.
         //
-        // The advancing side scores what a win scores, from cfg — FIDE's
-        // full-point bye, and the same pair total (`win + loss`) that
-        // `declaredPointsSets` already declares, so the conformance kit
-        // holds. `cfg.byeScore` is deliberately NOT read here: a half-point
-        // bye would take the pair outside declaredPointsSets, and this
-        // function cannot tell a bye from a two-sided walkover anyway — by
-        // the time it is called the empty seat has been filled with a
-        // phantom. Scoring a bye below a win is a competition-layer
-        // decision, which is what byeScore's own comment says.
+        // The advancing side scores what a win scores, from cfg — FIDE's full-point bye, and the same pair total
+        // (`win + loss`) that `declaredPointsSets` already declares, so the conformance kit holds. `cfg.byeScore` is
+        // deliberately NOT read here: a half-point bye would take the pair outside declaredPointsSets. Scoring a bye
+        // below a win is a competition-layer decision, which is what byeScore's own comment says.
         //
-        // Metrics come from an UNPLAYED state so `colorOf` excludes it from
-        // colour history, exactly as it already excludes a forfeit — nobody
-        // sat at a board, so "Games as White" must not move.
-        const unplayed: BoardgameState = { ...state, forfeited: true };
+        // The metrics are `boardgameForfeitCredit`'s: 1-0, out of colour history.
         const winnerSide = sideOf(state, outcome.winner);
-        const winner = build(winnerSide, 1, 0, 0, cfg.scoring.win, true, unplayed);
-        const loser = build(opponent(winnerSide), 0, 0, 1, cfg.scoring.loss, false, unplayed);
+        const offender = opponent(winnerSide);
+        const credit = boardgameForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
+        const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
+          ...build(side, w, 0, l, pts, w === 1),
+          metrics: creditedMetrics(sideMetrics(state, side, w === 1), credit, side),
+        });
+        const winner = at(winnerSide, 1, 0, cfg.scoring.win);
+        const loser = at(offender, 0, 1, cfg.scoring.loss);
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
       }
       case "draw":
@@ -877,13 +930,11 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         ];
       case "double_walkover": {
         // W2b X-DW-1 / BG-DW-1 — both players absent: each is charged a game played and LOST, 0 points, and nothing
-        // enters colour history (an unplayed state, as the award above). A double forfeit was a held no_result
-        // before W2b; this arm is what a `boardgame.result{double_forfeit}` now ranks as.
-        const unplayed: BoardgameState = { ...state, forfeited: true };
-        return [
-          build("home", 0, 0, 1, 0, false, unplayed),
-          build("away", 0, 0, 1, 0, false, unplayed),
-        ];
+        // enters colour history or any ratio (X-DW-4). A double forfeit was a held no_result before W2b; this arm is
+        // what a `boardgame.result{double_forfeit}` and a `core.forfeit{by:"both"}` now rank as.
+        const credit = boardgameForfeitCredit(cfg, state, "walkover", "both");
+        const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0, false), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });
+        return [at("home"), at("away")];
       }
       case "no_result":
         // An abandoned game that nothing settled — nobody's win, draw or loss (chess.md §7). (A double forfeit was
@@ -948,8 +999,9 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   // DOMAIN.md "downstream owed".
   playerStats: {
     metrics: [
-      { key: "games", label: "Games", from: "boardgame.pairing", field: "homePerson", agg: "count" },
-      { key: "games", label: "Games", from: "boardgame.pairing", field: "awayPerson", agg: "count" },
+      // W2b (X-PS-1): an appearance — not credited when the game was never played (`boardgameUnplayed`).
+      { key: "games", label: "Games", from: "boardgame.pairing", field: "homePerson", agg: "count", appearance: true },
+      { key: "games", label: "Games", from: "boardgame.pairing", field: "awayPerson", agg: "count", appearance: true },
       {
         key: "wins",
         label: "Wins",
@@ -969,9 +1021,13 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         { key: "losses", label: "Losses" },
         { key: "white", label: "Games as White" },
         { key: "black", label: "Games as Black" },
+        // W2b (X-PS-2): a forfeit after the start credits the winner's win here (no `boardgame.result` carries it).
+        { key: "wins", label: "Wins" },
       ],
+      sharesMetricKeys: ["wins"],
       fold: foldBoardgameStats,
     },
+    unplayed: boardgameUnplayed,
   },
 
   // spec 03 §6 — deterministic generator: start, then a single result

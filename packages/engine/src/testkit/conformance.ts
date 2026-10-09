@@ -437,6 +437,18 @@ export function conformanceSuite<Cfg, Ev, State>(
           "volleyball",
         ]);
         const foldMayEmitNothing = FOLD_MAY_EMIT_NOTHING.has(module.key);
+        // A `sharesMetricKeys` entry the fold emits on a stream this generator reaches too RARELY for 60 runs to be
+        // sure of — named per (module, key), with the test that proves the emission, so the honesty check (b)(i)
+        // below is skipped for that one key only and never for a module. The rarity is the generator's own roll bands:
+        // chess ends a live game with a retirement or a disqualification on 3% of rolls (one terminal event per
+        // stream), so 0.97^60 ≈ 16% of 60-run samples hold none — the check would be a coin toss, not a gate.
+        const SHARED_KEY_PROVED_ELSEWHERE: Readonly<Record<string, readonly string[]>> = {
+          // W2b X-PS-2: chess credits a retirement's or disqualification's win through the fold (no
+          // `boardgame.result` carries it); `sport/player-stats-forfeit.test.ts` "X-PS-2" asserts the winner's `wins`
+          // and the retiree's `losses` on a hand-built stream, every reason.
+          boardgame: ["wins"],
+        };
+        const sharedKeyProvedElsewhere = new Set(SHARED_KEY_PROVED_ELSEWHERE[module.key] ?? []);
 
         it("playerStats: folded.fold never writes a key absent from folded.keys, and sharesMetricKeys stays honest", () => {
           const emitted = new Set<string>();
@@ -485,7 +497,7 @@ export function conformanceSuite<Cfg, Ev, State>(
               metricKeys.has(key),
               `${module.key}: sharesMetricKeys names "${key}" but no metrics[] entry owns that key`,
             ).toBe(true);
-            if (!foldMayEmitNothing) {
+            if (!foldMayEmitNothing && !sharedKeyProvedElsewhere.has(key)) {
               expect(
                 emitted.has(key),
                 `${module.key}: sharesMetricKeys names "${key}" but folded.fold never emitted it across ${statsRuns} generated streams — a stale declaration silencing a real collision`,
@@ -531,6 +543,11 @@ export function conformanceSuite<Cfg, Ev, State>(
             const before = aggregatePlayerStats(events, playerStats, lineups, playerStatsCtx);
             const beforeByPerson = new Map(before.map((r) => [r.personId, r.stats]));
             const target = events[pick % events.length]!;
+            // W2b (X-PS-1): an `appearance` metric is skipped in a fixture whose forfeit nobody played, so voiding THAT
+            // forfeit restores the appearance — it rises, by design. Voiding any other event still may not raise it.
+            const appearanceKeys = new Set(
+              target.type === "core.forfeit" ? playerStats.metrics.filter((m) => m.appearance === true).map((m) => m.key) : [],
+            );
             const partialVoid = makeEnvelope(events.length, { type: "core.void", payload: {} }, target.id);
             const partial = aggregatePlayerStats(
               [...events, partialVoid],
@@ -541,7 +558,7 @@ export function conformanceSuite<Cfg, Ev, State>(
             for (const row of partial) {
               const prior = beforeByPerson.get(row.personId) ?? {};
               for (const [key, value] of Object.entries(row.stats)) {
-                if (!monotoneOnVoidKeys.has(key)) continue;
+                if (!monotoneOnVoidKeys.has(key) || appearanceKeys.has(key)) continue;
                 expect(
                   value,
                   `person ${row.personId} key "${key}" rose after voiding one event`,

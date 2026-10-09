@@ -123,10 +123,13 @@ describe("generic — core event mapping (spec 03 §2 table)", () => {
     expect(generic.summary(state).headline).toBe("L — W/O");
   });
 
-  it("maps core.abandon to no_result with shared points and no draw counted", () => {
+  // W2b GN-AB-1 (product rule W2b-R6): until W2b this mapped core.abandon to no_result with shared points. An abandon
+  // is now a replay — no result, phase "abandoned" — and a legacy no_result (folded before W2b) still ranks as it did.
+  it("maps core.abandon to a replay (GN-AB-1); a legacy no_result keeps shared points and no draw counted", () => {
     const state = fold(scoreCfg, stream(["core.start"], ["core.abandon", { reason: "rain" }]));
-    expect(state.outcome).toEqual({ kind: "no_result" });
-    const [home, away] = generic.standingsDelta(state.outcome!, scoreCfg, league, state);
+    expect(state.outcome).toBeNull();
+    expect(state.phase).toBe("abandoned");
+    const [home, away] = generic.standingsDelta({ kind: "no_result" }, scoreCfg, league, state);
     expect(home).toMatchObject({ played: 1, won: 0, drawn: 0, lost: 0, points: 1 });
     expect(away).toMatchObject({ played: 1, won: 0, drawn: 0, lost: 0, points: 1 });
   });

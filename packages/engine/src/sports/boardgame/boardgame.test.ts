@@ -13,6 +13,8 @@ import {
   boardgame,
   BOARDGAME_EVENT_SCHEMAS,
   BOARDGAME_TIEBREAKERS,
+  BoardgameMethod,
+  BoardgameResult,
   padSpec,
   type BoardgameState,
 } from "./boardgame.ts";
@@ -690,14 +692,42 @@ describe("boardgame padSpec — no core.* actions (match lifecycle is universal 
     }
   });
 
-  it("single forfeit rides boardgame.result's own method enum, not core.forfeit", () => {
+  // W2b (spec §5.2 "Chess forfeit paths", D15) — this pinned the opposite until W2b: a chess forfeit rode
+  // `boardgame.result{method:"forfeit" | "double_forfeit"}`. It is now `core.forfeit`, as in every other sport, so the
+  // spec's method enums no longer offer either; the methods stay in `BoardgameMethod` for streams written before W2b.
+  it("W2b D15: the result enums offer no forfeit method — a chess forfeit is core.forfeit; the schema still reads both", () => {
     const spec = padSpec(cfg);
     const decisive = spec.panels.flatMap((p) => p.actions).find((a) => a.labelKey.key === "pad.boardgame.action.result")!;
     const method = decisive.fields.find((f) => f.path === "method");
     expect(method?.kind).toBe("enum");
-    if (method?.kind === "enum") expect(method.values).toContain("forfeit");
     const drawn = spec.panels.flatMap((p) => p.actions).find((a) => a.labelKey.key === "pad.boardgame.action.draw")!;
     const drawnMethod = drawn.fields.find((f) => f.path === "method");
-    if (drawnMethod?.kind === "enum") expect(drawnMethod.values).toContain("double_forfeit");
+    expect(drawnMethod?.kind).toBe("enum");
+    if (method?.kind !== "enum" || drawnMethod?.kind !== "enum") throw new Error("method fields are enums");
+    expect(method.values.length).toBeGreaterThan(0);
+    expect(drawnMethod.values.length).toBeGreaterThan(0);
+    for (const retired of ["forfeit", "double_forfeit"]) {
+      expect(method.values, retired).not.toContain(retired);
+      expect(drawnMethod.values, retired).not.toContain(retired);
+      expect(BoardgameMethod.options, retired).toContain(retired);
+    }
+    // Every other method stays offered: the two enums together are BoardgameMethod minus the two retired ones.
+    const offered = new Set([...method.values, ...drawnMethod.values]);
+    expect([...offered].sort()).toEqual(BoardgameMethod.options.filter((m) => m !== "forfeit" && m !== "double_forfeit").sort());
+  });
+
+  it("W2b f-w2: the method and the winner agree — a double forfeit has no winner, a single forfeit names one", () => {
+    const ok = (payload: unknown) => BoardgameResult.safeParse(payload).success;
+    // accepted: the shapes streams written before W2b carry
+    expect(ok({ winner: null, method: "double_forfeit" })).toBe(true);
+    expect(ok({ method: "double_forfeit" })).toBe(true);
+    expect(ok({ winner: "H", method: "forfeit" })).toBe(true);
+    // refused: the shapes that disagree
+    expect(ok({ winner: "H", method: "double_forfeit" })).toBe(false);
+    expect(ok({ winner: null, method: "forfeit" })).toBe(false);
+    expect(ok({ method: "forfeit" })).toBe(false);
+    // every other method is unaffected either way
+    expect(ok({ winner: null, method: "agreement" })).toBe(true);
+    expect(ok({ winner: "H", method: "checkmate" })).toBe(true);
   });
 });

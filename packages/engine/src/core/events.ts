@@ -298,10 +298,13 @@ export function kernelOwnsEvent<State>(
   folded: { readonly state: State; readonly settled: boolean },
 ): boolean {
   if (isKernelOwnedEventType(event.type)) return true;
-  if (event.type === "core.forfeit") {
-    return !folded.settled && isLevelOutcome(module.outcome(folded.state)) && forfeitReasonOf(event.payload) === "withdrew";
-  }
-  return event.type === "core.finalize" && folded.settled && module.outcome(folded.state) === null;
+  const forfeit = event.type === "core.forfeit";
+  if (!forfeit && event.type !== "core.finalize") return false;
+  // ONE module read serves both conditional members (apps/web outcome-readers.test.ts counts the bare reads here).
+  const moduleOutcome = module.outcome(folded.state);
+  return forfeit
+    ? !folded.settled && isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === "withdrew"
+    : folded.settled && moduleOutcome === null;
 }
 
 /** W2b (plan D3) — a module that declares no `walkoverPhases` records a walkover only before play (Appendix A

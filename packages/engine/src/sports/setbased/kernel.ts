@@ -26,6 +26,9 @@ import {
   type DisciplineCard,
   type DisciplineModel,
   type LineupPair,
+  type AwardReason,
+  type ForfeitBy,
+  type ForfeitCredit,
   type ForfeitPhase,
   type ForfeitReason,
   type MatchOutcome,
@@ -37,7 +40,9 @@ import {
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import {
+  forfeitStatsRole,
   personsForEntrant,
   type PlayerStatMetric,
   type PlayerStatRow,
@@ -2054,7 +2059,10 @@ function setBasedMatchOutcomesFold(
         rows.set(personId, stats);
       };
 
-      if (played) {
+      // W2b (X-PS-1/2): a walkover, a withdrawal or a double walkover is no match for anybody, even after a rally;
+      // a retirement or an in-match disqualification is one for both sides, even before the first rally.
+      const forfeit = forfeitStatsRole(events);
+      if ((played && forfeit !== "unplayed") || forfeit === "played") {
         for (const p of personsFor(idX)) bump(p, "matches", 1);
         for (const p of personsFor(idY)) bump(p, "matches", 1);
       }
@@ -2274,6 +2282,49 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
     points_lost: totalPoints(state, opponent(side)),
   });
 
+  /**
+   * W2b (spec §5.2; VB/TT/BD-WO-1, VB/TT/BD-RT-1) — what a forfeit credits, from cfg and the sets in state.
+   *
+   * WALKOVER: the sets the winner needs (⌈bestOf/2⌉), each `setTo`-0 — FIVB 6.4.1 "0-25 every set", so `setTo` and
+   * never `finalSetTo`; ITTF and BWF likewise.
+   * RETIREMENT, in-match disqualification, a withdrawal (PF-7): every closed set stands; the open set completes for
+   * the winner at max(its target, the retiree's points + winBy), capped; every further set the winner still needs is
+   * `setTo`-0; the retiree keeps everything it won. Before play there are no sets, so this is the walkover credit —
+   * which is why a withdrawal before the start needs no branch of its own.
+   */
+  const setBasedForfeitCredit = (cfg: SetBasedCfg, state: SetBasedState, reason: AwardReason, by: ForfeitBy): ForfeitCredit => {
+    const played = [sideMetrics(state, "home"), sideMetrics(state, "away")] as const;
+    if (by === "both") return doubleWalkoverCredit(played[0], played[1], makeMetrics(preset.unitLabel).map((m) => m.key));
+    if (reason === "bye") return { perSide: played, excluded: [] };
+    const winner = opponent(by);
+    const need = majority(cfg.bestOf);
+    const sets = { home: 0, away: 0 };
+    const points = { home: 0, away: 0 };
+    if (reason !== "walkover") {
+      sets.home = state.setsWon.home;
+      sets.away = state.setsWon.away;
+      state.sets.forEach((set, index) => {
+        points.home += set.home;
+        points.away += set.away;
+        if (set.closed) return;
+        const completed = Math.max(setTarget(cfg, index), set[by] + cfg.winBy);
+        points[winner] += (cfg.cap === null ? completed : Math.min(completed, cfg.cap)) - set[winner];
+        sets[winner] += 1;
+      });
+    }
+    while (sets[winner] < need) {
+      sets[winner] += 1;
+      points[winner] += cfg.setTo;
+    }
+    const record = (side: Side) => ({
+      sets_won: sets[side],
+      sets_lost: sets[opponent(side)],
+      points_won: points[side],
+      points_lost: points[opponent(side)],
+    });
+    return { perSide: creditFor(by, record(winner), record(by)), excluded: [] };
+  };
+
   return {
     key: preset.key,
     version: preset.version,
@@ -2387,6 +2438,8 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
 
     outcome: (state) => state.outcome,
     forfeitPhase: (state) => FORFEIT_PHASE[state.phase],
+    // W2b (spec §5.2) — see setBasedForfeitCredit.
+    forfeitCredit: setBasedForfeitCredit,
 
     // W4a (#425) T6b — the cross-sport position axis (see `setBasedPosition`).
     position: setBasedPosition,
@@ -2460,12 +2513,25 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
           return winnerSide === "home" ? [winner, loser] : [loser, winner];
         }
         case "award": {
-          // Forfeit: clean-sweep pair to keep the total inside declaredPointsSets.
+          // Forfeit: clean-sweep pair to keep the total inside declaredPointsSets; W2b (spec §5.2) the CREDITED sets and
+          // points (`setBasedForfeitCredit`) over the played ledger. The offender is the side that is not the winner.
           const winnerSide = sideOf(state, outcome.winner);
+          const offender = opponent(winnerSide);
+          const credit = setBasedForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
           const [wp, lp] = cleanSweepPair(cfg);
-          const winner = build(winnerSide, 1, 0, wp);
-          const loser = build(opponent(winnerSide), 0, 1, lp);
+          const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
+            ...build(side, w, l, pts),
+            metrics: creditedMetrics(sideMetrics(state, side), credit, side),
+          });
+          const winner = at(winnerSide, 1, 0, wp);
+          const loser = at(offender, 0, 1, lp);
           return winnerSide === "home" ? [winner, loser] : [loser, winner];
+        }
+        case "double_walkover": {
+          // X-DW-4: both played and lost, no points, no score, out of every ratio.
+          const credit = setBasedForfeitCredit(cfg, state, "walkover", "both");
+          const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side), credit, side) });
+          return [at("home"), at("away")];
         }
         // Set-based sports always produce a winner (§3.3 supportsDraws = false);
         // abandon leaves the outcome null, so no draw/tie/no_result reaches here.

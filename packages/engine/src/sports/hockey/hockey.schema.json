@@ -16,7 +16,7 @@
       },
       "awardScore": {
         "default": {
-          "goals": 3
+          "goals": 5
         },
         "properties": {
           "goals": {

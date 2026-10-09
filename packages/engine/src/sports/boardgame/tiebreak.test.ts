@@ -56,8 +56,17 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
     const methods: (string | undefined)[] = [...BoardgameMethod.options, undefined];
     let tiebreaks = 0;
     const held: string[] = [];
+    let refused = 0;
     for (const method of methods) {
       const events = [ev(1, "core.start"), ev(2, "boardgame.result", { winner: null, ...(method === undefined ? {} : { method }) })];
+      // W2b (spec §5.2, f-w2): a single forfeit names its winner, so a null-winner "forfeit" is no result at all — the
+      // schema refuses it in both kinds. (Before W2b it parsed and folded as a draw, then went to the tie-break.)
+      if (method === "forfeit") {
+        expect(codeOf(() => fold(league, events)), String(method)).toBe("INVALID_EVENT");
+        expect(codeOf(() => fold(ko, events)), String(method)).toBe("INVALID_EVENT");
+        refused++;
+        continue;
+      }
       const asLeague = fold(league, events);
       const asKo = fold(ko, events);
       const name = String(method);
@@ -74,7 +83,8 @@ describe("BG-KO-1 / BG-KO-2: the chess knockout tie-break (ruling 73)", () => {
       }
     }
     expect(held).toEqual(["double_forfeit"]);
-    expect(tiebreaks).toBe(methods.length - 1);
+    expect(refused).toBe(1);
+    expect(tiebreaks).toBe(methods.length - 2);
     // Decided, not held: no tie-break is accepted after it (ruling D-C7: TIEBREAK_NOT_APPLICABLE, spec §7), and a
     // NEW settle is refused (a double walkover is not level, X-BR-1). A settle recorded over one before W2b, when it
     // was a held no_result, still replays and wins (D6) — the non-strict fold below.

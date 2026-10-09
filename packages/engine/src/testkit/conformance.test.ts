@@ -142,6 +142,8 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
 
   outcome: (state) => state.outcome,
   forfeitPhase: (state) => (state.phase === "pre" ? "pre" : state.phase === "live" ? "play" : "over"),
+  // W2b (spec §5.2): a coin flip has no score to credit — a forfeit credits the win alone; a double walkover nothing.
+  forfeitCredit: () => ({ perSide: [{}, {}], excluded: [] }),
 
   summary: (state) => ({
     headline: `${state.score.home} — ${state.score.away}`,

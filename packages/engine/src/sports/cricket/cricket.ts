@@ -18,6 +18,9 @@ import {
   DRAW_KINDS,
   EntrantId,
   type LineupPair,
+  type AwardReason,
+  type ForfeitBy,
+  type ForfeitCredit,
   type ForfeitPhase,
   type MatchOutcome,
   type ScoreSummary,
@@ -27,6 +30,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -3533,6 +3537,29 @@ export function padSpec(cfg: CricketCfg): PadSpec {
   );
 }
 
+/** Cricket's ledger keys (`cricket.metrics`); the first five are the NRR operands and the run difference. */
+const CRICKET_LEDGER_KEYS = ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff", "run_diff", "ties", "no_results"] as const;
+const CRICKET_NRR_KEYS = ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff", "run_diff"] as const;
+const zeroCricketLedger = (): Record<string, number> => Object.fromEntries(CRICKET_LEDGER_KEYS.map((key) => [key, 0]));
+
+/**
+ * W2b (spec §5.2; CK-WO-1, PF-6) — every cricket forfeit (a walkover, a retirement or refusal to continue, an in-match
+ * disqualification, a withdrawal) credits the same, and none of what was played: full points to the winner (in
+ * `standingsDelta`), the defaulter charged its FULL quota (`ballsPerInnings × inningsPerSide`) at 0 runs, the winner's
+ * NRR untouched (nothing credited to it at all). Unlimited-overs cricket (`ballsPerInnings` null) has no quota, so NRR
+ * is undefined: the result and its points only, the match excluded from NRR (PF-6, rule CK-WO-2). A bye keeps today's
+ * zeroed ledgers (C-5).
+ */
+function cricketForfeitCredit(cfg: CricketCfg, _state: CricketState, reason: AwardReason, by: ForfeitBy): ForfeitCredit {
+  if (by === "both") return doubleWalkoverCredit(zeroCricketLedger(), zeroCricketLedger(), CRICKET_LEDGER_KEYS);
+  if (reason === "bye") return { perSide: [zeroCricketLedger(), zeroCricketLedger()], excluded: [] };
+  if (cfg.ballsPerInnings === null) {
+    return { perSide: [zeroCricketLedger(), zeroCricketLedger()], excluded: [...CRICKET_NRR_KEYS] };
+  }
+  const quota = cfg.ballsPerInnings * cfg.inningsPerSide;
+  return { perSide: creditFor(by, zeroCricketLedger(), { ...zeroCricketLedger(), balls_faced_eff: quota }), excluded: [] };
+}
+
 export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   key: "cricket",
   version: "1.0.0",
@@ -3814,6 +3841,8 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   outcome: (state) => state.outcome,
   // W2b (plan D3) — see CRICKET_FORFEIT_PHASE. A super over is play (ruling 102 Q5).
   forfeitPhase: (state) => CRICKET_FORFEIT_PHASE[state.phase],
+  // W2b (spec §5.2) — see cricketForfeitCredit.
+  forfeitCredit: cricketForfeitCredit,
 
   // W4a (#425) T6b — the cross-sport position axis (see `cricketPosition`).
   position: cricketPosition,
@@ -3932,11 +3961,22 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
       }
       case "award": {
-        // Forfeit: full points, no NRR contribution (ICC convention).
+        // Forfeit: full points; W2b (spec §5.2, CK-WO-1) the ledger is `cricketForfeitCredit`'s, never the played one —
+        // laid over a zeroed ledger, so no run that was played reaches NRR.
         const winnerSide = sideOf(state, outcome.winner);
-        const winner = build(winnerSide, 1, 0, 0, cfg.points.win, zeroLedger());
-        const loser = build(opponent(winnerSide), 0, 0, 1, cfg.points.loss, zeroLedger());
+        const offender = opponent(winnerSide);
+        const credit = cricketForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
+        const winner = build(winnerSide, 1, 0, 0, cfg.points.win, creditedMetrics(zeroLedger(), credit, winnerSide));
+        const loser = build(offender, 0, 0, 1, cfg.points.loss, creditedMetrics(zeroLedger(), credit, offender));
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
+      }
+      case "double_walkover": {
+        // X-DW-4: both played and lost, no points, no score, out of every ratio.
+        const credit = cricketForfeitCredit(cfg, state, "walkover", "both");
+        return [
+          build("home", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, "home")),
+          build("away", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, "away")),
+        ];
       }
       case "tie": {
         const metrics = (side: Side) => ({ ...ledger(side), ties: 1 });
