@@ -1,0 +1,290 @@
+[
+  {
+    "id": "abandon-ignored",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "&& !f.has_active_abandon",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "NEW-H1: a scorer's abandon \\(an active core\\.abandon, outcome null\\) is NOT a dead feeder"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "NEW-H1: reverse order"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "NEW-H1: every sport"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "NEW-H1 / X-ST-1: every bracket kind"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "NEW-H1 \\(after a withdrawal\\)"
+      }
+    ]
+  },
+  {
+    "id": "abandon-always",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "&& !f.has_active_abandon",
+    "replace": "&& false",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "NEW-H1: the generator's own void \\(abandoned, outcome null, NO core\\.abandon event\\) is still dead"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "NEW-H1: a VOIDED scorer abandon is not active"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "an abandoned feeder with NO outcome — the generator's own void — still cascades"
+      }
+    ]
+  },
+  {
+    "id": "voids-ignored",
+    "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+    "find": "\n      and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "NEW-H1: a VOIDED scorer abandon is not active"
+      }
+    ]
+  },
+  {
+    "id": "cancelled",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "if (f.status === \"cancelled\") return true;",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "a 'cancelled' feeder is dead — defensive, and product-unreachable today"
+      }
+    ]
+  },
+  {
+    "id": "outcome-ignored",
+    "file": "apps/web/src/server/usecases/stages.ts",
+    "find": "f.status === \"abandoned\" && f.outcome === null && !f.has_active_abandon",
+    "replace": "f.status === \"abandoned\" && !f.has_active_abandon",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "NEW-H1 \\(M1\\): an event-less abandoned feeder that CARRIES an outcome"
+      }
+    ]
+  },
+  {
+    "id": "bracket-status-plain",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "    status: bracketEngineStatus(f),",
+    "replace": "    status: toEngineStatus(f.status),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1: a scorer-abandoned FINAL holds the knockout open"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1: every sport — a final its scorer abandoned"
+      }
+    ]
+  },
+  {
+    "id": "ladder-status-plain",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "const status = bracketEngineStatus(f);",
+    "replace": "const status = toEngineStatus(f.status);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1: a ladder whose only challenge its scorer abandoned"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "characterisation \\(D-G3, W2b\\): a ladder holder's withdrawal"
+      }
+    ]
+  },
+  {
+    "id": "awaits-null-only",
+    "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+    "find": "(f.outcome == null || isLevelOutcome(f.outcome as never))",
+    "replace": "f.outcome == null",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1: every sport — a final its scorer abandoned"
+      }
+    ]
+  },
+  {
+    "id": "awaits-ignores-ledger",
+    "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+    "find": "f.status === \"abandoned\" && f.has_active_abandon && ",
+    "replace": "f.status === \"abandoned\" && ",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1 guard: the unbeaten default never ranks a FIELD entrant"
+      }
+    ]
+  },
+  {
+    "id": "guard-off",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "if (unranked.length > 0) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1 guard: the unbeaten default never ranks a FIELD entrant"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "characterisation \\(D-G3, W2b\\): a stepladder whose seed 1 departed BEFORE the draw"
+      }
+    ]
+  },
+  {
+    "id": "guard-ignores-field",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "inputs.field.has(id) && ",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1 guard: the unbeaten default never ranks a FIELD entrant"
+      }
+    ]
+  },
+  {
+    "id": "field-is-everyone",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "if (inTheField(r)) field.add(r.id);",
+    "replace": "field.add(r.id);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1 guard: the unbeaten default never ranks a FIELD entrant"
+      }
+    ]
+  },
+  {
+    "id": "guard-ignores-lost",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "!lost.has(id) && ",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1: a scorer-abandoned FINAL holds the knockout open"
+      }
+    ]
+  },
+  {
+    "id": "guard-ignores-final-winners",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": " && !finalWinners.has(id)",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "D-G1: a scorer-abandoned FINAL holds the knockout open"
+      }
+    ]
+  },
+  {
+    "id": "table-status-bracket",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "      status: toEngineStatus(f.status),\n      ...(f.pool_id ? { poolId: f.pool_id } : {}),",
+    "replace": "      status: bracketEngineStatus(f),\n      ...(f.pool_id ? { poolId: f.pool_id } : {}),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "table stages keep the void: a league with a scorer's abandon AND an expunge withdrawal"
+      }
+    ]
+  }
+]

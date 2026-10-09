@@ -78,7 +78,10 @@ export interface DivisionCardStats {
 // PLAYED_STATUSES. Without the bye clause, a sit-out sits in `total`
 // forever and the ledger reads "N-1 of N" for a round that is done.
 // Denominator still excludes cancelled fixtures.
-const PLAYED = ["decided", "finalized"] as const;
+// W2a ruling D-H2: a held level result (`needs_decision`) counts — division-phase.ts's PLAYED_STATUSES says the same, so
+// the "N of M played" beside the pill and the phase under it agree. (A recorded abandon awaiting its settle is stored
+// `abandoned`; this SQL count cannot see that it is held, so it stays out here and the phase alone counts it.)
+const PLAYED = ["decided", "finalized", "needs_decision"] as const;
 
 // RS004 W2b review finding 1 — declared locally, NOT imported from
 // registrations.ts (which has its own, slightly different-purposed

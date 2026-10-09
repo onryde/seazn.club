@@ -122,6 +122,9 @@ function view(over: Partial<PadHostView> = {}): PadHostView {
     squads: squads(),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
+    entrantNames: {},
     ...over,
   };
 }

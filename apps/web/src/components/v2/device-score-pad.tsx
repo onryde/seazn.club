@@ -25,7 +25,6 @@ import {
 } from "@/components/v2/fixture-console";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { scoringErrorText } from "@/lib/scoring-vocab";
-import type { MessageKey } from "@/lib/messages";
 // S13/#422 W11 — the v2 scoring pad is now the only pad this dispatcher
 // renders (S12/#421's flag has been removed entirely, along with the seven
 // v1 pad components it used to choose between — this dispatcher never had a
@@ -39,6 +38,7 @@ import { deadLinkKey, VIEW_ONLY_COPY, type ViewOnlyReason } from "@/lib/scan-scr
 import { officialLabelKey } from "@/lib/official-label";
 import { useTabReturn } from "@/components/v2/use-tab-return";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
+import { scoreStatusLabel } from "@/lib/score-status-label";
 import type { EventEnvelope } from "@seazn/engine/core";
 
 export type PadSideInfo = SideInfo;
@@ -135,11 +135,6 @@ export function DeviceScorePad({
   initialViewOnly = null,
 }: Props) {
   const msg = useMsg();
-  const statusLabel = (s: string) => {
-    const key = `score.status.${s}` as MessageKey;
-    const label = msg(key);
-    return label === key ? s.replace("_", " ") : label;
-  };
   const [live, setLive] = useState<LiveState>(initialState);
   const [events, setEvents] = useState<PadEventIn[]>(initialEvents);
   const [error, setError] = useState<string | null>(null);
@@ -577,7 +572,7 @@ export function DeviceScorePad({
             </span>
           ) : (
             <span className="shrink-0 text-[11px] uppercase tracking-widest text-slate-400">
-              {statusLabel(live.status)}
+              {scoreStatusLabel(msg, live.status)}
             </span>
           )}
         </div>
@@ -722,6 +717,9 @@ export function DeviceScorePad({
               auth={padAuth}
               identity={scorePadV2.identity}
               entitlements={scorePadV2.entitlements}
+              stageKind={scorePadV2.stageKind}
+              // A device link is never an organiser: settle, forfeit and abandon are refused to it (X-ST-2, D-O1).
+              canOrganise={false}
               onEvents={handlePadEvents}
               onTerminalRefusal={enterCarriedForward}
             />

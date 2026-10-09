@@ -31,7 +31,6 @@ import {
   FINALIZE_TESTID,
   FORFEIT_SIDE_TESTID_PREFIX,
   FORFEIT_TESTID,
-  ORGANISER_ONLY_EVENT_TYPES,
   organiserStepsFor,
   playMatchByTaps,
   PROMPT_REASON_TESTID,
@@ -72,6 +71,12 @@ import {
   SCORE_TYPE as REAL_SCORE_TYPE,
   SETTLE_TILE_ID as REAL_SETTLE_TILE_ID,
 } from "../../../../apps/web/src/components/v2/scorepad/v3/skins/generic.tsx";
+// The product's organiser-only rule (T9 / D-O1): its own lists, read here so the sweeps below enumerate what the
+// product declares — never a list re-spelled in this file.
+import {
+  ORGANISER_ONLY_EVENT_TYPES as PRODUCT_ORGANISER_ONLY_TYPES,
+  ORGANISER_ONLY_SPORT_EVENTS as PRODUCT_ORGANISER_ONLY_SPORT_EVENTS,
+} from "../../../../apps/web/src/lib/organiser-only-events.ts";
 
 const HOME_REF = "e-home";
 const AWAY_REF = "e-away";
@@ -613,6 +618,48 @@ describe("playMatchByTaps — the adapter never substitutes a tap (I3, R50(e))",
   });
 });
 
+// T9 (bf49cd67e) moved "what is the organiser's to author" into ONE product module (`lib/organiser-only-events.ts`),
+// read by the server's refusal and the pad's tile filter; the driver routes by the SAME predicate. These sweeps
+// enumerate the product's own lists, so a fourth organiser-only type or sport arm joins them with no edit here.
+describe("playMatchByTaps routes by the product's organiser-only predicate (T9, D-O1)", () => {
+  const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  it("every organiser-only CORE type is authored on the console route, never by the scorer's adapter", async () => {
+    let checked = 0;
+    for (const type of PRODUCT_ORGANISER_ONLY_TYPES) {
+      // A payload no console route can author, so the run stops AT the routing decision and names the route it took.
+      const events = [START, { type, payload: {} }];
+      const pad = buildFakePad({ events, selectors: [START_SEL, "UNUSED"] });
+      const result = await playMatchByTaps(makeInput({ pad, stream: stream(events), cfg: SCORE_CFG }));
+      expect(joined(result.findings), type).toMatch(new RegExp(`^organiser: cannot map event 1 \\(${escapeRe(type)}\\) to a console action — `));
+      expect(pad.organiserLog.filter((l) => l.startsWith("click ")), type).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(PRODUCT_ORGANISER_ONLY_TYPES.length);
+    expect(checked, "the product declares organiser-only core types").toBeGreaterThan(0);
+  });
+
+  it("a sport event is the console's exactly when its declared field carries a forfeit value (D-O1); any other value is the scorer's", async () => {
+    let organiser = 0;
+    let scorer = 0;
+    for (const [type, arm] of Object.entries(PRODUCT_ORGANISER_ONLY_SPORT_EVENTS)) {
+      for (const value of [...arm.values, "w2a-not-a-forfeit"]) {
+        const events = [START, { type, payload: { [arm.field]: value } }];
+        const pad = buildFakePad({ events, selectors: [START_SEL, "UNUSED"] });
+        const result = await playMatchByTaps(makeInput({ pad, stream: stream(events), cfg: SCORE_CFG }));
+        const route = arm.values.includes(value) ? "organiser" : "adapter";
+        expect(joined(result.findings), `${type} ${arm.field}=${value}`).toMatch(new RegExp(`^${route}: cannot map event 1 \\(${escapeRe(type)}\\)`));
+        if (route === "organiser") organiser++;
+        else scorer++;
+      }
+    }
+    // Both directions reached: a sweep that only ever routed to the console could not see the payload being ignored.
+    expect(organiser).toBe(Object.values(PRODUCT_ORGANISER_ONLY_SPORT_EVENTS).reduce((n, a) => n + a.values.length, 0));
+    expect(organiser).toBeGreaterThan(0);
+    expect(scorer).toBe(Object.keys(PRODUCT_ORGANISER_ONLY_SPORT_EVENTS).length);
+  });
+});
+
 describe("playMatchByTaps — finalize on the organiser page, verified (I5, I6, R50(h))", () => {
   it("sets a >=768 viewport on the ORGANISER page, then finalizes there, and verifies the core.finalize row", async () => {
     const { pad, result } = await play([START, winBy(AWAY_REF)], WIN_LOSS_CFG);
@@ -845,7 +892,13 @@ describe("no HTTP-capable bypass is reachable from the tap driver's files (I4)",
 
   /** Every value a file may import, per module. Type-only specifiers are always allowed. */
   const VALUE_IMPORTS: Record<string, Record<string, readonly string[]>> = {
-    "scorer.ts": { "../ledger.ts": ["fetchFixtureLedger", "fetchFixtureStatus"], "../simulate.ts": ["resolvePayloadRefs"] },
+    "scorer.ts": {
+      "../ledger.ts": ["fetchFixtureLedger", "fetchFixtureStatus"],
+      "../simulate.ts": ["resolvePayloadRefs"],
+      // W2a T9: the product's organiser-only predicate — a pure function over (type, payload) in a module that imports
+      // nothing, so nothing HTTP-capable comes with it.
+      "../../../../apps/web/src/lib/organiser-only-events.ts": ["isOrganiserOnlyEvent"],
+    },
     "padpage-assignability.ts": {},
     "adapters/generic.ts": { "../scorer.ts": ["START_MATCH_TESTID"] },
   };
@@ -870,6 +923,13 @@ describe("no HTTP-capable bypass is reachable from the tap driver's files (I4)",
       return { from: m[3]!, names };
     });
   }
+
+  it("the one product module the driver value-imports imports nothing itself (so no transport can ride in with it)", () => {
+    const src = stripComments(readFileSync(new URL("../../../../apps/web/src/lib/organiser-only-events.ts", import.meta.url), "utf8"));
+    expect(src).toContain("export function isOrganiserOnlyEvent");
+    expect(src.match(/^\s*(import|export\s+\*\s+from|export\s+\{[^}]*\}\s+from)\b/gm) ?? []).toEqual([]);
+    expect(src).not.toMatch(/\brequire\s*\(|\bimport\s*\(/);
+  });
 
   it("covers every adapter file on disk (a new adapter must join the allowlist)", () => {
     expect(adapterFiles.length).toBeGreaterThan(0);
@@ -1077,13 +1137,6 @@ describe("organiserStepsFor — what the scorer pad cannot author, on the fixtur
     expect(() => organiserStepsFor({ type: RESULT_TYPE, payload: {} }, ctx)).toThrow(/no console mapping/);
   });
 
-  it("ORGANISER_ONLY_EVENT_TYPES restates pad-host.tsx's AUTHORITY_ONLY_EVENT_TYPES exactly", () => {
-    const src = readFileSync(new URL("../../../../apps/web/src/components/v2/scorepad/v3/pad-host.tsx", import.meta.url), "utf8");
-    const literal = /AUTHORITY_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\)/.exec(src);
-    expect(literal, "AUTHORITY_ONLY_EVENT_TYPES literal not found in pad-host.tsx").not.toBeNull();
-    const real = [...literal![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
-    expect([...ORGANISER_ONLY_EVENT_TYPES].sort()).toEqual(real.sort());
-  });
 
   it("every console and dock hook the driver selects is present in the product source (identity is pinned in apps/web)", () => {
     const web = (path: string) => readFileSync(new URL(`../../../../apps/web/src/components/v2/${path}`, import.meta.url), "utf8");

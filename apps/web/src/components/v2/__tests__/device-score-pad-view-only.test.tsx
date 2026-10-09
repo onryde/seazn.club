@@ -90,6 +90,7 @@ function props(status: string, outcome: unknown) {
       resolvedConfig: {},
       initialEvents: [],
       entitlements: {},
+      stageKind: null,
       band: 0 as const,
       identity: { recordedBy: null, deviceLinkId: DEVICE_LINK_ID },
     },
@@ -814,5 +815,18 @@ describe("DeviceScorePad — View-only chrome (scorer sheets §4.5.3)", () => {
     island.rerender({ ...live, initialViewOnly: null });
     expect(byTestId(island.tree(), "scan-view-only"), "a lifted verdict leaves View-only").toBeUndefined();
     expect(island.tree().find((e) => e.type === ScorePad)).toBeDefined();
+  });
+});
+
+// W2a Task 12 (loop-H addendum 4; D-O1) — a device link's pad reads the bootstrap's stage kind, and is never an
+// organiser: settle, forfeit, abandon and chess's forfeit methods are refused to it on the server.
+describe("DeviceScorePad — the pad gets the stage kind and is never an organiser", () => {
+  it("passes the bootstrap's stageKind through and canOrganise false", () => {
+    const base = props("in_play", null);
+    const island = renderIsland(DeviceScorePad, { ...base, scorePadV2: { ...base.scorePadV2, stageKind: "knockout" } });
+    const pad = island.tree().find((e) => e.type === ScorePad);
+    expect(pad, "precondition: the inner pad is mounted in play").toBeDefined();
+    expect(propsOf(pad!).stageKind).toBe("knockout");
+    expect(propsOf(pad!).canOrganise).toBe(false);
   });
 });

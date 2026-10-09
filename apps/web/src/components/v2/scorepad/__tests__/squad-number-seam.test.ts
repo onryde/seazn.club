@@ -211,6 +211,9 @@ describe("WS-SQ seam: a bench candidate's badge is reachable from the WIRE row (
       squads,
       events: [],
       contextOverrides: {},
+      stageKind: null,
+      canOrganise: true,
+      entrantNames: {},
     };
     return buildSwap(view, t)[0]!;
   }
@@ -266,6 +269,9 @@ describe("WS-PREC: the swap badge leads with the shirt number (ice hockey, the s
       squads,
       events: [],
       contextOverrides: {},
+      stageKind: null,
+      canOrganise: true,
+      entrantNames: {},
     };
     return icehockeySkinV3(t).swap!(view)[0]!;
   }

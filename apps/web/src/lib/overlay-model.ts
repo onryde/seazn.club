@@ -21,6 +21,7 @@ import {
 import {
   renderDecidedOutcome,
   shootoutScoreFromDetail,
+  tiebreakScoreFromDetail,
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
@@ -636,11 +637,13 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // reaches this pure model; decided frames show none (amended 2026-09-07).
   const clock = ended ? null : input.clockLabel;
   const shootout = shootoutScoreFromDetail(data.summary?.detail);
+  const tiebreakScore = tiebreakScoreFromDetail(data.summary?.detail);
   const result = renderDecidedOutcome(
     data.outcome,
     { [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name },
     input.decidedTemplates,
     shootout,
+    tiebreakScore,
   );
   // Fix round 5, I2 — `_THEMES.md` §3:330-333: "the band carries `resultMsg`'s
   // full sentence, the context line carries the same sentence with the winner
@@ -656,6 +659,7 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
     { [sides[0].id]: codes[0], [sides[1].id]: codes[1] },
     input.decidedTemplates,
     shootout,
+    tiebreakScore,
   );
   // Fix round 3, F1/F3 — a void-no-verdict frame renders NO detail band at
   // all (`_THEMES.md` §3/§4): `chase`/`result` are already null by

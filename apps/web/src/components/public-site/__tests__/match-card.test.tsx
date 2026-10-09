@@ -172,6 +172,13 @@ describe("MatchCard", () => {
     expect(h).not.toContain(`data-testid="mh-match-starts"`);
   });
 
+  it("fix round 1 (M1): a shoot-out or tie-break score in the result line is glued — one nowrap span, words unchanged", () => {
+    const h = card(
+      hubMatch({ bucket: "completed", winnerIndex: 0, resultLine: "Blue Blazers won 4–3 on penalties", header: { status: "decided" } }),
+    );
+    expect(h).toContain('Blue Blazers won <span class="whitespace-nowrap">4–3</span> on penalties');
+  });
+
   it("scheduled within 24h: 'Starts in 2 hours' from Intl.RelativeTimeFormat in the org locale; beyond 24h: the venue-zone DATE; unscheduled: no starts line at all", () => {
     // COUNTED, not merely contained. The card has two slots that can each
     // carry a time — the status slot top-right and this line bottom-right —

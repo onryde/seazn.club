@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BALL_GLYPH_KINDS, BALL_LINE_KEYS, DISMISSAL_KINDS, RESULT_KINDS, RESULT_MARGIN_KEYS } from "../match-centre";
+import { BALL_GLYPH_KINDS, BALL_LINE_KEYS, DISMISSAL_KINDS, RESULT_KINDS, RESULT_MARGIN_KEYS, RESULT_SCORED_KEYS } from "../match-centre";
 import type { Dict } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -82,6 +82,8 @@ const DERIVED_KEYS = [
     // The worded cricket margin (owner decision 2026-09-16): unit × DLS ×
     // `.one`/`.other`, derived from the same table `cricketMarginMsg` reads.
     ...RESULT_MARGIN_KEYS,
+    // W2a: the scored chess tie-break sentences, built from a template (one per rung with a match score).
+    ...RESULT_SCORED_KEYS,
   ]),
 ].sort();
 
@@ -94,7 +96,10 @@ describe("match-centre parity — every key buildMatchCentre can emit exists in 
     // "on penalties" entirely. Kept EXACT rather than a floor — this number
     // moving is what forces the four dictionaries to gain the key alongside,
     // which is the per-locale assertion below.
-    expect(RESULT_KINDS.length).toBe(10);
+    // 16 since W2a: the three settle methods and the three chess tie-break rungs (`BRACKET_DECIDER_METHODS`, read off
+    // the engine) each key their own sentence instead of falling through to `regulation`.
+    expect(RESULT_KINDS.length).toBe(16);
+    expect(RESULT_SCORED_KEYS.length).toBe(2);
     expect(BALL_GLYPH_KINDS.length).toBe(7);
     // 11, not 7: four of the seven kinds inflect, so each contributes a
     // `.one` and an `.other`. EXACT for the same reason `RESULT_KINDS` is —

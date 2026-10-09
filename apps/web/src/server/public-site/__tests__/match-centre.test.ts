@@ -33,6 +33,7 @@ import type { MatchCentreDocT, MsgT, PersonT, SideT } from "../match-centre-sche
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import enPublic from "@/dictionaries/en/public.json";
+import { BRACKET_DECIDER_METHODS } from "@/lib/scoring-vocab";
 import {
   AWAY,
   HOME,
@@ -532,6 +533,28 @@ describe("buildMatchCentre — cricket", () => {
     // `/^public\.matchCentre\.result\./` regex is the stale one.
     expect(doc.header.statusLine?.key).toMatch(/^matchCentre\.result\./);
     expect(doc.cricket!.live).toBeNull();
+  });
+
+  // W2a fix round 1 (M13). A bracket decider method (`settled_<m>`, `tiebreak_<rung>`) is its own sentence — "advanced
+  // on lot" — and must never be worded as a cricket margin. In every REACHABLE state the cricket card's margin is null
+  // beside a decider (a settle or tie-break follows a LEVEL result, and every level cricket fold carries `margin: null`),
+  // so this case is CRAFTED: a real won-by-24-runs card beside a stored settle. The guard is what keeps the method's
+  // sentence when that premise ever breaks (a replayed ledger, a hand-corrected outcome) — false premise 37 had removed
+  // it as equivalent, and only a crafted input can tell it apart.
+  it("M13: a decider method keeps its own sentence even beside a real cricket margin (crafted — the guard, not the premise)", () => {
+    const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+    const card = deriveCricketScorecard({ events: ledger.events, cfg: ledger.cfg, lineups: ledger.lineups });
+    expect(card.result?.margin, "the rig must carry a real margin").not.toBeNull();
+    let checked = 0;
+    for (const method of BRACKET_DECIDER_METHODS) {
+      const outcome = { ...(ledger.state.outcome as object), kind: "win", method } as PublicFixture["outcome"];
+      const doc = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger, { outcome }) }));
+      expect(doc.header.statusLine?.key, method).toBe(`matchCentre.result.${method}`);
+      expect(doc.header.statusLine?.params, method).not.toHaveProperty("runs");
+      checked++;
+    }
+    expect(checked).toBe(BRACKET_DECIDER_METHODS.length);
+    expect(checked).toBeGreaterThan(0);
   });
 
   describe("decided — every required result kind is reachable, keyed by outcome.method (fix round 1)", () => {

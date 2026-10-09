@@ -44,6 +44,7 @@
 //   trip took; that is expected drift, not the corruption
 //   `suppressHydrationWarning` normally papers over on OTHER attributes.
 import { EntityLogo } from "@/components/ui/entity-logo";
+import { ScoreSentence } from "@/components/score-sentence";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { lookup, t } from "@/lib/i18n-runtime";
 import type { MatchCentreHeaderT } from "@/server/public-site/match-centre-schema";
@@ -261,7 +262,7 @@ export function CourtCard({ header, dict }: CourtCardProps) {
           <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-white/10 pt-3">
             {header.statusLine ? (
               <p data-testid="mc-status-line" className="min-w-0 text-sm font-semibold text-court-ink">
-                {t(dict, header.statusLine.key, header.statusLine.params)}
+                <ScoreSentence text={t(dict, header.statusLine.key, header.statusLine.params)} />
               </p>
             ) : null}
             {header.rateLine ? (

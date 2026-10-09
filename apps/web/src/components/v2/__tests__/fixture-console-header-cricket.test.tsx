@@ -58,6 +58,8 @@ function consoleHtml(stream: readonly (readonly [string, unknown])[]): string {
       initialState={live}
       initialEvents={[]}
       canEdit
+      canOrganise
+      stageKind={null}
       recorderNames={{}}
       audit={null}
       viewerPlan="community"
@@ -104,6 +106,8 @@ describe("fixture-console header — cricket pre-innings noise (R7 follow-ups it
         initialState={live}
         initialEvents={[]}
         canEdit
+        canOrganise
+        stageKind={null}
         recorderNames={{}}
         audit={null}
         viewerPlan="community"

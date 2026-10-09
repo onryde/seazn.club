@@ -363,6 +363,8 @@ describe("fixture console phone classes — the empty scoring section hides itse
         initialState={live}
         initialEvents={[]}
         canEdit
+        canOrganise
+        stageKind={null}
         recorderNames={{}}
         audit={null}
         scorePadV2={{
@@ -370,6 +372,7 @@ describe("fixture console phone classes — the empty scoring section hides itse
           resolvedConfig: CFG,
           initialEvents: [],
           entitlements: {},
+          stageKind: null,
           identity: { recordedBy: "user-1", deviceLinkId: null },
         }}
         viewerPlan="community"

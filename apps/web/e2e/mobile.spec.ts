@@ -4857,6 +4857,87 @@ test("boardgame v3 pad: the pairing card (pre) and the halves + Draw tile (live)
   await expectNoHorizontalScroll(page);
 });
 
+// W2a Task 12 (spec §5.5, UI-2 option B; BG-KO-1, BG-KO-2 per ruling 82). A drawn chess KNOCKOUT game goes to its
+// tie-break, which is the only thing the pad offers: a three-step sheet (rung → winner → optional score). Each step
+// must be reachable and hold at this width, and the Armageddon winner step must offer the SAME options here as at
+// 1280 — membership and order, never a groomed shrink (AGENTS.md, the phone composition). Options are read by their
+// chassis data hook (`data-choice-option-id`, preflight C24), never by a testid or a translated label.
+test("chess tie-break (W2a): every step of the knockout tie-break sheet is reachable and holds at this width; the Armageddon options match 1280", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2a mobile chess ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Cup",
+    sport_key: "boardgame",
+    variant_key: "classical",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const added = await addEntrantsViaApi(request, div.data!.id, ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"], "individual");
+  expect(added.ids).toHaveLength(4);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "knockout", name: "Cup" });
+  const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  let fixtureId: string | null = null;
+  for (const id of fixtureIds) {
+    const f = await apiJson<{ home_entrant_id: string | null; away_entrant_id: string | null }>(request, `/api/v1/fixtures/${id}`);
+    if (f.data?.home_entrant_id && f.data.away_entrant_id) { fixtureId = id; break; }
+  }
+  expect(fixtureId, "a first-round game with both players").not.toBeNull();
+  for (const [type, payload] of [["core.start", {}], ["boardgame.result", { winner: null, method: "agreement" }]] as const) {
+    const st = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+    const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: st.data!.last_seq, type, payload });
+    expect(res.status, `${type}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+  }
+
+  const option = (id: string) => v3Sheet(page).locator(`[data-choice-option-id="${id}"]`);
+  const optionIds = () => v3Sheet(page).locator("[data-choice-option-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-choice-option-id")));
+  const backButton = () => v3Sheet(page).getByRole("button", { name: "Back", exact: true });
+  const projectWidth = page.viewportSize()!.width;
+
+  await page.goto(await fixturePath(page.request, fixtureId!), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await assertTapFloor(padTile(page, "tiebreak"), "chess: tie-break tile");
+  await expect(padTile(page, "draw"), "the game is drawn: no second Draw").toHaveCount(0);
+  await padTile(page, "tiebreak").click();
+  await expect(v3Sheet(page), "the tie-break sheet must open").toBeVisible({ timeout: 20_000 });
+
+  // Step 1 — the rung. Exactly the engine's three, no lots.
+  expect(await optionIds()).toEqual(["rapid", "blitz", "armageddon"]);
+  for (const id of ["rapid", "blitz", "armageddon"]) await assertTapFloor(option(id), `rung ${id}`);
+  await expectNoHorizontalScroll(page);
+  // Step 2 — the winner (rapid), then step 3 — the optional score.
+  await option("rapid").click();
+  expect(await optionIds()).toEqual(["home", "away"]);
+  await assertTapFloor(option("away"), "rapid winner");
+  await expectNoHorizontalScroll(page);
+  await option("away").click();
+  expect(await optionIds()).toEqual(["none", "2–0", "1½–½"]);
+  await assertTapFloor(option("none"), "score none");
+  await expectNoHorizontalScroll(page);
+  // Back twice to the rung, then Armageddon: its winner step, here and at 1280.
+  await backButton().click();
+  await backButton().click();
+  await option("armageddon").click();
+  await expect(v3Sheet(page).getByText("In Armageddon a draw means Black advances.")).toBeVisible();
+  const here = await optionIds();
+  expect(here).toEqual(["home", "away"]);
+  await expectNoHorizontalScroll(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(option("home")).toBeVisible();
+  const desktop = await optionIds();
+  expect(here, `the Armageddon options at ${projectWidth} vs 1280: membership and order`).toEqual(desktop);
+  // Nothing was written by walking the sheet.
+  const events = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fixtureId}/events`);
+  expect(events.data!.map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
+});
+
 // 2048 mobile swipe: on a real touchscreen the browser decides whether a
 // gesture is page-scroll/pan or app-handled AT touchstart, using whatever
 // `touch-action` value is ALREADY in effect at that instant -- not a value a

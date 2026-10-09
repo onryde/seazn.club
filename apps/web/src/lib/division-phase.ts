@@ -90,6 +90,17 @@ export interface PhaseFixture {
    *  rounds are null on both sides by CONSTRUCTION and are filled by the
    *  round before them, never by a draw. */
   awaitsSeedDraw: boolean;
+  /** W2a (addendum 9) — a recorded abandon in a BRACKET stage that decided nobody, so it is owed the organiser's
+   *  settle. Stored `abandoned`, exactly like the generator's void; only the ledger tells them apart, so the caller
+   *  computes this server-side from engine-db/recorded-abandon.ts (`abandonAwaitsSettle`, the one source) and this
+   *  pure module never re-derives it. A table stage's abandoned match is a void and never sets it. */
+  awaitsSettle: boolean;
+}
+
+/** W2a — a fixture HELD for the organiser's settle: `needs_decision` (a level bracket result), or a recorded abandon
+ *  awaiting its settle (`awaitsSettle`). Neither is finished, and both raise the red `needs_decision` row. */
+export function isHeldFixture(f: { status: string; awaitsSettle: boolean }): boolean {
+  return f.status === "needs_decision" || f.awaitsSettle;
 }
 
 /** The one derivation of `PhaseFixture.awaitsSeedDraw`, over the `fixtures`
@@ -239,6 +250,9 @@ export type Attention =
   // cannot exist without a known elapsed time (see NOT_RECORDING_GRACE_MINUTES).
   | { kind: "not_recording"; count: number; fixtureIds: string[]; minutesSinceKickoff: number }
   | { kind: "result_missing"; count: number; fixtureIds: string[] }
+  // W2a (addendum 9): held fixtures — a level bracket result or a recorded abandon that decided nobody — each owed
+  // the organiser's settle. Aggregated per division like `result_missing`; `fixtureIds` deep-links a single one.
+  | { kind: "needs_decision"; count: number; fixtureIds: string[] }
   | { kind: "registrations_waiting"; count: number };
 
 export type Severity = "red" | "amber" | "slate";
@@ -251,6 +265,9 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   // finding that produced this row watched a whole knockout sit unseeded
   // behind a "Finished" pill.
   needs_fixtures: "red",
+  // Red for the same reason as the two above: the bracket cannot finish — no later round seats its winner, and the
+  // stage cannot complete — until the organiser settles it, and nothing else on the desk asks.
+  needs_decision: "red",
   no_scorer: "red",
   // AMBER, not red, and the grace period is why. `no_scorer` is red because
   // nobody is even nominated: the organiser must act or the match goes
@@ -334,6 +351,8 @@ export function ledgerRank(desk: { phase: DivisionPhase; attention: readonly Att
 const KIND_ORDER: Attention["kind"][] = [
   "needs_draw",
   "needs_fixtures",
+  // W2a: beside the two stage-blocking rows, for the same reason — the bracket stops here until the organiser acts.
+  "needs_decision",
   "no_scorer",
   // Directly after `no_scorer`, and the position is the MEANING, not a
   // formatting choice: the two describe the same failure — a live match going
@@ -403,12 +422,18 @@ export function localDateKey(iso: string, tz: string): string {
 // "finished" past it. The J2 shape: a knockout stage completes on its final
 // alone, and a held third-place playoff beside it would otherwise vanish.
 const LIVE = new Set(["scheduled", "in_play", "needs_decision"]);
+/** LIVE, plus a recorded abandon awaiting its settle (W2a, addendum 9): stored `abandoned`, it is still owed work. */
+function isLiveFixture(f: PhaseFixture): boolean {
+  return LIVE.has(f.status) || f.awaitsSettle;
+}
 /** card-stats.ts's own PLAYED set ("a result exists"), mirrored here so a
  *  purely-derived phase check agrees with what the desk's own played/total
  *  count shows — never abandoned/forfeited/cancelled, which are terminal but
  *  not a played result. (Generation-time award byes are counted in card-stats
- *  via a one-sided-null clause, not this set — see card-stats.ts.) */
-const PLAYED_STATUSES = new Set(["decided", "finalized"]);
+ *  via a one-sided-null clause, not this set — see card-stats.ts.)
+ *  W2a ruling D-H2: a HELD level result (`needs_decision`) is played — the match happened, only who advances is owed —
+ *  so a division whose only fixture is a level final reads in progress, never "Setting up". */
+const PLAYED_STATUSES = new Set(["decided", "finalized", "needs_decision"]);
 
 /**
  * "Has anything actually been played?" — the PROGRESS question, which is the
@@ -431,8 +456,10 @@ const PLAYED_STATUSES = new Set(["decided", "finalized"]);
  * count comes from, so an answer here can never disagree with the number the
  * row beside it already shows.
  */
-export function hasPlayedFixture(fixtures: readonly { status: string }[]): boolean {
-  return fixtures.some((f) => PLAYED_STATUSES.has(f.status));
+export function hasPlayedFixture(fixtures: readonly { status: string; awaitsSettle?: boolean }[]): boolean {
+  // D-H2: the other held shape too — a recorded abandon awaiting its settle is stored `abandoned` (not a played status)
+  // but the match was under way. A caller with no `awaitsSettle` (a display row) reads it as not played, as before.
+  return fixtures.some((f) => PLAYED_STATUSES.has(f.status) || f.awaitsSettle === true);
 }
 
 /**
@@ -619,7 +646,7 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   // 2. finished
   const everyStageComplete = stages.length > 0 && stages.every((s) => s.status === "complete");
   const noOpenStage = !stages.some((s) => s.status === "pending" || s.status === "active");
-  const noLiveFixture = !fixtures.some((f) => LIVE.has(f.status));
+  const noLiveFixture = !fixtures.some(isLiveFixture);
   // V1 fix (review round 1): a division whose fixtures are ALL played reads
   // "finished" even when the organiser never clicked "Complete stage" — the
   // stage's own `status` lagging the fixtures underneath it must not read
@@ -644,6 +671,9 @@ export function resolvePhase(input: PhaseInput): DivisionPhase {
   const open = openStages(stages);
   const anyOpenStageOwesWork = open.some((st) => stageOwesWork(st, fixtures));
   const TERMINAL = new Set(["decided", "finalized", "abandoned", "forfeited", "cancelled"]);
+  // W2a (addendum 9): a recorded abandon awaiting its settle is stored `abandoned`, so it reads terminal HERE — and
+  // never reaches "finished" anyway: `isLiveFixture` counts it live, and every arm below needs `noLiveFixture`. One
+  // guard, not two (a second `!f.awaitsSettle` here was shadowed by that one, so no test could ever see it).
   const allPlayed = fixtures.length > 0 && fixtures.every((f) => TERMINAL.has(f.status));
   // J2 fix (fix round F, Critical): `noLiveFixture` was factored out of only
   // TWO of the three disjuncts, so `everyStageComplete` on its own declared a
@@ -740,7 +770,7 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // be a prompt for an action that cannot be taken. For the lowest open stage
   // the condition is unchanged from before this fix, deliberately: that arm
   // never consulted the fixtures and must keep not consulting them.
-  const noLive = !input.fixtures.some((f) => LIVE.has(f.status));
+  const noLive = !input.fixtures.some(isLiveFixture);
   const blocked = openStages(input.stages).find(
     (s, i) => stageOwesWork(s, input.fixtures) && (i === 0 || noLive),
   );
@@ -904,6 +934,10 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   if (resultMissing.length > 0) {
     out.push({ kind: "result_missing", count: resultMissing.length, fixtureIds: resultMissing });
   }
+  // W2a (addendum 9): every held fixture, in the order the caller listed them. Independent of the in-play loop above:
+  // a held fixture is never `in_play` or `scheduled`, so no fixture can raise both this and a recording row.
+  const held = input.fixtures.filter(isHeldFixture).map((f) => f.id);
+  if (held.length > 0) out.push({ kind: "needs_decision", count: held.length, fixtureIds: held });
   if (input.awaitingRegistrations > 0) {
     out.push({ kind: "registrations_waiting", count: input.awaitingRegistrations });
   }

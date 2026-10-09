@@ -187,6 +187,7 @@ function baseProps() {
       resolvedConfig: {},
       initialEvents: [],
       entitlements: {},
+      stageKind: null,
       band: 0 as const,
       identity: { recordedBy: null, deviceLinkId: DEVICE_LINK_ID },
     },

@@ -279,7 +279,7 @@
         "files": [
           "src/server/public-site/__tests__/competition-hub.test.ts"
         ],
-        "name": "W2a: a held fixture's status line is 'Needs a decision' \\(never the 'Not played' fallback\\)"
+        "name": "W2a: a held fixture's status line is the held one"
       }
     ]
   },

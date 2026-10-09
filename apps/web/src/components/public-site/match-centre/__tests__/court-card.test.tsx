@@ -113,6 +113,16 @@ describe("CourtCard", () => {
     expect(html).toContain("Competitions run by Abandoned — rain");
   });
 
+  it("fix round 1 (M1): a tie-break score in the status line is glued — one nowrap span, so it never splits at 320", () => {
+    const tiebreak: MatchCentreHeaderT = {
+      ...decidedHeader,
+      statusLine: { key: "matchCentre.result.tiebreak_rapid.scored", params: { winner: "W2a Ana", score: "1½–½" } },
+    };
+    const html = renderToStaticMarkup(<CourtCard header={tiebreak} dict={dict} />);
+    expect(html).toContain('<span class="whitespace-nowrap">1½–½</span>');
+    expect(html).toContain("W2a Ana");
+  });
+
   it("the live pill's dot only pulses when header.live is true, even while in_play", () => {
     const pausedInPlay: MatchCentreHeaderT = { ...liveHeader, live: false };
     const html = renderToStaticMarkup(<CourtCard header={pausedInPlay} dict={dict} />);

@@ -203,6 +203,9 @@ function cricketView(battingSide: "home" | "away"): PadHostView {
     squads: cricketSquads(),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
+    entrantNames: {},
   };
 }
 
@@ -358,6 +361,8 @@ function consoleHtml(over: { status: string; outcome: unknown }): string {
       initialState={live}
       initialEvents={[]}
       canEdit
+      canOrganise
+      stageKind={null}
       viewerPlan="community"
     />,
   );

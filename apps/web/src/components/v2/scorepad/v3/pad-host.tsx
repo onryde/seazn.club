@@ -1230,7 +1230,31 @@ export function resolveDockSpec(
   view: PadHostView,
 ): DockSpec | null {
   if (!held) return null;
-  return skin.dock(held.eventType, view, held.payload as Record<string, unknown> | undefined);
+  return dockFor(skin, held.eventType, view, held.payload as Record<string, unknown> | undefined);
+}
+
+/**
+ * W2a (owner ruling D-O1; loop-H addendum 2) — THE dock a viewer is offered: the skin's own, minus every chip whose
+ * write the server refuses this viewer. A chip only rewrites the held payload (`DockChip.mutate`), so "would this chip
+ * write an organiser-only event" is the server's own predicate on the mutated payload — `isOrganiserOnlyEvent`, the
+ * one list (scoring.ts's 403, this file's tile filter), never a second one. Chess is the case today: a scorer's
+ * decisive tap offers "forfeit" and the drawn tap "double forfeit", each a 403 for anyone but an organiser.
+ *
+ * Read by BOTH the render (`resolveDockSpec`) and the dispatch's soft-commit decision, so the dock a scorer sees and
+ * the hold the pad waits out can never disagree. Filtered on the chassis, not in a skin, for the reason
+ * `filterTilesByBand` states: the predicate is sport-agnostic, and the next sport with a payload-scoped authority
+ * write is covered without touching its skin.
+ */
+export function dockFor(
+  skin: SkinDefV3,
+  eventType: string,
+  view: PadHostView,
+  payload: Record<string, unknown> | undefined,
+): DockSpec | null {
+  const spec = skin.dock(eventType, view, payload);
+  if (spec === null || view.canOrganise) return spec;
+  const base = payload ?? {};
+  return { ...spec, chips: spec.chips.filter((chip) => !isOrganiserOnlyEvent(eventType, chip.mutate(base))) };
 }
 
 /**
@@ -1451,6 +1475,12 @@ const EMPTY_SPEC: PadSpec = { panels: [], fidelity: {} };
 export interface PadHostV3Props {
   module: AnySportModule;
   cfg: unknown;
+  /** W2a Task 12 — copied into `PadHostView.stageKind`; see its doc (types.ts). */
+  stageKind: string | null;
+  /** W2a D-O1 — copied into `PadHostView.canOrganise`; see its doc (types.ts). False for every device link. */
+  canOrganise: boolean;
+  /** W2a fix round 1 (I2) — copied into `PadHostView.entrantNames`; see its doc (types.ts). */
+  entrantNames: PadHostView["entrantNames"];
   fixtureId: string;
   lineups: LineupPair;
   identity: OwnIdentity;
@@ -1795,8 +1825,11 @@ export function PadHostV3(props: PadHostV3Props) {
       // types.ts's own doc on PadHostView.contextOverrides and this file's
       // contextOverridesStale/render-phase-reset block above.
       contextOverrides,
+      stageKind: props.stageKind,
+      canOrganise: props.canOrganise,
+      entrantNames: props.entrantNames,
     }),
-    [props.cfg, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
+    [props.cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
   );
 
   // `sheets` is resolved BEFORE the tiles so the band filter below can read a
@@ -1958,7 +1991,7 @@ export function PadHostV3(props: PadHostV3Props) {
   const dispatch = useMemo(
     () =>
       createSkinDispatch(padView, async (type, payload) => {
-        const dock = props.skin.dock(type, view, payload as Record<string, unknown> | undefined);
+        const dock = dockFor(props.skin, type, view, payload as Record<string, unknown> | undefined);
         if (!usesSoftCommit(dock)) {
           await pipeline.submit(type, payload);
           return;
@@ -2519,7 +2552,9 @@ export function PadHostV3(props: PadHostV3Props) {
           data-role="v3-ribbon"
           className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 max-md:order-1"
         >
-          <span className="min-w-0 flex-1 truncate text-sm text-slate-700">{ribbon.text}</span>
+          {/* W2a fix round 1: two lines, clamped — not `truncate`. The ribbon is standing context now ("Result
+              recorded — …" for a whole chess tie-break), and at 320 truncate cut it to a word and an ellipsis. */}
+          <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm text-slate-700">{ribbon.text}</span>
           {/* Withdrawn, not disabled, when nothing on the strip can be taken
               back (R7/C4) — a disabled control still reads as "there is an
               action here", and after a void there is not. The strip's TEXT

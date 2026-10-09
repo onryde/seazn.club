@@ -344,6 +344,9 @@ interface Props {
    *  its fixture page with `?stream=open` — the division's path to Stop; the panel itself lives on the fixture page.
    *  Optional like `venues`/`phase`: the pre-existing `stages-panel-*.test.tsx` props build without it (no chips). */
   streamStates?: Record<string, HoldState>;
+  /** W2a fix round 1 (M10) — the recorded abandons awaiting their settle (ids; the division page's
+   *  `listFixturesAwaitingSettle`), threaded to the run sheet so each row reads held. Optional: none by default. */
+  awaitingSettle?: readonly string[];
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -453,7 +456,7 @@ export function boardSlotOptionsFor(
 // Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1448,6 +1451,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           setUndoable(true);
         }}
         streamStates={streamStates}
+        awaitingSettle={awaitingSettle}
         /* An unfilled bracket seat is named by its FEEDER ("Winner of R1·3"),
            not "TBD" — the same `feedLabels()` builder and the same
            `slot.winner_match`/`slot.loser_match` vocabulary the schedule board

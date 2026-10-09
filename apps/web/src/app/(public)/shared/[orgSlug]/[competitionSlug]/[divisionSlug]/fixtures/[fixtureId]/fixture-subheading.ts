@@ -14,7 +14,12 @@ import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
  *  four-value enum, which is what the live document carries) are read by the
  *  same set — `decided` is a member of both vocabularies, and `finalized`
  *  only of the raw one, so the pair covers either caller. */
-const PLAYED_STATUSES = new Set(["decided", "finalized"]);
+const PLAYED_STATUSES = new Set(["decided", "finalized", "needs_decision"]);
+
+/** W2a — the held status (a bracket game that ended level, or an abandon that decided nobody). It HAS been played —
+ *  only the verdict waits — so it takes the played wording. The document folds it into "other" (`statusOf`), where
+ *  abandoned/cancelled also land, so `fixtureSubheadingLine` reads it off the payload's raw status instead. */
+const HELD_STATUS = "needs_decision";
 
 /**
  * "Time TBD" only makes sense pre-match — a live fixture with no
@@ -97,7 +102,8 @@ export function fixtureSubheadingLine(
 ): string | null {
   const parts = [
     fixtureSubheading(
-      doc?.header.status ?? fallbackStatus,
+      // The one raw status the folded document cannot say (see HELD_STATUS); the payload carries both in one snapshot.
+      fallbackStatus === HELD_STATUS ? HELD_STATUS : (doc?.header.status ?? fallbackStatus),
       doc?.startTime,
       labels.timeTbd,
       labels.timeNotRecorded,

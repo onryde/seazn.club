@@ -59,7 +59,7 @@ describe("StagesPanel phase gating", () => {
     ],
     fixtures: [1, 2, 3, 4, 5, 6].map((n) => ({
       id: `f${n}`, status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true,
-      stageId: "s1", awaitsSeedDraw: false,
+      stageId: "s1", awaitsSeedDraw: false, awaitsSettle: false,
     })),
     now: "2026-03-01T12:00:00Z",
     tz: "UTC",
@@ -107,7 +107,7 @@ describe("StagesPanel phase gating", () => {
         { id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, timing: null, sourceReady: false, proposal: "none" as const },
       ],
       fixtures: [
-        { id: "f1", status: "scheduled", scheduledAt: "2026-03-01T15:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s1", awaitsSeedDraw: false },
+        { id: "f1", status: "scheduled", scheduledAt: "2026-03-01T15:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s1", awaitsSeedDraw: false, awaitsSettle: false },
       ],
       now: "2026-03-01T12:00:00Z",
       tz: "UTC",
@@ -140,5 +140,26 @@ describe("StagesPanel phase gating", () => {
     );
     expect(html.indexOf("League")).toBeGreaterThan(-1);
     expect(html.indexOf("League")).toBeLessThan(html.indexOf("Finals"));
+  });
+});
+
+// W2a fix round 1 (M10): a recorded abandon that decided nobody is stored `abandoned` — the status alone reads it as a
+// result — so the division page hands its `listFixturesAwaitingSettle` ids down, and the run sheet's row for it is held
+// (chip + Settle). This is the panel → sheet → row half of that seam; the page half is e2e (bracket-finish addendum 9).
+describe("StagesPanel threads the recorded abandons awaiting their settle to the run sheet (M10)", () => {
+  const ko = stage({ id: "ko", kind: "knockout", name: "Final" });
+  const abandoned = fixture("ko", { id: "final", status: "abandoned", scheduled_at: "2026-03-01T10:00:00Z" });
+  const props = { ...baseProps, stages: [ko], fixtures: [abandoned], phase: "scheduled" as const };
+  const CHIP = 'data-testid="run-sheet-held-chip"';
+
+  it("the row is held when the page names it, and a plain abandon (the generator's void) is not", () => {
+    const held = renderToStaticMarkup(<StagesPanel {...props} awaitingSettle={["final"]} />);
+    expect(held).toContain('data-fixture-no="1"');
+    expect(held).toContain(CHIP);
+    expect(held).toContain('data-row-action="decide"');
+    const voided = renderToStaticMarkup(<StagesPanel {...props} awaitingSettle={[]} />);
+    expect(voided, "the positive pair: the same row renders").toContain('data-fixture-no="1"');
+    expect(voided).not.toContain(CHIP);
+    expect(voided).not.toContain('data-row-action="decide"');
   });
 });

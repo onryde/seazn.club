@@ -279,5 +279,20 @@
         "name": "X-ST-2: every gated row is refused 403 for every non-organiser authority, and nothing is written"
       }
     ]
+  },
+  {
+    "id": "bench-routes-by-type-only",
+    "file": "tools/bench/lib/drivers/scorer.ts",
+    "find": "isOrganiserOnlyEvent(resolved.type, resolved.payload)",
+    "replace": "isOrganiserOnlyEvent(resolved.type, undefined)",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "tools/bench/lib/__tests__/scorer-driver.test.ts"
+        ],
+        "name": "a sport event is the console's exactly when its declared field carries a forfeit value"
+      }
+    ]
   }
 ]

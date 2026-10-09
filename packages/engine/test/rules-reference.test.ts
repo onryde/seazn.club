@@ -9,9 +9,7 @@ import { ID, REPO, ROW_HEADER, RULES_DIR, STATUS, allRows, fileExists, hasToken,
 /** Signed rows whose proving test lands in a later W2a task. A task that adds
  *  the proof deletes its id here in the same commit; Task 16 Step 5 requires
  *  this map to be EMPTY. A row not named here must already be proved. */
-const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([
-  ["BG-KO-2", "Task 12"],
-]);
+const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);
 
 /** The ten ids W2a seeds, typed from spec §6 (2026-10-08-format-matrix-w2a-design.md, "W2a seeds only"). */
 const SEEDED = ["X-BR-1", "X-BR-2", "X-ST-1", "X-ST-2", "X-DR-1", "BG-KO-1", "BG-KO-2", "CA-KO-1", "GN-KO-1", "CK-KO-1"];

@@ -552,7 +552,7 @@ describe("hubHeader — all eleven fields, from the summary alone", () => {
     },
   );
 
-  it("W2a: a held fixture's status line is 'Needs a decision' (never the 'Not played' fallback)", () => {
+  it("W2a: a held fixture's status line is the held one — D-H3's 'Level — winner to be decided' (never the 'Not played' fallback)", () => {
     // Expected copy is the spec's own (§5.5 public surfaces), read from the en dictionary.
     const header = hubHeader(F({ id: "f1", status: "needs_decision" }), SIDES(), "football", "T");
     expect(header.status).toBe("other");
@@ -560,8 +560,8 @@ describe("hubHeader — all eleven fields, from the summary alone", () => {
     const en = JSON.parse(
       readFileSync(new URL("../../../dictionaries/en/public.json", import.meta.url), "utf8"),
     ) as Record<string, string>;
-    expect(en[header.statusLine!.key]).toBe("Needs a decision");
-    expect(en["matchCentre.status.other"]).not.toBe("Needs a decision"); // the two answers differ
+    expect(en[header.statusLine!.key]).toBe("Level — winner to be decided");
+    expect(en["matchCentre.status.other"]).not.toBe("Level — winner to be decided"); // the two answers differ
   });
 
   it("a status with no dictionary sentence falls back to matchCentre.status.other", () => {
@@ -2325,6 +2325,29 @@ describe("loadCompetitionHub — a FINALIZED fixture is a decided one", () => {
       ),
     );
     expect(match.resultLine).toContain("Red Rockets");
+  });
+
+  it("W2a: a chess tie-break's recorded score reaches the hub's result line (spec §5.5)", async () => {
+    const tiebreak = F({
+      id: "fx-tiebreak",
+      status: "decided",
+      round_no: 1,
+      home_entrant_id: "e1",
+      away_entrant_id: "e2",
+      scheduled_at: "2026-09-03T14:00:00.000Z",
+      outcome: { kind: "win", winner: "e2", loser: "e1", method: "tiebreak_rapid" },
+      summary: {
+        perSide: [
+          { entrantId: "e1", line: "½" },
+          { entrantId: "e2", line: "½" },
+        ],
+        detail: { tiebreak: { rung: "rapid", score: "1½–½" } },
+      },
+    });
+    getPublicDivisionMock.mockResolvedValue(divisionDetail({ fixtures: [tiebreak], standings: [] }));
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    const match = doc.matches.find((m) => m.fixtureId === "fx-tiebreak")!;
+    expect(match.resultLine).toBe("Red Rockets won on rapid tie-break (1½–½)");
   });
 });
 

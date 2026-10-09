@@ -116,6 +116,7 @@ const input = (over: Partial<MatchPosterInput> = {}): MatchPosterInput => ({
   activeIndex: null,
   setLine: null,
   topPerformers: null,
+  held: false,
   copy,
   ...over,
 });
@@ -505,5 +506,39 @@ describe("posterFonts — the real static TTFs, wired into satori's `fonts:` opt
     const tree = MatchPoster({ model, size: "poster" }) as { props: { style: Record<string, unknown> } };
     expect(tree.props.style.fontFamily).toBe(POSTER_FONT_HEADING);
     expect(tree.props.style.fontFamily).not.toBe("sans-serif");
+  });
+});
+
+// W2a Task 13 (addendum 6) — a HELD fixture (`needs_decision`: a bracket game that ended level, or an abandon that
+// decided nobody) has been played, so the poster shows the level board; but nobody has won, so it says the held line
+// rather than "Result", dims nobody, and names no performer. The document folds the held status into "other" (where
+// a match that never happened also lands), so the caller says `held` from the raw fixture status.
+describe("matchPosterModel — a held fixture (W2a)", () => {
+  const level = header({ status: "other", scoreLines: ["½", "½"], subLines: [null, null], statusLine: { key: "matchCentre.status.needs_decision" } });
+
+  it("empty case first: the same folded header NOT held is the upcoming poster, as before W2a", () => {
+    const m = matchPosterModel(input({ header: level, held: false, copy: { ...copy, statusLine: "Needs a decision" } }));
+    expect(m.variant).toBe("upcoming");
+    expect(m.sides[0].score).toBeNull();
+  });
+
+  it("held: the level board, the held line as the hero, no Result chip, nobody dimmed, no performers", () => {
+    const m = matchPosterModel(
+      input({ header: level, held: true, topPerformers: performers, copy: { ...copy, statusLine: "Needs a decision" } }),
+    );
+    expect(m.variant).toBe("held");
+    expect([m.sides[0].score, m.sides[1].score]).toEqual(["½", "½"]);
+    expect(m.hero).toBe("Needs a decision");
+    expect(m.chip).toBe("Men's T8 · Round 1");
+    expect(m.chip).not.toContain(copy.result);
+    expect(m.chipLive).toBe(false);
+    expect([m.sides[0].dim, m.sides[1].dim]).toEqual([false, false]);
+    expect(m.performers).toEqual([]);
+  });
+
+  it("held outranks a stale folded status: even a header reading 'decided' is not a Result poster while held", () => {
+    const m = matchPosterModel(input({ header: header({ status: "decided" }), held: true, copy: { ...copy, statusLine: "Needs a decision" } }));
+    expect(m.variant).toBe("held");
+    expect(m.chip).not.toContain(copy.result);
   });
 });

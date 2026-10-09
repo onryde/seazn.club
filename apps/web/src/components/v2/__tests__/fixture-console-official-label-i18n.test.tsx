@@ -92,6 +92,8 @@ function consoleHtml(locale: Locale): string {
         initialState={live}
         initialEvents={ROWS}
         canEdit
+        canOrganise
+        stageKind={null}
         recorderNames={{ "user-1": "Dana Okafor" }}
         audit={{ verified: true, tamperedSeq: null, entitled: true }}
         scorePadV2={{
@@ -99,6 +101,7 @@ function consoleHtml(locale: Locale): string {
           resolvedConfig: CFG,
           initialEvents: ENVELOPES,
           entitlements: {},
+          stageKind: null,
           identity: { recordedBy: "user-1", deviceLinkId: null },
         }}
         viewerPlan="community"

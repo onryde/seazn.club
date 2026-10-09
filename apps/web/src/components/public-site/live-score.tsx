@@ -15,6 +15,7 @@
 // any more.
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
+import { ScoreSentence } from "@/components/score-sentence";
 import en from "@/dictionaries/en/public.json";
 import {
   disciplineLabel,
@@ -29,6 +30,7 @@ import { type LiveFixtureData } from "./live-score-data";
 import {
   renderDecidedOutcome,
   shootoutScoreFromDetail,
+  tiebreakScoreFromDetail,
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
 
@@ -133,7 +135,13 @@ export function LiveScoreBody({
   // (R3.5/Task G) — correct at first paint but frozen after that, since a
   // Server Component cannot react to a client-side data change.
   const shootoutScore = shootoutScoreFromDetail(data.summary?.detail);
-  const decidedLine = renderDecidedOutcome(data.outcome, entrantNames, decidedTemplates, shootoutScore);
+  const decidedLine = renderDecidedOutcome(
+    data.outcome,
+    entrantNames,
+    decidedTemplates,
+    shootoutScore,
+    tiebreakScoreFromDetail(data.summary?.detail),
+  );
 
   // WHEN SUPPRESSION LEAVES NOTHING AT ALL. `summary-tab.tsx` passes
   // `suppressScorebug` for every non-cricket sport so the court slab is not
@@ -196,7 +204,11 @@ export function LiveScoreBody({
       ) : null}
       {suppressScorebug ? null : (
         <>
-      {decidedLine ? <p className="text-base font-semibold text-ink">{decidedLine}</p> : null}
+      {decidedLine ? (
+        <p className="text-base font-semibold text-ink">
+          <ScoreSentence text={decidedLine} />
+        </p>
+      ) : null}
       {/* Court-slab scorebug — the broadcast moment of the page. */}
       <div className="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg">
         <div className="p-5 sm:p-6">

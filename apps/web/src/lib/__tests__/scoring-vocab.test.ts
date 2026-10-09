@@ -6,12 +6,14 @@ import {
   decidedOutcomeText, shootoutScoreFromDetail, decidedOutcomeTemplates, renderDecidedOutcome,
   EVENT_KEY, ENUM_VOCAB, ENGINE_ERROR_KEY, POSITION_KEY, PAD_LABEL_KEYS,
   SCORING_VOCAB_KEYS, SPORT_KEY, type MsgFn,
+  SETTLE_METHOD_IDS, TIEBREAK_RUNG_IDS, settledMethodId,
 } from "@/lib/scoring-vocab";
 import { interpolate } from "@/lib/i18n-runtime";
 import { matchRef } from "@/lib/slot-label";
 import { buildRibbon, ribbonKeyFor, CORE_RIBBON_KEY } from "@/components/v2/scorepad/v3/ribbon";
 import { builtinModules } from "@seazn/engine/sports";
-import { CORE_EVENT_SCHEMAS, EngineErrorCode, matchPositionOf, SquadRole } from "@seazn/engine/core";
+import { CORE_EVENT_SCHEMAS, EngineErrorCode, matchPositionOf, SquadRole, SETTLE_METHODS as ENGINE_SETTLE_METHODS, settledMethod as engineSettledMethod } from "@seazn/engine/core";
+import { TIEBREAK_RUNGS as ENGINE_TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { buildStream, defaultLineupPair } from "@seazn/engine/testkit";
 import uiEn from "@/dictionaries/en/ui.json";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
@@ -1278,5 +1280,22 @@ describe("shootoutScoreFromDetail — narrows ScoreSummary.detail without an eng
     expect(shootoutScoreFromDetail(undefined)).toBeNull();
     expect(shootoutScoreFromDetail("nope")).toBeNull();
     expect(shootoutScoreFromDetail({ shootout: { home: "3", away: 0 } })).toBeNull();
+  });
+});
+
+// W2a fix round 1 (M4): the decider tuples are RESTATED in scoring-vocab.ts (a value import put the boardgame module
+// into the public live-score chunk). Pinned here against the engine's own declarations — never a table typed into the
+// test — so a fourth settle method or rung reds this file instead of shipping the plain sentence.
+describe("the restated decider tuples equal the engine's (M4)", () => {
+  it("settle methods, the settled-method namer and the tie-break rungs are the engine's, in its order", () => {
+    expect([...SETTLE_METHOD_IDS]).toEqual([...ENGINE_SETTLE_METHODS]);
+    expect([...TIEBREAK_RUNG_IDS]).toEqual([...ENGINE_TIEBREAK_RUNGS]);
+    let checked = 0;
+    for (const m of ENGINE_SETTLE_METHODS) {
+      expect(settledMethodId(m), m).toBe(engineSettledMethod(m));
+      checked++;
+    }
+    expect(checked).toBe(ENGINE_SETTLE_METHODS.length);
+    expect(checked).toBeGreaterThan(0);
   });
 });

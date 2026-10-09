@@ -74,6 +74,8 @@ function consoleHtml(sportKey: string): string {
       initialState={{ status: "scheduled", last_seq: 0, summary: null, state: {}, outcome: null }}
       initialEvents={[]}
       canEdit={true}
+      canOrganise={true}
+      stageKind={null}
       viewerPlan="community"
     />,
   );

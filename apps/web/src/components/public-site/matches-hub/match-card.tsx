@@ -26,6 +26,7 @@
 // W3's poster icon has no DOM in W2 (design ruling R4: no "coming soon").
 import Link from "next/link";
 import { EmptyCrest, EntityLogo, PendingCrest } from "@/components/ui/entity-logo";
+import { ScoreSentence } from "@/components/score-sentence";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { fmtPublicDate, fmtPublicTime } from "@/lib/format";
@@ -293,7 +294,7 @@ export function MatchCard({
         <span className="min-w-0 truncate">{[m.venueName, m.courtName].filter(Boolean).join(" · ")}</span>
         {m.resultLine ? (
           <span data-testid="mh-match-result" className="shrink-0 font-medium text-ink">
-            {m.resultLine}
+            <ScoreSentence text={m.resultLine} />
           </span>
         ) : m.header.statusLine ? (
           // A match that was called off. The builder already puts the reason

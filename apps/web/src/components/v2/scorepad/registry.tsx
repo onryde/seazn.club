@@ -162,6 +162,15 @@ export function personNamesFrom(home: SideInfo, away: SideInfo): Readonly<Record
   return names;
 }
 
+/**
+ * W2a fix round 1 (I2) — each side's ENTRANT display name, for `PadHostView.entrantNames`. The loaders' `SideInfo.name`
+ * is the name the console heading and the device-link header already show, so the pad's "who advances" options name
+ * the same two entrants (spec §5.5) — never a person, which is all `personNamesFrom` above can key.
+ */
+export function entrantNamesFrom(home: SideInfo, away: SideInfo): Readonly<Record<"home" | "away", string>> {
+  return { home: home.name, away: away.name };
+}
+
 // ---------------------------------------------------------------------------
 // <ScorePad/> — the single mount both dispatchers use
 // ---------------------------------------------------------------------------
@@ -189,6 +198,9 @@ export interface ScorePadBootstrap {
   // `resolveInitialBand`). Nothing server-side resolves a band any more.
   entitlements: Readonly<Record<string, boolean>>;
   identity: OwnIdentity;
+  /** W2a Task 12 (addendum 4) — the fixture's stage kind from `loadFixturePadCfg`, never discarded: the pad reads it
+   *  as `PadHostView.stageKind` (a bracket hides a level result). Null for a fixture with no stage. */
+  stageKind: string | null;
 }
 
 export interface ScorePadProps {
@@ -223,6 +235,10 @@ export interface ScorePadProps {
   onPartialResolver?: (resolve: (eventType: string, payload: Record<string, unknown>) => boolean) => void;
   identity: OwnIdentity;
   entitlements: Readonly<Record<string, boolean>>;
+  /** W2a Task 12 — forwarded to `PadHostV3.stageKind`. */
+  stageKind: string | null;
+  /** W2a D-O1 — forwarded to `PadHostV3.canOrganise`: the console passes its organiser flag, the device pad `false`. */
+  canOrganise: boolean;
 }
 
 type ModuleResolution = { ok: true; module: AnySportModule } | { ok: false; message: string };
@@ -257,6 +273,7 @@ export function ScorePad(props: ScorePadProps) {
 
   const lineups = useMemo(() => lineupPairFrom(props.home, props.away), [props.home, props.away]);
   const personNames = useMemo(() => personNamesFrom(props.home, props.away), [props.home, props.away]);
+  const entrantNames = useMemo(() => entrantNamesFrom(props.home, props.away), [props.home, props.away]);
   const transport = useMemo(
     () => (props.auth.kind === "device_link" ? deviceLinkTransport(props.auth.token) : sessionTransport()),
     [props.auth],
@@ -294,6 +311,9 @@ export function ScorePad(props: ScorePadProps) {
     <PadHostV3
       module={resolution.module}
       cfg={props.resolvedConfig}
+      stageKind={props.stageKind}
+      canOrganise={props.canOrganise}
+      entrantNames={entrantNames}
       fixtureId={props.fixtureId}
       lineups={lineups}
       identity={props.identity}

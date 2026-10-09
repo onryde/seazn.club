@@ -34,7 +34,7 @@ import { listVenues } from "@/server/usecases/venues";
 import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
-import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
+import { defaultMatchMinutes, listFixturesAwaitingSettle } from "@/server/usecases/competition-desk";
 import { comparePools } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
@@ -134,7 +134,7 @@ export default async function DivisionPage({
     (requested === "settings" && !canEdit) || (requested === "discipline" && !disciplineAvailable)
       ? defaultTab
       : (requested ?? defaultTab);
-  const [competition, stages, fixtures, entrants, scheduleSettings, canExport, venues, planKey] =
+  const [competition, stages, fixtures, entrants, scheduleSettings, canExport, venues, planKey, awaitingSettle] =
     await Promise.all([
     getCompetition(auth, division.competition_id),
     listStages(auth, id),
@@ -151,6 +151,9 @@ export default async function DivisionPage({
     // and venue-qualified on the board — the same court, two labels.
     listVenues(auth, { includeArchived: true }),
     orgPlanKey(auth.orgId),
+    // W2a (addendum 9): READ by `resolvePhase` (unlike the stubs below) — a bracket whose final was abandoned and
+    // awaits the organiser's settle is not finished. The desk's own predicate, so the two pages cannot disagree.
+    listFixturesAwaitingSettle(auth, id),
   ]);
   const viewerPlan = viewerPlanFrom(planKey);
   // How long a match is assumed to last on THIS division — resolved once,
@@ -222,6 +225,7 @@ export default async function DivisionPage({
       // null" in both files, which is also true of every round after the
       // first of a fully drawn bracket.
       awaitsSeedDraw: fixtureAwaitsSeedDraw(f),
+      awaitsSettle: awaitingSettle.has(f.id),
       eventCount: 0,
       // Final review minor fix: was a bare `?? 60`, retyping a number that
       // had already drifted from the desk's own schema-derived default (30).
@@ -779,6 +783,7 @@ export default async function DivisionPage({
               matchMinutes={matchMinutes}
               viewerPlan={viewerPlan}
               streamStates={streamStates}
+              awaitingSettle={[...awaitingSettle]}
             />
           </>
         )}

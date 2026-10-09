@@ -657,9 +657,10 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
 // and its result is supposed to stand.
 //
 // A GHOST is an entrant who is no longer active AND IS STILL EXPECTED TO
-// PLAY, so only a fixture in a pending status can make one. The five history
+// PLAY, so only a fixture in a pending status can make one. The six history
 // statuses cannot: `decided`/`finalized`/`forfeited`/`abandoned` are played,
-// `cancelled` never will be.
+// `needs_decision` was played and waits on the organiser, `cancelled` never
+// will be.
 //
 // The `unplaced` side deliberately keeps the UNFILTERED referenced set. An
 // entrant holding only a played fixture IS placed, so narrowing that side too
@@ -686,6 +687,9 @@ const GHOST_BY_FIXTURE_STATUS = [
   ["abandoned", false],
   ["forfeited", false],
   ["cancelled", false],
+  // W2a (V432, spec §5.4.6): a held level result waits for the ORGANISER's settle, not for its entrants — "a held
+  // fixture expects no play" (status-set-ledger.ts, PENDING_FIXTURE_STATUSES; ruling C17).
+  ["needs_decision", false],
 ] as const satisfies ReadonlyArray<readonly [string, boolean]>;
 
 describe.skipIf(!HAS_DB)("getStageRosterDrift — a finished fixture is history, not an obligation", () => {
@@ -713,7 +717,7 @@ describe.skipIf(!HAS_DB)("getStageRosterDrift — a finished fixture is history,
       const { fixtures } = await generateStageFixtures(auth, stage!.id);
       expect(fixtures).toHaveLength(1); // A v B — one fixture, so it really is A's ONLY one
 
-      // Written straight onto the row: several of these seven statuses have no
+      // Written straight onto the row: several of these eight statuses have no
       // product path that reaches them from a two-entrant league, and the
       // query under test reads nothing but `status` and the two seat columns,
       // so this is the whole input space. The real withdraw path is driven

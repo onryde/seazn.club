@@ -144,6 +144,9 @@ function view(over: Partial<PadHostView> = {}): PadHostView {
     squads: squads(),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
+    entrantNames: {},
     ...over,
   };
 }
@@ -1829,6 +1832,9 @@ function foldedView(
     squads: squadStateOf(folded, lineups),
     events,
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
+    entrantNames: {},
   };
 }
 
@@ -1927,6 +1933,9 @@ describe("against a real engine fold", () => {
       squads: squadStateOf(folded, lineups),
       events: kickoff,
       contextOverrides: {},
+      stageKind: null,
+      canOrganise: true,
+      entrantNames: {},
     };
     const home = buildSwap(foldedV, t)[0]!;
     // The number leads (h1 is #1 AND a declared GK — under the old
@@ -2233,6 +2242,9 @@ describe("the substitution cap counts ORDINARY substitutions (R3 review, the pad
       squads: squadStateOf(folded, lineups),
       events,
       contextOverrides: {},
+      stageKind: null,
+      canOrganise: true,
+      entrantNames: {},
     };
   }
 

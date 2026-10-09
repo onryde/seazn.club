@@ -86,8 +86,9 @@
 //  - dock chips (`chip`, `offeredChip`) and `releaseHold`: the generic pad
 //    amends a HELD half tap from its dock (see those `TapStep` variants).
 //  - `text`: typing into a field — the console's reason prompt.
-//  - organiser actions: an `ORGANISER_ONLY_EVENT_TYPES` event is mapped by
-//    `organiserStepsFor` (never an adapter) and tapped on `organiserPage`,
+//  - organiser actions: an event the product's `isOrganiserOnlyEvent` names
+//    (W2a T9) is mapped by `organiserStepsFor` (never an adapter) and tapped on
+//    `organiserPage`,
 //    after releasing whatever the pad holds; a stream a forfeit ends is judged
 //    "forfeited" at its last event, not "decided" (`terminalStatusOf`).
 // Payload equality, pack-order polling, never-rejects and the required
@@ -95,6 +96,11 @@
 import { fetchFixtureLedger, fetchFixtureStatus, type LedgerRow, type LedgerTransport } from "../ledger.ts";
 import { resolvePayloadRefs } from "../simulate.ts";
 import type { Session } from "../http.ts";
+// W2a T9 (bf49cd67e) put "what is the organiser's to author" in ONE product module that imports nothing — read by the
+// server's refusal and the pad's tile filter. The driver reads the same predicate rather than a mirror of it: the
+// "one copy, not two checked against each other" move `import.ts` made for IMPORT_CAPS (bench design §17.3). The
+// mirror this replaces had silently lost `core.settle` and chess's forfeit results when T9 widened the rule.
+import { isOrganiserOnlyEvent } from "../../../../apps/web/src/lib/organiser-only-events.ts";
 
 // ---------------------------------------------------------------------------
 // Taps — the vocabulary a scorer's finger actually has. Every kind maps to
@@ -300,13 +306,13 @@ export interface TapAdapter {
 // Organiser actions (Task 10 fix round 1, R59(c)).
 // ---------------------------------------------------------------------------
 // Some events are the ORGANISER's to author, never a scorer's: the pad filters
-// them off every device by design (`AUTHORITY_ONLY_EVENT_TYPES`,
-// v3/pad-host.tsx:720-723, restated here and pinned equal by a source scan in
-// `__tests__/scorer-driver.test.ts`). They are chassis-level — the fixture
-// console is sport-blind — so their mapping lives in this sport-blind file,
-// not in an adapter, and every step runs on `organiserPage`.
-
-export const ORGANISER_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(["core.forfeit", "core.abandon"]);
+// them off every device by design. Which ones is the product's own predicate,
+// `isOrganiserOnlyEvent(type, payload)` (`apps/web/src/lib/organiser-only-events.ts`,
+// W2a T9 / ruling D-O1: core settle, forfeit and abandon, plus a sport result
+// whose declared field records a forfeit) — imported above, never restated.
+// Their mapping lives in this sport-blind file, not in an adapter, and every
+// step runs on `organiserPage`; an organiser event the console route does not
+// map yet is a named finding (`organiserStepsFor` throws), never a scorer tap.
 
 const FORFEIT_PAYLOAD_KEYS: readonly string[] = ["by", "reason"];
 
@@ -378,7 +384,7 @@ export interface PlayMatchInput {
   /** Where `score-finalize` is driven — `scoring.ts:233-235` refuses a
    *  `core.finalize` from a device link, so never the same page as
    *  `scorerPage` for a device-link run. Every organiser-only action
-   *  (`ORGANISER_ONLY_EVENT_TYPES`, fix round 1) is driven here too. */
+   *  (`isOrganiserOnlyEvent`, fix round 1; W2a T9) is driven here too. */
   readonly organiserPage: PadPage;
   readonly deviceUrl: string;
   readonly fixtureId: string;
@@ -697,7 +703,7 @@ export async function playMatchByTaps(input: PlayMatchInput): Promise<PlayMatchR
     for (let i = 0; i < events.length; i += 1) {
       const event = events[i];
       const resolved = { type: event.type, payload: resolvePayloadRefs(event.payload, input.refIdByKey, "scorer") };
-      const organiserAction = ORGANISER_ONLY_EVENT_TYPES.has(event.type);
+      const organiserAction = isOrganiserOnlyEvent(resolved.type, resolved.payload);
 
       let steps: readonly TapStep[];
       try {

@@ -1,6 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import {
-  TAG, apiJson, activeOrg, addEntrantsViaApi, scoreFixture,
+  TAG, apiJson, activeOrg, addEntrantsViaApi, scoreFixture, createStageAndGenerate,
   setFixtureStatusSql,
   assignFixtureOfficialSql, setFixtureScheduledAtSql, seedBareRegistrationSql,
 } from "./helpers";
@@ -121,6 +121,38 @@ async function leagueOfFour(request: APIRequestContext, label: string) {
   expect(fixtures.length, "a 4-entrant round robin").toBe(6);
   return { comp: comp.data!, div: div.data!, leagueId: stage.data!.id, fixtures,
            fixtureIds: fixtures.map((f) => f.id), entrantIds: entrants.ids };
+}
+
+/** W2a (addendum 9): a football knockout whose first semi was ABANDONED at 0–0 — a recorded abandon that decided
+ *  nobody, stored `abandoned` exactly like the generator's void. Only the ledger tells them apart, so this is the row
+ *  that drives the desk's server-side read (`fixtureAwaitsSettle`) end to end; a `needs_decision` status needs none. */
+async function abandonedKnockout(request: APIRequestContext) {
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Actions held ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
+  });
+  expect(comp.status, "create competition").toBe(201);
+  const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`,
+    "POST", { name: "Cup", sport_key: "football", variant_key: "11-a-side" });
+  expect(div.status, "create division").toBe(201);
+  const added = await addEntrantsViaApi(request, div.data!.id, ["Held A", "Held B", "Held C", "Held D"], "team");
+  expect(added.ids, "four teams").toHaveLength(4);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "knockout", name: "Cup" });
+  expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBe(200);
+  const semis = [];
+  for (const id of fixtureIds) {
+    const f = (await apiJson<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }>(
+      request, `/api/v1/fixtures/${id}`)).data!;
+    if (f.home_entrant_id && f.away_entrant_id) semis.push(f);
+  }
+  expect(semis, "two seated semis").toHaveLength(2);
+  const sf = semis[0]!.id;
+  for (const [type, payload] of [["core.start", {}], ["core.abandon", { reason: "floodlights" }]] as const) {
+    const tip = (await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${sf}/state`)).data!.last_seq;
+    const res = await apiJson(request, `/api/v1/fixtures/${sf}/events`, "POST", { expected_seq: tip, type, payload });
+    expect(res.status, `${type}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+  }
+  expect((await apiJson<{ status: string }>(request, `/api/v1/fixtures/${sf}`)).data!.status).toBe("abandoned");
+  return { compSlug: comp.data!.slug, divSlug: div.data!.slug };
 }
 
 async function addStage(request: APIRequestContext, divisionId: string, progression: unknown) {
@@ -324,6 +356,18 @@ const ROWS: Row[] = [
     // pins the sport that key belongs to.
     land: async (page) => {
       await assertUsable(page, `button:has-text("${en["pad.generic.action.scoreEntry"]}")`, "enter final score");
+    },
+  },
+  {
+    id: "needs_decision",
+    kind: "needs_decision",
+    label: en["desk.needsYou.needs_decision.action"],
+    build: async (request) => abandonedKnockout(request),
+    // ONE held fixture: the row opens its console, where the organiser's Settle block is (Task 11).
+    land: async (page) => {
+      await expect(page).toHaveURL(/\/f\/\d+$/);
+      await expect(page.getByTestId("needs-decision")).toBeVisible();
+      await assertUsable(page, '[data-testid="settle-open"]', "settle the match");
     },
   },
   {

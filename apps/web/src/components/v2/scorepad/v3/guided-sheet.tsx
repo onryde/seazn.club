@@ -69,7 +69,7 @@
 // `destructive` in the TileGrid sense, so violet/red have no place here.
 import { useState } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
-import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
+import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetChoiceOption, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
 import { SPORT_TONE_CLASSES } from "./tokens";
 import type { SportTone } from "./sport-theme";
 
@@ -387,7 +387,7 @@ function renderToneSwatches(tones: readonly SportTone[]) {
 }
 
 function renderChoiceRow(
-  options: readonly { id: string; label: string; tone?: readonly SportTone[] }[],
+  options: readonly SheetChoiceOption[],
   hintKey: string | undefined,
   t: TFn,
   onPick: (id: string) => void,
@@ -428,7 +428,7 @@ function renderChoiceRow(
               }
             >
               {renderToneSwatches(tones)}
-              <span className="break-words">{t(opt.label)}</span>
+              <span className="break-words">{opt.labelText ?? t(opt.label)}</span>
               {reason !== undefined && (
                 <span className="ml-2 break-words text-xs font-normal text-red-600">{reason}</span>
               )}

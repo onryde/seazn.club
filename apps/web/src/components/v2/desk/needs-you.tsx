@@ -166,6 +166,26 @@ export function needsYouItems(
           });
           break;
         }
+        // W2a (addendum 9): a held bracket fixture — a level result or a recorded abandon that decided nobody. One
+        // names its match and opens its console, whose Settle block serves both shapes (Task 11); several open the
+        // fixtures tab, the same fallback the other aggregated rows take.
+        case "needs_decision": {
+          const single = a.fixtureIds.length === 1 ? dd.fixture_names[a.fixtureIds[0]!] : null;
+          items.push({
+            key: `${d.id}:needs_decision`, severity: sev, kind: a.kind,
+            title: single
+              ? t(dict, "desk.needsYou.needs_decision", { division: d.name, home: single.home ?? "—", away: single.away ?? "—" })
+              : plural(dict, "desk.needsYou.needs_decision.count", a.count, locale, { division: d.name }),
+            sub: t(dict, "desk.needsYou.needs_decision.sub"),
+            action: {
+              label: t(dict, "desk.needsYou.needs_decision.action"),
+              href: single
+                ? routes.fixture(org, comp, d.slug, single.fixture_no)
+                : routes.division(org, comp, d.slug, "fixtures"),
+            },
+          });
+          break;
+        }
         case "registrations_waiting":
           waiting += a.count; // one competition-level row, not one per division
           break;

@@ -34,7 +34,8 @@ import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
-import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
+import { scoreStatusLabel } from "@/lib/score-status-label";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -68,6 +69,8 @@ import { ActivityPanel, type ActivityDetailResolver, type ActivityEvent } from "
 import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
+import { NeedsDecisionBlock, finalizeVisible, heldCause, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
+import { ScoreSentence } from "@/components/score-sentence";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -315,6 +318,16 @@ interface Props {
   initialState: LiveState;
   initialEvents: EventIn[];
   canEdit: boolean;
+  /**
+   * W2a X-ST-2 (finding 11; owner ruling D-O1) — the viewer is an ORGANISER (owner/admin: the page's own `canEdit`),
+   * not merely someone who may score. `canEdit` above is the page's `canScore`, which an accepted official scorer also
+   * holds; settle, forfeit and abandon are organiser-only on the server (`isOrganiserOnlyEvent`, scoring.ts), so a
+   * scorer offered them would only ever earn a 403. Required, never defaulted: a forgotten prop must not fail open.
+   */
+  canOrganise: boolean;
+  /** The fixture's stage kind (`loadFixturePadCfg`), or null for a fixture with no stage. A held bracket fixture's
+   *  "Needs a decision" block reads it (`needsDecision`): only a bracket kind forbids a level result. */
+  stageKind: string | null;
   /** recorded_by → display name for Activity attribution. */
   recorderNames?: Record<string, string>;
   /** Public fixture path — enables the share action once decided (v3/10 #2).
@@ -492,6 +505,8 @@ export function FixtureConsole({
   initialState,
   initialEvents,
   canEdit,
+  canOrganise,
+  stageKind,
   recorderNames = {},
   publicPath = null,
   availability = {},
@@ -607,8 +622,11 @@ export function FixtureConsole({
       .finally(() => setPadSyncing(false));
   }, [resync]);
 
-  const send: SendEvent = useCallback(
-    async (type, payload) => {
+  /** THE write. Returns the server's answer instead of painting it: `send` below paints a refusal in the console's
+   *  own error line, the settle dialog paints it in its block (spec §7: "the dialog closes and shows the reason"). A
+   *  paywall answer still raises the upgrade gate here and carries no message. */
+  const post = useCallback(
+    async (type: string, payload: unknown): Promise<{ ok: true } | { ok: false; message: string | null }> => {
       setError(null);
       setPaywallFeature(null);
       setBusy(true);
@@ -624,31 +642,52 @@ export function FixtureConsole({
         });
         await resync();
         router.refresh();
-        return true;
+        return { ok: true };
       } catch (err) {
         if (err instanceof ApiV1Error && err.code === "SEQ_CONFLICT") {
           // Another scorer got there first — resync and let them retry.
           await resync().catch(() => undefined);
-          setError(msg("score.seqConflict"));
-        } else if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
+          return { ok: false, message: msg("score.seqConflict") };
+        }
+        if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
           setPaywallFeature(String(err.extra.feature_key ?? ""));
-        } else {
-          // #427: an EngineError's message is the engine's own English and the
-          // envelope carries it through ApiV1Error — localize by code first.
-          setError(scoringErrorText(
+          return { ok: false, message: null };
+        }
+        // #427: an EngineError's message is the engine's own English and the
+        // envelope carries it through ApiV1Error — localize by code first.
+        return {
+          ok: false,
+          message: scoringErrorText(
             err instanceof ApiV1Error ? err.code : null,
             err instanceof Error ? err.message : null,
             msg,
             "score.failed",
             err instanceof ApiV1Error ? err.extra : null,
-          ));
-        }
-        return false;
+          ),
+        };
       } finally {
         setBusy(false);
       }
     },
-    [fixture.id, live.last_seq, resync, router],
+    [fixture.id, live.last_seq, resync, router, msg],
+  );
+
+  const send: SendEvent = useCallback(
+    async (type, payload) => {
+      const r = await post(type, payload);
+      if (!r.ok && r.message !== null) setError(r.message);
+      return r.ok;
+    },
+    [post],
+  );
+
+  // W2a (spec §7): the settle dialog shows a refusal in its own block, so the console's error line stays clear.
+  const settle = useCallback(
+    async (payload: unknown): Promise<SettleResult> => {
+      const r = await post("core.settle", payload);
+      return r.ok ? r : { ok: false, message: r.message ?? msg("score.failed") };
+    },
+    [post, msg],
   );
 
   // W3 (design §5) — the console's own freshness floor.
@@ -798,6 +837,27 @@ export function FixtureConsole({
   // row may still be voided, and undoing a mistaken abandon must stay possible.
   // Over, but reversible.
   const decided = live.outcome !== null || live.status === "abandoned";
+  // W2a Task 11 (spec §5.5, ruling C12) — HELD: a bracket fixture the kernel's own settle precondition says is owed
+  // the organiser's settle (a level result, an active abandon that decided nobody, a chess game whose tie-break is
+  // pending). The module is resolved defensively, the way `resolvePadSpecForMount` does: an unresolvable pin falls
+  // back to "no pending-decider hook", which can only HIDE the block in phase tiebreak, never show it wrongly.
+  const settleModule = useMemo((): { awaitingDecider?(state: never): boolean } => {
+    try {
+      return resolveModuleClient(sport.key, scorePadV2?.moduleVersion ?? "");
+    } catch {
+      return {};
+    }
+  }, [sport.key, scorePadV2?.moduleVersion]);
+  const held = needsDecision(settleModule, { outcome: live.outcome, state: live.state, stageKind, events });
+  // The match-actions band's two halves, each decided ONCE and read both by the band's own gate and by the control it
+  // renders (two gates for one fact would each cover for the other, and neither would be tested).
+  //  - Finding 27: a held fixture's Finalize is refused (LEVEL_RESULT_IN_BRACKET), so it is not offered.
+  //  - Finding 11 / X-ST-2: forfeit and abandon are organiser-only on the server; a scorer is never offered them.
+  //  - Fix round 1 (I1): nor while HELD — a chess knockout in its tie-break is in play and undecided; the engine refuses
+  //    a forfeit there (WRONG_PHASE, boardgame.ts) but would take an abandon, so THIS gate is what keeps both off a held
+  //    match, and the settle above is the organiser's way out.
+  const offerFinalize = finalizeVisible({ decided, held });
+  const offerOrganiserActions = !decided && !held && canOrganise;
   // Owner ruling 17 — the padSpec resolved purely to decide whether a
   // DECIDED fixture still keeps the pad mounted (`shouldMountPad` above).
   // `scorePadV2?.resolvedConfig ?? sport.config` is the SAME cfg fallback
@@ -878,7 +938,14 @@ export function FixtureConsole({
   // that can say who won and how for those sports; `msg`/`entrantNames` are
   // exactly what `decidedOutcomeText` needs and this component already has
   // both.
-  const decidedLine = decidedOutcomeText(outcome, entrantNames, msg, shootoutScoreFromDetail(summary?.detail));
+  const decidedLine = decidedOutcomeText(
+    outcome,
+    entrantNames,
+    msg,
+    shootoutScoreFromDetail(summary?.detail),
+    undefined,
+    tiebreakScoreFromDetail(summary?.detail),
+  );
   const lastVoidable = [...events]
     .reverse()
     .find((e) => e.type !== "core.void" && !events.some((v) => v.voids_event_id === e.id));
@@ -990,7 +1057,8 @@ export function FixtureConsole({
             <span className="text-slate-600">{msg("schedule.vs")}</span>{" "}
             {awayName ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
           </h1>
-          <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
+          {/* Fix round 1 (M6): `normal-case` — `.badge` capitalizes, which Title-Cased the localised status word. */}
+          <span className={`badge normal-case ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}
           </span>
           {/* Spec 2026-09-30 §2 — Stream's phone twin, BEFORE ⇄. Same classes as the hand-over icon. */}
@@ -1059,7 +1127,11 @@ export function FixtureConsole({
         </div>
         {/* R3.5/Task G — the v3 pad unmounts once decided; this is the
             organiser console's surviving surface for "who won, and how". */}
-        {decidedLine && <p className="mt-1 text-sm font-medium text-slate-700">{decidedLine}</p>}
+        {decidedLine && (
+          <p className="mt-1 text-sm font-medium text-slate-700">
+            <ScoreSentence text={decidedLine} />
+          </p>
+        )}
         {/* Phone-only: the round/venue/time line sits behind
             `match-details-toggle` below md (spec §3.1) — wrapped in this div
             rather than folded into the <p>'s own className so
@@ -1188,6 +1260,10 @@ export function FixtureConsole({
                   auth={SESSION_AUTH}
                   identity={scorePadV2.identity}
                   entitlements={scorePadV2.entitlements}
+                  // W2a: the console's own stage kind and organiser flag — the SAME values its held block reads, so
+                  // the pad and the block can never disagree about whether this is a bracket or who is asking.
+                  stageKind={stageKind}
+                  canOrganise={canOrganise}
                   onEvents={handlePadEvents}
                   // R7/C1 — this console mounts the one ledger itself, below.
                   hideActivity
@@ -1389,7 +1465,29 @@ export function FixtureConsole({
           below the ledger, and OUTLINED throughout — a filled button here
           would compete with a scoring tile for the eye, which is exactly the
           hierarchy failure D-12 is. */}
-      {scoring && home && away && (
+      {/* W2a Task 11 (UI-1 option A): a HELD bracket fixture's decision, above the match actions — organisers only
+          (the settle is organiser-only on the server; a scorer would only earn a 403). */}
+      {scoring && home && away && canOrganise && held && (
+        <NeedsDecisionBlock
+          msg={msg}
+          cause={heldCause({ outcome: live.outcome, events })}
+          home={{ id: home.id, name: homeName! }}
+          away={{ id: away.id, name: awayName! }}
+          busy={busy || padSyncing}
+          settle={settle}
+        />
+      )}
+      {/* Fix round 1 (M7): an official scorer on a held fixture gets no block (the settle is organiser-only) — but one
+          line saying why the match is held, rather than a status word and silence. */}
+      {scoring && home && away && !canOrganise && held && (
+        <p data-testid="held-note" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          {msg("score.needsDecision.waiting")}
+        </p>
+      )}
+
+      {/* W2a: rendered only when it holds a control — a scorer on an in-play match, or anyone on a held one, would
+          otherwise get a named, explained container with nothing in it. */}
+      {scoring && home && away && (offerFinalize || offerOrganiserActions) && (
         <section
           data-role="match-actions"
           className="rounded-2xl border border-purple-100 bg-purple-50/40 p-4"
@@ -1399,7 +1497,7 @@ export function FixtureConsole({
           </h2>
           <p className="mt-0.5 text-xs text-slate-600">{msg("score.matchActionsNote")}</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {decided && (
+            {offerFinalize && (
               <>
                 <button
                   type="button"
@@ -1421,7 +1519,7 @@ export function FixtureConsole({
                 )}
               </>
             )}
-            {!decided && (
+            {offerOrganiserActions && (
               <>
                 <ForfeitButton busy={busy} padSyncing={padSyncing} home={home} away={away} send={send} />
                 <button
@@ -1464,13 +1562,6 @@ export function FixtureConsole({
 
 function decidedLock(status: string): boolean {
   return status === "finalized" || status === "cancelled";
-}
-
-/** Localized fixture status; unknown values fall back to the raw token. */
-function scoreStatusLabel(msg: Msg, status: string): string {
-  const key = `score.status.${status}` as MessageKey;
-  const label = msg(key);
-  return label === key ? status.replace("_", " ") : label;
 }
 
 function ForfeitButton({
