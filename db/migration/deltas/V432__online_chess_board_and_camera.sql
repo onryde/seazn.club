@@ -47,6 +47,42 @@ create index user_external_accounts_user_idx on user_external_accounts (user_id)
 alter table user_external_accounts enable row level security;
 alter table user_external_accounts force row level security;
 
+-- =============================================================================
+-- Organiser-driven rounds (design D12, 2026-10-09). The organiser presses
+-- "Open round": that stamps the round, sends every pairing's invite and STARTS
+-- the window. The timetable becomes the time players are SHOWN
+-- (fixture_external_play.scheduled_at_basis), never the trigger — a Swiss
+-- round almost never starts when the timetable said, and opening windows on a
+-- stale schedule marks a field no-show for a round that had not started.
+--
+-- The grain is (stage_id, round_no), because v2 has no rounds table: a round
+-- is a column on fixtures (V214__fixtures.sql:10, indexed at :47).
+-- `unique (stage_id, round_no)` makes "Open round" idempotent in the SCHEMA,
+-- so a double press or a retry cannot produce two windows for one round.
+-- `opened_by … on delete restrict`: this row is the authority for a window
+-- that can forfeit somebody, so it keeps its actor.
+--
+-- Declared ABOVE fixture_external_play because that table's round_open_id FK
+-- names it.
+--
+-- CONSEQUENCE FOR CODE, not enforced here: T−10 and T+20 are now relative to
+-- `opened_at`, not to the fixture's scheduled time, and a fixture whose round
+-- has no row here is not yet playable. window.ts is T9/T13's to change.
+-- =============================================================================
+create table stage_round_opens (
+  id        uuid primary key default gen_random_uuid(),
+  stage_id  uuid not null references stages(id) on delete cascade,
+  org_id    uuid not null references organizations(id) on delete cascade,
+  round_no  int  not null,
+  opened_at timestamptz not null default now(),
+  opened_by uuid not null references users(id) on delete restrict,
+  unique (stage_id, round_no)
+);
+create index stage_round_opens_org_idx on stage_round_opens (org_id, opened_at desc);
+
+alter table stage_round_opens enable row level security;
+alter table stage_round_opens force  row level security;
+
 create table fixture_external_play (
   fixture_id          uuid primary key references fixtures(id) on delete cascade,
   org_id              uuid not null references organizations(id) on delete cascade,
