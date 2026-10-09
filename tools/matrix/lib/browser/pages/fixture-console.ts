@@ -24,12 +24,16 @@
 //    newest event that is neither a core.void nor already voided (:880 lastVoidable) — an entry the console
 //    chooses itself, so the page object reports the answer and the caller judges the choice. It renders only while
 //    the match is scoring (not decided-locked), so it is offered on an in-play fixture.
+//  - "Abandon" (W2a Task 14 Step 8) has no testid either: it is the `btn btn-danger` button whose accessible name is the
+//    dictionary's score.abandon. It opens the TextPromptDialog forfeit's reason prompt also uses (score-prompt-reason /
+//    score-prompt-submit) and submits send("core.abandon", { reason }). It is offered only while `offerOrganiserActions`
+//    (not decided, not HELD, an organiser), so an abandoned or held match drops it.
 //  - The console polls only every 15 s (scorepad/use-fixture-stream.ts:21),
 //    and a console loaded before the fixture's last event is answered
 //    SEQ_CONFLICT — so both acts reload first, as the bench's
 //    reloadConsoleBeforeAction does (tap-play.ts:456).
 import type { Page } from "playwright";
-import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID, organiserStepsFor, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
+import { FINALIZE_TESTID, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, START_MATCH_TESTID, organiserStepsFor, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
 import { executeSteps } from "../../pads/execute.ts";
 import { BadBudget, budgetMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
@@ -144,5 +148,32 @@ export async function voidLastUi(c: PageCtx, fixtureId: string): Promise<PostedE
   const { data } = await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixtureId) }, () => voidLast.click({ timeout: t }), t);
   if (offered !== null) await awaitScreen(() => page.getByTitle(offered, { exact: true }).waitFor({ state: "detached", timeout: nav }), "the console, no longer offering the entry just voided", nav);
   await shoot(c, "10-void", before);
+  return data;
+}
+
+export class AbandonNeedsAReason extends Error {
+  constructor(fixtureId: string) {
+    super(`browser: the console's Abandon on fixture ${fixtureId} was given an empty reason — the prompt is submitted with the reason the event carries, so there is nothing to type`);
+    this.name = "AbandonNeedsAReason";
+  }
+}
+
+/** Abandons the open console's match through its Abandon button and reason prompt (W2a Task 14 Step 8); the product's
+ *  answer to the core.abandon the prompt posts. The button going away is the screen proving it: an abandoned (or held)
+ *  match is no longer offered Abandon. */
+export async function abandonUi(c: PageCtx, fixtureId: string, reason: string): Promise<PostedEvent> {
+  if (reason === "") throw new AbandonNeedsAReason(fixtureId);
+  const { page } = c;
+  const t = actBudget(c, 1);
+  const nav = navBudget(c);
+  const abandon = page.getByRole("button", { name: NAME.abandon.text });
+  await reload(c, { control: abandon, what: "the console's Abandon" });
+  await awaitScreen(() => abandon.waitFor({ state: "visible", timeout: nav }), "the console's Abandon, for a match in play", nav);
+  const before = await shoot(c, "12-abandon-before");
+  await abandon.click({ timeout: t });
+  await page.getByTestId(PROMPT_REASON_TESTID).fill(reason, { timeout: t });
+  const { data } = await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixtureId) }, () => page.getByTestId(PROMPT_SUBMIT_TESTID).click({ timeout: t }), t);
+  await awaitScreen(() => abandon.waitFor({ state: "detached", timeout: nav }), "the console, abandoned", nav);
+  await shoot(c, "12-abandon", before);
   return data;
 }

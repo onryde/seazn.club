@@ -14,7 +14,7 @@ import { FILLER, type FillerName } from "../fillers.ts";
 import type { CheckResult } from "../results.ts";
 import { WAVE_ID, type Route } from "../routing.ts";
 
-export const ACTION_TYPES = ["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "voidLast", "forfeit", "withdraw", "completeStage", "standingsView", "publicView"] as const;
+export const ACTION_TYPES = ["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "voidLast", "forfeit", "settle", "abandon", "withdraw", "completeStage", "standingsView", "publicView"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 export type Via = "browser" | "http";
 export type PadPolicy = "first" | "all";

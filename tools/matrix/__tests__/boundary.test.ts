@@ -21,7 +21,11 @@ const ALLOWED_BENCH = new Set([
   "tools/bench/lib/ledger.ts", "tools/bench/lib/drivers/scorer.ts",
   "tools/bench/lib/drivers/adapters/generic.ts", "tools/bench/lib/tap-play.ts",
 ]);
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts"]);
+// W2a Task 14 (phase 3): organiser-only-events.ts is the PRODUCT's own list of the events only an organiser may author
+// (isOrganiserOnlyEvent); the browser driver routes those through the console by that predicate, never a second list.
+// The module imports nothing (pinned below), so plain node loads it with no alias.
+const ORGANISER_ONLY_EVENTS = "apps/web/src/lib/organiser-only-events.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts", ORGANISER_ONLY_EVENTS]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -108,6 +112,14 @@ describe("tools/matrix import boundary", () => {
       if (target.startsWith("tools/bench/")) expect(ALLOWED_BENCH.has(target), target).toBe(true);
       if (target.startsWith("apps/web/")) expect(ALLOWED_WEB.has(target), target).toBe(true);
     }
+  });
+
+  it("the product's organiser-only predicate is a file plain node can load: it exists and imports nothing, and only the browser driver names it", () => {
+    const file = join(REPO, ORGANISER_ONLY_EVENTS);
+    expect(existsSync(file), ORGANISER_ONLY_EVENTS).toBe(true);
+    expect(importsOf(file), `${ORGANISER_ONLY_EVENTS} must stay import-free`).toEqual([]);
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === ORGANISER_ONLY_EVENTS)).map((m) => relative(MATRIX, m));
+    expect(naming).toEqual(["lib/driver/browser-driver.ts"]);
   });
 
   it("the test-module check sees every import shape it is held to, and no shipped module reaches __tests__ (anti-vacuity: the scan reads every module)", () => {

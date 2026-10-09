@@ -3,14 +3,13 @@
 // it: the block's button opens the dialog, the dialog takes the winner, the method and an optional note, and its
 // confirm posts core.settle to the fixture's events route (ORGANISER_ONLY, X-ST-2 — the scorer's pad never does).
 //
-// The testids are FROZEN by plan Task 11 ("Produces"), and the product file that renders them is loop H's
-// (components/v2/needs-decision.tsx, not written when this lane was cut). NEEDS_DECISION_PINS pins each to that file as
-// TEXT, like selectors.ts does for the rest — so they are red until H lands, by name, and a rename after that reds them
-// instead of timing out mid-run. They are kept here, not in selectors.ts's table, so the existing pin tests stay green
-// in the meantime.
+// The testids are FROZEN by plan Task 11, and the product file that renders them is loop H's
+// (components/v2/needs-decision.tsx). NEEDS_DECISION_PINS pins each to that file as TEXT, like selectors.ts does for the
+// rest, so a rename reds HERE, by name, and not as a timeout mid-run. They are kept here, not in selectors.ts's table.
 //
-// What was NOT seen: this page object has never driven the real console (H does not exist yet). The flow below is the
-// plan's description; Step 8 is its proof. Nothing here is a recording.
+// What was SEEN: Step 8 drove this page object through the real console on a prod build (generic, football, hockey,
+// cricket, carrom and badminton bracket cells: abandon, then settle through the dialog; the evidence is
+// 11-settle-before/11-settle in every case's shots).
 import type { Locator } from "playwright";
 import { SETTLE_METHODS } from "@seazn/engine/core";
 import type { PostedEvent } from "../../driver/types.ts";
@@ -99,4 +98,9 @@ export class NeedsDecisionPage {
     await shoot(c, "11-settle", before);
     return data;
   }
+}
+
+/** The page object as a function, the shape BrowserDriver's page seam takes (forfeitUi, abandonUi, voidLastUi). */
+export function settleUi(c: PageCtx, fixtureId: string, winnerEntrantId: string, method: SettleMethodId, note?: string): Promise<PostedEvent> {
+  return new NeedsDecisionPage(c, fixtureId).settle(winnerEntrantId, method, note);
 }

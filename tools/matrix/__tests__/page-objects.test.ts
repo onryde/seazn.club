@@ -10,11 +10,11 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { NoProductResponse } from "../lib/browser/respond.ts";
 import { COMPETITION_ENDS_ON, createFromTemplateUi } from "../lib/browser/pages/competition.ts";
-import { FORFEIT_SIDE_TESTID_PREFIX, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
+import { FINALIZE_TESTID, FORFEIT_SIDE_TESTID_PREFIX, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, START_MATCH_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import {
   LandedElsewhere, READS_ONLY, REACT_PROPS_KEY, REPLACEMENTS_MAX, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitHydrated, awaitScreen, boundActions,
@@ -23,12 +23,13 @@ import {
 } from "../lib/browser/pages/ctx.ts";
 import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
-import { ForfeitNeedsBothSides, eventsPath, forfeitBudgets, forfeitSteps, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
+import { ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
-import { ALL_FILTER, RUN_SHEET_FILTER_OPTIONS, type DefaultFilterSeen, fixtureLinkSelector, fixtureRowSelector, showAllFixtures } from "../lib/browser/pages/run-sheet.ts";
+import { ALL_FILTER, CONSOLE_MOUNTED_TESTIDS, RUN_SHEET_FILTER_OPTIONS, type DefaultFilterSeen, fixtureLinkSelector, fixtureRowSelector, showAllFixtures } from "../lib/browser/pages/run-sheet.ts";
 import { GeneratedWithoutFixtureNumbers, MD_BREAKPOINT_PX, completeStageUi, completionShots, expectedFoldBranch, generateUi, judgeFoldBranch, newestCreatedFixtureNo, openFold, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
+import { NEEDS_DECISION } from "../lib/browser/pages/needs-decision.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
 import { DATA, NAME, TESTID, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { UnknownTemplate } from "../lib/templates.ts";
@@ -1216,6 +1217,154 @@ describe("voidLastUi: the console's Void last entry (W1d item 15e)", () => {
   it("an offer that is still on screen after the void is ScreenNeverShowed (the screen did not change), not a pass", async () => {
     const g = consolePage({ titleGone: false });
     await expect(voidLastUi(g.ctx, "fx-1")).rejects.toBeInstanceOf(ScreenNeverShowed);
+  });
+});
+
+// W2a Task 14 Step 8 (found live): openFixtureUi waits for ANY control the console mounts for an organiser. A HELD
+// fixture (a bracket match that ended level, or was abandoned) mounts none of the four the sheet knew - no Start, no
+// pad, no Forfeit, no Finalize - only the Needs a decision block, so a settle that opened its console first timed out
+// with "console controls never showed" on a console that was showing exactly the control it needed.
+describe("openFixtureUi: the controls a console can be mounted with, one per state it can be in", () => {
+  it("every state of an organiser's console mounts a control the wait knows (scheduled, in play, decided, held), and the wait is exactly their union", () => {
+    const STATES: Readonly<Record<string, readonly string[]>> = {
+      "scheduled (Start)": [START_MATCH_TESTID],
+      "in play (the pad, or Forfeit)": [TESTID.scorePad.id, FORFEIT_TESTID],
+      "decided (Finalize)": [FINALIZE_TESTID],
+      "held (Needs a decision)": [NEEDS_DECISION.block],
+    };
+    let checked = 0;
+    for (const [state, mounted] of Object.entries(STATES)) {
+      expect(mounted.some((id) => CONSOLE_MOUNTED_TESTIDS.includes(id)), `${state}: none of ${mounted.join(", ")} is in the wait`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect([...CONSOLE_MOUNTED_TESTIDS].sort()).toEqual([...new Set(Object.values(STATES).flat())].sort());
+  });
+});
+
+// W2a Task 14 Step 8: the console's Abandon. It has no testid (fixture-console.tsx renders msg("score.abandon") in a bare
+// `btn btn-danger` button), so it is found by its accessible name (the dictionary's value, derived); it opens the same
+// TextPromptDialog forfeit uses (score-prompt-reason / score-prompt-submit, the bench's own constants) and submits
+// core.abandon {reason} to the fixture's events route. An abandoned (or held) match is no longer offered Abandon, so the
+// button going away is the screen proving it.
+describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
+  const BASE = "http://localhost:3999";
+  interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
+  type W = { pred: (r: Resp) => boolean; resolve: (r: Resp) => void; timer: ReturnType<typeof setTimeout> };
+
+  function consolePage(o: { offered?: boolean; stuck?: boolean; answer?: { status: number; body: unknown }; eventsOf?: string } = {}) {
+    const log: string[] = [];
+    let screen = 0;
+    const waiters: W[] = [];
+    const emit = (r: Resp) => { for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); waiters.splice(waiters.indexOf(w), 1); w.resolve(r); } };
+    const answer = o.answer ?? { status: 200, body: { ok: true, data: { seq: 4, status: "abandoned", outcome: null, event_id: "ev-4" } } };
+    const loc = (d: string) => ({
+      d,
+      first: () => loc(d),
+      waitFor: async (w?: { state?: string }) => {
+        log.push(`wait ${w?.state} ${d}`);
+        const absentButton = o.offered === false && d.startsWith("role:button") && w?.state !== "detached";
+        const stillThere = o.stuck === true && d.startsWith("role:button") && w?.state === "detached";
+        if (absentButton || stillThere) { const e = new Error("locator.waitFor: Timeout exceeded"); e.name = "TimeoutError"; throw e; }
+      },
+      elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
+      fill: async (v: string) => { log.push(`fill ${d} = ${v}`); screen++; },
+      click: async () => {
+        log.push(`click ${d}`);
+        screen++;
+        if (d === `testid:${PROMPT_SUBMIT_TESTID}`) {
+          emit({ request: () => ({ method: () => "POST" }), url: () => `${BASE}/api/v1/fixtures/${o.eventsOf ?? "fx-1"}/events`, status: () => answer.status, json: () => Promise.resolve(answer.body) });
+        }
+      },
+    });
+    const page = {
+      reload: async () => { log.push("reload"); },
+      getByRole: (role: string, f: { name: string }) => loc(`role:${role}:${f.name}`),
+      getByTestId: (id: string) => loc(`testid:${id}`),
+      waitForResponse: (pred: (r: Resp) => boolean, t: { timeout: number }): Promise<Resp> => new Promise((resolveW, reject) => {
+        const w: W = { pred, resolve: resolveW, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, t.timeout) };
+        waiters.push(w);
+      }),
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: unknown) => ({ jsonValue: async () => fn(arg), dispose: async () => undefined }),
+      evaluate: async () => ({ scrollWidth: 1280, clientWidth: 1280 }),
+      screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { log.push(`shot ${p.split("/").pop()!.replace(/\.png$/, "")}`); files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const evidence = new Evidence("/r", "case-1", fs);
+    const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence };
+    return { ctx, log, evidence };
+  }
+
+  it("the button is found by the dictionary's own words; the console renders them in a testid-less button that opens the reason prompt and sends core.abandon", () => {
+    const en = JSON.parse(src("apps/web/src/dictionaries/en/ui.json")) as Record<string, string>;
+    expect(NAME.abandon.text).toBe(en["score.abandon"]);
+    expect(NAME.abandon.text).toMatch(/^Abandon/);
+    const fc = src(`${V2}/fixture-console.tsx`);
+    expect(fc).toContain('{msg("score.abandon")}');
+    expect(fc).toContain("onClick={() => setAbandonPrompt(true)}");
+    expect(fc).toContain('void send("core.abandon", { reason });');
+  });
+
+  it("reloads, waits for the offer, pictures before, opens the prompt, types the reason, submits, takes the product's own answer, waits for the offer to go, pictures after", async () => {
+    const g = consolePage();
+    const posted = await abandonUi(g.ctx, "fx-1", "matrix: abandoned");
+    expect(posted).toMatchObject({ seq: 4, event_id: "ev-4", status: "abandoned" });
+    const btn = `role:button:${NAME.abandon.text}`;
+    expect(g.log).toEqual([
+      "reload",
+      `wait attached ${btn}`,
+      `wait visible ${btn}`,
+      "shot 12-abandon-before",
+      `click ${btn}`,
+      `fill testid:${PROMPT_REASON_TESTID} = matrix: abandoned`,
+      `click testid:${PROMPT_SUBMIT_TESTID}`,
+      `wait detached ${btn}`,
+      "shot 12-abandon",
+    ]);
+    expect(g.evidence.checks().find((c) => c.id === "visual-evidence")).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+
+  it("the answer waited for is THIS fixture's events route: another fixture's write is not taken for it", async () => {
+    const g = consolePage({ eventsOf: "fx-2" });
+    vi.useFakeTimers(); // the wait is the page object's real budget; the clock is the test's
+    try {
+      const abandoned = abandonUi(g.ctx, "fx-1", "r").then(() => null, (x: unknown) => x);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(await abandoned).toBeInstanceOf(NoProductResponse);
+      expect(g.log.some((l) => l === "shot 12-abandon")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the product's refusal of the abandon is the RefusedCall it answered, with its code; no 'after' picture", async () => {
+    const g = consolePage({ answer: { status: 409, body: { ok: false, error: { code: "WRONG_PHASE", message: "the match is already over" } } } });
+    const e = await abandonUi(g.ctx, "fx-1", "r").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 409, code: "WRONG_PHASE" });
+    expect(g.log.some((l) => l === "shot 12-abandon")).toBe(false);
+  });
+
+  it("a console that offers no Abandon (decided, held, or not the organiser's) is ScreenNeverShowed, never a click on nothing", async () => {
+    const g = consolePage({ offered: false });
+    await expect(abandonUi(g.ctx, "fx-1", "r")).rejects.toBeInstanceOf(ScreenNeverShowed);
+    expect(g.log.some((l) => l.startsWith("click"))).toBe(false);
+  });
+
+  it("an Abandon still offered after the send is ScreenNeverShowed (the screen did not change), not a pass", async () => {
+    const g = consolePage({ stuck: true });
+    await expect(abandonUi(g.ctx, "fx-1", "r")).rejects.toBeInstanceOf(ScreenNeverShowed);
+  });
+
+  it("an empty reason is refused by name before any tap: the prompt would submit nothing meaningful", async () => {
+    const g = consolePage();
+    await expect(abandonUi(g.ctx, "fx-1", "")).rejects.toThrow(/reason/);
+    expect(g.log).toEqual([]);
   });
 });
 

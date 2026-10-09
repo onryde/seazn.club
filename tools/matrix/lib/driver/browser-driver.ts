@@ -37,12 +37,15 @@ import { createCompetitionUi, createFromTemplateUi } from "../browser/pages/comp
 import { boundActions, navBudget, shoot, type DivisionWhere, type PageCtx } from "../browser/pages/ctx.ts";
 import { createDivisionUi, type StageOut } from "../browser/pages/division-builder.ts";
 import { addEntrantsUi, withdrawUi } from "../browser/pages/entrants.ts";
-import { finalizeUi, forfeitUi, voidLastUi } from "../browser/pages/fixture-console.ts";
+import { abandonUi, finalizeUi, forfeitUi, voidLastUi, type ForfeitReason } from "../browser/pages/fixture-console.ts";
+import { settleUi, type SettleMethodId } from "../browser/pages/needs-decision.ts";
 import { startUi } from "../browser/pages/launch.ts";
 import { readPublicUi } from "../browser/pages/public-division.ts";
 import { judgeTodayDefault, openFixtureUi, type DefaultFilterSeen } from "../browser/pages/run-sheet.ts";
 import { completeStageUi, generateUi, judgeFoldBranch, type RailHooks, type StagePosition } from "../browser/pages/stage-rail.ts";
 import { readStandingsUi, type UiTable } from "../browser/pages/standings.ts";
+import { SETTLE_METHODS } from "@seazn/engine/core";
+import { isOrganiserOnlyEvent } from "../../../../apps/web/src/lib/organiser-only-events.ts";
 import { noPadReason } from "../pad-sports.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
 import type { MatrixPadAdapter } from "../pads/types.ts";
@@ -79,6 +82,8 @@ export interface BrowserPages {
   readonly completeStageUi: typeof completeStageUi;
   readonly openFixtureUi: typeof openFixtureUi;
   readonly forfeitUi: typeof forfeitUi;
+  readonly settleUi: typeof settleUi;
+  readonly abandonUi: typeof abandonUi;
   readonly finalizeUi: typeof finalizeUi;
   readonly voidLastUi: typeof voidLastUi;
   readonly readStandingsUi: typeof readStandingsUi;
@@ -86,7 +91,7 @@ export interface BrowserPages {
 }
 export const REAL_PAGES: BrowserPages = Object.freeze({
   createCompetitionUi, createFromTemplateUi, createDivisionUi, addEntrantsUi, withdrawUi, startUi, generateUi,
-  completeStageUi, openFixtureUi, forfeitUi, finalizeUi, voidLastUi, readStandingsUi, readPublicUi,
+  completeStageUi, openFixtureUi, forfeitUi, settleUi, abandonUi, finalizeUi, voidLastUi, readStandingsUi, readPublicUi,
 });
 
 /** The HTTP side: every organiser call, plus the ledger read (HttpDriver.ledger),
@@ -145,6 +150,86 @@ export class ConsoleVoidUnproven extends Error {
     this.name = "ConsoleVoidUnproven";
     this.fixtureId = fixtureId;
   }
+}
+
+/** An organiser-only event (the PRODUCT's isOrganiserOnlyEvent) that no console control writes, or whose payload the
+ *  control cannot be given. Refused by name BEFORE anything of the stream is driven or posted (W2a Task 14 Step 8): the
+ *  scorer's pad never authors these (X-ST-2), and a stream half-played to the point where the organiser's act cannot
+ *  be made would only leave a held fixture behind and a refusal that names nothing. */
+export class NoOrganiserRoute extends Error {
+  readonly eventType: string;
+  constructor(event: StreamEvent, why: string) {
+    super(`browser: ${event.type} is organiser-only (organiser-only-events.ts) and ${why}; payload ${JSON.stringify(event.payload)}`);
+    this.name = "NoOrganiserRoute";
+    this.eventType = event.type;
+  }
+}
+
+/** A console organiser act answered, yet the ledger row at the seq it names is absent, another type, or carries other
+ *  values than the event the stream meant. Refused by name: the console is judged on what the product HOLDS, never on
+ *  the click having returned 200 (the pad path's replay does the same for the scorer's taps). */
+export class OrganiserWriteUnproven extends Error {
+  readonly fixtureId: string;
+  constructor(fixtureId: string, subject: string, why: string) {
+    super(`browser: fixture ${fixtureId}: ${subject} — ${why}`);
+    this.name = "OrganiserWriteUnproven";
+    this.fixtureId = fixtureId;
+  }
+}
+
+/** The ledger action type each organiser-only core type is recorded under (MixedLedger ACTION_TYPES). This is NOT a
+ *  list of what is organiser-only — that is isOrganiserOnlyEvent's, the product's, and a type it declares that has no
+ *  entry here is refused by name (NoOrganiserRoute): it says only which console control writes each. */
+const ORGANISER_ACTION: Readonly<Record<string, "settle" | "abandon" | "forfeit">> = Object.freeze({
+  "core.settle": "settle",
+  "core.abandon": "abandon",
+  "core.forfeit": "forfeit",
+});
+const FORFEIT_REASONS: readonly ForfeitReason[] = ["walkover", "retired hurt"];
+
+type OrganiserAct =
+  | { readonly action: "settle"; readonly winner: string; readonly method: SettleMethodId; readonly note: string | undefined }
+  | { readonly action: "abandon"; readonly reason: string }
+  | { readonly action: "forfeit"; readonly by: string; readonly reason: ForfeitReason };
+type Segment =
+  | { readonly kind: "scorer"; readonly events: readonly StreamEvent[] }
+  | { readonly kind: "organiser"; readonly event: StreamEvent; readonly act: OrganiserAct };
+
+/** What the console's control is given for `event`, read from the event itself. */
+function organiserActOf(event: StreamEvent): OrganiserAct {
+  const action: "settle" | "abandon" | "forfeit" | undefined = ORGANISER_ACTION[event.type];
+  if (action === undefined) throw new NoOrganiserRoute(event, "no console control writes it (the console's Settle, Abandon and Forfeit write core.settle, core.abandon and core.forfeit)");
+  const p: Record<string, unknown> = typeof event.payload === "object" && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
+  const text = (v: unknown): v is string => typeof v === "string" && v !== "";
+  if (action === "settle") {
+    if (!text(p.winner)) throw new NoOrganiserRoute(event, "its payload names no winner entrant for the dialog's winner buttons");
+    if (!(SETTLE_METHODS as readonly string[]).includes(p.method as string)) throw new NoOrganiserRoute(event, `its method is not one of the engine's SETTLE_METHODS (${SETTLE_METHODS.join(", ")})`);
+    if (p.note !== undefined && typeof p.note !== "string") throw new NoOrganiserRoute(event, "its note is not text");
+    return { action, winner: p.winner, method: p.method as SettleMethodId, note: p.note };
+  }
+  if (action === "abandon") {
+    if (!text(p.reason)) throw new NoOrganiserRoute(event, "its payload carries no reason for the prompt");
+    return { action, reason: p.reason };
+  }
+  if (!text(p.by)) throw new NoOrganiserRoute(event, "its payload names no entrant that forfeits");
+  if (!FORFEIT_REASONS.includes(p.reason as ForfeitReason)) throw new NoOrganiserRoute(event, `its reason is not one the console's Forfeit authors (${FORFEIT_REASONS.join(", ")})`);
+  return { action, by: p.by, reason: p.reason as ForfeitReason };
+}
+
+/** The stream cut at every organiser-only event (isOrganiserOnlyEvent): the scorer's events between, each organiser
+ *  event alone. An organiser act with no console control is refused here, before any segment is driven. */
+function segmentStream(events: readonly StreamEvent[]): Segment[] {
+  const out: Segment[] = [];
+  let run: StreamEvent[] = [];
+  for (const event of events) {
+    if (!isOrganiserOnlyEvent(event.type, event.payload)) { run.push(event); continue; }
+    const act = organiserActOf(event);
+    if (run.length > 0) out.push({ kind: "scorer", events: run });
+    run = [];
+    out.push({ kind: "organiser", event, act });
+  }
+  if (run.length > 0) out.push({ kind: "scorer", events: run });
+  return out;
 }
 
 /** Ruling C (amended, fix round 1): how long after the case's last write the
@@ -720,6 +805,91 @@ export class BrowserDriver implements OrganiserDriver {
    *  browser's turn, so under `first` the next stream the pad CAN write still
    *  runs on it. A sport with an adapter and no such stream is never exempt. */
   async postStream(fixtureId: string, events: readonly StreamEvent[], idempotencyPrefix: string): Promise<PostedEvent[]> {
+    const segments = segmentStream(events);
+    if (!segments.some((s) => s.kind === "organiser")) return this.#scorerStream(fixtureId, events, idempotencyPrefix);
+    return this.#splitStream(fixtureId, segments, idempotencyPrefix);
+  }
+
+  /** A stream holding an organiser-only event (W2a Task 14 Step 8; X-ST-2: the scorer's pad never authors core.settle,
+   *  core.abandon or core.forfeit, and the product refuses them from a scorer) is cut at each one, in order: the
+   *  scorer's events go the way they always went (the pad, or http), and each organiser event is the console's —
+   *  settle through the Needs a decision dialog, abandon through Abandon, forfeit through Forfeit — for the first of
+   *  its type, over http alone after (MixedLedger, the same first-only rule as every organiser action). A scorer
+   *  segment that answered fewer events than it was given ends the stream: its pad-ledger-as-generated finding is the
+   *  headline, and an organiser act on a half-played match would only bury it under a refusal. Every event the stream
+   *  answers carries the ledger row the product holds, or none does (a driver never mixes stored and unstored). */
+  async #splitStream(fixtureId: string, segments: readonly Segment[], idempotencyPrefix: string): Promise<PostedEvent[]> {
+    const out: PostedEvent[] = [];
+    for (const seg of segments) {
+      if (seg.kind === "scorer") {
+        const posted = await this.#scorerStream(fixtureId, seg.events, idempotencyPrefix);
+        out.push(...posted);
+        if (posted.length < seg.events.length) break;
+      } else {
+        out.push(...(await this.#organiserEvent(fixtureId, seg.event, seg.act, idempotencyPrefix)));
+      }
+    }
+    return this.#storedAllOrNone(fixtureId, out);
+  }
+
+  /** One organiser-only event: the console's control while the type's browser turn is unused, else one http post. */
+  async #organiserEvent(fixtureId: string, event: StreamEvent, act: OrganiserAct, idempotencyPrefix: string): Promise<PostedEvent[]> {
+    if (act.action === "forfeit") {
+      // The existing forfeit route on either lane (its own ledger record and pages); the console's answers are
+      // verified against the ledger, an http one is filled in from it by #storedAllOrNone when the stream mixes.
+      const viaConsole = this.#wants("forfeit");
+      const posted = await this.forfeit(fixtureId, act.by, act.reason, idempotencyPrefix);
+      return viaConsole ? this.#consoleRows(fixtureId, event, posted) : posted;
+    }
+    if (!this.#wants(act.action)) {
+      this.#ledger.record(act.action, "http");
+      return this.#write(() => this.#http.postStream(fixtureId, [event], idempotencyPrefix));
+    }
+    const { where, no } = await this.#findFixture(fixtureId);
+    this.#ledger.record(act.action, "browser");
+    await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));
+    const answered = await this.#write(() => this.#ui((p) => (act.action === "settle"
+      ? p.settleUi(this.#ctx, fixtureId, act.winner, act.method, act.note)
+      : p.abandonUi(this.#ctx, fixtureId, act.reason))));
+    return this.#consoleRows(fixtureId, event, [answered]);
+  }
+
+  /** The ledger row at each seq the console answered, as `stored`; the LAST answer is the event the stream meant, and
+   *  its row must be that type and hold every value the event carries (a forfeit on a still-scheduled match answers
+   *  core.start first: that row is stored, not compared). */
+  async #consoleRows(fixtureId: string, event: StreamEvent, answered: readonly PostedEvent[]): Promise<PostedEvent[]> {
+    if (answered.length === 0) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, "the page answered no event");
+    const rows = await this.#http.ledger(fixtureId, Math.min(...answered.map((a) => a.seq)) - 1);
+    return answered.map((a, i) => {
+      const row = rows.find((r) => r.seq === a.seq);
+      if (row === undefined) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the product's answer names seq ${a.seq}, which the ledger does not hold (it holds ${rows.map((r) => r.seq).join(", ") || "nothing after it"})`);
+      if (i === answered.length - 1) {
+        if (row.type !== event.type) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} is ${row.type}, not ${event.type}`);
+        const want = (typeof event.payload === "object" && event.payload !== null ? event.payload : {}) as Record<string, unknown>;
+        const held = (typeof row.payload === "object" && row.payload !== null ? row.payload : {}) as Record<string, unknown>;
+        const off = Object.keys(want).filter((k) => JSON.stringify(held[k]) !== JSON.stringify(want[k]));
+        if (off.length > 0) throw new OrganiserWriteUnproven(fixtureId, `the console's ${event.type}`, `the row at seq ${a.seq} holds ${off.map((k) => `${k}=${JSON.stringify(held[k])}`).join(", ")}, the event meant ${off.map((k) => `${k}=${JSON.stringify(want[k])}`).join(", ")}`);
+      }
+      return { ...a, stored: { type: row.type, payload: row.payload } };
+    });
+  }
+
+  /** `stored` on every answered event or on none: when some segments were answered from the ledger (the pad, the
+   *  console) and others by an http post, the http ones are read from the ledger too, at the seq the product answered. */
+  async #storedAllOrNone(fixtureId: string, posted: PostedEvent[]): Promise<PostedEvent[]> {
+    const unstored = posted.filter((p) => p.stored === undefined);
+    if (unstored.length === 0 || unstored.length === posted.length) return posted;
+    const rows = await this.#http.ledger(fixtureId, Math.min(...unstored.map((p) => p.seq)) - 1);
+    return posted.map((p) => {
+      if (p.stored !== undefined) return p;
+      const row = rows.find((r) => r.seq === p.seq);
+      if (row === undefined) throw new OrganiserWriteUnproven(fixtureId, "an http-posted event", `the product's answer names seq ${p.seq}, which the ledger does not hold`);
+      return { ...p, stored: { type: row.type, payload: row.payload } };
+    });
+  }
+
+  /** The scorer's events: the pad, or http (the body this method has always had). */
+  async #scorerStream(fixtureId: string, events: readonly StreamEvent[], idempotencyPrefix: string): Promise<PostedEvent[]> {
     const wanted = events.length > 0 && this.#wants("score");
     const sport = this.#spec.sport;
     const pad = wanted && Object.prototype.hasOwnProperty.call(this.#pads, sport) ? this.#pads[sport] : undefined;

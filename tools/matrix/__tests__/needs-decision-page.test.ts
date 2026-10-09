@@ -10,7 +10,7 @@ import { SETTLE_METHODS } from "@seazn/engine/core";
 import { describe, expect, it, vi } from "vitest";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import { ScreenNeverShowed, type PageCtx } from "../lib/browser/pages/ctx.ts";
-import { NEEDS_DECISION, NEEDS_DECISION_PINS, NeedsDecisionPage, SettleNeedsAWinner, UnknownSettleMethod } from "../lib/browser/pages/needs-decision.ts";
+import { NEEDS_DECISION, NEEDS_DECISION_PINS, NeedsDecisionPage, SettleNeedsAWinner, UnknownSettleMethod, settleUi } from "../lib/browser/pages/needs-decision.ts";
 import { NoProductResponse } from "../lib/browser/respond.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 
@@ -110,6 +110,17 @@ describe("NeedsDecisionPage: the block and the settle dialog (plan Task 11's fro
     const without = heldConsole();
     await without.ui.settle("e-7", "organiser");
     expect(without.log.some((l) => l.startsWith("fill "))).toBe(false);
+  });
+
+  it("settleUi is the page object as the driver's seam takes it: the same flow for the same fixture, with the winner, method and note it was given", async () => {
+    const g = heldConsole();
+    const posted = await settleUi(g.ctx, FIXTURE, "e-7", "higher_seed", "by seed");
+    expect(posted).toMatchObject({ seq: 4, event_id: "ev-4" });
+    expect(g.log).toContain(`click ${tid("settle-winner-e-7")}`);
+    expect(g.log).toContain(`check ${tid("settle-method-higher_seed")}`);
+    expect(g.log).toContain(`fill ${tid("settle-note")}=by seed`);
+    // The answer waited for is THIS fixture's: the seam passed the fixture id through.
+    expect(g.log.indexOf(`click ${tid("settle-confirm")}`)).toBeGreaterThan(-1);
   });
 
   it("every method the ENGINE declares has its radio, and the winner button is keyed by the entrant asked for", async () => {

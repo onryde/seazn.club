@@ -60,7 +60,7 @@ describe("MixedLedger", () => {
       checked++;
     }
     expect(checked).toBe(ACTION_TYPES.length);
-    expect(checked).toBe(12);
+    expect(checked).toBe(14); // the plan's twelve plus W2a's settle and abandon (a literal: the sweep cannot shrink silently)
     expect(createPath).toBe(KEEPS_TURN_UNTIL_CREATED.length);
   });
 
@@ -210,8 +210,8 @@ describe("MixedLedger", () => {
     expect(() => l.record("generate", "carrier-pigeon" as "http")).toThrow(/browser or http/);
   });
 
-  it("ACTION_TYPES is the plan's list, in its order", () => {
-    expect([...ACTION_TYPES]).toEqual(["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "voidLast", "forfeit", "withdraw", "completeStage", "standingsView", "publicView"]);
+  it("ACTION_TYPES is the plan's list, in its order - W2a (Task 14 Step 8) adds the organiser's other two organiser-only acts, settle and abandon, beside forfeit (X-ST-2)", () => {
+    expect([...ACTION_TYPES]).toEqual(["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "voidLast", "forfeit", "settle", "abandon", "withdraw", "completeStage", "standingsView", "publicView"]);
   });
 });
 

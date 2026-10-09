@@ -13,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { selectorForTapStep } from "../../bench/lib/drivers/scorer.ts";
+import { ORGANISER_ONLY_EVENT_TYPES, ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../apps/web/src/lib/organiser-only-events.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
@@ -22,7 +23,7 @@ import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
 import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
+  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
@@ -105,6 +106,8 @@ function fakePages(over: Partial<BrowserPages> = {}): FakePages {
     openFixtureUi: async () => undefined,
     forfeitUi: async (_c, f) => [{ seq: 2, status: "forfeited", outcome: null, event_id: `${f.id}-2` }],
     finalizeUi: async (_c, id) => ({ seq: 3, status: "finalized", outcome: null, event_id: `${id}-3` }),
+    settleUi: async (_c, id) => ({ seq: 4, status: "decided", outcome: null, event_id: `${id}-4` }),
+    abandonUi: async (_c, id) => ({ seq: 4, status: "abandoned", outcome: null, event_id: `${id}-4` }),
     voidLastUi: async (_c, id) => ({ seq: 4, status: "in_play", outcome: null, event_id: `${id}-4` }),
     readStandingsUi: async () => [],
     readPublicUi: async () => ({ tables: [], champion: null }),
@@ -2085,5 +2088,387 @@ describe("BrowserDriver — Void last entry, the date filler and the rail's hook
       expect(typeof (got[0] as { onRail: unknown }).onRail).toBe("function");
       expect(only(driver, "fold-branch")).toMatchObject({ verdict: "pass" });
     });
+  });
+});
+
+describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 Step 8; X-ST-2)", () => {
+  // The scorer's pad never authors core.settle, core.abandon or core.forfeit (isOrganiserOnlyEvent, the PRODUCT's
+  // predicate): a stream that holds one is cut at it, the scorer's events go the way they always went and each
+  // organiser event goes the console's, in stream order. Expected values come from the product's declared list and the
+  // spec's routes, never from the driver.
+  const F1 = fixture("f1", "s1", null, 4);
+  const DIV_CONFIG = { resultMode: "score", allowDraws: true };
+  const lrow = (seq: number, type: string, payload: unknown): LedgerRow => ({ id: `r${seq}`, seq, type, payload });
+  const START: StreamEvent = { type: "core.start", payload: {} };
+  const RESULT: StreamEvent = { type: "generic.result", payload: { p1Score: 1, p2Score: 1 } };
+  const SETTLE: StreamEvent = { type: "core.settle", payload: { winner: "e1", method: "lot" } };
+  const ABANDON: StreamEvent = { type: "core.abandon", payload: { reason: "matrix: abandoned" } };
+  const FORFEIT: StreamEvent = { type: "core.forfeit", payload: { by: "e2", reason: "walkover" } };
+  const asRow = (seq: number, e: StreamEvent): LedgerRow => lrow(seq, e.type, e.payload);
+  /** What a PostedEvent looks like as the page object / http post answers it. */
+  const answer = (seq: number, status = "needs_decision") => ({ seq, event_id: `r${seq}`, status, outcome: null });
+  const sent: { posts: string[][] } = { posts: [] };
+  /** The http side: the ledger holds `rows`; an http post answers seqs from `httpFrom` in order and records its event types. */
+  const orgHttp = (rows: LedgerRow[], httpFrom = 2) => {
+    sent.posts = [];
+    return stubHttp({
+      listFixtures: async () => [F1],
+      getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      fixtureState: async () => ({ status: "needs_decision", last_seq: 3, outcome: null }),
+      ledger: async (...a: never[]) => rows.filter((r) => r.seq > (a[1] as number)),
+      postStream: async (...a: never[]) => {
+        const evs = a[1] as StreamEvent[];
+        const from = httpFrom + sent.posts.flat().length;
+        sent.posts.push(evs.map((e) => e.type));
+        return evs.map((_e, i) => answer(from + i, "decided"));
+      },
+      listStages: async () => [stageRef("s1", 1, "knockout")],
+      listEntrants: async () => ENTRANTS,
+    });
+  };
+  const replayOf = (stored: LedgerRow[]) => {
+    const calls: Parameters<Replay>[] = [];
+    const fn: Replay = async (...a) => { calls.push(a); return { rows: [], stored, findings: [] }; };
+    return { fn, calls };
+  };
+  const PADS = { generic: genericPad };
+  /** built() creates the competition and the division through the pages: two invoked action types before any stream. */
+  const SETUP = 2;
+
+  it("a stream is cut at the organiser's event: the pad replays ONLY the scorer's events, then the console settles, and every answered event carries the ledger row the product holds", async () => {
+    const rows = [asRow(2, START), asRow(3, RESULT), asRow(4, SETTLE)];
+    const r = replayOf(rows.slice(0, 2));
+    const settleArgs: unknown[][] = [];
+    const { driver, http, pageCalls } = make({ http: orgHttp(rows), pads: PADS, replay: r.fn, pages: { settleUi: async (...a) => { settleArgs.push(a); return answer(4); } } });
+    await built(driver, spec("knockout"));
+    const posted = await driver.postStream("f1", [START, RESULT, SETTLE], "p");
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0]![2]).toEqual([START, RESULT]);
+    expect(settleArgs).toHaveLength(1);
+    expect(settleArgs[0]!.slice(1)).toEqual(["f1", "e1", "lot", undefined]);
+    expect(posted.map((x) => [x.seq, x.stored])).toEqual([[2, START], [3, RESULT], [4, SETTLE]]);
+    expect(http.calls).not.toContain("postStream");
+    // The console is opened before the settle (the page object reloads it, but it must be on THIS fixture), and both ran in the browser.
+    expect(pageCalls.indexOf("settleUi")).toBeGreaterThan(pageCalls.lastIndexOf("openFixtureUi"));
+    const cov = only(driver, "mixed-driver-coverage");
+    expect(cov).toMatchObject({ verdict: "pass", checked: SETUP + 2 }); // score and settle
+    expect(cov.reason).toMatch(new RegExp(`${SETUP + 2} invoked action type\\(s\\): ${SETUP + 2} ran in the browser, 0 exempt`));
+  });
+
+  it("the settle's note, when the event carries one, is typed into the dialog and held on the row", async () => {
+    const e: StreamEvent = { type: "core.settle", payload: { winner: "e1", method: "organiser", note: "coin toss" } };
+    const settleArgs: unknown[][] = [];
+    const { driver } = make({ http: orgHttp([asRow(4, e)]), pads: PADS, replay: replayOf([]).fn, pages: { settleUi: async (...a) => { settleArgs.push(a); return answer(4); } } });
+    await built(driver, spec("knockout"));
+    await driver.postStream("f1", [e], "p");
+    expect(settleArgs[0]!.slice(1)).toEqual(["f1", "e1", "organiser", "coin toss"]);
+  });
+
+  it("an abandon goes through the console's Abandon with the event's own reason, then the settle through the dialog, in the stream's order", async () => {
+    const rows = [asRow(2, START), asRow(3, RESULT), asRow(4, ABANDON), asRow(5, SETTLE)];
+    const order: string[] = [];
+    const abandonArgs: unknown[][] = [];
+    const r = replayOf(rows.slice(0, 2));
+    const { driver, http } = make({
+      http: orgHttp(rows), pads: PADS,
+      replay: (async (...a: Parameters<Replay>) => { order.push("replay"); return r.fn(...a); }) as Replay,
+      pages: {
+        abandonUi: async (...a) => { order.push("abandonUi"); abandonArgs.push(a); return answer(4); },
+        settleUi: async () => { order.push("settleUi"); return answer(5); },
+      },
+    });
+    await built(driver, spec("knockout"));
+    const posted = await driver.postStream("f1", [START, RESULT, ABANDON, SETTLE], "p");
+    expect(order).toEqual(["replay", "abandonUi", "settleUi"]);
+    expect(abandonArgs[0]!.slice(1)).toEqual(["f1", "matrix: abandoned"]);
+    expect(posted.map((x) => x.stored?.type)).toEqual(["core.start", "generic.result", "core.abandon", "core.settle"]);
+    expect(http.calls).not.toContain("postStream");
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: SETUP + 3 }); // score, abandon, settle
+  });
+
+  it("both reasons the console's Forfeit authors route to it", async () => {
+    let checked = 0;
+    for (const reason of ["walkover", "retired hurt"] as const) {
+      const ev: StreamEvent = { type: "core.forfeit", payload: { by: "e2", reason } };
+      const seen: unknown[] = [];
+      const { driver } = make({ http: orgHttp([asRow(3, ev)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async (...a) => { seen.push(a[3]); return [answer(3, "forfeited")]; } } });
+      await built(driver, spec("knockout"));
+      const posted = await driver.postStream("f1", [ev], "p");
+      expect(seen, reason).toEqual([reason]);
+      expect(posted.map((x) => x.stored), reason).toEqual([ev]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a forfeit on a still-scheduled match answers core.start first: that row is stored too, and only the forfeit's row is compared", async () => {
+    const { driver } = make({ http: orgHttp([asRow(2, START), asRow(3, FORFEIT)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(2, "in_play"), answer(3, "forfeited")] } });
+    await built(driver, spec("knockout"));
+    const posted = await driver.postStream("f1", [FORFEIT], "p");
+    expect(posted.map((x) => x.stored)).toEqual([START, FORFEIT]);
+  });
+
+  it("a forfeit in a stream is the console's Forfeit (the existing route), after the scorer's events", async () => {
+    const rows = [asRow(2, START), asRow(3, FORFEIT)];
+    const order: string[] = [];
+    const r = replayOf(rows.slice(0, 1));
+    const { driver } = make({
+      http: orgHttp(rows), pads: PADS,
+      replay: (async (...a: Parameters<Replay>) => { order.push("replay"); return r.fn(...a); }) as Replay,
+      pages: { forfeitUi: async (...a) => { order.push(`forfeitUi ${String(a[2])} ${String(a[3])}`); return [answer(3, "forfeited")]; } },
+    });
+    await built(driver, spec("knockout"));
+    const posted = await driver.postStream("f1", [START, FORFEIT], "p");
+    expect(order).toEqual(["replay", "forfeitUi e2 walkover"]);
+    expect(posted.map((x) => x.stored)).toEqual([START, FORFEIT]);
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: SETUP + 2 }); // score and forfeit
+  });
+
+  it("an organiser event alone is routed with no pad replay at all; with the type's browser turn used up, the next goes over http as its own one-event post", async () => {
+    const r = replayOf([]);
+    const settleCalls: string[] = [];
+    const { driver, pageCalls } = make({ http: orgHttp([asRow(4, SETTLE)]), pads: PADS, replay: r.fn, pages: { settleUi: async (_c, id) => { settleCalls.push(id); return answer(4); } } });
+    await built(driver, spec("knockout"));
+    await driver.postStream("f1", [SETTLE], "a");
+    expect(pageCalls.slice(-2)).toEqual(["openFixtureUi", "settleUi"]);
+    const second = await driver.postStream("f1", [SETTLE], "b");
+    expect(r.calls).toEqual([]);
+    expect(settleCalls).toEqual(["f1"]); // `first`: one in the browser
+
+    expect(sent.posts).toEqual([["core.settle"]]); // the other over http, never batched with the scorer's
+    expect(second).toHaveLength(1);
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: SETUP + 1 }); // settle: one browser, one http
+  });
+
+  it("an http-scored stream with a console settle still answers EVERY event from the ledger: a driver never mixes stored and unstored rows", async () => {
+    const rows = [asRow(2, START), asRow(3, RESULT), asRow(4, SETTLE)];
+    const { driver } = make({ http: orgHttp(rows), pads: EMPTY_PADS, replay: replayOf([]).fn, pages: { settleUi: async () => answer(4) } });
+    await built(driver, spec("knockout"));
+    const posted = await driver.postStream("f1", [START, RESULT, SETTLE], "p");
+    expect(sent.posts).toEqual([["core.start", "generic.result"]]);
+    expect(posted.map((x) => [x.seq, x.stored])).toEqual([[2, START], [3, RESULT], [4, SETTLE]]);
+  });
+
+  it("an http-posted event whose row the ledger does not hold is OrganiserWriteUnproven when the stream mixes - never `stored` invented from what was sent", async () => {
+    const { driver } = make({ http: orgHttp([asRow(4, SETTLE)]), pads: EMPTY_PADS, replay: replayOf([]).fn, pages: { settleUi: async () => answer(4) } });
+    await built(driver, spec("knockout"));
+    const e = await driver.postStream("f1", [START, RESULT, SETTLE], "p").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(OrganiserWriteUnproven);
+    expect((e as Error).message).toMatch(/an http-posted event .* seq 2, which the ledger does not hold/);
+  });
+
+  it("a stream with no organiser event is the scorer's whole and unchanged: one pad replay, or one http post of the whole stream", async () => {
+    const r = replayOf([]);
+    const a = make({ http: orgHttp([]), pads: PADS, replay: r.fn });
+    await built(a.driver, spec("knockout"));
+    await a.driver.postStream("f1", [START, RESULT], "p");
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0]![2]).toEqual([START, RESULT]);
+    const b = make({ http: orgHttp([]), pads: EMPTY_PADS, replay: r.fn });
+    await built(b.driver, spec("knockout"));
+    const posted = await b.driver.postStream("f1", [START, RESULT], "p");
+    expect(sent.posts).toEqual([["core.start", "generic.result"]]);
+    expect(posted.map((x) => x.stored)).toEqual([undefined, undefined]);
+  });
+
+  it("with the abandon's browser turn used up, a stream cut at an abandon is http throughout: separate posts in order, and nothing is `stored` (nothing was answered from the ledger)", async () => {
+    const { driver, pageCalls } = make({ http: orgHttp([asRow(2, ABANDON)]), pads: EMPTY_PADS, replay: replayOf([]).fn, pages: { abandonUi: async () => answer(2) } });
+    await built(driver, spec("knockout"));
+    await driver.postStream("f1", [ABANDON], "a"); // the type's browser turn
+    expect(pageCalls).toContain("abandonUi");
+    expect(sent.posts).toEqual([]);
+    const posted = await driver.postStream("f1", [START, ABANDON], "b");
+    expect(sent.posts).toEqual([["core.start"], ["core.abandon"]]);
+    expect(posted.map((x) => x.stored)).toEqual([undefined, undefined]);
+    expect(pageCalls.filter((c) => c === "abandonUi")).toHaveLength(1);
+  });
+
+  it("a forfeit with its browser turn used up is HttpDriver.forfeit (the bare forfeit on a started fixture), never a one-event stream post", async () => {
+    const forfeits: unknown[][] = [];
+    const h = stubHttp({
+      listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      ledger: async (...a: never[]) => [asRow(3, FORFEIT)].filter((r) => r.seq > (a[1] as number)),
+      forfeit: async (...a: never[]) => { forfeits.push(a); return [answer(9, "forfeited")]; },
+      listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,
+    });
+    const { driver, pageCalls } = make({ http: h, pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(3, "forfeited")] } });
+    await built(driver, spec("knockout"));
+    await driver.postStream("f1", [FORFEIT], "a");
+    const second = await driver.postStream("f1", [FORFEIT], "b");
+    expect(pageCalls.filter((c) => c === "forfeitUi")).toHaveLength(1);
+    expect(forfeits.map((a) => a.slice(0, 3))).toEqual([["f1", "e2", "walkover"]]);
+    expect(h.calls).not.toContain("postStream");
+    expect(second.map((x) => x.seq)).toEqual([9]);
+  });
+
+  it("cricket's barred stream is scored over http whole, and its settle is still the console's", async () => {
+    const barred: StreamEvent[] = [START, { type: CRICKET_SUMMARY, payload: { runs: 100, wickets: 10, legalBalls: 120 } }, { type: CRICKET_MATCH_CLOSE, payload: {} }];
+    const rows = [...barred.map((e, i) => asRow(2 + i, e)), asRow(5, SETTLE)];
+    const r = replayOf([]);
+    const { driver, pageCalls } = make({ http: orgHttp(rows), spec: spec("knockout", "cricket"), pads: { cricket: cricketPad }, replay: r.fn, pages: { settleUi: async () => answer(5) } });
+    await built(driver, spec("knockout", "cricket"));
+    await driver.postStream("f1", [...barred, SETTLE], "p");
+    expect(r.calls).toEqual([]);
+    expect(sent.posts).toEqual([barred.map((e) => e.type)]);
+    expect(pageCalls).toContain("settleUi");
+  });
+
+  it("the scorer's events AFTER an organiser event are not dropped: they follow it, in order, down the scorer's way", async () => {
+    const rows = [asRow(2, START), asRow(3, ABANDON), asRow(4, RESULT)];
+    const order: string[] = [];
+    const replayed: StreamEvent[][] = [];
+    const replay: Replay = async (...a) => {
+      replayed.push([...a[2]]);
+      order.push("replay");
+      return { rows: [], stored: [replayed.length === 1 ? rows[0]! : rows[2]!], findings: [] };
+    };
+    const { driver } = make({ http: orgHttp(rows), pads: PADS, replay, padPolicy: "all", pages: { abandonUi: async () => { order.push("abandonUi"); return answer(3); } } });
+    await built(driver, spec("knockout"));
+    const posted = await driver.postStream("f1", [START, ABANDON, RESULT], "p");
+    expect(order).toEqual(["replay", "abandonUi", "replay"]);
+    expect(replayed).toEqual([[START], [RESULT]]);
+    expect(posted.map((x) => x.stored?.type)).toEqual(["core.start", "core.abandon", "generic.result"]);
+  });
+
+  it("a console that answered no event at all is OrganiserWriteUnproven, never a stream that quietly lost the act", async () => {
+    const { driver } = make({ http: orgHttp([asRow(3, FORFEIT)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [] } });
+    await built(driver, spec("knockout"));
+    const e = await driver.postStream("f1", [FORFEIT], "p").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(OrganiserWriteUnproven);
+    expect((e as Error).message).toMatch(/answered no event/);
+  });
+
+  it("a scorer segment the pad answered only in part ends the stream: its finding is the headline and the organiser's act is not made on a half-played match", async () => {
+    const partial: ReplayResult = { rows: [], stored: [asRow(2, START)], findings: ["stopped after event 1 of 2: p2Score: stored 2, generated 1"] };
+    const { driver, pageCalls } = make({ http: orgHttp([asRow(2, START)]), pads: PADS, replay: (async () => partial) as Replay, pages: { settleUi: async () => { throw new Error("must not be driven"); } } });
+    await built(driver, spec("knockout"));
+    const posted = await driver.postStream("f1", [START, RESULT, SETTLE], "p");
+    expect(posted.map((x) => x.seq)).toEqual([2]);
+    expect(pageCalls).not.toContain("settleUi");
+    expect(only(driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "fail" });
+  });
+
+  describe("the console's write is judged on the ledger, not on the click returning", () => {
+    const run = async (rows: LedgerRow[], answered = answer(4)) => {
+      const { driver } = make({ http: orgHttp(rows), pads: PADS, replay: replayOf([]).fn, pages: { settleUi: async () => answered } });
+      await built(driver, spec("knockout"));
+      return driver.postStream("f1", [SETTLE], "p").then(() => null, (e: unknown) => e);
+    };
+
+    it("a row the ledger does not hold at the answered seq is OrganiserWriteUnproven, naming the seq", async () => {
+      const e = await run([asRow(2, START)]);
+      expect(e).toBeInstanceOf(OrganiserWriteUnproven);
+      expect((e as Error).message).toMatch(/seq 4, which the ledger does not hold/);
+    });
+
+    it("a row of another type is OrganiserWriteUnproven, naming both", async () => {
+      const e = await run([asRow(4, ABANDON)]);
+      expect(e).toBeInstanceOf(OrganiserWriteUnproven);
+      expect((e as Error).message).toMatch(/is core\.abandon, not core\.settle/);
+    });
+
+    it("a row holding another winner or method than the event meant is OrganiserWriteUnproven, naming the field", async () => {
+      const e = await run([lrow(4, "core.settle", { winner: "e2", method: "lot" })]);
+      expect(e).toBeInstanceOf(OrganiserWriteUnproven);
+      expect((e as Error).message).toMatch(/winner="e2"/);
+      const f = await run([lrow(4, "core.settle", { winner: "e1", method: "higher_seed" })]);
+      expect((f as Error).message).toMatch(/method="higher_seed".*method="lot"/);
+    });
+
+    it("a row holding MORE than the event meant is fine (the product may add fields), and the row is what is answered", async () => {
+      const { driver } = make({ http: orgHttp([lrow(4, "core.settle", { winner: "e1", method: "lot", by: "u1" })]), pads: PADS, replay: replayOf([]).fn, pages: { settleUi: async () => answer(4) } });
+      await built(driver, spec("knockout"));
+      const posted = await driver.postStream("f1", [SETTLE], "p");
+      expect(posted[0]!.stored).toEqual({ type: "core.settle", payload: { winner: "e1", method: "lot", by: "u1" } });
+    });
+  });
+
+  describe("an organiser act the console cannot be given is refused by name BEFORE any of the stream is driven or posted", () => {
+    const refused = async (events: StreamEvent[], sport = "knockout") => {
+      const r = replayOf([]);
+      const { driver, pageCalls, http } = make({ http: orgHttp([]), pads: PADS, replay: r.fn });
+      await built(driver, spec("knockout", sport === "knockout" ? "generic" : sport));
+      const before = http.calls.length;
+      const err = await driver.postStream("f1", events, "p").catch((e: unknown) => e);
+      expect(r.calls, "the pad was not run").toEqual([]);
+      expect(pageCalls, "nothing was driven").not.toContain("openFixtureUi");
+      expect(http.calls.length, "nothing was posted").toBe(before);
+      return err;
+    };
+
+    it("a settle with no winner, an unknown method, or a note that is not text", async () => {
+      let checked = 0;
+      for (const payload of [{ method: "lot" }, { winner: "", method: "lot" }, { winner: "e1" }, { winner: "e1", method: "coin" }, { winner: "e1", method: "lot", note: 7 }]) {
+        const err = await refused([START, { type: "core.settle", payload }]);
+        expect(err, JSON.stringify(payload)).toBeInstanceOf(NoOrganiserRoute);
+        checked++;
+      }
+      expect(checked).toBe(5);
+    });
+
+    it("an abandon with no reason; a forfeit with no side or a reason the console does not author", async () => {
+      let checked = 0;
+      for (const e of [
+        { type: "core.abandon", payload: {} }, { type: "core.abandon", payload: { reason: "" } },
+        { type: "core.forfeit", payload: { reason: "walkover" } }, { type: "core.forfeit", payload: { by: "e1", reason: "bored" } },
+      ]) {
+        expect(await refused([START, e]), JSON.stringify(e)).toBeInstanceOf(NoOrganiserRoute);
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+
+    it("every type the PRODUCT declares organiser-only has a console route; a sport's forfeit value (no console control writes it) is refused by name", async () => {
+      const ROUTES: Record<string, { page: string; payload: unknown }> = {
+        "core.settle": { page: "settleUi", payload: SETTLE.payload },
+        "core.abandon": { page: "abandonUi", payload: ABANDON.payload },
+        "core.forfeit": { page: "forfeitUi", payload: FORFEIT.payload },
+      };
+      let checked = 0;
+      for (const type of ORGANISER_ONLY_EVENT_TYPES) {
+        const route = ROUTES[type];
+        expect(route, `the driver has no route for ${type}, which the product declares organiser-only`).toBeDefined();
+        const ev = { type, payload: route!.payload };
+        const { driver, pageCalls, http } = make({
+          http: orgHttp([asRow(2, ev)]), pads: PADS, replay: replayOf([]).fn,
+          pages: { settleUi: async () => answer(2), abandonUi: async () => answer(2), forfeitUi: async () => [answer(2)] },
+        });
+        await built(driver, spec("knockout"));
+        await driver.postStream("f1", [ev], "p");
+        expect(pageCalls, type).toContain(route!.page);
+        expect(http.calls, type).not.toContain("postStream");
+        checked++;
+      }
+      for (const [type, arm] of Object.entries(ORGANISER_ONLY_SPORT_EVENTS)) {
+        for (const value of arm.values) {
+          const err = await refused([START, { type, payload: { [arm.field]: value } }], "boardgame");
+          expect(err, `${type} ${arm.field}=${value}`).toBeInstanceOf(NoOrganiserRoute);
+          expect((err as Error).message).toContain(type);
+          // Named for what it IS: no control writes it - not a payload complaint that happens to refuse the same event.
+          expect((err as Error).message).toMatch(/no console control writes it/);
+          checked++;
+        }
+      }
+      expect(checked).toBe(ORGANISER_ONLY_EVENT_TYPES.length + Object.values(ORGANISER_ONLY_SPORT_EVENTS).reduce((n, a) => n + a.values.length, 0));
+      expect(checked).toBeGreaterThan(3);
+    });
+  });
+
+  it("an ordinary sport result (boardgame.result by checkmate) is the scorer's: the product says it is not organiser-only, and the driver sends it down the pad", async () => {
+    const ev: StreamEvent = { type: "boardgame.result", payload: { winner: "e1", method: "checkmate" } };
+    expect(isOrganiserOnlyEvent(ev.type, ev.payload)).toBe(false);
+    const r = replayOf([]);
+    const { driver, pageCalls } = make({ http: orgHttp([]), spec: spec("knockout", "boardgame"), pads: { boardgame: genericPad }, replay: r.fn });
+    await built(driver, spec("knockout", "boardgame"));
+    await driver.postStream("f1", [START, ev], "p");
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0]![2]).toEqual([START, ev]);
+    expect(pageCalls).not.toContain("settleUi");
+  });
+
+  it("the routing predicate is the PRODUCT's: browser-driver.ts imports isOrganiserOnlyEvent and restates no list of organiser-only types", () => {
+    const text = src("tools/matrix/lib/driver/browser-driver.ts");
+    expect(text).toMatch(/import \{[^}]*\bisOrganiserOnlyEvent\b[^}]*\} from "\.\.\/\.\.\/\.\.\/\.\.\/apps\/web\/src\/lib\/organiser-only-events\.ts"/);
+    expect(text).not.toMatch(/\bORGANISER_ONLY[A-Z_]*\s*[:=]/);
   });
 });
