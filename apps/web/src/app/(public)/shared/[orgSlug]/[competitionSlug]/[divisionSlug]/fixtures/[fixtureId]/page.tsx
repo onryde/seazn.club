@@ -35,7 +35,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import { getDictionary, t } from "@/lib/i18n";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
-import { decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import { decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
 import { linkOnlyRobots } from "@/lib/competition-listing";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
@@ -70,6 +70,7 @@ function decidedLineFor(
     msgFn,
     shootoutScoreFromDetail(fixture.summary?.detail),
     sportKey,
+    tiebreakScoreFromDetail(fixture.summary?.detail),
   );
 }
 
@@ -220,7 +221,8 @@ export default async function FixturePage({ params }: Props) {
     eventStatus:
       fixture.status === "cancelled"
         ? "EventCancelled"
-        : fixture.status === "finalized" || fixture.status === "decided"
+        : // W2a: a held fixture (`needs_decision`) was PLAYED — only the verdict waits — so the event took place.
+          fixture.status === "finalized" || fixture.status === "decided" || fixture.status === "needs_decision"
           ? "EventCompleted"
           : "EventScheduled",
   });

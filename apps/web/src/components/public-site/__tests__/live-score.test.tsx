@@ -732,3 +732,40 @@ describe("matchCentre.empty.inPlay — four locales, four real sentences", () =>
     }
   });
 });
+
+// W2a Task 13 (spec §5.5) — the live island's decided sentence carries a chess tie-break's recorded score, read off the
+// polled summary's `detail.tiebreak` (`tiebreakScoreFromDetail`), and invents none when the detail has none.
+describe("LiveScoreBody — W2a chess tie-break sentence", () => {
+  const templates: DecidedOutcomeTemplates = {
+    tie: "",
+    plain: "{winner} won",
+    shootoutPlain: "",
+    byMethod: { tiebreak_rapid: "{winner} won on rapid tie-break" },
+    tiebreakScored: { rapid: "{winner} won on rapid tie-break ({score})" },
+  };
+  const names = { home: "Anand Viswanathan", away: "Bela Nakamura" };
+  const render = (detail: unknown) =>
+    renderToStaticMarkup(
+      <LiveScoreBody
+        data={{
+          status: "decided",
+          summary: { headline: "½ — ½", perSide: [{ entrantId: "home", line: "½" }, { entrantId: "away", line: "½" }], detail },
+          outcome: { kind: "win", winner: "away", method: "tiebreak_rapid" },
+        }}
+        entrantNames={names}
+        sportKey="boardgame"
+        decidedTemplates={templates}
+        dict={en as Dict}
+      />,
+    );
+
+  it("states the recorded score", () => {
+    expect(render({ tiebreak: { rung: "rapid", score: "1½–½" } })).toContain("Bela Nakamura won on rapid tie-break (1½–½)");
+  });
+
+  it("invents no score when the tie-break recorded none", () => {
+    const html = render({ tiebreak: { rung: "rapid" } });
+    expect(html).toContain("Bela Nakamura won on rapid tie-break");
+    expect(html).not.toContain("(");
+  });
+});

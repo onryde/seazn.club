@@ -1,8 +1,11 @@
 import { test, expect, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
-import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, expectNoHorizontalScroll, fixturePath, loginUi, screenshotAtWidths } from "./helpers";
+import { TAG, activeOrg, apiJson, addEntrantsViaApi, createStageAndGenerate, expectNoHorizontalScroll, fixturePath, loginUi, screenshotAtWidths } from "./helpers";
 import { withDb } from "./rs007-money-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { builtinModules } from "@seazn/engine/sports";
+import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // W2a spec §9 (format-matrix W2a, loop H): a bracket always finishes.
 //  - the console: a HELD fixture (a level result in a knockout, or an abandon that decided nobody) shows "Needs a
@@ -35,19 +38,22 @@ async function crop(target: Locator | Page, name: string, width: number) {
   else await (target as Locator).screenshot({ path });
 }
 
-async function knockout(r: APIRequestContext, sport: string, variant: string, names = ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"]) {
-  return staged(r, sport, variant, "knockout", names);
+type Visibility = "private" | "public";
+async function knockout(
+  r: APIRequestContext, sport: string, variant: string, names = ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"], visibility: Visibility = "private",
+) {
+  return staged(r, sport, variant, "knockout", names, visibility);
 }
 
-async function staged(r: APIRequestContext, sport: string, variant: string, kind: "knockout" | "league", names: string[]) {
+async function staged(r: APIRequestContext, sport: string, variant: string, kind: "knockout" | "league", names: string[], visibility: Visibility = "private") {
   // Preflight C14: the variant is one the sport declares (module.variants), never a guessed literal.
   expect(Object.keys(builtinModules.find((m) => m.key === sport)?.variants ?? {}), `${sport} declares ${variant}`).toContain(variant);
-  const comp = await apiJson<{ id: string }>(r, "/api/v1/competitions", "POST", {
+  const comp = await apiJson<{ id: string; slug: string }>(r, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `W2a ${sport} ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
-    visibility: "private",
+    visibility,
   });
-  const div = await apiJson<{ id: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Cup", sport_key: sport, variant_key: variant });
+  const div = await apiJson<{ id: string; slug: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Cup", sport_key: sport, variant_key: variant });
   // A team sport's entrants are teams (`assertRosterFits` refuses an individual football entrant).
   const added = await addEntrantsViaApi(r, div.data!.id, names, sport === "football" ? "team" : "individual");
   expect(added.ids, `entrants for ${sport}`).toHaveLength(names.length);
@@ -58,7 +64,8 @@ async function staged(r: APIRequestContext, sport: string, variant: string, kind
   const ready = all.filter((f) => f.home_entrant_id && f.away_entrant_id);
   const sf = ready[0]!;
   expect(sf, "a fixture with both entrants").toBeTruthy();
-  return { divisionId: div.data!.id, sf, ready };
+  const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
+  return { divisionId: div.data!.id, sf, ready, compSlug: comp.data!.slug, divSlug: div.data!.slug, nameOf };
 }
 
 /** Who sits in the fixture a semi's winner feeds — read from the row, not inferred. */
@@ -501,5 +508,223 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     // Nothing was written by any of it.
     const events = (await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!;
     expect(events.map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
+  });
+
+  test("the phone composition is a branch, not a shrink: the tie-break pad's control set at 320 equals 1280 — membership, order, repeats", async ({ page, request }) => {
+    // AGENTS.md (phone composition): verify by a control-set diff from the live DOM, never by box sizes. ATTACHED, not
+    // visible — a phone fold hides chrome it still holds (rule 22). Tiles, dock chips and every sheet step's options.
+    const { sf } = await drawnChessKnockout(request);
+    await page.goto(await fixturePath(request, sf.id));
+    const ids = (sel: string, attr: string) => pad(page).locator(sel).evaluateAll((els, a) => els.map((e) => e.getAttribute(a)!), attr);
+    const controlSet = async (w: number) => {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(tile(page, "tiebreak")).toBeAttached();
+      const set: Record<string, string[]> = {
+        tiles: await ids("[data-tile-id]", "data-tile-id"),
+        // Every control the pad holds, by its own hook (a tile, an option, a test id, a role) or else its name.
+        controls: await pad(page).locator("button, a[href], [role=button]").evaluateAll((els) =>
+          els.map((e) =>
+            e.getAttribute("data-tile-id") ?? e.getAttribute("data-choice-option-id") ?? e.getAttribute("data-testid") ??
+            e.getAttribute("data-role") ?? e.getAttribute("aria-label") ?? (e.textContent ?? "").trim())),
+      };
+      await tile(page, "tiebreak").click();
+      await expect(option(page, "rapid")).toBeAttached();
+      set.rung = await ids("[data-choice-option-id]", "data-choice-option-id");
+      await option(page, "rapid").click();
+      await expect(option(page, "away")).toBeAttached();
+      set.winner = await ids("[data-choice-option-id]", "data-choice-option-id");
+      await option(page, "away").click();
+      await expect(option(page, "none")).toBeAttached();
+      set.score = await ids("[data-choice-option-id]", "data-choice-option-id");
+      await pad(page).getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(option(page, "rapid")).toHaveCount(0);
+      return set;
+    };
+    const wide = await controlSet(1280);
+    const phone = await controlSet(320);
+    let compared = 0;
+    for (const k of Object.keys(wide)) {
+      expect(wide[k]!.length, `${k}: the 1280 set is not empty`).toBeGreaterThan(0);
+      expect(phone[k], `${k}: 320 vs 1280`).toEqual(wide[k]);
+      compared++;
+    }
+    expect(compared).toBe(5);
+    expect(wide.tiles).toContain("tiebreak");
+    expect(wide.rung, "the rungs the engine declares, in its order").toEqual([...TIEBREAK_RUNGS]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 13 — the public site says HOW a bracket was decided (spec §5.5, D5), and marks a held match. The copy is read
+// from the public dictionary, never typed, so the sentence under test is the one the locale ships.
+// ---------------------------------------------------------------------------
+
+const PUB = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/public.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+const say = (key: string, params: Record<string, string> = {}) => {
+  const tpl = PUB[key];
+  expect(tpl, `public.json has ${key}`).toBeTruthy();
+  return Object.entries(params).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, v), tpl!);
+};
+
+test.describe("W2a — the public match page and bracket (Task 13)", () => {
+  test("the public match page names the settle method and keeps the level score", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const ko = await knockout(request, "football", "11-a-side", undefined, "public");
+    const { sf } = ko;
+    await post(request, sf.id, "core.start");
+    await post(request, sf.id, "football.period", { phase: "HT" });
+    await post(request, sf.id, "football.period", { phase: "FT" });
+    expect((await read(request, sf.id)).status, "the rig must actually hold the fixture").toBe("needs_decision");
+    const base = `/shared/${org.slug}/${ko.compSlug}/${ko.divSlug}`;
+    const matchUrl = `${base}/fixtures/${sf.id}`;
+
+    // Held: the match page says so and names no winner; the bracket marks the match.
+    await page.goto(matchUrl);
+    await dismissCookieBanner(page);
+    const line = page.getByTestId("mc-status-line");
+    await expect(line).toHaveText(say("matchCentre.status.needs_decision"));
+    await expect(line).not.toContainText(ko.nameOf.get(sf.away_entrant_id!)!);
+    await page.goto(`${base}?tab=standings`);
+    const held = page.locator('[data-held="true"]');
+    await expect(held, "the held match is marked on the bracket").toHaveCount(1);
+    await expect(held).toContainText(say("matchCentre.status.needs_decision"));
+
+    // Settled by lot: the sentence names the method, and the score stays level.
+    await post(request, sf.id, "core.settle", { winner: sf.away_entrant_id, method: "lot" });
+    await page.goto(matchUrl);
+    const winner = ko.nameOf.get(sf.away_entrant_id!)!;
+    await expect(line).toHaveText(say("matchCentre.result.settled_lot", { winner }));
+    await expect(line, "the right answer differs from the plain line").not.toHaveText(say("matchCentre.result.regulation", { winner }));
+    await expect(page.getByTestId("mc-score-0")).toHaveText("0");
+    await expect(page.getByTestId("mc-score-1")).toHaveText("0");
+    await page.goto(`${base}?tab=standings`);
+    await expect(page.locator('[data-held="true"]'), "settled: no longer held").toHaveCount(0);
+  });
+
+  test("a chess knockout decided by a scored rapid tie-break: the public line names the rung and the score, the board stays level", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const ko = await knockout(request, "boardgame", "classical", undefined, "public");
+    const { sf } = ko;
+    await post(request, sf.id, "core.start");
+    await post(request, sf.id, RESULT_DRAWN.type, RESULT_DRAWN.payload);
+    await post(request, sf.id, "boardgame.tiebreak", { rung: "rapid", winner: sf.home_entrant_id, score: "1½–½" });
+    expect((await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.home_entrant_id, method: "tiebreak_rapid" });
+    await page.goto(`/shared/${org.slug}/${ko.compSlug}/${ko.divSlug}/fixtures/${sf.id}`);
+    await dismissCookieBanner(page);
+    const winner = ko.nameOf.get(sf.home_entrant_id!)!;
+    await expect(page.getByTestId("mc-status-line")).toHaveText(
+      say("matchCentre.result.tiebreak_rapid.scored", { winner, score: "1½–½" }),
+    );
+    const [a, b] = [await page.getByTestId("mc-score-0").textContent(), await page.getByTestId("mc-score-1").textContent()];
+    expect(a, "the drawn game's level score is kept").toBe(b);
+    expect(a?.trim()).not.toBe("");
+    let widths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(page.getByTestId("mc-court-card")).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await crop(page.getByTestId("mc-court-card"), "public-match-tiebreak", w);
+      widths++;
+    }
+    expect(widths).toBe(3);
+  });
+
+  test("addendum 8: the official's own lane keeps a held fixture as a duty, says it is held, and its Score link opens the console", async ({ browser, request }) => {
+    const UI = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+    ) as Record<string, string>;
+    const { sf } = await heldFootball(request);
+    const official = await officialScorerPage(browser, sf.id);
+    try {
+      const p = official.page;
+      await p.goto("/me");
+      await dismissCookieBanner(p);
+      const card = p.getByTestId("me-official-card").filter({ has: p.locator('[data-held="true"]') });
+      await expect(card, "the held fixture is on the lane, marked held").toHaveCount(1);
+      await expect(card.locator('[data-held="true"]')).toHaveText(UI["score.status.needs_decision"]!);
+      const link = card.getByRole("link", { name: UI["me.off.score"]! });
+      await expect(link, "a held fixture is still the scorer's to open").toBeVisible();
+      for (const w of [1280, 768, 320]) {
+        await p.setViewportSize({ width: w, height: 900 });
+        await expectNoHorizontalScroll(p);
+        await crop(card, "me-lane-held", w);
+      }
+      await link.click();
+      const consolePath = await fixturePath(request, sf.id);
+      await p.waitForURL((u) => u.pathname === consolePath);
+    } finally {
+      await official.close();
+    }
+  });
+
+  test("addendum 9: the desk reads an abandoned knockout final as owed work — red pill and a Needs-you row, never Finished", async ({ page, request }) => {
+    const UI = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+    ) as Record<string, string>;
+    const org = await activeOrg(page);
+    // Two entrants: one fixture, the final. Every fixture is then stored terminal, which is the shape that read Finished.
+    const ko = await knockout(request, "football", "11-a-side", ["W2a Ana", "W2a Ben"]);
+    expect(ko.ready, "a two-team knockout is one final").toHaveLength(1);
+    await post(request, ko.sf.id, "core.start");
+    await post(request, ko.sf.id, "core.abandon", { reason: "floodlights" });
+    expect((await read(request, ko.sf.id)).status).toBe("abandoned");
+    await page.goto(`/o/${org.slug}/c/${ko.compSlug}`);
+    await dismissCookieBanner(page);
+    const item = page.getByTestId("desk-needs-you").locator('[data-attention="needs_decision"]');
+    await expect(item).toHaveCount(1);
+    await expect(item.filter({ visible: true }).first()).toContainText(UI["desk.needsYou.needs_decision.action"]!);
+    const pill = page.locator('[data-pill="needs_decision"]:visible').first();
+    await expect(pill).toHaveText(UI["desk.pill.needs_decision"]!);
+    await expect(page.locator(`[data-pill="finished"]`), "not Finished").toHaveCount(0);
+    let widths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(item.filter({ visible: true }).first()).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await crop(item.filter({ visible: true }).first(), "desk-needs-decision", w);
+      await crop(page.locator('[data-pill="needs_decision"]:visible').first(), "desk-pill-needs-decision", w);
+      widths++;
+    }
+    expect(widths).toBe(3);
+  });
+
+  test("the public screens at 1280, 768 and 320: held match, settled match, held bracket — no horizontal scroll", async ({ page, request }) => {
+    const org = await activeOrg(page);
+    const LONG = ["W2a Maximiliana Konstantinopoulou-Grunewald", "W2a Bartholomew Featherstonehaugh-Wolfeschl", "W2a Cy", "W2a Di"];
+    const ko = await knockout(request, "football", "11-a-side", LONG, "public");
+    const { sf } = ko;
+    await post(request, sf.id, "core.start");
+    await post(request, sf.id, "football.period", { phase: "HT" });
+    await post(request, sf.id, "football.period", { phase: "FT" });
+    const base = `/shared/${org.slug}/${ko.compSlug}/${ko.divSlug}`;
+    let shots = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await page.goto(`${base}/fixtures/${sf.id}`);
+      await dismissCookieBanner(page);
+      await expect(page.getByTestId("mc-status-line")).toHaveText(say("matchCentre.status.needs_decision"));
+      await expectNoHorizontalScroll(page);
+      await crop(page.getByTestId("mc-court-card"), "public-match-held", w);
+      await page.goto(`${base}?tab=standings`);
+      const held = page.locator('[data-held="true"]');
+      await expect(held).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await crop(held.locator("xpath=ancestor::a[1]"), "public-bracket-held", w);
+      shots++;
+    }
+    await post(request, sf.id, "core.settle", { winner: sf.away_entrant_id, method: "higher_seed" });
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await page.goto(`${base}/fixtures/${sf.id}`);
+      await expect(page.getByTestId("mc-status-line")).toHaveText(
+        say("matchCentre.result.settled_higher_seed", { winner: ko.nameOf.get(sf.away_entrant_id!)! }),
+      );
+      await expectNoHorizontalScroll(page);
+      await crop(page.getByTestId("mc-court-card"), "public-match-settled", w);
+      shots++;
+    }
+    expect(shots).toBe(6);
   });
 });

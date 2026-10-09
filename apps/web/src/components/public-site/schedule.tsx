@@ -80,6 +80,8 @@ export interface ScheduleCopy {
   live: string;
   /** Row rail: a decided match. */
   ended: string;
+  /** W2a — a held bracket match (`needs_decision`): neither live nor finished. Read by the bracket card. */
+  held: string;
   /** Row rail: a match with no time yet. */
   tbd: string;
   /** The entrant filter's screen-reader label. */

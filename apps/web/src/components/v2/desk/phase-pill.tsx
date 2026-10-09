@@ -27,6 +27,7 @@ import { ATTENTION_SEVERITY, type Attention, type DivisionPhase } from "@/lib/di
 export const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
   needs_draw: "desk.pill.needs_draw",
   needs_fixtures: "desk.pill.needs_fixtures",
+  needs_decision: "desk.pill.needs_decision",
   no_scorer: "desk.pill.no_scorer",
   // `null` because it is amber, not red — the pill keeps showing the phase.
   // Pinned against ATTENTION_SEVERITY by desk-ssr.test.tsx, so this cannot

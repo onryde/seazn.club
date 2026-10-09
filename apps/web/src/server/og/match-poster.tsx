@@ -119,7 +119,8 @@ export async function posterImageInit<T extends { width: number; height: number 
   return fonts.length > 0 ? { ...size, fonts } : { ...size };
 }
 
-export type MatchPosterVariant = "upcoming" | "live" | "result";
+/** W2a: `held` — a bracket fixture that was played and awaits the organiser's decision (`needs_decision`). */
+export type MatchPosterVariant = "upcoming" | "live" | "result" | "held";
 
 export interface MatchPosterSide {
   short: string;
@@ -182,6 +183,12 @@ export interface MatchPosterInput {
    *  on an upcoming poster. Null when the fixture belongs to no named stage. */
   stageName: string | null;
   header: MatchCentreDocT["header"];
+  /**
+   * W2a — the fixture is HELD (`needs_decision`: a bracket game that ended level, or an abandon that decided nobody).
+   * Said by the caller from the raw fixture status, because the header folds it into "other" beside a match that never
+   * happened. A held poster shows the level board under the held line, never a "Result".
+   */
+  held: boolean;
   /**
    * Which side is DOING something right now — batting, or serving. Resolved by
    * the caller, because the answer comes from a different place per sport and
@@ -264,8 +271,13 @@ function paintPair(home: SideT, away: SideT): [{ bg: string; ink: string }, { bg
 
 export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
   const { header, copy } = input;
-  const variant: MatchPosterVariant =
-    header.status === "in_play" ? "live" : header.status === "decided" ? "result" : "upcoming";
+  const variant: MatchPosterVariant = input.held
+    ? "held"
+    : header.status === "in_play"
+      ? "live"
+      : header.status === "decided"
+        ? "result"
+        : "upcoming";
 
   // Which side to hold back. Live: whoever is not batting. Result: whoever the
   // score says did not win — and ONLY when the two scores actually differ, so a
@@ -305,7 +317,10 @@ export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
   const chip = (
     variant === "result"
       ? [copy.result, input.divisionName, input.stageName]
-      : variant === "live"
+      : variant === "held"
+        ? // No "Result" word: nobody has won yet. The hero below carries the held line.
+          [input.divisionName, input.stageName]
+        : variant === "live"
         ? [copy.live, copy.pillNote]
         : // The stage is the upcoming HERO, so the chip must not say it again:
           // this printed "TOURNAMENT · GROUP STAGE" above a 92px "GROUP STAGE".

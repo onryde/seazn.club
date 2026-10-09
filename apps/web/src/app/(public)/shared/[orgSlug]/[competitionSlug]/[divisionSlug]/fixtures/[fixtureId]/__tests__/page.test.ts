@@ -647,3 +647,49 @@ describe("FixturePage — the Poster button (Spectator Surface Boards §match-ce
     });
   }
 });
+
+// W2a Task 13 (spec §5.5) — the share/search description is built by `decidedLineFor`, the page's own composition of
+// the decided sentence. A chess tie-break's recorded score must reach it (the page reads `detail.tiebreak` through
+// `tiebreakScoreFromDetail`), and the board's level headline stays in front of it.
+describe("FixturePage generateMetadata — W2a chess tie-break description", () => {
+  it("names the tie-break with its score after the level headline", async () => {
+    getPublicFixture.mockResolvedValue(
+      baseData(
+        "en",
+        {
+          status: "decided",
+          home_entrant_id: "e1",
+          away_entrant_id: "e2",
+          outcome: { kind: "win", winner: "e2", loser: "e1", method: "tiebreak_rapid" },
+          summary: { headline: "½ — ½", detail: { tiebreak: { rung: "rapid", score: "1½–½" } } },
+        },
+        { e1: "Anand Viswanathan", e2: "Bela Nakamura" },
+      ),
+    );
+    const { generateMetadata } = await import("../page");
+    const m = await generateMetadata({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open", fixtureId: "f1" }),
+    });
+    expect(m.description).toBe("½ — ½ — Bela Nakamura won on rapid tie-break (1½–½)");
+  });
+});
+
+// W2a Task 13 (addendum 6) — schema.org's eventStatus says whether the EVENT took place. A held fixture
+// (`needs_decision`) was played — only the verdict waits on the organiser — so it is completed, like a decided one.
+describe("FixturePage JSON-LD — a held fixture (W2a)", () => {
+  const eventStatusOf = async (status: string) => {
+    const html = renderToStaticMarkup(await render({ status }));
+    const json = /<script type="application\/ld\+json">(.*?)<\/script>/.exec(html)?.[1];
+    expect(json, `${status}: the JSON-LD is rendered`).toBeDefined();
+    return (JSON.parse(json!) as { eventStatus: string }).eventStatus;
+  };
+
+  it("empty case first: a scheduled fixture is EventScheduled", async () => {
+    expect(await eventStatusOf("scheduled")).toBe("https://schema.org/EventScheduled");
+  });
+
+  it("a held fixture is completed, like a decided one", async () => {
+    expect(await eventStatusOf("needs_decision")).toBe("https://schema.org/EventCompleted");
+    expect(await eventStatusOf("decided")).toBe("https://schema.org/EventCompleted");
+  });
+});

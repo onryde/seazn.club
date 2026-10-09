@@ -35,7 +35,7 @@ import { makeEnvelope } from "@seazn/engine/testkit";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { football, FootballCfg } from "@seazn/engine/sports/football";
 import { tennis } from "@seazn/engine/sports/tennis";
-import { RESULT_KINDS, buildMatchCentre, type MatchCentreInput } from "../match-centre";
+import { RESULT_KINDS, RESULT_SCORED_KEYS, buildMatchCentre, type MatchCentreInput } from "../match-centre";
 import type { PublicFixture } from "../data";
 import type { PublicPerson } from "../public-lineups";
 import type { MatchCentreDocT, MsgT, SideT } from "../match-centre-schema";
@@ -356,6 +356,19 @@ function documents(): { label: string; doc: MatchCentreDocT }[] {
       fixture: decidedFixture(decided, { outcome: outcome as PublicFixture["outcome"] }),
     });
   }
+  // W2a: the scored chess tie-break sentences take a `{score}` the loop above never supplies (its summary has no
+  // tie-break) — one doc per scored key, the score read the way the builder reads it, off `detail.tiebreak`.
+  for (const key of RESULT_SCORED_KEYS) {
+    const method = key.slice("matchCentre.result.".length, -".scored".length);
+    push(`cricket/decided+${method}+scored`, {
+      events: decided.events,
+      cfg: decided.cfg,
+      fixture: decidedFixture(decided, {
+        outcome: { kind: "win", winner: "home", loser: "away", method } as PublicFixture["outcome"],
+        summary: { ...cricket.summary(decided.state), detail: { tiebreak: { score: "1½–½" } } } as PublicFixture["summary"],
+      }),
+    });
+  }
 
   // --- the structured margin's other sentences (owner decision 2026-09-16):
   //     the singular form, the wickets unit and the innings victory, each off
@@ -506,6 +519,9 @@ describe("every Msg the match centre emits renders with no leftover brace, in ev
     ]) {
       expect([...prefixes], `family ${family} is reached by the matrix`).toContain(family);
     }
+    // W2a: each scored tie-break sentence is reached, so its `{score}` is checked against all four dictionaries.
+    for (const key of RESULT_SCORED_KEYS) expect([...distinctKeys], key).toContain(key);
+    expect(RESULT_SCORED_KEYS.length).toBeGreaterThan(0);
   });
 
   it("no dead allowance entries — every excused (key, param) pair is still emitted, and still unnamed in English", () => {

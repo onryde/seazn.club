@@ -3,6 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { OfficiatingLane } from "@/components/me/officiating-lane";
 import { routes } from "@/lib/routes";
 import type { MyOfficiatingAssignment } from "@/server/usecases/me-officiating";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import enUi from "@/dictionaries/en/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+
+const en = enUi as Record<string, string>;
+const fr = frUi as Record<string, string>;
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -227,5 +233,64 @@ describe("OfficiatingLane — day-one placeholder slot labels (fix-wave finding 
     expect(html).toContain("Winner of Group A");
     expect(html).toContain("Runner-up of Group B");
     expect(html).not.toContain("TBD");
+  });
+});
+
+// W2a Task 13 (addendum 8) — a HELD fixture (`needs_decision`) stays in the official's outstanding duties (ruling D-F3),
+// so its card says it is held, in the viewer's locale, and still links to the fixture: a chess tie-break is the
+// scorer's to record there. The completed card's status badge was the RAW token ("decided", English in every locale).
+describe("OfficiatingLane — held fixtures and localised statuses (W2a)", () => {
+  const lane = (a: MyOfficiatingAssignment, where: "assignments" | "completed", dict?: Record<string, string>) => {
+    const tree = (
+      <OfficiatingLane
+        isOfficial
+        assignments={where === "assignments" ? [a] : []}
+        completed={where === "completed" ? [a] : []}
+        blackouts={[]}
+        pendingClaims={[]}
+      />
+    );
+    return renderToStaticMarkup(dict ? <DictProvider dict={dict as never} locale="fr">{tree}</DictProvider> : tree);
+  };
+  const scoreHref = (a: MyOfficiatingAssignment) => routes.fixture(a.org_slug, a.competition_slug, a.division_slug, a.fixture_no);
+
+  it("empty case first: a scheduled duty shows no held badge, and links to the fixture", () => {
+    const a = makeAssignment({ fixture_status: "scheduled" });
+    const html = lane(a, "assignments");
+    expect(html).not.toContain('data-held="true"');
+    expect(html).toContain(`href="${scoreHref(a)}"`);
+  });
+
+  it("a held duty says so in the viewer's words and still links to the fixture", () => {
+    const a = makeAssignment({ fixture_status: "needs_decision" });
+    const html = lane(a, "assignments");
+    expect(html).toContain('data-held="true"');
+    expect(html).toContain(en["score.status.needs_decision"]);
+    // The dictionary's sentence case survives: `.badge` capitalizes every word unless the badge opts out (seen live
+    // as "Needs A Decision" at 320/768/1280 before this).
+    expect(html).toMatch(/data-held="true" class="[^"]*\bnormal-case\b/);
+    expect(html).toContain(`href="${scoreHref(a)}"`);
+    const french = lane(a, "assignments", fr);
+    expect(french).toContain(fr["score.status.needs_decision"]);
+    expect(fr["score.status.needs_decision"]).not.toBe(en["score.status.needs_decision"]);
+  });
+
+  it("a declined held duty keeps no link (the existing decline rule still wins)", () => {
+    const a = makeAssignment({ fixture_status: "needs_decision", response: "declined" });
+    expect(lane(a, "assignments")).not.toContain(`href="${scoreHref(a)}"`);
+  });
+
+  it("the completed card's status badge is the dictionary's word, not the raw token", () => {
+    let checked = 0;
+    for (const status of ["decided", "finalized", "abandoned", "forfeited", "cancelled"]) {
+      const html = lane(makeAssignment({ fixture_status: status }), "completed", fr);
+      const word = fr[`score.status.${status}`]!;
+      expect(word, status).toBeTruthy();
+      expect(html, status).toContain(`>${word}</span>`);
+      expect(html, status).toMatch(/class="badge [^"]*\bnormal-case\b[^"]*">/);
+      expect(html, status).not.toMatch(/class="badge bg-slate-100 [^"]*\bcapitalize\b/);
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 });

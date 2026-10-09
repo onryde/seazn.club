@@ -118,6 +118,7 @@ describe("PhasePill", () => {
     ["needs_draw", "Needs draw", { kind: "needs_draw", stageName: "Finals", door: "compute" }],
     ["needs_fixtures", "Needs fixtures", { kind: "needs_fixtures", stageName: "Finals" }],
     ["no_scorer", "No scorer", { kind: "no_scorer", count: 1, fixtureIds: ["f"], minutesSinceKickoff: 4 }],
+    ["needs_decision", "Needs a decision", { kind: "needs_decision", count: 1, fixtureIds: ["f"] }],
   ] as const)("RED_PILL_KEY, alone: %s prints its own word", (kind, word, attention) => {
     const html = renderToStaticMarkup(<PhasePill dict={en} phase="scheduled" attention={[attention as Attention]} />);
     expect(html).toContain(`data-pill="${kind}"`);
@@ -338,6 +339,41 @@ describe("desk.* copy (review round 3 — pluralization and subject-verb agreeme
     // registrants table (and its approve control) is on `registrants`.
     expect(item?.action.href).toBe("/o/org/c/comp/registration?tab=registrants");
   });
+  // W2a (addendum 9). Empty case first: no attention, no row.
+  it("W2a needs_decision: no held fixture builds no row", () => {
+    expect(needsYouItems(en, desk(div({ attention: [] })), names, "org", "comp", "en")).toEqual([]);
+  });
+  it("W2a needs_decision: ONE held fixture names its match and opens its console, red, with the Settle label", () => {
+    const d = div({
+      attention: [{ kind: "needs_decision", count: 1, fixtureIds: ["f9"] }],
+      fixture_names: { f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 } },
+    });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "needs_decision", severity: "red" });
+    expect(items[0].title).toBe("Premier Division · Riverside FC v Summit CC needs a decision");
+    expect(items[0].sub).toBe(en["desk.needsYou.needs_decision.sub"]);
+    expect(items[0].action).toEqual({ label: "Settle the match", href: "/o/org/c/comp/d/premier-division/f/9" });
+  });
+  it("W2a needs_decision: several held fixtures collapse to ONE counted row opening the fixtures tab", () => {
+    const d = div({
+      attention: [{ kind: "needs_decision", count: 2, fixtureIds: ["f9", "f10"] }],
+      fixture_names: {
+        f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 },
+        f10: { home: "Valley CC", away: "Lakeside FC", fixture_no: 10 },
+      },
+    });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    expect(items).toHaveLength(1);
+    expect(items[0].title).toBe("Premier Division · 2 fixtures need a decision");
+    expect(items[0].action.href).toBe("/o/org/c/comp/d/premier-division?tab=fixtures");
+  });
+  it("W2a needs_decision: a held bracket reads its red pill, never Finished (red attention outranks the phase)", () => {
+    const attention: Attention[] = [{ kind: "needs_decision", count: 1, fixtureIds: ["f9"] }];
+    const html = renderToStaticMarkup(<PhasePill dict={en} phase="finished" attention={attention} />);
+    expect(html).toContain('data-pill="needs_decision"');
+    expect(html).not.toContain("Finished");
+  });
   it("K1: needs_fixtures builds a row naming the stage, with the fixtures-tab action", () => {
     const d = div({ attention: [{ kind: "needs_fixtures", stageName: "Finals" }] });
     const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
@@ -427,7 +463,7 @@ describe("DivisionLedger", () => {
       stages: [{ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, timing: null, sourceReady: false, proposal: "none" as const }],
       fixtures: Array.from({ length: 6 }, (_, i) => ({
         id: `f${i}`, status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 90, hasScorer: false,
-        stageId: "s1", awaitsSeedDraw: false,
+        stageId: "s1", awaitsSeedDraw: false, awaitsSettle: false,
       })),
       now: "2026-09-05T09:00:00Z",
       tz: "Europe/London",

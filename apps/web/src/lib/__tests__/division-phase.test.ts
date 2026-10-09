@@ -12,6 +12,8 @@ import {
   hasPlayedFixture,
   isResultMissing,
   isUnscheduledFixture,
+  isHeldFixture,
+  ATTENTION_SEVERITY,
   DEFAULT_MATCH_MINUTES,
   NOT_RECORDING_GRACE_MINUTES,
   type Attention,
@@ -29,7 +31,7 @@ const stage = (o: Partial<PhaseStage> = {}): PhaseStage => ({
 });
 const fx = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
   id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 90,
-  hasScorer: false, stageId: "st1", awaitsSeedDraw: false, ...o,
+  hasScorer: false, stageId: "st1", awaitsSeedDraw: false, awaitsSettle: false, ...o,
 });
 /**
  * M1 (fix round I): a stage that owes its DRAW — the only shape that raises
@@ -945,9 +947,9 @@ describe("isUnscheduledFixture", () => {
 
   it("agrees with the `unscheduled` attention it was lifted out of", () => {
     const fixtures: PhaseFixture[] = [
-      { id: "a", status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
-      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
-      { id: "c", status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
+      { id: "a", status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
+      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
+      { id: "c", status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
     ];
     const row = resolveAttention({
       divisionStatus: "active", stages: [], fixtures,
@@ -987,9 +989,9 @@ describe("isResultMissing", () => {
 
   it("agrees with the `result_missing` attention it was lifted out of", () => {
     const fixtures: PhaseFixture[] = [
-      { id: "a", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
-      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T17:45:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
-      { id: "c", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T09:00:00Z", eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
+      { id: "a", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
+      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T17:45:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
+      { id: "c", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T09:00:00Z", eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false },
     ];
     const nowIso = "2026-09-05T18:00:00Z";
     const row = resolveAttention({
@@ -1169,5 +1171,64 @@ describe("fixtureAwaitsSeedDraw — an unfilled SEED slot, not just an empty sid
       bracketFx("final", row({ home_entrant_id: "e1" }), { scheduledAt: LATER }),
     ];
     expect(drawRows(afterConfirm), "a walked-over bye is nobody's draw").toEqual([]);
+  });
+});
+
+
+// W2a Task 13 (addendum 9; competition-desk _RULES: empty set first, a red attention outranks the phase). A HELD
+// fixture owes the organiser's settle: status `needs_decision` (a level bracket result), or a recorded abandon in a
+// bracket stage that decided nobody — stored `abandoned`, told apart only by the ledger (`awaitsSettle`, computed
+// server-side from engine-db/recorded-abandon.ts, the one source). `abandoned` is TERMINAL, so a bracket whose final
+// awaited a settle read "Finished" with nothing asking the organiser for the one action that ends it.
+describe("held fixtures — needs_decision attention and never Finished (W2a)", () => {
+  const ko = stage({ id: "ko", name: "Knockout", status: "active" });
+  const final = (o: Partial<PhaseFixture>) => fx({ id: "final", stageId: "ko", scheduledAt: null, ...o });
+
+  it("empty case first: no fixtures hold nothing, and a plain played division raises no needs_decision", () => {
+    expect(resolveAttention(input({ stages: [ko], fixtures: [] })).some((a) => a.kind === "needs_decision")).toBe(false);
+    const played = input({ stages: [ko], fixtures: [final({ status: "decided" })] });
+    expect(resolveAttention(played).some((a) => a.kind === "needs_decision")).toBe(false);
+    expect(resolvePhase(played)).toBe("finished");
+  });
+
+  it("isHeldFixture: needs_decision, or a recorded abandon awaiting its settle — and nothing else", () => {
+    expect(isHeldFixture({ status: "needs_decision", awaitsSettle: false })).toBe(true);
+    expect(isHeldFixture({ status: "abandoned", awaitsSettle: true })).toBe(true);
+    let checked = 0;
+    for (const status of ["scheduled", "in_play", "decided", "finalized", "abandoned", "forfeited", "cancelled"]) {
+      expect(isHeldFixture({ status, awaitsSettle: false }), status).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(7);
+  });
+
+  it("a recorded abandon awaiting its settle is NOT finished; the same abandon without it (a generator void) is", () => {
+    const held = input({ stages: [ko], fixtures: [final({ status: "abandoned", awaitsSettle: true })] });
+    expect(resolvePhase(held)).not.toBe("finished");
+    const voided = input({ stages: [ko], fixtures: [final({ status: "abandoned", awaitsSettle: false })] });
+    expect(resolvePhase(voided), "the positive pair: a void with nothing owed is terminal").toBe("finished");
+  });
+
+  it("raises ONE red needs_decision row naming every held fixture, both shapes, and it outranks the phase", () => {
+    const fixtures = [
+      final({ status: "abandoned", awaitsSettle: true }),
+      fx({ id: "3p", stageId: "ko", status: "needs_decision", scheduledAt: null }),
+      fx({ id: "sf", stageId: "ko", status: "decided" }),
+    ];
+    const attention = resolveAttention(input({ stages: [ko], fixtures }));
+    const row = attention.find((a) => a.kind === "needs_decision");
+    expect(row).toEqual({ kind: "needs_decision", count: 2, fixtureIds: ["final", "3p"] });
+    expect(ATTENTION_SEVERITY.needs_decision).toBe("red");
+    expect(ledgerRank({ phase: resolvePhase(input({ stages: [ko], fixtures })), attention }), "red outranks the phase").toBe(-1);
+    expect(leadingAttention([{ attention }])?.kind).toBe("needs_decision");
+  });
+
+  it("a later stage's empty draw is not raised past a held fixture: it is still LIVE work", () => {
+    const later = stage({ id: "nx", name: "Next", seq: 2, status: "pending", hasFixtures: false, timing: "on_complete" });
+    const attention = resolveAttention(
+      input({ stages: [ko, later], fixtures: [final({ status: "abandoned", awaitsSettle: true })] }),
+    );
+    expect(attention.some((a) => a.kind === "needs_fixtures" && a.stageName === "Next")).toBe(false);
+    expect(attention.some((a) => a.kind === "needs_decision")).toBe(true);
   });
 });

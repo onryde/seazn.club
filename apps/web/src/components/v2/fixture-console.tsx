@@ -34,7 +34,8 @@ import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
-import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
+import { scoreStatusLabel } from "@/lib/score-status-label";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -933,7 +934,14 @@ export function FixtureConsole({
   // that can say who won and how for those sports; `msg`/`entrantNames` are
   // exactly what `decidedOutcomeText` needs and this component already has
   // both.
-  const decidedLine = decidedOutcomeText(outcome, entrantNames, msg, shootoutScoreFromDetail(summary?.detail));
+  const decidedLine = decidedOutcomeText(
+    outcome,
+    entrantNames,
+    msg,
+    shootoutScoreFromDetail(summary?.detail),
+    undefined,
+    tiebreakScoreFromDetail(summary?.detail),
+  );
   const lastVoidable = [...events]
     .reverse()
     .find((e) => e.type !== "core.void" && !events.some((v) => v.voids_event_id === e.id));
@@ -1537,13 +1545,6 @@ export function FixtureConsole({
 
 function decidedLock(status: string): boolean {
   return status === "finalized" || status === "cancelled";
-}
-
-/** Localized fixture status; unknown values fall back to the raw token. */
-function scoreStatusLabel(msg: Msg, status: string): string {
-  const key = `score.status.${status}` as MessageKey;
-  const label = msg(key);
-  return label === key ? status.replace("_", " ") : label;
 }
 
 function ForfeitButton({

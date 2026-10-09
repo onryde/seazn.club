@@ -483,6 +483,9 @@ async function loadMatchPosterModelBefore(orgSlug: string, competitionSlug: stri
     divisionName: division.name,
     stageName: stageRow?.name ?? null,
     header,
+    // W2a Task 13: a field the poster input gained after this copy was frozen — the loader's own expression, so the
+    // diff below still isolates what T4 changed.
+    held: fixture.status === "needs_decision",
     activeIndex,
     setLine: setLineOfBefore(matchCentre.sets),
     topPerformers: matchCentre.cricket?.topPerformers ?? null,

@@ -29,6 +29,7 @@ import { type LiveFixtureData } from "./live-score-data";
 import {
   renderDecidedOutcome,
   shootoutScoreFromDetail,
+  tiebreakScoreFromDetail,
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
 
@@ -133,7 +134,13 @@ export function LiveScoreBody({
   // (R3.5/Task G) — correct at first paint but frozen after that, since a
   // Server Component cannot react to a client-side data change.
   const shootoutScore = shootoutScoreFromDetail(data.summary?.detail);
-  const decidedLine = renderDecidedOutcome(data.outcome, entrantNames, decidedTemplates, shootoutScore);
+  const decidedLine = renderDecidedOutcome(
+    data.outcome,
+    entrantNames,
+    decidedTemplates,
+    shootoutScore,
+    tiebreakScoreFromDetail(data.summary?.detail),
+  );
 
   // WHEN SUPPRESSION LEAVES NOTHING AT ALL. `summary-tab.tsx` passes
   // `suppressScorebug` for every non-cricket sport so the court slab is not

@@ -412,6 +412,30 @@ describe("overlayModel — decided", () => {
     expect(model.sides[1].led).toBe(false);
   });
 
+  it("W2a: a chess tie-break's recorded score reaches BOTH decided sentences (band and short form), off the real fold's detail", () => {
+    const data = payload("boardgame", [
+      ["core.start", {}],
+      ["boardgame.result", { winner: null, method: "agreement" }],
+      ["boardgame.tiebreak", { rung: "rapid", winner: "A", score: "1½–½" }],
+    ], "decided", { kind: "win", winner: "A", method: "tiebreak_rapid" }, { tiebreak: true });
+    const templates: DecidedOutcomeTemplates = {
+      ...TEMPLATES,
+      byMethod: { ...TEMPLATES.byMethod, tiebreak_rapid: "TB {winner}" },
+      tiebreakScored: { rapid: "TB {winner} ({score})" },
+    };
+    const model = overlayModel({
+      sportKey: "boardgame",
+      data: { lastSeq: null, venueTz: "UTC", ...data } as OverlayLiveData,
+      sides: SIDES,
+      startLabel: null,
+      clockLabel: null,
+      msg: keyMsg,
+      decidedTemplates: templates,
+    });
+    expect(model.result).toBe("TB Northbridge Athletic (1½–½)");
+    expect(model.header.period, "the short form carries the same score").toBe("TB NOR (1½–½)");
+  });
+
   it("carries ended-card highlights from the overlay poll payload, not a page prop", () => {
     const data: OverlayLiveData = {
       status: "decided",

@@ -40,7 +40,7 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
 import { renderProse } from "@/lib/prose";
 import { publicRoundNamer } from "./feeder-slot-label";
-import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
 import {
   bucketFixture,
   deriveHubTabs,
@@ -794,6 +794,7 @@ export async function loadCompetitionHub(
                 ui,
                 shootoutScoreFromDetail(f.summary?.detail),
                 d.sport_key,
+                tiebreakScoreFromDetail(f.summary?.detail),
               )
             : null,
       });

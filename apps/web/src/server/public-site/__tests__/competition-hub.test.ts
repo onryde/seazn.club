@@ -2326,6 +2326,29 @@ describe("loadCompetitionHub — a FINALIZED fixture is a decided one", () => {
     );
     expect(match.resultLine).toContain("Red Rockets");
   });
+
+  it("W2a: a chess tie-break's recorded score reaches the hub's result line (spec §5.5)", async () => {
+    const tiebreak = F({
+      id: "fx-tiebreak",
+      status: "decided",
+      round_no: 1,
+      home_entrant_id: "e1",
+      away_entrant_id: "e2",
+      scheduled_at: "2026-09-03T14:00:00.000Z",
+      outcome: { kind: "win", winner: "e2", loser: "e1", method: "tiebreak_rapid" },
+      summary: {
+        perSide: [
+          { entrantId: "e1", line: "½" },
+          { entrantId: "e2", line: "½" },
+        ],
+        detail: { tiebreak: { rung: "rapid", score: "1½–½" } },
+      },
+    });
+    getPublicDivisionMock.mockResolvedValue(divisionDetail({ fixtures: [tiebreak], standings: [] }));
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    const match = doc.matches.find((m) => m.fixtureId === "fx-tiebreak")!;
+    expect(match.resultLine).toBe("Red Rockets won on rapid tie-break (1½–½)");
+  });
 });
 
 // ---------------------------------------------------------------------------

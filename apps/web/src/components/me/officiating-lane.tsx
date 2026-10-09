@@ -14,6 +14,7 @@ import { routes } from "@/lib/routes";
 import { MarkBadge } from "@/components/officials/mark-badge";
 import { ReportForm } from "@/components/officials/report-form";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { scoreStatusLabel } from "@/lib/score-status-label";
 import type {
   MyBlackout,
   MyOfficiatingAssignment,
@@ -112,6 +113,11 @@ export function OfficiatingLane({
 // and the official accepted it. Report state keys off the completed union, not
 // a date window (#122 lesson).
 const REPORTABLE = new Set(["decided", "finalized", "abandoned"]);
+/** W2a: a held bracket fixture (`needs_decision`) — played level, the verdict waits on the organiser. */
+const HELD_STATUS = "needs_decision";
+/** The statuses whose card links to the fixture's scoring page: still to play, in play, or held — a chess tie-break
+ *  is the scorer's to record on that page (W2a Task 12). */
+const SCOREABLE = new Set(["scheduled", "in_play", HELD_STATUS]);
 
 /** Read-only row for a finished match (no accept/decline/score) — shown inside
  *  the collapsed "completed" disclosure. Reportable rows carry the match-report
@@ -137,7 +143,9 @@ function CompletedCard({ a }: { a: MyOfficiatingAssignment }) {
             {msg("me.off.role", { role: a.role_key })}
           </span>
         </p>
-        <span className="badge bg-slate-100 capitalize text-slate-600">{a.fixture_status}</span>
+        {/* `normal-case`, not `.badge`'s `capitalize`: the word is the dictionary's own sentence-case copy now, and
+            `capitalize` turned it into title case ("Needs A Decision", "Décision Requise") in every locale. */}
+        <span className="badge bg-slate-100 normal-case text-slate-600">{scoreStatusLabel(msg, a.fixture_status)}</span>
       </div>
       <p className="text-xs text-slate-400">
         {a.competition_name} · {a.division_name} · {a.org_name}
@@ -328,6 +336,12 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
           {response === "accepted" && (
             <span className="badge bg-lime-100 text-lime-800">{msg("me.off.accepted")}</span>
           )}
+          {/* W2a: a held fixture stays an outstanding duty (D-F3) — say why it is not finished. */}
+          {a.fixture_status === HELD_STATUS && (
+            <span data-held="true" className="badge bg-amber-100 normal-case text-amber-800">
+              {scoreStatusLabel(msg, a.fixture_status)}
+            </span>
+          )}
           {response === "declined" && (
             <>
               <span className="badge bg-red-100 text-red-700">{msg("me.off.declined")}</span>
@@ -379,7 +393,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
         </div>
       )}
 
-      {response !== "declined" && (a.fixture_status === "scheduled" || a.fixture_status === "in_play") && (
+      {response !== "declined" && SCOREABLE.has(a.fixture_status) && (
         <div className="flex flex-wrap items-center gap-2">
           <Link
             href={routes.fixture(a.org_slug, a.competition_slug, a.division_slug, a.fixture_no)}

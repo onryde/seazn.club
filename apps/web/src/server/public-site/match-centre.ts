@@ -86,7 +86,13 @@ import { log } from "@/server/logger";
 // The ONE reader of `summary.detail.shootout`, shared with `live-score.tsx`'s
 // decided sentence — a second parse of the same jsonb is a second chance to
 // disagree about the same match.
-import { SHOOTOUT_IS_SKATED, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
+import {
+  BRACKET_DECIDER_METHODS,
+  SHOOTOUT_IS_SKATED,
+  TIEBREAK_SCORED_RUNGS,
+  shootoutScoreFromDetail,
+  tiebreakScoreFromDetail,
+} from "@/lib/scoring-vocab";
 // The SAME readers `live-score.tsx` uses for the pair the match centre had
 // dropped — one authority per fact, never a second parse of the same jsonb.
 import { matchPhase, matchStrength } from "@/lib/public-site";
@@ -172,8 +178,15 @@ export const DISMISSAL_KINDS = [...CricketWicket.shape.kind.options, "not_out", 
 // own decided sentence (R11/C7) on the stated premise that this line already
 // carries it, and for a shootout that premise was false. 7 football and 1 ice
 // hockey fixtures in one local database were in exactly that state.
-const WIN_METHODS = ["regulation", "dls", "innings", "super_over", "boundary_count", "shootout"] as const;
+//
+// W2a (spec §5.5, D5): a bracket decided by an organiser's settle or a chess tie-break rung carries a method of its
+// own (`settled_<m>`, `tiebreak_<rung>`) — read off the engine through `BRACKET_DECIDER_METHODS`, so each one keys its
+// own sentence and the dictionary gates below cover it. Before W2a they fell through to `regulation`.
+const WIN_METHODS = ["regulation", "dls", "innings", "super_over", "boundary_count", "shootout", ...BRACKET_DECIDER_METHODS] as const;
 export const RESULT_KINDS = [...WIN_METHODS, "tie", "no_result", "draw", "forfeit"] as const;
+/** W2a — the scored tie-break sentences ("won on rapid tie-break (1½–½)"), one per rung with a match score. Exported
+ *  for the dictionary gates: these keys are built from a template, so no source scan finds them. */
+export const RESULT_SCORED_KEYS: readonly string[] = TIEBREAK_SCORED_RUNGS.map((r) => `matchCentre.result.tiebreak_${r}.scored`);
 
 // Hand-pinned from `BallGlyph`'s own declaration (`scorecard-types.ts:39-44`)
 // — a plain TS union, not a zod schema, so there is no `.options` to read
@@ -724,7 +737,7 @@ function resultMsg(
   // The two margins belong to two win vocabularies, and the METHOD picks which
   // one is read (see `buildHeader`): a shootout's tally ("3–0", notation, not
   // prose) or the cricket fold's structured margin.
-  margins: { shootoutTally: string | null; cricket: CricketMargin | null },
+  margins: { shootoutTally: string | null; cricket: CricketMargin | null; tiebreakScore: string | null },
   cardWinner: string | null,
   sides: readonly [SideT, SideT],
   sportKey: string,
@@ -767,7 +780,18 @@ function resultMsg(
           params: { winner, margin },
         };
       }
-      // A method that IS the sentence ("won on the super over") needs no count.
+      // W2a: a chess tie-break with its match score recorded states it — only on a rung that has a scored sentence
+      // (Armageddon is one game), and only from the summary's own detail, never invented.
+      if (kind.startsWith("tiebreak_") && margins.tiebreakScore !== null) {
+        const rung = kind.slice("tiebreak_".length);
+        if (TIEBREAK_SCORED_RUNGS.includes(rung)) {
+          return { key: `matchCentre.result.${kind}.scored`, params: { winner, score: margins.tiebreakScore } };
+        }
+      }
+      // A method that IS the sentence ("won on the super over") needs no count. A W2a decider ("advanced on lot", "won
+      // on Armageddon") needs no branch of its own: it reaches the bare sentence below, because a settle or tie-break
+      // only ever follows a LEVEL result and every level cricket fold carries `margin: null` (cricket.ts, each
+      // tie/draw/no_result return) — so the cricket branch cannot word a count for it.
       if (kind === "super_over" || kind === "boundary_count") {
         return { key: `matchCentre.result.${kind}`, params: { winner } };
       }
@@ -962,6 +986,7 @@ function buildHeader(
       {
         shootoutTally: shootout !== null ? `${shootout.home}–${shootout.away}` : null,
         cricket: card?.result?.margin ?? null,
+        tiebreakScore: tiebreakScoreFromDetail(fixture.summary?.detail),
       },
       cardWinner,
       sides,

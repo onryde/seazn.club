@@ -190,6 +190,31 @@ describe("the console renders people, not entry labels (D-6)", () => {
     expect(html).not.toContain("Entry 3");
   });
 
+  it("W2a: a chess tie-break's recorded score reaches the console's decided sentence (spec §5.5)", () => {
+    const live: LiveState = {
+      status: "decided",
+      last_seq: 3,
+      summary: { headline: "½ — ½", detail: { tiebreak: { rung: "rapid", score: "1½–½" } } },
+      state: {},
+      outcome: { kind: "win", winner: "e-home", method: "tiebreak_rapid" },
+    };
+    const html = renderToStaticMarkup(
+      <FixtureConsole
+        fixture={{ id: "f1", status: "decided", scheduled_at: null, venue_name: null, court_name: null, round_no: 1 }}
+        sport={sport}
+        home={SINGLES}
+        away={PAIR}
+        initialState={live}
+        initialEvents={[GOAL]}
+        canEdit
+        canOrganise
+        stageKind="knockout"
+        viewerPlan="community"
+      />,
+    );
+    expect(html).toContain("Ada Okonkwo won on rapid tie-break (1½–½)");
+  });
+
   it("still shows a football team by its team name", () => {
     const html = consoleHtml(TEAM, { ...TEAM, id: "e-team2", name: "Summit Athletic" });
     expect(html).toContain("Riverside FC");

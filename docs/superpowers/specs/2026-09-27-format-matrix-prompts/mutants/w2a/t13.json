@@ -1,0 +1,572 @@
+[
+  {
+    "id": "drop-settled",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "  ...Object.fromEntries(SETTLE_METHODS.map((m) => [settledMethod(m), `fixture.decidedBy.settled.${camel(m)}` as MessageKey])),\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/w2a-decided-sentences.test.ts"
+        ],
+        "name": "each settle method and each tie-break rung renders a distinct, non-plain sentence naming the winner, in 4 locales"
+      }
+    ]
+  },
+  {
+    "id": "drop-tiebreak",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "  ...Object.fromEntries(TIEBREAK_RUNGS.map((r) => [`tiebreak_${r}`, `fixture.decidedBy.tiebreak.${r}` as MessageKey])),\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/w2a-decided-sentences.test.ts"
+        ],
+        "name": "each settle method and each tie-break rung renders a distinct, non-plain sentence naming the winner, in 4 locales"
+      }
+    ]
+  },
+  {
+    "id": "scored-ignored",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "if (outcome.method?.startsWith(TIEBREAK_METHOD_PREFIX) && tiebreakScore) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/w2a-decided-sentences.test.ts"
+        ],
+        "name": "the tie-break score appears when recorded, and no score is invented when it is not"
+      }
+    ]
+  },
+  {
+    "id": "score-reader-null",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "return typeof score === \"string\" && score !== \"\" ? score : null;",
+    "replace": "return null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/w2a-decided-sentences.test.ts"
+        ],
+        "name": "seam: a REAL fold — drawn, tie-break pending, then a scored rapid tie-break — reads into the sentence"
+      }
+    ]
+  },
+  {
+    "id": "score-reader-junk",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "return typeof score === \"string\" && score !== \"\" ? score : null;",
+    "replace": "return (score as string) ?? null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/w2a-decided-sentences.test.ts"
+        ],
+        "name": "empty and junk details read null — never an invented score"
+      }
+    ]
+  },
+  {
+    "id": "mc-drop-deciders",
+    "file": "apps/web/src/server/public-site/match-centre.ts",
+    "find": "\"shootout\", ...BRACKET_DECIDER_METHODS] as const;",
+    "replace": "\"shootout\"] as const;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-w2a-deciders.test.ts"
+        ],
+        "name": "RESULT_KINDS carries every decider method the engine declares, so the dictionary gates cover each one"
+      }
+    ]
+  },
+  {
+    "id": "mc-scored-branch",
+    "file": "apps/web/src/server/public-site/match-centre.ts",
+    "find": "if (TIEBREAK_SCORED_RUNGS.includes(rung)) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-w2a-deciders.test.ts"
+        ],
+        "name": "a scored tie-break states its score; an unscored one and a scored Armageddon do not"
+      }
+    ]
+  },
+  {
+    "id": "mc-scored-armageddon",
+    "file": "apps/web/src/server/public-site/match-centre.ts",
+    "find": "if (TIEBREAK_SCORED_RUNGS.includes(rung)) {",
+    "replace": "if (true) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-w2a-deciders.test.ts"
+        ],
+        "name": "a scored tie-break states its score; an unscored one and a scored Armageddon do not"
+      }
+    ]
+  },
+  {
+    "id": "mc-header-score",
+    "file": "apps/web/src/server/public-site/match-centre.ts",
+    "find": "tiebreakScore: tiebreakScoreFromDetail(fixture.summary?.detail),",
+    "replace": "tiebreakScore: null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-w2a-deciders.test.ts"
+        ],
+        "name": "seam: a REAL fold — drawn knockout game, then a scored rapid tie-break — keeps the level score and names the tie-break"
+      }
+    ]
+  },
+  {
+    "id": "overlay-score",
+    "file": "apps/web/src/lib/overlay-model.ts",
+    "find": "const tiebreakScore = tiebreakScoreFromDetail(data.summary?.detail);",
+    "replace": "const tiebreakScore = null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/overlay-model.test.ts"
+        ],
+        "name": "W2a: a chess tie-break's recorded score reaches BOTH decided sentences \\(band and short form\\), off the real fold's detail"
+      }
+    ]
+  },
+  {
+    "id": "hub-score",
+    "file": "apps/web/src/server/public-site/competition-hub.ts",
+    "find": "                tiebreakScoreFromDetail(f.summary?.detail),",
+    "replace": "                null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/competition-hub.test.ts"
+        ],
+        "name": "W2a: a chess tie-break's recorded score reaches the hub's result line \\(spec §5\\.5\\)"
+      }
+    ]
+  },
+  {
+    "id": "live-score-score",
+    "file": "apps/web/src/components/public-site/live-score.tsx",
+    "find": "    tiebreakScoreFromDetail(data.summary?.detail),",
+    "replace": "    null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/live-score.test.tsx"
+        ],
+        "name": "states the recorded score"
+      }
+    ]
+  },
+  {
+    "id": "console-score",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "    tiebreakScoreFromDetail(summary?.detail),",
+    "replace": "    null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-person-names.test.tsx"
+        ],
+        "name": "W2a: a chess tie-break's recorded score reaches the console's decided sentence \\(spec §5\\.5\\)"
+      }
+    ]
+  },
+  {
+    "id": "page-score",
+    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+    "find": "    tiebreakScoreFromDetail(fixture.summary?.detail),",
+    "replace": "    null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+        ],
+        "name": "names the tie-break with its score after the level headline"
+      }
+    ]
+  },
+  {
+    "id": "jsonld-held",
+    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+    "find": " || fixture.status === \"needs_decision\"",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/page.test.ts"
+        ],
+        "name": "a held fixture is completed, like a decided one"
+      }
+    ]
+  },
+  {
+    "id": "bracket-winner-guard",
+    "file": "apps/web/src/components/public-site/bracket.tsx",
+    "find": "const winner = held ? undefined : fixture.outcome?.winner;",
+    "replace": "const winner = fixture.outcome?.winner;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/bracket.test.tsx"
+        ],
+        "name": "never highlights a winner on a held card, even one a stray outcome names \\(the guard\\)"
+      }
+    ]
+  },
+  {
+    "id": "bracket-held-chip",
+    "file": "apps/web/src/components/public-site/bracket.tsx",
+    "find": ") : held ? (",
+    "replace": ") : false ? (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/bracket.test.tsx"
+        ],
+        "name": "shows the held chip AND the level score, and names no winner"
+      }
+    ]
+  },
+  {
+    "id": "schedule-copy-held",
+    "file": "apps/web/src/server/public-site/schedule-copy.ts",
+    "find": "held: t(dict, \"matchCentre.status.needs_decision\"),",
+    "replace": "held: \"needs_decision\",",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/bracket.test.tsx"
+        ],
+        "name": "the held word is the org locale's own, in every locale"
+      }
+    ]
+  },
+  {
+    "id": "subheading-held-override",
+    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/fixture-subheading.ts",
+    "find": "fallbackStatus === HELD_STATUS ? HELD_STATUS : (doc?.header.status ?? fallbackStatus),",
+    "replace": "(doc?.header.status ?? fallbackStatus),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/fixture-subheading.test.ts"
+        ],
+        "name": "a held fixture with no time says the time was NOT RECORDED — bare status, no document, and the folded document"
+      }
+    ]
+  },
+  {
+    "id": "subheading-played",
+    "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/fixture-subheading.ts",
+    "find": "new Set([\"decided\", \"finalized\", \"needs_decision\"])",
+    "replace": "new Set([\"decided\", \"finalized\"])",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/__tests__/fixture-subheading.test.ts"
+        ],
+        "name": "a held fixture with no time says the time was NOT RECORDED — bare status, no document, and the folded document"
+      }
+    ]
+  },
+  {
+    "id": "poster-held-variant",
+    "file": "apps/web/src/server/og/match-poster.tsx",
+    "find": "const variant: MatchPosterVariant = input.held",
+    "replace": "const variant: MatchPosterVariant = false",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/og/__tests__/match-poster.test.ts"
+        ],
+        "name": "held: the level board, the held line as the hero, no Result chip, nobody dimmed, no performers"
+      }
+    ]
+  },
+  {
+    "id": "poster-loader-held",
+    "file": "apps/web/src/server/og/match-poster-data.ts",
+    "find": "held: fixture.status === \"needs_decision\",",
+    "replace": "held: false,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/og/__tests__/match-poster-held-loader.test.ts"
+        ],
+        "name": "a needs_decision fixture is the held poster, with the level board and the held line"
+      }
+    ]
+  },
+  {
+    "id": "lane-scoreable",
+    "file": "apps/web/src/components/me/officiating-lane.tsx",
+    "find": "const SCOREABLE = new Set([\"scheduled\", \"in_play\", HELD_STATUS]);",
+    "replace": "const SCOREABLE = new Set([\"scheduled\", \"in_play\"]);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/me/__tests__/officiating-lane.test.tsx"
+        ],
+        "name": "a held duty says so in the viewer's words and still links to the fixture"
+      }
+    ]
+  },
+  {
+    "id": "lane-held-badge",
+    "file": "apps/web/src/components/me/officiating-lane.tsx",
+    "find": "{a.fixture_status === HELD_STATUS && (",
+    "replace": "{false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/me/__tests__/officiating-lane.test.tsx"
+        ],
+        "name": "a held duty says so in the viewer's words and still links to the fixture"
+      }
+    ]
+  },
+  {
+    "id": "lane-held-case",
+    "file": "apps/web/src/components/me/officiating-lane.tsx",
+    "find": "className=\"badge bg-amber-100 normal-case text-amber-800\"",
+    "replace": "className=\"badge bg-amber-100 text-amber-800\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/me/__tests__/officiating-lane.test.tsx"
+        ],
+        "name": "a held duty says so in the viewer's words and still links to the fixture"
+      }
+    ]
+  },
+  {
+    "id": "lane-completed-word",
+    "file": "apps/web/src/components/me/officiating-lane.tsx",
+    "find": "normal-case text-slate-600\">{scoreStatusLabel(msg, a.fixture_status)}</span>",
+    "replace": "normal-case text-slate-600\">{a.fixture_status}</span>",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/me/__tests__/officiating-lane.test.tsx"
+        ],
+        "name": "the completed card's status badge is the dictionary's word, not the raw token"
+      }
+    ]
+  },
+  {
+    "id": "lane-completed-case",
+    "file": "apps/web/src/components/me/officiating-lane.tsx",
+    "find": "className=\"badge bg-slate-100 normal-case text-slate-600\"",
+    "replace": "className=\"badge bg-slate-100 capitalize text-slate-600\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/me/__tests__/officiating-lane.test.tsx"
+        ],
+        "name": "the completed card's status badge is the dictionary's word, not the raw token"
+      }
+    ]
+  },
+  {
+    "id": "status-label-dict",
+    "file": "apps/web/src/lib/score-status-label.ts",
+    "find": "return label === key ? status.replace(\"_\", \" \") : label;",
+    "replace": "return status.replace(\"_\", \" \");",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/me/__tests__/officiating-lane.test.tsx"
+        ],
+        "name": "the completed card's status badge is the dictionary's word, not the raw token"
+      }
+    ]
+  },
+  {
+    "id": "held-predicate",
+    "file": "apps/web/src/lib/division-phase.ts",
+    "find": "return f.status === \"needs_decision\" || f.awaitsSettle;",
+    "replace": "return f.status === \"needs_decision\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/division-phase.test.ts"
+        ],
+        "name": "isHeldFixture: needs_decision, or a recorded abandon awaiting its settle — and nothing else"
+      }
+    ]
+  },
+  {
+    "id": "held-live",
+    "file": "apps/web/src/lib/division-phase.ts",
+    "find": "return LIVE.has(f.status) || f.awaitsSettle;",
+    "replace": "return LIVE.has(f.status);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/division-phase.test.ts"
+        ],
+        "name": "a later stage's empty draw is not raised past a held fixture: it is still LIVE work"
+      }
+    ]
+  },
+  {
+    "id": "held-row",
+    "file": "apps/web/src/lib/division-phase.ts",
+    "find": "  if (held.length > 0) out.push({ kind: \"needs_decision\", count: held.length, fixtureIds: held });\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/division-phase.test.ts"
+        ],
+        "name": "raises ONE red needs_decision row naming every held fixture, both shapes, and it outranks the phase"
+      }
+    ]
+  },
+  {
+    "id": "held-severity",
+    "file": "apps/web/src/lib/division-phase.ts",
+    "find": "  needs_decision: \"red\",",
+    "replace": "  needs_decision: \"amber\",",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/division-phase.test.ts"
+        ],
+        "name": "raises ONE red needs_decision row naming every held fixture, both shapes, and it outranks the phase"
+      }
+    ]
+  },
+  {
+    "id": "red-pill-key",
+    "file": "apps/web/src/components/v2/desk/phase-pill.tsx",
+    "find": "needs_decision: \"desk.pill.needs_decision\",",
+    "replace": "needs_decision: null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/desk-ssr.test.tsx"
+        ],
+        "name": "RED_PILL_KEY, alone: needs_decision prints its own word"
+      }
+    ]
+  },
+  {
+    "id": "needs-you-case",
+    "file": "apps/web/src/components/v2/desk/needs-you.tsx",
+    "find": "case \"needs_decision\": {",
+    "replace": "case \"needs_decision_x\" as never: {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/desk-ssr.test.tsx"
+        ],
+        "name": "W2a needs_decision: ONE held fixture names its match and opens its console, red, with the Settle label"
+      }
+    ]
+  },
+  {
+    "id": "needs-you-title",
+    "file": "apps/web/src/components/v2/desk/needs-you.tsx",
+    "find": "t(dict, \"desk.needsYou.needs_decision\", {",
+    "replace": "t(dict, \"desk.needsYou.no_scorer\", {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/desk-ssr.test.tsx"
+        ],
+        "name": "W2a needs_decision: ONE held fixture names its match and opens its console, red, with the Settle label"
+      }
+    ]
+  },
+  {
+    "id": "desk-awaits-settle",
+    "file": "apps/web/src/server/usecases/competition-desk.ts",
+    "find": "awaitsSettle: fixtureAwaitsSettle(stageKindById.get(x.stage_id), x),",
+    "replace": "awaitsSettle: false,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/competition-desk-held.test.ts"
+        ],
+        "name": "a knockout FINAL abandoned at a level score is not Finished: one red needs_decision row names it"
+      }
+    ]
+  },
+  {
+    "id": "desk-bracket-only",
+    "file": "apps/web/src/server/usecases/competition-desk.ts",
+    "find": "return BRACKET_KINDS.has(stageKind as StageKind) && abandonAwaitsSettle(f);",
+    "replace": "return abandonAwaitsSettle(f);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/competition-desk-held.test.ts"
+        ],
+        "name": "a TABLE stage's recorded abandon is a void: no row, and the page's read stays empty"
+      }
+    ]
+  },
+  {
+    "id": "page-read-filter",
+    "file": "apps/web/src/server/usecases/competition-desk.ts",
+    "find": "return new Set(rows.filter((r) => fixtureAwaitsSettle(r.kind, r)).map((r) => r.id));",
+    "replace": "return new Set(rows.map((r) => r.id));",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/competition-desk-held.test.ts"
+        ],
+        "name": "the generator's void \\(abandoned, no core\\.abandon in the ledger\\) is terminal: no row, and Finished"
+      }
+    ]
+  }
+]
