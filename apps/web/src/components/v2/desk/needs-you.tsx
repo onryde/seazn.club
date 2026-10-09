@@ -258,7 +258,9 @@ export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] })
                 <p className="text-sm text-slate-900">{it.title}</p>
                 <p className="text-xs text-slate-600">{it.sub}</p>
               </div>
-              <Link href={it.action.href} className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} shrink-0 px-3 py-1.5 text-xs`}>
+              {/* Loop R M7(e): this row shows from md (768), and 768 and 834 are touch widths — 44px there; the compact
+                  28px button only from lg, a mouse width. */}
+              <Link href={it.action.href} className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} min-h-11 shrink-0 px-3 py-1.5 text-xs lg:min-h-0`}>
                 {it.action.label}
               </Link>
             </div>

@@ -270,6 +270,27 @@ describe("NeedsYou", () => {
     expect(html).toContain("Open scoring");
     expect(html).not.toContain("Assign scorer");
   });
+  it("loop R M7(e): every Needs-you action is a 44px tap target below lg (768 and 834 are touch widths), compact only at lg", () => {
+    // The desktop row (md and up) carried `py-1.5 text-xs` — 28px at 768, a touch width. Each row's two actions (the
+    // phone stack and the md row) are read; every item, red and amber.
+    const d = div({
+      phase: "match_day", in_play: 1,
+      attention: [
+        { kind: "unscheduled", count: 3 },
+        { kind: "no_scorer", count: 1, fixtureIds: ["f9"], minutesSinceKickoff: 12 },
+      ],
+      fixture_names: { f9: { home: "Riverside FC", away: "Summit CC", fixture_no: 9 } },
+    });
+    const items = needsYouItems(en, desk(d, 1), names, "org", "comp", "en");
+    const html = renderToStaticMarkup(<NeedsYou dict={en} items={items} />);
+    const rowLinks = [...html.matchAll(/<div class="hidden items-center[^"]*md:flex">[\s\S]*?<a [^>]*class="([^"]*)"/g)].map((m) => m[1]!.split(/\s+/));
+    expect(rowLinks.length, "one md row per item").toBe(items.length);
+    expect(rowLinks.length).toBeGreaterThan(0);
+    for (const cls of rowLinks) {
+      expect(cls, "44px below lg").toContain("min-h-11");
+      expect(cls, "compact from lg (a mouse width)").toContain("lg:min-h-0");
+    }
+  });
   // F3 fix (final review, Important): used to be one row PER FIXTURE — a
   // division with 6 overdue fixtures produced 6 identical rows. Now ONE row,
   // stating the count, deep-linking to the fixtures tab (which shows all of

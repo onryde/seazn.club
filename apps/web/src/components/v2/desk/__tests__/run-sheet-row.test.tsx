@@ -255,6 +255,30 @@ describe("a held fixture (needs_decision) reads Needs a decision and offers Sett
     expectRowRendered(html);
     expect(html).not.toContain('data-testid="run-sheet-held-chip"');
   });
+
+  it("loop R M7(d): on a phone a held row gives its meta line a line of its own, so 'abandoned' is never truncated away", () => {
+    // At 320 line 2 held the meta text, the held chip and Settle: the chip and the action took the room and the meta
+    // truncated to "Round 1 · …", hiding the reason. A held row's meta now takes the whole line (max-md:basis-full) and
+    // the chip and Settle wrap below it; any other row keeps the two-line composition (Task 9, A3).
+    const phoneMeta = (html: string) => /<p class="([^"]*\bmd:hidden\b[^"]*)">([^<]*)<\/p>/.exec(html);
+    const abandoned = fx({ status: "abandoned", outcome: null });
+    const rows = [
+      { name: "held abandon", html: rowHtml(abandoned, true, undefined, true), own: true },
+      { name: "needs_decision", html: rowHtml(HELD), own: true },
+      { name: "a void (no chip)", html: rowHtml(abandoned, true, undefined, false), own: false },
+      { name: "a decided row", html: rowHtml(fx({ status: "decided", outcome: { kind: "win", winner: "e1", loser: "e2" } })), own: false },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      expectRowRendered(r.html);
+      const m = phoneMeta(r.html);
+      expect(m, `${r.name}: the phone meta paragraph renders`).not.toBeNull();
+      expect(m![1]!.split(/\s+/).includes("max-md:basis-full"), r.name).toBe(r.own);
+      checked++;
+    }
+    expect(phoneMeta(rows[0]!.html)![2], "the held abandon's meta still carries the reason").toContain(fixtureStatusLabel(msg, "abandoned"));
+    expect(checked).toBe(rows.length);
+  });
 });
 
 describe("an awarded bye names the sit-out AND the walkover", () => {

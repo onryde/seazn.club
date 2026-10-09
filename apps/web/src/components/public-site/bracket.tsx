@@ -170,11 +170,14 @@ function FixtureCard({
             {copy.live}
           </span>
         ) : held ? (
-          // The held chip, and the level score the board recorded beside it — the score stays; only the verdict waits.
-          <span data-held="true" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">{copy.held}</span>
+          // The held note, and the level score the board recorded beside it — the score stays; only the verdict waits.
+          // Loop R M7(b): ONE row that never wraps. The held words (28–35 characters across the four locales) do not fit
+          // the 188px node on one line, so the note is a block that wraps inside itself (rounded-md, balanced lines) to
+          // the left of the score — never a rounded-full pill broken in two with the score pushed to a third line.
+          <span data-held="true" className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 flex-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-semibold leading-tight text-balance text-amber-800">{copy.held}</span>
             {fixture.summary?.headline ? (
-              <span className="font-display text-sm font-semibold tabular-nums text-ink">{fixture.summary.headline}</span>
+              <span className="shrink-0 whitespace-nowrap font-display text-sm font-semibold tabular-nums text-ink">{fixture.summary.headline}</span>
             ) : null}
           </span>
         ) : fixture.summary?.headline ? (

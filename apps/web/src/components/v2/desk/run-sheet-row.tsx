@@ -292,6 +292,8 @@ export function RunSheetRow({
   // seats a winner — so its names are not struck as a void's are (that beside "Needs a decision" read as two
   // contradicting facts). Its reason line still says abandoned.
   const struck = voided && !awaitsSettle;
+  // The held chip's one condition, read by the chip and by the phone line it changes (loop R M7(d)).
+  const held = fixture.status === "needs_decision" || awaitsSettle;
 
   // The sub-line: ONE computed string, ONE guard below.
   //
@@ -535,7 +537,10 @@ export function RunSheetRow({
         {/* B3 re-review N-1: `max-md:flex-wrap` — at 320 the French waiting chip ("En attente du téléphone") plus the
             action pass line 2 by 16 px; the action wraps under the chip instead of squeezing past the row's edge. */}
         <div data-row-line="2" className="flex min-w-0 items-center justify-between gap-2 max-md:flex-wrap md:contents">
-          <p className="min-w-0 flex-1 truncate text-xs text-slate-500 md:hidden">{phoneLineTwo}</p>
+          {/* Loop R M7(d): a HELD row also carries the held chip and Settle on this line, and at 320 they took the room —
+              the meta truncated to "Round 1 · …" and hid the reason ("abandoned"). A held row's meta takes the whole
+              line (`max-md:basis-full`) and the chip and Settle wrap below it; every other row keeps two lines. */}
+          <p className={`min-w-0 flex-1 truncate text-xs text-slate-500 md:hidden${held ? " max-md:basis-full" : ""}`}>{phoneLineTwo}</p>
           {/* Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; a session that is up shows HERE as a
               chip — "● Live" or "● Waiting for phone" — linking to that page with the panel open. At every fixture
               status: a stream outlives the whistle. 44 px tall on phones (the tap floor).
@@ -561,7 +566,7 @@ export function RunSheetRow({
           )}
           {/* W2a Task 11 (finding 25): a HELD bracket fixture says so, in the desk's red attention tone (attention
               outranks phase, competition-desk _RULES). Every viewer sees it; only an editor is offered Settle. */}
-          {(fixture.status === "needs_decision" || awaitsSettle) && (
+          {held && (
             <span
               data-testid="run-sheet-held-chip"
               className="badge inline-flex shrink-0 items-center normal-case bg-red-50 text-red-700 md:order-first"

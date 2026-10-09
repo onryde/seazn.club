@@ -891,6 +891,10 @@ export function FixtureConsole({
   // Spec 2026-09-30 §2: an open stream panel is content too, exactly as an open hand-over panel is.
   const consoleScoringEmptyOnPhone =
     started && !(scorePadV2 && mountPad) && !(canHandOver && handoverOpen) && !(stream && streamOpen);
+  // Loop R M7(a): at md and up the header row still renders the "Scoring" heading, and beside it only the Stream and
+  // Remote scoring buttons (Start match is gone once started). With neither, a card that is empty on a phone is a heading
+  // over nothing at 768 and 1280 too — an official on a held fixture saw exactly that — so it is hidden at every width.
+  const consoleScoringEmpty = consoleScoringEmptyOnPhone && !stream && !canHandOver;
   // The Scoring section's own gate (below). Where it does not render — finalized, cancelled, read-only (frozen) or a
   // TBD side — Stream gets its own card, so Stop stays reachable (spec 2026-09-30 §2, Review Focus 4).
   const scoringSection = scoring && !!home && !!away;
@@ -1192,7 +1196,7 @@ export function FixtureConsole({
           that question wrong. */}
       {scoring && home && away && (
         <section
-          className={`card p-5 max-md:p-3${consoleScoringEmptyOnPhone ? " max-md:hidden" : ""}`}
+          className={`card p-5 max-md:p-3${consoleScoringEmpty ? " hidden" : consoleScoringEmptyOnPhone ? " max-md:hidden" : ""}`}
           data-role="console-scoring"
         >
           <div className={`mb-3 flex flex-wrap items-center justify-between gap-2${started ? " max-md:hidden" : ""}`}>

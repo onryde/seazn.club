@@ -48,6 +48,22 @@ async function crop(target: Locator | Page, name: string, width: number) {
   else await (target as Locator).screenshot({ path });
 }
 
+/** Loop R M7(c): a later tie-break step's header — Back on the title's row (above every option, never on a line of its
+ *  own between them), and the hyphenated "tie-break" one unbroken run (320 split it "TIE-" / "BREAK?"). */
+async function expectSheetHeadOneRow(page: Page, width: number) {
+  const b = pad(page).getByRole("button", { name: "Back", exact: true });
+  const head = b.locator("xpath=..");
+  const title = head.locator("p.mk-eyebrow");
+  const [bb, tb] = [(await b.boundingBox())!, (await title.boundingBox())!];
+  expect(bb.y, `${width}: Back starts within the title's rows`).toBeLessThan(tb.y + tb.height);
+  expect(bb.x, `${width}: Back is right of the title`).toBeGreaterThanOrEqual(tb.x + tb.width - 1);
+  const firstOption = (await pad(page).locator("[data-choice-option-id]").first().boundingBox())!;
+  expect(bb.y + bb.height, `${width}: Back sits above the options`).toBeLessThanOrEqual(firstOption.y);
+  const hyphenated = title.locator("span.whitespace-nowrap");
+  await expect(hyphenated).toHaveCount(1);
+  expect(await hyphenated.evaluate((el) => el.getClientRects().length), `${width}: "tie-break" on one line`).toBe(1);
+}
+
 type Visibility = "private" | "public";
 async function knockout(
   r: APIRequestContext, sport: string, variant: string, names = ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"], visibility: Visibility = "private", people?: string[],
@@ -213,6 +229,13 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
       await page.setViewportSize({ width: w, height: 900 });
       await expect(row.getByTestId("run-sheet-held-chip"), `${w}: the hold is on the row`).toBeVisible();
       await expectNoHorizontalScroll(page);
+      if (w < 768) {
+        // Loop R M7(d): the phone meta line carries the reason in full — "abandoned" is not truncated away.
+        const meta = row.locator('[data-row-line="2"] > p');
+        await expect(meta).toContainText("abandoned");
+        const cut = await meta.evaluate((el) => el.scrollWidth > el.clientWidth);
+        expect(cut, `${w}: the meta line is not truncated`).toBe(false);
+      }
       await crop(row, "run-sheet-held-abandon", w);
       rowWidths++;
     }
@@ -311,6 +334,8 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
       for (const w of [1280, 768, 320]) {
         await p.setViewportSize({ width: w, height: 900 });
         await expectNoHorizontalScroll(p);
+        // Loop R M7(a): nothing to score, hand over or stream — so no "Scoring" card over nothing, at any width.
+        await expect(p.locator('[data-role="console-scoring"]'), `${w}: no empty Scoring card`).toBeHidden();
         if (w >= 768) {
           // m5 (fix round 2): the note sits under the Scoring card, above the ledger and lineups — in the first screen.
           await p.evaluate(() => window.scrollTo(0, 0));
@@ -723,10 +748,12 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       await expect(option(page, "away")).toBeVisible();
       await expect(option(page, "away")).toHaveText(shownAs.get(sf.away_entrant_id!)!);
       await expectNoHorizontalScroll(page);
+      await expectSheetHeadOneRow(page, w);
       await crop(pad(page), "pad-tiebreak-winner", w);
       await option(page, "away").click();
       await expect(option(page, "none")).toBeVisible();
       await expectNoHorizontalScroll(page);
+      await expectSheetHeadOneRow(page, w);
       await crop(pad(page), "pad-tiebreak-score", w);
       await back(page).click();
       await back(page).click();
@@ -928,6 +955,11 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
       await page.setViewportSize({ width: w, height: 900 });
       await expect(item.filter({ visible: true }).first()).toBeVisible();
       await expectNoHorizontalScroll(page);
+      if (w < 1024) {
+        // Loop R M7(e): below lg every width is a touch width — the Settle action is a 44px tap target.
+        const box = (await item.locator("a:visible").first().boundingBox())!;
+        expect(box.height, `${w}: "Settle the match" is a 44px tap target`).toBeGreaterThanOrEqual(44);
+      }
       await crop(item.filter({ visible: true }).first(), "desk-needs-decision", w);
       await crop(page.locator('[data-pill="needs_decision"]:visible').first(), "desk-pill-needs-decision", w);
       widths++;
@@ -967,6 +999,16 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
       const held = page.locator('[data-held="true"]');
       await expect(held).toBeVisible();
       await expectNoHorizontalScroll(page);
+      // Loop R M7(b): the held note and the level score share one row — the score sits beside the note (its centre
+      // inside the note's height), on one line; the note never pushes it to a line below.
+      const note = held.locator(":scope > span").first();
+      const score = held.locator(":scope > span").nth(1);
+      await expect(note).toHaveText(say("matchCentre.status.needs_decision"));
+      await expect(score).toHaveText(/\d.*\d/); // the level score the board recorded
+      const [nb, sb] = [(await note.boundingBox())!, (await score.boundingBox())!];
+      expect(sb.y + sb.height / 2, `${w}: the score is beside the note, not under it`).toBeLessThanOrEqual(nb.y + nb.height);
+      expect(sb.x, `${w}: the score is right of the note`).toBeGreaterThanOrEqual(nb.x + nb.width);
+      expect(await score.evaluate((el) => el.getClientRects().length), `${w}: the score on one line`).toBe(1);
       await crop(held.locator("xpath=ancestor::a[1]"), "public-bracket-held", w);
       shots++;
     }
