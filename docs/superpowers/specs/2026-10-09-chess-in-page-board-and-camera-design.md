@@ -1,0 +1,380 @@
+# Chess: in-page board and camera — design
+
+**Date:** 2026-10-09
+**Status:** awaiting owner review
+**Supersedes:** `2026-09-15-chess-lichess-external-play-design.md` (the "players leave for
+lichess.org" shape). That document's Tasks 1–8 are built and largely survive; its
+venue, transport and result-detection sections are replaced wholesale by this one.
+**Branch:** `feat/chess-lichess-external-play`, worktree
+`.claude/worktrees/chess-lichess-external-play`, rebased onto main `8afdd8b42`.
+
+---
+
+## 0. What changed and why
+
+The old product was a lobby: both players check in, we create a Lichess challenge, the
+players leave for lichess.org, and we poll the game export for a result.
+
+The new product is a venue. **The match is played on our page** — a chessground board
+beside the player's own camera tile — with moves submitted through the Lichess Board API
+using each player's own OAuth token. Lichess remains the authority on legality, clocks
+and results. It stops being the place the game happens.
+
+Owner decisions taken 2026-10-09, in order:
+
+| # | Decision |
+|---|---|
+| D1 | Ship 1 is board **and** camera together, not board first |
+| D2 | Camera is **mandatory**, pulling preflight, policy, arbiter and penalties into scope |
+| D3 | The old "leave for lichess.org" mode is **deleted**. One venue |
+| D4 | Two boards: Chess Quest keeps its own; live play uses **chessground**, GPL-3.0 accepted |
+| D5 | Camera policy is the **org's** choice per division/stage: `Off` / `Optional` / `Required` |
+| D6 | **One camera** per player is enough for ship 1; model it as N participants |
+| D7 | Players do **not** see each other. Each sees only their own tile |
+| D8 | Deterrent only — no mandatory observer; an arbiter **may** be assigned when available |
+| D9 | Policy changes after a round opens are **downgrade-only, with an audit row** |
+| D10 | Camera failure mid-game = **flag; the organiser decides**. The board never freezes |
+| D11 | RealtimeKit outage under `Required` = **organiser override with an audit row** |
+
+---
+
+## 1. Global constraints
+
+- Lichess is the authority on legality, clocks and results. We never adjudicate chess.
+- Our board is the only **supported** venue. We cannot technically prevent the same
+  accounts playing on lichess.org, so out-of-band play is **detected, not blocked**.
+- No long-lived connection to Lichess anywhere. No always-on service.
+- Every user-facing string ships in en/es/fr/nl. This surface is **not** under
+  `apps/web/src/games/**`, so the games English-only exemption does not apply to it.
+- Full mobile bar: 320, 768, 1280, no horizontal page scroll. No exemption.
+- Colour is **read from the pairing**, never assigned here. W3 owns colour allocation.
+- Names resolve through `entrantDisplayName`, never raw entrant text.
+- Unrated games only.
+- chessground stays **isolated and unmodified** — its own chunk, loaded as a library,
+  with a thin wrapper of ours above it. See §9.
+
+---
+
+## 2. Measured facts
+
+Everything in this section was measured against live lichess.org on 2026-10-09, not
+inferred. Logs: `scratchpad/flag-spike.log`, `spike-battery2.log`, `tc-boundary.log`.
+Each line that follows is a design input; several contradict the brainstorming document.
+
+| # | Fact | Evidence |
+|---|---|---|
+| M1 | **Lichess ends a game on time with no client connected.** Game `PbxONnd6`: poll at 10:02:05Z `status=started`; poll at 10:02:21Z `status=outoftime winner=black`, after white's 180s expired ~10:02:15Z, with no stream open | flag spike |
+| M2 | **Caveat on M1:** this cannot distinguish "Lichess auto-flags" from "our export read finalises it". The flag appeared on the first poll after expiry, consistent with both. The spec therefore says *a read settles the flag*, never *Lichess pushes it to us* | flag spike |
+| M3 | **Challenge creation is rate-limited hard.** Four creates in ~1s, then every subsequent create returned `{"error":"Too many requests. Try again later."}` | battery v1 |
+| M4 | **Moves are not rate-limited** at speed — 8 back-to-back posts, all 200 | battery v2 §F |
+| M5 | **A malformed UCI is played, not rejected.** `move e7e6xx` → `200 {"ok":true}`, export `moves=e4 e6`. Lichess truncated the suffix | battery v2 §D |
+| M6 | **Out-of-turn and game-over share one error:** `400 {"error":"Not your turn, or game already over"}` | battery v2 §D |
+| M7 | **Promotion works plainly:** `e7e8q` → 200, export `e8=Q` | battery v2 §B |
+| M8 | **Stalemate** → `status=stalemate winner=None` | battery v2 §C |
+| M9 | **An early resign is an abort.** Resigning after one move gave `status=aborted winner=None`; after two moves, `status=resign winner=black` | battery v2 §B, §D |
+| M10 | **A pending draw offer is invisible in the export.** Full body dumped while an offer stood: no draw-offer field, `status` still `started` | battery v2 §E |
+| M11 | **The export carries authoritative clocks:** `"clocks":[60000,60000]` centiseconds plus `"clock":{initial,increment,totalTime}` | battery v2 §E |
+| M12 | **The Board API refuses play on fast clocks, but the challenge is accepted at creation.** 0+1 and 1+0 created fine, then every move `400 {"error":"This game cannot be played with the Board API."}` | battery v2 §A |
+| M13 | **The cutoff is blitz or slower.** 120+1 (est 160s) → `speed=bullet` → refused; 180+0 (est 180s) → `speed=blitz` → played. Estimated duration = `limit + 40 × increment`. Two points tested, not the whole curve | tc-boundary |
+| M14 | **`clock.limit` is an enumerated set, not a free integer.** 170+0 and 140+1 were refused at creation with `{"clock.limit":["Invalid value"]}` | tc-boundary |
+| M15 | `claim-victory` is for an opponent who **left**, not for flagging: "Claim victory when the opponent has left the game for a while". The board stream carries an `opponentGone` event | Lichess OpenAPI |
+
+Premises from the brainstorming document that these falsify or qualify:
+- §6 "never poll, keep one connection per game" — **reversed**. See §4.
+- §10 "Board API excludes the fastest time controls" — **true for play, false for
+  creation** (M12). The dangerous half is that creation succeeds.
+- §11's implied promotion support in chessground — chessground ships **no** promotion UI.
+
+---
+
+## 3. Architecture
+
+Seven components. Nothing long-lived.
+
+### 3.1 Link
+Lichess OAuth (PKCE, built) now requests **`board:play` + `challenge:write`** instead of
+no scopes. The token is **stored encrypted at rest**, reusing the sealed-secret pattern
+the device link uses (V417), and revoked on unlink.
+
+This reverses the earlier identity-only decision, which revoked the token immediately
+after reading the account. Players already linked under that flow get a **re-consent
+screen** before their first online fixture. The copy states plainly that the scope lets
+us submit moves in their games — including games that are not ours.
+
+### 3.2 Window and seat
+Unchanged: window opens T−10, deadline T+20, check-in stamps the fixture. Under policy
+`Required`, the seat is granted only after camera preflight passes (§5).
+
+### 3.3 Creation
+Claim-then-call, already built: claim the mint with a conditional UPDATE, call Lichess
+outside any transaction, then conditionally record. One claimant per fixture.
+
+- **White's token challenges Black's username; Black's token accepts.** Colour comes
+  from the pairing. This removes the `urlWhite`/`urlBlack` hand-off entirely.
+- Creation runs through a **global throttle queue with 429 backoff** (M3). A 64-player
+  round wants 32 games at once; Lichess allows roughly four a second.
+- The time control comes from a **curated list verified playable** (§3.7).
+- The fixture records `pending` before the HTTP call, and a unique index on the challenge
+  id makes a double-create impossible.
+
+### 3.4 Play loop
+1. The client posts an intended move to our server — never to Lichess.
+2. The server **validates the UCI strictly** against `^[a-h][1-8][a-h][1-8][qrbn]?$`
+   (M5 — a malformed string is not rejected by Lichess, it moves a piece), checks that
+   it is that player's turn and that the caller is that player, and submits it with that
+   player's token.
+3. On acceptance the server records the move and broadcasts position, last move and
+   clocks to both players and to spectators over the realtime channel we already own.
+
+We submit both sides, so we own the move stream without asking Lichess for it.
+
+### 3.5 Reconcile
+One export read, on exactly four triggers:
+- a rejected move (M6 — the message covers two states, so reconcile, never assume);
+- a local clock reaching zero;
+- game end;
+- an organiser pressing resync.
+
+The read returns status, winner **and authoritative clocks** (M11), so every reconcile
+corrects our locally-derived clocks instead of letting them drift to the flag.
+
+### 3.6 Result
+Terminal status maps to our events, written **under organiser authority**
+(`mintOrgOwnerAuth`), because W2a makes `core.forfeit`, `core.settle` and `core.abandon`
+organiser-only.
+
+| Lichess | Our outcome |
+|---|---|
+| `mate`, `resign`, `outoftime` | decided result, winner as reported |
+| `draw`, `stalemate` | draw. In a knockout this becomes `needs_decision` / phase `tiebreak`; **never written as decided** |
+| `aborted` | no result. Note M9: an early resign lands here with no winner |
+| no-show at T+20 | `core.forfeit {by, reason: "walkover"}` |
+| both absent | `core.forfeit {by: "both", reason: "walkover"}`; refused `DOUBLE_WALKOVER_NO_NEXT_MATCH` on a final, last rung or third-place match, where the fixture stays open for the organiser |
+
+A Lichess **timeout is a normal win, not a forfeit**. Only a no-show is a forfeit.
+
+**A token revoked or rejected mid-match** is not a no-show and must not be recorded as
+one. It produces a distinct reason value and sends the fixture to the organiser queue.
+
+**T+20 is the deadline to be seated and have the game created** — not a cap on the game.
+Once a game exists it runs on its own clock, past the window if it must. Nothing in our
+system ends a live game early.
+
+**Out-of-band play with no camera** — moves advancing while the policy is `Required` and
+no live publisher is present is logged as a fair-play flag for the organiser. It is
+never an automatic sanction.
+
+### 3.7 Time controls
+The organiser picks from a curated list, validated at **tournament setup** — creation
+succeeding proves nothing about playability (M12). Permitted entries must satisfy both
+`limit + 40 × increment ≥ 180` (M13) and a `clock.limit` value Lichess accepts (M14).
+Ship-1 list: **3+0, 3+2, 5+0, 5+3, 10+5, 15+10**. Each is verified by the test in §8.
+
+---
+
+## 4. Transport: why there is no streaming service
+
+The brainstorming document specified one long-lived NDJSON connection per live game. That
+is removed. Our server submits both players' moves, so the only things a stream would
+tell us that our own writes do not are: a flag, a Lichess-declared terminal state, and a
+move made out of band. Each has a cheaper answer — M1 for the flag, the end-of-game
+reconcile for terminal states, and a rejected submission for out-of-band play.
+
+The 5-minute cron stays what it is: sweeps and no-shows. It does not become a live
+service.
+
+**Known blind spot, accepted:** a draw offer made on lichess.org is invisible to us
+(M10). Offers made on our page are fine — our server sends them, so our server
+broadcasts them.
+
+**Known cost, accepted:** with us as the only mover, our downtime stops play. Deleting
+the lichess.org mode did not delete the escape hatch, because the game is a real Lichess
+game: `lichess.org/<gameId>` works with no code from us. The break-glass is a runbook
+line — the organiser tells both players to finish there, and our reconcile records the
+result when we return. It is not a second mode to build or test.
+
+---
+
+## 5. Camera
+
+### 5.1 Policy
+`Off` / `Optional` / `Required`, set per division/stage, defaulting from the competition,
+`Off` for all existing data.
+
+- `Off` — no meeting is created. Zero video spend.
+- `Optional` — tile shown if the player grants camera; never blocks a seat.
+- `Required` — preflight gates the seat.
+
+**Changes after the first check-in window opens are downgrade-only and write an audit
+row** (D9). Otherwise an org could flip `Required`→`Off` to erase a flag, or
+`Off`→`Required` at T−5 and strand the field.
+
+### 5.2 Preflight is server-verified
+A player is seated only when the meeting itself reports a **live video publisher** for
+that participant. The POC gated check-in on a client-sent `cameraOk` boolean; that is
+forgeable and is on the do-not-copy list (§10).
+
+Consequence: the meeting is created when the **first** player arrives in the window, not
+after both check in, because preflight needs something to join. Torn down at the result,
+or at T+20 if nobody comes.
+
+### 5.3 What each person sees
+- **A player sees their own tile only** (D7). Local preview; no subscription to the
+  opponent.
+- A **presence pill** shows "opponent camera: live / off" — compliance without a face.
+- An **arbiter**, when assigned, joins receive-only and sees both players' tiles for a
+  chosen fixture, plus that fixture's flags.
+- Mic muted by default. Chess needs no audio.
+
+Rationale for D7: chess events are full of under-18s, and showing a child's face to a
+stranger they were paired with is a safeguarding problem that self-view avoids.
+
+### 5.4 Honesty of the copy
+There is no mandatory observer (D8). Player-facing copy must therefore say **"your
+camera may be reviewed by an organiser"** — never "you are being monitored", which would
+be a false statement inside a consent flow on an unstaffed round. Registration states the
+camera requirement **before** signup, not at T−10.
+
+### 5.5 Failure
+Camera loss mid-game never freezes the board — Lichess clocks cannot pause. We log it
+with timestamps, flip the presence pill, and surface it on the run sheet. **The organiser
+decides the consequence** (D10).
+
+If RealtimeKit is unavailable under `Required`, the organiser may **override and proceed
+without video, writing an audit row** (D11). A video vendor outage must not cancel a
+tournament.
+
+---
+
+## 6. The match room
+
+One page, one DOM, phone-first; everything below `md` is `max-md:*`.
+
+**States:** before the window → window open, not seated (preflight + Check in) → seated,
+waiting → game live → over → needs organiser.
+
+**Always visible during play:** both clocks, both names, whose move it is, the board, your
+own tile, the opponent presence pill.
+
+**Phone composition at 320** (owner chose A over a picture-in-picture overlay, because an
+overlaid tile covers a board corner and that is where a rook lives):
+
+```
+┌──────────────────────┐
+│ Ada 10:00 · you 9:42 │  clocks + names
+├──────────────────────┤
+│        BOARD         │  full width
+├──────────────────────┤
+│ [you] 🎥  opp ● live │  own tile + presence pill
+├──────────────────────┤
+│  Draw   Resign       │
+└──────────────────────┘
+```
+
+Desktop keeps the board central with the tile and controls in a side rail.
+
+**Controls:** draw offer, resign, abort before the first move, and **our own promotion
+picker** — chessground ships none. No takeback: it is a dispute magnet with a camera
+pointed at it.
+
+**Clocks** render locally from accepted-move timestamps and are corrected on every
+reconcile (M11). We never declare a flag from our own arithmetic.
+
+---
+
+## 7. Public and organiser surfaces
+
+- **Public match centre** watches on our page, view-only board. No lichess.org link.
+- **Run sheet** shows camera flags, held fixtures and the organiser's Settle action.
+- A knockout draw shows as held — "winner to be decided" — never as a decided result.
+
+---
+
+## 8. Testing
+
+House rules apply in full: every change ships a test that fails without it; every guard
+added is mutated once; anti-vacuity — a sweep reports how many items it checked and zero
+is a failure; expected values derive from the rulebook or the engine's declarations,
+never from the code under test.
+
+Specific to this design:
+
+1. **The UCI validator is mutated** — delete the pattern, confirm a test fails. M5 is the
+   reason it exists: garbage does not error, it moves a piece.
+2. **The time-control list is driven, not asserted.** A test walks every entry in the
+   ship-1 list and checks `limit + 40 × increment ≥ 180`, and reports the count checked.
+3. **Result mapping enumerates every terminal status** — `mate`, `resign`, `outoftime`,
+   `draw`, `stalemate`, `aborted` — including M9's early-resign-is-an-abort case, where
+   the wrong answer differs from the right one by having a winner at all.
+4. **The no-show sweep is tested in phase `pre`**, which is where a game that never began
+   sits. Today no test anywhere covers a chess forfeit; the only Swiss withdrawal test
+   that drives an unstarted board is badminton, whose engine tolerates `pre`.
+5. **Preflight is tested against a forged client claim** — a request asserting
+   `cameraOk` with no live publisher must be refused.
+6. **E2E covers the seven widths**, with the match room driven at 320 and 1280.
+7. A Lichess **stub** stands in for e2e; the recorded real payloads in
+   `__fixtures__/lichess/` stay the contract check.
+
+---
+
+## 9. Licensing
+
+chessground is **GPL-3.0** and we ship it to every visitor's browser, which is
+distribution of a combined work. It is not AGPL, so server use alone triggers nothing.
+The owner accepted this on 2026-10-09 after being told; no legal advice was given or
+implied, and a lawyer is the right answer if the question is ever pressed.
+
+Mitigation, which the design requires: chessground is **isolated and unmodified** — its
+own chunk, loaded as a library, never vendored or patched, with a thin wrapper of ours
+above it. This narrows the argument; it does not remove it.
+
+chess.js (BSD-2) supplies client-side legality hints. If Chess Quest's piece artwork is
+ever reused here, it is Cburnett **CC BY-SA 3.0 / GFDL** and the attribution travels with
+it.
+
+---
+
+## 10. Do not copy from the POC
+
+The sample is a mechanism reference, not a code source. Specifically rejected:
+
+- player tokens pasted into a form, held in plaintext memory and never revoked;
+- a client-supplied `cameraOk` boolean as the check-in gate;
+- an unauthenticated `/ws` upgrade whose `game_ready` frame broadcasts **both** seats'
+  video tokens;
+- `ARBITER_KEY` defaulting to `'arbiter'` and pre-filled in the HTML;
+- an unauthenticated `/api/reset`.
+
+---
+
+## 11. Sequencing and dependencies
+
+- **This programme cannot ship its no-show path before W2b merges.** Until then a
+  pre-start chess forfeit returns 422 `WRONG_PHASE`. W2b accepts phase `pre` and makes
+  `core.forfeit` strict: `{by: <entrant> | "both", reason: "walkover" | "retired" |
+  "disqualified" | "withdrew"}`; free text is refused. Contract supplied by session
+  f-w2b, signed by their owner 2026-10-08 — **information to us, not a ruling**.
+- W2a makes forfeit/settle/abandon organiser-only. Verify our sweep's actor against the
+  **merged** gate, not the branch.
+- **W3 owns Swiss colour alternation.** We read colour; we do not fix allocation.
+- Migrations: V405/V407 sit below main's high-water mark (V431) and `flyway.toml` sets no
+  `outOfOrder`, so they are refused on any DB past V431. **Amend them to V432/V433 as
+  part of this design's schema work** — do not enable `outOfOrder`.
+
+---
+
+## 12. Out of scope for ship 1
+
+Recording and retention. A second camera angle (the model allows N participants per
+player, so it is config later, not a migration). Takeback. Rated games. A new arbiter
+role — the existing organiser/admin role is used, one migration after `scorer` was
+retired. Variants other than standard.
+
+---
+
+## 13. Open items
+
+- Penalty wording for a camera that goes dark: ruled as **flag, organiser decides** (D10);
+  the player-facing sentence still needs writing in four locales.
+- W2b's merge date, which gates the no-show path.
+- Whether the ship-1 time-control list should include anything slower than 15+10.
