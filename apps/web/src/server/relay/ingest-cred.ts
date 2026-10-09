@@ -2,12 +2,14 @@
 // from the stored Cloudflare values. Pure: no I/O, no clock; the caller opens the stored values (`readFirstInput`)
 // inside its own request and passes the environment's settings in.
 //
-//  - RTMPS: an exact `live.cloudflare.com` hostname is rewritten to the environment's ingest host. Scheme, port and
-//    path are kept — `rtmps:` is not a special scheme, so `URL` keeps `:443` and `/live/` exactly as stored.
+//  - RTMPS: an exact `live.cloudflare.com` hostname is rewritten to the ingest host when one is set. Scheme, port and
+//    path are kept — `rtmps:` is not a special scheme, so `URL` keeps `:443` and `/live/` exactly as stored. The ingest
+//    host is W15, retired by W26: unset in every environment; setting it breaks every phone.
 //  - SRT is NEVER rewritten (W21): it is served on `srt://live.cloudflare.com:778` as Cloudflare issued it.
 //  - With an ingest host set, any other hostname on either url is refused (`ingest_host_unexpected`): capture refuses a
 //    cred that is not on an allowed host, so serving it would only fail the start on the phone.
-//  - With no ingest host (local, CI), the stored values pass through — the fake's `fake.ingest.invalid` included.
+//  - With no ingest host (every environment under W26), the stored values pass through — the fake's
+//    `fake.ingest.invalid` included.
 //  - `srtEnabled: false` (A18's safety net) → `srt: null`, and `preferred` never names a null shape.
 import type { CaptureCred } from "@/server/api-v1/capture-schemas";
 import { QR_PREFERRED_DEFAULT } from "./config";

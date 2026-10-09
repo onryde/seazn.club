@@ -69,9 +69,10 @@ const WaitingFields = {
 export const CaptureWaiting = z.strictObject({ state: z.literal("waiting"), ...WaitingFields });
 export type CaptureWaiting = z.infer<typeof CaptureWaiting>;
 
-/** W21: SRT is offered on srt://live.cloudflare.com:778 as Cloudflare issues it; RTMPS on the environment's live.*.
- *  No host is pattern-checked here: capture enforces the host per environment (G0-i, agreed 2026-10-01:
- *  cred.srt on exactly live.cloudflare.com or the env's live.*; RTMPS and every other URL strict live.*). */
+/** W26 (2026-10-05, superseding W15 and W21's RTMPS half): both credentials are on Cloudflare's own host, exactly as
+ *  Cloudflare issues them — srt://live.cloudflare.com:778 and rtmps://live.cloudflare.com:443/live/ — in every
+ *  environment; there is no custom ingest host. No host is pattern-checked here: capture enforces it (capture's
+ *  owner, 2026-10-05: the app trusts only live.cloudflare.com, for SRT and RTMPS alike). */
 export const CaptureCred = z.strictObject({
   srt: z.strictObject({
     url: z.string().min(1), streamId: z.string().min(1), passphrase: z.string().min(1),

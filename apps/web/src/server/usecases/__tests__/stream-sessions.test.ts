@@ -5409,7 +5409,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect((await r.row(sessionId)).state).toBe("warming");
   });
 
-  it("§6.15 (D1): PHONE_SILENT_FLOOR_SECONDS is the floor Go live's presence reads — under ENV_NAME=ci a SHORTENED floor makes a phone that has been quiet a while silent (phone_not_paired); with the variable unset the same phone at the same instant is present and admitted (the positive pair)", async () => {
+  it("§6.15 (D1): PHONE_SILENT_FLOOR_SECONDS is the floor Go live's presence reads — under ENV_NAME=ci a SHORTENED floor makes a phone that has been quiet a while silent (phone_not_responding — it is paired, owner ruling 2026-10-09); with the variable unset the same phone at the same instant is present and admitted (the positive pair)", async () => {
     // §6.9: silent when quiet for max(floor, answered cadence + slack). At the lowest cadence V430 lets a pairing store
     // (answered_poll_seconds 5..300) the cadence term is small, so the FLOOR decides — the default's and the shortened one.
     const CADENCE = 5;
@@ -5423,7 +5423,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     await sql`update fixture_stream_pairings set answered_poll_seconds = ${CADENCE} where id = ${pairingId}`;
     r.tick(quiet * 1000);
     await withEnv({ ENV_NAME: "ci", PHONE_SILENT_FLOOR_SECONDS: String(SHORT) }, () =>
-      expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_paired" }));
+      expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_responding" }));
     expect(await sessionsOf(r.auth.orgId)).toBe(0);
     await withEnv({ PHONE_SILENT_FLOOR_SECONDS: undefined }, () =>
       expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) }));
@@ -5466,13 +5466,13 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect(await codeOf(codeId), "an open session defers C2").toEqual({ ended_at: null, end_cause: null });
   });
 
-  it("W5: a SILENT phone (current, but no beat for longer than §6.9's threshold on the start's clock) is not present → phone_not_paired; its next beat makes the same Go live admitted", async () => {
+  it("W5 (owner ruling 2026-10-09): a SILENT phone (current, but no beat for longer than §6.9's threshold on the start's clock) is paired but not present → phone_not_responding, never phone_not_paired; its next beat makes the same Go live admitted", async () => {
     const r = await rig({ credits: 1, phone: false });
     // The threshold from the domain's own rule (§6.9, domain/pairing.ts): max(floor, answered cadence + slack).
     const { codeId } = await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
     expect(codeId).toBeTruthy();
     r.tick(10 * 60_000);   // ten minutes: past max(60 s, 60 s + 30 s) whatever the tunables
-    await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_paired" });
+    await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_responding" });
     expect(await sessionsOf(r.auth.orgId)).toBe(0);
     await pairPresentPhone(r.fixtureId, { at: r.deps.now() });   // the next beat, on the same clock
     await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) });
@@ -5575,7 +5575,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect((await currentSession(r.auth, r.fixtureId, r.deps))!.startCause).toBe("organiser");
   });
 
-  it("A23 (a new write path, diffed against the old): the organiser's Go live and the phone operator's start build the SAME AdmitInput but for the documented phonePresent, and make the SAME provider calls in the SAME order — at the start and at go-live", async () => {
+  it("A23 (a new write path, diffed against the old): the organiser's Go live and the phone operator's start build the SAME AdmitInput but for the documented phone standing, and make the SAME provider calls in the SAME order — at the start and at go-live", async () => {
     const rec = new FakeRecorder();
     const r = await rig({ credits: 2, fixtures: 2, recorder: rec });
     const deps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
@@ -5596,7 +5596,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     const organiser = await observe(() => organiserStart(r.auth, a, body(r.target.id), deps));
     const operator = await observe(() => startBroadcast(
       { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phoneB.pairingId }, b,
-      { targetId: second.id, startCause: "operator", phonePresent: true }, deps));
+      { targetId: second.id, startCause: "operator", phone: "present" }, deps));
     // The W5 probe (before the storage read), the M1 probe and the admission: three asks each, or one path skipped a gate
     // the other kept.
     expect(organiser.inputs).toHaveLength(3);
@@ -5605,15 +5605,15 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     // session, moves it between the two starts. Every other field is compared.
     const strip = (i: AdmitInput): Partial<AdmitInput> => {
       const rest: Partial<AdmitInput> = { ...i };
-      delete rest.phonePresent;
+      delete rest.phone;
       delete rest.headroomMinutes;
       return rest;
     };
     expect(operator.inputs.map(strip)).toEqual(organiser.inputs.map(strip));
-    // The documented difference is WHERE phonePresent comes from: read from the pairing for the organiser, the caller's
-    // own word for the operator. Both true here — a present phone is paired on each fixture.
-    expect(organiser.inputs.map((i) => i.phonePresent)).toEqual([true, true, true]);
-    expect(operator.inputs.map((i) => i.phonePresent)).toEqual([true, true, true]);
+    // The documented difference is WHERE the phone standing comes from: read from the pairing for the organiser, the
+    // caller's own word for the operator. Both present here — a present phone is paired on each fixture.
+    expect(organiser.inputs.map((i) => i.phone)).toEqual(["present", "present", "present"]);
+    expect(operator.inputs.map((i) => i.phone)).toEqual(["present", "present", "present"]);
     expect(organiser.calls.length, "the organiser's start made provider calls").toBeGreaterThan(0);
     expect(operator.calls).toEqual(organiser.calls);
     r.tick(3000);
@@ -5632,7 +5632,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect(issuedBy, "the differential: the code's issuer is not the organiser this rig signs in as").not.toBe(r.auth.userId);
     const { sessionId } = await startBroadcast(
       { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phone.pairingId }, r.fixtureId,
-      { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps);
+      { targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps);
     const [row] = await sql<{ created_by: string; start_cause: string; pairing_id: string; code_id: string }[]>`
       select created_by, start_cause, pairing_id, code_id from fixture_stream_sessions where id = ${sessionId}`;
     expect(row).toEqual({ created_by: issuedBy, start_cause: "operator", pairing_id: phone.pairingId, code_id: phone.codeId });
@@ -5657,7 +5657,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     let checked = 0;
     for (const [label, actor] of refused) {
       const err = await startBroadcast(actor, r.fixtureId,
-        { targetId: r.target.id, startCause: actor.source === "auto" ? "automatic" : "operator", phonePresent: true }, r.deps).then(() => null, (e: unknown) => e);
+        { targetId: r.target.id, startCause: actor.source === "auto" ? "automatic" : "operator", phone: "present" }, r.deps).then(() => null, (e: unknown) => e);
       expect(err, label).toBeInstanceOf(Error);
       expect(err, label).not.toBeInstanceOf(HttpError);
       expect((err as Error).message, label).toMatch(/startBroadcast: an? (phone|auto) start/);
@@ -5667,7 +5667,7 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect(await sessionsOf(r.auth.orgId)).toBe(0);
     const { sessionId } = await startBroadcast(
       { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phone.pairingId }, r.fixtureId,
-      { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps);
+      { targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps);
     const [row] = await sql<{ created_by: string }[]>`select created_by from fixture_stream_sessions where id = ${sessionId}`;
     expect(row!.created_by).toBe(issuedBy);
   });
@@ -5680,14 +5680,14 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     const [{ issued_by: issuerB }] = await sql<{ issued_by: string }[]>`select issued_by from fixture_stream_codes where id = ${onB.codeId}`;
     const err = await startBroadcast(
       { userId: issuerB, orgId: r.auth.orgId, source: "phone", pairingId: onA.pairingId }, b,
-      { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps).then(() => null, (e: unknown) => e);
+      { targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps).then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(HttpError);
     expect((err as Error).message).toMatch(/is not on fixture/);
     expect(await sessionsOf(r.auth.orgId)).toBe(0);
     await expect(startBroadcast(
       { userId: issuerB, orgId: r.auth.orgId, source: "phone", pairingId: onB.pairingId }, b,
-      { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) });
+      { targetId: r.target.id, startCause: "operator", phone: "present" }, r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) });
   });
 
   it("A8: warming_at is written when the session ENTERS warming, on the start's clock, round-trips into the Session, and anchors the warming timeout — created_at alone past the limit does not expire it; warming_at past it does", async () => {

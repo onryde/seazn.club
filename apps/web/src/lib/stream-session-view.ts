@@ -131,7 +131,7 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
 
 /** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. */
 export const CREATE_ERROR_CODES = [
-  "no_credits", "overlay_required", "active_session", "phone_not_paired", "storage_exhausted", "ingest_unavailable",
+  "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
   "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
@@ -140,8 +140,10 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   no_credits: "stream.error.no_credits",
   overlay_required: "stream.error.overlay_required",
   active_session: "stream.error.active_session",
-  // Capture QR v2 W5: no phone paired and answering on the stream code (an expired code answers it too, B7 m-b).
+  // Capture QR v2 W5: no phone paired on the stream code (an expired code answers it too, B7 m-b).
   phone_not_paired: "stream.error.phone_not_paired",
+  // Owner ruling 2026-10-09 (Option 1): a phone IS paired but has stopped answering (§6.9 silent) — wake it, don't rescan.
+  phone_not_responding: "stream.error.phone_not_responding",
   storage_exhausted: "stream.error.storage_exhausted",
   ingest_unavailable: "stream.error.ingest_unavailable",
   // T3: the ONE holder-less "elsewhere" sentence; a holder with a match is named by `inUseText` (stream.inUse.*).
@@ -157,7 +159,8 @@ const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unkn
 
 /** The lower-case domain codes createSession puts on the wire VERBATIM (stream-sessions.ts `refuse`, `targetInUse`). */
 const VERBATIM_CODES: readonly CreateErrorCode[] = [
-  "no_credits", "overlay_required", "active_session", "phone_not_paired", "storage_exhausted", "ingest_unavailable", "target_in_use",
+  "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
+  "target_in_use",
 ];
 
 /** The plan gates createSession refuses with `PaymentRequiredError(featureKey)` — read from the ONE authority the
@@ -323,8 +326,35 @@ export function readyStateOf(phone: StreamPhone | null, session: StreamSessionCu
   return phone.phone.present ? "paired" : "silent";
 }
 
-/** §6.12: Go live is enabled ONLY with a phone paired and answering — W5's own gate (`phone_not_paired`) on the server. */
+/** §6.12: Go live is enabled ONLY with a phone paired and answering — W5's own gate on the server (`phone_not_paired`, or
+ *  `phone_not_responding` for a paired phone gone silent since the panel's last read, owner ruling 2026-10-09). */
 export const canGoLive = (state: ReadyState): boolean => state === "paired";
+
+/** W5's two answers (§6.7.1; owner ruling 2026-10-09, Option 1): no phone on the code, or a paired phone gone silent. */
+export const W5_REFUSAL_CODES = ["phone_not_paired", "phone_not_responding"] as const satisfies readonly CreateErrorCode[];
+export const isW5Refusal = (code: string): boolean => (W5_REFUSAL_CODES as readonly string[]).includes(code);
+
+/**
+ * Owner ruling 2026-10-09 ("A"): a Go live refused for want of a phone (either W5 answer) is retired by the first
+ * PRESENT answer to a phone read sent after the refusal — the phone the sentence asked for has arrived. Every other
+ * refusal keeps its own rules. The watch is the newest read already sent when the last W5 refusal landed
+ * (`refusedAtRead`, the panel's read sequence number):
+ *  - a W5 refusal is itself news that there was no phone to stream from, whatever the panel last read, so a present
+ *    answer read before the click never retires it;
+ *  - only an answer to a read SENT after the refusal counts: one already in flight when the click was refused says
+ *    nothing about that click.
+ * A later present answer may say "clear" again; by then no W5 error is pending (the first one retired it, and a new W5
+ * refusal moves the watch), and the panel only ever clears a W5 error.
+ */
+export type PresenceWatch = { refusedAtRead: number };
+export const PRESENCE_WATCH_START: PresenceWatch = { refusedAtRead: 0 };
+export function presenceAfterRefusal(watch: PresenceWatch, code: string, newestRead: number): PresenceWatch {
+  return isW5Refusal(code) ? { refusedAtRead: newestRead } : watch;
+}
+/** Whether this landed phone read retires a pending W5 error: it reads present, and it was sent after the refusal. */
+export function readClearsW5(watch: PresenceWatch, read: { seq: number; present: boolean }): boolean {
+  return read.present && read.seq > watch.refusedAtRead;
+}
 
 /** O5 (§6.12, ruled 2026-10-01): why a live phone that still beats sends no video. */
 export type ReconnectReason = "camera" | "sound" | "network" | "held" | "weak";

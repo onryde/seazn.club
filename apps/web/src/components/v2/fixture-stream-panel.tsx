@@ -62,9 +62,14 @@ import {
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
   STATE_PILL_KEYS,
+  PRESENCE_WATCH_START,
   STREAM_POLL_MS,
   TARGET_REMOVED,
   canGoLive,
+  isW5Refusal,
+  presenceAfterRefusal,
+  readClearsW5,
+  type PresenceWatch,
   createErrorCode,
   createErrorHolder,
   createErrorIsNotFound,
@@ -941,12 +946,18 @@ export function PhoneTab({
   const [phone, setPhone] = useState<StreamPhone | null>(null);
   const [phoneLoaded, setPhoneLoaded] = useState(false);
   const phoneSeq = useRef(0);
+  // Owner ruling 2026-10-09 ("A"): a Go live refused for want of a phone clears on the first present answer to a read
+  // sent after the refusal (`readClearsW5`); the watch lives in a ref so the interval's callback never reads a stale one.
+  const presence = useRef<PresenceWatch>(PRESENCE_WATCH_START);
   const readPhone = useCallback(async () => {
     const seq = ++phoneSeq.current;
     try {
       const got = await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`);
       if (seq !== phoneSeq.current) return;
       setPhone(got);
+      if (readClearsW5(presence.current, { seq, present: got.phone?.present === true })) {
+        setCreateError((e) => (e !== null && isW5Refusal(e.code) ? null : e));
+      }
       const answer = got.destination?.id ?? null;
       // B8 final re-review n-6: "couldn't save" is news only while the server's answer is the one it was said beside —
       // an answer that CHANGES (saved from another device or tab) retires it. A poll answering the same keeps it.
@@ -1152,6 +1163,8 @@ export function PhoneTab({
       // m-2: removed and NOTHING left — the empty state is the whole answer; "pick another" would point at nothing.
       if (!(removed && reread.length === 0)) {
         setCreateError({ code: removed ? TARGET_REMOVED : code, holder: createErrorHolder(err) });
+        // "A": a W5 refusal is news that there was no phone — only a read asked from here on may clear it.
+        presence.current = presenceAfterRefusal(presence.current, code, phoneSeq.current);
       }
     }
     // Either way the server's state is the answer: the new session, or — after a refusal — whatever is there (an

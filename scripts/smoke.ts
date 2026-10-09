@@ -18958,7 +18958,9 @@ async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> 
 
 /**
  * Capture QR v2 over real HTTP (spec 2026-10-01 §11.1.6, case `capture-v2`), on the fake relay drivers: the organiser
- * mints the stream code → a phone claims the slot with it → the organiser's Go live → the phone's beat hears `go-live`
+ * mints the stream code → a phone claims the slot with it → the same phone gone silent (its last beat moved back in SQL)
+ * is refused `409 phone_not_responding` (owner ruling 2026-10-09), its next beat restores it → the organiser's Go live →
+ * the phone's beat hears `go-live`
  * for that session → the phone's descriptor GET carries the session AND its `cred`, while a SECOND phone's GET of the
  * same code carries the session and NO `cred` → the fake input connects (the T7 control route) → the phone's beat hears
  * `live` → the organiser's Stop → the beat hears `over`, stopped. W28/W27 (2026-10-06): both descriptors carry the
@@ -18984,7 +18986,7 @@ async function captureV2Suite(): Promise<void> {
     console.log("SKIP  capture-v2 suite (DATABASE_URL not set — the plan change needs SQL)");
     return;
   }
-  const EXPECTED_STEPS = 24;
+  const EXPECTED_STEPS = 25;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`capture-v2 smoke: ${label}`, cond);
@@ -19083,13 +19085,44 @@ async function captureV2Suite(): Promise<void> {
   const claimed = await beat(phoneA, { claim: "new", device: { model: "Smoke phone" } });
   step(`a NEW claim on a free slot → 200 waiting (got ${claimed.status} ${claimed.json?.state})`, claimed.status === 200 && claimed.json?.state === "waiting");
 
-  // 3. GO LIVE — the organiser's destination, then the start: W5 admits it (a phone paired and answering).
+  // The organiser's destination (step 3 goes live on it; 2b is refused on it).
   const target = await v1(owner, `/api/v1/orgs/${orgId}/stream-targets`, "POST", {
     kind: "youtube",
     label: "capture-v2 smoke",
     streamKey: `smoke-${randomBytes(6).toString("hex")}`,
   });
   const targetId = (target.json.data as { id?: string } | undefined)?.id;
+
+  // 2b. W5's second answer (owner ruling 2026-10-09): the phone IS paired but has stopped beating. Its last beat is moved
+  // back past §6.9's window in SQL (10 min: past max(floor, cadence + slack) for every cadence the DB admits, 5..300 s —
+  // a smoke server runs the default floor, so waiting it out would cost minutes) → the organiser's Go live is 409
+  // phone_not_responding, never phone_not_paired, and writes no session; the phone's next beat answers it again.
+  {
+    const quietUrl = process.env.DATABASE_URL;   // the suite's first line returns without it
+    const quiet = postgres(quietUrl, {
+      connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+      ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(quietUrl) ? false : "require",
+      prepare: !quietUrl.includes(":6543"),
+      max: 1,
+    });
+    try {
+      const moved = await quiet`
+        update fixture_stream_pairings p set last_beat_at = now() - interval '10 minutes'
+          from fixture_stream_codes c
+         where c.id = p.code_id and c.fixture_id = ${fx.fixtureId} and c.ended_at is null and p.ended_at is null`;
+      const silent = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions`, "POST", { mode: "passthrough", targetId });
+      const [{ n: rows }] = await quiet<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fx.fixtureId}`;
+      const back = await beat(phoneA);
+      step(
+        `a paired phone gone silent → Go live 409 phone_not_responding, no session row; its next beat → 200 (pairings moved ${moved.count}, Go live ${silent.status} ${silent.json.error?.code ?? ""}, rows ${rows}, beat ${back.status})`,
+        moved.count === 1 && silent.status === 409 && silent.json.error?.code === "phone_not_responding" && rows === 0 && back.status === 200,
+      );
+    } finally {
+      await quiet.end();
+    }
+  }
+
+  // 3. GO LIVE — the start: W5 admits it (a phone paired and answering).
   const made = await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions`, "POST", { mode: "passthrough", targetId });
   const sid = (made.json.data as { sessionId?: string } | undefined)?.sessionId;
   step(

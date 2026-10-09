@@ -170,7 +170,7 @@ shapes", "The answer table" and "Asks for the web side"), with our replies to it
 | 8 — beats and 410 | **Beats never answer 410.** A sid that has ended, named by a beat (its `sid` or its `stopped`), gets `200 {state:"over", sid, endReason}`. 410 is reserved to `GET code`. This server answers an ended broadcast on `GET` with the session shape in `completed` or `failed` (to the phone) or the waiting shape (to the scan), so **no route of ours sends 410** today. |
 | 9 — `POST start` carries `{phone}`; a phone that is not current gets `409 replaced` | Agreed as written. |
 | 10 — a warming broadcast whose phone has gone quiet is ended | **Required, agreed.** The new end reason `phone_lost` (not `stopped`), with no credit spent. §6.8.3 gives the exact clock. |
-| New from us (capture's A18) | **`cred.srt` may be `null`, with `preferred: "rtmps"`, as a safety net only.** By W21 SRT is offered from launch on `srt://live.cloudflare.com:778`; RTMPS is on the environment's `live.*` host. |
+| New from us (capture's A18) | **`cred.srt` may be `null`, with `preferred: "rtmps"`, as a safety net only.** By W21 SRT is offered from launch on `srt://live.cloudflare.com:778`; RTMPS is on the environment's `live.*` host (superseded by W26, 2026-10-05). |
 
 ### 4.2 G0 — the publish gate
 
@@ -188,7 +188,7 @@ below in writing.** Each confirmation is recorded here with its date and capture
 | G0-f | **The end-reason value `failed`**, for a server-side end that is neither a stop nor a timeout (a credit running out at the live transition, a provider fault). Capture reads it "Stream ended by Seazn — ask the organiser". | **agreed**, `69ef359`, 2026-10-01 |
 | G0-g | **A claim and a stop are independent.** A claim refused while it carries `stopped` is answered `taken` or `replaced` by the claim rules, not `over X`. The stop is still applied, and that 2xx delivers it. | **agreed**, `69ef359`, 2026-10-01 |
 | G0-h | **The staging SRT test** on `srt://live.stg.seazn.club:778`. | **deferred by the owner, 2026-10-01 (W20): not a gate.** Optional later step S2b. |
-| G0-i | **Capture's ingest-host rule admits `live.cloudflare.com` for SRT** (W21). RTMPS stays on the environment's `live.*`. The schema documents the SRT hosts as {`live.cloudflare.com`, the environment's `live.*`}. | **agreed, 2026-10-01.** Capture reports that their owner ruled independently: `cred.srt` may sit on exactly `live.cloudflare.com` or the environment's `live.*` host, and RTMPS and every other URL stay strict `live.*`. Their A18 is being updated to match. So `STREAM_SRT_ENABLED` defaults on in prod and stg from launch, with **no interim `false`**. |
+| G0-i | **Capture's ingest-host rule admits `live.cloudflare.com` for SRT** (W21). RTMPS stays on the environment's `live.*`. The schema documents the SRT hosts as {`live.cloudflare.com`, the environment's `live.*`}. | **agreed, 2026-10-01.** Capture reports that their owner ruled independently: `cred.srt` may sit on exactly `live.cloudflare.com` or the environment's `live.*` host, and RTMPS and every other URL stay strict `live.*`. Their A18 is being updated to match. So `STREAM_SRT_ENABLED` defaults on in prod and stg from launch, with **no interim `false`**. (superseded by W26, 2026-10-05) |
 
 - **The schemas are published first.** PR-1's first task writes them to `docs/contracts/` and removes v1, so
   capture can vendor them while the server is built.
@@ -325,7 +325,7 @@ unless a status is shown.
 | T7 | beat with no claim from P | P is not current | nothing changes | `replaced` |
 | T8 | beat from current P | — | latest beat stored (§6.10). Session ticked (§6.11). | per §6.3.3 |
 | T9 | beat from P naming an ended sid X, by its `sid` or its `stopped` | X is terminal | — | `200 over X` with X's endReason (ask 8; **first**, whatever has opened since, except a refused claim's `taken` or `replaced` and a non-current caller's `replaced`, G0-g). Never 410. |
-| T10 | organiser Go live | no current present phone | refused | `409 phone_not_paired` (panel) |
+| T10 | organiser Go live | no current present phone | refused | `409 phone_not_paired` (panel). **Amended 2026-10-09 (owner ruling, Option 1):** split in two — no current pairing on the active code → `409 phone_not_paired`; a current pairing whose phone is silent past §6.9's window → `409 phone_not_responding`. Console-only: never sent to the phone. |
 | T11 | organiser Go live | current phone present | session created, `startCause organiser`, phone = C | current phone's next beat: `waiting` (5 s) while starting, then `go-live S` |
 | T12 | `POST start` from P | P is not current | refused | `409 replaced` |
 | T13 | `POST start` from current P | an open session exists | refused | `409 already_live {sid, startedBy}` |
@@ -640,7 +640,7 @@ console's links store, its hash and its sealed envelope.
 | `autoAllowed` | PR-1: always `false`. PR-2: the fixture's switch (§7.1). |
 | `destinationName` | The `label` of the destination the phone's start would open on (§6.7.3's resolver, amended §17.13), or null when that is none — a choice cleared or archived (T36), or no live destination. Cut to the contract's maximum with one "…" (amended, §17.6). |
 | `heartbeatUrl`, `startUrl` | `${captureOrigin()}/api/v1/capture/codes/{code}/beats` and `…/start`. |
-| `cred.rtmps.url` | The stored Cloudflare value with the **hostname** replaced by `STREAM_INGEST_HOST` (W15). See below. |
+| `cred.rtmps.url` | The stored Cloudflare value with the **hostname** replaced by `STREAM_INGEST_HOST` (W15). See below. **Dormant under W26 (2026-10-05):** `STREAM_INGEST_HOST` is unset in every environment, so the value is served unchanged, `rtmps://live.cloudflare.com:443/live/`; setting it would break every phone. |
 | `cred.srt.url` | The stored Cloudflare value **unchanged**: `srt://live.cloudflare.com:778` (W21). It is never rewritten. |
 | `cred.srt` | Present while `STREAM_SRT_ENABLED` is on, its default (W21). `null` while it is off: A18's safety net. |
 | `cred.*` secrets | `readFirstInput` (secret-columns.ts), opened only inside this request. |
@@ -656,11 +656,12 @@ console's links store, its hash and its sealed envelope.
 **Ingest URL rewrite.**
 
 - **RTMPS only.** An exact `live.cloudflare.com` hostname on the RTMPS url is rewritten to `STREAM_INGEST_HOST`. The
-  scheme, port and path are kept.
+  scheme, port and path are kept. **Dormant under W26 (2026-10-05):** `STREAM_INGEST_HOST` is unset in every
+  environment, and setting it would break every phone (capture trusts only `live.cloudflare.com`).
 - **SRT is never rewritten** (W21). Its url must have exactly the host `live.cloudflare.com`.
 - **Any other hostname, on either url, answers `503`** (`ingest_host_unexpected`) and is logged as an error. Capture
   refuses a `cred` that is not on an allowed host, so serving it would only fail the start on the phone.
-- With `STREAM_INGEST_HOST` unset (local or CI), Cloudflare's values are served.
+- With `STREAM_INGEST_HOST` unset (every environment under W26), Cloudflare's values are served.
 - **SRT from launch on Cloudflare's host; `srt: null` is A18's safety net only.**
   - `STREAM_SRT_ENABLED` **defaults ON** (W21): unset means on, in code. Setting it to `false` is the safety net: the
     descriptor then carries `cred.srt: null` and `preferred: "rtmps"`, and the phone publishes RTMPS only, with no
@@ -668,8 +669,9 @@ console's links store, its hash and its sealed envelope.
   - The flag is turned off for an environment only when SRT fails there (S2). Capture's host rule admits
     `live.cloudflare.com` for SRT (G0-i, agreed), so there is no interim `false`. Each flip is recorded in this file
     with its evidence.
-  - **Moving SRT to the custom host later (S2b, optional)** is a server change only: rewrite the SRT host too. The
-    contract already admits both hosts.
+  - **Moving SRT to the custom host later (S2b, optional)** is a server change only: rewrite the SRT host too.
+    **Superseded by W26 (2026-10-05):** there is no custom host, the contract documents only `live.cloudflare.com`,
+    and capture trusts only that host, so S2b is off the table.
 
 **`captureOrigin()`** is `OAUTH_BASE_URL || NEXT_PUBLIC_BASE_URL`. Both are set in `fly.toml` and `fly.stg.toml`. Only
 when neither is set (local or CI) does it fall back to `deps.appUrl`. It is **never header-derived** where the
@@ -749,6 +751,15 @@ plan task (house rule "new write path").
   `storage_exhausted`. W5 is answered before the storage read, and after the destination doors (amended, §17.10).
   - The organiser route asks it of slot 0's current pairing.
   - The phone route and auto start pass `true`, because the caller **is** the current phone (T12 checked it first).
+  - **Amended 2026-10-09 (owner ruling, Option 1).** The boolean is now a standing,
+    `phone: "present" | "silent" | "unpaired"`, and W5 has two refusals on the same rung (after `active_session`,
+    before `no_credits`; both answered before the storage read; a free restart waives neither):
+    - `unpaired` → `phone_not_paired`: the active code has no current pairing (never claimed, reissued, expired by C2,
+      or ended by the phone's own stop, T21).
+    - `silent` → `phone_not_responding`: a current pairing exists, but its phone has sent no beat within §6.9's window,
+      `max(floor, answered cadence + slack)`. The organiser wakes the phone; no rescan is owed.
+    - The phone route and auto start pass `"present"`, and both refusal mappers refuse either answer by name. The two
+      codes are console-only and never reach the phone, so the capture contracts do not change.
 
 #### 6.7.2 The phone's refusals (W6; capture's start shape)
 
@@ -1370,7 +1381,7 @@ alter table fixture_stream_settings
 | `POST /api/v1/fixtures/{id}/stream-code/reissue` | 1 | → `200 {qr, issuedAt}` | as above |
 | `GET /api/v1/fixtures/{id}/stream-phone` | 1 | → `{code: {issuedAt, state: "active" \| "finishing" \| "ended", endCause} \| null, phone: {present, silent, notResponding, model, appVersion, mode, state, notReady, startFailed, lastBeatAt, elapsedMs, beat: {battery, bitrateKbps, delivery, thermal, dataUsedMB}} \| null, destination: {id, label} \| null, lastTakeover: {at, model} \| null, auto: {...} \| null}` (no secret). PR-2 fills `auto` and uses `lastTakeover`. | `404` |
 | `PUT /api/v1/fixtures/{id}/stream-settings` | 1 / 2 | `{targetId?}` (PR-1), `{autoStream?}` (PR-2) → the settings | `404` (target not in org, or archived) |
-| `POST /api/v1/fixtures/{id}/stream-sessions` | 1 | existing. It saves the pre-pick. | **new `409 phone_not_paired`** |
+| `POST /api/v1/fixtures/{id}/stream-sessions` | 1 | existing. It saves the pre-pick. | **new `409 phone_not_paired`**; **amended 2026-10-09 (owner ruling, Option 1):** also `409 phone_not_responding` (paired, but silent past §6.9's window; console-only) |
 | `GET …/stream-sessions/current` | 1 | existing **minus `qr`** and `?reveal`. It gains `startCause`. `endReason` widens (§6.8.4). | — |
 | `POST …/stream-sessions/{sid}/stop` | 1 / 2 | existing. PR-2 stamps `auto_start_blocked_at`. | — |
 
@@ -1534,6 +1545,7 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
 | T24a: drop the "current phone holds X" check | A's late stop ends B's live X → red (the two-phone sequence, §11.1.4) |
 | T23: apply the hold check to the current phone too | the current phone's own late stop of X is ignored → red |
 | `phone_not_paired` gate removed | the organiser Go live with no phone → red |
+| `phone_not_responding` answered as `phone_not_paired` (amended 2026-10-09, owner ruling, Option 1) | a current pairing silent just past §6.9's window (edge taken from the constants) → the Go live must answer `phone_not_responding` → red |
 | pollSeconds near window off by one | T−30 boundary |
 | ask 10 without `first_ingest_at IS NULL` | a live session with a silent phone is ended at 60 s → red (W8, W19's 15 min) |
 | W19: drop the beat conjunct | a beating phone with the input down 15 min is ended → red |
@@ -2025,6 +2037,13 @@ controller's review. None is the controller's ruling, and none is the seazn.club
 - **The code line follows the phone past Ready (ruling A).** The folded "Show the code again" line, with Revoke &
   reissue inside it, also shows under Waiting and Live for a session with a pairing. It does not show for a legacy
   session. The mockup draws it only at Ready.
+- **A W5 Go live error clears when the phone reads present (owner ruling 2026-10-09 ("A"); added 2026-10-09).** A
+  `phone_not_paired` / `phone_not_responding` Go live error clears once the panel's phone read, sent after the refusal,
+  reads present; other errors are unchanged. Unlike the readings above, this bullet is the seazn.club owner's ruling, and
+  it is a DIFFERENT ruling from the code line's "ruling A" in the bullet before it: the two only share a letter. Built in
+  #930 (`presenceAfterRead`), simplified to `readClearsW5` on 2026-10-09 (chore/capture-contract-cleanup;
+  `lib/stream-session-view.ts`): the first present answer to a read sent after the refusal clears it, and an answer to
+  a read already in flight when the click was refused does not.
 - **No Revoke & reissue on a finished fixture.** The reissue route answers 422 there, so the control is not drawn.
   While the code is still `finishing`, Show the code again keeps the code.
 - **Code ended is one line.** At Ready with the match over (finished, and the code ended or absent), the tab shows "This

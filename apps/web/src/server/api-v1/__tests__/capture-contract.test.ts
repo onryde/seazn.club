@@ -10,7 +10,7 @@
 //   * every enum, typed here from the spec's literal lists (§6.3.1–§6.3.4), against the file and the twin;
 //   * the per-state field matrices (R5 final, A21), TYPED HERE FROM THE SPEC'S TEXT (§6.3.1, §17.5) — the rulebook,
 //     never read off the twin — run against BOTH the twin (through the fixtures) and the JSON file (structurally);
-//   * optional-versus-null, `at`'s offset, strictness surviving .extend()/.partial(), W21's hosts, QR v2 (with
+//   * optional-versus-null, `at`'s offset, strictness surviving .extend()/.partial(), W26's hosts, QR v2 (with
 //     capture's optional `exp`, which this server never sends), and 409;
 //   * W27 (2026-10-06): the scoring-link route's contract — its {phone} body, its 200 {url} and every refusal it
 //     answers, `match_finished` among them — and W28: the descriptor's optional `stage` on every state, its bounds
@@ -46,7 +46,7 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
  *  same commit, and capture re-vendors the file. */
 const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "3292e33f84b693e5def6048012f6653ca7e31e1573fda3901da4fe67a62c5d43",
-  "capture-descriptor.v1.json": "84e936b72b866df4fc37317e06fc3f6f5555dd2196b10b24efc890b52f28a5d6",
+  "capture-descriptor.v1.json": "5c9b09c422b092671ad3a842b02e5c18902c92fc290cbc562c91033555955b8b",
   "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "012d6e3851e84d0ce659ad23449fa91b61f0d20cfac1e58f2ccbc7cbb0742bae",
   "capture-scoring-link.v1.json": "f0f1188655f3ca83b3e42ce7fedd6f6210a3a141b0bcf02fa250eb2448b1c85f",
@@ -614,21 +614,61 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(parses(S.CaptureDescriptor, noCred)).toBe(true);
   });
 
-  it("W21/G0-i hosts: SRT on Cloudflare's own host, RTMPS on the environment's live.*, and the file documents both SRT hosts", () => {
+  it("W26 hosts (supersedes W15 and W21's RTMPS half): both credentials on Cloudflare's own live.cloudflare.com, in every fixture and in the file's prose — no custom ingest host anywhere", () => {
+    // W26, verbatim: "Both credentials use Cloudflare's own host, exactly as Cloudflare issues them:
+    // `rtmps://live.cloudflare.com:443/live/` and `srt://live.cloudflare.com:778`, in every environment."
+    const W26 = { srt: "srt://live.cloudflare.com:778", rtmps: "rtmps://live.cloudflare.com:443/live/" };
+    // W15 / W21's custom hosts, which W26 retired: "no longer served to phones".
+    const RETIRED = /live\.(stg\.)?seazn\.club/;
     const cred = fixture("capture-descriptor.v1", "valid-live").cred as { srt: Json; rtmps: Json };
-    expect(cred.srt.url).toBe("srt://live.cloudflare.com:778");
-    expect(cred.rtmps.url).toBe("rtmps://live.stg.seazn.club:443/live/");
-    const descriptor = rootOf(contract(DESCRIPTOR));
-    const srtUrls = nodesAt(descriptor, ["cred", "srt", "url"]);
-    // cred appears in warming, live and ending (§17.5).
-    expect(srtUrls, "cred.srt.url occurrences").toHaveLength(3);
-    for (const node of srtUrls) {
-      expect(node.description, "cred.srt.url").toContain("live.cloudflare.com");
-      expect(node.description, "cred.srt.url").toContain("live.*");
+    expect(cred.srt.url).toBe(W26.srt);
+    expect(cred.rtmps.url).toBe(W26.rtmps);
+    // Every cred in every hand-written fixture, whatever the fixture is for: its URLs are W26's, exactly.
+    const creds = (node: unknown): Json[] => {
+      if (Array.isArray(node)) return node.flatMap(creds);
+      if (node === null || typeof node !== "object") return [];
+      const o = node as Json;
+      const here = o.cred !== null && typeof o.cred === "object" ? [o.cred as Json] : [];
+      return [...here, ...Object.values(o).flatMap(creds)];
+    };
+    let files = 0, srtSeen = 0, rtmpsSeen = 0;
+    for (const dir of Object.keys(DIRS)) {
+      for (const f of readdirSync(resolve(FIXTURES, dir)).filter((n) => n.endsWith(".json"))) {
+        const text = readFileSync(resolve(FIXTURES, dir, f), "utf8");
+        expect(text, `${dir}/${f}: a retired custom ingest host`).not.toMatch(RETIRED);
+        files++;
+        for (const c of creds(JSON.parse(text))) {
+          const srt = c.srt as Json | null | undefined, rtmps = c.rtmps as Json | undefined;
+          if (srt) { expect(srt.url, `${dir}/${f}: cred.srt.url`).toBe(W26.srt); srtSeen++; }
+          if (rtmps) { expect(rtmps.url, `${dir}/${f}: cred.rtmps.url`).toBe(W26.rtmps); rtmpsSeen++; }
+        }
+      }
     }
-    const rtmpsUrls = nodesAt(descriptor, ["cred", "rtmps", "url"]);
-    expect(rtmpsUrls).toHaveLength(3);
-    for (const node of rtmpsUrls) expect(node.description, "cred.rtmps.url").toContain("live.*");
+    expect(files, "fixture files scanned").toBe(Object.values(DIRS).reduce((n, d) => n + d.count, 0));
+    expect(srtSeen, "cred.srt.url values checked").toBe(12);
+    expect(rtmpsSeen, "cred.rtmps.url values checked").toBe(15);
+    // The published prose names Cloudflare's URL and W26, and never a custom host.
+    const descriptor = rootOf(contract(DESCRIPTOR));
+    let described = 0;
+    for (const [which, url] of Object.entries(W26)) {
+      const nodes = nodesAt(descriptor, ["cred", which, "url"]);
+      // cred appears in warming, live and ending (§17.5).
+      expect(nodes, `cred.${which}.url occurrences`).toHaveLength(3);
+      for (const node of nodes) {
+        expect(node.description, `cred.${which}.url`).toContain(url);
+        expect(node.description, `cred.${which}.url`).toContain("W26");
+        expect(node.description, `cred.${which}.url`).not.toMatch(RETIRED);
+        expect(node.description, `cred.${which}.url`).not.toContain("live.*");
+        described++;
+      }
+    }
+    expect(described).toBe(6);
+    let contracts = 0;
+    for (const file of Object.keys(SHA256)) {
+      expect(contractText(file), `${file}: a retired custom ingest host`).not.toMatch(RETIRED);
+      contracts++;
+    }
+    expect(contracts).toBe(5);
   });
 
   it("QR v2 `exp` (capture's A1, §1.2): optional, an integer ≥ 0 of epoch SECONDS; admitted when present, never sent by this server", () => {

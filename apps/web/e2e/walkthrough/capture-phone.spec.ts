@@ -467,6 +467,131 @@ test("W5: no phone → Go live disabled, the strip says pair first, and the API 
 });
 
 // ===========================================================================
+// W5 split (owner ruling 2026-10-09, Option 1): a paired phone that stopped answering is told apart from no phone
+// ===========================================================================
+/**
+ * The panel withholds Go live from a phone it already reads as silent or absent (`canGoLive`), so the server's W5 answer
+ * reaches a person only in the race this ruling is about: the panel's last read said "present", and by the click the
+ * phone has fallen asleep (or the code has changed under it). That race is held open here deterministically: until the
+ * Go live is SENT, every read-model poll is answered with the last answer the panel got while the phone was present
+ * (`freezePanelRead`); every read asked after it is the server's own. The server, the database and the Go live are all
+ * real; only the panel is one read behind, as it is for up to a poll.
+ *
+ * Owner ruling 2026-10-09 ("A"): either W5 sentence goes away as soon as the panel's phone read flips to present — and
+ * a later Go live refused again shows its sentence again.
+ */
+test("W5 split @1280/320/768: the panel read the phone present, then it went silent → Go live shows the not-responding sentence (never the scan one), no row, and the panel catches up; the phone wakes → the sentence goes (A), a later refusal shows it again; a reissued code no phone ever claimed → the pair-first sentence, gone once a phone scans it", async ({
+  page,
+}) => {
+  test.setTimeout(SEED_MS + NAV_MS + 16 * POLL_WAIT_MS + 30_000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const rig = await seedRig(page);
+  await addTargetApi(page, rig.orgId, "W5 split destination");
+  const f = rig.fixtures[0]!;
+  const body = await openPhoneTab(page, rig, f);
+  const goLive = body.getByTestId("stream-go-live");
+  const strip = body.getByTestId("stream-phone-strip");
+  const refusal = body.getByTestId("stream-create-error");
+  const notResponding = en("stream.error.phone_not_responding");
+  const notPaired = en("stream.error.phone_not_paired");
+  expect(notResponding, "PREMISE: the two sentences differ, so each assertion below can only pass on its own").not.toBe(notPaired);
+  // The sentence itself, anchored on its exact text: present → count 1, retired → count 0.
+  const sentence = (text: string) => body.getByText(text, { exact: true });
+
+  const READ_MODEL = new RegExp(`/api/v1/fixtures/${f.id}/stream-phone(\\?.*)?$`);
+  let frozen: string | null = null;
+  await page.route(READ_MODEL, (route) =>
+    frozen !== null ? route.fulfill({ status: 200, contentType: "application/json", body: frozen }) : route.continue());
+  // The freeze ends the moment the Go live leaves the browser: a read asked after the click is the server's truth.
+  page.on("request", (req) => {
+    if (req.method() === "POST" && new URL(req.url()).pathname === `/api/v1/fixtures/${f.id}/stream-sessions`) frozen = null;
+  });
+  const freezePanelRead = async (): Promise<void> => {
+    const read = await apiJson<{ phone?: { present?: boolean } | null }>(page.request, `/api/v1/fixtures/${f.id}/stream-phone`);
+    expect(read.status, "the read model answers the organiser").toBe(200);
+    expect(read.data?.phone?.present, "PREMISE: the panel is frozen on a PRESENT phone").toBe(true);
+    frozen = JSON.stringify({ ok: true, data: read.data });   // the v1 envelope, as the route serves it
+  };
+
+  // A phone scans the panel's own paste code and claims the slot through the real beat route — and then beats only when
+  // told to (no keep-alive), so nothing can race the backdates below.
+  const phone = await fakeCapturePhone(page, await newPhoneRequest(new URL(page.url()).origin));
+  const claimed = await phone.claim("new");
+  expect(claimed.status, `the claim was accepted: ${JSON.stringify(claimed.refusal)}`).toBe(200);
+  await expect(goLive, "the panel reads the phone present: Go live").toBeEnabled({ timeout: POLL_WAIT_MS });
+  // The phone falls asleep: its last beat moved back past §6.9's window — the file's own arithmetic on the server's tuned
+  // floor and the cadence the server answered it, plus a margin.
+  const fallAsleep = async (): Promise<void> => {
+    const [pairing] = await pairingsOf(f.id);
+    expect(pairing, "one pairing, this phone's, current").toMatchObject({ phone: phone.id, ended_at: null });
+    const quietMs = silentAfterMs(pairing!.answered_poll_seconds) + 5_000;
+    await withDb((sql) => sql`update fixture_stream_pairings set last_beat_at = now() - make_interval(secs => ${quietMs / 1_000}) where id = ${pairing!.id}`);
+  };
+
+  // (b) Present on the panel, asleep on the server → Go live: the not-responding sentence.
+  await freezePanelRead();
+  await fallAsleep();
+  await expect(goLive, "the frozen panel still offers Go live").toBeEnabled();
+  await goLive.click();
+  await expect(refusal, "a paired phone gone silent: wake it, not scan again").toHaveText(notResponding, { timeout: POLL_WAIT_MS });
+  await expect(sentence(notResponding)).toHaveCount(1);
+  expect(await sessionsOf(rig.orgId), "the refusal writes no session row").toEqual([]);
+  // The panel catches up on its next real read: the phone is named silent, Go live is withheld — and the sentence stays:
+  // a silent read is no flip to present.
+  await expect(strip).toHaveText(en("stream.phone.silent"), { timeout: POLL_WAIT_MS });
+  await expect(goLive).toBeDisabled();
+  await expect(refusal).toHaveText(notResponding);
+  const WIDTHS = [1280, 320, 768] as const;
+  let shots = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: 900 });
+    await expect(body, `@${w}: the panel is still open`).toBeVisible();
+    await expect(refusal, `@${w}: the sentence is on screen`).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await body.screenshot({ path: join(test.info().outputPath(), `w5-not-responding-${w}.png`), timeout: NAV_MS });
+    shots++;
+  }
+  expect(shots, "one screenshot per width").toBe(WIDTHS.length);
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // A: the phone wakes → the panel's read flips to present → the sentence is gone, Go live is back.
+  expect((await phone.beat()).status, "the phone wakes up").toBe(200);
+  await expect(sentence(notResponding), "A: the phone the sentence asked for is here — the sentence goes").toHaveCount(0, { timeout: POLL_WAIT_MS });
+  await expect(refusal).toHaveCount(0);
+  await expect(goLive, "present again: Go live").toBeEnabled();
+
+  // …and a LATER refusal is its own news: asleep again, the panel one read behind, Go live → the sentence shows again.
+  await freezePanelRead();
+  await fallAsleep();
+  await goLive.click();
+  await expect(sentence(notResponding), "a later Go live refused again says so again").toHaveCount(1, { timeout: POLL_WAIT_MS });
+  await expect(strip).toHaveText(en("stream.phone.silent"), { timeout: POLL_WAIT_MS });
+  await expect(sentence(notResponding), "still silent: still the sentence").toHaveCount(1);
+  expect((await phone.beat()).status, "awake once more").toBe(200);
+  await expect(sentence(notResponding)).toHaveCount(0, { timeout: POLL_WAIT_MS });
+  await expect(goLive).toBeEnabled();
+
+  // (a) The other answer, on the same panel: present and frozen on that, the code is revoked and reissued from another
+  // tab's API call — a code no phone has ever claimed. Go live → the pair-first sentence.
+  await freezePanelRead();
+  const reissued = await apiJson(page.request, `/api/v1/fixtures/${f.id}/stream-code/reissue`, "POST");
+  expect(reissued.status, "Revoke & reissue").toBe(200);
+  await goLive.click();
+  await expect(refusal, "no phone on the new code: scan it").toHaveText(notPaired, { timeout: POLL_WAIT_MS });
+  await expect(sentence(notPaired)).toHaveCount(1);
+  expect(await sessionsOf(rig.orgId), "still no session row").toEqual([]);
+  await expect(strip, "the panel catches up: pair a phone first").toHaveText(en("stream.phone.pairFirst"), { timeout: POLL_WAIT_MS });
+  await expect(goLive).toBeDisabled();
+  await expect(sentence(notPaired), "no phone yet: the sentence stays").toHaveCount(1);
+  // A: a phone scans the NEW code the panel now shows → present → the pair-first sentence is gone.
+  await expect(body.getByTestId("stream-code-card"), "no phone on the new code: the card again").toBeVisible({ timeout: POLL_WAIT_MS });
+  const fresh = await pairedPhone(page);
+  expect(fresh.qr.code, "the panel shows a NEW code").not.toBe(phone.qr.code);
+  await expect(sentence(notPaired), "A: a phone on the new code — the sentence goes").toHaveCount(0, { timeout: POLL_WAIT_MS });
+  await expect(goLive, "the new code's phone: Go live").toBeEnabled();
+});
+
+// ===========================================================================
 // Operator start (§6.3.4) + I-2: the panel open at Ready picks a phone-started stream up within one poll
 // ===========================================================================
 test("operator start from the phone: 200 {sid}; the panel open at Ready shows it starting within ONE poll (no stale Go live, no active_session) and live after the connect; the phone hears go-live (operator), its GET carries cred and a second phone's does not; already_live and replaced refuse a second start; one consume", async ({
@@ -862,12 +987,13 @@ test("ask 10: the phone dies as Go live is tapped (it never hears go-live, its v
   expect(ended.ended_at!.getTime() - deadline, "within one poll of it").toBeLessThanOrEqual(END_LATE_MS);
   expect((await ledger(rig.orgId)).total, "a broadcast that never had video spends nothing").toBe(before);
 
-  // W5 again, the other way in: the phone is now SILENT.
+  // W5 again, the other way in: the phone is now SILENT — still paired, so it is not responding rather than absent (owner
+  // ruling 2026-10-09).
   await body.getByTestId("stream-again").click();
   await expect(strip).toHaveText(en("stream.phone.silent"), { timeout: POLL_WAIT_MS });
   await expect(body.getByTestId("stream-go-live")).toBeDisabled();
   const refused = await apiJson(page.request, `/api/v1/fixtures/${f.id}/stream-sessions`, "POST", { mode: "passthrough", targetId: target.id });
-  expect([refused.status, refused.error?.code], "a silent phone is no phone").toEqual([409, "phone_not_paired"]);
+  expect([refused.status, refused.error?.code], "a silent PAIRED phone is not responding — never 'no phone'").toEqual([409, "phone_not_responding"]);
 });
 
 // ===========================================================================
