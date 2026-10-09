@@ -2,6 +2,7 @@
 // points, no score, and out of every ratio — in every sport and every cfg it declares.
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
+import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
@@ -39,6 +40,62 @@ describe("X-DW-4: a double walkover in a table — P+1, L+1, 0 points, no score,
       }
     });
     expect(checked).toBeGreaterThanOrEqual(11);
+  });
+
+  it("sequence: after a double walkover, a walkover or a retirement the fixture is over — a second walkover is refused, every sport", () => {
+    // spec §5.1: a forfeit decides the fixture — the module reads its phase as "over" (D3 R0) and the kernel refuses a
+    // further walkover ALREADY_DECIDED (spec 03 §2 guarantee 4).
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      for (const { name, cfg } of declaredCfgs(m as never)) {
+        const l = defaultLineupPair(m.positions);
+        const streams: Array<[string, Array<[string, unknown]>]> = [
+          ["double walkover", [["core.forfeit", { by: "both", reason: "walkover" }]]],
+          ["walkover", [["core.forfeit", { by: l.away.entrantId, reason: "walkover" }]]],
+          ["retirement", [["core.start", {}], ["core.forfeit", { by: l.home.entrantId, reason: "retired" }]]],
+        ];
+        for (const [label, spec] of streams) {
+          const events = spec.map(([type, payload], i) => makeEnvelope(i + 1, { type, payload }));
+          const f = foldMatchWithStoppage(m as never, cfg as never, l, events);
+          expect(m.forfeitPhase(f.state as never), `${m.key}/${name} ${label}`).toBe("over");
+          const again = makeEnvelope(events.length + 1, { type: "core.forfeit", payload: { by: l.away.entrantId, reason: "walkover" } });
+          expect(() => foldMatchWithStoppage(m as never, cfg as never, l, [...events, again]), `${m.key}/${name} ${label}: second walkover`).toThrowError(
+            expect.objectContaining({ code: "ALREADY_DECIDED" }), // guarantee 4: a decided fixture refuses another walkover
+          );
+          checked++;
+        }
+      }
+    });
+    expect(checked).toBeGreaterThanOrEqual(33);
+  });
+
+  it("sequence: an awarded abandon decides the fixture whether a side leads or it is level (D8, FB-AB-1) — the goal sports", () => {
+    // Single-sport family: only the goal sports declare `abandonPolicy` (football, hockey, ice hockey).
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      const parsed = m.configSchema.safeParse({ abandonPolicy: "award" });
+      if (!parsed.success || (parsed.data as { abandonPolicy?: string }).abandonPolicy !== "award") return; // not declared here
+      const cfg = parsed.data;
+      const l = defaultLineupPair(m.positions);
+      for (const [label, goals] of [["level", 0], ["home leads", 1]] as const) {
+        const spec: Array<[string, unknown]> = [["core.start", {}], ...Array.from({ length: goals }, (): [string, unknown] => [`${m.key}.goal`, { by: l.home.entrantId }]), ["core.abandon", { reason: "floodlights" }]];
+        const f = foldMatchWithStoppage(m as never, cfg as never, l, spec.map(([type, payload], i) => makeEnvelope(i + 1, { type, payload })));
+        expect(outcomeOf(m as never, f as never)?.kind, `${m.key} ${label}`).toBe(goals === 0 ? "draw" : "win");
+        expect(m.forfeitPhase(f.state as never), `${m.key} ${label}`).toBe("over");
+        checked++;
+      }
+    });
+    expect(checked).toBe(6);
+  });
+
+  it("X-DW-1: generic's result card reads a loss for both sides — and a walkover reads W/O for the winner only", () => {
+    // Single-sport: generic is the one module whose summary writes result letters, not a score.
+    const m = builtinModules.find((x) => x.key === "generic")!;
+    const cfg = m.configSchema.parse(Object.values(m.variants)[0]);
+    const l = defaultLineupPair(m.positions);
+    const head = (payload: unknown) => m.summary(foldMatchWithStoppage(m as never, cfg as never, l, [makeEnvelope(1, { type: "core.forfeit", payload })]).state).headline;
+    expect(head({ by: "both", reason: "walkover" })).toBe("L — L");
+    expect(head({ by: l.away.entrantId, reason: "walkover" })).toBe("W/O — L");
   });
 
   it("X-DW-4: forfeitCredit(…, both) credits nothing and excludes every metric the sport declares from its ratios", () => {

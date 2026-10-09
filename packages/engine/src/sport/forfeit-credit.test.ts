@@ -8,7 +8,7 @@ import type { StandingsDelta } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
-import { buildStream, defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
+import { buildStream, buildWalk, defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
 
 const ev = (seq: number, type: string, payload: unknown = {}): EventEnvelope => makeEnvelope(seq, { type, payload });
 const mod = (k: string) => {
@@ -109,6 +109,14 @@ describe("X-WO-1: walkover credit per sport, from the stage's own cfg (spec §5.
     expectWalkover("cricket", parsed("cricket"));
     const [home] = walkoverDeltas("cricket", parsed("cricket"));
     expect(home.points).toBe((parsed("cricket").points as { win: number }).win);
+  });
+  it("CK-WO-1: a two-innings limited-overs match charges the defaulter BOTH innings' balls", () => {
+    // Every declared limited-overs cfg is one innings a side, where × and ÷ by inningsPerSide agree; this one is not.
+    const cfg = parsed("cricket", { inningsPerSide: 2, ballsPerInnings: 60, superOver: false });
+    expect([cfg.inningsPerSide, cfg.ballsPerInnings]).toEqual([2, 60]);
+    expectWalkover("cricket", cfg);
+    const [, away] = walkoverDeltas("cricket", cfg);
+    expect(away.metrics.balls_faced_eff).toBe(120);
   });
   it("BG-WO-1: chess walkover = 1-0, out of colour history", () => {
     expectWalkover("boardgame", parsed("boardgame"));
@@ -416,7 +424,10 @@ describe("X-WO-1: one credited score — the goal sports' headline shows it (spe
       const l = defaultLineupPair(m.positions);
       const wo = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: A, reason: "walkover" })]);
       expect(m.summary(wo.state as never).headline.startsWith(`${g} — 0`), `${key} walkover`).toBe(true);
-      const rt = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), ...Array.from({ length: g + 2 }, (_, i) => ev(i + 2, goalType, { by: A })), ev(g + 4, "core.forfeit", { by: H, reason: "retired" })]);
+      // the other side: the away winner's credited goals, where the real away tally is 0
+      const woHome = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: H, reason: "walkover" })]);
+      expect(m.summary(woHome.state as never).headline.startsWith(`0 — ${g}`), `${key} walkover by home`).toBe(true);
+      const rt =foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), ...Array.from({ length: g + 2 }, (_, i) => ev(i + 2, goalType, { by: A })), ev(g + 4, "core.forfeit", { by: H, reason: "retired" })]);
       expect(m.summary(rt.state as never).headline.startsWith(`0 — ${g + 2}`), `${key} retirement keeps the worse real score`).toBe(true);
       checked++;
     }
@@ -459,5 +470,36 @@ describe("X-RS-1: every arbitraryEvent forfeit is one the phase guard admits (sp
     expect(streams).toBe(11 * 200);
     for (const [key, n] of Object.entries(perSport)) expect(n, `${key} emitted no forfeit in 200 seeds`).toBeGreaterThan(0);
     expect(forfeits).toBeGreaterThan(0);
+  });
+
+  it("X-RS-1 breadth: in play the generators draw every in-match reason, against either side — every sport", () => {
+    // From the rule, not the generator: once play starts a match can end in a retirement or a disqualification
+    // (X-RT-1, X-DQ-1), and in a walkover only where the module declares that phase (`walkoverPhases`; chess, FIDE
+    // Laws 6.7.1). A withdrawal is the competition layer's cascade (X-WD-1), never one fixture's random draw.
+    let forfeits = 0;
+    let sports = 0;
+    forEachSport(({ module: m }) => {
+      const cfg = parsed(m.key);
+      const l = defaultLineupPair(m.positions);
+      const reasons = new Set<string>();
+      const offenders = new Set<string>();
+      for (let seed = 1; seed <= 200; seed++) {
+        const { events, states } = buildWalk(m as never, cfg as never, l, seed, 300);
+        events.forEach((e, i) => {
+          if (e.type !== "core.forfeit") return;
+          const before = i === 0 ? m.init(cfg, l) : states[i - 1];
+          const { by, reason } = e.payload as { by: string; reason: string };
+          if (m.forfeitPhase(before as never) === "play") reasons.add(reason);
+          offenders.add(by);
+          forfeits++;
+        });
+      }
+      const walkoverInPlay = (m.walkoverPhases ?? ["pre"]).includes("play");
+      expect([...reasons].sort(), `${m.key}: the reasons drawn in play`).toEqual(["disqualified", "retired", ...(walkoverInPlay ? ["walkover"] : [])]);
+      expect([...offenders].sort(), `${m.key}: the offenders drawn`).toEqual([A, H]);
+      sports++;
+    });
+    expect(sports).toBe(11);
+    expect(forfeits).toBeGreaterThan(11 * 3);
   });
 });

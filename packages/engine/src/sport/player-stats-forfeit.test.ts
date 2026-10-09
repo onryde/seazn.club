@@ -4,7 +4,7 @@
 // the ones a person's row counts per MATCH (appearance, result, a keeper's clean sheet); per-event credits (goals,
 // points, runs) are what was played and stay credited either way.
 import { describe, expect, it } from "vitest";
-import type { EventEnvelope } from "../core/events.ts";
+import { foldMatchWithStoppage, type EventEnvelope } from "../core/events.ts";
 import { builtinModules } from "../sports/index.ts";
 import { aggregatePlayerStats, type PlayerStatRow, type PlayerStatsFoldCtx, type PlayerStatsModel } from "../stats/stats.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
@@ -144,6 +144,51 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
       }
     });
     expect(checked).toBeGreaterThanOrEqual(20);
+  });
+
+  it("X-PS-2 sequence: a note and the finalize recorded after a retirement change no player's row — every sport", () => {
+    // The forfeit is not the ledger's last event once the match is signed off: the credit is read from the forfeit,
+    // not from whatever was recorded last.
+    let checked = 0;
+    let credited = 0;
+    forEachSport(({ module: m }) => {
+      if (m.playerStats === undefined) return;
+      for (const reason of ["retired", "disqualified"]) {
+        const spec: Spec = [...(PRE[m.key] ?? []), ["core.start"], ...PLAYED[m.key]!, ["core.forfeit", { by: H, reason }]];
+        const after: Spec = [...spec, ["core.note", { text: "arbiter signed the scoresheet" }], ["core.finalize"]];
+        // the scene is one the kernel admits: a note and the finalize on a decided match
+        const cfg = m.configSchema.parse(m.configSchema.safeParse({}).success ? {} : Object.values(m.variants)[0]);
+        expect(() => foldMatchWithStoppage(m as never, cfg as never, defaultLineupPair(m.positions), evs(after)), `${m.key} ${reason}`).not.toThrow();
+        const before = statsOf(m.key, spec).rows;
+        expect(statsOf(m.key, after).rows, `${m.key} ${reason}`).toEqual(before);
+        if (sumOf(before, declaredMatchKeys(m.playerStats)) > 0) credited++;
+        checked++;
+      }
+    });
+    expect(checked).toBeGreaterThanOrEqual(22);
+    // vacuity guard: the rows compared carry a per-match credit in every sport that declares one (all but cricket)
+    expect(credited).toBeGreaterThanOrEqual(20);
+  });
+
+  it("a player-stat key carries one label wherever its model declares it, and no label is empty — every sport", () => {
+    // Not a forfeit rule: X-PS-1 re-declared boardgame's "games" metrics and X-PS-2 its folded "wins", and a key
+    // listed twice must read as one column (the folded "Games as White" comment states the same discipline).
+    let keys = 0;
+    let repeated = 0;
+    forEachSport(({ module: m }) => {
+      if (m.playerStats === undefined) return;
+      const labels = new Map<string, Set<string>>();
+      const all = [...m.playerStats.metrics, ...(m.playerStats.folded?.keys ?? []), ...(m.playerStats.derived ?? []), ...(m.playerStats.awards ?? [])];
+      for (const { key, label } of all) labels.set(key, (labels.get(key) ?? new Set<string>()).add(label));
+      for (const [key, set] of labels) {
+        expect([...set], `${m.key}.${key}`).toHaveLength(1);
+        expect([...set][0]!.length, `${m.key}.${key} label`).toBeGreaterThan(0);
+        keys++;
+      }
+      repeated += all.length - labels.size;
+    });
+    expect(keys).toBeGreaterThanOrEqual(30);
+    expect(repeated, "some model declares a key twice (boardgame's games and wins)").toBeGreaterThanOrEqual(2);
   });
 
   it("X-PS-2: a retirement or a disqualification straight after the start, before any play, still counts the match", () => {

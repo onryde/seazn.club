@@ -729,5 +729,58 @@ describe("boardgame padSpec — no core.* actions (match lifecycle is universal 
     // every other method is unaffected either way
     expect(ok({ winner: null, method: "agreement" })).toBe(true);
     expect(ok({ winner: "H", method: "checkmate" })).toBe(true);
+    // The refusal names the field and says why — it is the message a recorder reads back on a rejected result.
+    const issues = (payload: unknown) => BoardgameResult.safeParse(payload).error?.issues.map((i) => ({ path: i.path, message: i.message }));
+    expect(issues({ winner: "H", method: "double_forfeit" })).toEqual([{ path: ["winner"], message: "a double forfeit has no winner" }]);
+    expect(issues({ winner: null, method: "forfeit" })).toEqual([{ path: ["winner"], message: "a forfeit names its winner" }]);
+    expect(issues({ method: "forfeit" })).toEqual([{ path: ["winner"], message: "a forfeit names its winner" }]);
+  });
+});
+
+// W2b (spec §5.2, R14) — the kernel's phase guard judges WHICH reason a phase admits; the module refuses only a
+// forfeit on a game that is over. Folding never reaches this (the kernel refuses first), so it is driven by
+// `apply` directly — the assumption "the kernel always guards first" is a guard here, not a comment.
+describe("boardgame: the module's own forfeit phase guard (W2b)", () => {
+  const ko = boardgame.configSchema.parse({ ...boardgame.bracketDeciders(cfg) });
+  const forfeit = (payload: unknown) => asEv(makeEnvelope(9, { type: "core.forfeit", payload }));
+  const states: Record<string, BoardgameState> = {
+    pre: fold(stream()),
+    live: fold(stream(["core.start"])),
+    tiebreak: fold(stream(["core.start"], ["boardgame.result", { winner: null, method: "agreement" }]), ko),
+    done: fold(stream(["core.start"], ["boardgame.result", { winner: "H", method: "resign" }])),
+    final: fold(stream(["core.start"], ["boardgame.result", { winner: "H", method: "resign" }], ["core.finalize"])),
+    abandoned: fold(stream(["core.start"], ["core.abandon", { reason: "power cut" }])),
+  };
+
+  it("positive pair: a forfeit in pre, live or tie-break is applied — the offender loses, 1-0 out of colour history", () => {
+    let checked = 0;
+    for (const phase of ["pre", "live", "tiebreak"]) {
+      const state = states[phase]!;
+      expect(state.phase, phase).toBe(phase);
+      const out = boardgame.apply(state, forfeit({ by: "A", reason: "walkover" }));
+      expect([out.phase, out.method, out.forfeited, out.outcome], phase).toEqual(["done", "forfeit", true, { kind: "award", winner: "H", loser: "A", reason: "walkover" }]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("refuses a forfeit on a game that is over — done, final or abandoned — with the phase named", () => {
+    let checked = 0;
+    for (const phase of ["done", "final", "abandoned"]) {
+      const state = states[phase]!;
+      expect(state.phase, phase).toBe(phase);
+      expect(() => boardgame.apply(state, forfeit({ by: "A", reason: "withdrew" })), phase).toThrowError(
+        expect.objectContaining({ code: "WRONG_PHASE", message: `forfeit not allowed in phase "${phase}"` }),
+      );
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a core.forfeit by both records the double forfeit method — the same game a boardgame.result{double_forfeit} records", () => {
+    const viaCore = boardgame.apply(states.live!, forfeit({ by: "both", reason: "walkover" }));
+    const viaResult = fold(stream(["core.start"], ["boardgame.result", { winner: null, method: "double_forfeit" }]));
+    expect([viaCore.phase, viaCore.method, viaCore.forfeited, viaCore.outcome]).toEqual(["done", "double_forfeit", true, { kind: "double_walkover" }]);
+    expect([viaResult.method, viaResult.outcome]).toEqual([viaCore.method, viaCore.outcome]);
   });
 });
