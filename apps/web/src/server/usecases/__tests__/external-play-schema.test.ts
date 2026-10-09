@@ -133,14 +133,28 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V405/V407)", (
     })).toEqual({ accepted: true, row: { status: "accepted", needs_reason: null } });
   });
 
-  it("fixture_external_play has exactly the spec §7.2 columns", async () => {
+  it("fixture_external_play has exactly the design §3 columns (V432)", async () => {
     expect(await columns("fixture_external_play")).toEqual([
       "black_emailed_at", "black_lichess_id", "challenge_id", "created_at", "expires_at",
       "finished_at", "fixture_id", "last_error", "last_polled_at", "mint_claimed_at",
       "needs_reason", "org_id", "provider", "scheduled_at_basis", "started_at", "status",
-      "updated_at", "url_black", "url_white", "white_emailed_at", "white_lichess_id", "white_side",
+      "updated_at", "url_black", "url_white", "video_override_at", "white_emailed_at",
+      "white_lichess_id", "white_side",
     ]);
   });
+
+  // Design §3.6: a token revoked mid-match is NOT a no-show and must not be
+  // recorded as one; a blocked double walkover is its own state. Both are
+  // written by T12, so the vocabulary has to admit them here.
+  it.each(["token_revoked", "double_walkover_blocked"])(
+    "accepts needs_reason %s",
+    async (reason) => {
+      expect(await tryInsert("needs_organiser", reason)).toEqual({
+        accepted: true,
+        row: { status: "needs_organiser", needs_reason: reason },
+      });
+    },
+  );
 
   it("rejects a needs_reason outside the vocabulary", async () => {
     expect(await tryInsert("needs_organiser", "no_show_grace_elapsed")).toEqual({
