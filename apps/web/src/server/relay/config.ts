@@ -164,8 +164,9 @@ export const OUTPUT_READ_FAILURES_BEFORE_REPORT = 6;
  *  which leg is production primary — R3 rules that, and this is the config line. */
 export const QR_PREFERRED_DEFAULT: "srt" | "rtmps" = "srt";
 
-/** Capture QR v2 §6.4 / §6.15 (W15, W21): the three ingest settings the phone's descriptor reads. Each is read at the
- *  request, never cached, so a test (and an operator) can flip it. Typed `Record<…>` for the reason `tunable` gives. */
+/** Capture QR v2 §6.4 / §6.15 (W15, W21; W26): the three ingest settings the phone's descriptor reads. Each is read at
+ *  the request, never cached, so a test (and an operator) can flip it. Typed `Record<…>` for the reason `tunable` gives.
+ *  STREAM_INGEST_HOST is W15, retired by W26: unset in every environment; setting it breaks every phone. */
 const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
 function hostSetting(name: "STREAM_INGEST_HOST" | "STREAM_PLAYBACK_HOST", env: Record<string, string | undefined>): string | null {
   const v = env[name]?.trim();
@@ -174,8 +175,8 @@ function hostSetting(name: "STREAM_INGEST_HOST" | "STREAM_PLAYBACK_HOST", env: R
   if (!HOST_RE.test(v)) throw new Error(`${name} must be a bare hostname (no scheme, port or path), got ${JSON.stringify(v)}`);
   return v;
 }
-/** W15: the environment's RTMPS ingest host (`live.seazn.club`, `live.stg.seazn.club`). Unset or blank (local, CI) =
- *  null, and Cloudflare's own host is served. */
+/** The RTMPS ingest host rewrite — W15, retired by W26 (2026-10-05): unset in every environment; setting it breaks every
+ *  phone (capture trusts only `live.cloudflare.com`). Unset or blank = null, and Cloudflare's own host is served. */
 export function streamIngestHost(env: Record<string, string | undefined> = process.env): string | null {
   return hostSetting("STREAM_INGEST_HOST", env);
 }
