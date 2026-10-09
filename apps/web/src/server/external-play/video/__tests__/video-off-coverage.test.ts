@@ -253,12 +253,39 @@ describe("videoOffCoverage — synthetic sequences", () => {
     expect(spans(videoOffCoverage(two))).toEqual([[at(14), at(194), 180]]);
   });
 
-  it("a FASTER cadence than measured is honoured, not widened to 7 s", () => {
-    // 3 s cadence ⇒ threshold 9 s: a 12 s hole is a gap here even though it is
-    // under the 21 s a 7 s cadence would allow.
-    const fast = report({ samples: [...every(3, 300, 3), ...every(312, 597, 3)] });
-    expect(spans(videoOffCoverage(fast))).toEqual([[at(300), at(312), 12]]);
-    expect(complete(videoOffCoverage(fast)).cadenceSeconds).toBe(3);
+  it("DUPLICATE samples: every sample reported twice is still a camera on throughout", () => {
+    // Review I3: without de-duplication the deltas alternate 0 and 7 s, the
+    // median collapses to 0, and a camera on for the whole match read
+    // 600 of 600 s off. Hand arithmetic: on throughout ⇒ 0 s off, and the
+    // true cadence is still 7 s.
+    const once = every(7, 595);
+    const doubled = report({ samples: once.flatMap((t) => [t, t]) });
+    expect(doubled.participant.peer_report.quality.video_producer.length, "premise: doubled").toBe(once.length * 2);
+    const c = complete(videoOffCoverage(doubled));
+    expect(c.offIntervals).toEqual([]);
+    expect(c.offSeconds).toBe(0);
+    expect(c.cadenceSeconds, "the duplicates do not distort the cadence").toBe(7);
+  });
+
+  it("NEAR-duplicates a few ms apart behave the same: 0 s off, cadence floored at 5 s", () => {
+    // t and t + 3 ms: identical-timestamp de-duplication cannot merge these,
+    // so the 5 s floor is what keeps the threshold at 15 s.
+    const near = report({ samples: every(7, 595).flatMap((t) => [t, t + 0.003]) });
+    const c = complete(videoOffCoverage(near));
+    expect(c.offIntervals).toEqual([]);
+    expect(c.offSeconds).toBe(0);
+    expect(c.cadenceSeconds).toBe(5);
+  });
+
+  it("the cadence FLOOR is 5 s: under a 3 s cadence a 12 s hole is not a gap and a 16 s hole is", () => {
+    // Floor justified by the measurement: 50 deltas of 6.99–7.003 s in the
+    // spike, so a median below 5 s is a data-shape artefact (duplicates,
+    // bursts), not the SDK's cadence. 5 s keeps the threshold at >= 15 s.
+    const twelve = report({ samples: [...every(3, 300, 3), ...every(312, 597, 3)] });
+    expect(spans(videoOffCoverage(twelve)), "12 s < 3 × 5 s").toEqual([]);
+    expect(complete(videoOffCoverage(twelve)).cadenceSeconds).toBe(5);
+    const sixteen = report({ samples: [...every(3, 300, 3), ...every(316, 598, 3)] });
+    expect(spans(videoOffCoverage(sixteen)), "16 s > 3 × 5 s").toEqual([[at(300), at(316), 16]]);
   });
 
   it("samples arriving out of order give the same answer, and the input is not mutated", () => {
