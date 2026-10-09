@@ -1,7 +1,7 @@
 // apps/web/src/server/usecases/__tests__/external-play-schema.test.ts
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { seedFutureDivision, seedOrg } from "./_seed";
 
 /** Postgres names a column CHECK `<table>_<column>_check` and a table CHECK
@@ -13,6 +13,12 @@ const CONSENT_TOKEN_CHECK = "user_external_accounts_consent_token_check";
 const CONSENT_SCOPES_CHECK = "user_external_accounts_consent_scopes_check";
 const INVITE_CHECK = "fixture_external_play_invite_needs_open_round_check";
 const ROUND_OPEN_FK = "fixture_external_play_round_open_id_fkey";
+/** The constraint trigger raises under this name, with one message per
+ *  refusal — the messages are the trigger's declaration, typed here. */
+const ROUND_BINDING = "fixture_external_play_round_open_binding";
+const BINDING_OTHER_ORG = "round_open_id names a round opened in another organisation";
+const BINDING_OTHER_STAGE = "round_open_id names a round of another stage";
+const BINDING_OTHER_ROUND = "round_open_id names another round of this stage";
 const CHECK_VIOLATION = "23514";
 const FK_VIOLATION = "23503";
 
@@ -23,6 +29,22 @@ type Outcome =
 describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", () => {
   let orgId = "";
   let fixtureId = "";
+  // D12 binding rig: the fixture's own (stage, round), a SECOND stage in the
+  // same org, and a stage in a FOREIGN org — each with an owner to open it.
+  let fixtureStageId = "";
+  let fixtureRoundNo = 0;
+  let ownerId = "";
+  let otherStageId = "";
+  let foreignOrgId = "";
+  let foreignStageId = "";
+  let foreignOwnerId = "";
+
+  async function ownerOf(org: string): Promise<string> {
+    const [m] = await sql<{ user_id: string }[]>`
+      select user_id from org_members where org_id = ${org} and role = 'owner' limit 1`;
+    if (!m) throw new Error(`org ${org} has no owner`);
+    return m.user_id;
+  }
 
   beforeAll(async () => {
     const { auth } = await seedOrg();
@@ -31,6 +53,29 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", (
     if (!first) throw new Error("seedFutureDivision produced no fixtures");
     orgId = auth.orgId;
     fixtureId = first.id;
+    const [f] = await sql<{ stage_id: string; round_no: number }[]>`
+      select stage_id, round_no from fixtures where id = ${fixtureId}`;
+    fixtureStageId = f!.stage_id;
+    fixtureRoundNo = f!.round_no;
+    ownerId = await ownerOf(orgId);
+
+    const second = await seedFutureDivision(auth);
+    const [s2] = await sql<{ stage_id: string }[]>`
+      select stage_id from fixtures where id = ${second.fixtures[0]!.id}`;
+    otherStageId = s2!.stage_id;
+
+    const { auth: foreign } = await seedOrg();
+    const third = await seedFutureDivision(foreign);
+    const [s3] = await sql<{ stage_id: string }[]>`
+      select stage_id from fixtures where id = ${third.fixtures[0]!.id}`;
+    foreignOrgId = foreign.orgId;
+    foreignStageId = s3!.stage_id;
+    foreignOwnerId = await ownerOf(foreignOrgId);
+
+    // Premises, not decoration: each binding case is only meaningful if the
+    // thing it calls "other" really is other.
+    if (otherStageId === fixtureStageId) throw new Error("second stage is the fixture's stage");
+    if (foreignOrgId === orgId) throw new Error("foreign org is the fixture's org");
   });
 
   afterAll(async () => {
@@ -137,91 +182,161 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", (
   });
 
   it("fixture_external_play has exactly the design §3 + D12 columns (V432)", async () => {
+    // D12 adds round_open_id ONLY: the invite stamps are the pre-existing
+    // per-seat white_emailed_at / black_emailed_at — no second invite column.
     expect(await columns("fixture_external_play")).toEqual([
       "black_emailed_at", "black_lichess_id", "challenge_id", "created_at", "expires_at",
-      "finished_at", "fixture_id", "invited_at", "last_error", "last_polled_at",
+      "finished_at", "fixture_id", "last_error", "last_polled_at",
       "mint_claimed_at", "needs_reason", "org_id", "provider", "round_open_id",
       "scheduled_at_basis", "started_at", "status", "updated_at", "url_black", "url_white",
       "video_override_at", "white_emailed_at", "white_lichess_id", "white_side",
     ]);
   });
 
-  /** One bridge row carrying an invite stamp, against the SAME real org +
-   *  fixture every other case uses, rolled back. `roundOpen` is either null,
-   *  a real opened-round id (created inside the transaction so it rolls back
-   *  too), or a syntactically valid id that names nothing. */
+  type OpenRef = "none" | "dangling" | "own" | "other-stage" | "other-round" | "other-org";
+  type InviteOutcome =
+    | { accepted: true }
+    | { accepted: false; code: string | undefined; constraint: string | undefined; message: string };
+
+  /** Create (inside `tx`, so it rolls back) the open row `ref` describes and
+   *  return its id. "own" is the fixture's stage + round; every "other-*"
+   *  differs from it in exactly the named way and nothing else that the
+   *  composite FK allows (a foreign org's row is necessarily a foreign
+   *  stage's, at the fixture's round number). */
+  async function openRow(tx: Tx, ref: OpenRef): Promise<string | null> {
+    if (ref === "none") return null;
+    if (ref === "dangling") return randomUUID();
+    const target = {
+      own: { stage: fixtureStageId, org: orgId, round: fixtureRoundNo, by: ownerId },
+      "other-stage": { stage: otherStageId, org: orgId, round: fixtureRoundNo, by: ownerId },
+      "other-round": { stage: fixtureStageId, org: orgId, round: fixtureRoundNo + 1, by: ownerId },
+      "other-org": { stage: foreignStageId, org: foreignOrgId, round: fixtureRoundNo, by: foreignOwnerId },
+    }[ref];
+    const [open] = await tx<{ id: string }[]>`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_by)
+      values (${target.stage}, ${target.org}, ${target.round}, ${target.by})
+      returning id`;
+    return open!.id;
+  }
+
+  /** One bridge row carrying (or not) the per-seat invite stamps and a round
+   *  open reference, against the SAME real org + fixture every other case
+   *  uses, rolled back. `then`, when given, re-points round_open_id with an
+   *  UPDATE after the insert — the trigger's second entry point. */
   async function tryInvite(a: {
-    invitedAt: Date | null;
-    roundOpen: "none" | "real" | "dangling";
-  }): Promise<Outcome> {
+    white?: Date | null;
+    black?: Date | null;
+    roundOpen: OpenRef;
+    then?: OpenRef;
+  }): Promise<InviteOutcome> {
     const rollback = new Error("rollback");
-    let row: { status: string; needs_reason: string | null } | undefined;
+    let reached = false;
     try {
       await sql.begin(async (tx) => {
-        let openId: string | null = null;
-        if (a.roundOpen === "real") {
-          const [stage] = await tx<{ stage_id: string; round_no: number }[]>`
-            select stage_id, round_no from fixtures where id = ${fixtureId}`;
-          const [owner] = await tx<{ user_id: string }[]>`
-            select user_id from org_members where org_id = ${orgId} limit 1`;
-          const [open] = await tx<{ id: string }[]>`
-            insert into stage_round_opens (stage_id, org_id, round_no, opened_by)
-            values (${stage!.stage_id}, ${orgId}, ${stage!.round_no}, ${owner!.user_id})
-            returning id`;
-          openId = open!.id;
-        } else if (a.roundOpen === "dangling") {
-          openId = randomUUID();
-        }
+        const openId = await openRow(tx, a.roundOpen);
         await tx`
           insert into fixture_external_play
-            (fixture_id, org_id, status, scheduled_at_basis, round_open_id, invited_at)
-          values (${fixtureId}, ${orgId}, 'pending', now(), ${openId}, ${a.invitedAt})`;
-        row = { status: "pending", needs_reason: null };
+            (fixture_id, org_id, status, scheduled_at_basis, round_open_id,
+             white_emailed_at, black_emailed_at)
+          values (${fixtureId}, ${orgId}, 'pending', now(), ${openId},
+                  ${a.white ?? null}, ${a.black ?? null})`;
+        if (a.then) {
+          const nextId = await openRow(tx, a.then);
+          await tx`
+            update fixture_external_play set round_open_id = ${nextId}
+             where fixture_id = ${fixtureId}`;
+        }
+        reached = true;
         throw rollback;
       });
     } catch (err) {
-      if (err === rollback && row) return { accepted: true, row };
-      const e = err as { code?: string; constraint_name?: string };
-      return { accepted: false, code: e.code, constraint: e.constraint_name };
+      if (err === rollback && reached) return { accepted: true };
+      const e = err as { code?: string; constraint_name?: string; message?: string };
+      return {
+        accepted: false, code: e.code, constraint: e.constraint_name, message: e.message ?? "",
+      };
     }
     throw new Error("transaction committed — the rollback sentinel never fired");
   }
 
   // D12, the invariant that matters: a fixture cannot be marked invited before
   // its round is opened. The wrong answer differs from the right one by having
-  // sent a real email on a round that had not started.
-  it("refuses an invite stamp with no opened round", async () => {
-    expect(await tryInvite({ invitedAt: new Date(), roundOpen: "none" })).toEqual({
+  // sent a real email on a round that had not started. One refusal PER SEAT,
+  // so each disjunct of the CHECK is killable on its own.
+  it("refuses a WHITE seat stamp with no opened round", async () => {
+    expect(await tryInvite({ white: new Date(), roundOpen: "none" })).toMatchObject({
       accepted: false, code: CHECK_VIOLATION, constraint: INVITE_CHECK,
     });
   });
 
-  it("refuses an invite stamp naming a round open that does not exist", async () => {
-    expect(await tryInvite({ invitedAt: new Date(), roundOpen: "dangling" })).toEqual({
+  it("refuses a BLACK seat stamp with no opened round", async () => {
+    expect(await tryInvite({ black: new Date(), roundOpen: "none" })).toMatchObject({
+      accepted: false, code: CHECK_VIOLATION, constraint: INVITE_CHECK,
+    });
+  });
+
+  it("refuses a seat stamp naming a round open that does not exist", async () => {
+    expect(await tryInvite({ white: new Date(), roundOpen: "dangling" })).toMatchObject({
       accepted: false, code: FK_VIOLATION, constraint: ROUND_OPEN_FK,
     });
   });
 
-  it("accepts an invite stamp once the round is opened", async () => {
-    expect(await tryInvite({ invitedAt: new Date(), roundOpen: "real" })).toEqual({
-      accepted: true, row: { status: "pending", needs_reason: null },
-    });
+  // The positive pair for every refusal below: the fixture's OWN round, open,
+  // carrying both seat stamps.
+  it("accepts both seat stamps once THIS fixture's round is opened", async () => {
+    expect(await tryInvite({ white: new Date(), black: new Date(), roundOpen: "own" }))
+      .toEqual({ accepted: true });
   });
 
   // The empty case: the state every fixture is in before the organiser presses
   // Open round. Neither column set, and that must stay legal.
-  it("accepts a bridge row with neither an open round nor an invite", async () => {
-    expect(await tryInvite({ invitedAt: null, roundOpen: "none" })).toEqual({
-      accepted: true, row: { status: "pending", needs_reason: null },
-    });
+  it("accepts a bridge row with neither an open round nor a seat stamp", async () => {
+    expect(await tryInvite({ roundOpen: "none" })).toEqual({ accepted: true });
   });
 
   // And the other direction: a round opened but nobody invited yet is the state
   // between the press and the send. An over-tight CHECK would refuse it.
-  it("accepts an opened round with no invite stamp yet", async () => {
-    expect(await tryInvite({ invitedAt: null, roundOpen: "real" })).toEqual({
-      accepted: true, row: { status: "pending", needs_reason: null },
+  it("accepts an opened round with no seat stamp yet", async () => {
+    expect(await tryInvite({ roundOpen: "own" })).toEqual({ accepted: true });
+  });
+
+  // The binding (reviewer probe, 2026-10-09): CHECK + FK alone accepted a
+  // fixture whose own round had NO open row, by naming another round's row.
+  // In each case below the fixture's own (stage, round) is never opened.
+  it("refuses a round_open_id naming another STAGE's open row", async () => {
+    expect(await tryInvite({ white: new Date(), roundOpen: "other-stage" })).toEqual({
+      accepted: false, code: CHECK_VIOLATION, constraint: ROUND_BINDING,
+      message: BINDING_OTHER_STAGE,
     });
+  });
+
+  it("refuses a round_open_id naming another ROUND of the same stage", async () => {
+    expect(await tryInvite({ white: new Date(), roundOpen: "other-round" })).toEqual({
+      accepted: false, code: CHECK_VIOLATION, constraint: ROUND_BINDING,
+      message: BINDING_OTHER_ROUND,
+    });
+  });
+
+  it("refuses a round_open_id naming another ORGANISATION's open row", async () => {
+    expect(await tryInvite({ white: new Date(), roundOpen: "other-org" })).toEqual({
+      accepted: false, code: CHECK_VIOLATION, constraint: ROUND_BINDING,
+      message: BINDING_OTHER_ORG,
+    });
+  });
+
+  // Second call: the binding holds on UPDATE too — a row legally bound to its
+  // own round cannot be re-pointed at another round afterwards.
+  it("refuses re-pointing a bound row at another round by UPDATE", async () => {
+    expect(await tryInvite({ roundOpen: "own", then: "other-round" })).toEqual({
+      accepted: false, code: CHECK_VIOLATION, constraint: ROUND_BINDING,
+      message: BINDING_OTHER_ROUND,
+    });
+  });
+
+  // ...and its positive pair: an UPDATE from no round to THIS fixture's round
+  // is the write T19 makes when the organiser presses Open round.
+  it("accepts binding an unbound row to its own round by UPDATE", async () => {
+    expect(await tryInvite({ roundOpen: "none", then: "own" })).toEqual({ accepted: true });
   });
 
   // Design §3.6: a token revoked mid-match is NOT a no-show and must not be

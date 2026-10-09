@@ -61,6 +61,10 @@ alter table user_external_accounts force row level security;
 -- so a double press or a retry cannot produce two windows for one round.
 -- `opened_by … on delete restrict`: this row is the authority for a window
 -- that can forfeit somebody, so it keeps its actor.
+-- `(stage_id, org_id)` is ONE composite FK through stages_id_org_key (V375),
+-- the fixtures_court_id_org_id_fkey shape: a plain `org_id` FK only proves the
+-- org exists, so an open row could carry another tenant's org beside this
+-- stage. FK checks bypass RLS, so the binding has to be in the key itself.
 --
 -- Declared ABOVE fixture_external_play because that table's round_open_id FK
 -- names it.
@@ -71,12 +75,14 @@ alter table user_external_accounts force row level security;
 -- =============================================================================
 create table stage_round_opens (
   id        uuid primary key default gen_random_uuid(),
-  stage_id  uuid not null references stages(id) on delete cascade,
+  stage_id  uuid not null,
   org_id    uuid not null references organizations(id) on delete cascade,
   round_no  int  not null,
   opened_at timestamptz not null default now(),
   opened_by uuid not null references users(id) on delete restrict,
-  unique (stage_id, round_no)
+  unique (stage_id, round_no),
+  constraint stage_round_opens_stage_org_fkey
+    foreign key (stage_id, org_id) references stages (id, org_id) on delete cascade
 );
 create index stage_round_opens_org_idx on stage_round_opens (org_id, opened_at desc);
 
@@ -121,26 +127,75 @@ create table fixture_external_play (
   video_override_at   timestamptz null,
   -- D12: the round this fixture's window hangs off. Null until the organiser
   -- presses Open round; `on delete restrict` because a round that has already
-  -- invited players cannot be un-opened by deleting its row.
+  -- invited players cannot be un-opened by deleting its row. The FK only
+  -- proves SOME open row exists; that it is THIS fixture's round is the
+  -- fixture_external_play_round_open_binding trigger below.
   round_open_id       uuid null references stage_round_opens(id) on delete restrict,
-  -- D12: the per-fixture record that the pairing's invite went out. One row
-  -- per fixture (fixture_id is the primary key), so "invited" is recorded
-  -- once; T13 writes it with `where invited_at is null`, which is what makes a
-  -- re-open or a retry a no-op instead of a second email to both players.
-  invited_at          timestamptz null,
   started_at          timestamptz,
   finished_at         timestamptz,
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now(),
   check ((status = 'needs_organiser') = (needs_reason is not null)),
   -- D12's invariant: a fixture cannot be marked invited before its round is
-  -- opened. Half of it — the other half is the round_open_id FK, which can
-  -- only name a row the organiser's press created. Two guards, deliberately
-  -- separate so each is mutable on its own; a CHECK cannot span tables, so no
-  -- single constraint can express the whole thing.
+  -- opened. The invite stamps ARE the seat stamps above — T19's
+  -- inviteUnemailedSeats stamps white_emailed_at / black_emailed_at per seat
+  -- and emails only a seat whose stamp is null; there is no second, per-fixture
+  -- invite column. Either seat stamp set ⇒ round_open_id set. Three guards,
+  -- each mutable on its own: this CHECK (a seat stamp needs an open round),
+  -- the round_open_id FK (that open row exists), and the binding trigger below
+  -- (that open row is THIS fixture's stage, round and organisation). A CHECK
+  -- cannot span tables, so no single constraint expresses the whole thing.
   constraint fixture_external_play_invite_needs_open_round_check
-    check (invited_at is null or round_open_id is not null)
+    check ((white_emailed_at is null and black_emailed_at is null)
+           or round_open_id is not null)
 );
+
+-- D12, the cross-table half: round_open_id must name the open row for THIS
+-- fixture's (stage_id, round_no), in THIS fixture's organisation. Without it a
+-- fixture whose own round was never opened satisfies the CHECK and the FK by
+-- naming another round's row — or another tenant's, since FK checks bypass RLS
+-- (reviewer probe, 2026-10-09). One constraint name, three messages, so each
+-- refusal is attributable and each branch is killable on its own; org is
+-- checked FIRST because a foreign org's row is also a foreign stage's, and the
+-- stage message would otherwise hide it.
+-- security definer + pinned search_path (the V306 shape): stage_round_opens is
+-- sealed (FORCE RLS, no app_user policy, no grant), so an invoker function run
+-- under withTenant could not read the row it is asked to vouch for. It only
+-- READS, and only the two rows named by the row being written.
+-- Fires on INSERT and on UPDATE OF round_open_id / fixture_id only: a fixture
+-- re-paired into another round is a fixtures UPDATE this trigger does not see
+-- (re-open semantics are T19's).
+create function fixture_external_play_round_open_binding() returns trigger
+  language plpgsql security definer
+  set search_path = ${flyway:defaultSchema}, pg_temp as $$
+declare
+  f_stage uuid; f_round int; f_org uuid;
+  o_stage uuid; o_round int; o_org uuid;
+begin
+  if new.round_open_id is null then
+    return null;
+  end if;
+  select stage_id, round_no, org_id into f_stage, f_round, f_org
+    from fixtures where id = new.fixture_id;
+  select stage_id, round_no, org_id into o_stage, o_round, o_org
+    from stage_round_opens where id = new.round_open_id;
+  if o_org is distinct from f_org then
+    raise exception 'round_open_id names a round opened in another organisation'
+      using errcode = '23514', constraint = 'fixture_external_play_round_open_binding';
+  end if;
+  if o_stage is distinct from f_stage then
+    raise exception 'round_open_id names a round of another stage'
+      using errcode = '23514', constraint = 'fixture_external_play_round_open_binding';
+  end if;
+  if o_round is distinct from f_round then
+    raise exception 'round_open_id names another round of this stage'
+      using errcode = '23514', constraint = 'fixture_external_play_round_open_binding';
+  end if;
+  return null;
+end $$;
+create constraint trigger fixture_external_play_round_open_binding
+  after insert or update of round_open_id, fixture_id on fixture_external_play
+  for each row execute function fixture_external_play_round_open_binding();
 
 create index fixture_external_play_org_idx on fixture_external_play (org_id);
 create index fixture_external_play_poll_idx
