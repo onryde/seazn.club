@@ -229,7 +229,10 @@ export type BoardErrorCode =
   | "unplayable_time_control" // 400 "This game cannot be played with the Board API." (M12)
   | "rate_limited"            // 429
   | "unauthorized"            // 401/403 — token revoked or wrong scope
-  | "unavailable";            // 5xx, network, timeout
+  | "unavailable"             // a DEFINITE failure: Lichess answered and nothing was created
+  | "outcome_unknown";        // timeout, 5xx, or a 200 with no id — a challenge MAY exist.
+                              // Never release a creation claim on this code: look the
+                              // challenge up before any re-create (Task 3-5 review T3-I2).
 export type GameSnapshot = {
   gameId: string;
   status: LichessStatus;

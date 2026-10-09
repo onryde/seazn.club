@@ -71,7 +71,7 @@ Each line that follows is a design input; several contradict the brainstorming d
 |---|---|---|
 | M1 | **Lichess ends a game on time with no client connected.** Game `PbxONnd6`: poll at 10:02:05Z `status=started`; poll at 10:02:21Z `status=outoftime winner=black`, after white's 180s expired ~10:02:15Z, with no stream open | flag spike |
 | M2 | **Caveat on M1:** this cannot distinguish "Lichess auto-flags" from "our export read finalises it". The flag appeared on the first poll after expiry, consistent with both. The spec therefore says *a read settles the flag*, never *Lichess pushes it to us* | flag spike |
-| M3 | **Challenge creation is rate-limited hard.** Four creates in ~1s, then every subsequent create returned `{"error":"Too many requests. Try again later."}` | battery v1 |
+| M3 | **Challenge creation is limited to 5 per minute per challenger**, plus 500 per 10 minutes per IP. Corrected 2026-10-09 by the Task 3-5 review: the v1 log shows FIVE creates in ~4s (four section-A challenges and game B) before the first `{"error":"Too many requests. Try again later."}`, and lila's `Limiters.scala:61-71` / `Challenge.scala:298-309` state both limits. The earlier wording here ("four creates in ~1s", "roughly four a second") misread the log as a burst rate | battery v1 + lila source |
 | M4 | **Moves are not rate-limited** at speed — 8 back-to-back posts, all 200 | battery v2 §F |
 | M5 | **A malformed UCI is played, not rejected.** `move e7e6xx` → `200 {"ok":true}`, export `moves=e4 e6`. Lichess truncated the suffix | battery v2 §D |
 | M6 | **Out-of-turn and game-over share one error:** `400 {"error":"Not your turn, or game already over"}` | battery v2 §D |
@@ -137,8 +137,12 @@ outside any transaction, then conditionally record. One claimant per fixture.
 
 - **White's token challenges Black's username; Black's token accepts.** Colour comes
   from the pairing. This removes the `urlWhite`/`urlBlack` hand-off entirely.
-- Creation runs through a **global throttle queue with 429 backoff** (M3). A 64-player
-  round wants 32 games at once; Lichess allows roughly four a second.
+- Creation respects Lichess's two real limits (M3). **Per challenger, 5 creates per
+  minute** — and since White's token creates the challenge, a round asks each White for
+  ONE create, so a normal round never approaches it; it bites only on retries for the
+  same player. **Per IP, 500 creates per 10 minutes** — every create leaves our servers,
+  so this is the true ceiling on how many boards can start together. A 429 waits out a
+  full window (at least 60s), never a short ladder that cannot outlast it.
 - The time control comes from a **curated list verified playable** (§3.7).
 - The fixture records `pending` before the HTTP call, and a unique index on the challenge
   id makes a double-create impossible.
