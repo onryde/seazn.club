@@ -10,7 +10,7 @@
       "latencyMs": 2000
     },
     "rtmps": {
-      "url": "rtmps://live.stg.seazn.club:443/live/",
+      "url": "rtmps://live.cloudflare.com:443/live/",
       "streamKey": "a1b2c3d4e5f60718293a4b5c6d7e8f90k7d3e9a1c5b8f2046e1d9c3a7b5f8e2d"
     }
   },

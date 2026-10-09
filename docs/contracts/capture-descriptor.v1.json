@@ -352,7 +352,7 @@
                   "type": "object",
                   "properties": {
                     "url": {
-                      "description": "srt://live.cloudflare.com:778 (as Cloudflare issues it, W21) or the environment's live.* host; null cred.srt means the RTMPS-only safety net (A18). The server never rewrites it (§6.4, G0-i).",
+                      "description": "srt://live.cloudflare.com:778, exactly as Cloudflare issues it, in every environment; there is no custom ingest host. null cred.srt means the RTMPS-only safety net (A18). The server never rewrites it (§6.4, W21, W26).",
                       "type": "string",
                       "minLength": 1
                     },
@@ -388,7 +388,7 @@
               "type": "object",
               "properties": {
                 "url": {
-                  "description": "the environment's live.* host (live.seazn.club / live.stg.seazn.club) (§6.4, W15, G0-i).",
+                  "description": "rtmps://live.cloudflare.com:443/live/, exactly as Cloudflare issues it, in every environment; there is no custom ingest host (§6.4, W26, superseding W15).",
                   "type": "string",
                   "minLength": 1
                 },
@@ -634,7 +634,7 @@
                   "type": "object",
                   "properties": {
                     "url": {
-                      "description": "srt://live.cloudflare.com:778 (as Cloudflare issues it, W21) or the environment's live.* host; null cred.srt means the RTMPS-only safety net (A18). The server never rewrites it (§6.4, G0-i).",
+                      "description": "srt://live.cloudflare.com:778, exactly as Cloudflare issues it, in every environment; there is no custom ingest host. null cred.srt means the RTMPS-only safety net (A18). The server never rewrites it (§6.4, W21, W26).",
                       "type": "string",
                       "minLength": 1
                     },
@@ -670,7 +670,7 @@
               "type": "object",
               "properties": {
                 "url": {
-                  "description": "the environment's live.* host (live.seazn.club / live.stg.seazn.club) (§6.4, W15, G0-i).",
+                  "description": "rtmps://live.cloudflare.com:443/live/, exactly as Cloudflare issues it, in every environment; there is no custom ingest host (§6.4, W26, superseding W15).",
                   "type": "string",
                   "minLength": 1
                 },
@@ -916,7 +916,7 @@
                   "type": "object",
                   "properties": {
                     "url": {
-                      "description": "srt://live.cloudflare.com:778 (as Cloudflare issues it, W21) or the environment's live.* host; null cred.srt means the RTMPS-only safety net (A18). The server never rewrites it (§6.4, G0-i).",
+                      "description": "srt://live.cloudflare.com:778, exactly as Cloudflare issues it, in every environment; there is no custom ingest host. null cred.srt means the RTMPS-only safety net (A18). The server never rewrites it (§6.4, W21, W26).",
                       "type": "string",
                       "minLength": 1
                     },
@@ -952,7 +952,7 @@
               "type": "object",
               "properties": {
                 "url": {
-                  "description": "the environment's live.* host (live.seazn.club / live.stg.seazn.club) (§6.4, W15, G0-i).",
+                  "description": "rtmps://live.cloudflare.com:443/live/, exactly as Cloudflare issues it, in every environment; there is no custom ingest host (§6.4, W26, superseding W15).",
                   "type": "string",
                   "minLength": 1
                 },
