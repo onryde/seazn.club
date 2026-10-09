@@ -265,9 +265,14 @@ describe("the double walkover's checks (X-DW-1..4)", () => {
   });
 
   it("a ladder's order is unmoved by a double walkover", () => {
-    expect(ladderUnmoved(["a", "b", "c"], ["a", "b", "c"])).toMatchObject({ verdict: "pass", checked: 1 });
-    expect(ladderUnmoved(["a", "b", "c"], ["b", "a", "c"]).verdict).toBe("fail");
-    expect(ladderUnmoved(null, ["a"]).verdict).toBe("fail");
+    expect(ladderUnmoved(dw, ["a", "b", "c"], ["a", "b", "c"])).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(ladderUnmoved(dw, ["a", "b", "c"], ["b", "a", "c"]).verdict).toBe("fail");
+    expect(ladderUnmoved(dw, null, ["a"]).verdict).toBe("fail");
+    // The truth-run's find: a refused double walkover leaves the order unmoved by construction, so it fails by name.
+    const refused = ladderUnmoved({ ...dw, refusal: { status: 422, code: "INVALID_EVENT" } }, ["a", "b", "c"], ["a", "b", "c"]);
+    expect(refused).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(refused.reason).toMatch(/q1: the product refused it 422 INVALID_EVENT/);
+    expect(ladderUnmoved(null, ["a"], ["a"]).reason).toMatch(/no double walkover was posted/);
   });
 });
 
@@ -515,6 +520,9 @@ describe("WD-CASC's checks (X-WD-1..4)", () => {
     const swap = (key: string, f: ObservedFixture) => good.map((g) => (g.extKey === key ? f : g));
     expect(withdrawalsWalkOver(r, swap(qf2.ext_key!, ext(qf2.ext_key!, qf2.home_entrant_id, a2, "abandoned", null))).verdict).toBe("fail");
     expect(withdrawalsWalkOver({ ...r, steps: [...r.steps, { entrantId: "y", label: "x", answer: answer({ voided: 1 }) }] }, good).verdict, "a voiding answer").toBe("fail");
+    const refused = withdrawalsWalkOver({ ...r, steps: [...r.steps, { entrantId: "y", label: "semi-final opponent TBD", answer: null, refusal: { status: 422, code: "WRONG_PHASE" } }] }, good);
+    expect(refused, "a refused withdrawal (X-WD-3)").toMatchObject({ verdict: "fail", checked: 4 });
+    expect(refused.reason).toMatch(/withdrawal of y \(semi-final opponent TBD\) refused 422 WRONG_PHASE/);
     expect(tbdSeatWalksOver(r, swap(lines.a.sf, ext(lines.a.sf, w1, a2, "forfeited", { kind: "award", winner: a2, loser: w1, reason: WITHDREW }))).verdict, "W1 still seated").toBe("fail");
     expect(tbdSeatWalksOver(r, [...good, ext("other", w1, "z", "scheduled", null)]).verdict, "W1 seated later").toBe("fail");
     expect(tbdSeatWalksOver(r, swap(qf1.ext_key!, ext(qf1.ext_key!, w1, qf1.away_entrant_id, "cancelled", null))).verdict, "a voided fixture").toBe("fail");

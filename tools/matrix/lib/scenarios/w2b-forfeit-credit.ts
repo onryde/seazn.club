@@ -250,7 +250,9 @@ async function abandonTableCheck(ctx: ScenarioContext, rec: Recorder, setup: Div
 // ---------------------------------------------------------------------------------------------------------------
 // WD-CASC: the knockout choreography.
 
-interface WithdrawStep { readonly entrantId: string; readonly label: string; readonly answer: WithdrawOut }
+/** One withdrawal the choreography asked for: the product's answer, or its refusal (X-WD-3: a withdrawal whose fixture has
+ *  a TBD opponent walks over, so a refusal there is the defect, recorded and judged — never a crash of the case). */
+interface WithdrawStep { readonly entrantId: string; readonly label: string; readonly answer: WithdrawOut | null; readonly refusal?: { readonly status: number; readonly code: string | null } }
 interface Line { readonly qf: readonly [FixtureRow, FixtureRow]; readonly sf: string }
 /** QF1's semi-final line and the other one, from the feed graph (never fixture numbers), and the final. */
 export function knockoutLines(g: FeedGraph, r1: readonly FixtureRow[]): { a: Line; b: Line; final: string } {
@@ -300,7 +302,11 @@ export function withdrawalsWalkOver(r: WdRecord, fixtures: readonly ObservedFixt
     const a = o !== null && o.kind === "award" ? o : null;
     return { ok: f?.status === "forfeited" && a !== null && a.winner === w.remaining && a.loser === w.withdrawn && a.reason === WITHDREW, note: `${w.fixtureId} (${w.label}): ${f?.status ?? "(missing)"} ${o === null ? "no outcome" : JSON.stringify(o)}, wanted forfeited award to ${w.remaining}, loser ${w.withdrawn}, reason ${WITHDREW}` };
   });
-  for (const s of r.steps) items.push({ ok: s.answer.policy === "walkover" && s.answer.voided === 0, note: `withdrawal of ${s.entrantId} (${s.label}) answered policy ${s.answer.policy}, voided ${s.answer.voided}` });
+  for (const s of r.steps) {
+    items.push(s.answer === null
+      ? { ok: false, note: `withdrawal of ${s.entrantId} (${s.label}) refused ${s.refusal?.status ?? "?"} ${s.refusal?.code ?? "(no code)"}` }
+      : { ok: s.answer.policy === "walkover" && s.answer.voided === 0, note: `withdrawal of ${s.entrantId} (${s.label}) answered policy ${s.answer.policy}, voided ${s.answer.voided}` });
+  }
   return assertion("w2b-withdrawal-walks-over", r.walked.length === 0 ? [{ ok: false, note: "no withdrawal was recorded" }] : items);
 }
 
@@ -468,7 +474,7 @@ const dwAll = scenario("DW-ALL", async (ctx, rec, setup) => {
   return finish(ctx, rec, setup, plays, async (observed) => {
     const fixtures = observed.stages[0].fixtures;
     const advances = noPlacement ? assertion("w2b-double-walkover-advances-nobody", [], NO_PLACEMENT)
-      : kind === "ladder" ? ladderUnmoved(ladderBefore, ladderAfter)
+      : kind === "ladder" ? ladderUnmoved(d, ladderBefore, ladderAfter)
       : refusesAtTheEnd ? doubleWalkoverAdvancesNobody(d, fixtures, dead)
       : assertion("w2b-double-walkover-advances-nobody", [], `a ${kind} table: nobody advances from any match there; its entry is w2b-double-walkover-table's (X-DW-4)`);
     return [
@@ -504,7 +510,16 @@ const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
   const r: WdRecord = { steps: [], walked: [], w1: null, a2: null, a3: null, lines: null, dw: null };
   const cfg = stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind);
   const withdraw = async (entrantId: string, label: string) => {
-    const answer = await ctx.driver.withdraw(entrantId);
+    let answer: WithdrawOut;
+    try {
+      answer = await ctx.driver.withdraw(entrantId);
+    } catch (e) {
+      if (!(e instanceof RefusedCall)) throw e;
+      // The entrant stays in: the rest of the choreography plays on, and the refusal is a failing item by name.
+      r.steps.push({ entrantId, label, answer: null, refusal: { status: e.status, code: e.code } });
+      rec.notes.push(`WD-CASC: the withdrawal of ${entrantId} (${label}) was refused ${e.status} ${e.code ?? "(no code)"}`);
+      return;
+    }
     rec.facts.add("withdrawn");
     rec.withdrawn.add(entrantId);
     r.steps.push({ entrantId, label, answer });

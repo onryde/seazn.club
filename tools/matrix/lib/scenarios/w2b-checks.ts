@@ -217,7 +217,9 @@ export function doubleWalkoverAdvancesNobody(d: ForfeitDrive | null, fixtures: r
 }
 
 /** A ladder's double walkover leaves the order as it was (W2b D19: nobody climbs). */
-export function ladderUnmoved(before: readonly string[] | null, after: readonly string[] | null): CheckResult {
+export function ladderUnmoved(d: ForfeitDrive | null, before: readonly string[] | null, after: readonly string[] | null): CheckResult {
+  // A refused double walkover leaves the order where it was by construction: judging it would be a pass on nothing.
+  if (d === null || d.refusal !== null) return assertion("w2b-double-walkover-advances-nobody", [{ ok: false, note: d === null ? "no double walkover was posted" : refusedNote(d) }]);
   if (before === null || after === null) return assertion("w2b-double-walkover-advances-nobody", [{ ok: false, note: "the ladder order was not read around the double walkover" }]);
   return assertion("w2b-double-walkover-advances-nobody", [{ ok: before.join(",") === after.join(","), note: `ladder order ${before.join(" > ")} became ${after.join(" > ")} after a double walkover` }]);
 }
