@@ -41,6 +41,23 @@ describe("needsDecision = bracket kind AND the kernel's settleApplies (ruling C1
     expect(checked).toBeGreaterThan(0);
   });
 
+  it("P1 follow-up — empty case, every sport, every bracket kind: a SCHEDULED fixture (no match_states row, so getFixtureState serves state null) renders as needing nothing, never held and never a crash", () => {
+    // The empty case above passes `state: {}` with a hook-less module; the page passes `match_states.state ?? null`
+    // and the REAL module. A scheduled chess knockout read `null.phase` in boardgame's hook and crashed its console.
+    let checked = 0;
+    const visited = forEachSport(({ key, module }) => {
+      for (const k of BRACKET_KINDS) {
+        expect(needsDecision(module, { outcome: null, state: null, stageKind: k, events: [] }), `${key} ${k}`).toBe(false);
+        checked++;
+      }
+    });
+    expect(visited).toBeGreaterThan(0);
+    expect(checked).toBe(visited * BRACKET_KINDS.size);
+    // The positive pair: the same real module, on a drawn knockout game whose tie-break is owed, IS held.
+    const pending = chessKnockout();
+    expect(needsDecision(boardgame, { outcome: pending.outcome, state: pending.state, stageKind: "knockout", events: [start] })).toBe(true);
+  });
+
   it("empty case, every sport: a fresh, started knockout fixture needs nothing (forEachSport)", () => {
     let cfgs = 0;
     const visited = forEachSport(({ module }) => {

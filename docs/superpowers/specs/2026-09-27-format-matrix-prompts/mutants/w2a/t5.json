@@ -181,8 +181,8 @@
   {
     "id": "d-c5-decider-pending-ignores-outcome",
     "file": "packages/engine/src/core/events.ts",
-    "find": "return module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;",
-    "replace": "return module.awaitingDecider?.(folded.state) === true;",
+    "find": "  return folded.state != null && module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;",
+    "replace": "  return folded.state != null && module.awaitingDecider?.(folded.state) === true;",
     "killers": [
       {
         "cwd": "packages/engine",
