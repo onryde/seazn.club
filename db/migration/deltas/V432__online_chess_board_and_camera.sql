@@ -56,6 +56,10 @@ create table fixture_external_play (
                       )),
   scheduled_at_basis  timestamptz not null,
   challenge_id        text,
+  -- Dead under the 2026-10-09 design (§3.3 removes the urlWhite/urlBlack
+  -- hand-off: White's token challenges Black's username). Kept nullable
+  -- because guard.ts/room.ts still select them; T9 drops them in V434 once
+  -- the last reader is gone.
   url_white           text,
   url_black           text,
   white_side          text check (white_side in ('home', 'away')),
@@ -68,9 +72,17 @@ create table fixture_external_play (
   last_polled_at      timestamptz,
   needs_reason        text check (needs_reason in (
                         'no_show_white', 'no_show_black', 'no_show_both',
-                        'not_started', 'aborted', 'mismatch', 'provider_error'
+                        'not_started', 'aborted', 'mismatch', 'provider_error',
+                        -- §3.6: a revoked/rejected token is not a no-show; a
+                        -- double walkover on a final/last rung/third place is
+                        -- refused and the fixture stays open for the organiser.
+                        'token_revoked', 'double_walkover_blocked'
                       )),
   last_error          text,
+  -- §5.5 / D11: the organiser proceeded without video under policy
+  -- `required` (RealtimeKit unavailable). Read by preflight (T8); the human
+  -- record of WHO and WHY is the online_chess_audit row beside it.
+  video_override_at   timestamptz null,
   started_at          timestamptz,
   finished_at         timestamptz,
   created_at          timestamptz not null default now(),
