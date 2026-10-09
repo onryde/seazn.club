@@ -51,15 +51,18 @@ export function isBoardApiPlayable(tc: TimeControl): boolean {
   return estimatedSeconds(tc) >= BOARD_API_MIN_ESTIMATED_SECONDS;
 }
 
-/** Ship-1 (§3.7). Frozen: a caller must not be able to push an unverified
- *  entry into the shared catalogue, which would walk straight past the sweep
- *  that checks it. */
+/** Ship-1 (§3.7; 10+0 and 15+0 added by owner ruling 2026-10-09, both
+ *  measured playable in b3-spike.log). Frozen: a caller must not be able to
+ *  push an unverified entry into the shared catalogue, which would walk
+ *  straight past the sweep that checks it. */
 export const SHIP1_TIME_CONTROLS: readonly TimeControl[] = Object.freeze([
   Object.freeze({ key: "3+0", limitSeconds: 180, incrementSeconds: 0 }),
   Object.freeze({ key: "3+2", limitSeconds: 180, incrementSeconds: 2 }),
   Object.freeze({ key: "5+0", limitSeconds: 300, incrementSeconds: 0 }),
   Object.freeze({ key: "5+3", limitSeconds: 300, incrementSeconds: 3 }),
+  Object.freeze({ key: "10+0", limitSeconds: 600, incrementSeconds: 0 }),
   Object.freeze({ key: "10+5", limitSeconds: 600, incrementSeconds: 5 }),
+  Object.freeze({ key: "15+0", limitSeconds: 900, incrementSeconds: 0 }),
   Object.freeze({ key: "15+10", limitSeconds: 900, incrementSeconds: 10 }),
 ]);
 

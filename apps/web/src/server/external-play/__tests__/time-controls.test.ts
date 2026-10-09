@@ -16,8 +16,10 @@ import type { TimeControl } from "../time-controls";
 import type { BoardgameClockInput } from "../clock";
 
 /** Spec §3.7's list, written out as the rulebook states it — the catalogue is
- *  checked AGAINST this, not derived from it. */
-const SHIP1_KEYS = ["3+0", "3+2", "5+0", "5+3", "10+5", "15+10"];
+ *  checked AGAINST this, not derived from it. Owner ruling 2026-10-09: 10+0
+ *  and 15+0 join ship-1, in this order (both measured playable, b3-spike.log
+ *  18:00:23Z and 18:00:40Z: created, accepted, both sides' moves 200). */
+const SHIP1_KEYS = ["3+0", "3+2", "5+0", "5+3", "10+0", "10+5", "15+0", "15+10"];
 
 /** The stored clock for a ship-1 key, from the KEY's own words (minutes +
  *  increment seconds; divisions.config.clock is in seconds). */
@@ -37,8 +39,9 @@ const documentedCreatable = (limit: number) =>
 
 describe("M14's documented rule agrees with every measured creation", () => {
   it("accepts each limit a spike created, and refuses each one a spike saw refused", () => {
-    // Accepted: spike-battery2.log §A-§F, tc-boundary.log, flag-spike.log.
-    const accepted = [0, 60, 120, 180, 600];
+    // Accepted: spike-battery2.log §A-§F, tc-boundary.log, flag-spike.log,
+    // b3-spike.log (900: the 15+0 game, 18:00:40Z).
+    const accepted = [0, 60, 120, 180, 600, 900];
     // Refused {"clock.limit":["Invalid value"]}: tc-boundary.log 10:32:04Z, 10:33:06Z.
     const refused = [170, 140];
     let checked = 0;
@@ -49,7 +52,7 @@ describe("M14's documented rule agrees with every measured creation", () => {
 });
 
 describe("SHIP1_TIME_CONTROLS", () => {
-  it("is exactly the spec's six entries, in the spec's order", () => {
+  it("is exactly the ruled ship-1 list (eight entries), in its order", () => {
     expect(SHIP1_TIME_CONTROLS.map((t) => t.key)).toEqual(SHIP1_KEYS);
   });
 
@@ -81,7 +84,9 @@ describe("SHIP1_TIME_CONTROLS", () => {
     expect(checked, "the playability sweep checked nothing — zero is a failure")
       .toBe(SHIP1_TIME_CONTROLS.length);
     expect(checked).toBeGreaterThan(0);
-    expect(checked).toBe(6);
+    // Anchored on the RULING's list, not the catalogue: an entry dropped from
+    // both would otherwise shrink the sweep unnoticed.
+    expect(checked).toBe(SHIP1_KEYS.length);
   });
 
   it("no duplicate keys, and no duplicate (limit, increment) pairs", () => {

@@ -260,7 +260,7 @@ export function enqueueCreation<T>(key: string, job: () => Promise<T>): Promise<
 
 // T5 — apps/web/src/server/external-play/time-controls.ts
 export type TimeControl = { key: string; limitSeconds: number; incrementSeconds: number };
-export const SHIP1_TIME_CONTROLS: readonly TimeControl[]; // 3+0,3+2,5+0,5+3,10+5,15+10
+export const SHIP1_TIME_CONTROLS: readonly TimeControl[]; // 3+0,3+2,5+0,5+3,10+0,10+5,15+0,15+10 (10+0, 15+0: owner ruling 2026-10-09)
 export function isBoardApiPlayable(tc: TimeControl): boolean; // limit + 40*inc >= 180
 export function assertTimeControl(key: string): TimeControl;  // throws 400 INVALID_TIME_CONTROL
 
@@ -4157,7 +4157,7 @@ either rule rather than only in their conjunction.
 - Produces, exactly as the authoritative list declares:
   ```ts
   export type TimeControl = { key: string; limitSeconds: number; incrementSeconds: number };
-  export const SHIP1_TIME_CONTROLS: readonly TimeControl[]; // 3+0,3+2,5+0,5+3,10+5,15+10
+  export const SHIP1_TIME_CONTROLS: readonly TimeControl[]; // 3+0,3+2,5+0,5+3,10+0,10+5,15+0,15+10 (10+0, 15+0: owner ruling 2026-10-09)
   export function isBoardApiPlayable(tc: TimeControl): boolean; // limit + 40*inc >= 180
   export function assertTimeControl(key: string): TimeControl;  // throws 400 INVALID_TIME_CONTROL
   ```
@@ -4201,10 +4201,10 @@ measured refusals as its tests. Do not write out a guessed enum.
 
   /** Spec §3.7's list, written out as the rulebook states it — the catalogue is
    *  checked AGAINST this, not derived from it. */
-  const SHIP1_KEYS = ["3+0", "3+2", "5+0", "5+3", "10+5", "15+10"];
+  const SHIP1_KEYS = ["3+0", "3+2", "5+0", "5+3", "10+0", "10+5", "15+0", "15+10"]; // owner ruling 2026-10-09
 
   describe("SHIP1_TIME_CONTROLS", () => {
-    it("is exactly the spec's six entries, in the spec's order", () => {
+    it("is exactly the ruled ship-1 list (eight entries), in its order", () => {
       expect(SHIP1_TIME_CONTROLS.map((t) => t.key)).toEqual(SHIP1_KEYS);
     });
 
@@ -4236,7 +4236,7 @@ measured refusals as its tests. Do not write out a guessed enum.
       expect(checked, "the playability sweep checked nothing — zero is a failure")
         .toBe(SHIP1_TIME_CONTROLS.length);
       expect(checked).toBeGreaterThan(0);
-      expect(checked).toBe(6);
+      expect(checked).toBe(SHIP1_KEYS.length); // the ruling's list, not a literal
     });
 
     it("no duplicate keys, and no duplicate (limit, increment) pairs", () => {
@@ -4430,7 +4430,9 @@ measured refusals as its tests. Do not write out a guessed enum.
     Object.freeze({ key: "3+2", limitSeconds: 180, incrementSeconds: 2 }),
     Object.freeze({ key: "5+0", limitSeconds: 300, incrementSeconds: 0 }),
     Object.freeze({ key: "5+3", limitSeconds: 300, incrementSeconds: 3 }),
+    Object.freeze({ key: "10+0", limitSeconds: 600, incrementSeconds: 0 }),
     Object.freeze({ key: "10+5", limitSeconds: 600, incrementSeconds: 5 }),
+    Object.freeze({ key: "15+0", limitSeconds: 900, incrementSeconds: 0 }),
     Object.freeze({ key: "15+10", limitSeconds: 900, incrementSeconds: 10 }),
   ]);
 
