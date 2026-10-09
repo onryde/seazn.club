@@ -3,11 +3,15 @@
 // over with `core.forfeit` — which boardgame refuses outside phase "live" — so the withdrawal 422'd WRONG_PHASE and the
 // entrant was never withdrawn. A fixture whose decider is still owed (the engine's `deciderPending`) is a HOLD, the
 // C17 shape: nobody is walked over on it, and the organiser settles it for the remaining entrant.
+// Ruling D-R7: the held decider must not seat the withdrawn entrant by the OTHER door either — a scorer recording the
+// decider event itself (`boardgame.tiebreak {winner}`) is refused exactly as C17 refuses the settle.
+import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { BRACKET_KINDS, deciderPending, type StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { sql } from "@/lib/db";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { BRACKET_WALKOVER_KINDS, createStages, generateStageFixtures } from "@/server/usecases/stages";
@@ -196,4 +200,70 @@ describe.skipIf(!HAS_DB)("I-1 (ruling D-R1): a withdrawal never walks over a fix
     expect(held).toBe(kinds.length * deciderSports.length);
     expect(held).toBeGreaterThan(0);
   }, 600_000);
+});
+
+/** Each decider EVENT type the engine declares (`deciderTypes`), with the payload naming its winner. Derived set check
+ *  below: a new decider type fails until it names its payload here. */
+const DECIDER_EVENT_PAYLOADS: Record<string, (winner: string) => unknown> = {
+  "boardgame.tiebreak": (winner) => ({ rung: "armageddon", winner }),
+};
+
+/** scorers.test.ts's acceptOfficial (as organiser-only-events.test.ts copies it): a user with NO org role, accepted
+ *  as an official on this fixture — a scorer, who may record a tie-break (it is not organiser-only). */
+async function scorerOn(orgId: string, fixtureId: string): Promise<AuthCtx> {
+  const [user] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified)
+    values (${`scorer-${randomUUID().slice(0, 8)}@test.local`}, 'Scorer', true) returning id`;
+  const [person] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name, user_id) values (${orgId}, 'Scorer', ${user!.id}) returning id`;
+  const [official] = await sql<{ id: string }[]>`
+    insert into officials (org_id, person_id, display_name, role_keys)
+    values (${orgId}, ${person!.id}, 'Scorer', ${sql.json(["referee"])}) returning id`;
+  await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+            values (${orgId}, ${fixtureId}, ${official!.id}, 'referee', 'accepted')`;
+  return { orgId, via: "session", userId: user!.id, role: null, keyId: null };
+}
+
+describe.skipIf(!HAS_DB)("D-R7: a held decider cannot seat a withdrawn entrant through the decider event", () => {
+  it("D-R7: every engine decider event naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE (withdrawn) and writes nothing; naming the remaining entrant is accepted and seats them — for a scorer and for the organiser", async () => {
+    const deciders = builtinModules.flatMap((m) => (m.deciderTypes ?? []).map((type) => ({ sport: m.key, type })));
+    expect(deciders.length, "the engine declares at least one decider event").toBeGreaterThan(0);
+    expect(Object.keys(DECIDER_EVENT_PAYLOADS).sort(), "every decider type names its payload").toEqual(
+      deciders.map((d) => d.type).sort(),
+    );
+    const WHO = ["scorer", "organiser"] as const;
+    let checked = 0;
+    for (const d of deciders)
+      for (const who of WHO) {
+        const label = `${d.type} as ${who}`;
+        const t = await started(d.sport, "knockout");
+        await DECIDER_DRIVERS[d.sport]!(t.auth, t.id);
+        await withdrawEntrantCascade(t.auth, t.away);
+        expect(await pendingDecider(d.sport, t.id), `${label}: the rig holds an owed decider`).toBe(true);
+        const auth = who === "scorer" ? await scorerOn(t.auth.orgId, t.id) : t.auth;
+        const before = await seq(t.id);
+        await expect(post(auth, t.id, d.type, DECIDER_EVENT_PAYLOADS[d.type]!(t.away)), label).rejects.toMatchObject({
+          code: "SETTLE_NOT_APPLICABLE",
+          data: { reason: "withdrawn", winner: t.away },
+        });
+        expect(await seq(t.id), `${label}: the refusal wrote nothing`).toBe(before);
+        expect(await seated(t.next!), label).toEqual([]);
+        expect(await pendingDecider(d.sport, t.id), `${label}: still owed`).toBe(true);
+        // The positive pair: the remaining entrant's decider is recorded and seats them.
+        await post(auth, t.id, d.type, DECIDER_EVENT_PAYLOADS[d.type]!(t.home));
+        expect((await row(t.id)).status, label).toBe("decided");
+        expect(await seated(t.next!), label).toEqual([t.home]);
+        checked++;
+      }
+    expect(checked).toBe(deciders.length * WHO.length);
+  }, 120_000);
+
+  it("D-R7 negative pair: with nobody withdrawn, a scorer's decider naming either entrant is accepted (the refusal is the withdrawal's, not the decider's)", async () => {
+    const t = await started("boardgame", "knockout", "classical");
+    await DECIDER_DRIVERS.boardgame!(t.auth, t.id);
+    const scorer = await scorerOn(t.auth.orgId, t.id);
+    await post(scorer, t.id, "boardgame.tiebreak", DECIDER_EVENT_PAYLOADS["boardgame.tiebreak"]!(t.away));
+    expect((await row(t.id)).status).toBe("decided");
+    expect(await seated(t.next!)).toEqual([t.away]);
+  });
 });

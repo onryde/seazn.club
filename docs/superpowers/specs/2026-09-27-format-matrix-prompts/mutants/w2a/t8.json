@@ -141,6 +141,21 @@
     ]
   },
   {
+    "id": "decider-withdrawn-settle-only",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (candidate.type === \"core.settle\" || (sportModule.deciderTypes ?? []).includes(candidate.type)) {",
+    "replace": "if (candidate.type === \"core.settle\") {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "D-R7: every engine decider event naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\) and writes nothing; naming the remaining entrant is accepted and seats them — for a scorer and for the organiser"
+      }
+    ]
+  },
+  {
     "id": "finalize-held",
     "file": "apps/web/src/server/engine-db/append-event.ts",
     "find": "if (candidate.type === \"core.finalize\" && forbidsLevelResult(stageKind)) {",
