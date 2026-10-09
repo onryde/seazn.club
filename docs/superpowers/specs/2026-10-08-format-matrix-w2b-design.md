@@ -344,6 +344,11 @@ renumbered. Each signed or deviation row ships with a proving test whose title c
    (chess pre-start), B-9 / B-10 (chess double forfeit), C-6 (carrom), CR-2 / CR-10 (cricket NR, NRR), the C17 held
    fixture, page_playoff/ladder void, the TBD-seat throw, the chess-not-started throw, the DE ranks/seating disagreement,
    auto-advance on `finalized`. Each red is recorded with its case id before the fix.
+   **Inherited reds from W2a (ruling D-P2):** 5 boardgame L3 cells on scenario R4 — knockout,
+   knockout_third_place, double_elim, ko_plate, qualifying_main — re-keyed SC-O1 → CD-T13 and pinned in W2a's judge
+   with their reason string (`withdrawal.ts:125-130` posts a bare `core.forfeit` on an unstarted chess fixture;
+   `boardgame.ts:711` refuses WRONG_PHASE). BG-WO-2 + the W2b reason rules turn them green; W2b then unpins them
+   (pin names come with W2a's merge notice). Not W2b's: boardgame ko_plate F1 → FX-G14 (W4).
 3. Fix → the W2b rows green locally (scoped: W2b cases only).
 4. One judge regression dispatched on CI (`matrix:judge regression`) → 0 new reds, including W3–W7 cells.
 5. `MATRIX.md` regenerated.
