@@ -214,15 +214,23 @@ create policy fixture_external_play_tenant on fixture_external_play
 grant select, insert, update, delete on fixture_external_play to app_user;
 
 -- =============================================================================
--- Camera policy (design §5.1, D5). COLUMNS, not config keys: divisions.config
--- and stages.config are sport-module-validated snapshots and would strip a
--- foreign key — the same reason V209 put scorer_can_finalize in a column.
+-- Camera policy (design §5.1, D5: "set per division/stage, defaulting from the
+-- competition"). COLUMNS, not config keys: divisions.config and stages.config
+-- are sport-module-validated snapshots and would strip a foreign key — the
+-- same reason V209 put scorer_can_finalize in a column.
 -- The competition is the floor (NOT NULL, 'off' for all existing data, so no
--- legacy competition can accidentally start spending on video); a stage's
--- null means "inherit". effectivePolicy (T6) reads exactly these two levels.
+-- legacy competition can accidentally start spending on video); a division's
+-- or a stage's null means "inherit". effectivePolicy (T6) resolves exactly
+-- these three levels, nearest first: stage → division → competition. The
+-- division level was added by T6 (controller ruling Q1=D, 2026-10-09): it is
+-- what the organiser edits on the division settings page, and a stage created
+-- later inherits it without anything having to copy a value forward.
 -- =============================================================================
 alter table competitions
   add column camera_policy text not null default 'off'
+    check (camera_policy in ('off', 'optional', 'required'));
+alter table divisions
+  add column camera_policy text null
     check (camera_policy in ('off', 'optional', 'required'));
 alter table stages
   add column camera_policy text null
@@ -292,17 +300,22 @@ create index fixture_play_flags_open_idx
   on fixture_play_flags (fixture_id) where closed_at is null;
 
 -- =============================================================================
--- Audit (design D9, D11). Two things an org can do that must leave a trace:
--- downgrade the camera policy after a window has opened, and override a
--- RealtimeKit outage under `required`. Both carry WHO; `on delete restrict`
--- because an audit row whose actor vanished is not an audit row.
+-- Audit (design D11). An org overriding a RealtimeKit outage under `required`
+-- must leave a trace: WHO, on WHICH fixture; `on delete restrict` because an
+-- audit row whose actor vanished is not an audit row.
+-- A camera-POLICY change (D9) is NOT recorded here. It is a competition
+-- settings change, so it is one row in competition_events
+-- (`chess.camera_policy_changed`, written by patchDivision in the same
+-- transaction as the change) — one authority per fact (T6 ruling Q2,
+-- 2026-10-09). `policy_downgrade` was removed from both CHECKs below for that
+-- reason; stage_id/from_policy/to_policy stay, held NULL by the shape check.
 -- =============================================================================
 create table online_chess_audit (
   id            uuid primary key default gen_random_uuid(),
   org_id        uuid not null references organizations(id) on delete cascade,
   fixture_id    uuid null references fixtures(id) on delete cascade,
   stage_id      uuid null references stages(id) on delete cascade,
-  kind          text not null check (kind in ('policy_downgrade', 'video_override')),
+  kind          text not null check (kind in ('video_override')),
   actor_user_id uuid not null references users(id) on delete restrict,
   from_policy   text null check (from_policy in ('off', 'optional', 'required')),
   to_policy     text null check (to_policy   in ('off', 'optional', 'required')),
@@ -313,9 +326,6 @@ create table online_chess_audit (
   -- covered for by the kind CHECK instead of standing on its own.
   constraint online_chess_audit_shape_check check (
     case kind
-      when 'policy_downgrade' then
-        stage_id is not null and fixture_id is null
-        and from_policy is not null and to_policy is not null
       when 'video_override' then
         fixture_id is not null and stage_id is null
         and from_policy is null and to_policy is null

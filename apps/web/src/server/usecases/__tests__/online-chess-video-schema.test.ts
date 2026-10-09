@@ -139,18 +139,27 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V432)", () => {
     });
   });
 
-  it("a policy downgrade audit row needs its stage and both policies", async () => {
-    expect(await attempt(sql`
-      insert into online_chess_audit (org_id, stage_id, kind, actor_user_id, from_policy, to_policy, note)
-      values (${orgId}, ${stageId}, 'policy_downgrade', ${userId}, 'required', 'optional', 'vendor outage')`,
-    )).toEqual({ accepted: true });
-    // The wrong shape differs from the right one by more than a missing field:
-    // a downgrade carrying a fixture is a video override wearing the wrong kind.
-    expect(await attempt(sql`
-      insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, from_policy, to_policy, note)
-      values (${orgId}, ${fixtureId}, 'policy_downgrade', ${userId}, 'required', 'optional', 'wrong shape')`,
-    )).toEqual({
-      accepted: false, code: CHECK_VIOLATION, constraint: "online_chess_audit_shape_check",
+  // T6 ruling Q2: a camera-policy change is a competition SETTINGS change, so
+  // it is recorded once, in competition_events (`chess.camera_policy_changed`),
+  // never here too. `policy_downgrade` left this table's vocabulary; what was
+  // its well-formed row must now be refused — by the KIND check, not by the
+  // shape check that also rejects an unknown kind (`else false`). Rolled back
+  // so a mutant that lets it in leaves nothing behind.
+  it("policy_downgrade is no longer an audit kind here — refused by the kind check", async () => {
+    const ROLLBACK = new Error("rollback sentinel");
+    let outcome: Outcome | undefined;
+    await sql
+      .begin(async (tx) => {
+        outcome = await attempt(tx`
+          insert into online_chess_audit (org_id, stage_id, kind, actor_user_id, from_policy, to_policy, note)
+          values (${orgId}, ${stageId}, 'policy_downgrade', ${userId}, 'required', 'optional', 'vendor outage')`);
+        throw ROLLBACK;
+      })
+      .catch((err: unknown) => {
+        if (err !== ROLLBACK) throw err;
+      });
+    expect(outcome).toEqual({
+      accepted: false, code: CHECK_VIOLATION, constraint: "online_chess_audit_kind_check",
     });
   });
 
