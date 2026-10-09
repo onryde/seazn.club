@@ -141,7 +141,7 @@ export interface OverlayModel {
   voided: boolean;
   header: {
     /** The word beside the dot: "Live" while playing, a void status label
-     *  once abandoned/cancelled/forfeited, the scheduled start label / "Not
+     *  once abandoned/cancelled/forfeited, "Awaiting decision" once held (W2a M1), the scheduled start label / "Not
      *  started" fallback — or "" for a plain decided/finalized fixture (the
      *  short result lives in `period`; "Final" was retired 2026-09-12). */
     context: string;
@@ -326,8 +326,14 @@ export const OVERLAY_VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeit
 
 /** Every status `_THEMES.md` §3/§4's "Decided / void" row treats as the
  *  match having ended — `decided`/`finalized` plus the three void statuses.
- *  Deliberately NOT `scheduled`: that state has its own header branch. */
-const ENDED_STATUSES = new Set(["decided", "finalized", ...OVERLAY_VOID_STATUSES]);
+ *  Deliberately NOT `scheduled`: that state has its own header branch.
+ *
+ *  W2a loop R, M1 — plus `needs_decision`: a level result in a bracket is HELD
+ *  for the organiser's settle (`fixtureStatusFromFold`). Its play has stopped,
+ *  so it takes the ended frame (no live dot, no LED, no chase, no clock — the
+ *  clock hook's `NO_CLOCK_STATUSES` already drops it) under its own status
+ *  word, `overlay.status.held`; left out, the header fell through to "Live". */
+const ENDED_STATUSES = new Set(["decided", "finalized", "needs_decision", ...OVERLAY_VOID_STATUSES]);
 
 /**
  * Fix round 3, F1 — the two-conjunct predicate `_THEMES.md` §3 pins verbatim
@@ -346,7 +352,7 @@ function hasVerdict(outcome: OverlayLiveData["outcome"]): boolean {
 /**
  * Fix round 3, F1/F2/F7 — the word that replaces the live dot once a fixture
  * has ended. Void statuses keep their own `overlay.status.*` word
- * (Abandoned / Cancelled / Forfeited). A plain decided/finalized fixture
+ * (Abandoned / Cancelled / Forfeited), and a held fixture its own (W2a M1). A plain decided/finalized fixture
  * returns "" — the short result already sits in `header.period` ("CAN won"),
  * and a status word of "Final" reads as a knockout stage name on air
  * (owner, 2026-09-12). Never `resultMsg` and never `fixtureStatusLabel`.
@@ -355,6 +361,7 @@ function statusLabel(msg: OverlayMsg, status: string): string {
   if (status === "cancelled") return msg("overlay.status.cancelled");
   if (status === "abandoned") return msg("overlay.status.abandoned");
   if (status === "forfeited") return msg("overlay.status.forfeited");
+  if (status === "needs_decision") return msg("overlay.status.held");
   return "";
 }
 

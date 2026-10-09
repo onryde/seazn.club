@@ -5594,6 +5594,7 @@
   "stream.phone.again": "Empezar otra",
   "stream.phone.retry": "Reintentar",
   "stream.phone.decided": "Partido decidido — sigue emitiendo",
+  "stream.phone.held": "Requiere una decisión — sigue emitiendo",
   "stream.target.kind.other": "Otro",
   "stream.credits.error.owner": "Pide al responsable de facturación del club que compre créditos.",
   "stream.credits.close": "Cerrar",

@@ -5594,6 +5594,7 @@
   "stream.phone.again": "Nog een starten",
   "stream.phone.retry": "Opnieuw proberen",
   "stream.phone.decided": "Wedstrijd beslist — nog steeds live",
+  "stream.phone.held": "Beslissing nodig — nog steeds live",
   "stream.target.kind.other": "Anders",
   "stream.credits.error.owner": "Vraag de factuurbeheerder van de club om tegoed te kopen.",
   "stream.credits.close": "Sluiten",

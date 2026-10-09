@@ -588,6 +588,7 @@
   "overlay.status.cancelled": "Cancelled",
   "overlay.status.abandoned": "Abandoned",
   "overlay.status.forfeited": "Forfeited",
+  "overlay.status.held": "Awaiting decision",
   "overlay.detail.serving": "{side} serving",
   "overlay.detail.card": "{side} {card}",
   "overlay.card.green": "Green",

@@ -38741,6 +38741,9 @@
                             "fixtureDecided": {
                               "type": "boolean"
                             },
+                            "fixtureHeld": {
+                              "type": "boolean"
+                            },
                             "endReason": {
                               "anyOf": [
                                 {
@@ -38895,6 +38898,7 @@
                             "replayUrl",
                             "target",
                             "fixtureDecided",
+                            "fixtureHeld",
                             "endReason",
                             "creditUsed",
                             "restart",
@@ -38947,6 +38951,7 @@
                       "label": "example"
                     },
                     "fixtureDecided": true,
+                    "fixtureHeld": true,
                     "endReason": "stopped",
                     "creditUsed": true,
                     "restart": {
@@ -39443,6 +39448,9 @@
                         "fixtureDecided": {
                           "type": "boolean"
                         },
+                        "fixtureHeld": {
+                          "type": "boolean"
+                        },
                         "endReason": {
                           "anyOf": [
                             {
@@ -39597,6 +39605,7 @@
                         "replayUrl",
                         "target",
                         "fixtureDecided",
+                        "fixtureHeld",
                         "endReason",
                         "creditUsed",
                         "restart",
@@ -39644,6 +39653,7 @@
                       "label": "example"
                     },
                     "fixtureDecided": true,
+                    "fixtureHeld": true,
                     "endReason": "stopped",
                     "creditUsed": true,
                     "restart": {

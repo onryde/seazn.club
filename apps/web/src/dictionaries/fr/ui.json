@@ -5594,6 +5594,7 @@
   "stream.phone.again": "En lancer une autre",
   "stream.phone.retry": "Réessayer",
   "stream.phone.decided": "Match décidé — diffusion en cours",
+  "stream.phone.held": "Décision requise — diffusion en cours",
   "stream.target.kind.other": "Autre",
   "stream.credits.error.owner": "Demandez au responsable de la facturation du club d'acheter des crédits.",
   "stream.credits.close": "Fermer",

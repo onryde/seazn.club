@@ -99,7 +99,7 @@ describe("relay wire enums equal their declarations", () => {
   // come back (nor a new field arrive) without this list moving; and schemas.ts re-exports no capture QR schema at all.
   it("W4 + A9: StreamSessionCurrent's exact key set — no `qr`, `restart` the one restart field — and no QR schema re-exported", () => {
     expect(Object.keys(S.StreamSessionCurrent.shape).sort()).toEqual([
-      "balance", "countdown", "creditUsed", "desiredState", "endReason", "endedAt", "failReason", "fixtureDecided", "fixtureId",
+      "balance", "countdown", "creditUsed", "desiredState", "endReason", "endedAt", "failReason", "fixtureDecided", "fixtureHeld", "fixtureId",
       "health", "id", "ingest", "mode", "output", "replayUrl", "restart", "startCause", "startedAt", "state", "target",
     ]);
     expect(Object.keys(S).filter((k) => /^CaptureQr/.test(k))).toEqual([]);
@@ -251,7 +251,7 @@ describe("relay request schemas refuse what they must", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
       health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
-      target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
+      target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
       startCause: "organiser", restart: null, countdown: null,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
