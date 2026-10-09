@@ -1,12 +1,20 @@
 -- =============================================================================
--- V405 — Chess Lichess external play (spec 2026-09-15, revised 2026-09-16)
+-- V432 — Online chess: board in page + camera (design 2026-10-09).
+-- Amends the unmerged V405 in place (renamed: V405 sat below main's V431 and
+-- flyway.toml sets no outOfOrder, so it could never be applied again).
 --
--- user_external_accounts: a Seazn user's Lichess identity. No OAuth token is
--- kept: linking reads /api/account and revokes the token (spec §5.1). Not
--- org-scoped; FORCE RLS with no app_user policy, read via privileged `sql`.
+-- user_external_accounts: a Seazn user's Lichess identity AND their token at
+-- rest. This REVERSES V405's identity-only decision (design §3.1): the board
+-- API submits moves with each player's own token, so the token is sealed
+-- under LICHESS_TOKEN_KEK (server/relay/crypto.ts sealWith — the same
+-- envelope V417 gave the device link) and kept. `scopes` records what the
+-- grant actually carries, `consented_at` when the player agreed to it.
+-- A row with all three null is a LEGACY identity-only link: legal, and owed
+-- a re-consent screen before its first online fixture.
+-- Not org-scoped; FORCE RLS with no app_user policy, read via privileged `sql`.
 --
--- fixture_external_play: per-fixture bridge for online play (spec §7.2).
--- Check-in is NOT here — it is fixture_availability.checked_in_at.
+-- fixture_external_play: per-fixture bridge for online play. Check-in is NOT
+-- here — it is fixture_availability.checked_in_at.
 -- =============================================================================
 
 create table user_external_accounts (
@@ -15,10 +23,23 @@ create table user_external_accounts (
   provider         text not null check (provider in ('lichess')),
   external_user_id text not null,
   username         text not null,
+  -- Sealed under LICHESS_TOKEN_KEK. Named ONLY by
+  -- server/usecases/external-accounts.ts (enc-boundary.test.ts holds every
+  -- other file to that). Nothing ever searches by this value.
+  access_token_enc bytea null,
+  scopes           text[] not null default '{}',
+  consented_at     timestamptz null,
   created_at       timestamptz not null default now(),
   updated_at       timestamptz not null default now(),
   unique (user_id, provider),
-  unique (provider, external_user_id)
+  unique (provider, external_user_id),
+  -- Named, not positional: two table CHECKs would otherwise be
+  -- `…_check` and `…_check1`, and a test that asserts a constraint NAME is
+  -- the only thing stopping the other CHECK from satisfying it.
+  constraint user_external_accounts_consent_token_check
+    check ((access_token_enc is null) = (consented_at is null)),
+  constraint user_external_accounts_consent_scopes_check
+    check (consented_at is null or cardinality(scopes) > 0)
 );
 
 create index user_external_accounts_user_idx on user_external_accounts (user_id);

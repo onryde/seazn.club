@@ -49,10 +49,16 @@ const STREAM_COLUMNS = ["ingest_rtmps_key_enc", "ingest_srt_key_enc", "rtmp_enc"
 /** Scorer sheets §4.1: the sealed device-link secret, named by exactly one file. */
 const DEVICE_LINK_COLUMNS = ["secret_enc"];
 const DEVICE_LINK_OWNER = "server/usecases/device-links.ts";
+/** Design §3.1 (2026-10-09): the player's Lichess token at rest, sealed under
+ *  LICHESS_TOKEN_KEK. SQL over it lives in exactly one file — the positive
+ *  "and it does" claim is added with that file (T2). */
+const LICHESS_COLUMNS = ["access_token_enc"];
 
 describe("*_enc columns never leave their owners", () => {
   it("every declared *_enc column is owned — a new one cannot walk past this test", () => {
-    expect(ENC_COLUMNS).toEqual([...STREAM_COLUMNS, ...DEVICE_LINK_COLUMNS].sort());
+    expect(ENC_COLUMNS).toEqual(
+      [...STREAM_COLUMNS, ...DEVICE_LINK_COLUMNS, ...LICHESS_COLUMNS].sort(),
+    );
   });
 
   it("no file outside server/relay/** names a stream column (r3)", () => {

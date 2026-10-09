@@ -1,5 +1,6 @@
 // apps/web/src/server/usecases/__tests__/external-play-schema.test.ts
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { seedFutureDivision, seedOrg } from "./_seed";
 
@@ -8,6 +9,8 @@ import { seedFutureDivision, seedOrg } from "./_seed";
  *  other CHECK, from satisfying a rejection test. */
 const VOCABULARY_CHECK = "fixture_external_play_needs_reason_check";
 const COUPLING_CHECK = "fixture_external_play_check";
+const CONSENT_TOKEN_CHECK = "user_external_accounts_consent_token_check";
+const CONSENT_SCOPES_CHECK = "user_external_accounts_consent_scopes_check";
 const CHECK_VIOLATION = "23514";
 
 type Outcome =
@@ -61,10 +64,73 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V405/V407)", (
     throw new Error("transaction committed — the rollback sentinel never fired");
   }
 
-  it("user_external_accounts stores identity only — no token columns", async () => {
-    expect(await columns("user_external_accounts")).toEqual(
-      ["created_at", "external_user_id", "id", "provider", "updated_at", "user_id", "username"],
-    );
+  it("user_external_accounts carries the sealed token, scopes and consent (V432)", async () => {
+    expect(await columns("user_external_accounts")).toEqual([
+      "access_token_enc", "consented_at", "created_at", "external_user_id",
+      "id", "provider", "scopes", "updated_at", "user_id", "username",
+    ]);
+  });
+
+  /** One account row against a REAL user (so no FK can fire), read back, rolled back. */
+  async function tryAccount(a: {
+    token: Buffer | null;
+    scopes: string[];
+    consentedAt: Date | null;
+  }): Promise<Outcome> {
+    const rollback = new Error("rollback");
+    let row: { status: string; needs_reason: string | null } | undefined;
+    try {
+      await sql.begin(async (tx) => {
+        const [u] = await tx<{ id: string }[]>`
+          insert into users (email, display_name, email_verified)
+          values (${`v432-${randomUUID()}@test.local`}, 'V432', true) returning id`;
+        await tx`
+          insert into user_external_accounts
+            (user_id, provider, external_user_id, username, access_token_enc, scopes, consented_at)
+          values (${u!.id}, 'lichess', ${`lid-${randomUUID().slice(0, 8)}`}, 'Player',
+                  ${a.token}, ${a.scopes}, ${a.consentedAt})`;
+        row = { status: "accepted", needs_reason: null };
+        throw rollback;
+      });
+    } catch (err) {
+      if (err === rollback && row) return { accepted: true, row };
+      const e = err as { code?: string; constraint_name?: string };
+      return { accepted: false, code: e.code, constraint: e.constraint_name };
+    }
+    throw new Error("transaction committed — the rollback sentinel never fired");
+  }
+
+  it("refuses a stored token with no consent timestamp", async () => {
+    expect(await tryAccount({
+      token: Buffer.from("sealed"), scopes: ["board:play"], consentedAt: null,
+    })).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: CONSENT_TOKEN_CHECK });
+  });
+
+  it("refuses a consent timestamp with no stored token", async () => {
+    expect(await tryAccount({
+      token: null, scopes: ["board:play"], consentedAt: new Date(),
+    })).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: CONSENT_TOKEN_CHECK });
+  });
+
+  it("refuses consent with an empty scope list", async () => {
+    expect(await tryAccount({
+      token: Buffer.from("sealed"), scopes: [], consentedAt: new Date(),
+    })).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: CONSENT_SCOPES_CHECK });
+  });
+
+  // The EMPTY case, stated first in spirit: a legacy identity-only row — the
+  // state every already-linked player is in — must stay legal, or V432 cannot
+  // be applied to a database that has one.
+  it("accepts a legacy identity-only row: no token, no scopes, no consent", async () => {
+    expect(await tryAccount({ token: null, scopes: [], consentedAt: null }))
+      .toEqual({ accepted: true, row: { status: "accepted", needs_reason: null } });
+  });
+
+  it("accepts a sealed token with scopes and consent", async () => {
+    expect(await tryAccount({
+      token: Buffer.from("sealed"), scopes: ["board:play", "challenge:write"],
+      consentedAt: new Date(),
+    })).toEqual({ accepted: true, row: { status: "accepted", needs_reason: null } });
   });
 
   it("fixture_external_play has exactly the spec §7.2 columns", async () => {
