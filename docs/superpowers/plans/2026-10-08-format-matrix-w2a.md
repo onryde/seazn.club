@@ -5930,7 +5930,7 @@ The `plans.lock.json` entries for W2a point at `TR/w2a-final/ci` and its run id.
 - Modify: `scripts/smoke.ts` (`bracketFinishSuite`, after `hubKnockoutSuite` at `:1967`; called beside it at `:1097`)
 - Modify: `apps/web/src/lib/__tests__/status-set-ledger.ts` (rows for sets lane P1 reported and for `smoke.ts`; preflight C19)
 - Modify: `IDX` (W2a status row and the per-screen verdicts)
-- Create: screenshots under `docs/superpowers/specs/2026-09-27-format-matrix-prompts/evidence/w2a/` (cropped PNGs)
+- Screenshots: cropped PNGs stay in the gitignored SDD scratch dir and are NOT committed (owner ruling 2026-10-09); the per-screen verdicts are a text table in `IDX` and the PR body
 
 - [ ] **Step 1: The smoke suite** — `bracketFinishSuite`, modelled on `hubKnockoutSuite` (read it first; its helpers, its API wrapper and its cleanup are the pattern). The four flows, each through the real API as the organiser:
   1. A football knockout semi-final played to full time level with no decider (the C18 stream, Task 11): the status is `needs_decision` (an ABANDONED one would read `abandoned`, D3 order 2). Settle `lot` for the away side: decided, `settled_lot`, and the final's slot holds the winner. The public match page text contains "advanced on lot".
