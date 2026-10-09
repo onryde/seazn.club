@@ -1,32 +1,48 @@
 /**
- * Task 9 — full online-play funnel + OTB regression in one place:
- * linked enroll → prepare (mocked Lichess) → mate apply → standings;
- * onlinePlay off → unlinked enroll OK and prepare creates no bridge row.
+ * The online-play funnel end to end, against the 2026-10-09 model (T9
+ * rewrite of the inherited lichess.org-mode suite), plus the OTB regression:
+ *
+ *   linked enroll into an onlinePlay division → division started → nothing
+ *   created before the organiser opens the round (D12) → round opened → both
+ *   players seated by T8's REAL seatPlayer (camera policy off, the
+ *   competition default) → createGameIfReady: White's token challenges
+ *   Black's username, Black's token accepts → bridge row ready.
+ *
+ * Every producer is real except the Lichess HTTP boundary (T3's module) and
+ * the round-open write, which no task owns yet (the B2 handover's item 1).
+ * The old suite's result → standings leg died with applyProviderGameUpdate
+ * (the deleted mode); the new result path is T12's and is tested there.
+ *
+ * Single-sport by construction: online play exists only for `boardgame`.
  */
-import { afterAll, describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomBytes, randomUUID } from "node:crypto";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, getStandings } from "../stages";
+import { createStages } from "../stages";
 import { startDivision } from "../schedule";
 import { PLAY_SCOPES, upsertLichessLink } from "../external-accounts";
-import { applyProviderGameUpdate, markExternalPlayReady, prepareExternalPlayWindow } from "../external-play";
+import { createGameIfReady } from "../external-play/create-game";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
-import type { ExternalPlayAdapter, LichessGameSnapshot } from "@/server/external-play/types";
+
+// A Lichess link seals the player's token (T2), so this suite needs
+// LICHESS_TOKEN_KEK. Set only when nothing else did (ci.yml sets it).
+process.env.LICHESS_TOKEN_KEK ??= randomBytes(32).toString("hex");
+
+const board = vi.hoisted(() => ({ createChallengeToUser: vi.fn(), acceptChallenge: vi.fn() }));
+vi.mock("@/server/external-play/lichess/board-api", () => board);
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const FIXTURE_DIR = join(process.cwd(), "src/server/external-play/__fixtures__/lichess");
-
-function loadSnap(name: string): LichessGameSnapshot {
-  return JSON.parse(readFileSync(join(FIXTURE_DIR, name), "utf8")) as LichessGameSnapshot;
-}
+const T = new Date("2026-10-01T12:10:00.000Z");
+const OPENED = new Date("2026-10-01T12:00:00.000Z");
+const NOW = new Date("2026-10-01T12:05:00.000Z");
+/** 10+0, in SHIP1_TIME_CONTROLS: createDivision refuses a clock outside it. */
+const CLOCK = { base: 600, increment: 0 };
 
 async function seedBoardgameSport(): Promise<void> {
   await sql`
@@ -39,21 +55,19 @@ async function seedBoardgameSport(): Promise<void> {
     on conflict on constraint sport_variants_pkey do update set config = excluded.config`;
 }
 
-async function seedOwner(): Promise<AuthCtx & { orgSlug: string }> {
+async function seedOwner(): Promise<AuthCtx> {
   const suffix = randomUUID().slice(0, 8);
   const [{ id: userId }] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified, locale)
     values (${`hp-${suffix}@test.local`}, 'Owner', true, 'en') returning id`;
-  const [{ id: orgId, slug: orgSlug }] = await sql<{ id: string; slug: string }[]>`
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug, created_by)
-    values (${"HP Org " + suffix}, ${"hp-" + suffix}, ${userId}) returning id, slug`;
+    values (${"HP Org " + suffix}, ${"hp-" + suffix}, ${userId}) returning id`;
   await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, 'owner')`;
   await setOrgPlan(orgId, "pro");
   await invalidateOrgEntitlements(orgId);
   await seedBoardgameSport();
-  return { orgId, via: "session", userId, role: "owner", keyId: null, orgSlug } as AuthCtx & {
-    orgSlug: string;
-  };
+  return { orgId, via: "session", userId, role: "owner", keyId: null } as AuthCtx;
 }
 
 async function seedLinkedPlayer(orgId: string, name: string, lichessId: string) {
@@ -79,218 +93,119 @@ async function seedUnlinkedPerson(orgId: string, name: string) {
   return personId;
 }
 
+/** Division → two entrants → a league stage → one round-1 fixture at T. */
+async function seedBoard(owner: AuthCtx, config: Record<string, unknown>, members: [string, string]) {
+  const competition = await createCompetition(owner, {
+    name: "Happy Path Cup",
+    visibility: "public",
+    branding: {},
+    starts_on: "2026-10-01",
+    ends_on: "2026-10-02",
+  });
+  const division = await createDivision(owner, competition.id, {
+    name: "Open",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: { variant: "classical", clock: CLOCK, ...config },
+  });
+  const [home] = await createEntrants(owner, division.id, [
+    { display_name: "White", kind: "individual", members: [{ person_id: members[0], is_captain: false, roles: [] }] },
+  ]);
+  const [away] = await createEntrants(owner, division.id, [
+    { display_name: "Black", kind: "individual", members: [{ person_id: members[1], is_captain: false, roles: [] }] },
+  ]);
+  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
+  const [fixture] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
+                          status, home_entrant_id, away_entrant_id, scheduled_at)
+    values (${stage!.id}, ${division.id}, ${owner.orgId}, 1, 1, ${`hp-${randomUUID().slice(0, 6)}`},
+            'scheduled', ${home!.id}, ${away!.id}, ${T})
+    returning id`;
+  await startDivision(owner, division.id);
+  /** No usecase owns the organiser's round open yet; this is its row. */
+  const openRound = () => sql`
+    insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+    values (${stage!.id}, ${owner.orgId}, 1, ${OPENED}, ${owner.userId})`;
+  return { divisionId: division.id, fixtureId: fixture!.id, openRound };
+}
+
+let GM = "";
+beforeEach(() => {
+  vi.clearAllMocks();
+  GM = `gm-${randomUUID().slice(0, 12)}`;
+  board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
+  board.acceptChallenge.mockResolvedValue({ ok: true });
+});
+
 afterAll(async () => {
   if (HAS_DB) await sql.end({ timeout: 2 }).catch(() => undefined);
 });
 
 describe.skipIf(!HAS_DB)("external-play happy path + OTB regression", () => {
-  it("linked enroll → prepare → mate finish → standings", async () => {
+  it("linked enroll → started → round opened → both seated → game created from White, accepted by Black", async () => {
     const owner = await seedOwner();
-    const homeLichess = `hp-w-${randomUUID().slice(0, 8)}`;
-    const awayLichess = `hp-b-${randomUUID().slice(0, 8)}`;
-    const competition = await createCompetition(owner, {
-      name: "Happy Path Cup",
-      visibility: "public",
-      branding: {},
-      starts_on: "2026-10-01",
-      ends_on: "2026-10-02",
+    const white = await seedLinkedPlayer(owner.orgId, "White", `hp-w-${randomUUID().slice(0, 8)}`);
+    const black = await seedLinkedPlayer(owner.orgId, "Black", `hp-b-${randomUUID().slice(0, 8)}`);
+    // createEntrants refuses an unlinked player into an onlinePlay division,
+    // so reaching the next line IS the linked-enroll step.
+    const b = await seedBoard(owner, { onlinePlay: "lichess" }, [white.personId, black.personId]);
+
+    // D12: paired and started, but nobody has opened the round.
+    expect(await createGameIfReady(b.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+
+    await b.openRound();
+    expect(await createGameIfReady(b.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+
+    // No pairing card ⇒ White is home. The tokens are the ones sealed at
+    // link time, opened at the call.
+    expect(board.createChallengeToUser).toHaveBeenCalledTimes(1);
+    expect(board.createChallengeToUser).toHaveBeenCalledWith({
+      whiteToken: `tok-${white.lichessId}`,
+      blackUsername: black.lichessId,
+      limitSeconds: CLOCK.base,
+      incrementSeconds: CLOCK.increment,
     });
-    const division = await createDivision(owner, competition.id, {
-      name: "Open",
-      sport_key: "boardgame",
-      variant_key: "classical",
-      config: {
-        variant: "classical",
-        onlinePlay: "lichess",
-        clock: { base: 600, increment: 0 },
-      },
+    expect(board.acceptChallenge).toHaveBeenCalledWith({ blackToken: `tok-${black.lichessId}`, challengeId: GM });
+
+    const [bridge] = await sql<{
+      status: string; challenge_id: string | null; white_side: string | null;
+      white_lichess_id: string | null; black_lichess_id: string | null;
+    }[]>`
+      select status, challenge_id, white_side, white_lichess_id, black_lichess_id
+        from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    expect(bridge).toEqual({
+      status: "ready",
+      challenge_id: GM,
+      white_side: "home",
+      white_lichess_id: white.lichessId,
+      black_lichess_id: black.lichessId,
     });
+    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${b.fixtureId}`;
+    expect(fx?.status, "the board is not started by creation — T10's first move does that").toBe("scheduled");
 
-    const white = await seedLinkedPlayer(owner.orgId, "White", homeLichess);
-    const black = await seedLinkedPlayer(owner.orgId, "Black", awayLichess);
-    const [home] = await createEntrants(owner, division.id, [
-      {
-        display_name: "White",
-        kind: "individual",
-        members: [{ person_id: white.personId, is_captain: false, roles: [] }],
-      },
-    ]);
-    const [away] = await createEntrants(owner, division.id, [
-      {
-        display_name: "Black",
-        kind: "individual",
-        members: [{ person_id: black.personId, is_captain: false, roles: [] }],
-      },
-    ]);
-
-    const [stage] = await createStages(owner, division.id, {
-      seq: 1,
-      kind: "league",
-      name: "RR",
-      config: {},
-    });
-
-    const now = new Date(Date.now() + Math.floor(Math.random() * 1e12));
-    const scheduledAt = new Date(now.getTime() + 10 * 60 * 1000);
-    const challengeId = `ch-${randomUUID().slice(0, 8)}`;
-    const [fixture] = await sql<{ id: string }[]>`
-      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
-                            status, home_entrant_id, away_entrant_id, scheduled_at)
-      values (${stage!.id}, ${division.id}, ${owner.orgId}, 1, 1, ${`hp-${randomUUID().slice(0, 6)}`},
-              'scheduled', ${home!.id}, ${away!.id}, ${scheduledAt})
-      returning id`;
-
-    await startDivision(owner, division.id);
-
-    const createChallenge = vi.fn(async () => ({
-      challengeId,
-      whitePlayUrl: `https://lichess.org/${challengeId}`,
-      blackPlayUrl: `https://lichess.org/${challengeId}`,
-    }));
-    const adapter: ExternalPlayAdapter = {
-      createChallenge,
-      fetchGame: vi.fn(),
-    };
-    const sendReadyEmail = vi.fn(async () => true);
-
-    const prepared = await prepareExternalPlayWindow({
-      now,
-      origin: "https://example.test",
-      adapter,
-      sendReadyEmail,
-      orgId: owner.orgId,
-    });
-    expect(prepared.prepared).toBe(0);
-    expect(prepared.emailed).toBe(1);
-    expect(createChallenge).not.toHaveBeenCalled();
-
-    const waiting = await markExternalPlayReady({
-      userId: white.userId,
-      fixtureId: fixture!.id,
-      now,
-      adapter,
-    });
-    expect(waiting.phase).toBe("ready_up");
-    expect(waiting.homeReady).toBe(true);
-    expect(waiting.awayReady).toBe(false);
-    expect(createChallenge).not.toHaveBeenCalled();
-
-    const minted = await markExternalPlayReady({
-      userId: black.userId,
-      fixtureId: fixture!.id,
-      now,
-      adapter,
-    });
-    expect(minted.phase).toBe("countdown");
-    expect(createChallenge).toHaveBeenCalledWith(
-      expect.objectContaining({
-        whiteAccessToken: `tok-${homeLichess}`,
-        blackLichessUsername: awayLichess,
-        rated: false,
-      }),
-    );
-
-    const [bridge] = await sql<{ status: string; play_url: string | null }[]>`
-      select status, play_url from fixture_external_play where fixture_id = ${fixture!.id}`;
-    expect(bridge!.status).toBe("ready");
-    expect(bridge!.play_url).toBe(`https://lichess.org/${challengeId}`);
-
-    const snap = loadSnap("game-mate-white.json");
-    snap.id = challengeId;
-    snap.players.white.userId = homeLichess;
-    snap.players.black.userId = awayLichess;
-
-    const applied = await applyProviderGameUpdate({
-      provider: "lichess",
-      gameId: challengeId,
-      snapshot: snap,
-    });
-    expect(applied).toBe("finished");
-
-    const [fx] = await sql<{ status: string; outcome: unknown }[]>`
-      select status, outcome from fixtures where id = ${fixture!.id}`;
-    expect(fx!.status).toBe("decided");
-    expect(fx!.outcome).toMatchObject({ kind: "win", winner: home!.id });
-
-    const standings = await getStandings(owner, stage!.id);
-    const rows = standings.rows as {
-      entrantId: string;
-      played: number;
-      won: number;
-      lost: number;
-    }[];
-    const whiteRow = rows.find((r) => r.entrantId === home!.id);
-    const blackRow = rows.find((r) => r.entrantId === away!.id);
-    expect(whiteRow?.played).toBe(1);
-    expect(whiteRow?.won).toBe(1);
-    expect(blackRow?.played).toBe(1);
-    expect(blackRow?.lost).toBe(1);
+    // The funnel's second pass is a no-op.
+    expect(await createGameIfReady(b.fixtureId, { now: NOW })).toEqual({ created: false, reason: "already" });
+    expect(board.createChallengeToUser).toHaveBeenCalledTimes(1);
   });
 
-  it("onlinePlay off: unlinked enroll OK and prepare creates no bridge", async () => {
+  it("onlinePlay off: unlinked enroll OK, and an opened, started round creates nothing and no bridge row", async () => {
     const owner = await seedOwner();
-    const competition = await createCompetition(owner, {
-      name: "OTB Cup",
-      visibility: "public",
-      branding: {},
-      starts_on: "2026-10-01",
-      ends_on: "2026-10-02",
-    });
-    const division = await createDivision(owner, competition.id, {
-      name: "OTB",
-      sport_key: "boardgame",
-      variant_key: "classical",
-      config: { variant: "classical", clock: { base: 600 } },
-    });
-    expect((division.config as Record<string, unknown>).onlinePlay).toBeUndefined();
-
     const whitePid = await seedUnlinkedPerson(owner.orgId, "OTB White");
     const blackPid = await seedUnlinkedPerson(owner.orgId, "OTB Black");
-    const [home] = await createEntrants(owner, division.id, [
-      {
-        display_name: "OTB White",
-        kind: "individual",
-        members: [{ person_id: whitePid, is_captain: false, roles: [] }],
-      },
-    ]);
-    const [away] = await createEntrants(owner, division.id, [
-      {
-        display_name: "OTB Black",
-        kind: "individual",
-        members: [{ person_id: blackPid, is_captain: false, roles: [] }],
-      },
-    ]);
-    expect(home!.id).toBeTruthy();
-    expect(away!.id).toBeTruthy();
+    const b = await seedBoard(owner, {}, [whitePid, blackPid]);
+    const [division] = await sql<{ config: Record<string, unknown> }[]>`
+      select config from divisions where id = ${b.divisionId}`;
+    expect(division?.config.onlinePlay, "premise: an OTB division").toBeUndefined();
+    // Opened and started, so online play being off is the only thing missing
+    // (the case above is the positive control).
+    await b.openRound();
 
-    const [stage] = await createStages(owner, division.id, {
-      seq: 1,
-      kind: "league",
-      name: "RR",
-      config: {},
-    });
-    const now = new Date(Date.now() + Math.floor(Math.random() * 1e12));
-    const scheduledAt = new Date(now.getTime() + 10 * 60 * 1000);
-    const [fixture] = await sql<{ id: string }[]>`
-      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
-                            status, home_entrant_id, away_entrant_id, scheduled_at)
-      values (${stage!.id}, ${division.id}, ${owner.orgId}, 1, 1, ${`otb-${randomUUID().slice(0, 6)}`},
-              'scheduled', ${home!.id}, ${away!.id}, ${scheduledAt})
-      returning id`;
-
-    const createChallenge = vi.fn();
-    const prepared = await prepareExternalPlayWindow({
-      now,
-      origin: "https://example.test",
-      adapter: { createChallenge, fetchGame: vi.fn() },
-      sendReadyEmail: vi.fn(async () => true),
-      orgId: owner.orgId,
-    });
-    expect(prepared.prepared).toBe(0);
-    expect(createChallenge).not.toHaveBeenCalled();
-
+    expect(await createGameIfReady(b.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+    expect(board.acceptChallenge).not.toHaveBeenCalled();
     const [{ n }] = await sql<{ n: number }[]>`
-      select count(*)::int as n from fixture_external_play where fixture_id = ${fixture!.id}`;
+      select count(*)::int as n from fixture_external_play where fixture_id = ${b.fixtureId}`;
     expect(n).toBe(0);
   });
 });
