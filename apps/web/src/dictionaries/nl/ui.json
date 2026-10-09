@@ -2387,6 +2387,7 @@
   "divset.camera.inherited": "Niet ingesteld voor deze divisie — de instelling van de competitie geldt: {policy}. Een keuze hierboven opslaan stelt hem in voor deze divisie.",
   "divset.camera.inheritOption": "Competitie-instelling",
   "divset.camera.inheritSummary": "Competitie-instelling ({policy})",
+  "divset.camera.inheritPending": "Na het opslaan gebruikt deze divisie de instelling van de competitie: {policy}.",
   "divset.camera.playerNoticeLabel": "Spelers krijgen te lezen:",
   "divset.camera.save": "Camera-instelling opslaan",
   "divset.camera.saved": "Camera-instelling opgeslagen.",

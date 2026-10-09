@@ -82,9 +82,21 @@ export function cameraSelectOptions(msg: CameraMsg): { value: CameraChoice; labe
 
 /** The hint under the select naming the competition's current value — shown
  *  only while inherit is SELECTED (a select is never the only place a value
- *  is visible, and this line can wrap where an option cannot). */
-export function cameraInheritHint(choice: CameraChoice, inherited: CameraPolicy, msg: CameraMsg): string | null {
-  return choice === CAMERA_INHERIT ? msg("divset.camera.inherited", { policy: msg(CAMERA_OPTION_KEY[inherited]) }) : null;
+ *  is visible, and this line can wrap where an option cannot). Its wording
+ *  follows the SAVED state (review Minor 3): "not set for this division" is
+ *  true only once inherit is stored; an unsaved inherit choice on a pinned
+ *  division says what saving will do instead. */
+export function cameraInheritHint(
+  choice: CameraChoice,
+  stored: CameraChoice,
+  inherited: CameraPolicy,
+  msg: CameraMsg,
+): string | null {
+  if (choice !== CAMERA_INHERIT) return null;
+  const policy = msg(CAMERA_OPTION_KEY[inherited]);
+  return stored === CAMERA_INHERIT
+    ? msg("divset.camera.inherited", { policy })
+    : msg("divset.camera.inheritPending", { policy });
 }
 
 /** The collapsed Group's summary for the STORED choice: a pin's short label,
@@ -505,7 +517,7 @@ export function DivisionSettings({
   const cameraOptions = cameraSelectOptions(msg);
   const onlinePlaySaved = cfg.onlinePlay === "lichess";
   const [cameraChoice, setCameraChoice] = useState<CameraChoice>(storedCameraChoice);
-  const cameraHint = cameraInheritHint(cameraChoice, inheritedCamera, msg);
+  const cameraHint = cameraInheritHint(cameraChoice, storedCameraChoice, inheritedCamera, msg);
   // Same derive-from-props resync as the config block above: a saved change
   // (or another tab's) arrives as new props after router.refresh().
   const cameraSignature = `${storedCameraChoice}|${inheritedCamera}`;

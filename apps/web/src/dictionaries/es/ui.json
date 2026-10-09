@@ -2387,6 +2387,7 @@
   "divset.camera.inherited": "No está definido para esta división; se aplica el ajuste de la competición: {policy}. Al guardar una opción de arriba, se define para esta división.",
   "divset.camera.inheritOption": "Ajuste de la competición",
   "divset.camera.inheritSummary": "Ajuste de la competición ({policy})",
+  "divset.camera.inheritPending": "Al guardar, esta división usará el ajuste de la competición: {policy}.",
   "divset.camera.playerNoticeLabel": "Se informa a los jugadores:",
   "divset.camera.save": "Guardar ajuste de cámara",
   "divset.camera.saved": "Ajuste de cámara guardado.",
