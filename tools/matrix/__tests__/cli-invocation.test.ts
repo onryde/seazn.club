@@ -21,7 +21,7 @@ const REPO = new URL("../../..", import.meta.url).pathname;
  *  held EQUAL to that discovery, so a CLI with no row, or a row naming no CLI, reds. `findings-table` and `draw-counts`
  *  have no `matrix:*` script (a documented, preloaded `node` line runs them) and were never in this table: the
  *  discovery found them. */
-const CLIS = ["run", "render", "gen-catalogue", "single-sport", "model", "parity", "lock-append-only", "merge-shards", "judge", "findings-table", "draw-counts", "ci/pr-rows", "ci/shard-matrix", "ci/summary", "ci/staleness", "ci/run-sample", "triage", "audit-ledger", "backlog"];
+const CLIS = ["run", "render", "gen-catalogue", "single-sport", "model", "parity", "lock-append-only", "merge-shards", "judge", "findings-table", "draw-counts", "ci/pr-rows", "ci/shard-matrix", "ci/summary", "ci/staleness", "ci/run-sample", "triage", "audit-ledger", "backlog", "w2a-expect"];
 const DIRS = [HARNESS_DIR, ...HISTORICAL_HARNESS_DIRS];
 if (!DIRS.every((d) => /^[\w-]+(?:\/[\w-]+)*$/.test(d))) throw new Error(`a harness directory is not a plain path: ${DIRS.join(", ")}`);
 
@@ -106,7 +106,7 @@ describe("CLI invocation (carry e)", () => {
     // that names no CLI. Pinned as a literal beside the derived bound, which is a tautology on its own.
     expect(DISCOVERED.length).toBeGreaterThan(0);
     expect(DISCOVERED, "a CLI under tools/matrix has no row in CLIS, or a row names none").toEqual([...CLIS].sort());
-    expect(CLIS).toHaveLength(19);
+    expect(CLIS).toHaveLength(20);
     expect(DISCOVERED.filter((c) => c.includes("/")), "the nested (ci/) CLIs are discovered").toEqual(["ci/pr-rows", "ci/run-sample", "ci/shard-matrix", "ci/staleness", "ci/summary"]);
     // Truth-run evidence is the one exclusion, and only it.
     expect(scanned("docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model-final/README.md")).toBe(false);
