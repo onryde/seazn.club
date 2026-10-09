@@ -7,6 +7,8 @@
 // response parsing — a double that answered `true`/`false` directly would
 // prove only the double (AGENTS.md, "the inert seam").
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Sentry is the one place a swallowed (optional-policy) outage becomes visible;
@@ -25,6 +27,7 @@ import { patchDivision } from "../divisions";
 import {
   SEAT_REFUSAL_REASONS,
   isPlayableFixtureStatus,
+  organiserOverrideVideo,
   seatPlayer,
   type PreflightDeps,
   type SeatResult,
@@ -933,5 +936,141 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
     await expectOwnToken(camS, "home", seen.get("camera_required")!);
     await expectOwnToken(lostS, "home", seen.get("camera_lost")!);
     expect(checked, "anti-vacuity: every refusal reason produced once").toBe(SEAT_REFUSAL_REASONS.length);
+  });
+});
+
+// ─── A forged camera claim is inert (spec §5.2, §10, test item 5) ──────────
+
+describe.skipIf(!process.env.DATABASE_URL)("a forged camera claim is inert", () => {
+  it("an extra cameraOk:true on the argument changes nothing — the meeting is asked anyway", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    // The POC's gate, forced onto the call as a hostile client would:
+    // seatPlayer has no such parameter, so this must be dead weight.
+    const forged = { fixtureId: s.fixtureId, personId: s.home.personId, cameraOk: true } as unknown as {
+      fixtureId: string;
+      personId: string;
+    };
+    const got = await seatPlayer(forged, { now: NOW, video: rtk.video });
+    expect(!got.seated && got.reason).toBe("camera_required");
+    expect(count(rtk.adapter, "hasLiveVideoPublisher"), "the meeting was asked — that is the point").toBe(1);
+  });
+
+  it("the module names no client-supplied camera flag anywhere in its source", () => {
+    // Audit-shaped, so it carries its own anti-vacuity: positive controls that
+    // prove the right file was read, and a size floor.
+    const src = readFileSync(join(__dirname, "../external-play/preflight.ts"), "utf8");
+    expect(src.length, "premise: the file was actually read").toBeGreaterThan(500);
+    expect(src, "positive control: this IS the preflight module").toContain("hasLiveVideoPublisher");
+    expect(src, "positive control: and it is the one that gates the seat").toContain("camera_required");
+    expect(src).not.toMatch(/camera[_ ]?ok/i);
+    expect(src).not.toMatch(/\bclaimsCamera\b|\bcameraGranted\b|\bvideoEnabled\b/);
+  });
+});
+
+// ─── D11: an organiser proceeds without video ──────────────────────────────
+
+async function auditRows(fixtureId: string) {
+  return sql<{ kind: string; actor_user_id: string; note: string; org_id: string }[]>`
+    select kind, actor_user_id, note, org_id from online_chess_audit
+     where fixture_id = ${fixtureId} order by created_at, id`;
+}
+async function competitionEventCount(competitionId: string): Promise<number> {
+  const [row] = await sql<{ n: number }[]>`
+    select count(*)::int as n from competition_events where competition_id = ${competitionId}`;
+  return row?.n ?? 0;
+}
+async function overrideStamp(fixtureId: string): Promise<Date | null> {
+  const [row] = await sql<{ video_override_at: Date | null }[]>`
+    select video_override_at from fixture_external_play where fixture_id = ${fixtureId}`;
+  return row?.video_override_at ?? null;
+}
+
+describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a vendor outage must not cancel a tournament)", () => {
+  it("after an override, a required division seats the player with no tile, and RealtimeKit is never called", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    await organiserOverrideVideo({
+      fixtureId: s.fixtureId,
+      actorUserId: s.ownerUserId,
+      note: "RealtimeKit 503 for twenty minutes; both players present in the hall",
+    });
+    // Every RealtimeKit request would fail — so a seat proves the override
+    // short-circuited BEFORE the vendor was touched.
+    const rtk = fakeRealtimeKit();
+    rtk.failWhen(() => "network");
+    expect(await claim(s, "home", rtk)).toEqual({ seated: true, participant: null });
+    expect(await claim(s, "away", rtk)).toEqual({ seated: true, participant: null });
+    expect(rtk.adapter, "the override exists because the vendor may be the broken thing").toEqual([]);
+    expect(rtk.http).toEqual([]);
+  });
+
+  it("SEQUENCE: outage ⇒ video_unavailable, organiser overrides, the same player is then seated", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    rtk.failWhen((m, p) => (m === "GET" && p.endsWith("/active-session") ? json(503, { success: false }) : null));
+    expect(await claim(s, "home", rtk)).toEqual({ seated: false, reason: "video_unavailable" });
+    await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });
+    const mark = rtk.http.length;
+    expect(await claim(s, "home", rtk)).toEqual({ seated: true, participant: null });
+    expect(rtk.http.slice(mark)).toEqual([]);
+  });
+
+  it("the override does not outrank the other refusals: an unopened round is still round_not_open", async () => {
+    const s = await seed({ cameraPolicy: "required", roundOpenedAt: undefined });
+    await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });
+    const rtk = fakeRealtimeKit();
+    expectInertRefusal(await claim(s, "home", rtk), "round_not_open", rtk);
+  });
+
+  it("records ONE online_chess_audit row with the actor and the note, and nothing in competition_events", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const eventsBefore = await competitionEventCount(s.competitionId);
+    await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "  vendor outage  " });
+    const rows = await auditRows(s.fixtureId);
+    expect(rows).toEqual([
+      { kind: "video_override", actor_user_id: s.ownerUserId, note: "vendor outage", org_id: s.orgId },
+    ]);
+    expect(await overrideStamp(s.fixtureId), "the stamp the seat reads").not.toBeNull();
+    expect(
+      await competitionEventCount(s.competitionId),
+      "one authority per fact (addendum 2): no competition_events row",
+    ).toBe(eventsBefore);
+  });
+
+  it("is idempotent and FIRST-WRITER-WINS: a second override changes neither the stamp nor the record", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "one" });
+    const first = await overrideStamp(s.fixtureId);
+    await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "two" });
+    expect((await overrideStamp(s.fixtureId))?.getTime()).toBe(first?.getTime());
+    const rows = await auditRows(s.fixtureId);
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.note, "the reason on the record is the one the decision was taken on").toBe("one");
+  });
+
+  it("two organisers overriding at once still leave exactly one record", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    await Promise.all([
+      organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "a" }),
+      organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "b" }),
+    ]);
+    expect((await auditRows(s.fixtureId)).length).toBe(1);
+  });
+
+  it("an empty note is refused — an unexplained override is not an audit trail", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    await expect(
+      organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "   " }),
+    ).rejects.toMatchObject({ status: 422, code: "OVERRIDE_NOTE_REQUIRED" });
+    expect(await auditRows(s.fixtureId)).toEqual([]);
+    expect(await overrideStamp(s.fixtureId)).toBeNull();
+  });
+
+  it("a fixture we do not serve is 404, and nothing is written", async () => {
+    const s = await seed({ onlinePlay: "off" });
+    await expect(
+      organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "x" }),
+    ).rejects.toMatchObject({ status: 404, code: "NOT_FOUND" });
+    expect(await auditRows(s.fixtureId)).toEqual([]);
   });
 });

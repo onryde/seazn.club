@@ -13,6 +13,7 @@ import type postgres from "postgres";
 import { roomPhase } from "@/server/external-play/window";
 import { roundOpenFor } from "@/server/external-play/round-open";
 import { sql } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import {
@@ -23,7 +24,7 @@ import {
   refreshParticipantToken,
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
-import { loadOnlinePlayFixture, loadSides, type SidePlayer } from "./guard";
+import { ensureBridgeRow, loadOnlinePlayFixture, loadSides, type SidePlayer } from "./guard";
 
 /** Every reason a seat can be refused. The two camera refusals carry the
  *  caller's OWN participant token (controller ruling Q1, 2026-10-09): under
@@ -107,6 +108,14 @@ export async function seatPlayer(
     // No meeting is created. Zero video spend (spec §5.1).
     return { seated: true, participant: null };
   }
+
+  // D11: an organiser has already proceeded without video on this fixture.
+  // Read BEFORE any RealtimeKit call, because the whole point of the override
+  // is that RealtimeKit may be the thing that is broken. It relaxes only the
+  // camera: every refusal above still stands.
+  const [bridge] = await sql<{ video_override_at: Date | null }[]>`
+    select video_override_at from fixture_external_play where fixture_id = ${a.fixtureId}`;
+  if (bridge?.video_override_at) return { seated: true, participant: null };
 
   const video = deps.video ?? REAL_VIDEO;
   if (policy === "optional") {
@@ -235,5 +244,44 @@ function reportOutage(err: RealtimeKitError, orgId: string, fixtureId: string, p
     orgId,
     route: "external-play/preflight",
     extra: { fixtureId, policy, status: err.status, code: err.code },
+  });
+}
+
+/** D11. RealtimeKit unavailable under `required`: an organiser may proceed
+ *  without video on one fixture, and the record says who did and why. A video
+ *  vendor outage must not cancel a tournament — and must not be silent.
+ *
+ *  ONE record (controller addendum 2): `fixture_external_play.video_override_at`
+ *  is what the seat reads; the who and why live only in `online_chess_audit`
+ *  (kind `video_override`), never also in competition_events. Both are written
+ *  in one transaction, so a stamp never exists without its record.
+ *
+ *  Idempotent and FIRST-WRITER-WINS: the reason on the record is the one given
+ *  when the decision was actually taken, not whatever a later click re-sent.
+ *
+ *  Authorisation is the CALLER's: the organiser route (T16) resolves
+ *  `actorUserId` from an authorised session. This function trusts it. */
+export async function organiserOverrideVideo(a: {
+  fixtureId: string;
+  actorUserId: string;
+  note: string;
+}): Promise<void> {
+  const note = a.note.trim();
+  if (note === "") {
+    throw new HttpError(422, "an override needs a reason", "OVERRIDE_NOTE_REQUIRED");
+  }
+  const f = await loadOnlinePlayFixture(a.fixtureId);
+  if (!f) throw new HttpError(404, "fixture not found", "NOT_FOUND");
+  await ensureBridgeRow(f);
+  await sql.begin(async (tx) => {
+    const claimed = await tx<{ fixture_id: string }[]>`
+      update fixture_external_play
+         set video_override_at = now(), updated_at = now()
+       where fixture_id = ${a.fixtureId} and video_override_at is null
+       returning fixture_id`;
+    if (claimed.length === 0) return; // already overridden — the first record stands
+    await tx`
+      insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, note)
+      values (${f.orgId}, ${a.fixtureId}, 'video_override', ${a.actorUserId}, ${note})`;
   });
 }
