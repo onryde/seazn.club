@@ -528,5 +528,65 @@
         "name": "review M-4: V432's backfill block reports the rows it moved and the complete stages that hold one, and leaves those stages complete"
       }
     ]
+  },
+  {
+    "id": "rR-m4-no-switch-shape",
+    "file": "apps/web/src/lib/__tests__/status-set-sweep.test.ts",
+    "find": "...findMaps(text), ...findSwitches(text)].map(",
+    "replace": "...findMaps(text)].map(",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "found at least one set, and every found set is in the ledger"
+      }
+    ]
+  },
+  {
+    "id": "rR-m4-chain-single-line",
+    "file": "apps/web/src/lib/__tests__/status-set-sweep.test.ts",
+    "find": "  const continues = (a: string, b: string) => /(\\|\\||&&)\\s*$/.test(a) || /^\\s*(\\|\\||&&)/.test(b);",
+    "replace": "  const continues = (_a: string, _b: string) => false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "loop R M4: a braced switch, a chain broken across lines"
+      }
+    ]
+  },
+  {
+    "id": "rR-m4-map-reads-case",
+    "file": "apps/web/src/lib/__tests__/status-set-sweep.test.ts",
+    "find": "(?:^|[{,\\\\s])(?<!\\\\bcase\\\\s+)['\"]?",
+    "replace": "(?:^|[{,\\\\s])['\"]?",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "loop R M4: a braced switch, a chain broken across lines"
+      }
+    ]
+  },
+  {
+    "id": "rR-m4-switch-ignores-nested",
+    "file": "apps/web/src/lib/__tests__/status-set-sweep.test.ts",
+    "find": "    for (let depth = 1; close < text.length && depth > 0; close++) depth += text[close] === \"{\" ? 1 : text[close] === \"}\" ? -1 : 0;",
+    "replace": "    while (close < text.length && text[close] !== \"}\") close++;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/status-set-sweep.test.ts"
+        ],
+        "name": "loop R M4: a braced switch, a chain broken across lines"
+      }
+    ]
   }
 ]

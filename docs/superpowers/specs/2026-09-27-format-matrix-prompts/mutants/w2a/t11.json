@@ -180,8 +180,8 @@
   {
     "id": "row-held-chip",
     "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
-    "find": "{(fixture.status === \"needs_decision\" || awaitsSettle) && (",
-    "replace": "{false && (",
+    "find": "          {held && (",
+    "replace": "          {false && (",
     "killers": [
       {
         "cwd": "apps/web",
@@ -354,6 +354,51 @@
           "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
         ],
         "name": "N2 \\(fix round 2\\): an official on a chess TIE-BREAK"
+      }
+    ]
+  },
+  {
+    "id": "rR-m7a-empty-card-shown",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "${consoleScoringEmpty ? \" hidden\" : consoleScoringEmptyOnPhone ? \" max-md:hidden\" : \"\"}",
+    "replace": "${consoleScoringEmptyOnPhone ? \" max-md:hidden\" : \"\"}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "loop R M7\\(a\\)"
+      }
+    ]
+  },
+  {
+    "id": "rR-m7a-stream-keeps-card",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "  const consoleScoringEmpty = consoleScoringEmptyOnPhone && !stream && !canHandOver;",
+    "replace": "  const consoleScoringEmpty = consoleScoringEmptyOnPhone && !canHandOver;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "loop R M7\\(a\\)"
+      }
+    ]
+  },
+  {
+    "id": "rR-m7d-meta-own-line",
+    "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+    "find": "${held ? \" max-md:basis-full\" : \"\"}",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "loop R M7\\(d\\)"
       }
     ]
   }
