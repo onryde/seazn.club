@@ -28,6 +28,7 @@ import {
   refreshParticipantToken,
 } from "@/server/external-play/video/realtimekit";
 import { captureError } from "@/lib/sentry";
+import { roomPhase, windowFor } from "@/server/external-play/window";
 import { patchDivision } from "../divisions";
 import {
   SEAT_REFUSAL_REASONS,
@@ -460,7 +461,7 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer on a fixture that can no 
     expect(checked, "anti-vacuity: five settled statuses").toBe(5);
   });
 
-  it("positive pair: in_play is still playable (a reload mid-game re-seats)", async () => {
+  it("positive pair: in_play is still playable inside the window (re-entry AFTER it: see I1 below)", async () => {
     const s = await seed();
     await sql`update fixtures set status = 'in_play' where id = ${s.fixtureId}`;
     const rtk = fakeRealtimeKit();
@@ -883,6 +884,207 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
   });
 });
 
+// ─── Re-entry after T+20 (controller ruling I1, fix round 1 — amends Q1) ───
+//
+// "T+20 is the deadline to be seated and have the game created — not a cap on
+// the game" (spec §3.6). After the window, a caller passes the window check
+// only when ALL THREE hold: they were seated on this fixture, its game
+// exists, and it is in_play. The camera checks still apply. A caller never
+// seated still gets window_closed (a no-show is T13's).
+
+/** Past T+20 of the OPEN stamp, derived from the window's own constants so
+ *  moving DEADLINE_AFTER_MS moves this with it. */
+const LATE = new Date(windowFor(OPENED).deadline.getTime() + 20 * 60_000);
+
+type Rtk = ReturnType<typeof fakeRealtimeKit>;
+
+/** T9's create-game record (task-9-brief.md, the `ready` UPDATE): the Lichess
+ *  game id, White's side and the two Lichess accounts it SEATED, written
+ *  together immediately after T9 re-verified both seats through seatPlayer.
+ *  create-game.ts is not built yet, so this writes those columns exactly as
+ *  T9 does; `live` is the sync's promotion once the game is under way. */
+async function recordGame(
+  s: Seeded,
+  over: {
+    challengeId?: string | null;
+    whiteSide?: Side;
+    white?: string;
+    black?: string;
+    status?: "ready" | "live";
+    basis?: Date;
+  } = {},
+): Promise<void> {
+  const whiteSide: Side = over.whiteSide ?? "home";
+  const blackSide: Side = whiteSide === "home" ? "away" : "home";
+  const challengeId = over.challengeId === undefined ? `g${randomUUID().slice(0, 11)}` : over.challengeId;
+  const status = over.status ?? "live";
+  await sql`
+    insert into fixture_external_play
+      (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side,
+       white_lichess_id, black_lichess_id, started_at)
+    values (${s.fixtureId}, ${s.orgId}, ${status}, ${over.basis ?? T}, ${challengeId}, ${whiteSide},
+            ${over.white ?? s[whiteSide].lichessId}, ${over.black ?? s[blackSide].lichessId},
+            ${status === "live" ? OPENED : null})
+    on conflict (fixture_id) do update set
+      status = excluded.status, scheduled_at_basis = excluded.scheduled_at_basis,
+      challenge_id = excluded.challenge_id, white_side = excluded.white_side,
+      white_lichess_id = excluded.white_lichess_id, black_lichess_id = excluded.black_lichess_id,
+      started_at = excluded.started_at`;
+}
+
+async function setFixtureStatus(s: Seeded, status: string): Promise<void> {
+  await sql`update fixtures set status = ${status} where id = ${s.fixtureId}`;
+}
+
+/** Both players seated in the window under `required`, as T9 needs them
+ *  before it creates a game: each claims, joins with the token they were
+ *  issued, and claims again. Returns each player's participant id. */
+async function seatBothLive(s: Seeded, rtk: Rtk): Promise<Record<Side, string>> {
+  const pid: Record<Side, string> = { home: "", away: "" };
+  for (const sd of ["home", "away"] as const) {
+    rtk.join(await claim(s, sd, rtk));
+    const got = await claim(s, sd, rtk);
+    expect(got.seated, `premise: ${sd} seated inside the window`).toBe(true);
+    pid[sd] = got.seated && got.participant ? got.participant.participantId : "";
+  }
+  return pid;
+}
+
+describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amending Q1)", () => {
+  it("premise: LATE is past the window, by the window's own rule", () => {
+    expect(roomPhase(LATE, OPENED)).toBe("closed");
+  });
+
+  it("required: a seated player reloads mid-game after T+20 — their OWN token, and they re-seat once live", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    const pid = await seatBothLive(s, rtk);
+    // White is AWAY on this board, so each player's account sits in the
+    // column for their COLOUR, not their side.
+    await recordGame(s, { whiteSide: "away" });
+    await setFixtureStatus(s, "in_play");
+    let checked = 0;
+    for (const sd of ["home", "away"] as const) {
+      rtk.leave(pid[sd]); // the reload: the old tab is gone from the meeting
+      const back = await claim(s, sd, rtk, LATE);
+      // T9 verified them live before it created the game, so the evidence
+      // says they HAD the camera: camera_lost, never window_closed.
+      expect(!back.seated && back.reason, `${sd}: a camera refusal, not window_closed`).toBe("camera_lost");
+      expect(await expectOwnToken(s, sd, back), `${sd}: their own participant`).toBe(pid[sd]);
+      rtk.join(back);
+      const seated = await claim(s, sd, rtk, LATE);
+      expect(seated.seated, `${sd}: re-seated once live`).toBe(true);
+      expect(seated.seated && seated.participant?.participantId).toBe(pid[sd]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both colours re-entered").toBe(2);
+  });
+
+  it("required, camera not live yet: a camera refusal WITH their own token, unchanged an hour later, while the live opponent is seated", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    const pid = await seatBothLive(s, rtk);
+    await recordGame(s);
+    await setFixtureStatus(s, "in_play");
+    rtk.leave(pid.home);
+    // A long game: 15+10 runs well past T+20 (SHIP1_TIME_CONTROLS).
+    for (const at of [LATE, new Date(LATE.getTime() + 60 * 60_000)]) {
+      const got = await claim(s, "home", rtk, at);
+      expect(got.seated, "not live, so not seated").toBe(false);
+      expect(!got.seated && got.reason).toBe("camera_lost");
+      expect(await expectOwnToken(s, "home", got)).toBe(pid.home);
+    }
+    const opponent = await claim(s, "away", rtk, LATE);
+    expect(opponent.seated, "the opponent, still live, re-enters").toBe(true);
+    expect(opponent.seated && opponent.participant?.participantId, "with THEIR own participant").toBe(pid.away);
+  });
+
+  it("off seats a re-entering player with no tile and no RealtimeKit call; optional hands them their own tile", async () => {
+    let checked = 0;
+    for (const policy of ["off", "optional"] as const) {
+      const s = await seed({ cameraPolicy: policy });
+      const rtk = fakeRealtimeKit();
+      for (const sd of ["home", "away"] as const) {
+        expect((await claim(s, sd, rtk)).seated, `premise: ${policy} ${sd} seated in the window`).toBe(true);
+      }
+      await recordGame(s);
+      await setFixtureStatus(s, "in_play");
+      const mark = rtk.http.length;
+      const back = await claim(s, "home", rtk, LATE);
+      if (policy === "off") {
+        expect(back).toEqual({ seated: true, participant: null });
+        expect(rtk.http.slice(mark), "off: still no RealtimeKit call").toEqual([]);
+      } else {
+        expect(back.seated).toBe(true);
+        await expectOwnToken(s, "home", back);
+      }
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: two policies").toBe(2);
+  });
+
+  it("a caller NEVER seated on this game gets window_closed after T+20 — no token, no RealtimeKit call — each condition failing ALONE, swept and counted", async () => {
+    const cases: { name: string; arrange: (s: Seeded, rtk: Rtk) => Promise<void> }[] = [
+      { name: "a no-show: nobody came in the window and no game exists (T13's)", arrange: async () => undefined },
+      {
+        name: "(a) alone: the game on record was created for OTHER Lichess accounts",
+        arrange: async (s) => {
+          await recordGame(s, { white: `other-w-${RUN}`, black: `other-b-${RUN}` });
+          await setFixtureStatus(s, "in_play");
+        },
+      },
+      {
+        name: "(b) alone: both seated and in_play, but no game id on record",
+        arrange: async (s, rtk) => {
+          await seatBothLive(s, rtk);
+          await recordGame(s, { challengeId: null });
+          await setFixtureStatus(s, "in_play");
+        },
+      },
+      {
+        name: "(c) alone: both seated and the game created, but the board never started",
+        arrange: async (s, rtk) => {
+          await seatBothLive(s, rtk);
+          await recordGame(s, { status: "ready" });
+        },
+      },
+      {
+        name: "a STALE bridge (minted for an older timetable, never live) is not this fixture's game",
+        arrange: async (s, rtk) => {
+          await seatBothLive(s, rtk);
+          await recordGame(s, { status: "ready", basis: new Date(T.getTime() - 86_400_000) });
+          await setFixtureStatus(s, "in_play");
+        },
+      },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const s = await seed({ cameraPolicy: "required" });
+      await c.arrange(s, fakeRealtimeKit());
+      const late = fakeRealtimeKit();
+      const got = await claim(s, "home", late, LATE);
+      expect(got, c.name).toEqual({ seated: false, reason: "window_closed" });
+      expectInertRefusal(got, "window_closed", late);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: five ways not to re-enter").toBe(5);
+  });
+
+  it("a previously seated player whose board is no longer being played is refused, no token — swept and counted", async () => {
+    let checked = 0;
+    for (const status of ["decided", "forfeited", "abandoned"]) {
+      const s = await seed({ cameraPolicy: "required" });
+      await seatBothLive(s, fakeRealtimeKit());
+      await recordGame(s);
+      await setFixtureStatus(s, status);
+      const late = fakeRealtimeKit();
+      expectInertRefusal(await claim(s, "home", late, LATE), "fixture_not_playable", late);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: three settled statuses").toBe(3);
+  });
+});
+
 describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (controller ruling Q1)", () => {
   it("every refusal reason, swept: only the two camera refusals carry the caller's own token", async () => {
     // From the RULING, not the code: a token only once every other check has
@@ -1078,25 +1280,102 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
     ).rejects.toMatchObject({ status: 404, code: "NOT_FOUND" });
     expect(await auditRows(s.fixtureId)).toEqual([]);
   });
+
+  // Minor m5 (fix round 1): the override exists for ONE situation — video
+  // required and RealtimeKit unavailable on a board still being played.
+  it("is refused unless the effective policy is REQUIRED: under off and optional nothing is written — swept and counted", async () => {
+    let checked = 0;
+    for (const policy of ["off", "optional"] as const) {
+      const s = await seed({ cameraPolicy: policy });
+      await expect(
+        organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" }),
+      ).rejects.toMatchObject({ status: 409, code: "VIDEO_NOT_REQUIRED" });
+      expect(await auditRows(s.fixtureId), `${policy}: no audit row`).toEqual([]);
+      expect(await overrideStamp(s.fixtureId), `${policy}: no stamp`).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: two policies").toBe(2);
+  });
+
+  it("is refused on a board that can no longer be played, and nothing is written — swept and counted", async () => {
+    let checked = 0;
+    for (const status of ["decided", "forfeited", "abandoned"]) {
+      const s = await seed({ cameraPolicy: "required" });
+      await setFixtureStatus(s, status);
+      await expect(
+        organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" }),
+      ).rejects.toMatchObject({ status: 409, code: "FIXTURE_NOT_PLAYABLE" });
+      expect(await auditRows(s.fixtureId), `${status}: no audit row`).toEqual([]);
+      expect(await overrideStamp(s.fixtureId), `${status}: no stamp`).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: three settled statuses").toBe(3);
+  });
+
+  it("positive pair: accepted on an in_play board whose EFFECTIVE policy is required (the stage's, over an optional division)", async () => {
+    const s = await seed({ cameraPolicy: "optional", stageCameraPolicy: "required" });
+    await setFixtureStatus(s, "in_play");
+    await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });
+    expect((await auditRows(s.fixtureId)).length).toBe(1);
+    expect(await overrideStamp(s.fixtureId)).not.toBeNull();
+  });
+
+  // Minor m1 (fix round 1): where the override sits against the window and
+  // round checks. It relaxes the camera only.
+  it("the override never bypasses the window: a caller never seated is still window_closed after T+20", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });
+    const rtk = fakeRealtimeKit();
+    expectInertRefusal(await claim(s, "home", rtk, LATE), "window_closed", rtk);
+  });
+
+  it("the override never bypasses fixture_not_playable: a board settled after the override", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });
+    await setFixtureStatus(s, "decided");
+    const rtk = fakeRealtimeKit();
+    expectInertRefusal(await claim(s, "home", rtk), "fixture_not_playable", rtk);
+  });
+
+  it("position pair: on RE-ENTRY after T+20 the override still applies — seated, no tile, no RealtimeKit call", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });
+    const rtk = fakeRealtimeKit();
+    rtk.failWhen(() => "network");
+    // T9's seats, under the override: both seated with no tile.
+    for (const sd of ["home", "away"] as const) {
+      expect(await claim(s, sd, rtk), `premise: ${sd}`).toEqual({ seated: true, participant: null });
+    }
+    await recordGame(s);
+    await setFixtureStatus(s, "in_play");
+    expect(await claim(s, "home", rtk, LATE)).toEqual({ seated: true, participant: null });
+    expect(rtk.http).toEqual([]);
+  });
 });
 
 // ─── Property: random orderings of the seat's world ────────────────────────
 //
 // Actions: open the round, a player joins / leaves the meeting (only with a
-// token the server actually issued them), a player claims the seat, and the
+// token the server actually issued them), a player claims the seat, the
 // organiser DOWNGRADES the policy through the real writer (patchDivision —
-// after a round opens, T6's guard allows only relaxing). Every run starts
-// under `required` with the round unopened.
+// after a round opens, T6's guard allows only relaxing), and — fix round 1 —
+// time passes BEYOND T+20, T9 creates the game (it re-verifies BOTH seats
+// through seatPlayer and records the game only if both pass), the board
+// starts (in_play), or a game is on record for OTHER accounts. Every run
+// starts under `required` with the round unopened.
 //
 // The expected result of every claim comes from a MODEL of the rules
-// (spec §5.1/§5.2, D12, rulings Q1/Q3), never from the code:
+// (spec §5.1/§5.2/§3.6, D12, rulings Q1/Q3/I1), never from the code:
 //   round not open            ⇒ round_not_open, no token, no RealtimeKit call
+//   past T+20, not re-entry   ⇒ window_closed, no token, no RealtimeKit call
+//     (re-entry = seated by the create that recorded this game ∧ the game
+//      exists ∧ the board is in_play — the three conditions of ruling I1)
 //   off                       ⇒ seated, no tile, no RealtimeKit call
 //   optional                  ⇒ seated with the caller's own tile, publisher never asked
 //   required, live now        ⇒ seated with the caller's own tile
 //   required, not live now    ⇒ camera_lost if this player was ever verified
 //                               live before, else camera_required; own token
-// plus the two invariants the controller named, counted separately.
+// plus the controller's invariants, each counted on its own.
 
 type Side = "home" | "away";
 type Act =
@@ -1104,7 +1383,11 @@ type Act =
   | { kind: "join"; side: Side }
   | { kind: "leave"; side: Side }
   | { kind: "seat"; side: Side }
-  | { kind: "downgrade" };
+  | { kind: "downgrade" }
+  | { kind: "late" }
+  | { kind: "create" }
+  | { kind: "start" }
+  | { kind: "foreign" };
 
 const side = fc.constantFrom<Side>("home", "away");
 const act: fc.Arbitrary<Act> = fc.oneof(
@@ -1112,25 +1395,53 @@ const act: fc.Arbitrary<Act> = fc.oneof(
   { arbitrary: side.map((x): Act => ({ kind: "join", side: x })), weight: 3 },
   { arbitrary: side.map((x): Act => ({ kind: "leave", side: x })), weight: 2 },
   { arbitrary: side.map((x): Act => ({ kind: "seat", side: x })), weight: 5 },
-  { arbitrary: fc.constant<Act>({ kind: "downgrade" }), weight: 1 },
+  { arbitrary: fc.constant<Act>({ kind: "downgrade" }), weight: 2 },
+  { arbitrary: fc.constant<Act>({ kind: "late" }), weight: 3 },
+  { arbitrary: fc.constant<Act>({ kind: "create" }), weight: 2 },
+  { arbitrary: fc.constant<Act>({ kind: "start" }), weight: 1 },
+  { arbitrary: fc.constant<Act>({ kind: "foreign" }), weight: 1 },
 );
-/** Edge weighting: about half the runs start from a seated-and-live player,
- *  so the lose/re-verify paths (camera_lost) are reached, not just possible. */
+/** Edge weighting. LIVE: a seated-and-live player, so the lose/re-verify
+ *  paths (camera_lost) are reached, not just possible. CREATED: both players
+ *  live and T9's game created but not started, then T+20 passes, so the "not
+ *  started" refusal is reached. GAME: the game created and started, so
+ *  re-entry after T+20 is reached; GAME_LEFT: the same, with home's tab gone
+ *  and T+20 passed, so a re-entering camera refusal is reached. FOREIGN: a game
+ *  on record for other accounts on a started board, so condition (a) failing
+ *  alone is reached. Each is a PREFIX: the random tail can still undo any of
+ *  it, and every action in it is checked against the model like any other. */
 const LIVE_PREFIX: Act[] = [
   { kind: "open" },
   { kind: "seat", side: "home" },
   { kind: "join", side: "home" },
   { kind: "seat", side: "home" },
 ];
+const CREATED_PREFIX: Act[] = [
+  ...LIVE_PREFIX,
+  { kind: "seat", side: "away" },
+  { kind: "join", side: "away" },
+  { kind: "create" },
+];
+const GAME_PREFIX: Act[] = [...CREATED_PREFIX, { kind: "start" }];
+const GAME_LEFT_PREFIX: Act[] = [...GAME_PREFIX, { kind: "leave", side: "home" }, { kind: "late" }];
+const FOREIGN_PREFIX: Act[] = [{ kind: "open" }, { kind: "foreign" }, { kind: "start" }];
+const prefix = fc.oneof(
+  { arbitrary: fc.constant<Act[]>([]), weight: 2 },
+  { arbitrary: fc.constant<Act[]>(LIVE_PREFIX), weight: 1 },
+  { arbitrary: fc.constant<Act[]>([...CREATED_PREFIX, { kind: "late" }]), weight: 1 },
+  { arbitrary: fc.constant<Act[]>(GAME_PREFIX), weight: 2 },
+  { arbitrary: fc.constant<Act[]>(GAME_LEFT_PREFIX), weight: 1 },
+  { arbitrary: fc.constant<Act[]>(FOREIGN_PREFIX), weight: 1 },
+);
 const scenario = fc
-  .tuple(fc.boolean(), fc.array(act, { minLength: 1, maxLength: 14 }))
-  .map(([prefix, rest]) => (prefix ? [...LIVE_PREFIX, ...rest] : rest));
+  .tuple(prefix, fc.array(act, { minLength: 1, maxLength: 16 }))
+  .map(([head, rest]) => [...head, ...rest]);
 
 const LOWER = { required: "optional", optional: "off", off: "off" } as const;
 
-describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open / join / leave / seat / downgrade", () => {
+describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open / join / leave / seat / downgrade / late / create / start", () => {
   it(
-    "nobody is seated under required without being live at the claim, nor before the round opens — and every claim matches the model",
+    "nobody is seated under required without being live, nor before the round opens, nor past T+20 except by re-entry — and every claim matches the model",
     async () => {
       const totals = {
         runs: 0,
@@ -1145,9 +1456,22 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
         downgrades: 0,
         joinsApplied: 0,
         leavesApplied: 0,
-        // The controller's two invariants, counted on their own.
+        gamesCreated: 0,
+        gamesForeign: 0,
+        starts: 0,
+        lateClaims: 0,
+        // Past T+20 and NOT re-entry, by the first of the three conditions
+        // that fails in the model.
+        lateNoGame: 0,
+        lateForeignGame: 0,
+        lateNotInPlay: 0,
+        // Past T+20 and re-entry.
+        lateReentrySeated: 0,
+        lateReentryCameraRefused: 0,
+        // The controller's invariants, counted on their own.
         violationsRequiredNotLive: 0,
         violationsBeforeOpen: 0,
+        violationsOutsideWindow: 0,
       };
 
       await fc.assert(
@@ -1156,24 +1480,100 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
           const s = await seed({ cameraPolicy: "required", roundOpenedAt: undefined });
           const owner = await mintOrgOwnerAuth(s.orgId);
           const rtk = fakeRealtimeKit();
-          // The model.
-          let roundOpen = false;
-          // An object field, not a local: the policy changes inside the loop,
-          // and a narrowed local would be read stale by the type checker.
-          const m: { policy: "required" | "optional" | "off" } = { policy: "required" };
+          // The model. Object fields, not locals: they change inside the
+          // loop, and a narrowed local would be read stale by the type checker.
+          const m: {
+            policy: "required" | "optional" | "off";
+            roundOpen: boolean;
+            late: boolean;
+            game: "none" | "players" | "others";
+            inPlay: boolean;
+          } = { policy: "required", roundOpen: false, late: false, game: "none", inPlay: false };
           const token: Record<Side, string | null> = { home: null, away: null };
           const pid: Record<Side, string | null> = { home: null, away: null };
           const peers: Record<Side, number> = { home: 0, away: 0 };
           const verified: Record<Side, boolean> = { home: false, away: false };
 
-          for (const x of acts) {
+          /** One claim, checked against the model. Returns whether it seated. */
+          const check = async (sd: Side, where: string): Promise<boolean> => {
+            totals.claims += 1;
+            const httpBefore = rtk.http.length;
+            const adapterBefore = rtk.adapter.length;
+            const got = await claim(s, sd, rtk, m.late ? LATE : NOW);
+            const live = peers[sd] > 0;
+            const reentry = m.game === "players" && m.inPlay;
+            const carriesToken = "participant" in got && got.participant !== null;
+
+            // The invariants.
+            if (got.seated && !m.roundOpen) totals.violationsBeforeOpen += 1;
+            // No override is ever applied here, so EVERY seat under required
+            // needs a live player — a null tile is no exemption.
+            if (got.seated && m.policy === "required" && !live) totals.violationsRequiredNotLive += 1;
+            if (m.late && !reentry && (got.seated || carriesToken)) totals.violationsOutsideWindow += 1;
+
+            if (!m.roundOpen) {
+              expect(got, where).toEqual({ seated: false, reason: "round_not_open" });
+              expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+              totals.roundNotOpen += 1;
+              return false;
+            }
+            if (m.late) totals.lateClaims += 1;
+            if (m.late && !reentry) {
+              expect(got, where).toEqual({ seated: false, reason: "window_closed" });
+              expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+              if (m.game === "none") totals.lateNoGame += 1;
+              else if (m.game === "others") totals.lateForeignGame += 1;
+              else totals.lateNotInPlay += 1;
+              return false;
+            }
+            if (m.policy === "off") {
+              expect(got, where).toEqual({ seated: true, participant: null });
+              expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+              totals.seatedOff += 1;
+              if (m.late) totals.lateReentrySeated += 1;
+              return true;
+            }
+            const carried = "participant" in got ? got.participant : null;
+            expect(carried, `${where}: a token`).not.toBeNull();
+            if (pid[sd] === null) pid[sd] = carried!.participantId;
+            expect(carried!.participantId, `${where}: the caller's own, single participant`).toBe(pid[sd]);
+            const other: Side = sd === "home" ? "away" : "home";
+            if (pid[other] !== null) expect(carried!.participantId, `${where}: never the opponent's`).not.toBe(pid[other]);
+            token[sd] = carried!.authToken;
+
+            if (m.policy === "optional") {
+              expect(got.seated, where).toBe(true);
+              expect(rtk.adapter.slice(adapterBefore), `${where}: optional never asks`).not.toContain(
+                "hasLiveVideoPublisher",
+              );
+              totals.seatedOptional += 1;
+              if (m.late) totals.lateReentrySeated += 1;
+              return true;
+            }
+            if (live) {
+              expect(got.seated, where).toBe(true);
+              verified[sd] = true;
+              totals.seatedRequiredLive += 1;
+              if (m.late) totals.lateReentrySeated += 1;
+              return true;
+            }
+            const want = verified[sd] ? "camera_lost" : "camera_required";
+            expect(!got.seated && got.reason, where).toBe(want);
+            if (want === "camera_lost") totals.cameraLost += 1;
+            else totals.cameraRequired += 1;
+            if (m.late) totals.lateReentryCameraRefused += 1;
+            return false;
+          };
+
+          for (const [i, x] of acts.entries()) {
             totals.actions += 1;
+            const where = `${JSON.stringify(acts)} → #${i} ${JSON.stringify(x)}`;
             if (x.kind === "open") {
-              if (!roundOpen) {
+              if (!m.roundOpen) {
                 await sql`
                   insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
                   values (${s.stageId}, ${s.orgId}, 1, ${OPENED}, ${s.ownerUserId})`;
-                roundOpen = true;
+                m.roundOpen = true;
               }
             } else if (x.kind === "join") {
               if (token[x.side] !== null) {
@@ -1193,56 +1593,35 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
                 await patchDivision(owner, s.divisionId, { camera_policy: m.policy });
                 totals.downgrades += 1;
               }
+            } else if (x.kind === "late") {
+              m.late = true;
+            } else if (x.kind === "create") {
+              // T9: a game already on record is `already`; otherwise BOTH
+              // seats are re-verified through seatPlayer, and the game is
+              // recorded for the two accounts only if both pass.
+              if (m.game === "none") {
+                const home = await check("home", `${where} (T9 seats home)`);
+                const away = await check("away", `${where} (T9 seats away)`);
+                if (home && away) {
+                  await recordGame(s, { status: "ready" });
+                  m.game = "players";
+                  totals.gamesCreated += 1;
+                }
+              }
+            } else if (x.kind === "start") {
+              if (!m.inPlay) {
+                await setFixtureStatus(s, "in_play");
+                m.inPlay = true;
+                totals.starts += 1;
+              }
+            } else if (x.kind === "foreign") {
+              if (m.game === "none") {
+                await recordGame(s, { status: "ready", white: `other-w-${RUN}`, black: `other-b-${RUN}` });
+                m.game = "others";
+                totals.gamesForeign += 1;
+              }
             } else {
-              totals.claims += 1;
-              const httpBefore = rtk.http.length;
-              const adapterBefore = rtk.adapter.length;
-              const got = await claim(s, x.side, rtk);
-              const live = peers[x.side] > 0;
-              const where = `${JSON.stringify(acts)} → seat ${x.side}`;
-
-              // The two named invariants.
-              if (got.seated && !roundOpen) totals.violationsBeforeOpen += 1;
-              // No override is ever applied here, so EVERY seat under required
-              // needs a live player — a null tile is no exemption.
-              if (got.seated && m.policy === "required" && !live) totals.violationsRequiredNotLive += 1;
-
-              if (!roundOpen) {
-                expect(got, where).toEqual({ seated: false, reason: "round_not_open" });
-                expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
-                totals.roundNotOpen += 1;
-                continue;
-              }
-              if (m.policy === "off") {
-                expect(got, where).toEqual({ seated: true, participant: null });
-                expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
-                totals.seatedOff += 1;
-                continue;
-              }
-              const carried = "participant" in got ? got.participant : null;
-              expect(carried, `${where}: a token`).not.toBeNull();
-              if (pid[x.side] === null) pid[x.side] = carried!.participantId;
-              expect(carried!.participantId, `${where}: the caller's own, single participant`).toBe(pid[x.side]);
-              const other: Side = x.side === "home" ? "away" : "home";
-              if (pid[other] !== null) expect(carried!.participantId, `${where}: never the opponent's`).not.toBe(pid[other]);
-              token[x.side] = carried!.authToken;
-
-              if (m.policy === "optional") {
-                expect(got.seated, where).toBe(true);
-                expect(rtk.adapter.slice(adapterBefore), `${where}: optional never asks`).not.toContain(
-                  "hasLiveVideoPublisher",
-                );
-                totals.seatedOptional += 1;
-              } else if (live) {
-                expect(got.seated, where).toBe(true);
-                verified[x.side] = true;
-                totals.seatedRequiredLive += 1;
-              } else {
-                const want = verified[x.side] ? "camera_lost" : "camera_required";
-                expect(!got.seated && got.reason, where).toBe(want);
-                if (want === "camera_lost") totals.cameraLost += 1;
-                else totals.cameraRequired += 1;
-              }
+              await check(x.side, where);
             }
           }
           // Per run: one stored player participant per side that ever claimed.
@@ -1254,14 +1633,18 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
         }),
         // endOnFailure: every replay seeds a whole fixture, so shrinking is
         // switched off; the failing sequence is printed in each message.
-        { numRuns: 30, seed: 20261009, endOnFailure: true },
+        { numRuns: 80, seed: 20261009, endOnFailure: true },
       );
 
       console.log(`PROPERTY_COUNTS ${JSON.stringify(totals)}`);
       expect(totals.violationsBeforeOpen, "INVARIANT: nobody seated before the round opens").toBe(0);
       expect(totals.violationsRequiredNotLive, "INVARIANT: nobody seated under required without being live").toBe(0);
+      expect(
+        totals.violationsOutsideWindow,
+        "INVARIANT: no token and no seat past T+20 except re-entry under exactly the three conditions",
+      ).toBe(0);
       // Anti-vacuity: zero checked is a failure, per path the property is named for.
-      expect(totals.runs, "runs").toBeGreaterThanOrEqual(30);
+      expect(totals.runs, "runs").toBeGreaterThanOrEqual(80);
       expect(totals.claims, "claims").toBeGreaterThan(0);
       expect(totals.roundNotOpen, "claims before the round opened").toBeGreaterThan(0);
       expect(totals.seatedRequiredLive, "seats under required with a live player").toBeGreaterThan(0);
@@ -1270,7 +1653,14 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
       expect(totals.seatedOptional, "seats after a downgrade to optional").toBeGreaterThan(0);
       expect(totals.seatedOff, "seats after a downgrade to off").toBeGreaterThan(0);
       expect(totals.leavesApplied, "leaves").toBeGreaterThan(0);
+      expect(totals.gamesCreated, "games T9 created").toBeGreaterThan(0);
+      expect(totals.lateClaims, "claims past T+20").toBeGreaterThan(0);
+      expect(totals.lateNoGame, "past T+20, no game").toBeGreaterThan(0);
+      expect(totals.lateForeignGame, "past T+20, a game for other accounts").toBeGreaterThan(0);
+      expect(totals.lateNotInPlay, "past T+20, the game not started").toBeGreaterThan(0);
+      expect(totals.lateReentrySeated, "re-entry past T+20, seated").toBeGreaterThan(0);
+      expect(totals.lateReentryCameraRefused, "re-entry past T+20, a camera refusal with a token").toBeGreaterThan(0);
     },
-    240_000,
+    300_000,
   );
 });
