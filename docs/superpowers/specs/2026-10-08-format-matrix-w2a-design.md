@@ -79,6 +79,8 @@ standalone PR then.
 | Chess `double_forfeit` as a loss for both (RB2B-15) | W2b | Until then it folds to `no_result` and lands in `needs_decision` (§5.4). |
 | Tennis tie-break guard reads cfg only (checklist §7) | W2e | Tennis. |
 | Auto-walkover of a held (`needs_decision`) bracket fixture when one side withdraws | W2b | Preflight ruling C17 (controller, 2026-10-08): in W2a a withdrawal leaves the held fixture `needs_decision` (the bracket withdrawal cascade skips it), a settle naming the withdrawn entrant is refused, and the organiser settles for the remaining entrant. Walkover credit is W2b's. |
+| Both entrants of an abandoned bracket line withdraw: settle is refused for each (C17), the fed seat waits; the organiser's escape is void the abandon → forfeit → forfeit | W2b | Double-walkover credit (spec §2.1). Pinned in W2a as a named characterisation test (ruling D-G2). Before NEW-H1's fix the sibling walked through, correct only by accident. |
+| A settle seats a withdrawn LOSER on a loser edge (page_playoff q2, knockout third place, double_elim) — no withdrawal check on the loser edge | W2b | Withdrawal/walkover credit (X-WD-1). Pinned in W2a as a characterisation test (ruling D-G2). |
 | Recording armageddon colours on the tie-break (`black: EntrantId`) and enforcing BG-KO-2 in the engine | W2c | Ruling 82: W2a drops the "Drawn — Black advances" choice. The scorer always taps the winner, and the armageddon step shows a hint that a draw means Black advances. |
 
 ## 3. Rulings this spec implements
