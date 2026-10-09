@@ -166,7 +166,7 @@ export async function abandonUi(c: PageCtx, fixtureId: string, reason: string): 
   const { page } = c;
   const t = actBudget(c, 1);
   const nav = navBudget(c);
-  const abandon = page.getByRole("button", { name: NAME.abandon.text });
+  const abandon = page.getByRole("button", { name: NAME.abandon.text, exact: true });
   await reload(c, { control: abandon, what: "the console's Abandon" });
   await awaitScreen(() => abandon.waitFor({ state: "visible", timeout: nav }), "the console's Abandon, for a match in play", nav);
   const before = await shoot(c, "12-abandon-before");

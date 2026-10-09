@@ -72,6 +72,12 @@ export class MixedLedger {
     return t;
   }
 
+  /** How many invocations of each type took each path so far - only the types invoked (M-4: the http count of an
+   *  organiser event is otherwise visible nowhere, so dropping its record would pass every check). */
+  paths(): Readonly<Partial<Record<ActionType, Readonly<{ browser: number; http: number }>>>> {
+    return Object.freeze(Object.fromEntries([...this.#tally].map(([a, t]) => [a, Object.freeze({ browser: t.browser, http: t.http })])));
+  }
+
   /** The path one invocation of `a` took. */
   record(a: ActionType, via: Via): void {
     assertType(a);

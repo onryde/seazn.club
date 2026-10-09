@@ -14,7 +14,7 @@ import type { FixtureRow } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
 import { winnerOf } from "../observed.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
-import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
+import { assertion, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, decideFixture, playDivision, setUpDivision, snapshot, type DivisionSetup } from "./common.ts";
 import { BRACKET_KINDS } from "./terminal-finals.ts";
 import type { Scenario } from "./types.ts";
@@ -108,6 +108,9 @@ export const m1Walkover: Scenario = {
             ? { ok: rankOne === seed1, note: `the walkover was the terminal final, but finalRanks[0] is ${rankOne ?? "(none: no finalRanks)"}, not seed 1 (${seed1})` }
             : { ok: t !== null && s0.fixtures.some((f) => (f.roundNo ?? 0) > t.round && (f.home === seed1 || f.away === seed1)), note: "seed 1 absent from every later round" }],
           BRACKETS.has(setup.stage.kind) ? null : "not a bracket stage"),
+        // W2a (M-6): a bracket stage in this run owes a decider; the walkover took the first bracket fixture, the policy's
+        // next hard-path slot is the fourth.
+        bracketDeciderExercised(rec, observed),
         stageCompleted(observed),
         loopBounded(rec, observed),
         advanceSeededAsDeclared(plays, observed, rec.withdrawn),

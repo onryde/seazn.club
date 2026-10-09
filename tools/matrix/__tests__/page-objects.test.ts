@@ -34,6 +34,7 @@ import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../li
 import { DATA, NAME, TESTID, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { UnknownTemplate } from "../lib/templates.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
+import { fixtureStatusesText } from "./product-text.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const src = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
@@ -1225,20 +1226,39 @@ describe("voidLastUi: the console's Void last entry (W1d item 15e)", () => {
 // pad, no Forfeit, no Finalize - only the Needs a decision block, so a settle that opened its console first timed out
 // with "console controls never showed" on a console that was showing exactly the control it needed.
 describe("openFixtureUi: the controls a console can be mounted with, one per state it can be in", () => {
-  it("every state of an organiser's console mounts a control the wait knows (scheduled, in play, decided, held), and the wait is exactly their union", () => {
-    const STATES: Readonly<Record<string, readonly string[]>> = {
-      "scheduled (Start)": [START_MATCH_TESTID],
-      "in play (the pad, or Forfeit)": [TESTID.scorePad.id, FORFEIT_TESTID],
-      "decided (Finalize)": [FINALIZE_TESTID],
-      "held (Needs a decision)": [NEEDS_DECISION.block],
-    };
+  // Phase 3 fix round 1 (M-2): the states are the PRODUCT's own fixture statuses (FIXTURE_STATUSES, read through the
+  // api-v1 schema that reads it), not a mirror typed here - so a status the product gains reds this test BY NAME, and
+  // owes an entry saying what the organiser's console mounts for it. What a status mounts is fixture-console.tsx's
+  // gates (scoring, decided, held, offerOrganiserActions); the two terminal statuses are read out of its `scoring` line.
+  const MOUNTS: Readonly<Record<string, readonly string[]>> = {
+    scheduled: [START_MATCH_TESTID],
+    in_play: [TESTID.scorePad.id, FORFEIT_TESTID],
+    decided: [FINALIZE_TESTID],
+    abandoned: [FINALIZE_TESTID], // `decided` is true for an abandoned fixture and the match is not held
+    forfeited: [FINALIZE_TESTID], // a walkover carries an outcome: decided
+    needs_decision: [NEEDS_DECISION.block],
+    finalized: [], // terminal: `scoring` is false, so no control is mounted
+    cancelled: [],
+  };
+
+  it("every fixture status the product declares is accounted for, the statuses that mount nothing are the console's own terminal ones, and the wait is exactly the union of what the rest mount", () => {
+    const statuses = fixtureStatusesText();
+    expect(statuses.length, "the product declares its fixture statuses").toBeGreaterThan(5);
+    expect(statuses.filter((st) => !Object.hasOwn(MOUNTS, st)), "a fixture status the product gained: say what the console mounts for it").toEqual([]);
+    expect(Object.keys(MOUNTS).filter((st) => !statuses.includes(st)), "a status this table names that the product no longer declares").toEqual([]);
+    // The terminal statuses, as the console itself says them.
+    const scoringLine = /const scoring = canEdit && ([^;]*);/.exec(src(`${V2}/fixture-console.tsx`));
+    expect(scoringLine, "fixture-console.tsx no longer has its `scoring` gate").not.toBeNull();
+    const terminal = [...scoringLine![1]!.matchAll(/live\.status !== "([a-z_]+)"/g)].map((m) => m[1]!);
+    expect(terminal.length, "the console's terminal statuses").toBeGreaterThan(0);
+    expect(statuses.filter((st) => MOUNTS[st]!.length === 0).sort()).toEqual([...terminal].sort());
     let checked = 0;
-    for (const [state, mounted] of Object.entries(STATES)) {
-      expect(mounted.some((id) => CONSOLE_MOUNTED_TESTIDS.includes(id)), `${state}: none of ${mounted.join(", ")} is in the wait`).toBe(true);
+    for (const st of statuses) {
+      for (const id of MOUNTS[st]!) expect(CONSOLE_MOUNTED_TESTIDS, `${st}: ${id} is not in the wait`).toContain(id);
       checked++;
     }
-    expect(checked).toBe(4);
-    expect([...CONSOLE_MOUNTED_TESTIDS].sort()).toEqual([...new Set(Object.values(STATES).flat())].sort());
+    expect(checked).toBe(statuses.length);
+    expect([...CONSOLE_MOUNTED_TESTIDS].sort()).toEqual([...new Set(statuses.flatMap((st) => MOUNTS[st]!))].sort());
   });
 });
 
@@ -1254,6 +1274,7 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
 
   function consolePage(o: { offered?: boolean; stuck?: boolean; answer?: { status: number; body: unknown }; eventsOf?: string } = {}) {
     const log: string[] = [];
+    const roles: { role: string; name: string; exact: boolean | undefined }[] = [];
     let screen = 0;
     const waiters: W[] = [];
     const emit = (r: Resp) => { for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); waiters.splice(waiters.indexOf(w), 1); w.resolve(r); } };
@@ -1279,7 +1300,7 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
     });
     const page = {
       reload: async () => { log.push("reload"); },
-      getByRole: (role: string, f: { name: string }) => loc(`role:${role}:${f.name}`),
+      getByRole: (role: string, f: { name: string; exact?: boolean }) => { roles.push({ role, name: f.name, exact: f.exact }); return loc(`role:${role}:${f.name}`); },
       getByTestId: (id: string) => loc(`testid:${id}`),
       waitForResponse: (pred: (r: Resp) => boolean, t: { timeout: number }): Promise<Resp> => new Promise((resolveW, reject) => {
         const w: W = { pred, resolve: resolveW, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, t.timeout) };
@@ -1297,7 +1318,7 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
     };
     const evidence = new Evidence("/r", "case-1", fs);
     const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence };
-    return { ctx, log, evidence };
+    return { ctx, log, evidence, roles };
   }
 
   it("the button is found by the dictionary's own words; the console renders them in a testid-less button that opens the reason prompt and sends core.abandon", () => {
@@ -1327,6 +1348,13 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
       "shot 12-abandon",
     ]);
     expect(g.evidence.checks().find((c) => c.id === "visual-evidence")).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+
+  it("the Abandon button is looked up by its WHOLE accessible name (exact), so a longer button that merely contains the word is never the one clicked (M-3)", async () => {
+    const g = consolePage();
+    await abandonUi(g.ctx, "fx-1", "matrix: abandoned");
+    expect(g.roles.length).toBeGreaterThan(0);
+    for (const r of g.roles) expect(r, JSON.stringify(r)).toEqual({ role: "button", name: NAME.abandon.text, exact: true });
   });
 
   it("the answer waited for is THIS fixture's events route: another fixture's write is not taken for it", async () => {

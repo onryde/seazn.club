@@ -389,7 +389,7 @@
   ],
   "newScenarios": [],
   "browserShards": {
-    "note": "Task 1 finding: the L1/L2 cells in `cases` are GRID cells. `matrix:browser --layer L1|L2 --only ...` is refused (UnknownFilter, EXIT=2) outside the 6-cell slice, and `--scope grid` takes no --only. A grid cell is reached by its stripe: `pnpm matrix:browser --layer <L> --scope grid --shard <k>/64 --run-id <id> --report-dir <dir>`. Stripe k holds plan items i with i mod 64 = k-1 (plan order = the W1d baseline order; planSize L1 231, L2 1731). Each listed stripe contains at least one SC-O1/SC-O2 case and 2-4 other cases the run also drives.",
+    "note": "Task 1 finding: the L1/L2 cells in `cases` are GRID cells. `matrix:browser --layer L1|L2 --only ...` is refused (UnknownFilter, EXIT=2) outside the 6-cell slice, and `--scope grid` takes no --only. A grid cell is reached by its stripe: `pnpm matrix:browser --layer <L> --scope grid --shard <k>/64 --run-id <id> --report-dir <dir>`. Stripe k holds plan items i with i mod 64 = k-1 (plan order = the W1d baseline order; planSize L1 231, L2 1729). Each listed stripe contains at least one SC-O1/SC-O2 case and 2-4 other cases the run also drives.",
     "of": 64,
     "scope": "grid",
     "L1": [
@@ -407,7 +407,7 @@
     ],
     "L2": [
       2,
-      16,
+      14,
       26
     ]
   }

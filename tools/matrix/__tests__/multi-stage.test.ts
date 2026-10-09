@@ -252,6 +252,23 @@ describe("playDivision on the fake — the product sequence", () => {
     expect(judged).toBeGreaterThan(0);
     expect(judged).toBe(SPORT_KEYS.length);
   });
+  it("F1, M1 and R4 on a league_ko row owe the decider of its KNOCKOUT stage (stage 2), counted over the registry (M-6)", async () => {
+    expect(SPORT_KEYS.length).toBeGreaterThan(0);
+    let judged = 0;
+    for (const scenario of ["F1", "M1", "R4"] as const) {
+      for (const sport of SPORT_KEYS) {
+        const { out, checks } = await runOn(new FakeMultiStageDriver(), scenario, { row: "league_ko", sport, variant: offlineBuilderDefault(sport) });
+        const check = checks.find((c) => c.id === "life-bracket-decider-exercised");
+        expect(check, `${scenario}/${sport}: the check is in the scenario`).toBeDefined();
+        // Stage 1 is a league (no decider owed); the check judges the bracket stage the run reached.
+        expect(out.observed.stages.map((s) => s.kind), `${scenario}/${sport}`).toEqual(["league", "knockout"]);
+        expect(check!.verdict, `${scenario}/${sport}: ${check!.reason}`).toBe("pass");
+        expect(check!.checked, `${scenario}/${sport}`).toBeGreaterThan(0);
+        judged++;
+      }
+    }
+    expect(judged).toBe(3 * SPORT_KEYS.length);
+  });
   it("X-DR-1 over EVERY declared stage kind: the bracket kinds are everything but league, group, swiss and americano (the rulebook's draw half), and no sport draws in one at any variant — so no bracket line in any row waits on a draw", () => {
     // single list, from the rulebook (spec §5.4.1, ruling 78) - not read back from the engine's DRAW_KINDS.
     const RULEBOOK_DRAW_KINDS = ["league", "group", "swiss", "americano"];

@@ -25,6 +25,21 @@ describe("MixedLedger", () => {
     expect(c).toMatchObject({ id: "mixed-driver-coverage", verdict: "fail", checked: 0 });
   });
 
+  it("paths(): nothing before the first call, then each invoked type's browser and http counts, and a type never invoked stays absent", () => {
+    const l = new MixedLedger();
+    expect(l.paths()).toEqual({});
+    l.record("settle", "browser");
+    l.record("settle", "http");
+    l.record("settle", "http");
+    l.record("abandon", "http");
+    expect(l.paths()).toEqual({ settle: { browser: 1, http: 2 }, abandon: { browser: 0, http: 1 } });
+    expect(Object.hasOwn(l.paths(), "forfeit")).toBe(false);
+    const before = l.paths();
+    l.record("settle", "browser");
+    expect(before.settle, "a reading is a snapshot, not a view").toEqual({ browser: 1, http: 2 });
+    expect(Object.isFrozen(before)).toBe(true);
+  });
+
   it("policy first: the first call of a type goes to the browser, every later one to http; policy all: score always browser", () => {
     const l = new MixedLedger();
     expect(l.wantsBrowser("start", "first")).toBe(true);

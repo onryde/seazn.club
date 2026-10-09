@@ -115,6 +115,69 @@ describe("life-bracket-decider-exercised — zero is a failure, never an abstent
   });
 });
 
+describe("life-bracket-decider-exercised — a settle the recorded withdrawal struck is explained, not a missing read-back (M-6, R4 on a bracket)", () => {
+  const settledFx = (id: string, status: string, method?: string): ObservedFixture =>
+    ({ id, stageId: "s1", poolId: null, roundNo: 1, home: "a", away: "b", status, outcome: method === undefined ? null : ({ kind: "win", winner: "a", method } as never), declared: null });
+  const withdrawn = (policy: "walkover" | "expunge", before: { id: string; status: string }[]) => ({ entrantId: "a", afterRound: 1, policy, walkovers: 0, voided: 0, skippedFinalized: 0, before: before.map((b) => ({ ...b, outcome: null })) });
+  const runWith = (fixtures: ObservedFixture[], w: ReturnType<typeof withdrawn> | null): ObservedRun => ({
+    caseId: "c", facts: [], withdrawal: w, configEdit: null,
+    stages: [{ id: "s1", seq: 1, kind: "knockout", config: {}, field: ["a", "b"], fieldSource: "division", fixtures, standings: [], generates: [], pairRounds: [], complete: null }],
+  });
+  const settleDrive = (fixtureId: string) => ({ fixtureId, asked: { kind: "settle" } }) as never;
+
+  it("an expunge that abandoned the settled fixture of the withdrawn entrant passes (the withdrawal explains the missing settled_ win); with NO recorded withdrawal the same read-back fails", () => {
+    const rec = new Recorder();
+    rec.settlesPosted = 2;
+    rec.bracketDrives.push(settleDrive("f1"), settleDrive("f2"));
+    const fixtures = [settledFx("f1", "abandoned"), settledFx("f2", "decided", "settled_lot")];
+    const w = withdrawn("expunge", [{ id: "f1", status: "decided" }, { id: "f2", status: "decided" }]);
+    expect(bracketDeciderExercised(rec, runWith(fixtures, w))).toMatchObject({ verdict: "pass" });
+    expect(bracketDeciderExercised(rec, runWith(fixtures, null))).toMatchObject({ verdict: "fail", evidence: [expect.stringMatching(/posted 2 settle\(s\), the product shows 1/)] });
+  });
+
+  it("a tie-break the expunge struck is explained the same way, and a struck decider of one kind never explains a missing one of the other", () => {
+    const tied = (id: string, status: string, method?: string) => settledFx(id, status, method);
+    const drive = (fixtureId: string, kind: "settle" | "tiebreak") => ({ fixtureId, asked: { kind } }) as never;
+    const w = withdrawn("expunge", [{ id: "t1", status: "decided" }, { id: "s1", status: "decided" }]);
+    const onlyTiebreak = new Recorder();
+    onlyTiebreak.tiebreaksPosted = 1;
+    onlyTiebreak.bracketDrives.push(drive("t1", "tiebreak"));
+    expect(bracketDeciderExercised(onlyTiebreak, runWith([tied("t1", "abandoned")], w))).toMatchObject({ verdict: "pass" });
+    // One settle shown, one tie-break struck: the struck tie-break must not be counted toward the settles too.
+    const both = new Recorder();
+    both.settlesPosted = 2;
+    both.tiebreaksPosted = 1;
+    both.bracketDrives.push(drive("t1", "tiebreak"), drive("s1", "settle"), drive("s2", "settle"));
+    const fixtures = [tied("t1", "abandoned"), tied("s1", "decided", "settled_lot"), tied("s2", "decided")];
+    const got = bracketDeciderExercised(both, runWith(fixtures, w));
+    expect(got).toMatchObject({ verdict: "fail" });
+    expect(got.evidence).toEqual([expect.stringMatching(/posted 2 settle\(s\), the product shows 1/)]);
+  });
+
+  it("a strike on ANOTHER fixture does not explain this settle's missing read-back: the drive's own fixture is the one that must have been struck", () => {
+    const rec = new Recorder();
+    rec.settlesPosted = 1;
+    rec.bracketDrives.push(settleDrive("s2"));
+    // s2 was settled and is still `decided` with no settled_ win (the product lost the method); t1, a different fixture, was struck.
+    const fixtures = [settledFx("t1", "abandoned"), settledFx("s2", "decided")];
+    const w = withdrawn("expunge", [{ id: "t1", status: "decided" }, { id: "s2", status: "decided" }]);
+    const got = bracketDeciderExercised(rec, runWith(fixtures, w));
+    expect(got).toMatchObject({ verdict: "fail" });
+    expect(got.evidence).toEqual([expect.stringMatching(/posted 1 settle\(s\), the product shows 0/)]);
+    // The positive pair: the same run with s2 itself struck is explained.
+    const own = [settledFx("t1", "decided"), settledFx("s2", "abandoned")];
+    expect(bracketDeciderExercised(rec, runWith(own, withdrawn("expunge", [{ id: "t1", status: "decided" }, { id: "s2", status: "decided" }])))).toMatchObject({ verdict: "pass" });
+  });
+
+  it("a settle the withdrawal could NOT have struck (a walkover touches only pending fixtures, and the settled one was decided) is still a missing read-back", () => {
+    const rec = new Recorder();
+    rec.settlesPosted = 1;
+    rec.bracketDrives.push(settleDrive("f1"));
+    const w = withdrawn("walkover", [{ id: "f1", status: "decided" }]);
+    expect(bracketDeciderExercised(rec, runWith([settledFx("f1", "abandoned")], w))).toMatchObject({ verdict: "fail", evidence: [expect.stringMatching(/posted 1 settle\(s\), the product shows 0/)] });
+  });
+});
+
 describe("LIFECYCLE on the knockout fake — every sport plays its bracket to the end THROUGH a decider", () => {
   async function life(sport: string) {
     const variant = offlineBuilderDefault(sport);
@@ -150,5 +213,36 @@ describe("LIFECYCLE on the knockout fake — every sport plays its bracket to th
     expect(judged).toBe(SPORT_KEYS.length);
     expect(judged).toBeGreaterThan(0);
     expect(deciders).toBeGreaterThanOrEqual(judged);
+  });
+});
+
+// Phase 3 fix round 1 (M-6): Step 8 states the decider rule for EVERY bracket-row run where bracketPolicy posts settles,
+// not LIFECYCLE alone. F1, M1 and R4 play their divisions through the same playDivision, so a bracket stage in any of them
+// (a knockout row, or the knockout stage of a league_ko row) owes the same posted-and-read-back decider. Only
+// BRACKET_EXTRA_BOARD stays out (w2a-scenarios.test.ts pins why): its extra board is the pad's, and it posts no settle.
+describe("F1, M1 and R4 on a bracket row play THROUGH a decider too (M-6)", () => {
+  async function play(scenario: "F1" | "M1" | "R4", sport: string) {
+    const variant = offlineBuilderDefault(sport);
+    const spec: CaseSpec = { caseId: `knockout|${sport}|${variant}|${scenario}`, row: "knockout", sport, variant, scenario, canary: false };
+    const out = await SCENARIOS[scenario].run({ driver: new FakeKnockoutDriver(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+    return { out, checks: [...evaluateInvariants(out.observed), ...out.assertions] };
+  }
+
+  it("each scenario carries the check on every sport; it passes on a counted item, and the deciders the product shows are the ones posted", async () => {
+    let judged = 0;
+    for (const scenario of ["F1", "M1", "R4"] as const) {
+      for (const sport of SPORT_KEYS) {
+        const { out, checks } = await play(scenario, sport);
+        const check = checks.find((c) => c.id === "life-bracket-decider-exercised");
+        expect(check, `${scenario}/${sport}: the check is in the scenario`).toBeDefined();
+        expect(check!.verdict, `${scenario}/${sport}: ${check!.reason}`).toBe("pass");
+        expect(check!.checked, `${scenario}/${sport}`).toBeGreaterThan(0);
+        const prefix = sport === "boardgame" ? "tiebreak_" : "settled_";
+        const shown = out.observed.stages[0]!.fixtures.filter((f) => f.outcome?.kind === "win" && (f.outcome as { method?: string }).method?.startsWith(prefix) === true);
+        expect(shown.length, `${scenario}/${sport}: a decider is on the product's side`).toBeGreaterThan(0);
+        judged++;
+      }
+    }
+    expect(judged).toBe(3 * SPORT_KEYS.length);
   });
 });

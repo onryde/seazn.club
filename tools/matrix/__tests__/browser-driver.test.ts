@@ -11,7 +11,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { selectorForTapStep } from "../../bench/lib/drivers/scorer.ts";
 import { ORGANISER_ONLY_EVENT_TYPES, ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../apps/web/src/lib/organiser-only-events.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
@@ -33,6 +33,7 @@ import { Recorder, TEMPLATE_ENDS_ON, playStage, setUpDivision } from "../lib/sce
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { noPadReason } from "../lib/pad-sports.ts";
 import { CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE, CRICKET_NO_CONTROL, CRICKET_SUMMARY, cricketPad } from "../lib/pads/cricket.ts";
+import { boardgamePad } from "../lib/pads/boardgame.ts";
 import { genericPad } from "../lib/pads/generic.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
 import { replayEvents, type ReplayDeps, type ReplayResult } from "../lib/pads/replay.ts";
@@ -158,12 +159,12 @@ function fakeClock(): Clock & { sleeps: number[]; t: number } {
 }
 
 interface Made { driver: BrowserDriver; pageCalls: string[]; pageArgs: Record<string, unknown[][]>; defaults: number[]; ctx: PageCtx }
-function make<H extends HttpSide>(o: { http: H; spec?: CaseSpec; pages?: Partial<BrowserPages>; padPolicy?: "first" | "all"; pads?: PadRegistry; clock?: Clock; replay?: Replay; page?: object }): Made & { http: H } {
+function make<H extends HttpSide>(o: { http: H; spec?: CaseSpec; pages?: Partial<BrowserPages>; padPolicy?: "first" | "all"; pads?: PadRegistry; clock?: Clock; replay?: Replay; page?: object; Driver?: typeof BrowserDriver }): Made & { http: H } {
   const fp = fakePages(o.pages);
   const defaults: number[] = [];
   const page = { ...o.page, setDefaultTimeout: (ms: number) => { defaults.push(ms); } };
   const ctx: PageCtx = { page: page as unknown as PageCtx["page"], base: "http://localhost:3999", orgSlug: ORG_SLUG, holdMs: 3000, evidence: new Evidence("/report", "case-1", memFs()) };
-  const driver = new BrowserDriver({ http: o.http, ctx, spec: o.spec ?? spec("league"), padPolicy: o.padPolicy ?? "first", pads: o.pads ?? EMPTY_PADS, orgId: ORG, pages: fp.pages, clock: o.clock ?? fakeClock(), ...(o.replay === undefined ? {} : { replay: o.replay }) });
+  const driver = new (o.Driver ?? BrowserDriver)({ http: o.http, ctx, spec: o.spec ?? spec("league"), padPolicy: o.padPolicy ?? "first", pads: o.pads ?? EMPTY_PADS, orgId: ORG, pages: fp.pages, clock: o.clock ?? fakeClock(), ...(o.replay === undefined ? {} : { replay: o.replay }) });
   return { driver, http: o.http, pageCalls: fp.calls, pageArgs: fp.args, defaults, ctx };
 }
 const league = (o: { spec?: CaseSpec; pages?: Partial<BrowserPages>; padPolicy?: "first" | "all"; pads?: PadRegistry } = {}) => make({ ...o, http: new FakeHttp(ORG) });
@@ -2240,6 +2241,22 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: SETUP + 1 }); // settle: one browser, one http
   });
 
+  it("the path each organiser event took is counted per type, browser AND http: the second settle and the second abandon are http calls on the ledger (M-4)", async () => {
+    const rows = [asRow(2, SETTLE), asRow(3, ABANDON), asRow(4, SETTLE), asRow(5, ABANDON)];
+    const { driver } = make({ http: orgHttp(rows), pads: PADS, replay: replayOf([]).fn, pages: { settleUi: async () => answer(2), abandonUi: async () => answer(3) } });
+    await built(driver, spec("knockout"));
+    expect(driver.paths.settle).toBeUndefined(); // nothing invoked yet: the empty case first
+    await driver.postStream("f1", [SETTLE], "a");
+    await driver.postStream("f1", [ABANDON], "b");
+    expect(driver.paths.settle, "after the browser turn").toEqual({ browser: 1, http: 0 });
+    expect(driver.paths.abandon, "after the browser turn").toEqual({ browser: 1, http: 0 });
+    await driver.postStream("f1", [SETTLE], "c");
+    await driver.postStream("f1", [ABANDON], "d");
+    expect(driver.paths.settle, "the type's browser turn is used: the next goes over http").toEqual({ browser: 1, http: 1 });
+    expect(driver.paths.abandon).toEqual({ browser: 1, http: 1 });
+    expect(sent.posts).toEqual([["core.settle"], ["core.abandon"]]);
+  });
+
   it("an http-scored stream with a console settle still answers EVERY event from the ledger: a driver never mixes stored and unstored rows", async () => {
     const rows = [asRow(2, START), asRow(3, RESULT), asRow(4, SETTLE)];
     const { driver } = make({ http: orgHttp(rows), pads: EMPTY_PADS, replay: replayOf([]).fn, pages: { settleUi: async () => answer(4) } });
@@ -2418,7 +2435,40 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
       expect(checked).toBe(4);
     });
 
-    it("every type the PRODUCT declares organiser-only has a console route; a sport's forfeit value (no console control writes it) is refused by name", async () => {
+    it("a type the product GAINS as organiser-only, which no console control writes, is refused by name before anything is driven (an assumption is a guard)", async () => {
+      // The product's list is the authority; the driver only says which control writes each. So a new organiser-only core
+      // type reaches the route table with no entry: the real product module is wrapped for this one test to declare one.
+      const NEW = "core.future_organiser_act";
+      expect(isOrganiserOnlyEvent(NEW, {}), "the real product does not declare it").toBe(false);
+      vi.resetModules();
+      vi.doMock("../../../apps/web/src/lib/organiser-only-events.ts", async (importOriginal) => {
+        const real = await importOriginal<typeof import("../../../apps/web/src/lib/organiser-only-events.ts")>();
+        return { ...real, isOrganiserOnlyEvent: (type: string, payload?: unknown) => type === "core.future_organiser_act" || real.isOrganiserOnlyEvent(type, payload) };
+      });
+      try {
+        const fresh = await import("../lib/driver/browser-driver.ts");
+        const r = replayOf([]);
+        const { driver, pageCalls, http } = make({ http: orgHttp([]), pads: PADS, replay: r.fn, Driver: fresh.BrowserDriver });
+        await built(driver, spec("knockout", "generic"));
+        const before = http.calls.length;
+        const err = await driver.postStream("f1", [START, { type: NEW, payload: {} }], "p").catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(fresh.NoOrganiserRoute);
+        expect((err as Error).message).toContain("no console control writes it");
+        expect(r.calls, "the pad was not run").toEqual([]);
+        expect(pageCalls, "nothing was driven").not.toContain("openFixtureUi");
+        expect(http.calls.length, "nothing was posted").toBe(before);
+        // The positive pair: the wrapped module still routes a type that HAS a control (the wrap broke nothing else).
+        const ok = make({ http: orgHttp([asRow(2, SETTLE)]), pads: PADS, replay: replayOf([]).fn, pages: { settleUi: async () => answer(2) }, Driver: fresh.BrowserDriver });
+        await built(ok.driver, spec("knockout", "generic"));
+        await ok.driver.postStream("f1", [SETTLE], "p");
+        expect(ok.pageCalls).toContain("settleUi");
+      } finally {
+        vi.doUnmock("../../../apps/web/src/lib/organiser-only-events.ts");
+        vi.resetModules();
+      }
+    });
+
+    it("every CORE type the PRODUCT declares organiser-only has a console route", async () => {
       const ROUTES: Record<string, { page: string; payload: unknown }> = {
         "core.settle": { page: "settleUi", payload: SETTLE.payload },
         "core.abandon": { page: "abandonUi", payload: ABANDON.payload },
@@ -2439,18 +2489,73 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
         expect(http.calls, type).not.toContain("postStream");
         checked++;
       }
-      for (const [type, arm] of Object.entries(ORGANISER_ONLY_SPORT_EVENTS)) {
-        for (const value of arm.values) {
-          const err = await refused([START, { type, payload: { [arm.field]: value } }], "boardgame");
-          expect(err, `${type} ${arm.field}=${value}`).toBeInstanceOf(NoOrganiserRoute);
-          expect((err as Error).message).toContain(type);
-          // Named for what it IS: no control writes it - not a payload complaint that happens to refuse the same event.
-          expect((err as Error).message).toMatch(/no console control writes it/);
-          checked++;
-        }
+      expect(checked).toBe(ORGANISER_ONLY_EVENT_TYPES.length);
+      expect(checked).toBe(3);
+    });
+  });
+
+  // D-P3 (phase 3 review I-1): a sport's forfeit value (ORGANISER_ONLY_SPORT_EVENTS, D-O1) is organiser-only but is NOT
+  // a console control: the organiser's console mounts the pad with canOrganise, the dock then offers the sport's own
+  // forfeit chips (dockFor, skins/boardgame.tsx), and the harness's session IS the organiser. So it rides the pad with
+  // the scorer's events. The driver used to refuse it as `NoOrganiserRoute: no console control writes it`, a reason
+  // that is false. Expected values come from the product's declared list (every type and value, counted).
+  describe("a sport's forfeit value rides the organiser's pad (D-P3)", () => {
+    const BG = "boardgame";
+    /** The winner each declared value is posted with: a forfeit has a winner, a double forfeit none. A value the product
+     *  gains owes an entry here, by name, rather than being driven with a guessed payload. */
+    const WINNER: Readonly<Record<string, string | null>> = { forfeit: "e1", double_forfeit: null };
+    const declared = Object.entries(ORGANISER_ONLY_SPORT_EVENTS).flatMap(([type, arm]) => arm.values.map((value) => ({ type, field: arm.field, value })));
+
+    it("the pad replays the WHOLE stream, no console control is driven, nothing goes over http, and every answered event carries the row the product holds", async () => {
+      expect(declared.length, "the product declares sport forfeit values").toBeGreaterThan(1);
+      let checked = 0;
+      for (const { type, field, value } of declared) {
+        expect(Object.hasOwn(WINNER, value), `${type} ${field}=${value} has no winner in this test's table`).toBe(true);
+        const ev: StreamEvent = { type, payload: { winner: WINNER[value], [field]: value } };
+        expect(isOrganiserOnlyEvent(ev.type, ev.payload), `${value} is organiser-only (the premise)`).toBe(true);
+        const rows = [asRow(2, START), asRow(3, ev)];
+        const r = replayOf(rows);
+        const { driver, pageCalls, http } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn });
+        await built(driver, spec("knockout", BG));
+        const posted = await driver.postStream("f1", [START, ev], "p");
+        expect(r.calls, value).toHaveLength(1);
+        expect(r.calls[0]![2], value).toEqual([START, ev]);
+        for (const page of ["settleUi", "abandonUi", "forfeitUi"]) expect(pageCalls, `${value}: ${page}`).not.toContain(page);
+        expect(http.calls, value).not.toContain("postStream");
+        expect(posted.map((x) => x.stored), value).toEqual([START, ev]);
+        // The pad's turn was used (score ran in the browser); the console's forfeit action was never invoked.
+        expect(only(driver, "mixed-driver-coverage"), value).toMatchObject({ verdict: "pass", checked: SETUP + 1 });
+        checked++;
       }
-      expect(checked).toBe(ORGANISER_ONLY_EVENT_TYPES.length + Object.values(ORGANISER_ONLY_SPORT_EVENTS).reduce((n, a) => n + a.values.length, 0));
-      expect(checked).toBeGreaterThan(3);
+      expect(checked).toBe(declared.length);
+    });
+
+    it("a sport with no pad adapter takes the same event over http whole: the organiser's own session writes it, and no console is opened", async () => {
+      let checked = 0;
+      for (const { type, field, value } of declared) {
+        const ev: StreamEvent = { type, payload: { winner: WINNER[value], [field]: value } };
+        const { driver, pageCalls } = make({ http: orgHttp([]), spec: spec("knockout", BG), pads: EMPTY_PADS, replay: replayOf([]).fn });
+        await built(driver, spec("knockout", BG));
+        await driver.postStream("f1", [START, ev], "p");
+        expect(sent.posts, value).toEqual([["core.start", type]]);
+        for (const page of ["openFixtureUi", "settleUi", "abandonUi", "forfeitUi"]) expect(pageCalls, `${value}: ${page}`).not.toContain(page);
+        checked++;
+      }
+      expect(checked).toBe(declared.length);
+    });
+
+    it("beside a core.settle the sport forfeit stays with the scorer's events (the pad) and only the settle goes to the console", async () => {
+      const { type, field, value } = declared[0]!;
+      const ev: StreamEvent = { type, payload: { winner: WINNER[value], [field]: value } };
+      const rows = [asRow(2, START), asRow(3, ev), asRow(4, SETTLE)];
+      const r = replayOf(rows.slice(0, 2));
+      const { driver, pageCalls } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn, pages: { settleUi: async () => answer(4) } });
+      await built(driver, spec("knockout", BG));
+      const posted = await driver.postStream("f1", [START, ev, SETTLE], "p");
+      expect(r.calls[0]![2]).toEqual([START, ev]);
+      expect(pageCalls).toContain("settleUi");
+      expect(pageCalls).not.toContain("forfeitUi");
+      expect(posted.map((x) => x.stored?.type)).toEqual(["core.start", type, "core.settle"]);
     });
   });
 

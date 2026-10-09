@@ -19,6 +19,7 @@ import { tennis } from "@seazn/engine/sports/tennis";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/drivers/adapters/generic.ts";
 import { START_MATCH_TESTID, selectorForTapStep, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
+import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../apps/web/src/lib/organiser-only-events.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { PAD_OWNER, PAD_SPORTS, PAD_UNOWNED, noPadReason } from "../lib/pad-sports.ts";
@@ -1326,6 +1327,44 @@ describe("boardgame", () => {
     // and the method really is outside what the generator emits (the reason this row exists)
     const emitted = new Set(requestsFor("boardgame").flatMap((q) => streamOf(q)).filter((e) => e.type === BOARDGAME_RESULT).map((e) => (e.payload as { method: string }).method));
     expect([...emitted].sort()).toEqual(["agreement", "checkmate"]);
+  });
+
+  it("route cases (the PRODUCT's own organiser-only values, D-O1/D-P3): every declared forfeit value is tapped on the pad — the winner's half or the draw tile, then its `method:<value>` chip — equal on the ledger, organiser-only by the product's predicate, folded by the engine, and offered by the skin's own dock list", async () => {
+    const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
+    const arm = ORGANISER_ONLY_SPORT_EVENTS[BOARDGAME_RESULT];
+    expect(arm, "the product declares no organiser-only boardgame.result values").toBeDefined();
+    expect(arm!.field).toBe("method");
+    const outcomes = padOutcomes(outcomesFor("boardgame", cfg));
+    const decisive = listOf("DECISIVE_METHODS");
+    const drawn = listOf("DRAWN_METHODS");
+    // Each value is offered by exactly one of the skin's docks: that dock decides which tile holds the result (a decisive
+    // half, or the draw tile), and the engine decides what the stored row folds to.
+    const FOLDS: Readonly<Record<string, Record<string, unknown>>> = { forfeit: { kind: "win", winner: HOME, method: "forfeit" }, double_forfeit: { kind: "no_result" } };
+    let checked = 0;
+    for (const value of arm!.values) {
+      expect(Object.hasOwn(FOLDS, value), `${value}: no expected fold in this test (a value the product gains owes one)`).toBe(true);
+      const inDecisive = decisive.includes(value);
+      const inDrawn = drawn.includes(value);
+      expect(inDecisive !== inDrawn, `${value} must be offered by exactly one dock (decisive ${inDecisive}, drawn ${inDrawn})`).toBe(true);
+      const base = outcomes.find((o) => o.kind === (inDecisive ? "win" : "draw"));
+      expect(base, `${value}: the generator builds no ${inDecisive ? "win" : "draw"} to start from`).toBeDefined();
+      const r = req("boardgame", cfg, base!);
+      const evs = generateStream(r).map((e) => (e.type === BOARDGAME_RESULT ? { ...e, payload: { ...(e.payload as object), method: value } } : e));
+      const result = evs.find((e) => e.type === BOARDGAME_RESULT)!;
+      expect(isOrganiserOnlyEvent(result.type, result.payload), `${value} is organiser-only (the premise of the route)`).toBe(true);
+      const side = (result.payload as { winner: string | null }).winner === null ? null : (result.payload as { winner: string }).winner === HOME ? "home" : "away";
+      expect(boardgamePad.stepsFor(result, ctxOf(r)), value).toEqual([side === null ? { kind: "tile", tileId: BOARDGAME_DRAW_TILE } : { kind: "half", side }, { kind: "chip", chipId: methodChipId(value) }]);
+      const { res, ledger } = await replayOnModel(boardgamePad, evs, ctxOf(r), boardgameModel(ctxOf(r)));
+      expect(res.findings, value).toEqual([]);
+      expect(res.rows.map((x) => x.verdict), value).toEqual(["equal", "equal"]);
+      const row = ledger.find((x) => x.type === BOARDGAME_RESULT)!;
+      expect(row.payload, value).toEqual(result.payload);
+      expect(isOrganiserOnlyEvent(row.type, row.payload), `${value}: the STORED row is organiser-only too`).toBe(true);
+      expect(foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome, value).toMatchObject(FOLDS[value]!);
+      checked++;
+    }
+    expect(checked).toBe(arm!.values.length);
+    expect(checked).toBeGreaterThan(1);
   });
 
   it("pins (loop H adds the tie-break tile; red until it lands): the tile id and the score step's `none` option are boardgame.tsx's own, and the event is the engine's", () => {

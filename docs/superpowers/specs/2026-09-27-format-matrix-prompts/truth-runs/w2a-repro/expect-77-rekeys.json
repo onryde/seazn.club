@@ -1,0 +1,58 @@
+{
+  "note": "Controller ruling D-P2 (progress.md, 'P1 phase 3 review'): six boardgame L3 cells in expect-77.json are not W2a's to turn green. Task 16's judge (tools/matrix/w2a-expect.ts) passes for 71 works + these 6 red, each for its pinned reason; any other red, or one of these red for a different reason, fails it. `reason` is compared with double quotes dropped on both sides (the product writes phase \"pre\"). Moved by the ruling, not by a run: the ids stay in expect-77.json.",
+  "rekeys": [
+    {
+      "caseId": "knockout|boardgame|blitz|R4",
+      "was": "SC-O1",
+      "now": "CD-T13",
+      "wave": "W2b",
+      "rule": "BG-WO-2",
+      "reason": "forfeit not allowed in phase \"pre\"",
+      "ruling": "D-P2"
+    },
+    {
+      "caseId": "knockout_third_place|boardgame|blitz|R4",
+      "was": "SC-O1",
+      "now": "CD-T13",
+      "wave": "W2b",
+      "rule": "BG-WO-2",
+      "reason": "forfeit not allowed in phase \"pre\"",
+      "ruling": "D-P2"
+    },
+    {
+      "caseId": "double_elim|boardgame|blitz|R4",
+      "was": "SC-O1",
+      "now": "CD-T13",
+      "wave": "W2b",
+      "rule": "BG-WO-2",
+      "reason": "forfeit not allowed in phase \"pre\"",
+      "ruling": "D-P2"
+    },
+    {
+      "caseId": "ko_plate|boardgame|blitz|R4",
+      "was": "SC-O1",
+      "now": "CD-T13",
+      "wave": "W2b",
+      "rule": "BG-WO-2",
+      "reason": "forfeit not allowed in phase \"pre\"",
+      "ruling": "D-P2"
+    },
+    {
+      "caseId": "qualifying_main|boardgame|blitz|R4",
+      "was": "SC-O1",
+      "now": "CD-T13",
+      "wave": "W2b",
+      "rule": "BG-WO-2",
+      "reason": "forfeit not allowed in phase \"pre\"",
+      "ruling": "D-P2"
+    },
+    {
+      "caseId": "ko_plate|boardgame|blitz|F1",
+      "was": "SC-O1",
+      "now": "FX-G14",
+      "wave": "W4",
+      "reason": "STAGE_COMPLETED_SEEDING_FAILED",
+      "ruling": "D-P2"
+    }
+  ]
+}

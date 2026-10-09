@@ -119,8 +119,23 @@ describe("NeedsDecisionPage: the block and the settle dialog (plan Task 11's fro
     expect(g.log).toContain(`click ${tid("settle-winner-e-7")}`);
     expect(g.log).toContain(`check ${tid("settle-method-higher_seed")}`);
     expect(g.log).toContain(`fill ${tid("settle-note")}=by seed`);
-    // The answer waited for is THIS fixture's: the seam passed the fixture id through.
-    expect(g.log.indexOf(`click ${tid("settle-confirm")}`)).toBeGreaterThan(-1);
+  });
+
+  it("settleUi waits for the answer of the fixture it was GIVEN: the seam passes the fixture id through, so the answer it returns is that fixture's and another's is NoProductResponse", async () => {
+    // The product answers fx-2's events route only. Given fx-2 the seam returns that answer (the awaited value, not a
+    // log of taps); given the fixture the console was opened on, nothing it waits for ever arrives.
+    const asked = heldConsole({ eventsOf: "fx-2", answer: { status: 200, body: { ok: true, data: { seq: 9, status: "decided", outcome: null, event_id: "ev-9" } } } });
+    const posted = await settleUi(asked.ctx, "fx-2", "e-7", "lot");
+    expect(posted).toMatchObject({ seq: 9, event_id: "ev-9" });
+    const wrong = heldConsole({ eventsOf: "fx-2" });
+    vi.useFakeTimers();
+    try {
+      const settled = settleUi(wrong.ctx, FIXTURE, "e-7", "lot").then(() => null, (x: unknown) => x);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(await settled).toBeInstanceOf(NoProductResponse);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("every method the ENGINE declares has its radio, and the winner button is keyed by the entrant asked for", async () => {

@@ -216,17 +216,30 @@ export function drawPathExercised(rec: Recorder, observed: ObservedRun, drawOk: 
  *  straight-win path that never stalled. The count is what the harness POSTED (Recorder), cross-checked against what
  *  the product shows: every settled fixture reads back with a `settled_*` win, every tie-break with a `tiebreak_*`
  *  win. Zero deciders in a run with a bracket stage is a FAILURE, never an abstention (R25); a run with no bracket
- *  stage abstains by name — the rule says nothing about it. */
+ *  stage abstains by name — the rule says nothing about it.
+ *
+ *  Phase 3 fix round 1 (M-6): every scenario that plays a division through bracketPolicy carries it (LIFECYCLE, F1, M1,
+ *  R4), on a bracket row and on the bracket stage of a league_ko row alike - Step 8's rule is "every bracket-row run
+ *  where bracketPolicy posts settles". A decider the RECORDED withdrawal struck after it was posted (R4: an expunge
+ *  abandons the unlocked fixtures of the departed entrant, the settled one among them) is explained by the cascade the
+ *  way life-results-as-posted explains it (cascadeWrote), and counted, never silently dropped. BRACKET_EXTRA_BOARD is
+ *  the one scenario that stays out: its extra board is the pad's and it posts no settle. */
 export function bracketDeciderExercised(rec: Recorder, observed: ObservedRun): CheckResult {
   const brackets = observed.stages.filter((s) => forbidsLevelResult(s.kind as StageKind));
   if (brackets.length === 0) return assertion("life-bracket-decider-exercised", [], "no bracket stage in this run: a level result cannot stall it");
   const fixtures = brackets.flatMap((s) => s.fixtures);
   const settled = fixtures.filter((f) => f.outcome?.kind === "win" && f.outcome.method?.startsWith("settled_") === true).length;
   const tiebroken = fixtures.filter((f) => f.outcome?.kind === "win" && f.outcome.method?.startsWith("tiebreak_") === true).length;
+  // Posted deciders the recorded withdrawal then struck (cascadeWrote reads the snapshot taken before the call).
+  const struck = (kind: "settle" | "tiebreak"): number =>
+    rec.bracketDrives.filter((d) => d.asked.kind === kind && fixtures.some((f) => f.id === d.fixtureId && cascadeWrote(f, observed.withdrawal))).length;
+  const struckSettles = struck("settle");
+  const struckTiebreaks = struck("tiebreak");
+  const note = (n: number, what: string) => (n === 0 ? "" : `; ${n} more ${what} struck by the recorded ${observed.withdrawal!.policy} after it was posted`);
   return assertion("life-bracket-decider-exercised", [
     { ok: rec.settlesPosted + rec.tiebreaksPosted > 0, note: `${brackets.length} bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)` },
-    { ok: settled === rec.settlesPosted, note: `posted ${rec.settlesPosted} settle(s), the product shows ${settled} settled win(s)` },
-    { ok: tiebroken === rec.tiebreaksPosted, note: `posted ${rec.tiebreaksPosted} tie-break(s), the product shows ${tiebroken} tie-break win(s)` },
+    { ok: settled + struckSettles === rec.settlesPosted, note: `posted ${rec.settlesPosted} settle(s), the product shows ${settled} settled win(s)${note(struckSettles, "settle(s)")}` },
+    { ok: tiebroken + struckTiebreaks === rec.tiebreaksPosted, note: `posted ${rec.tiebreaksPosted} tie-break(s), the product shows ${tiebroken} tie-break win(s)${note(struckTiebreaks, "tie-break(s)")}` },
   ]);
 }
 

@@ -45,7 +45,7 @@ import { judgeTodayDefault, openFixtureUi, type DefaultFilterSeen } from "../bro
 import { completeStageUi, generateUi, judgeFoldBranch, type RailHooks, type StagePosition } from "../browser/pages/stage-rail.ts";
 import { readStandingsUi, type UiTable } from "../browser/pages/standings.ts";
 import { SETTLE_METHODS } from "@seazn/engine/core";
-import { isOrganiserOnlyEvent } from "../../../../apps/web/src/lib/organiser-only-events.ts";
+import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../../apps/web/src/lib/organiser-only-events.ts";
 import { noPadReason } from "../pad-sports.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
 import type { MatrixPadAdapter } from "../pads/types.ts";
@@ -152,7 +152,7 @@ export class ConsoleVoidUnproven extends Error {
   }
 }
 
-/** An organiser-only event (the PRODUCT's isOrganiserOnlyEvent) that no console control writes, or whose payload the
+/** An organiser-only CORE event (the PRODUCT's isOrganiserOnlyEvent) that no console control writes, or whose payload the
  *  control cannot be given. Refused by name BEFORE anything of the stream is driven or posted (W2a Task 14 Step 8): the
  *  scorer's pad never authors these (X-ST-2), and a stream half-played to the point where the organiser's act cannot
  *  be made would only leave a held fixture behind and a refusal that names nothing. */
@@ -216,13 +216,21 @@ function organiserActOf(event: StreamEvent): OrganiserAct {
   return { action, by: p.by, reason: p.reason as ForfeitReason };
 }
 
-/** The stream cut at every organiser-only event (isOrganiserOnlyEvent): the scorer's events between, each organiser
- *  event alone. An organiser act with no console control is refused here, before any segment is driven. */
+/** D-P3 (phase 3 review I-1): a SPORT's forfeit value (the product's ORGANISER_ONLY_SPORT_EVENTS, D-O1: boardgame.result
+ *  method forfeit / double_forfeit) is organiser-only but is not a console control. The organiser's console mounts the
+ *  pad with `canOrganise`, whose dock offers the sport's own forfeit chips (pad-host.tsx dockFor, skins/boardgame.tsx),
+ *  and this driver's session is the organiser's. So the event rides the pad with the scorer's events (or http, for a
+ *  sport with no pad adapter): the real path today, not a refusal. Keyed on the product's own table, no second list. */
+const padAuthored = (event: StreamEvent): boolean => Object.hasOwn(ORGANISER_ONLY_SPORT_EVENTS, event.type);
+
+/** The stream cut at every organiser-only event (isOrganiserOnlyEvent) that a console control writes: the scorer's
+ *  events between (a sport's forfeit value among them, see padAuthored), each organiser event alone. An organiser act
+ *  with no console control is refused here, before any segment is driven. */
 function segmentStream(events: readonly StreamEvent[]): Segment[] {
   const out: Segment[] = [];
   let run: StreamEvent[] = [];
   for (const event of events) {
-    if (!isOrganiserOnlyEvent(event.type, event.payload)) { run.push(event); continue; }
+    if (!isOrganiserOnlyEvent(event.type, event.payload) || padAuthored(event)) { run.push(event); continue; }
     const act = organiserActOf(event);
     if (run.length > 0) out.push({ kind: "scorer", events: run });
     run = [];
@@ -716,6 +724,9 @@ export class BrowserDriver implements OrganiserDriver {
 
   /** The setup filler this driver ran, by name (mixed.ts FILLER). */
   get fillers(): Readonly<Partial<Record<FillerName, number>>> { return this.#ledger.fillers(); }
+
+  /** The path each invoked action type took, counted (mixed.ts MixedLedger.paths). */
+  get paths(): ReturnType<MixedLedger["paths"]> { return this.#ledger.paths(); }
 
   /** Filler (W1d Task 14, item 15c): dates a fixture NOW, always HTTP — the date is the precondition of a match
    *  day, not the act under test. The fixture's number is kept per division: those are the rows the run sheet's
