@@ -1,11 +1,12 @@
 import type { PublicExternalPlay } from "@/server/external-play/public-view";
-import { playUrlForStatus } from "@/server/external-play/public-view";
 
 type Msg = (key: string, vars?: Record<string, string | number>) => string;
 
 /**
  * Player-facing online-play strip for the public fixture page.
- * Ready/live → Play on Lichess; pending → wait copy; needs_organiser → wait for organiser.
+ * pending → wait copy; needs_organiser → wait for organiser; anything else →
+ * nothing. There is no "Play on Lichess" link: D3 deleted the lichess.org
+ * mode, and the game is played on the in-page board (T14's surfaces).
  */
 export function ExternalPlayCta({
   externalPlay,
@@ -16,24 +17,6 @@ export function ExternalPlayCta({
   scheduledLabel: string | null;
   msg: Msg;
 }) {
-  const playUrl = playUrlForStatus(externalPlay);
-
-  if (playUrl) {
-    return (
-      <p className="mb-4">
-        <a
-          data-testid="external-play-cta"
-          href={playUrl}
-          target="_blank"
-          rel="noopener"
-          className="inline-flex min-h-11 items-center rounded-full bg-accent px-5 text-sm font-semibold text-accent-ink shadow-sm transition hover:opacity-90"
-        >
-          {msg("externalPlay.playOnLichess")}
-        </a>
-      </p>
-    );
-  }
-
   if (externalPlay.status === "pending") {
     return (
       <p
@@ -48,13 +31,15 @@ export function ExternalPlayCta({
   }
 
   if (externalPlay.status === "needs_organiser") {
-    const delay = externalPlay.lastError === "delay_unsupported";
+    // The reason stays off the public page: it lives in last_error, which is
+    // operator text. A legacy delay clock no longer reaches here at all (the
+    // guard treats its division as not online).
     return (
       <p
         data-testid="external-play-needs-organiser"
         className="mb-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900"
       >
-        {msg(delay ? "externalPlay.reason.delayUnsupported" : "externalPlay.needsOrganiser")}
+        {msg("externalPlay.needsOrganiser")}
       </p>
     );
   }

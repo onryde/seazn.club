@@ -1320,7 +1320,12 @@ export async function getPublicFixture(
     // v4 (W2b Task 13, review M-1): the document gained the forfeit tag and
     // sentence and the set sports' credited summary; a v3 entry would show a
     // walkover as a bare "Forfeited" over a played 0 — 0.
-    ["pub-fixture-v4", fixtureId],
+    //
+    // v5 (chess T9, 2026-10-09; renumbered over W2b's v4 at the 2026-10-13
+    // rebase): `externalPlay` is `{ status }` alone — the lichess.org play URLs
+    // went with D3, and `lastError` is operator text. A v4 entry written
+    // before the chess branch has no `externalPlay` at all.
+    ["pub-fixture-v5", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   );
   if (!detail) return null;

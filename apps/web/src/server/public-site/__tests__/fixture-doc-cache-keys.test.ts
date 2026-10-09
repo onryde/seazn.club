@@ -18,6 +18,9 @@
 // sports' credited summary), so an entry built before the deploy would show a
 // walkover as "Forfeited" with a played 0 — 0 for its whole window. Both names
 // move again: Redis `pub:v1:fixture:v3:{id}`, Next `["pub-fixture-v4", id]`.
+//     → `["pub-fixture-v5", id]` (chess T9, 2026-10-09; renumbered over W2b's
+//     `-v4` at the 2026-10-13 rebase): `externalPlay` is `{ status }` alone
+//     now; a `-v4` entry has no `externalPlay` field at all.
 //
 // The Redis READER's key is pinned here as a literal — the same literal the
 // invalidator suites (`hub-cache-invalidation`, `score-revalidate-in-request`,
@@ -75,10 +78,10 @@ describe("the public fixture document's cache names (v3/v4, W2b T13 M-1)", () =>
     for (const old of [`pub:v1:fixture:${FIXTURE_ID}`, `pub:v1:fixture:v2:${FIXTURE_ID}`]) expect(probe.gets).not.toContain(old);
   });
 
-  it("getPublicFixture caches the page's document under [pub-fixture-v4, id]", async () => {
+  it("getPublicFixture caches the page's document under [pub-fixture-v5, id]", async () => {
     const out = await getPublicFixture("org", "comp", "div", FIXTURE_ID);
     expect(out?.fixture).toEqual({ id: FIXTURE_ID });
     const fixtureEntries = probe.keyParts.filter((parts) => parts[0]?.startsWith("pub-fixture"));
-    expect(fixtureEntries).toEqual([["pub-fixture-v4", FIXTURE_ID]]);
+    expect(fixtureEntries).toEqual([["pub-fixture-v5", FIXTURE_ID]]);
   });
 });
