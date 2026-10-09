@@ -842,7 +842,8 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
     if (level) {
       home = draw;
       away = draw;
-    } else if (outcome?.kind === "win") {
+    } else if (outcome?.kind === "win" || outcome?.kind === "award") {
+      // W2b (BG-WO-1, X-WO-1): a forfeit is an `award` since W2b and reads the credited 1-0, as the `win` it was.
       const winnerHome = outcome.winner === state.entrants.home;
       home = winnerHome ? win : loss;
       away = winnerHome ? loss : win;

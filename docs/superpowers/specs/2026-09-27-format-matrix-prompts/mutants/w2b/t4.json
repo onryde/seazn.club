@@ -687,5 +687,20 @@
         "name": "C-5: a legacy award with no reason"
       }
     ]
+  },
+  {
+    "id": "bg-headline-award",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "} else if (outcome?.kind === \"win\" || outcome?.kind === \"award\") {",
+    "replace": "} else if (outcome?.kind === \"win\") {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "BG-WO-1: a chess forfeit's headline reads the credited 1-0"
+      }
+    ]
   }
 ]

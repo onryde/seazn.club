@@ -422,6 +422,20 @@ describe("X-WO-1: one credited score — the goal sports' headline shows it (spe
     }
     expect(checked).toBe(3);
   });
+
+  it("BG-WO-1: a chess forfeit's headline reads the credited 1-0, before and after the start (FIDE Laws 6.7.1)", () => {
+    // Before W2b a chess forfeit folded to `win{method:"forfeit"}` and the headline showed the 1-0; W2b unified it on
+    // `award`, which must read the same.
+    const m = mod("boardgame");
+    const cfg = parsed("boardgame");
+    const l = defaultLineupPair(m.positions);
+    const wo = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: H, reason: "walkover" })]);
+    expect(m.summary(wo.state as never).headline, "walkover by H").toBe("0 — 1");
+    const rt = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.start"), ev(2, "core.forfeit", { by: A, reason: "retired" })]);
+    expect(m.summary(rt.state as never).headline, "retirement by A").toBe("1 — 0");
+    const dw = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: "both", reason: "walkover" })]);
+    expect(m.summary(dw.state as never).headline, "double walkover: nobody scores").toBe("0 — 0");
+  });
 });
 
 describe("X-RS-1: every arbitraryEvent forfeit is one the phase guard admits (spec §5.1 D3)", () => {
