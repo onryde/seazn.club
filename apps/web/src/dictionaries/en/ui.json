@@ -3921,6 +3921,7 @@
   "engineError.TIEBREAK_NOT_APPLICABLE": "A tie-break can only follow a drawn knockout game.",
   "engineError.LEVEL_RESULT_IN_BRACKET": "Enter the winner — a knockout match can't end level.",
   "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled": "Settle the match or record its decider before finalizing — a knockout match can't end level.",
+  "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn": "That side has withdrawn — choose the other side.",
   "engineError.LEVEL_RESULT_SEATED": "Something went wrong placing this result. We've been notified.",
   "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS": "These groups have played different numbers of games, so their standings can't be compared yet.",
   "scoring.position.set": "Set",

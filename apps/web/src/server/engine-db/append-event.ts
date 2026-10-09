@@ -15,6 +15,7 @@ import {
   type StageKind,
 } from "@seazn/engine/core";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
+import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
@@ -332,7 +333,7 @@ export async function appendEventInTx(
       if (w?.status === "withdrawn") {
         throw new EngineError("SETTLE_NOT_APPLICABLE", "that entrant has withdrawn — settle for the remaining entrant", {
           fixtureId,
-          reason: "withdrawn",
+          reason: SETTLE_REFUSAL_REASON.withdrawn,
           winner,
         });
       }

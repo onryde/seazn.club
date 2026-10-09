@@ -34,6 +34,7 @@ import type { TIEBREAK_RUNGS as ENGINE_TIEBREAK_RUNGS } from "@seazn/engine/spor
 import { swatchName } from "@/lib/brand-palette";
 import { interpolate } from "@/lib/i18n-runtime";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
+import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { NEXT_MATCH_STARTED_CODE, ROUND_CODE_KEYS, nextMatchLabel, nextMatchRefOf } from "@/lib/next-match-started";
 
 export type WicketKind =
@@ -1309,6 +1310,10 @@ export const ENGINE_ERROR_REASON_KEY: Partial<Record<EngineErrorCode, Readonly<R
   // The generic-draw reason keeps the code's own "Enter the winner" copy.
   LEVEL_RESULT_IN_BRACKET: {
     [LEVEL_RESULT_REASON.finalizeUnsettled]: "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled",
+  },
+  // W2a ruling D-R8: a settle or a decider naming a withdrawn winner — the code's own copy says "isn't level".
+  SETTLE_NOT_APPLICABLE: {
+    [SETTLE_REFUSAL_REASON.withdrawn]: "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn",
   },
 };
 

@@ -6,11 +6,17 @@
 // Ruling D-R7: the held decider must not seat the withdrawn entrant by the OTHER door either — a scorer recording the
 // decider event itself (`boardgame.tiebreak {winner}`) is refused exactly as C17 refuses the settle.
 import { randomUUID } from "node:crypto";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { BRACKET_KINDS, deciderPending, type StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { refusalText } from "@/components/v2/scorepad/refusal-copy";
+import { sessionTransport } from "@/components/v2/scorepad/transport";
+import enDict from "@/dictionaries/en/ui.json";
+import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { sql } from "@/lib/db";
+import { scoringErrorText, type MsgFn } from "@/lib/scoring-vocab";
+import { v1 } from "@/server/api-v1/http";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { scoreEvent } from "@/server/usecases/scoring";
@@ -265,5 +271,61 @@ describe.skipIf(!HAS_DB)("D-R7: a held decider cannot seat a withdrawn entrant t
     await post(scorer, t.id, "boardgame.tiebreak", DECIDER_EVENT_PAYLOADS["boardgame.tiebreak"]!(t.away));
     expect((await row(t.id)).status).toBe("decided");
     expect(await seated(t.next!)).toEqual([t.away]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("D-R8: the withdrawn-winner refusal reaches both surfaces in its own words", () => {
+  const en = enDict as Record<string, string>;
+  const m: MsgFn = (k) => en[k]!;
+  it("D-R8: the REAL refusal (a scorer's tie-break, the organiser's settle) crosses the v1 envelope with reason withdrawn and reads as the withdrawn copy on the console (apiV1 → scoringErrorText) and on the pad (transport → refusalText)", async () => {
+    const withdrawn = en["engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn"];
+    expect(typeof withdrawn === "string" && withdrawn.length > 0, "the en copy exists").toBe(true);
+    expect(withdrawn).not.toBe(en["engineError.SETTLE_NOT_APPLICABLE"]);
+    const t = await started("boardgame", "knockout", "classical");
+    await DECIDER_DRIVERS.boardgame!(t.auth, t.id);
+    await withdrawEntrantCascade(t.auth, t.away);
+    const refusals = [
+      { label: "scorer tie-break", auth: await scorerOn(t.auth.orgId, t.id), type: "boardgame.tiebreak", payload: DECIDER_EVENT_PAYLOADS["boardgame.tiebreak"]!(t.away) },
+      { label: "organiser settle", auth: t.auth, type: "core.settle", payload: { winner: t.away, method: "organiser" } },
+    ];
+    let checked = 0;
+    for (const r of refusals) {
+      const err = await post(r.auth, t.id, r.type, r.payload).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err, r.label).toMatchObject({ code: "SETTLE_NOT_APPLICABLE" });
+      const wire = () =>
+        v1(async () => {
+          throw err;
+        });
+      const res = await wire();
+      expect(res.status, r.label).toBe(409);
+      expect(((await res.json()) as { error: unknown }).error, r.label).toMatchObject({ code: "SETTLE_NOT_APPLICABLE", reason: "withdrawn" });
+      // The console's settle dialog (fixture-console.tsx `post`): apiV1 → ApiV1Error → scoringErrorText(…, err.extra).
+      vi.stubGlobal("fetch", async () => wire());
+      try {
+        const caught = await apiV1("/api/v1/fixtures/x/events", { method: "POST", json: {} }).then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(caught, r.label).toBeInstanceOf(ApiV1Error);
+        const e = caught as ApiV1Error;
+        expect(scoringErrorText(e.code, e.message, m, "score.failed", e.extra), r.label).toBe(withdrawn);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      // The pad's tie-break path: the session transport → the pipeline's rejection → pad-host's refusalText.
+      const outcome = await sessionTransport({ fetchFn: (async () => wire()) as typeof fetch }).appendEvent(t.id, {
+        expected_seq: 0,
+        type: r.type,
+        payload: {},
+        idempotency_key: "k",
+      });
+      expect(outcome, r.label).toMatchObject({ kind: "rejected", code: "SETTLE_NOT_APPLICABLE", reason: "withdrawn" });
+      expect(refusalText(outcome as never, m), r.label).toBe(withdrawn);
+      checked++;
+    }
+    expect(checked).toBe(refusals.length);
   });
 });

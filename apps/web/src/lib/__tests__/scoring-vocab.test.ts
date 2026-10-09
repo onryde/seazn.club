@@ -951,6 +951,26 @@ describe("scoring-vocab covers what the engine declares", () => {
     expect(checked).toBe(4);
   });
 
+  it("D-R8: SETTLE_NOT_APPLICABLE for a withdrawn winner says so in every locale; every other settle refusal keeps the code's own copy", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const m: MsgFn = (k) => dict[k]!;
+      const generic = dict["engineError.SETTLE_NOT_APPLICABLE"];
+      const withdrawn = dict["engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn"];
+      expect(typeof withdrawn === "string" && withdrawn.length > 0, `${locale} has the copy`).toBe(true);
+      expect(withdrawn, `${locale}: two refusals, two sentences`).not.toBe(generic);
+      expect(engineErrorLabel("SETTLE_NOT_APPLICABLE", m, "withdrawn"), locale).toBe(withdrawn);
+      // The console's settle dialog and the device pad resolve through scoringErrorText with the envelope's extras.
+      expect(scoringErrorText("SETTLE_NOT_APPLICABLE", "raw", m, "score.failed", { reason: "withdrawn" }), locale).toBe(withdrawn);
+      // The positive pair: no reason, the not-a-bracket reason, or an unknown one reads the code's own copy.
+      expect(engineErrorLabel("SETTLE_NOT_APPLICABLE", m), locale).toBe(generic);
+      expect(engineErrorLabel("SETTLE_NOT_APPLICABLE", m, "not_bracket"), locale).toBe(generic);
+      expect(scoringErrorText("SETTLE_NOT_APPLICABLE", "raw", m, "score.failed", {}), locale).toBe(generic);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("resolves the new W4a vocabulary against the real en dictionary", () => {
     expect(eventLabel("tabletennis.expedite.start", en)).toBe("Expedite system");
     expect(eventLabel("tennis.interruption", en)).toBe("Interruption");
