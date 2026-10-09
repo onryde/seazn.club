@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createBoardApi } from "../lichess/board-api";
+import { LICHESS_STATUSES } from "../types";
 import { LICHESS_TIMEOUT_MS } from "../window";
 
 const NOT_YOUR_TURN = '{"error":"Not your turn, or game already over"}';   // M6
@@ -120,7 +121,8 @@ describe("createChallengeToUser — White's token challenges Black's username", 
     })).toEqual({ ok: false, code: "unavailable", raw: BAD_LIMIT });
   });
 
-  // M3: four creates in ~1s, then every subsequent create returned this.
+  // M3 (corrected 2026-10-09): five creates in ~4s, then the next ones returned
+  // this. lila: 5 creates per minute per challenger, 500 per 10 min per IP.
   it("429 is rate_limited — T4's queue reads this code to back off", async () => {
     const f = vi.fn(async () => res(RATE_LIMITED, 429));
     expect(await api(f as unknown as typeof fetch).createChallengeToUser({
@@ -128,20 +130,24 @@ describe("createChallengeToUser — White's token challenges Black's username", 
     })).toEqual({ ok: false, code: "rate_limited", raw: RATE_LIMITED });
   });
 
-  it("a 200 with no id is unavailable, not a created game with an undefined id", async () => {
+  // Fix round 1 (T3-I2): Lichess ANSWERED 2xx, so it may well have created
+  // the challenge — the body just did not tell us its id. That is not a
+  // definite failure, and releasing the claim on it is how a second challenge
+  // gets created.
+  it("a 200 with no id is outcome_unknown, not a created game with an undefined id", async () => {
     const f = vi.fn(async () => res('{"ok":true}', 200));
     expect(await api(f as unknown as typeof fetch).createChallengeToUser({
       whiteToken: "t", blackUsername: "Ada", limitSeconds: 300, incrementSeconds: 0,
-    })).toMatchObject({ ok: false, code: "unavailable" });
+    })).toEqual({ ok: false, code: "outcome_unknown", raw: '{"ok":true}' });
   });
 
   // Added beyond the brief: the `id === ""` guard in createChallengeToUser had
   // no test, and mutating it away stayed green.
-  it("a 200 with an EMPTY id is unavailable — an empty challenge id is no game", async () => {
+  it("a 200 with an EMPTY id is outcome_unknown — an empty challenge id is no id", async () => {
     const f = vi.fn(async () => res('{"id":""}', 200));
     expect(await api(f as unknown as typeof fetch).createChallengeToUser({
       whiteToken: "t", blackUsername: "Ada", limitSeconds: 300, incrementSeconds: 0,
-    })).toEqual({ ok: false, code: "unavailable", raw: '{"id":""}' });
+    })).toEqual({ ok: false, code: "outcome_unknown", raw: '{"id":""}' });
   });
 
   // Added beyond the brief: the module's own invariant is "never an uncaught
@@ -149,16 +155,75 @@ describe("createChallengeToUser — White's token challenges Black's username", 
   // object (a proxy's HTML page, or a literal `null`) would otherwise throw
   // out of JSON.parse or out of `null.id` — after a challenge may already
   // exist at Lichess.
-  it("a 200 whose body is not a JSON object is unavailable, never an uncaught throw", async () => {
+  it("a 200 whose body is not a JSON object is outcome_unknown, never an uncaught throw", async () => {
     let checked = 0;
     for (const body of ["<html>bad gateway</html>", "null", ""]) {
       const f = vi.fn(async () => res(body, 200));
       expect(await api(f as unknown as typeof fetch).createChallengeToUser({
         whiteToken: "t", blackUsername: "Ada", limitSeconds: 300, incrementSeconds: 0,
-      }), JSON.stringify(body)).toEqual({ ok: false, code: "unavailable", raw: body });
+      }), JSON.stringify(body)).toEqual({ ok: false, code: "outcome_unknown", raw: body });
       checked++;
     }
     expect(checked).toBe(3);
+  });
+
+  // Fix round 1 (T3-I2). A 5xx can come from a proxy AFTER lila committed the
+  // challenge, so it is not a definite refusal. Synthetic bodies: no 5xx was
+  // measured.
+  it("a 5xx on create is outcome_unknown, carrying the raw body", async () => {
+    let checked = 0;
+    for (const status of [500, 502, 503, 504]) {
+      const body = `upstream ${status}`;
+      const f = vi.fn(async () => res(body, status));
+      expect(await api(f as unknown as typeof fetch).createChallengeToUser({
+        whiteToken: "t", blackUsername: "Ada", limitSeconds: 300, incrementSeconds: 0,
+      }), String(status)).toEqual({ ok: false, code: "outcome_unknown", raw: body });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  // The 10s timeout fires while lila may still be creating; a network error
+  // can land after the request was sent. Neither says nothing was created.
+  it("a thrown fetch on create (network, or the timeout firing) is outcome_unknown", async () => {
+    let checked = 0;
+    for (const thrown of [
+      new Error("socket hang up"),
+      // What AbortSignal.timeout's abort surfaces as from fetch.
+      new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+    ]) {
+      const f = vi.fn(async () => { throw thrown; });
+      expect(await api(f as unknown as typeof fetch).createChallengeToUser({
+        whiteToken: "t", blackUsername: "Ada", limitSeconds: 300, incrementSeconds: 0,
+      }), thrown.name).toEqual({ ok: false, code: "outcome_unknown", raw: "" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // The other side of the split: a 4xx is lila REFUSING the request, so
+  // nothing was created and the claim may be released. lila answers a failed
+  // create with `BadRequest(jsonError(err))` (Challenge.scala apiCreate, e.g.
+  // "No such user: <name>") — the body below is that shape, synthetic.
+  it("a 4xx on create stays a DEFINITE code, never outcome_unknown", async () => {
+    const cases: Array<[number, string, string]> = [
+      [400, '{"error":"No such user: Ada"}', "unavailable"],
+      [400, BAD_LIMIT, "unavailable"],
+      [404, "", "unavailable"],
+      [401, "", "unauthorized"],
+      [403, "", "unauthorized"],
+      [429, RATE_LIMITED, "rate_limited"],
+    ];
+    let checked = 0;
+    for (const [status, body, code] of cases) {
+      const f = vi.fn(async () => res(body, status));
+      expect(await api(f as unknown as typeof fetch).createChallengeToUser({
+        whiteToken: "t", blackUsername: "Ada", limitSeconds: 300, incrementSeconds: 0,
+      }), `${status} ${body}`).toEqual({ ok: false, code, raw: body });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    expect(checked).toBeGreaterThan(0);
   });
 });
 
@@ -316,8 +381,9 @@ describe("exportGame — the reconcile read (M10, M11)", () => {
     expect(new Headers(init.headers).has("authorization")).toBe(false);
   });
 
-  // Enumerated from the measured statuses plus the ones the OpenAPI declares;
-  // T12 owns the mapping to our events, this only proves none is lost here.
+  // Winner pass-through on representative rows. COMPLETENESS of the status
+  // list is the sweep below, derived from the recorded OpenAPI enum; T12 owns
+  // the mapping to our events, this only proves none is lost here.
   it.each([
     ["mate", "white"], ["resign", "black"], ["outoftime", "black"],
     ["draw", null], ["stalemate", null], ["aborted", null],
@@ -334,10 +400,80 @@ describe("exportGame — the reconcile read (M10, M11)", () => {
   });
 
   it("a body with no id or no status is null, not a snapshot with undefined fields", async () => {
-    for (const body of ['{"status":"mate"}', '{"id":"g"}', "{}"]) {
+    let checked = 0;
+    for (const body of [
+      '{"status":"mate"}', '{"id":"g"}', "{}",
+      // A status that is not a string at all is a malformed body, not a new
+      // status: there is no name to show an organiser.
+      '{"id":"g","status":30}', '{"id":"g","status":null}',
+    ]) {
       const f = vi.fn(async () => res(body, 200));
       expect(await api(f as unknown as typeof fetch).exportGame("g"), body).toBeNull();
+      checked++;
     }
+    expect(checked).toBe(5);
+  });
+
+  // Fix round 1 (T3-I1). The expected list is READ from the recorded OpenAPI
+  // schema (lichess-org/api doc/specs/schemas/GameStatusName.yaml at 59ebacb,
+  // byte-identical copy in __fixtures__/lichess), never from our own type.
+  // scalachess core/src/main/scala/Status.scala at 2ab0a40 declares the same
+  // 14 cases. A parse that drops a line reds the length pin.
+  const OPENAPI_STATUSES = (() => {
+    const text = raw("openapi-GameStatusName.yaml");
+    const list = text.slice(text.indexOf("enum:"));
+    return [...list.matchAll(/^\s+-\s+(\S+)\s*$/gm)].map((m) => m[1]!);
+  })();
+
+  it("the recorded OpenAPI enum parses to its 14 statuses", () => {
+    expect(OPENAPI_STATUSES.length).toBeGreaterThan(0);
+    expect(OPENAPI_STATUSES.length).toBe(14);
+    expect(new Set(OPENAPI_STATUSES).size).toBe(OPENAPI_STATUSES.length);
+  });
+
+  it("our status list is EXACTLY the OpenAPI enum — nothing missing, nothing invented", () => {
+    expect([...LICHESS_STATUSES].sort()).toEqual([...OPENAPI_STATUSES].sort());
+  });
+
+  it("every status Lichess declares is carried through as itself, never as unrecognised", async () => {
+    let checked = 0;
+    for (const status of OPENAPI_STATUSES) {
+      const f = vi.fn(async () => res(JSON.stringify({
+        id: "g", status, moves: "", clock: { initial: 180, increment: 0 },
+      }), 200));
+      const snap = await api(f as unknown as typeof fetch).exportGame("g");
+      expect(snap, status).not.toBeNull();
+      expect(snap!.status, status).toBe(status);
+      expect(snap, status).not.toHaveProperty("rawStatus");
+      checked++;
+    }
+    expect(checked, "the status sweep checked nothing").toBe(OPENAPI_STATUSES.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  // The ruling: an unrecognised status is an explicit outcome, not a silent
+  // pass and not null (null means "no game yet / retry", which would loop a
+  // reconcile forever on a game Lichess considers real). T12 routes it.
+  it("a status Lichess has not declared is explicitly unrecognised, keeping the raw name", async () => {
+    let checked = 0;
+    for (const rawStatus of ["someFutureStatus", "Mate", ""]) {
+      const f = vi.fn(async () => res(JSON.stringify({
+        id: "g", status: rawStatus, winner: "white", moves: "e4 e5",
+        clocks: [18000, 18000], clock: { initial: 180, increment: 2 },
+      }), 200));
+      const snap = await api(f as unknown as typeof fetch).exportGame("g");
+      expect(snap, JSON.stringify(rawStatus)).toEqual({
+        gameId: "g", status: "unrecognised", rawStatus, winner: "white",
+        movesSan: ["e4", "e5"], whiteMs: 180000, blackMs: 180000, increment: 2,
+      });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("our 'unrecognised' marker cannot collide with a name Lichess declares", () => {
+    expect(OPENAPI_STATUSES.length).toBeGreaterThan(0);
+    expect(OPENAPI_STATUSES).not.toContain("unrecognised");
   });
 
   // Added beyond the brief, for the same invariant as the create case above:

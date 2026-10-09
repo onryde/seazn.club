@@ -66,3 +66,17 @@ Three consequences:
   `delayKeepsFirstMoves = 5` in `modules/game/src/main/PgnDump.scala`;
   `delayMoves = !trusted` in `app/controllers/Game.scala`) — read from source
   at the same commit, not measured. At two plies nothing was withheld here.
+
+## `openapi-GameStatusName.yaml` — the status list, recorded from source
+
+A byte-identical copy of `doc/specs/schemas/GameStatusName.yaml` from
+lichess-org/api, fetched 2026-10-09 at repo HEAD `906d1a6e9` (the file was
+last changed in `59ebacb31`, 2025-08-12). It is NOT a measurement: it is the
+published schema for the `status` field of a game export. Its 14 names match
+the 14 cases of `enum Status` in scalachess
+`core/src/main/scala/Status.scala` at `2ab0a403d`, read the same day.
+
+`board-api.test.ts` parses this file for the expected list of statuses, so the
+completeness test never reads its answer out of `LICHESS_STATUSES` (the code
+under test). To refresh it, fetch the file again, replace this copy whole, and
+let the length pin and the exact-match test tell you what changed.
