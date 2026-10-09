@@ -11,7 +11,10 @@ const VOCABULARY_CHECK = "fixture_external_play_needs_reason_check";
 const COUPLING_CHECK = "fixture_external_play_check";
 const CONSENT_TOKEN_CHECK = "user_external_accounts_consent_token_check";
 const CONSENT_SCOPES_CHECK = "user_external_accounts_consent_scopes_check";
+const INVITE_CHECK = "fixture_external_play_invite_needs_open_round_check";
+const ROUND_OPEN_FK = "fixture_external_play_round_open_id_fkey";
 const CHECK_VIOLATION = "23514";
+const FK_VIOLATION = "23503";
 
 type Outcome =
   | { accepted: true; row: { status: string; needs_reason: string | null } }
@@ -133,14 +136,92 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", (
     })).toEqual({ accepted: true, row: { status: "accepted", needs_reason: null } });
   });
 
-  it("fixture_external_play has exactly the design §3 columns (V432)", async () => {
+  it("fixture_external_play has exactly the design §3 + D12 columns (V432)", async () => {
     expect(await columns("fixture_external_play")).toEqual([
       "black_emailed_at", "black_lichess_id", "challenge_id", "created_at", "expires_at",
-      "finished_at", "fixture_id", "last_error", "last_polled_at", "mint_claimed_at",
-      "needs_reason", "org_id", "provider", "scheduled_at_basis", "started_at", "status",
-      "updated_at", "url_black", "url_white", "video_override_at", "white_emailed_at",
-      "white_lichess_id", "white_side",
+      "finished_at", "fixture_id", "invited_at", "last_error", "last_polled_at",
+      "mint_claimed_at", "needs_reason", "org_id", "provider", "round_open_id",
+      "scheduled_at_basis", "started_at", "status", "updated_at", "url_black", "url_white",
+      "video_override_at", "white_emailed_at", "white_lichess_id", "white_side",
     ]);
+  });
+
+  /** One bridge row carrying an invite stamp, against the SAME real org +
+   *  fixture every other case uses, rolled back. `roundOpen` is either null,
+   *  a real opened-round id (created inside the transaction so it rolls back
+   *  too), or a syntactically valid id that names nothing. */
+  async function tryInvite(a: {
+    invitedAt: Date | null;
+    roundOpen: "none" | "real" | "dangling";
+  }): Promise<Outcome> {
+    const rollback = new Error("rollback");
+    let row: { status: string; needs_reason: string | null } | undefined;
+    try {
+      await sql.begin(async (tx) => {
+        let openId: string | null = null;
+        if (a.roundOpen === "real") {
+          const [stage] = await tx<{ stage_id: string; round_no: number }[]>`
+            select stage_id, round_no from fixtures where id = ${fixtureId}`;
+          const [owner] = await tx<{ user_id: string }[]>`
+            select user_id from org_members where org_id = ${orgId} limit 1`;
+          const [open] = await tx<{ id: string }[]>`
+            insert into stage_round_opens (stage_id, org_id, round_no, opened_by)
+            values (${stage!.stage_id}, ${orgId}, ${stage!.round_no}, ${owner!.user_id})
+            returning id`;
+          openId = open!.id;
+        } else if (a.roundOpen === "dangling") {
+          openId = randomUUID();
+        }
+        await tx`
+          insert into fixture_external_play
+            (fixture_id, org_id, status, scheduled_at_basis, round_open_id, invited_at)
+          values (${fixtureId}, ${orgId}, 'pending', now(), ${openId}, ${a.invitedAt})`;
+        row = { status: "pending", needs_reason: null };
+        throw rollback;
+      });
+    } catch (err) {
+      if (err === rollback && row) return { accepted: true, row };
+      const e = err as { code?: string; constraint_name?: string };
+      return { accepted: false, code: e.code, constraint: e.constraint_name };
+    }
+    throw new Error("transaction committed — the rollback sentinel never fired");
+  }
+
+  // D12, the invariant that matters: a fixture cannot be marked invited before
+  // its round is opened. The wrong answer differs from the right one by having
+  // sent a real email on a round that had not started.
+  it("refuses an invite stamp with no opened round", async () => {
+    expect(await tryInvite({ invitedAt: new Date(), roundOpen: "none" })).toEqual({
+      accepted: false, code: CHECK_VIOLATION, constraint: INVITE_CHECK,
+    });
+  });
+
+  it("refuses an invite stamp naming a round open that does not exist", async () => {
+    expect(await tryInvite({ invitedAt: new Date(), roundOpen: "dangling" })).toEqual({
+      accepted: false, code: FK_VIOLATION, constraint: ROUND_OPEN_FK,
+    });
+  });
+
+  it("accepts an invite stamp once the round is opened", async () => {
+    expect(await tryInvite({ invitedAt: new Date(), roundOpen: "real" })).toEqual({
+      accepted: true, row: { status: "pending", needs_reason: null },
+    });
+  });
+
+  // The empty case: the state every fixture is in before the organiser presses
+  // Open round. Neither column set, and that must stay legal.
+  it("accepts a bridge row with neither an open round nor an invite", async () => {
+    expect(await tryInvite({ invitedAt: null, roundOpen: "none" })).toEqual({
+      accepted: true, row: { status: "pending", needs_reason: null },
+    });
+  });
+
+  // And the other direction: a round opened but nobody invited yet is the state
+  // between the press and the send. An over-tight CHECK would refuse it.
+  it("accepts an opened round with no invite stamp yet", async () => {
+    expect(await tryInvite({ invitedAt: null, roundOpen: "real" })).toEqual({
+      accepted: true, row: { status: "pending", needs_reason: null },
+    });
   });
 
   // Design §3.6: a token revoked mid-match is NOT a no-show and must not be
