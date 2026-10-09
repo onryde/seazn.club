@@ -22,6 +22,7 @@ import {
   type RoomPhase,
 } from "@/server/external-play/window";
 import { defaultLichessAdapter } from "@/server/external-play/lichess/client";
+import { roundOpenFor } from "@/server/external-play/round-open";
 import type { ExternalPlayAdapter, ExternalPlayStatus, NeedsReason } from "@/server/external-play/types";
 import { verifyMatchRoomToken } from "@/server/usecases/match-room-token";
 import { stampFixtureCheckIn } from "@/server/usecases/me";
@@ -106,6 +107,13 @@ async function resolveWithSides(
   return player ? { player, home, away } : null;
 }
 
+/** D12: the organiser's open stamp for this fixture's round, or null when
+ *  nobody has opened it. Every window question in this file (phase, opensAt,
+ *  deadline, which check-ins count, the mint's expires_at) hangs off it. */
+async function openAnchor(fixtureId: string): Promise<Date | null> {
+  return (await roundOpenFor(sql, fixtureId))?.roundOpenedAt ?? null;
+}
+
 /** Check-in state for both sides, scoped by fixture_id AND the two resolved
  *  person ids. A side with no resolved `personId` (unrostered entrant, or a
  *  merge tombstone) can never have a row, so it is dropped from the `IN`
@@ -117,7 +125,11 @@ async function checkIns(
   f: OnlinePlayFixture,
   home: SidePlayer,
   away: SidePlayer,
+  anchor: Date | null,
 ): Promise<{ home: boolean; away: boolean }> {
+  // An unopened round has no window, so no check-in can count toward it —
+  // and one stamped during a PREVIOUS round's window must not either (D12).
+  if (anchor === null) return { home: false, away: false };
   const ids = [home.personId, away.personId].filter((p): p is string => p !== null);
   const rows =
     ids.length === 0
@@ -128,8 +140,8 @@ async function checkIns(
              and person_id in ${sql(ids)}`;
   const at = (p: string | null) => (p === null ? null : (rows.find((r) => r.person_id === p)?.checked_in_at ?? null));
   return {
-    home: checkInCounts(at(home.personId), f.scheduledAt),
-    away: checkInCounts(at(away.personId), f.scheduledAt),
+    home: checkInCounts(at(home.personId), anchor),
+    away: checkInCounts(at(away.personId), anchor),
   };
 }
 
@@ -140,11 +152,15 @@ async function buildView(
   f: OnlinePlayFixture,
   resolved: { player: SidePlayer; home: SidePlayer; away: SidePlayer },
   now: Date,
+  anchor: Date | null,
 ): Promise<MatchRoomView> {
   const { player, home, away } = resolved;
   const bridge = effectiveBridge(f);
-  const phase = roomPhase(now, f.scheduledAt);
-  const ci = await checkIns(f, home, away);
+  // D12: no open stamp ⇒ the round has not started, whatever the timetable
+  // says. The scheduled time is still what the player is SHOWN (opensAt and
+  // deadline below), as the estimate it is.
+  const phase: RoomPhase = anchor === null ? "before" : roomPhase(now, anchor);
+  const ci = await checkIns(f, home, away, anchor);
   const opponent = player.side === "home" ? away : home;
   const youCheckedIn = player.side === "home" ? ci.home : ci.away;
   const opponentCheckedIn = player.side === "home" ? ci.away : ci.home;
@@ -173,7 +189,7 @@ async function buildView(
     away.lichess !== null &&
     (!bridge || (bridge.status === "pending" && bridge.challenge_id === null));
 
-  const w = windowFor(f.scheduledAt);
+  const w = windowFor(anchor ?? f.scheduledAt);
   return {
     fixtureId: f.fixtureId,
     phase,
@@ -202,7 +218,7 @@ export async function readMatchRoom(
   if (!f) throw ROOM_NOT_FOUND();
   const resolved = await resolveWithSides(identity, f);
   if (!resolved) throw ROOM_NOT_FOUND();
-  return buildView(f, resolved, now ?? new Date());
+  return buildView(f, resolved, now ?? new Date(), await openAnchor(fixtureId));
 }
 
 /**
@@ -224,7 +240,11 @@ export async function checkInToMatchRoom(
   if (!resolved) throw ROOM_NOT_FOUND();
 
   const now = deps.now ?? new Date();
-  if (roomPhase(now, f.scheduledAt) !== "open") {
+  // D12: an unopened round refuses with the same 409 as a closed window —
+  // the player-facing distinction belongs in the view's state (T14), not in a
+  // second error code on a POST.
+  const anchor = await openAnchor(fixtureId);
+  if (anchor === null || roomPhase(now, anchor) !== "open") {
     throw new HttpError(409, "Check-in is closed for this match", "CHECK_IN_CLOSED");
   }
 
@@ -241,7 +261,7 @@ export async function checkInToMatchRoom(
   }
   await stampFixtureCheckIn(personId, f.fixtureId, f.orgId);
   await (deps.publish ?? publishExternalPlayLobby)(f.fixtureId);
-  await mintIfReady(f, deps);
+  await mintIfReady(f, deps, anchor);
   return readMatchRoom(identity, fixtureId, now);
 }
 
@@ -269,9 +289,12 @@ export async function checkInToMatchRoom(
 export async function mintIfReady(
   f: OnlinePlayFixture,
   deps: RoomDeps = {},
+  /** The round's open stamp (D12); read here when the caller has not. */
+  anchorIn?: Date | null,
 ): Promise<"minted" | "not_ready" | "busy" | "failed"> {
   const now = deps.now ?? new Date();
-  if (roomPhase(now, f.scheduledAt) !== "open") return "not_ready";
+  const anchor = anchorIn === undefined ? await openAnchor(f.fixtureId) : anchorIn;
+  if (anchor === null || roomPhase(now, anchor) !== "open") return "not_ready";
 
   // A bridge already past 'pending' (ready/live/finished/needs_organiser) is
   // simply nothing to do — never "busy" (nobody is contesting it) and never
@@ -284,7 +307,7 @@ export async function mintIfReady(
   if (known && known.status !== "pending") return "not_ready";
 
   const { home, away } = await loadSides(f);
-  const ci = await checkIns(f, home, away);
+  const ci = await checkIns(f, home, away, anchor);
   if (!ci.home || !ci.away || !home.lichess || !away.lichess) return "not_ready";
 
   await resetStaleBridge(f);
@@ -308,7 +331,7 @@ export async function mintIfReady(
   if (!wl || !bl) return "not_ready";
 
   const adapter = deps.adapter ?? defaultLichessAdapter();
-  const deadline = windowFor(f.scheduledAt).deadline;
+  const deadline = windowFor(anchor).deadline;
   try {
     const ch = await adapter.createOpenChallenge({
       // Outside any transaction — see this function's doc comment.
