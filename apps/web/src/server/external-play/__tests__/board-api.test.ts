@@ -123,7 +123,7 @@ describe("createChallengeToUser — White's token challenges Black's username", 
 
   // M3 (corrected 2026-10-09): five creates in ~4s, then the next ones returned
   // this. lila: 5 creates per minute per challenger, 500 per 10 min per IP.
-  it("429 is rate_limited — T4's queue reads this code to back off", async () => {
+  it("429 is rate_limited — the create job turns it into T4's CreationRateLimited hold", async () => {
     const f = vi.fn(async () => res(RATE_LIMITED, 429));
     expect(await api(f as unknown as typeof fetch).createChallengeToUser({
       whiteToken: "t", blackUsername: "Ada", limitSeconds: 300, incrementSeconds: 0,
