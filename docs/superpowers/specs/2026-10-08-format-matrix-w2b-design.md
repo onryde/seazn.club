@@ -108,6 +108,7 @@ number then). `_INDEX.md` is not edited before W2a merges (rule 18).
 | W2b-UI-1 | Console: one dialog — who (Home / Away / Neither) → why (chips by phase) → credit preview → one specific Confirm. Wireframe in `.superpowers/brainstorm/51672-1791493602/content/forfeit-dialog.html` (gitignored; flow only). | "A" (against the session's recommendation B) |
 | W2b-UI-2 | Public: short tag where space is tight (`w/o`, `ret.`, `DQ`, `2× w/o`, `Aband. · DLS`, `Aband. · NR`; per locale), the full sentence as tooltip and accessible name and in the match centre. Wireframe `public-copy.html`. | "A" |
 | W2b-R12 | Legacy stages already complete that hold a V432-moved fixture: no reopen path; pre-ship count on staging and prod, stop and ask if non-zero (W2a item 5). | "A" |
+| W2b-R13 | `division_has_results` (quota slot) counts only results with a verdict: excludes `no_result` and `double_walkover` whatever the status; single walkover still counts. | "A" |
 | W2b-A1 | Approach 1: extend `core.forfeit`; strict schema, no legacy free-text mapping (owner: "we don't have any forfeit old data") — verified before ship (§5.4). | "1" |
 
 Wireframes are for flow and structure only (W2a owner ruling, 2026-10-08): the build applies house UI — v2
@@ -276,6 +277,12 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
   active result is `boardgame.result{double_forfeit}` to `forfeited` + `double_walkover`, then run the dead-seat
   cascade for each. Settled rows are untouched. The migration reports examined and changed counts; its test fails on
   zero examined (it seeds the row it expects). Prod count is probably 0.
+- **Billing: `division_has_results` (W2b-R13).** The quota-slot predicate (V355; W2a D-F4 for held `no_result`)
+  counts a fixture by status. W2b's statuses would silently move it: a cricket rain no-result becomes `decided` (R6)
+  and a double walkover `forfeited`. A W2b delta redefines it to exclude outcome kinds `no_result` and
+  `double_walkover` whatever the status; a single walkover still counts (as today). One test per outcome kind × status,
+  including a positive pair for each exclusion; reads in `division-slots.ts` and `admin-divisions.ts` keep calling the
+  SQL function, never a TypeScript copy. Rebase on W2a's final definition (D-F4) before writing the delta.
 - **Legacy completed stages holding a fixture (W2b-R12).** A stage already marked complete keeps `stages.status`
   when W2a's V432 moves one of its fixtures to `needs_decision` (stored flag, `competition.ts:679`, early return
   `:580`); W2a's V432 notice counts them (`complete_stages_holding_one`). W2b builds no reopen path: before ship, read
@@ -313,7 +320,7 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
 
 ## 6. The rules reference
 
-Appendix A lists the 52 rows (22 cross-sport, 30 per sport) to add at build; 7 new sport files (football, hockey,
+Appendix A lists the 53 rows (23 cross-sport, 30 per sport) to add at build; 7 new sport files (football, hockey,
 icehockey, volleyball, badminton, tabletennis, tennis). Ids are new and unique against the W2a seed (X-BR-1, X-BR-2,
 X-ST-1, X-ST-2, X-DR-1, BG-KO-1, BG-KO-2, CA-KO-1, CK-KO-1, GN-KO-1). X-BR-1's text is amended (W2b-R2), not
 renumbered. Each signed or deviation row ships with a proving test whose title contains its id
@@ -427,7 +434,7 @@ Format: `packages/engine/rules/README.md` on `feat/format-matrix-w2a`. Status `s
 `signed <_INDEX ruling number> 2026-10-08` when the rulings are folded (§10). `enforced at` and `proved by` are filled
 at build; a signed or deviation row ships only with a proving test whose title contains the id.
 
-52 rows: cross-sport.md 22, football.md 3, hockey.md 3, icehockey.md 3, volleyball.md 2, tabletennis.md 2, tennis.md 2, badminton.md 3, cricket.md 3, boardgame.md 3, carrom.md 3, generic.md 3.
+53 rows: cross-sport.md 23, football.md 3, hockey.md 3, icehockey.md 3, volleyball.md 2, tabletennis.md 2, tennis.md 2, badminton.md 3, cricket.md 3, boardgame.md 3, carrom.md 3, generic.md 3.
 
 ### `cross-sport.md`
 
@@ -455,6 +462,7 @@ at build; a signed or deviation row ships only with a proving test whose title c
 | X-PS-2 | A retirement, in-match DQ or abandon with a result counts as a match for both sides' players, W/L as decided; events already played stay credited. | product rule W2b-R9 | signed W2b-R9 2026-10-08 | — | — |
 | X-DE-1 | In double elimination any forfeit loser (walkover, withdrew, disqualified, retired) is out of the tournament: it never drops to the losers' bracket, its losers'-bracket opponent advances by walkover, and final ranks place it as eliminated in that round (seating and ranks agree). | product rule W2b-R11 | signed W2b-R11 2026-10-08 | — | — |
 | X-WD-5 | A withdrawn entrant is never seated on a loser edge; the seat is dead and its opponent advances by walkover. | product rule W2b-R8 (W2a D-G2) | signed W2b-R8 2026-10-08 | — | — |
+| X-BL-1 | A division's results for the quota slot exclude no-result and double-walkover fixtures; a single walkover counts. | product rule W2b-R13 | signed W2b-R13 2026-10-09 | — | — |
 
 ### `football.md (new)`
 
