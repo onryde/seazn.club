@@ -82,6 +82,7 @@ and no organiser has to fake a walkover to move a draw on.
 | Sanction/short-team endings (tennis default, badminton DQ, volleyball incomplete team, hockey below `strength.min`, M12b) | W2e | Sport mechanics; W2b supplies the credit they will use. |
 | Swiss: double walkover "not met" and bye-eligible (RB3-14, SW-M9), forfeits unplayed in Buchholz/SB (SW-L1) | W3 | W2b owns the outcome; W3 wires Swiss. |
 | RB2B-34 refuse bulk retroactive forfeit | W9 | Operational bulk action. |
+| All-or-nothing withdrawal cascade (CD-T13's W9 half; each step is its own `scoreEvent` tx today) | W9 | Ruling 101. W2b removes the known failing steps and proves every withdrawal path completes. |
 | A vacant title or third place after a double walkover in a final | W4 | With joint winners (RB2A-30); needs the final-ranks reader. **Handover**, W2b-R10. |
 | "Void last" offered after a forfeit (W1d observation) | Pad programme | Pad defect, noted only. |
 | A "replay from 0-0" reset for an abandoned match | unowned — gap | No wave has it; recorded so it is not assumed. |
@@ -111,6 +112,7 @@ number then). `_INDEX.md` is not edited before W2a merges (rule 18).
 | W2b-R12 | Legacy stages already complete that hold a V432-moved fixture: no reopen path; pre-ship count on staging and prod, stop and ask if non-zero (W2a item 5). | "A" |
 | W2b-R13 | `division_has_results` (quota slot) counts only results with a verdict: excludes `no_result` and `double_walkover` whatever the status; single walkover still counts. | "A" |
 | W2b-R14 | Chess tie-break pending (classical drawn, decider not played): a withdrawal walks the fixture over to the remaining side (`core.forfeit{reason:"withdrew"}` accepted in phase `tiebreak`), and an organiser may record a walkover when a player does not turn up for the tie-break games; the classical game stays a draw in stats (D-C6). Replaces W2a's interim hold (D-R1) and the pinned WRONG_PHASE forfeit in `tiebreak`. | "A" |
+| W2b-R15 (101) | Re-pin amendments accepted (byes, expunge flag, status keyed on the event, D-O1 entries removed); atomic withdrawal cascade stays W9 — W2b proves every withdrawal path in its truth run completes. | "Ok" (2026-10-09) |
 | W2b-A1 | Approach 1: extend `core.forfeit`; strict schema, no legacy free-text mapping (owner: "we don't have any forfeit old data") — verified before ship (§5.4). | "1" |
 
 Wireframes are for flow and structure only (W2a owner ruling, 2026-10-08): the build applies house UI — v2

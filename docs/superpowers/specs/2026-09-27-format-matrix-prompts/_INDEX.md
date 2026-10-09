@@ -1124,6 +1124,15 @@ Elsewhere the text is the controller's record.
     `core.forfeit` and the boardgame `live` walkover phase; amended 2026-10-09 with rulings 97–99 and the W2a
     hand-overs (D-G2, D-G3, D-P2, D-R1, D-F4). `docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md` §3.
 
+101. **W2b re-pin amendments and the atomic withdrawal** (2026-10-09, owner "Ok"). The spec's re-pin against main
+     `a99147bd0` is accepted: byes become `award{loser: null, reason: "bye"}` with today's credit; `core.abandon`
+     gains a cascade-only `expunge` flag so a table expunge never scores; a level bracket abandon keeps status
+     `abandoned` and `forfeited` stays keyed on the `core.forfeit` event; W2b removes the two chess `boardgame.result`
+     entries from the organiser-only list and rewrites its derivation. Making the withdrawal cascade one transaction
+     stays **W9** (CD-T13's all-or-nothing half); W2b removes the known partial-withdrawal failures and proves every
+     withdrawal path in its truth run completes. `docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md` §3,
+     §5.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
