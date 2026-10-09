@@ -7,7 +7,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
-import { upsertLichessLink } from "../external-accounts";
+import { PLAY_SCOPES, upsertLichessLink } from "../external-accounts";
 import { markExternalPlayReady, prepareExternalPlayWindow } from "../external-play";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -83,12 +83,14 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
     await upsertLichessLink(white.userId, {
       externalUserId: `w-${randomUUID().slice(0, 8)}`,
       username: "WhiteOnLichess",
-      accessToken: "white-tok",
+      scopes: [...PLAY_SCOPES],
+      token: "white-tok",
     });
     await upsertLichessLink(black.userId, {
       externalUserId: `b-${randomUUID().slice(0, 8)}`,
       username: "BlackOnLichess",
-      accessToken: "black-tok",
+      scopes: [...PLAY_SCOPES],
+      token: "black-tok",
     });
 
     const [home] = await createEntrants(owner, division.id, [
@@ -247,12 +249,14 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
     await upsertLichessLink(white.userId, {
       externalUserId: `w2-${randomUUID().slice(0, 8)}`,
       username: "W2L",
-      accessToken: "tok",
+      scopes: [...PLAY_SCOPES],
+      token: "tok",
     });
     await upsertLichessLink(black.userId, {
       externalUserId: `b2-${randomUUID().slice(0, 8)}`,
       username: "B2L",
-      accessToken: "tok",
+      scopes: [...PLAY_SCOPES],
+      token: "tok",
     });
     const [home] = await createEntrants(owner, division.id, [
       {

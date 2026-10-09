@@ -586,7 +586,7 @@ Test-type ledger: unit here; regression = raw-shape parse + 404; E2E via stub (T
 **Files:**
 - Create: `apps/web/src/server/external-play/pkce.ts`, test `apps/web/src/server/external-play/__tests__/pkce.test.ts`
 - Modify: `apps/web/src/lib/oauth.ts` (PR part), `apps/web/src/app/api/auth/lichess/route.ts`, `apps/web/src/app/api/auth/lichess/callback/route.ts`
-- Modify: `apps/web/src/server/usecases/external-accounts.ts` (drop `getLichessAccessToken`, token args)
+- Modify: `apps/web/src/server/usecases/external-accounts.ts` (drop `getLichessAccessToken`, token args) — SUPERSEDED 2026-10-09: the in-page-board design keeps the token and reinstates `getLichessAccessToken`; see `docs/superpowers/plans/2026-10-09-chess-in-page-board-and-camera.md` Task 2.
 - Modify: `apps/web/.env.example` (remove `LICHESS_CLIENT_SECRET`, add `# LICHESS_BASE_URL=` comment)
 - Modify: `apps/web/src/server/usecases/__tests__/external-accounts.test.ts` and every seeder calling `upsertLichessLink` with `accessToken` (escalate, happy-path, prepare, sync, online-play-enrollment tests) — drop the arg
 - Test: `apps/web/src/app/api/auth/lichess/__tests__/lichess-oauth-routes.test.ts` (create)
@@ -694,7 +694,7 @@ await fetch(LICHESS_TOKEN_URL, {
 
 then `upsertLichessLink(user.id, { externalUserId: account.id, username: account.username })`; redirect to `next ?? "/me?lichess=linked"`; `fail(reason)` redirects to `(next ?? "/me") + "?lichess=" + reason` (use `&` when `next` already has a query).
 
-`external-accounts.ts`: delete `getLichessAccessToken`; `upsertLichessLink` SQL inserts/updates only `external_user_id, username, updated_at`.
+`external-accounts.ts`: delete `getLichessAccessToken`; `upsertLichessLink` SQL inserts/updates only `external_user_id, username, updated_at`. SUPERSEDED 2026-10-09: the row now also carries `access_token_enc`, `scopes` and `consented_at`, and `getLichessAccessToken` is back (in-page-board plan, Task 2).
 
 - [ ] **Step 5: Run the two new files + `external-accounts.test.ts` — expect PASS.** Mutant: remove `code_challenge` param → start test fails.
 - [ ] **Step 6: Commit** — `fix(chess): Lichess OAuth uses PKCE, revokes the token, keeps identity only`.
@@ -1599,7 +1599,10 @@ export async function startLichessStub(port = 8799) {
 
 ### Task 16: Full gate, review loop, product walkthrough
 
-- [ ] **Step 1: Delete dead code and keys** — `grep -arn "CHALLENGE_TTL_MS\|markExternalPlayReady\|readExternalPlayLobby\|playUrlForStatus\|getLichessAccessToken\|listNeedsOrganiserExternalPlay\|externalPlay.lobby\|externalPlay.queue\|white_ready_at\|external_challenge_id\|LICHESS_CLIENT_SECRET" apps scripts db docs/superpowers/specs` must return nothing outside this plan/spec.
+- [ ] **Step 1: Delete dead code and keys** — `grep -arn "CHALLENGE_TTL_MS\|markExternalPlayReady\|readExternalPlayLobby\|playUrlForStatus\|listNeedsOrganiserExternalPlay\|externalPlay.lobby\|externalPlay.queue\|white_ready_at\|external_challenge_id\|LICHESS_CLIENT_SECRET" apps scripts db docs/superpowers/specs` must return nothing outside this plan/spec.
+  (`getLichessAccessToken` was removed from this list on 2026-10-09: the
+  2026-10-09 in-page-board design REVERSES the identity-only decision and
+  reinstates the function — see that plan's Task 2. Do not re-add it.)
 - [ ] **Step 2: Gates** (paste raw numbers):
   - `rtk proxy npm run typecheck` ⇒ exit 0.
   - `rtk proxy npm run lint` ⇒ `0 errors` (warnings not increased vs `origin/main`: run the same on a detached main worktree and compare).

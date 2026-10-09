@@ -4,7 +4,7 @@
 // (`seedBoardgameSport`/`seedOwner`/`seedPlayer`) — that file's fixture row
 // used the OLD V404-era `fixture_external_play` columns and is being
 // superseded task-by-task (R1); these helpers target the CURRENT schema.
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -15,7 +15,15 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
 import { startDivision } from "../schedule";
-import { upsertLichessLink } from "../external-accounts";
+import { PLAY_SCOPES, upsertLichessLink } from "../external-accounts";
+
+// A linked seed now seals a REAL token (T2), so `upsertLichessLink` needs
+// LICHESS_TOKEN_KEK in the process. Set here, once, rather than in each of the
+// fourteen suites that reach this helper — and only when nothing else set it,
+// so a suite that pins its own key (external-accounts.test.ts) still wins, and
+// a CI job or .env.local value is never overwritten. Test-only file; the
+// production path reads the key from the environment as always.
+process.env.LICHESS_TOKEN_KEK ??= randomBytes(32).toString("hex");
 
 export async function seedBoardgameSport(): Promise<void> {
   await sql`
@@ -60,7 +68,14 @@ export async function seedPlayer(
     insert into persons (org_id, full_name, user_id)
     values (${orgId}, ${name}, ${userId}) returning id`;
   if (linked) {
-    await upsertLichessLink(userId, { externalUserId: lichessId, username: lichessId });
+    // The link now carries a sealed token (T2), so every suite that seeds a
+    // linked player needs LICHESS_TOKEN_KEK in its process.
+    await upsertLichessLink(userId, {
+      externalUserId: lichessId,
+      username: lichessId,
+      scopes: [...PLAY_SCOPES],
+      token: `lio_seed_${lichessId}`,
+    });
   }
   return { userId, personId, lichessId };
 }

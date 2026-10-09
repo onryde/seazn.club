@@ -1,13 +1,18 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { upsertLichessLink } from "../external-accounts";
+import { PLAY_SCOPES, upsertLichessLink } from "../external-accounts";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+
+// A Lichess link now seals the player's token (T2 / design §3.1), so this
+// suite needs LICHESS_TOKEN_KEK in its process. Set only when nothing else
+// did, so a CI job or .env.local value still wins.
+process.env.LICHESS_TOKEN_KEK ??= randomBytes(32).toString("hex");
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -111,6 +116,8 @@ describe.skipIf(!HAS_DB)("onlinePlay division + enrollment gate", () => {
     await upsertLichessLink(owner.userId!, {
       externalUserId: `lid-${randomUUID().slice(0, 8)}`,
       username: "LinkedPlayer",
+      scopes: [...PLAY_SCOPES],
+      token: "lio_enrollment",
     });
 
     const created = await createEntrants(owner, division.id, [
