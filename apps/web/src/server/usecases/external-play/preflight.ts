@@ -171,13 +171,16 @@ export async function seatPlayer(
  *  (b) the game exists: T9 records the Lichess game id exactly when it
  *      creates one. A stale bridge (minted for an older timetable and never
  *      live) is not this fixture's game (`effectiveBridge`).
- *  (c) the board is being played: `in_play`. A board settled since is refused
- *      earlier as fixture_not_playable; a game created but not yet started is
- *      a seat still owed inside the window, which has closed. */
+ *  (c) the game is not over (amended, fix round 2): that bridge is `ready`
+ *      (T9's create + accept) or `live` (T10's first accepted move).
+ *      `finished` and `needs_organiser` refuse. NOT `fixtures.status`: an
+ *      online board stays `scheduled` for the whole game — `in_play` comes
+ *      only from `core.start`, which T12 emits as it writes the result — and
+ *      a board settled since is refused earlier as fixture_not_playable. */
 function isReentry(f: OnlinePlayFixture, player: SidePlayer): boolean {
   const game = effectiveBridge(f);
   if (game === null || game.challenge_id === null) return false; // (b)
-  if (f.fixtureStatus !== "in_play") return false; // (c)
+  if (game.status !== "ready" && game.status !== "live") return false; // (c)
   if (game.white_side === null || player.lichess === null) return false; // (a)
   const seatedAccount = game.white_side === player.side ? game.white_lichess_id : game.black_lichess_id;
   return seatedAccount === player.lichess.id; // (a)
