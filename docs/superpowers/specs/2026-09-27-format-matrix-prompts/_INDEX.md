@@ -1149,6 +1149,13 @@ Elsewhere the text is the controller's record.
      "we don't have any forfeit old data" stands in until Task 17, where the same four queries on both projects are a
      hard ship gate (ruling 102 Q7: any non-zero stops the ship).
 
+104. **No forfeit records on staging or production** (2026-10-09, owner: "no forfeit record"). The early pre-ship read
+     (ruling 103) is answered by the owner: zero `core.forfeit` events, zero chess
+     `boardgame.result{forfeit|double_forfeit}` and zero settled double forfeits on either project, so the strict
+     `core.forfeit` schema and the chess method retirement cannot break a stored stream. Task 17 still runs the four
+     queries if the Supabase MCP connects (incl. `complete_stages_holding_one`, which is not a forfeit count); if it
+     does not, this ruling stands.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
