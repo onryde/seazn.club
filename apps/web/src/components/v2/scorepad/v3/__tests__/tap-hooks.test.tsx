@@ -358,6 +358,8 @@ function consoleHtml(over: { status: string; outcome: unknown }): string {
       initialState={live}
       initialEvents={[]}
       canEdit
+      canOrganise
+      stageKind={null}
       viewerPlan="community"
     />,
   );

@@ -363,6 +363,8 @@ describe("fixture console phone classes — the empty scoring section hides itse
         initialState={live}
         initialEvents={[]}
         canEdit
+        canOrganise
+        stageKind={null}
         recorderNames={{}}
         audit={null}
         scorePadV2={{

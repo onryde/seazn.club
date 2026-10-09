@@ -136,6 +136,8 @@ function baseProps() {
     initialState: { status: "in_play", last_seq: 1, summary: null, state: {}, outcome: null },
     initialEvents: [SEEDED],
     canEdit: true,
+    canOrganise: true,
+    stageKind: null,
     scorePadV2: {
       moduleVersion: "1.0.0",
       resolvedConfig: {},

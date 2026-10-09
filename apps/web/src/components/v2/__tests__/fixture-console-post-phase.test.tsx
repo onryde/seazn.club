@@ -154,6 +154,8 @@ describe("fixture-console: the pad's actual mount site (owner ruling 17)", () =>
         initialState={live}
         initialEvents={[]}
         canEdit
+        canOrganise
+        stageKind={null}
         recorderNames={{}}
         audit={null}
         scorePadV2={{
@@ -181,6 +183,8 @@ describe("fixture-console: the pad's actual mount site (owner ruling 17)", () =>
         initialState={live}
         initialEvents={[]}
         canEdit
+        canOrganise
+        stageKind={null}
         recorderNames={{}}
         audit={null}
         scorePadV2={{

@@ -72,6 +72,8 @@ function consoleHtml(sportKey: string): string {
       initialState={{ status: "scheduled", last_seq: 0, summary: null, state: {}, outcome: null }}
       initialEvents={[]}
       canEdit={true}
+      canOrganise={true}
+      stageKind={null}
       viewerPlan="community"
     />,
   );
@@ -253,6 +255,8 @@ describe("a fixture with no lineup to pick still shows the roster's availability
         initialState={{ status: "scheduled", last_seq: 0, summary: null, state: {}, outcome: null }}
         initialEvents={[]}
         canEdit={true}
+        canOrganise={true}
+        stageKind={null}
         viewerPlan="community"
       />,
     );

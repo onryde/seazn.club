@@ -1,0 +1,195 @@
+[
+  {
+    "id": "kind-gate",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "  if (!forbidsLevelResult(f.stageKind)) return false;\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "a level outcome needs a decision in every bracket kind, and never outside brackets"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "the positive pair: the same level result in a LEAGUE is a result"
+      }
+    ]
+  },
+  {
+    "id": "active-abandon",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "!events.some((v) => v.voids_event_id === e.id)",
+    "replace": "true",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "the generator's void .* and a voided abandon need nothing"
+      }
+    ]
+  },
+  {
+    "id": "decider-hook",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "return settleApplies(module, {",
+    "replace": "return settleApplies({}, {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "C12: a chess knockout in phase tiebreak"
+      }
+    ]
+  },
+  {
+    "id": "double-submit",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "s.winner === null || s.method === null || s.sending;",
+    "replace": "s.winner === null || s.method === null;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "confirmBlocked: blocked until a winner AND a method are chosen"
+      }
+    ]
+  },
+  {
+    "id": "finalize-hidden",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "s.decided && !s.held;",
+    "replace": "s.decided;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "finalizeVisible: Finalize shows for a decided fixture and never while it is held"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "finding 27 \\+ C12: a held knockout fixture shows the block and hides Finalize"
+      }
+    ]
+  },
+  {
+    "id": "console-organiser-gate",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "const offerOrganiserActions = !decided && canOrganise;",
+    "replace": "const offerOrganiserActions = !decided;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "X-ST-2: an organiser is offered Forfeit and Abandon; an official scorer \\(canOrganise false\\) is offered neither"
+      }
+    ]
+  },
+  {
+    "id": "console-block-organiser-gate",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "{scoring && home && away && canOrganise && held && (",
+    "replace": "{scoring && home && away && held && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "an official scorer on a held fixture sees no block and no Settle"
+      }
+    ]
+  },
+  {
+    "id": "console-finalize-wiring",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "const offerFinalize = finalizeVisible({ decided, held });",
+    "replace": "const offerFinalize = decided;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "finding 27 \\+ C12: a held knockout fixture shows the block and hides Finalize"
+      }
+    ]
+  },
+  {
+    "id": "row-decide",
+    "file": "apps/web/src/lib/fixture-row-action.ts",
+    "find": "if (status === \"needs_decision\") return canEdit ? { kind: \"decide\" } : { kind: \"view\" };",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/fixture-row-action.test.ts"
+        ],
+        "name": "offers Settle \\(decide\\) to an editor, timed or not, today or not"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "shows the held chip and the decide action to an editor"
+      }
+    ]
+  },
+  {
+    "id": "row-decide-editor-gate",
+    "file": "apps/web/src/lib/fixture-row-action.ts",
+    "find": "return canEdit ? { kind: \"decide\" } : { kind: \"view\" };",
+    "replace": "return { kind: \"decide\" };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/fixture-row-action.test.ts"
+        ],
+        "name": "a viewer who cannot edit only views it"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "a read-only viewer still sees the chip, and only views"
+      }
+    ]
+  },
+  {
+    "id": "row-held-chip",
+    "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
+    "find": "{fixture.status === \"needs_decision\" && (",
+    "replace": "{false && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
+        ],
+        "name": "shows the held chip and the decide action to an editor"
+      }
+    ]
+  }
+]

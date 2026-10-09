@@ -58,6 +58,8 @@ function baseProps() {
     initialState: { status: "in_play", last_seq: 1, summary: null, state: {}, outcome: null },
     initialEvents: [] as EventIn[],
     canEdit: true,
+    canOrganise: true,
+    stageKind: null,
     viewerPlan: "community" as const,
   };
 }

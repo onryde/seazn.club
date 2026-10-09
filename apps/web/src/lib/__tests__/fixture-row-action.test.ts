@@ -78,6 +78,29 @@ describe("fixtureRowAction — the enumerated table", () => {
   });
 });
 
+// W2a Task 11 (finding 25; addendum 3): a HELD bracket fixture (`needs_decision` — a level result in a knockout) is
+// neither a result nor open scoring: it is owed the organiser's settle, and that is the row's one action.
+describe("fixtureRowAction — a held fixture (W2a, needs_decision)", () => {
+  it("offers Settle (decide) to an editor, timed or not, today or not", () => {
+    let checked = 0;
+    for (const scheduledAt of [TODAY_1500, TOMORROW_1000, null]) {
+      for (const hasOfficials of [true, false]) {
+        expect(fixtureRowAction(row({ status: "needs_decision", scheduledAt, hasOfficials })).kind, String(scheduledAt)).toBe("decide");
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("a viewer who cannot edit only views it — the settle is organiser-only on the server", () => {
+    expect(fixtureRowAction(row({ status: "needs_decision", canEdit: false })).kind).toBe("view");
+  });
+
+  it("the positive pair: the same row DECIDED is a result, never a decide", () => {
+    expect(fixtureRowAction(row({ status: "decided" })).kind).toBe("result");
+  });
+});
+
 // F5 (W2 walkthrough gate 1): a TIMED bracket fixture whose entrants are still
 // undrawn read "Awaiting draw" as its sub-line and offered "Score" as its
 // action — a promise the fixture cannot keep, since neither side is named.

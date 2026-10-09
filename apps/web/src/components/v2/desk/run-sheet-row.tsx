@@ -404,6 +404,8 @@ export function RunSheetRow({
   const actionLabel =
     action.kind === "open_pad"
       ? msg("runsheet.action.openPad")
+      : action.kind === "decide"
+        ? msg("runsheet.action.decide")
       : action.kind === "assign_scorer"
         ? msg("runsheet.action.assignScorer")
         : action.kind === "score"
@@ -547,6 +549,16 @@ export function RunSheetRow({
               <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full ${streamState === "live" ? "bg-red-600" : "bg-amber-500"}`} />
               {msg(streamState === "live" ? "runsheet.stream.live" : "runsheet.stream.waiting")}
             </Link>
+          )}
+          {/* W2a Task 11 (finding 25): a HELD bracket fixture says so, in the desk's red attention tone (attention
+              outranks phase, competition-desk _RULES). Every viewer sees it; only an editor is offered Settle. */}
+          {fixture.status === "needs_decision" && (
+            <span
+              data-testid="run-sheet-held-chip"
+              className="badge inline-flex shrink-0 items-center normal-case bg-red-50 text-red-700 md:order-first"
+            >
+              {msg("score.status.needs_decision")}
+            </span>
           )}
           {/* The ONE action — a plain link for every kind except `set_time`,
               which toggles the inline editor below (≥44px either way). `max-md:ml-auto`: when line 2 wraps (N-1)

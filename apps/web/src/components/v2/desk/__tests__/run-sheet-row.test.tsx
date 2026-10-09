@@ -199,6 +199,33 @@ describe("a voided row says WHY it is struck through", () => {
 // forfeited+award sit-out used to print only "{name} has a bye" and hide the
 // walkover. Pin both halves — bye label AND won (w/o) — derived from the same
 // helpers the row uses.
+// W2a Task 11 (finding 25): a held bracket fixture says so on the run sheet — a chip in the red attention tone — and
+// its one action is Settle, which opens the fixture page where the "Needs a decision" block lives.
+describe("a held fixture (needs_decision) reads Needs a decision and offers Settle", () => {
+  const HELD = fx({ status: "needs_decision", outcome: { kind: "draw" } });
+
+  it("shows the held chip and the decide action to an editor", () => {
+    const html = rowHtml(HELD);
+    expectRowRendered(html);
+    expect(html).toContain('data-testid="run-sheet-held-chip"');
+    expect(html).toContain(">Needs a decision<");
+    expect(rowAction(html)).toBe("decide");
+    expect(html).toContain(">Settle<");
+  });
+
+  it("a read-only viewer still sees the chip, and only views", () => {
+    const html = rowHtml(HELD, false);
+    expect(html).toContain('data-testid="run-sheet-held-chip"');
+    expect(rowAction(html)).toBe("view");
+  });
+
+  it("the positive pair: a decided row carries no held chip", () => {
+    const html = rowHtml(fx({ status: "decided", outcome: { kind: "win", winner: "e1", loser: "e2" } }));
+    expectRowRendered(html);
+    expect(html).not.toContain('data-testid="run-sheet-held-chip"');
+  });
+});
+
 describe("an awarded bye names the sit-out AND the walkover", () => {
   it("shows schedule.bye and schedule.outcome.wonWo for a one-sided award", () => {
     const outcome = { kind: "award" as const, winner: "e1" };

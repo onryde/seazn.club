@@ -97,6 +97,11 @@ type ConsoleOver = {
     away?: SideInfo | null;
     /** The console's OWN canEdit (`canScore && !frozen`) — false is the read-only (frozen) shape. */
     canEdit?: boolean;
+    /** W2a X-ST-2 — the viewer is an organiser (owner/admin). False is an accepted official scorer: may score, but
+     *  settle/forfeit/abandon are refused to them on the server. */
+    canOrganise?: boolean;
+    /** W2a Task 11 — the fixture's stage kind; a bracket kind is what makes a level result HELD. */
+    stageKind?: string | null;
     /** Spec 2026-09-30 §2 — the page's stream mount and its `?stream=open`. */
     stream?: FixtureStreamMount;
     streamReturn?: boolean;
@@ -130,6 +135,8 @@ function consoleTree(over: ConsoleOver = {}) {
       initialState={live}
       initialEvents={status === "scheduled" ? [] : EVENTS}
       canEdit={over.canEdit ?? true}
+      canOrganise={over.canOrganise ?? true}
+      stageKind={over.stageKind ?? null}
       deviceHandover={over.deviceHandover ?? true}
       stream={over.stream}
       streamReturn={over.streamReturn}
@@ -271,6 +278,48 @@ describe("the authority band (D-12)", () => {
     expect(scheduled).toContain("Start match");
     // ...and it is NOT in the authority band, which is outlined throughout.
     expect(bandHtml(scheduled)).not.toContain("Start match");
+  });
+});
+
+describe("W2a: held bracket fixtures and organiser-only actions (finding 11, finding 27, X-ST-2, ruling C12)", () => {
+  const HELD = { status: "needs_decision", outcome: { kind: "draw" }, stageKind: "knockout" } as const;
+  const BLOCK = 'data-testid="needs-decision"';
+  const FINALIZE = 'data-testid="score-finalize"';
+
+  it("X-ST-2: an organiser is offered Forfeit and Abandon; an official scorer (canOrganise false) is offered neither", () => {
+    const organiser = bandHtml(consoleHtml({ canOrganise: true }));
+    expect(organiser).toContain('data-testid="score-forfeit"');
+    expect(organiser).toContain(">Abandon…<");
+    const scorer = consoleHtml({ canOrganise: false });
+    expect(scorer).not.toContain('data-testid="score-forfeit"');
+    expect(scorer).not.toContain(">Abandon…<");
+    // Nothing left to offer ⇒ no empty "Match actions" container either.
+    expect(scorer).not.toContain('data-role="match-actions"');
+  });
+
+  it("a scorer still finalizes a decided match: Finalize is not organiser-only", () => {
+    expect(bandHtml(consoleHtml({ canOrganise: false, outcome: { kind: "win", winner: "e-home" } }))).toContain(FINALIZE);
+  });
+
+  it("finding 27 + C12: a held knockout fixture shows the block and hides Finalize, for the organiser", () => {
+    const html = consoleHtml(HELD);
+    expect(html).toContain(BLOCK);
+    expect(html).toContain('data-testid="settle-open"');
+    expect(html).not.toContain(FINALIZE);
+  });
+
+  it("the positive pair: the same level result in a LEAGUE is a result — no block, Finalize offered", () => {
+    const html = consoleHtml({ ...HELD, status: "decided", stageKind: "league" });
+    expect(html).not.toContain(BLOCK);
+    expect(html).toContain(FINALIZE);
+  });
+
+  it("an official scorer on a held fixture sees no block and no Settle (the settle is organiser-only)", () => {
+    const html = consoleHtml({ ...HELD, canOrganise: false });
+    expect(html, "the scorer still sees the fixture is held — its status reads so").toContain(">Needs a decision<");
+    expect(html).not.toContain(BLOCK);
+    expect(html).not.toContain('data-testid="settle-open"');
+    expect(html).not.toContain(FINALIZE);
   });
 });
 

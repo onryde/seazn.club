@@ -20,6 +20,7 @@ const SETTLED = new Set(["decided", "finalized", "abandoned", "forfeited", "canc
 
 export type RowAction =
   | { kind: "open_pad" }
+  | { kind: "decide" }
   | { kind: "assign_scorer" }
   | { kind: "score" }
   | { kind: "result" }
@@ -130,6 +131,11 @@ export function fixtureRowAction(input: RowActionInput): RowAction {
   // 1. Live beats everything. A match in play is the one thing an organiser
   //    standing at the venue is looking for, whatever its time says.
   if (status === "in_play") return { kind: "open_pad" };
+
+  // 1b. W2a (finding 25): HELD — a bracket match that ended level is owed the organiser's settle, and nothing else
+  //     moves until it gets one. Neither a result (nobody advanced) nor open scoring (the match is over). The settle
+  //     is organiser-only on the server, so a viewer who cannot edit only views it.
+  if (status === "needs_decision") return canEdit ? { kind: "decide" } : { kind: "view" };
 
   // 2. Settled. Checked before the scheduling rules below so a cancelled match
   //    never invites an organiser to score a match that will not be played —

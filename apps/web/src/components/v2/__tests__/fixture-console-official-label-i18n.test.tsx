@@ -92,6 +92,8 @@ function consoleHtml(locale: Locale): string {
         initialState={live}
         initialEvents={ROWS}
         canEdit
+        canOrganise
+        stageKind={null}
         recorderNames={{ "user-1": "Dana Okafor" }}
         audit={{ verified: true, tamperedSeq: null, entitled: true }}
         scorePadV2={{

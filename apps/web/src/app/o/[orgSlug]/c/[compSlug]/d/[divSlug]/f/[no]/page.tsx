@@ -66,7 +66,7 @@ export default async function FixturePage({
   // applied. Deliberately not `division.config`, which is what this page used
   // to hand the pad: it disagrees with the fold for any scored fixture, and it
   // cannot see a per-stage format override at all.
-  const [division, state, events, recorderNames, availability, schedule, padCfg] =
+  const [division, state, events, recorderNames, availability, schedule, padLoad] =
     await Promise.all([
       getDivision(auth, fixture.division_id),
       getFixtureState(auth, id),
@@ -74,9 +74,11 @@ export default async function FixturePage({
       eventRecorderNames(auth, id),
       listFixtureAvailability(auth, id),
       getScheduleSettings(auth, fixture.division_id),
-      // W2a: `{ cfg, stageKind }` — the pad reads the cfg here; Task 12 threads the stage kind on to it.
-      loadFixturePadCfg(auth, id).then((loaded) => loaded.cfg),
+      // W2a: `{ cfg, stageKind }` — the cfg drives the pad; the stage kind drives the console's held block (Task 11)
+      // and the pad's bracket rules (Task 12). Never discarded: a kind read and dropped is the inert seam.
+      loadFixturePadCfg(auth, id),
     ]);
+  const { cfg: padCfg, stageKind } = padLoad;
   const [competition, planKey] = await Promise.all([
     getCompetition(auth, division.competition_id),
     orgPlanKey(auth.orgId),
@@ -258,6 +260,10 @@ export default async function FixturePage({
             device_link_id: e.device_link_id,
           }))}
           canEdit={canScore && !(competition.frozen ?? false)}
+          // W2a X-ST-2 (finding 11): settle, forfeit and abandon are the ORGANISER's — the page's own canEdit
+          // (owner/admin), never `canScore`, which an accepted official scorer also holds.
+          canOrganise={canEdit && !(competition.frozen ?? false)}
+          stageKind={stageKind}
           recorderNames={recorderNames}
           availability={availability}
           activeSuspensions={activeSuspensions}

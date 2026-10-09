@@ -53,6 +53,8 @@ function consoleHtml(stream: readonly (readonly [string, unknown])[]): string {
       initialState={live}
       initialEvents={[]}
       canEdit
+      canOrganise
+      stageKind={null}
       recorderNames={{}}
       audit={null}
       viewerPlan="community"

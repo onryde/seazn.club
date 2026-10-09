@@ -105,6 +105,8 @@ function consoleHtml(home: SideInfo, away: SideInfo): string {
       initialState={live}
       initialEvents={[{ ...GOAL, payload: { by: home.id } }]}
       canEdit
+      canOrganise
+      stageKind={null}
       viewerPlan="community"
     />,
   );
@@ -179,6 +181,8 @@ describe("the console renders people, not entry labels (D-6)", () => {
         initialState={live}
         initialEvents={[GOAL]}
         canEdit
+        canOrganise
+        stageKind={null}
         viewerPlan="community"
       />,
     );
@@ -243,6 +247,8 @@ describe("the forfeit picker, opened (D-6)", () => {
       } satisfies LiveState,
       initialEvents: [GOAL],
       canEdit: true,
+      canOrganise: true,
+      stageKind: null,
       viewerPlan: "community",
     });
     const el = console_
