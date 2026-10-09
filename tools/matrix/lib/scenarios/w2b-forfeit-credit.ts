@@ -11,8 +11,10 @@
 //   WD-CASC   a knockout's withdrawal cascade: TBD seat, held / tie-break pending,
 //             not started, and a line whose two seats both die                        X-WD-1..4, BG-WO-2/3
 //
-// A credited score the product shows in its table (X-WO-1) is judged against the walkover-credit oracle
-// (reference-walkover.ts); a case the oracle does not cover is counted as not judged, by name.
+// A credited score the product shows in its table (X-WO-1) is judged against the walkover-credit reference family
+// (@seazn/reference), asked with the drive's offender and, after START, the scoresheet so far (scoresheetOf); a credit
+// the family refuses is a FAILING item, by name — never a skip. Every bracket drive, the forfeits among them, is
+// judged against the bracket-finish family (life-reference-bracket-finish, I-3).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
@@ -20,7 +22,7 @@ import { RefusedCall, type FixtureRow, type StageRef, type StandingsRowWire, typ
 import { fieldSizeFor } from "../field-size.ts";
 import { foldStream } from "../fold.ts";
 import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
-import { CreditNotCovered, walkoverCredit, type CreditCase } from "../reference-walkover.ts";
+import type { CreditCase } from "@seazn/reference";
 import type { CheckResult } from "../results.ts";
 import { sportModule, stageCfg } from "../sport-cfg.ts";
 import { generateStream, levelReachable, partialPlay } from "../streams/index.ts";
@@ -28,10 +30,10 @@ import { GeneratorUnsupported, OutcomeUnreachable, type ForfeitReason, type Requ
 import { AWARD_POLICY, DLS_ON, abandonOverride, w2bApplies } from "../w2b-cells.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
-import { Recorder, decideFixture, ensureLineups, playDivision, recordPosted, setUpDivision, snapshot, type DivisionSetup, type RoundHooks } from "./common.ts";
+import { Recorder, decideFixture, ensureLineups, liveEvents, playDivision, recordPosted, setUpDivision, snapshot, type DivisionSetup, type RoundHooks } from "./common.ts";
 import {
-  NO_PLACEMENT, deadSeats, doubleWalkoverAdvancesNobody, doubleWalkoverRecorded, doubleWalkoverRefusedAtTheEnd, feedGraph, forfeitRecorded, hasNoNextMatch, isolatedTable, ladderUnmoved, partialPlayStands, pickDoubleWalkover,
-  WITHDREW, type ExpectedDelta, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
+  NO_PLACEMENT, ScoresheetUnread, creditExpectation, deadSeats, doubleWalkoverAdvancesNobody, doubleWalkoverRecorded, doubleWalkoverRefusedAtTheEnd, feedGraph, forfeitRecorded, hasNoNextMatch, isolatedTable, ladderUnmoved,
+  partialPlayStands, pickDoubleWalkover, scoresheetOf, withRefusals, WITHDREW, type ExpectedDelta, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
 } from "./w2b-checks.ts";
 import { W2B_SCENARIO_KEYS, type Scenario, type ScenarioContext, type ScenarioOutput, type W2bScenarioKey } from "./types.ts";
 
@@ -109,63 +111,70 @@ function localDelta(ctx: ScenarioContext, rec: Recorder, stage: StageRef): (f: O
   };
 }
 
-const creditCase = (ctx: ScenarioContext, stage: StageRef, reason: CreditCase["reason"]): CreditCase =>
-  ({ sport: ctx.spec.sport, cfg: stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind) as Record<string, unknown>, reason });
+const creditCase = (ctx: ScenarioContext, stage: StageRef, reason: CreditCase["reason"], extra: Pick<CreditCase, "by" | "played"> = {}): CreditCase =>
+  ({ sport: ctx.spec.sport, cfg: stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind) as Record<string, unknown>, reason, ...extra });
 
-/** WO-PRE's table: each walked-over match credits the Appendix A walkover to the side it went to (and its loser),
- *  a win and a loss. */
+/** The isolated table over the drives the family credited, with each refusal a failing item beside it (withRefusals):
+ *  a refused credit is judged, never skipped. */
+async function creditTable(id: string, ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, observed: ObservedRun, judged: ReadonlyMap<string, (e: string) => ExpectedDelta>, refused: readonly string[]): Promise<CheckResult> {
+  const fixtures = observed.stages[0].fixtures;
+  const table = judged.size === 0 ? assertion(id, []) : isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });
+  return withRefusals(table, refused);
+}
+
+/** WO-PRE's table: each walked-over match credits the walkover-credit family's walkover (*-WO-1) to the side it went
+ *  to (and its loser), a win and a loss — the family asked with the drive's own offender. */
 async function walkoverCreditCheck(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, drives: readonly ForfeitDrive[], observed: ObservedRun): Promise<CheckResult> {
   const id = "w2b-walkover-credit";
   if (!tableJudged(setup.stage.kind)) return assertion(id, [], `the root stage is a ${setup.stage.kind}, not a table: a walkover's credit is the table's (X-WO-1)`);
-  let credit;
-  try {
-    credit = walkoverCredit(creditCase(ctx, setup.stage, "walkover"));
-  } catch (e) {
-    if (!(e instanceof CreditNotCovered)) throw e;
-    return assertion(id, [], e.message);
-  }
   const judged = new Map<string, (e: string) => ExpectedDelta>();
+  const refused: string[] = [];
   for (const d of drives) {
     if (d.refusal !== null || d.asked.kind !== "forfeit") continue;
-    const loser = d.asked.by === "home" ? d.home : d.away;
-    judged.set(d.fixtureId, (e) => (e === loser ? { scalars: { played: 1, won: 0, lost: 1 }, metrics: credit.loser } : { scalars: { played: 1, won: 1, lost: 0 }, metrics: credit.winner }));
+    const x = creditExpectation(creditCase(ctx, setup.stage, "walkover", { by: d.asked.by }), { home: d.home, away: d.away, offender: d.asked.by });
+    if ("refused" in x) refused.push(`${d.fixtureId}: ${x.refused}`);
+    else judged.set(d.fixtureId, x.expect);
   }
-  const fixtures = observed.stages[0].fixtures;
-  return isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });
+  return creditTable(id, ctx, rec, setup, observed, judged, refused);
 }
 
-/** RT-PART's table: the retirement credit (*-RT-1), asked of the oracle; until the walkover-credit family answers a
- *  retirement the check abstains with the oracle's own reason. */
-function retirementCreditCheck(ctx: ScenarioContext, setup: DivisionSetup): CheckResult {
+/** RT-PART's table: the retirement credit (*-RT-1, X-RT-1 — an in-match disqualification takes it too), asked of the
+ *  walkover-credit family with the drive's offender and the scoresheet so far, read from the events the harness posted
+ *  before its forfeit (scoresheetOf). A refusal — the family's or the reading's — is a failing item, by name. */
+async function retirementCreditCheck(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, drives: readonly ForfeitDrive[], observed: ObservedRun): Promise<CheckResult> {
   const id = "w2b-retirement-credit";
   if (!tableJudged(setup.stage.kind)) return assertion(id, [], `the root stage is a ${setup.stage.kind}, not a table: a retirement's credit is the table's (X-WO-1)`);
-  try {
-    walkoverCredit(creditCase(ctx, setup.stage, "retired"));
-  } catch (e) {
-    if (!(e instanceof CreditNotCovered)) throw e;
-    return assertion(id, [], e.message);
+  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind) as Record<string, unknown>;
+  const judged = new Map<string, (e: string) => ExpectedDelta>();
+  const refused: string[] = [];
+  for (const d of drives) {
+    if (d.refusal !== null || d.asked.kind !== "forfeit") continue;
+    const live = liveEvents(rec.streams.get(d.fixtureId) ?? []);
+    if (live.at(-1)?.type !== "core.forfeit") { refused.push(`${d.fixtureId}: the stream the harness holds ends with ${live.at(-1)?.type ?? "nothing"}, not its core.forfeit`); continue; }
+    let played: { home: number[]; away: number[] };
+    try {
+      played = scoresheetOf(ctx.spec.sport, cfg, live.slice(0, -1), d.home, d.away);
+    } catch (e) {
+      if (!(e instanceof ScoresheetUnread)) throw e;
+      refused.push(`${d.fixtureId}: ${e.message}`);
+      continue;
+    }
+    const x = creditExpectation(creditCase(ctx, setup.stage, d.asked.reason, { by: d.asked.by, played }), { home: d.home, away: d.away, offender: d.asked.by });
+    if ("refused" in x) refused.push(`${d.fixtureId}: ${x.refused}`);
+    else judged.set(d.fixtureId, x.expect);
   }
-  // The oracle answering a retirement is the walkover-credit family's arrival: its played-score inputs are this
-  // check's to wire then. Until then the line above has already abstained.
-  return assertion(id, [{ ok: false, note: "the oracle now answers a retirement: wire its played score into this check" }]);
+  return creditTable(id, ctx, rec, setup, observed, judged, refused);
 }
 
-/** X-DW-4: a double walkover in a table is P+1, L+1, 0 points for both, nothing credited. */
+/** X-DW-4: a double walkover in a table is P+1, L+1, 0 points for both, nothing credited — the family's answer. */
 async function doubleWalkoverTableCheck(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, d: ForfeitDrive | null, observed: ObservedRun): Promise<CheckResult> {
   const id = "w2b-double-walkover-table";
   if (!tableJudged(setup.stage.kind)) return assertion(id, [], `the root stage is a ${setup.stage.kind}, not a table (X-DW-4 is a table's rule)`);
   if (d === null || d.refusal !== null) return assertion(id, [{ ok: false, note: d === null ? "no double walkover was posted" : `${d.fixtureId}: refused ${d.refusal!.status} ${d.refusal!.code ?? "(no code)"}` }]);
-  let zero: Record<string, number>;
-  try {
-    const c = walkoverCredit(creditCase(ctx, setup.stage, "double_walkover"));
-    zero = { ...c.winner, ...c.loser };
-  } catch (e) {
-    if (!(e instanceof CreditNotCovered)) throw e;
-    return assertion(id, [], e.message);
-  }
-  const judged = new Map<string, (e: string) => ExpectedDelta>([[d.fixtureId, () => ({ scalars: { played: 1, won: 0, drawn: 0, lost: 1, points: 0 }, metrics: zero })]]);
-  const fixtures = observed.stages[0].fixtures;
-  return isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });
+  const x = creditExpectation(creditCase(ctx, setup.stage, "double_walkover"), { home: d.home, away: d.away, offender: "both" });
+  return "refused" in x
+    ? creditTable(id, ctx, rec, setup, observed, new Map(), [`${d.fixtureId}: ${x.refused}`])
+    : creditTable(id, ctx, rec, setup, observed, new Map([[d.fixtureId, x.expect]]), []);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -452,11 +461,11 @@ const rtPart = scenario("RT-PART", async (ctx, rec, setup) => {
     },
   };
   const plays = await playDivision(ctx, rec, setup, hooks);
-  return finish(ctx, rec, setup, plays, (observed) => Promise.resolve([
+  return finish(ctx, rec, setup, plays, async (observed) => [
     forfeitRecorded("w2b-retirement-recorded", drives, observed.stages[0].fixtures),
     partialPlayStands(drives),
-    retirementCreditCheck(ctx, setup),
-  ]));
+    await retirementCreditCheck(ctx, rec, setup, drives, observed),
+  ]);
 });
 
 const dwAll = scenario("DW-ALL", async (ctx, rec, setup) => {

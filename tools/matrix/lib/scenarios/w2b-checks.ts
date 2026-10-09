@@ -5,10 +5,11 @@
 // rows), the cfg's own declarations (points, awardScore, best-of) and the engine bracket generator's feed edges —
 // never the product's answer and never the engine's forfeitCredit.
 import { EngineError } from "@seazn/engine/core";
+import { CreditRefused, walkoverCredit, type CreditCase } from "@seazn/reference";
 import type { FixtureRow, StandingsRowWire } from "../driver/types.ts";
 import { type ObservedFixture, type ObservedOutcome } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
-import type { RequestedOutcome } from "../streams/types.ts";
+import type { RequestedOutcome, StreamEvent } from "../streams/types.ts";
 import { assertion, type Item } from "./assertions.ts";
 import { BRACKET_OF } from "./terminal-finals.ts";
 
@@ -293,4 +294,122 @@ export function isolatedTable(id: string, t: TableInput): CheckResult {
   const verdict = assertion(id, items);
   if (skipped.length === 0 || (verdict.verdict === "fail" && verdict.checked > 0)) return verdict;
   return { ...verdict, reason: `${verdict.reason}; ${skipped.length} entrant(s) not isolable (${skipped.join("; ")})` };
+}
+
+/** A table check with the walkover-credit family's refusals folded in: each refused credit is a FAILING item, counted
+ *  beside the table's own (a refusal is a judged failure, never a skip); none leaves the table's verdict as it was. */
+export function withRefusals(table: CheckResult, refused: readonly string[]): CheckResult {
+  if (refused.length === 0) return table;
+  const judged = table.verdict === "abstain" ? 0 : table.checked;
+  return { ...table, verdict: "fail", checked: judged + refused.length, reason: refused[0], evidence: [...refused, ...table.evidence].slice(0, 12) };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The walkover-credit family (@seazn/reference), asked for one forfeited match: the stage's cfg (X-WO-1), the reason,
+// the side at fault and — after play started — the scoresheet so far, read from the events the harness POSTED.
+
+/** The harness's own stream before its forfeit could not be read unit by unit. */
+export class ScoresheetUnread extends Error {
+  constructor(sport: string, why: string) {
+    super(`scenario: ${sport} scoresheet so far — ${why}`);
+    this.name = "ScoresheetUnread";
+  }
+}
+
+type Sheet = { home: number[]; away: number[] };
+
+/** The scoresheet so far, per the family's unit (a period, a set, a game, an innings), from the live events the
+ *  harness posted before its forfeit (START included or not). Read in the generators' own vocabulary
+ *  (streams/*.ts `partial`) — never from the product. One unit holds the play: a reading that would have to place a
+ *  finished unit (a set or a game that may have ended, a game at its target) refuses by name, as does an event outside
+ *  the sport's vocabulary or a side that is neither of the two. */
+export function scoresheetOf(sport: string, cfg: Record<string, unknown>, events: readonly StreamEvent[], home: string, away: string): Sheet {
+  const played = events.filter((e) => e.type !== "core.start");
+  const unread = (why: string): never => { throw new ScoresheetUnread(sport, why); };
+  const pay = (e: StreamEvent): Record<string, unknown> => (e.payload ?? {}) as Record<string, unknown>;
+  const sideOf = (who: unknown, e: StreamEvent): "home" | "away" => (who === home ? "home" : who === away ? "away" : unread(`${e.type} names ${JSON.stringify(who)}, neither side`));
+  const only = (type: string): void => { for (const e of played) if (e.type !== type) unread(`${e.type} is not in its vocabulary (${type})`); };
+  const target = (key: string): number => (typeof cfg[key] === "number" ? cfg[key] : unread(`the cfg carries no numeric '${key}'`));
+  const tally = (count: (e: StreamEvent) => [side: "home" | "away", n: number]): { home: number; away: number } => {
+    const t = { home: 0, away: 0 };
+    for (const e of played) { const [s, n] = count(e); t[s] += n; }
+    return t;
+  };
+  switch (sport) {
+    case "football":
+    case "hockey":
+    case "icehockey": {
+      // FB/HK/IH-RT-1 read the goals so far: one period holds them.
+      only(`${sport}.goal`);
+      const t = tally((e) => [sideOf(pay(e).by, e), 1]);
+      return { home: [t.home], away: [t.away] };
+    }
+    case "volleyball":
+    case "tabletennis":
+    case "badminton": {
+      // VB/TT/BD-RT-1: the unfinished set so far, rally by rally; a side at the set target may have ended it.
+      only(`${sport}.rally`);
+      const t = tally((e) => [sideOf(pay(e).wonBy, e), 1]);
+      if (Math.max(t.home, t.away) >= target("setTo")) unread(`a side reached setTo (${t.home}-${t.away}): set 1 may have ended`);
+      return { home: [t.home], away: [t.away] };
+    }
+    case "tennis": {
+      // TN-RT-1 is TN-WO-1's credit (the sheet is read for its shape): set 1's games — none, while no game can have ended.
+      only("tennis.point");
+      const t = tally((e) => [sideOf(pay(e).by, e), 1]);
+      if (Math.max(t.home, t.away) >= 4) unread(`${t.home}-${t.away} points: a game may have ended`);
+      return { home: [0], away: [0] };
+    }
+    case "generic": {
+      // GN-RT-1: "keeping any recorded score" — the points recorded so far.
+      only("generic.score");
+      const t = tally((e) => { const n = pay(e).points; return [sideOf(pay(e).by, e), typeof n === "number" ? n : unread(`generic.score carries no numeric points`)]; });
+      return played.length === 0 ? { home: [], away: [] } : { home: [t.home], away: [t.away] };
+    }
+    case "carrom": {
+      // CA-RT-1: the unfinished game so far — a board's winner scores the opponent's coins left × pointsPerCoin.
+      only("carrom.board.summary");
+      const per = target("pointsPerCoin");
+      const t = tally((e) => {
+        const p = pay(e);
+        if (p.queenTo !== null && p.queenTo !== undefined) unread("a board with the queen covered is not a reading this harness makes");
+        return [sideOf(p.winner, e), typeof p.opponentCoinsLeft === "number" ? p.opponentCoinsLeft * per : unread("carrom.board.summary carries no numeric opponentCoinsLeft")];
+      });
+      if (Math.max(t.home, t.away) >= target("gameTo")) unread(`a side reached gameTo (${t.home}-${t.away}): game 1 may have ended`);
+      return { home: [t.home], away: [t.away] };
+    }
+    case "cricket": {
+      // The innings so far, home batting first (the generators' order); CK-WO-1's credit does not read it.
+      only("cricket.innings.summary");
+      if (played.length > 2) unread(`${played.length} innings: only a first innings each is a reading this harness makes`);
+      const runs = played.map((e) => (typeof pay(e).runs === "number" ? (pay(e).runs as number) : unread("cricket.innings.summary carries no numeric runs")));
+      return { home: runs.slice(0, 1), away: [runs[1] ?? 0] };
+    }
+    case "boardgame":
+      // BG: the game IS its result — nothing is played short of it.
+      if (played.length > 0) unread(`${played[0].type} before the forfeit: a chess game has no scoring event short of its result`);
+      return { home: [], away: [] };
+    default:
+      return unread("no scoresheet reading for this sport");
+  }
+}
+
+/** One forfeited match's table expectation from the walkover-credit family — or the family's refusal, by name, for
+ *  the caller to count as a FAILING item (never thrown past it, never skipped). A one-sided forfeit credits the side
+ *  it went to the winner's metrics with W1, the offender the loser's with L1; a double walkover (X-DW-4) is P1 L1,
+ *  0 points, and no score for either side. */
+export function creditExpectation(c: CreditCase, sides: { readonly home: string; readonly away: string; readonly offender: "home" | "away" | "both" }): { readonly expect: (entrantId: string) => ExpectedDelta } | { readonly refused: string } {
+  let credit: ReturnType<typeof walkoverCredit>;
+  try {
+    credit = walkoverCredit(c);
+  } catch (e) {
+    if (e instanceof CreditRefused) return { refused: `walkover-credit refused (${e.reason}): ${e.message}` };
+    throw e;
+  }
+  if (sides.offender === "both") {
+    const zero = { ...credit.winner, ...credit.loser };
+    return { expect: () => ({ scalars: { played: 1, won: 0, drawn: 0, lost: 1, points: 0 }, metrics: zero }) };
+  }
+  const loser = sides.offender === "home" ? sides.home : sides.away;
+  return { expect: (e) => (e === loser ? { scalars: { played: 1, won: 0, lost: 1 }, metrics: credit.loser } : { scalars: { played: 1, won: 1, lost: 0 }, metrics: credit.winner }) };
 }
