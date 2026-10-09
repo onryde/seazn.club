@@ -39,7 +39,9 @@ export const CaptureStageRole = z.strictObject({
   entrants: z.number().int().min(2).optional(),
 });
 /** W28: the match's place in its stage — the scheduler board's chip (`code`), its round role, its pool's key, and
- *  (2026-10-07) the `label` the phone shows verbatim: the pool word + " · " + code in the org's locale, or the code. */
+ *  (2026-10-07; reshaped 2026-10-08) the `label` the phone shows verbatim, in the org's locale: division · pool word ·
+ *  round, an absent part left out — "Round {n}" for a plain round, the long name for a final, third-place match or
+ *  grand final, the chip otherwise. Over this max the pool word goes first, then the division, then the label. */
 export const CAPTURE_STAGE_LABEL_MAX = 40;
 export const CaptureStage = z.strictObject({
   code: z.string().min(1).max(8),

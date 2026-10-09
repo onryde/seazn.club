@@ -13,6 +13,7 @@ import { sql } from "@/lib/db";
 import { CAPTURE_CODE_RE } from "@/server/api-v1/capture-schemas";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { MAX_DURATION_MINUTES } from "../config";
+import { AUTO_START_REFUSALS } from "../domain/auto-stream";
 import { ACTIVE_STATES, TERMINAL_STATES } from "../domain/session";
 import { lastCheckList, STREAM_TABLES } from "./_stream-migration";
 
@@ -924,5 +925,84 @@ describe.skipIf(!HAS_DB)("V430__capture_stream_codes.sql — the constraints are
     const [session] = await sql<{ fixture_id: string | null; code_id: string | null; pairing_id: string | null; start_cause: string }[]>`
       select fixture_id, code_id, pairing_id, start_cause from fixture_stream_sessions where id = ${sid}`;
     expect(session).toEqual({ fixture_id: null, code_id: null, pairing_id: null, start_cause: "operator" });
+  });
+});
+
+// V431 (capture QR v2 PR-2, spec §8.2, plan R-1 and FP16). v431-migration.test.ts reads the file's TEXT; these run it. Each
+// refusal has its accepted twin in the same `it`, so a test on an unmigrated schema cannot pass.
+describe.skipIf(!HAS_DB)("V431__auto_stream.sql — the constraints are real", () => {
+  const settingsRow = (r: Awaited<ReturnType<typeof rig>>) =>
+    sql`insert into fixture_stream_settings (fixture_id, org_id) values (${r.fixtureId}, ${r.orgId})`;
+
+  it("auto_start_refusal: every code the DOMAIN declares is accepted (and null), an unknown code is refused by the CHECK", async () => {
+    const r = await rig();
+    await settingsRow(r);
+    const set = (code: string | null) => sql`update fixture_stream_settings set auto_start_refusal = ${code} where fixture_id = ${r.fixtureId}`;
+    let accepted = 0;
+    for (const code of AUTO_START_REFUSALS) {
+      await set(code);
+      accepted++;
+    }
+    expect(accepted).toBe(AUTO_START_REFUSALS.length);
+    expect(accepted).toBeGreaterThan(0);
+    await set(null);   // null = "no refusal on record"
+    await set("no_credit");
+    await expect(set("ufo")).rejects.toMatchObject({ code: "23514", constraint_name: "fixture_stream_settings_auto_start_refusal_check" });
+    const [row] = await sql<{ auto_start_refusal: string | null }[]>`select auto_start_refusal from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+    expect(row!.auto_start_refusal, "the refused write changed nothing").toBe("no_credit");
+  });
+
+  it("auto_start_session_id: an unknown session is refused by the FK; deleting the session NULLS the pointer and the row — and its once-per-match stamp — survive (ON DELETE SET NULL)", async () => {
+    const r = await rig();
+    await expect(
+      sql`insert into fixture_stream_settings (fixture_id, org_id, auto_start_session_id) values (${r.fixtureId}, ${r.orgId}, ${randomUUID()})`,
+    ).rejects.toMatchObject({ code: "23503" });
+    const sid = await insertSession(r, "live");
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, auto_start_session_id, auto_started_at) values (${r.fixtureId}, ${r.orgId}, ${sid}, now())`;
+    const read = () => sql<{ auto_start_session_id: string | null; auto_started_at: Date | null }[]>`
+      select auto_start_session_id, auto_started_at from fixture_stream_settings where fixture_id = ${r.fixtureId}`;
+    expect((await read())[0]!.auto_start_session_id, "twin: the pointer holds while the session exists").toBe(sid);
+    await sql`delete from fixture_stream_sessions where id = ${sid}`;
+    const after = await read();
+    expect(after).toHaveLength(1);   // the row is not deleted with its session
+    expect(after[0]!.auto_start_session_id).toBeNull();
+    expect(after[0]!.auto_started_at, "a deleted session does not re-arm auto start").not.toBeNull();
+  });
+
+  it("fixture_stream_sessions has a NON-partial btree (fixture_id) index, and maybeAutoStart's 'any session ever received ingest' read plans through an index (with seq scans disabled it has one to use) — the partial one_active cannot serve a terminal row", async () => {
+    const all = await sql<{ indexname: string; indexdef: string }[]>`
+      select indexname, indexdef from pg_indexes where schemaname = current_schema() and tablename = 'fixture_stream_sessions'`;
+    const idx = all.filter((i) => /USING btree \(fixture_id\)/.test(i.indexdef));
+    const plain = idx.filter((i) => !/\bWHERE\b/.test(i.indexdef));
+    expect(plain.map((i) => i.indexname), "exactly one non-partial (fixture_id) index").toHaveLength(1);
+    expect(idx.some((i) => i.indexname === "fixture_stream_sessions_one_active"), "twin: the partial one exists too, and is not the plain one").toBe(true);
+    const r = await rig();
+    const plan = await sql.begin(async (tx) => {
+      await tx`set local enable_seqscan = off`;
+      return tx<{ "QUERY PLAN": string }[]>`
+        explain select exists (select 1 from fixture_stream_sessions s where s.fixture_id = ${r.fixtureId} and s.first_ingest_at is not null) as any_ingest`;
+    });
+    const text = plan.map((p) => p["QUERY PLAN"]).join("\n");
+    // Through the plain index, read directly OR through a bitmap: which of the two the planner picks is the table's statistics
+    // (B8 gate: a long-lived test database, ~3 sessions per fixture after autoanalyze, plans a Bitmap Index Scan on the same
+    // index; a fresh one an Index Scan). Both read the index; neither is a seq scan.
+    expect(text, text).toMatch(new RegExp(`(?:Index Scan using|Bitmap Index Scan on) ${plain[0]!.indexname}\\b`));
+    expect(text, text).not.toMatch(/Seq Scan on fixture_stream_sessions/);
+  });
+
+  it("fixture_stream_pairings.not_ready_since: a NULLABLE timestamptz with no default, null on a new pairing, round-trips a timestamp and clears back to null (FP16)", async () => {
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_pairings' and column_name = 'not_ready_since'`;
+    expect(shape).toEqual({ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null });
+    const r = await rig();
+    const pid = await insertPairing(r.orgId, await insertCode(r));
+    const read = async () => (await sql<{ not_ready_since: Date | null }[]>`select not_ready_since from fixture_stream_pairings where id = ${pid}`)[0]!.not_ready_since;
+    expect(await read()).toBeNull();
+    const at = new Date("2026-10-07T12:00:00.123Z");
+    await sql`update fixture_stream_pairings set not_ready_since = ${at} where id = ${pid}`;
+    expect((await read())?.toISOString()).toBe(at.toISOString());
+    await sql`update fixture_stream_pairings set not_ready_since = null where id = ${pid}`;
+    expect(await read()).toBeNull();
   });
 });

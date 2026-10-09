@@ -22,7 +22,7 @@ import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "
 import { checkDestination } from "@/lib/stream-destinations";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
-  CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
+  AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
   CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
   RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, WARMING_TIMEOUT_MINUTES, relayEnvironment, tunable,
@@ -32,6 +32,7 @@ import {
   type Command, type Decision, type Effect, type HoldState, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
 import { isPresent } from "@/server/relay/domain/pairing";
+import { autoStopApplies, autoStopVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
@@ -51,7 +52,7 @@ import {
 import { DestinationNotAllowedError, TargetUnreadableError } from "./stream-targets";
 import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
 import { setFixtureStreamUrl } from "./fixtures";
-import { writeStreamSettings } from "./stream-codes";
+import { markAutoStartBlocked, writeStreamSettings } from "./stream-codes";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
 
@@ -1251,7 +1252,12 @@ export async function createSession(
 export async function startBroadcast(
   actor: StartActor,
   fixtureId: string,
-  opts: { targetId: string; startCause: StartCause; phonePresent: boolean; mode?: CreateStreamSession["mode"]; themeId?: string | null },
+  opts: {
+    targetId: string; startCause: StartCause; phonePresent: boolean; mode?: CreateStreamSession["mode"]; themeId?: string | null;
+    /** The automatic start's instant (§7.2, final review m-1): stamped as `auto_started_at` IN the insert's transaction, so
+     *  the session and "once per match" commit together. Given exactly when `actor.source` is `auto`. */
+    autoStartedAt?: Date;
+  },
   deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
   const { orgId, competitionId } = await fixtureContext(fixtureId);
@@ -1277,6 +1283,14 @@ export async function startBroadcast(
     if (actor.userId !== pairing.issued_by) {
       throw new Error(`startBroadcast: a ${actor.source} start is attributed to its stream code's issuer, not to user ${actor.userId}`);
     }
+  }
+  // Final review m-1, an assumption made a guard: the automatic start's stamp rides its own transaction below, so an auto
+  // start that brings no instant (it would commit a session with no stamp — the second-start defect) and any other start
+  // that brings one (it would mark a hand start as the match's automatic one) are caller bugs, refused before anything is
+  // weighed or written. After the attribution guard, so that guard keeps answering first. Witness: "an automatic start
+  // without its stamp instant, or a non-automatic start with one, is refused by name".
+  if ((actor.source === "auto") !== (opts.autoStartedAt !== undefined)) {
+    throw new Error(`startBroadcast: auto_started_at is stamped by an auto start and only by one (a ${actor.source} start ${opts.autoStartedAt === undefined ? "brought none" : "brought one"}) on fixture ${fixtureId}`);
   }
   // R5 (Task 14b): a production deployment with no RELAY_DRIVERS has no relay (drivers.ts `disabledRelayDrivers`).
   // Refused with the ingest's own 503 BEFORE anything else — no expiry, no provider call, no monthly grant, no row —
@@ -1433,6 +1447,16 @@ export async function startBroadcast(
       returning id`;
     const sid = s!.id;
     await tx`insert into fixture_stream_inputs (session_id, slot) values (${sid}, 0)`;   // M3: same transaction
+    // Final review m-1: "once per match" commits WITH the session it records — never in a statement of its own after this
+    // transaction, where a failure (or a dead process) left an automatic session with no stamp, and the next beat past the
+    // retry spacing started a second one. The claim's row (`maybeAutoStart`) is the one stamped; a start that finds none
+    // is refused by name, and the whole transaction with it.
+    if (opts.autoStartedAt !== undefined) {
+      const stamped = await tx`update fixture_stream_settings
+                                  set auto_started_at = ${opts.autoStartedAt}, auto_start_session_id = ${sid}, auto_start_refusal = null
+                                where fixture_id = ${fixtureId}`;
+      if (stamped.count !== 1) throw new Error(`startBroadcast: an auto start found no settings row to stamp auto_started_at on fixture ${fixtureId}`);
+    }
     await recordStorageSnapshot(tx, { ...snapshot, sessionId: sid });
     await recordEvent(tx, { sessionId: sid, orgId, source: START_EVENT_SOURCE[actor.source], kind: "action", type: "create", actorUserId, occurredAt: deps.now(),
       payload: { mode: body.mode, targetId: body.targetId, headroomMinutes: headroom, credits: balance, startCause: opts.startCause, pairingId: actor.pairingId } });
@@ -1469,7 +1493,14 @@ async function provisionSession(sessionId: string, deps: SessionDeps): Promise<v
     creds = await recordEffect(provisioning, "create_live_input", "ingest", () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0 }), { slot: 0 });
   } catch (err) {
     log.error({ sid: sessionId, err }, "stream session: ingest create failed");
-    await sql`delete from fixture_stream_sessions where id = ${sessionId}`;   // no §6.4 reason fits; no dead row (E5's logic) — the events cascade with it (the ONE delete the append-only trigger allows)
+    // No §6.4 reason fits; no dead row (E5's logic) — the events cascade with it (the ONE delete the append-only trigger
+    // allows). Final review m-1: an automatic start's stamp goes WITH its session, in one transaction — the FK's
+    // `on delete set null` would clear only the id and leave `auto_started_at`, so a start that never existed would block
+    // every retry of the match.
+    await sql.begin(async (tx) => {
+      await tx`update fixture_stream_settings set auto_started_at = null, auto_start_session_id = null where auto_start_session_id = ${sessionId}`;
+      await tx`delete from fixture_stream_sessions where id = ${sessionId}`;
+    });
     throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
   }
   await sql.begin(async (tx) => {
@@ -1596,7 +1627,9 @@ export type TickObservation = {
 /** T7 (§6.11): who advances a session. The organiser poll's reconcile-and-ingest block, extracted so a phone beat and the
  *  stream-tick job (W22) advance a session nobody is watching. In order: 1. lazy expiry; 2. the coalesced ingest read
  *  (`claimIngestPoll`; the sample and its event in ONE tx, B0 R-1); 3. warming → live (the credit); 4. target_rejected;
- *  5. m-5, then ask 10 (§6.8.3); 6. W19 (§6.8.5). `cause` names the caller in the log line of an end it makes. */
+ *  5. m-5, then ask 10 (§6.8.3); 6. W19 (§6.8.5); 7. the automatic stop after the result (§7.3) — LAST, so a phone-lost
+ *  end that the same tick makes is the session's reason (the first reason wins). `cause` names the caller in the log line
+ *  of an end it makes. */
 export async function tickSession(sessionId: string, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<TickObservation> {
   let row = await readRow(sessionId);
   if (!row) return { session: null, ingestState: null, outputObserved: null, coalescedSince: undefined, freshIngest: undefined, phoneReadFailed: false };
@@ -1710,6 +1743,9 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
 
   // 5–6: the phone-lost ends, judged on what this tick read and re-taken on the LOCKED row.
   if (!isTerminal(row.state)) row = await endIfPhoneLost(row, freshIngest, deps, cause);
+  // 7: the automatic stop after the result (PR-2 T5, FP7: here once, so every caller of the tick reaches it). It returns an
+  // ending or terminal row untouched on its own.
+  row = await endIfAutoStopDue(row, deps, cause);
   return { session: toSession(row), ingestState, outputObserved, coalescedSince, freshIngest, phoneReadFailed };
 }
 
@@ -1802,6 +1838,65 @@ async function endIfPhoneLost(row: Row, fresh: IngestState | undefined, deps: Se
   }, deps);
   const after = (await readRow(row.id)) ?? row;
   if (rule !== null && isTerminal(after.state)) log.info({ sid: row.id, orgId: row.org_id, cause, rule, state: after.state }, "stream session: ended by the tick");
+  return after;
+}
+
+/** The facts `autoStopDue` (§7.3) judges, in ONE statement (one snapshot). The session's phone is its `pairing_id`, ended or
+ *  not: the mode that was set is what the session's phone chose (FP13 — it lags the phone's Settings by at most one poll
+ *  interval, by design). Every join is a fact, not a filter: a session with no `pairing_id` has a null `mode` (no phone, never
+ *  auto-stopped), one with no settings row has `auto_stream` false, and a deleted fixture (`fixture_id` null) returns no row
+ *  at all. `session_predates_result` is compared HERE, in SQL: `created_at` and `finished_at` are database stamps at
+ *  microsecond precision and a JS `Date` truncates both to the millisecond, so a session created in the result's own
+ *  millisecond would read equal there (Review Focus 4). Two clocks stay apart: those two stamps are compared with each other,
+ *  and the delay is `deps.now()` against `finished_at`. `exec` is apply's tx when re-taken under the row lock. */
+type AutoStopFacts = { auto_stream: boolean; mode: string | null; finished_at: Date | null; session_predates_result: boolean };
+async function autoStopFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<AutoStopFacts | null> {
+  const [f] = await exec<AutoStopFacts[]>`
+    select coalesce(st.auto_stream, false) as auto_stream, p.mode, f.finished_at,
+           coalesce(s.created_at < f.finished_at, false) as session_predates_result
+      from fixture_stream_sessions s
+      join fixtures f on f.id = s.fixture_id
+      left join fixture_stream_settings st on st.fixture_id = s.fixture_id
+      left join fixture_stream_pairings p on p.id = s.pairing_id
+     where s.id = ${sessionId}`;
+  return f ?? null;
+}
+const phoneModeOf = (mode: string | null): PhoneMode | null => (mode === "automatic" || mode === "operator" ? mode : null);
+/** B7 review M-3: whether §7.3 will ever stop this session (`autoStopApplies`), read from the SAME facts `autoStopDue` judges
+ *  (one statement, the pre/post-result comparison in SQL) — the organiser panel's read model serves it, so the panel's
+ *  "stops about N minutes after the result" line can never promise a stop the tick will not make. False for a session gone. */
+export async function autoStopAppliesTo(sessionId: string): Promise<boolean> {
+  const f = await autoStopFactsOf(sql, sessionId);
+  return f !== null && autoStopApplies({
+    autoStream: f.auto_stream, phoneMode: phoneModeOf(f.mode), finishedAt: f.finished_at, sessionPredatesResult: f.session_predates_result,
+  });
+}
+function autoStopDue(f: AutoStopFacts, now: Date): boolean {
+  return autoStopVerdict({
+    autoStream: f.auto_stream, phoneMode: phoneModeOf(f.mode), finishedAt: f.finished_at, sessionPredatesResult: f.session_predates_result,
+  }, now, tunable("AUTO_STOP_AFTER_RESULT_SECONDS", AUTO_STOP_AFTER_RESULT_SECONDS)).due;
+}
+
+/** Step 7 of the tick (§7.3): end the session `auto_stopped` once `autoStopDue`. Judged on an UNLOCKED read first (the common
+ *  answer is "no", and `apply` takes the org's money lock), then RE-TAKEN on the locked row inside `apply`: a result reverted,
+ *  a switch turned off or an organiser's Stop may have landed between the two, and only the locked answer ends anything. An
+ *  `ending` or terminal session is not re-decided — the first reason wins (`ending × stop` is the identity in the domain, but
+ *  deciding it would still cost the org lock). */
+async function endIfAutoStopDue(row: Row, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<Row> {
+  if (row.state === "ending" || isTerminal(row.state)) return row;
+  const facts = await autoStopFactsOf(sql, row.id);
+  if (!facts || !autoStopDue(facts, deps.now())) return row;
+  let decided = false;
+  await apply(row.id, async (s, tx) => {
+    if (s.state === "ending" || isTerminal(s.state)) return null;
+    const locked = await autoStopFactsOf(tx, s.id);
+    decided = locked !== null && autoStopDue(locked, deps.now());
+    return decided ? { type: "stop", reason: "auto_stopped" } : null;
+  }, deps);
+  const after = (await readRow(row.id)) ?? row;
+  if (decided && (after.state === "ending" || isTerminal(after.state))) {
+    log.info({ sid: row.id, orgId: row.org_id, cause, rule: "auto-stop", state: after.state }, "stream session: ended by the tick");
+  }
   return after;
 }
 
@@ -1947,6 +2042,23 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   };
 }
 
+/** A12 / plan R-3 (controller, 2026-10-07): an organiser's Stop of a NON-terminal session turns automatic start off for the
+ *  match (`auto_start_blocked_at`). Stamped on the transaction that DECIDES the stop (`apply`'s command function, the locked
+ *  row, or the repeated tap's own lock), so the stamp commits or rolls back with the stop: a Stop the database refuses leaves
+ *  no stamp, and a stamp can never survive without its stop. NOT stamped by: a Stop of a terminal session, a 409
+ *  `not_active`, the tick's / the sweep's ends (`phone_lost`), the phone's own stop, `expireTargetHolders` (FP12) — none is
+ *  an organiser's intent.
+ *  A stamp that FAILS is reported and the Stop proceeds (a live broadcast must stop), so it runs in a SAVEPOINT: a failed
+ *  statement aborts a Postgres transaction, and only the savepoint lets the stop's own writes carry on past it. */
+async function stampOrganiserStop(tx: Tx, auth: AuthCtx, fixtureId: string, deps: SessionDeps): Promise<void> {
+  try {
+    await tx.savepoint((sp) => markAutoStartBlocked(auth.orgId, fixtureId, deps.now(), auth.userId ?? null, sp));
+  } catch (err) {
+    log.error({ err: String(err), orgId: auth.orgId, fixtureId }, "stream session: the Stop's automatic-start block was not stamped — the Stop proceeds");
+    captureError(err, { orgId: auth.orgId, route: "relay.session.stop_stamp", extra: { fixtureId } });
+  }
+}
+
 export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: string, deps: SessionDeps): Promise<StreamSessionCurrent> {
   const row = await readRow(sessionId);
   if (!row || row.fixture_id !== fixtureId || row.org_id !== auth.orgId) throw new HttpError(404, "session not found");
@@ -1964,6 +2076,8 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
         const locked = await lockRow(tx, sessionId);
         await recordEvent(tx, { sessionId, orgId: row.org_id, source: "client", kind: "action", type: "stop", actorUserId: auth.userId ?? null,
           occurredAt: deps.now(), payload: { state: locked?.state ?? row.state } });
+        // A12 (R-3): the tap on a session still `ending` is a Stop of a non-terminal session — judged on the LOCKED row.
+        if (locked && !isTerminal(locked.state)) await stampOrganiserStop(tx, auth, fixtureId, deps);
       });
     }
     return (await currentSession(auth, fixtureId, deps))!;
@@ -1974,13 +2088,22 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
   // recorded action (Task 10 n5) — the row names her and the decision her Stop made. A session another writer finished
   // first decides nothing and records nothing, as below.
   if (deps.drivers.disabled) {
-    await apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "relay_disabled" }), deps, { userId: auth.userId ?? null, source: "client" });
+    await apply(sessionId, async (s, tx) => {
+      if (isTerminal(s.state)) return null;
+      await stampOrganiserStop(tx, auth, fixtureId, deps);
+      return { type: "relay_disabled" };
+    }, deps, { userId: auth.userId ?? null, source: "client" });
     return (await currentSession(auth, fixtureId, deps))!;
   }
   // m1: re-decided on the LOCKED row (T5-a). A session another writer FINISHED after the read above (an expiry, a failure)
   // writes nothing — no decision, no tap, the same as the finished-session branch above — and the projection answers.
-  // `ending` is still decided: `ending × stop` is identity, and it records the tap (n5).
-  await apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "stop", reason: "stopped" }), deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
+  // `ending` is still decided: `ending × stop` is identity, and it records the tap (n5). The A12 stamp rides this same
+  // locked row (R-3): a terminal row writes neither the stop nor the stamp.
+  await apply(sessionId, async (s, tx) => {
+    if (isTerminal(s.state)) return null;
+    await stampOrganiserStop(tx, auth, fixtureId, deps);
+    return { type: "stop", reason: "stopped" };
+  }, deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
   return (await currentSession(auth, fixtureId, deps))!;
 }
 

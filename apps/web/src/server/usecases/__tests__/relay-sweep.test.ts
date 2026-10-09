@@ -31,7 +31,7 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { IngestProvider, RunnerProvider } from "@/server/relay/ports";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import {
-  CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, PHONE_LOST_LIVE_MINUTES,
+  AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, PHONE_LOST_LIVE_MINUTES,
   PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS,
   REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
   relayEnvironment,
@@ -41,6 +41,7 @@ import { type FailReason, TERMINAL_STATES } from "@/server/relay/domain/session"
 import { mintRelayToken } from "@/server/relay/tokens";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits } from "../stream-credits";
+import { saveStreamSettings } from "../stream-codes";
 import { createStreamTarget } from "../stream-targets";
 import { type SessionDeps, createSession, currentSession, heartbeat, stopSession } from "../stream-sessions";
 import { type BackstopBucket, SweepScopeEmpty, backstopOutcome, isOrphan, sweepSessionLockKey, sweepStreamSessions } from "../relay-sweep";
@@ -224,6 +225,23 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(res.backstop).toMatchObject({ candidates: 1, visited: 1, errored: 0, phoneLost: 1, wallClockEnded: 0, otherFailures: 0 });
     const [row] = await sql<{ state: string; end_reason: string | null }[]>`select state, end_reason from fixture_stream_sessions where id = ${r.sessionId}`;
     expect(row).toEqual({ state: "completed", end_reason: "phone_lost" });
+  });
+
+  it("PR-2 T5: the backstop's tick auto-stops a live session three minutes after the result and counts it in ITS bucket — never the wall clock's, never phone_lost's", async () => {
+    const r = await rig();
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+    const [{ pairing_id }] = await sql<{ pairing_id: string }[]>`select pairing_id from fixture_stream_sessions where id = ${r.sessionId}`;
+    await sql`update fixture_stream_pairings set mode = 'automatic' where id = ${pairing_id}`;
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
+    await sql`update fixtures set status = 'decided' where id = ${r.fixtureId}`;
+    // The result stood one second after the session was created; the rig's clock runs past the delay (+ the 60 s margin).
+    await sql`update fixtures set finished_at = (select created_at from fixture_stream_sessions where id = ${r.sessionId}) + interval '1 second' where id = ${r.fixtureId}`;
+    r.tick((AUTO_STOP_AFTER_RESULT_SECONDS + 60) * 1000);
+    const res = await sweep(r);
+    expect(res.backstop).toMatchObject({ candidates: 1, visited: 1, errored: 0, autoStopped: 1, wallClockEnded: 0, phoneLost: 0, otherFailures: 0 });
+    const [row] = await sql<{ state: string; end_reason: string | null }[]>`select state, end_reason from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(row).toEqual({ state: "completed", end_reason: "auto_stopped" });
   });
 
   it("W10: the sweep deletes phone-beat history older than PHONE_BEAT_RETENTION_HOURS — and keeps the session's FINAL beat, its phone_beat, the pairing's last_beat, and another org's old beat outside the scope (mutant: the cutoff at the sweep's own clock → the final beat goes)", async () => {
@@ -1169,6 +1187,10 @@ describe("relay sweep — pure parts", () => {
       ["ask 10 phone lost (warming → completed)", [{ state: "warming", runnerState: "none", runnerAttempts: 0 }, { state: "completed", failReason: null, endReason: "phone_lost", runner: { state: "none", attempt: 0 } }, null], "phoneLost"],
       ["ask 10 phone lost (requested → completed)", [{ state: "requested", runnerState: "none", runnerAttempts: 0 }, { state: "completed", failReason: null, endReason: "phone_lost", runner: { state: "none", attempt: 0 } }, null], "phoneLost"],
       ["a composed phone lost still ending", [live, { state: "ending", failReason: null, endReason: "phone_lost", runner: { state: "stopping", attempt: 1 } }, null], "phoneLost"],
+      // PR-2 T5: the tick's auto stop after the result — from live and from warming, completed or still ending (composed).
+      ["auto stop (live → completed)", [live, { state: "completed", failReason: null, endReason: "auto_stopped", runner: { state: "none", attempt: 0 } }, null], "autoStopped"],
+      ["auto stop (warming → completed)", [{ state: "warming", runnerState: "none", runnerAttempts: 0 }, { state: "completed", failReason: null, endReason: "auto_stopped", runner: { state: "none", attempt: 0 } }, null], "autoStopped"],
+      ["a composed auto stop still ending", [live, { state: "ending", failReason: null, endReason: "auto_stopped", runner: { state: "stopping", attempt: 1 } }, null], "autoStopped"],
       ["terminal runner settles", [{ state: "completed", runnerState: "lost", runnerAttempts: 1 }, { state: "completed", failReason: null, runner: { state: "destroyed", attempt: 1 } }, null], "terminalRunnersSettled"],
       ["terminal runner unchanged", [{ state: "failed", runnerState: "playing", runnerAttempts: 1 }, { state: "failed", failReason: "machine_crash", runner: { state: "playing", attempt: 1 } }, null], null],
       ["a failed row with no reason", [live, { state: "failed", failReason: null, runner: { state: "destroyed", attempt: 1 } }, null], "otherFailures"],

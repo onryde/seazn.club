@@ -44877,7 +44877,7 @@
     },
     "/api/v1/fixtures/{id}/stream-phone": {
       "get": {
-        "summary": "The organiser panel's phone read model (editor session only): the fixture's stream code (active, finishing or ended, with its end cause), its paired phone — present, silent and not responding judged on the server's clock, its model, app version, mode, state, readiness and latest beat (battery, bitrate, delivery, thermal, data used), with elapsedMs since that beat on the server's clock — the destination pre-pick (null when archived), and the last time another phone took the slot. A session with no phone (opened before stream codes) shows no phone. Carries no secret. Served private, no-store",
+        "summary": "The organiser panel's phone read model (editor session only): the fixture's stream code (active, finishing or ended, with its end cause), its paired phone — present, silent and not responding judged on the server's clock, its model, app version, mode, state, readiness and latest beat (battery, bitrate, delivery, thermal, data used), with elapsedMs since that beat on the server's clock, the amber health reason (null when none), and how long it has been continuously not ready (shown only once a beat at least 20 seconds after it began still reports it, and never for a silent phone; a silent phone's readings are not judged) — the destination pre-pick (null when archived), the last time another phone took the slot, and the fixture's automatic-streaming state (null with no settings row; a refusal is shown only while an automatic start could still fire). A session with no phone (opened before stream codes) shows no phone. Carries no secret. Served private, no-store",
         "tags": [
           "fixtures"
         ],
@@ -45039,6 +45039,25 @@
                                     }
                                   ]
                                 },
+                                "notReadyShown": {
+                                  "type": "boolean"
+                                },
+                                "health": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "not_responding",
+                                        "stalled",
+                                        "hot",
+                                        "battery_low"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "startFailed": {
                                   "anyOf": [
                                     {
@@ -45178,6 +45197,8 @@
                                 "mode",
                                 "state",
                                 "notReady",
+                                "notReadyShown",
+                                "health",
                                 "startFailed",
                                 "lastBeatAt",
                                 "elapsedMs",
@@ -45239,11 +45260,17 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "elapsedMs": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
                                 }
                               },
                               "required": [
                                 "at",
-                                "model"
+                                "model",
+                                "elapsedMs"
                               ],
                               "additionalProperties": false
                             },
@@ -45253,7 +45280,68 @@
                           ]
                         },
                         "auto": {
-                          "type": "null"
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "enabled": {
+                                  "type": "boolean"
+                                },
+                                "refusal": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "no_destination",
+                                        "no_credit",
+                                        "not_entitled",
+                                        "destination_in_use",
+                                        "unavailable"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "wontStart": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "stopped",
+                                        "already_streamed",
+                                        "already_started"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "stopApplies": {
+                                  "anyOf": [
+                                    {
+                                      "type": "boolean"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "enabled",
+                                "refusal",
+                                "wontStart",
+                                "stopApplies"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         },
                         "legacy": {
                           "type": "boolean"
@@ -45316,6 +45404,8 @@
                       "mode": "automatic",
                       "state": "paired",
                       "notReady": "camera",
+                      "notReadyShown": true,
+                      "health": "not_responding",
                       "startFailed": "not-found",
                       "lastBeatAt": "example",
                       "elapsedMs": 0,
@@ -45339,9 +45429,15 @@
                     },
                     "lastTakeover": {
                       "at": "example",
-                      "model": "example"
+                      "model": "example",
+                      "elapsedMs": 0
                     },
-                    "auto": null,
+                    "auto": {
+                      "enabled": true,
+                      "refusal": "no_destination",
+                      "wontStart": "stopped",
+                      "stopApplies": true
+                    },
                     "legacy": true,
                     "finished": true,
                     "session": {
@@ -45542,7 +45638,7 @@
     },
     "/api/v1/fixtures/{id}/stream-settings": {
       "put": {
-        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it). 404 when the target is not this org's, is archived, or does not exist",
+        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it) and the automatic-streaming switch (`autoStream`). Send either or both; a field left out is left as it is. The answer's `targetId` is the saved choice. 404 when the target is not this org's, is archived, or does not exist",
         "tags": [
           "fixtures"
         ],
@@ -45576,15 +45672,16 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "autoStream": {
+                    "type": "boolean"
                   }
                 },
-                "required": [
-                  "targetId"
-                ],
                 "additionalProperties": false
               },
               "example": {
-                "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                "autoStream": true
               }
             }
           }
@@ -45619,10 +45716,14 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "autoStream": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
-                        "targetId"
+                        "targetId",
+                        "autoStream"
                       ],
                       "additionalProperties": false
                     },
@@ -45635,7 +45736,8 @@
                 "example": {
                   "ok": true,
                   "data": {
-                    "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                    "targetId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "autoStream": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

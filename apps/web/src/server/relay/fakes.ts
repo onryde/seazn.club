@@ -67,7 +67,7 @@ export const FAKE_CONNECT_AFTER_MS_DEFAULT = 3000;
  *  `relayDriverMode()` refuses a junk RELAY_DRIVERS, because a fake driver's env
  *  is still an operator-facing switch and the failure it causes is three layers
  *  from its cause. 0 stays legal — "connect immediately", asked for on purpose. */
-function connectAfterMsFromEnv(): number {
+export function connectAfterMsFromEnv(): number {
   const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
   if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
   if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be a whole number of milliseconds, got ${JSON.stringify(raw)}`);

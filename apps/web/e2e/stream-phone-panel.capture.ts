@@ -330,7 +330,9 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
 
       // 8. Live (REAL: the fake ingest connects).
       await expect(scope.getByTestId("stream-stop")).toBeVisible({ timeout: 60_000 });
-      await expect(scope.getByTestId("stream-phone-strip")).toHaveCount(0, { timeout: POLL_WAIT_MS });
+      // PR-2 (§7.4, Option A state 4): live and healthy, the strip is the phone-health line — slate, nothing amber.
+      await expect(scope.getByTestId("stream-phone-strip")).toHaveAttribute("data-tone", "slate", { timeout: POLL_WAIT_MS });
+      await expect(scope.getByTestId("stream-phone-strip")).toHaveAttribute("data-icon", "phone");
       await shoot(page, scope, "08-live");
 
       // 11. Live, a LEGACY session (STAGED: null pairing) — today's panel: no strip, no code line.

@@ -36,9 +36,14 @@ import Stripe from "stripe";
 import { apiJson, invalidateOrgEntitlements } from "../helpers";
 import { grantRigPackCredits, seedOverlayFixture, setRigPlan, type OverlayRig } from "../overlay-kit";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
-import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
-import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
+import {
+  CREDITS_SLOT_KEY,
+  FAKE_CONNECT_MS,
+  liveWaitMs,
+  releaseStreamSlot,
+  slotKeyFreeElsewhere,
+  takeCreditsSlot,
+} from "../helpers/stream-slot-pool";
 import { disposeFakePhones, pairPhoneOnFixture } from "../helpers/fake-capture-phone";
 
 /** lib/currency.ts `PASS_KEYS`, restated: that module cannot be imported here — it pulls `@/config/stripe-plans.json`
@@ -67,18 +72,10 @@ const ACT_MS = 5_000;
 const SEED_MS = 45_000;
 /** One signed webhook POST, through runEvent and the ledger writer. */
 const HOOK_MS = 5_000;
-/** The fake ingest reads "connected" this long after its input was created (server/relay/fakes.ts). A server started
- *  with FAKE_INGEST_CONNECT_AFTER_MS overrides it — CI sets it on the server AND this process (e2e.yml), so export the
- *  server's value here too. Parsed as strictly as fakes.ts parses it (stream-relay.spec.ts's pattern), so a junk value
- *  fails here rather than budgeting from NaN. */
-const FAKE_CONNECT_MS = ((): number => {
-  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
-  if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
-  if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be whole milliseconds, got ${JSON.stringify(raw)}`);
-  return Number(raw);
-})();
-/** The fake's connect delay, then two organiser polls (the one in flight and the one that sees it), plus slack (B6). */
-const LIVE_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
+/** The fake's connect delay, then two organiser polls (the one in flight and the one that sees it), plus slack (B6) —
+ *  the stream-slot pool's one read of the delay (FAKE_CONNECT_MS: CI sets it on the server AND this process, e2e.yml)
+ *  and its one derivation of the wait (final review m-3), never restated here. */
+const LIVE_MS = liveWaitMs(FAKE_CONNECT_MS);
 const budget = (c: { seeds: number; navs: number; acts: number; hooks?: number; lives?: number }): number =>
   Math.max(
     60_000,
@@ -131,53 +128,24 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
 // The ONE stream slot this file may hold. Admission weighs the deployment's storage headroom — every ACTIVE session's
 // max-duration reservation, across the WHOLE server — before it looks at the fixture's own active session
 // (server/relay/domain/session.ts `admit`), so a stream started here while stream-relay.spec.ts (File A) streams on the
-// same server can be refused as "storage exhausted", or refuse one of File A's. File A holds the advisory-lock keys
-// [7_301_130_000, 7_301_130_000 + CAPACITY - 1) and leaves exactly one slot for any other file; this file takes THAT
-// key, for its one live case (B6), and stops the stream in teardown — on a red too — before it lets the key go. The
-// capacity is DERIVED the way File A derives it (the fake ingest's storage limit over the config's max duration), so a
-// change to either moves both files' key ranges together. No other case here goes live.
+// same server can be refused as "storage exhausted", or refuse one of File A's. The stream-slot pool
+// (e2e/helpers/stream-slot-pool.ts) gives the relay and capture walkthroughs every capacity key but the last; this file
+// takes THAT key, for its one live case (B6), and stops the stream in teardown — on a red too — before it lets the key
+// go. The helper derives the capacity once, so a change to the fake's storage or the max duration moves every range
+// together. No other case here goes live.
 // ---------------------------------------------------------------------------------------------------------------------
 
-const STREAM_CAPACITY = Math.floor(new FakeIngest().storage.totalStorageMinutesLimit / MAX_DURATION_MINUTES);
-/** stream-relay.spec.ts's `SLOT_LOCK_BASE`, restated (a spec cannot import another spec). */
-const FILE_A_SLOT_BASE = 7_301_130_000;
-/** The slot File A leaves: the first key past its range. */
-const STREAM_SLOT_KEY = FILE_A_SLOT_BASE + STREAM_CAPACITY - 1;
+/** The slot the pool leaves: the last capacity key. */
+const STREAM_SLOT_KEY = CREDITS_SLOT_KEY;
 /** Waiting out one other holder of the key: its stream going live and its teardown taking it off the air. */
 const SLOT_WAIT_MS = LIVE_MS + NAV_MS;
 /** Teardown: the stop, then the organiser poll that ticks the session to completed. */
 const TEARDOWN_MS = NAV_MS;
 
-let lease: (() => Promise<void>) | null = null;
 const liveRigs: { request: APIRequestContext; orgId: string }[] = [];
 
-/** Take this file's stream slot before going live; held until teardown. */
-async function streamSlot(): Promise<void> {
-  if (!(STREAM_CAPACITY >= 1)) throw new Error(`the fake ingest holds ${STREAM_CAPACITY} stream(s) — none for this file`);
-  if (lease) throw new Error("this file holds at most ONE stream slot, and it is already held");
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(dbUrl, {
-    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
-    prepare: !dbUrl.includes(":6543"),
-    max: 1,
-    idle_timeout: 0,
-  });
-  const deadline = Date.now() + SLOT_WAIT_MS;
-  for (;;) {
-    const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${STREAM_SLOT_KEY}::bigint) as ok`;
-    if (row?.ok) {
-      lease = () => sql.end(); // a session-level advisory lock is released with its connection
-      return;
-    }
-    if (Date.now() > deadline) {
-      await sql.end();
-      throw new Error(`stream slot ${STREAM_SLOT_KEY} not free after ${SLOT_WAIT_MS} ms`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-}
+/** Take this file's stream slot before going live; held until teardown. At most one: a second take throws. */
+const streamSlot = (): Promise<void> => takeCreditsSlot(SLOT_WAIT_MS);
 
 /** Every session the org still holds that is not over. */
 async function openSessions(orgId: string): Promise<{ id: string; fixture_id: string }[]> {
@@ -211,9 +179,7 @@ async function teardownStreams(): Promise<void> {
         );
     }
   } finally {
-    const release = lease;
-    lease = null;
-    await release?.();
+    await releaseStreamSlot();
   }
 }
 
@@ -1098,7 +1064,7 @@ test("B6 · mid-stream at 320px, a checkout sheet whose code cannot load says so
   // slot first, and the rig registered for teardown BEFORE the start, so a red after it still takes the stream down.
   await streamSlot();
   expect(
-    await withDb(async (sql) => (await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${STREAM_SLOT_KEY}::bigint) as ok`)[0]?.ok),
+    await slotKeyFreeElsewhere(STREAM_SLOT_KEY),
     "the slot is HELD — a second holder is refused it",
   ).toBe(false);
   liveRigs.push({ request: page.request, orgId: rig.orgId });

@@ -39,10 +39,10 @@ const ENV_READERS: ReadonlySet<string> = (() => {
 const ALLOWED_SOURCE = /^(\.\.\/config|\.\/[\w-]+|@\/server\/api-v1\/capture-schemas)$/;
 
 describe("server/relay/domain is pure", () => {
-  it("has the twelve units (capture QR v2: T4a's stream-code, pairing, slot, poll-seconds; T4b's beat-answer, end-reason, phone-lost)", () => {
+  it("has the fifteen units (capture QR v2: T4a's stream-code, pairing, slot, poll-seconds; T4b's beat-answer, end-reason, phone-lost; PR-2 T2's auto-stream, phone-health; T6's health-reasons)", () => {
     expect(files.map((f) => f.name).sort()).toEqual([
-      "beat-answer.ts", "credits.ts", "end-reason.ts", "expiry.ts", "pairing.ts", "phone-lost.ts", "poll-seconds.ts", "retention.ts",
-      "runner.ts", "session.ts", "slot.ts", "stream-code.ts",
+      "auto-stream.ts", "beat-answer.ts", "credits.ts", "end-reason.ts", "expiry.ts", "health-reasons.ts", "pairing.ts", "phone-health.ts",
+      "phone-lost.ts", "poll-seconds.ts", "retention.ts", "runner.ts", "session.ts", "slot.ts", "stream-code.ts",
     ]);
   });
   it("imports nothing impure and never reads the clock", () => {
@@ -71,6 +71,19 @@ describe("server/relay/domain is pure", () => {
     expect(codeOf(files.find((f) => f.name === "pairing.ts")!.text)).toMatch(/\bPHONE_SILENT_SLACK_SECONDS\b/);
     // …and the strip is what lets prose name tunable(…): at least one domain file does, in a comment.
     expect(files.some((f) => /\btunable\(/.test(f.text) && !/\btunable\(/.test(codeOf(f.text)))).toBe(true);
+  });
+
+  // PR-2 T6: api-v1/schemas.ts is also loaded by the standalone OpenAPI generator (node --experimental-strip-types, no resolver,
+  // so no extensionless or `@/` import can be followed). The domain files it takes constants from must therefore import NOTHING.
+  it("every domain file api-v1/schemas.ts imports (the generator loads it with no resolver) imports nothing at all", () => {
+    const schemas = readFileSync(resolve(DOMAIN, "../../api-v1/schemas.ts"), "utf8");
+    const loaded = [...codeOf(schemas).matchAll(/from "\.\.\/relay\/domain\/([\w-]+\.ts)"/g)].map((m) => m[1]!);
+    expect(loaded, "anti-vacuity: the constants schemas.ts takes from the domain").toEqual(expect.arrayContaining(["auto-stream.ts", "health-reasons.ts"]));
+    for (const name of loaded) {
+      const f = files.find((x) => x.name === name);
+      expect(f, `${name} is a domain file`).toBeDefined();
+      expect(codeOf(f!.text), `${name} must import nothing`).not.toMatch(/^\s*(?:import|export\b[^\n]*\bfrom)\b/m);
+    }
   });
 
   it("imports only from ../config, its siblings and the zod-only capture contract — no other module can bring the environment in", () => {

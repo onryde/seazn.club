@@ -70,7 +70,7 @@ const STAGE_PROSE: Record<string, string> = {
   "stage.role.n": "The round number the role carries (losers_round, rung, plain_round), from 1 (W28).",
   "stage.role.entrants": "round_of only: how many entrants the round starts with, from 2 (W28).",
   "stage.pool": "The key of the match's pool, one capital letter (A, B, …), present only for a pooled group match. Never the pool's display name (W28).",
-  "stage.label": "What the phone shows for the stage, verbatim, 1 to 40 characters, in the org's locale (W28, added 2026-10-07): the pool's word and key, \" · \", then the code (\"Group A · R1\", \"Grupo A · R1\") for a pooled match, else exactly the code. Omitted, never cut, when it would not fit; show nothing then.",
+  "stage.label": "What the phone shows for the stage, verbatim, 1 to 40 characters, in the org's locale (W28, added 2026-10-07; reshaped 2026-10-08): the division's name, then the pool's word and key for a pooled match, then the round, joined with \" · \" (\"Open · Round 2\", \"Open · QF\", \"Open · Final\", \"Girls U14 · Group A · Round 2\", \"Open · Grupo A · Ronda 1\"). The round is \"Round {n}\" where the board codes no round (n is the number in its R{n} code); the final, the third-place match and the grand final use their long names (\"Final\", \"Third place\", \"Grand final\"); every other round uses its code. Over 40 characters the pool is dropped first, then the division; a round still over 40 omits the label. Omitted, never cut; show nothing then.",
 };
 
 const contracts: Contract[] = [

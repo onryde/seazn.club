@@ -25,7 +25,7 @@ import {
 } from "@/server/relay/config";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { fitText, getCode, holdWindowFor } from "../capture-phone";
-import { reissueStreamCode } from "../stream-codes";
+import { reissueStreamCode, saveStreamSettings } from "../stream-codes";
 import { captureRig, override, phoneId, type CaptureRig } from "./_capture-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -102,8 +102,8 @@ async function expectedWaiting(r: CaptureRig, o: { label: string; pollSeconds: n
     ...(o.scheduledStart !== undefined ? { scheduledStart: o.scheduledStart } : {}),
     // W28 (2026-10-06): the rig's fixture is round 1 of a league — the board's chip R1, the engine's plain round 1.
     // capture-stage.test.ts derives every family's stage from the board and the engine; this is the rig's one value.
-    // label (2026-10-07): no pool, so exactly the code.
-    stage: { code: "R1", role: { kind: "plain_round", n: 1 }, label: "R1" },
+    // label (owner ruling 2026-10-08): the rig's division "Open" (_rig.ts divisionRig) · en `bracket.round.plain`, no pool.
+    stage: { code: "R1", role: { kind: "plain_round", n: 1 }, label: "Open · Round 1" },
   };
 }
 
@@ -368,6 +368,56 @@ describe.skipIf(!HAS_DB)("getCode — each field from its §6.4 source", () => {
     await moveTo(sid, "completed", { end: "stopped" });
     await sql`update org_stream_targets set archived_at = now() where id = ${r.target.id}`;
     expect((await get(r, null)).destinationName).toBeNull();
+  });
+
+  // Plan T3 (W7, A4): `autoAllowed` is the fixture's switch, read in the SAME statement as the other fixture facts. The switch is
+  // set through the REAL PUT (`saveStreamSettings`); a row typed in by SQL would prove the fixture, not the producer.
+  it("autoAllowed: the fixture's switch — false with no row and when off, true when on, on the waiting shape AND every session shape; another fixture's switch never leaks; the organiser's Go live pick leaves it on", async () => {
+    const r = await captureRig();
+    const other = await captureRig();   // another org, another fixture
+    const mine = phoneId("mine");
+    const flip = (rig: CaptureRig, autoStream: boolean) => saveStreamSettings(rig.auth, rig.fixtureId, { autoStream });
+    const seen: string[] = [];
+    const expectAuto = async (label: string, want: boolean, phone: string | null = null, rig: CaptureRig = r) => {
+      const body = await get(rig, phone);
+      expect(body.autoAllowed, label).toBe(want);
+      expect(CaptureDescriptor.parse(body)).toEqual(body);
+      seen.push(`${label}:${body.state}`);
+      return body;
+    };
+    await flip(other, true);
+    await expectAuto("another fixture's switch is on; this one has no row", false);
+    await expectAuto("the other fixture itself", true, null, other);
+    await flip(r, true);
+    await expectAuto("on, no phone", true);
+    await expectAuto("on, a phone", true, phoneId("x"));
+    // The Go live writes the destination pick into the same row — the switch must survive it.
+    const sid = await r.start(mine);
+    await expectAuto("on, warming, the session's phone", true, mine);
+    await expectAuto("on, warming, another phone", true, phoneId("other"));
+    await moveTo(sid, "live");
+    await expectAuto("on, live", true, mine);
+    await moveTo(sid, "ending", { end: "stopped" });
+    await expectAuto("on, ending", true, mine);
+    await moveTo(sid, "completed", { end: "stopped" });
+    await expectAuto("on, completed", true, mine);
+    await moveTo(sid, "failed", { fail: "machine_oom" });
+    await expectAuto("on, failed", true, mine);
+    await flip(r, false);
+    await expectAuto("off, failed", false, mine);
+    await expectAuto("off, waiting", false);
+    await expectAuto("the other fixture is still on", true, null, other);
+    expect(seen.filter((x) => x.endsWith(":waiting")).length, "the waiting shape").toBe(6);
+    expect([...new Set(seen.map((x) => x.split(":")[1]))].sort(), "every session state the descriptor serves, plus waiting").toEqual(["completed", "ending", "failed", "live", "waiting", "warming"]);
+    expect(seen).toHaveLength(13);
+  });
+
+  it("ANOTHER SPORT: a cricket fixture's descriptor carries its own switch too (the fixture-facts join is not sport-specific)", async () => {
+    const r = await captureRig({ sport: "cricket" });
+    expect((await get(r, null)).autoAllowed, "PREMISE: no row, off").toBe(false);
+    await saveStreamSettings(r.auth, r.fixtureId, { autoStream: true });
+    expect((await get(r, null)).autoAllowed).toBe(true);
+    expect((await get(r, phoneId("x"))).autoAllowed).toBe(true);
   });
 });
 

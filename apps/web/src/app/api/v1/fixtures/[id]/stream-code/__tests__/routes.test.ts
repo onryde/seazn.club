@@ -66,7 +66,7 @@ const BASE = "https://test.local/api/v1";
 interface Envelope<T = unknown> {
   ok: boolean;
   data?: T;
-  error?: { code: string; message: string; [k: string]: unknown };
+  error?: { code: string; message: string; issues?: unknown; [k: string]: unknown };
   requestId?: string;
 }
 
@@ -183,7 +183,7 @@ describe.skipIf(!HAS_DB)("PUT …/stream-settings over HTTP", () => {
     const target = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court", streamKey: `k-${randomUUID().slice(0, 8)}` });
     const saved = await read<StreamSettings>(await settingsRaw(o.fixtureId, { targetId: target.id }));
     expect(saved.status).toBe(200);
-    expect(StreamSettings.parse(saved.body.data)).toEqual({ targetId: target.id });
+    expect(StreamSettings.parse(saved.body.data)).toEqual({ targetId: target.id, autoStream: false });
     const other = await organiser();
     const theirs = await createStreamTarget(other.auth, other.auth.orgId, { kind: "youtube", label: "Theirs", streamKey: `k-${randomUUID().slice(0, 8)}` });
     authState.userId = o.auth.userId!;
@@ -193,21 +193,58 @@ describe.skipIf(!HAS_DB)("PUT …/stream-settings over HTTP", () => {
     const [row] = await sql<{ target_id: string | null }[]>`select target_id from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
     expect(row!.target_id).toBe(target.id);
     const cleared = await read<StreamSettings>(await settingsRaw(o.fixtureId, { targetId: null }));
-    expect(StreamSettings.parse(cleared.body.data)).toEqual({ targetId: null });
+    expect(StreamSettings.parse(cleared.body.data)).toEqual({ targetId: null, autoStream: false });
   });
 
-  it("the body is strict: an unknown key or a missing targetId is refused and writes nothing", async () => {
+  // FP4 (plan 2026-10-07): PR-1 pinned `{}` and `{ targetId: null, autoStream: true }` as REJECTED; the switch makes the second
+  // one a real body, and `{ autoStream }` alone too. `{}` stays refused (the refine), and so do an unknown key and a
+  // mistyped value. The panel's PR-1 body `{ targetId }` must keep working untouched (the regression).
+  it("the body is strict: {}, a mistyped autoStream, a bad targetId and an unknown key are refused and write nothing", async () => {
     const o = await organiser();
     let checked = 0;
-    for (const body of [{}, { targetId: null, autoStream: true }, { targetId: "not-a-uuid" }]) {
-      const r = await settingsRaw(o.fixtureId, body);
-      expect(r.status, JSON.stringify(body)).toBeGreaterThanOrEqual(400);
-      expect(r.status, JSON.stringify(body)).toBeLessThan(500);
+    for (const body of [{}, { autoStream: "yes" }, { targetId: "not-a-uuid" }, { autoStream: true, extra: 1 }]) {
+      const r = await read(await settingsRaw(o.fixtureId, body));
+      // v1's ZodError branch: 400 VALIDATION with the issues (the house shape for a body the schema refuses).
+      expect(r.status, JSON.stringify(body)).toBe(400);
+      expect(r.body.error?.code, JSON.stringify(body)).toBe("VALIDATION");
+      // The refine's own sentence rides the 400's `issues` (v1's ZodError branch): the one thing that tells the refine from any other layer.
+      if (Object.keys(body).length === 0) expect(JSON.stringify(r.body.error?.issues), "{} is refused by the schema's own sentence").toContain("targetId or autoStream is required");
+      checked++;
+    }
+    expect(checked).toBe(4);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
+    expect(n).toBe(0);
+  });
+
+  it("the accepted bodies: {autoStream}, {targetId: null, autoStream}, and the panel's PR-1 {targetId} — each answers 200 with the new two-field shape", async () => {
+    // One fresh organiser per body, so each answer is that fixture's FIRST write.
+    const cases: [string, (targetId: string) => unknown, (targetId: string) => StreamSettings][] = [
+      ["the switch alone", () => ({ autoStream: true }), () => ({ targetId: null, autoStream: true })],
+      ["a cleared pick with the switch", () => ({ targetId: null, autoStream: true }), () => ({ targetId: null, autoStream: true })],
+      ["the panel's PR-1 body", (t) => ({ targetId: t }), (t) => ({ targetId: t, autoStream: false })],
+    ];
+    let checked = 0;
+    for (const [label, body, want] of cases) {
+      const o = await organiser();
+      const target = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court", streamKey: `k-${randomUUID().slice(0, 8)}` });
+      const r = await read<StreamSettings>(await settingsRaw(o.fixtureId, body(target.id)));
+      expect(r.status, label).toBe(200);
+      expect(StreamSettings.parse(r.body.data), label).toEqual(want(target.id));
       checked++;
     }
     expect(checked).toBe(3);
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
-    expect(n).toBe(0);
+  });
+
+  it("the switch survives a destination pick and the pick survives the switch, over HTTP — and a second identical PUT changes nothing", async () => {
+    const o = await organiser();
+    const target = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court", streamKey: `k-${randomUUID().slice(0, 8)}` });
+    const put = async (body: unknown) => StreamSettings.parse((await read<StreamSettings>(await settingsRaw(o.fixtureId, body))).body.data);
+    expect(await put({ autoStream: true })).toEqual({ targetId: null, autoStream: true });
+    expect(await put({ targetId: target.id }), "pick after the switch").toEqual({ targetId: target.id, autoStream: true });
+    expect(await put({ autoStream: false }), "switch off after the pick").toEqual({ targetId: target.id, autoStream: false });
+    expect(await put({ autoStream: false }), "the same PUT twice").toEqual({ targetId: target.id, autoStream: false });
+    const rows = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
+    expect(rows[0]!.n).toBe(1);
   });
 });
 
@@ -222,6 +259,7 @@ describe.skipIf(!HAS_DB)("the three routes are never key-reachable (NEVER_KEY_RO
       ["ensure", () => ensureRaw(o.fixtureId, bearer)],
       ["reissue", () => reissueRaw(o.fixtureId, bearer)],
       ["settings", () => settingsRaw(o.fixtureId, { targetId: null }, bearer)],
+      ["settings (the switch)", () => settingsRaw(o.fixtureId, { autoStream: true }, bearer)],
     ];
     let checked = 0;
     for (const [label, call] of calls) {
@@ -230,9 +268,11 @@ describe.skipIf(!HAS_DB)("the three routes are never key-reachable (NEVER_KEY_RO
       expect(r.body.error?.message, label).toMatch(/cannot access this endpoint/);
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_codes where fixture_id = ${o.fixtureId}`;
     expect(n).toBe(0);
+    const [{ rows }] = await sql<{ rows: number }[]>`select count(*)::int as rows from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
+    expect(rows, "a key's switch PUT wrote no settings row").toBe(0);
     authState.userId = o.auth.userId!;
     expect((await ensureRaw(o.fixtureId)).status).toBe(200);
     expect((await settingsRaw(o.fixtureId, { targetId: null })).status).toBe(200);
@@ -269,7 +309,7 @@ describe.skipIf(!HAS_DB)("editors only (§6.1) — the door's write scope is the
     return u.id;
   }
 
-  it("a VIEWER of the fixture's own org is refused 403 by the DOOR on ensure, reissue and settings and nothing is written; an ADMIN of the same org is admitted on all three (the positive pair)", async () => {
+  it("a VIEWER of the fixture's own org is refused 403 by the DOOR on ensure, reissue, settings and the switch and nothing is written; an ADMIN of the same org is admitted on all four (the positive pair)", async () => {
     const o = await organiser();
     const target = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Court", streamKey: `k-${randomUUID().slice(0, 8)}` });
     const viewer = await member(o.auth.orgId, "viewer");
@@ -278,6 +318,7 @@ describe.skipIf(!HAS_DB)("editors only (§6.1) — the door's write scope is the
       ["ensure", () => ensureRaw(o.fixtureId)],
       ["reissue", () => reissueRaw(o.fixtureId)],
       ["settings", () => settingsRaw(o.fixtureId, { targetId: target.id })],
+      ["settings (the switch)", () => settingsRaw(o.fixtureId, { autoStream: true })],
     ];
     authState.userId = viewer;
     let refused = 0;
@@ -288,11 +329,11 @@ describe.skipIf(!HAS_DB)("editors only (§6.1) — the door's write scope is the
       expect(r.body.error?.message, label).toBe("Insufficient permissions");
       refused++;
     }
-    expect(refused).toBe(3);
+    expect(refused).toBe(4);
     const codeRows = async () => sql<{ issued_by: string; ended_at: Date | null }[]>`
       select issued_by, ended_at from fixture_stream_codes where fixture_id = ${o.fixtureId} order by created_at`;
-    const pick = async () => sql<{ target_id: string | null; updated_by: string | null }[]>`
-      select target_id, updated_by from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
+    const pick = async () => sql<{ target_id: string | null; updated_by: string | null; auto_stream: boolean }[]>`
+      select target_id, updated_by, auto_stream from fixture_stream_settings where fixture_id = ${o.fixtureId}`;
     expect(await codeRows(), "a viewer minted nothing").toEqual([]);
     expect(await pick(), "a viewer saved no pick").toEqual([]);
 
@@ -302,10 +343,10 @@ describe.skipIf(!HAS_DB)("editors only (§6.1) — the door's write scope is the
       expect((await call()).status, label).toBe(200);
       admitted++;
     }
-    expect(admitted).toBe(3);
+    expect(admitted).toBe(4);
     // ensure minted one, reissue ended it and minted the next — both issued by the admin; the pick is the admin's.
     const rows = await codeRows();
     expect(rows.map((c) => [c.issued_by, c.ended_at === null ? "active" : "ended"])).toEqual([[admin, "ended"], [admin, "active"]]);
-    expect(await pick()).toEqual([{ target_id: target.id, updated_by: admin }]);
+    expect(await pick()).toEqual([{ target_id: target.id, updated_by: admin, auto_stream: true }]);
   });
 });

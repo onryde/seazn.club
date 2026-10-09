@@ -7,9 +7,15 @@ import "server-only";
 //    fallback) — rendered in the org's default_locale, like the descriptor's label (W25): an `es` org reads CF.
 //  - `role`: the engine's `RoundRole` for the fixture (`roundRoleFor`, the board's own call), serialised verbatim.
 //  - `pool`: the fixture's pool KEY (`pools.key`, one capital letter), never its English name.
-//  - `label` (2026-10-07, after #923's pool word): what the phone shows verbatim — the pool's display label
-//    (`poolLabel`, `table.poolLabel` of the org locale's `public` dictionary: "Group A", "Grupo A", "Poule A") + " · " +
-//    `code`, or exactly `code` without a pool. Over 40 characters it is omitted (logged), the rest of the stage kept.
+//  - `label` (owner ruling 2026-10-08, Option A): what the phone shows verbatim — the division's name, the pool's display
+//    label (`poolLabel`, `table.poolLabel` of the org locale's `public` dictionary: "Group A", "Grupo A", "Poule A") and
+//    the round's text, joined with " · ", a part that is absent left out: "Open · Round 2", "Open · QF",
+//    "Girls U14 · Group A · Round 2". The round's text: an uncoded round — a plain round — reads the long
+//    `bracket.round.plain` ("Round {n}", "Ronda {n}") with the n its `R{n}` chip shows; the final, the third-place match
+//    and the grand final read their long names (`roundRoleLabel`: "Final", "Third place", "Grand final"; follow-up A1,
+//    2026-10-08); every other coded round reads `code` (the other long names are plural or wordy: "Quarter-finals").
+//    Over 40 characters the pool word is dropped, then the division; still over, the label is omitted, the rest of the
+//    stage kept. Each drop is logged.
 //
 // ONE builder, `buildCaptureStage`, returns `{code, role, pool?, label?}`.
 import type { RoundRole } from "@seazn/engine/competition";
@@ -18,12 +24,15 @@ import { getDictionary, toLocale } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
 import { poolLabel } from "@/lib/pool-label";
-import { laneRoundRank, roundRoleFor } from "@/lib/round-role-label";
+import { laneRoundRank, roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { boardRoundCodes, type RoundCodeFixture } from "@/components/v2/board/round-codes";
 import { CAPTURE_POOL_RE, CAPTURE_STAGE_LABEL_MAX, CaptureStage } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+/** The coded rounds whose label reads the round's LONG name, not its chip (A1, 2026-10-08): the singular finals. Each
+ *  one's chip is its own role's (`roundRoleShort`: F, 3rd, GF) — a winners'-lane final is `winners_final`, not here. */
+const LONG_NAMED_ROLES: ReadonlySet<RoundRole["kind"]> = new Set(["final", "third_place", "grand_final"]);
 /** A pool's display label from its key, in the org's locale (`poolLabel` over the `public` dictionary). */
 type PoolText = (key: string) => string;
 
@@ -33,6 +42,8 @@ export type CaptureStageInput = {
   stageKind: string;
   /** `pools.key` of the fixture's pool; null when it has none. */
   poolKey: string | null;
+  /** `divisions.name` of the fixture's division; null or blank leaves the division out of the label. */
+  divisionName: string | null;
   /** EVERY fixture of the fixture's stage (the board's round-code columns): a round role is a position in the stage. */
   rows: readonly RoundCodeFixture[];
 };
@@ -47,11 +58,13 @@ export type CaptureStageInput = {
  *    `plain_round` with the round's rank + 1, the role every uncoded round has, and the role never contradicts the chip;
  *  - `pools.key` has no CHECK: a key outside `^[A-Z]$` is omitted (and logged), the rest of the stage kept;
  *  - anything else the contract refuses (a code outside 1–8 characters) omits the whole stage, logged;
- *  - a `label` over 40 characters (2026-10-07) is omitted, logged, and the rest of the stage kept: the phone shows the
- *    label verbatim and nothing when it is missing, so it is never cut. `poolText` is asked only when there IS a pool.
+ *  - a `label` over 40 characters is never cut — the phone shows it verbatim, and nothing when it is missing: the pool
+ *    word is dropped first, then the division (owner ruling 2026-10-08), and a round's text still over 40 omits the
+ *    label, the rest of the stage kept. Each step is logged with the part it dropped, never the words. `poolText` is
+ *    asked only when there IS a pool.
  */
 export function buildCaptureStage(input: CaptureStageInput, msg: Msg, poolText: PoolText): CaptureStage | null {
-  const { fixtureId, stageKind, poolKey, rows } = input;
+  const { fixtureId, stageKind, poolKey, divisionName, rows } = input;
   const self = rows.find((r) => r.id === fixtureId);
   // An assumption made a guard: the rows are read THROUGH the fixture's own stage, so it is always among them.
   if (self === undefined) throw new RangeError(`buildCaptureStage: fixture ${fixtureId} is not among its stage's rows`);
@@ -77,11 +90,15 @@ export function buildCaptureStage(input: CaptureStageInput, msg: Msg, poolText: 
     else log.warn({ fixtureId, poolKey }, "capture stage: the pool's key is not one capital letter; pool omitted");
   }
   const code = rc?.code ?? `R${self.round_no}`;
-  let label: string | undefined = pool !== undefined ? `${poolText(pool)} · ${code}` : code;
-  if (label.length > CAPTURE_STAGE_LABEL_MAX) {
-    log.warn({ fixtureId, length: label.length }, "capture stage: the label is over 40 characters; label omitted");
-    label = undefined;
-  }
+  // The round's text. An uncoded round is exactly a plain round — the role is forced to `plain_round` above whenever
+  // the board leaves the chip uncoded, and the board codes no plain round (`roundRoleShort`) — so it reads the long form
+  // with the n its chip `R{round_no}` shows; a final, third-place match or grand final its long name; every other coded
+  // round its chip.
+  const round = rc === undefined
+    ? msg("bracket.round.plain", { n: self.round_no })
+    : LONG_NAMED_ROLES.has(role.kind) ? roundRoleLabel(msg, role) : rc.code;
+  const division = divisionName?.trim() || undefined;
+  const label = fitLabel(fixtureId, { division, pool: pool !== undefined ? poolText(pool) : undefined, round });
   const stage = { code, role: { ...role }, ...(pool !== undefined ? { pool } : {}), ...(label !== undefined ? { label } : {}) };
   const parsed = CaptureStage.safeParse(stage);
   if (!parsed.success) {
@@ -94,11 +111,40 @@ export function buildCaptureStage(input: CaptureStageInput, msg: Msg, poolText: 
   return parsed.data;
 }
 
-type StageRow = RoundCodeFixture & { kind: string; pool_key: string | null; default_locale: string | null };
+/** The label's parts, in the order the phone reads them; an undefined part is left out. */
+type LabelParts = { division: string | undefined; pool: string | undefined; round: string };
+const joinLabel = ({ division, pool, round }: LabelParts): string =>
+  [division, pool, round].filter((p) => p !== undefined).join(" · ");
+
+/**
+ * The label that fits the contract's 40 (owner ruling 2026-10-08): the pool word dropped first, then the division; a
+ * round's text still over 40 is no label. Each drop is logged with the length it found and the part it dropped.
+ */
+function fitLabel(fixtureId: string, parts: LabelParts): string | undefined {
+  let label = joinLabel(parts);
+  if (label.length > CAPTURE_STAGE_LABEL_MAX && parts.pool !== undefined) {
+    log.warn({ fixtureId, length: label.length, dropped: "pool" }, "capture stage: the label is over 40 characters; pool dropped");
+    parts = { ...parts, pool: undefined };
+    label = joinLabel(parts);
+  }
+  if (label.length > CAPTURE_STAGE_LABEL_MAX && parts.division !== undefined) {
+    log.warn({ fixtureId, length: label.length, dropped: "division" }, "capture stage: the label is over 40 characters; division dropped");
+    parts = { ...parts, division: undefined };
+    label = joinLabel(parts);
+  }
+  if (label.length > CAPTURE_STAGE_LABEL_MAX) {
+    log.warn({ fixtureId, length: label.length, dropped: "label" }, "capture stage: the label is over 40 characters; label omitted");
+    return undefined;
+  }
+  return label;
+}
+
+type StageRow = RoundCodeFixture & { kind: string; pool_key: string | null; division_name: string | null; default_locale: string | null };
 
 /**
  * The descriptor's `stage` for `fixtureId` (W28): ONE statement — the fixture's stage's fixtures (the board's columns,
- * through `fixtures_stage_idx`), the stage's kind, the fixture's pool key and the org's locale — then the builder.
+ * through `fixtures_stage_idx`), the stage's kind, the fixture's pool key, its division's name and the org's locale —
+ * then the builder.
  * Non-tenant `sql`, bounded by `orgId` (the code row's org), like every read in capture-phone.ts. null = omit.
  * The pool word comes from the `public` dictionary (`getDictionary`, the public pages' own loader): `msgFor` reads the
  * `ui` catalogue alone.
@@ -106,7 +152,7 @@ type StageRow = RoundCodeFixture & { kind: string; pool_key: string | null; defa
 export async function captureStageOf(orgId: string, fixtureId: string): Promise<CaptureStage | null> {
   const rows = await sql<StageRow[]>`
     select f.id, f.stage_id, f.round_no, f.seq_in_round, f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
-           s.kind, p.key as pool_key, o.default_locale
+           s.kind, p.key as pool_key, d.name as division_name, o.default_locale
       from fixtures t
       join divisions d on d.id = t.division_id
       join organizations o on o.id = d.org_id
@@ -115,11 +161,11 @@ export async function captureStageOf(orgId: string, fixtureId: string): Promise<
       join fixtures f on f.stage_id = t.stage_id
      where t.id = ${fixtureId} and d.org_id = ${orgId}`;
   if (rows.length === 0) return null;   // the fixture went with its code (T35); the descriptor's own read answers that
-  const { kind, pool_key, default_locale } = rows[0]!;
+  const { kind, pool_key, division_name, default_locale } = rows[0]!;
   const locale = toLocale(default_locale);
   const publicDict = await getDictionary(locale, "public");
   return buildCaptureStage(
-    { fixtureId, stageKind: kind, poolKey: pool_key, rows },
+    { fixtureId, stageKind: kind, poolKey: pool_key, divisionName: division_name, rows },
     (key, vars) => msgFor(locale, key, vars),
     (key) => poolLabel(publicDict, key),
   );

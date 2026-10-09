@@ -90,10 +90,11 @@ async function world(row: TargetRow) {
       break;
     }
     case "unknown": {
-      // Another club's destination: the writer refuses it (404), so only a raw row can hold it.
+      // Another club's destination: the writer refuses it (404), so only a raw row can hold it. `target_chosen` (V431, plan R-1)
+      // is what makes it a CHOSEN row: a raw row without it reads as 'nobody chose' and resolves the default.
       const other = await seedOrg();
       const theirs = await createStreamTarget(other.auth, other.auth.orgId, { kind: "youtube", label: "Theirs", streamKey: `yt-${randomUUID()}` });
-      await sql`insert into fixture_stream_settings (fixture_id, org_id, target_id) values (${r.fixtureId}, ${r.auth.orgId}, ${theirs.id})`;
+      await sql`insert into fixture_stream_settings (fixture_id, org_id, target_id, target_chosen) values (${r.fixtureId}, ${r.auth.orgId}, ${theirs.id}, true)`;
       break;
     }
   }
