@@ -811,22 +811,35 @@ test("a printed sheet's QR, scanned early: Waiting moves to Confirm by itself, S
 // ── THE WIDEST COMBINATION (review round 3) ─────────────────────────────────
 // Once the round wraps inside itself, its WIDEST WORD sets its min-content
 // width, and beside a wide status that can still be wider than the room the
-// line has — es "POR INCOMPARECENCIA" beside a logo at 320. So the same bracket
-// also forfeits the match whose es label paints the widest word, picked by
-// MEASURED width on a live Spanish scan page (never by character count), and
-// reads it at 320 beside that status and the logo — measured, the label is
-// wider than its room, and it must still paint whole.
-/** Org seed + sign-in, then competition, division, entrants, stage, generate,
- *  start, the draw, two mints for the measuring and forfeited pages, five
- *  results and their reads, a forfeit (state + event), the reset's poll, a
- *  mint, and the forfeit's read back. */
-const DE_REACHES = 29;
+// line has. So the same bracket also puts the match whose es label paints the
+// widest word into the status whose es word paints widest — BOTH picked by
+// MEASURED width on a live Spanish scan page (never by character count, never
+// by a typed key) — and reads it at 320 beside that status and the logo:
+// measured, the label is wider than its room, and it must still paint whole.
+// The widest status was es "POR INCOMPARECENCIA" (forfeited) until W2a's held
+// result, "REQUIERE UNA DECISIÓN" (needs_decision), painted wider (ruling D-R2).
+// A held result needs a sport that can end level, so the bracket is football
+// 11-a-side: a 0–0 at full time in a knockout is HELD (X-BR-2), where a generic
+// level result is refused (GN-KO-1). Every status the case can land on has its
+// own reach through the organiser's API (`REACH_STATUS`); a widest status with
+// none is refused by name, never skipped.
+/** One football match on the record: kick-off, a goal (none for a 0–0), half
+ *  time, full time — each a read of the ledger's tip and a POST. */
+const DE_MATCH_REACHES = 4 * 2;
+/** The matches the reach plays: the five before the grand final, the grand
+ *  final, and the widest-label match's hold and settle (one match's worth). */
+const DE_MATCHES = 7;
+/** Org seed + sign-in, competition, division, entrants, stage, generate,
+ *  start, the draw, the measuring page's mint, the draw read before each of
+ *  the six plays, the draw after them, the reset's poll and mint, and the
+ *  widest-label match's status read and mint; then the matches themselves. */
+const DE_REACHES = 21 + DE_MATCHES * DE_MATCH_REACHES;
 const DE_LOCALES: readonly Locale[] = ["en", "fr", "es", "nl"];
 /** The measuring page, then per locale the reset's Confirm and the forfeit. */
 const DE_PAGES = 1 + 2 * DE_LOCALES.length;
 const DE_BUDGET_MS = Math.max(120_000, STEP_MS + DE_REACHES * REACH_MS + DE_PAGES * (STEP_MS + 3 * REACH_MS));
 
-test("the scorebug's LONGEST round label — a double-elimination reset — is whole at 320 beside the org logo, in en, fr, es and nl; so is the WIDEST es label beside the widest status, forfeited", async ({
+test("the scorebug's LONGEST round label — a double-elimination reset — is whole at 320 beside the org logo, in en, fr, es and nl; so is the WIDEST es label beside the WIDEST es status, both measured (held or forfeited, whichever paints wider)", async ({
   browser,
 }, testInfo) => {
   test.setTimeout(DE_BUDGET_MS);
@@ -852,6 +865,8 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
     const api = owner.request;
 
     // ---- Reach: a started four-entrant double elimination --------------------
+    // Football 11-a-side, not generic: the widest-status case below may need a
+    // HELD result, and only a sport that can end level holds one (D-R2).
     const comp = await apiJson<{ id: string }>(api, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
       name: `Scan DE ${tag}`,
@@ -860,13 +875,13 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
     expect(comp.status, `competition POST → ${JSON.stringify(comp.error)}`).toBe(201);
     const div = await apiJson<{ id: string }>(api, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
       name: DIVISION,
-      sport_key: "generic",
-      variant_key: "score",
-      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      sport_key: "football",
+      variant_key: "11-a-side",
     });
     expect(div.status, `division POST → ${JSON.stringify(div.error)}`).toBe(201);
     const divisionId = div.data!.id;
-    const added = await addEntrantsViaApi(api, divisionId, [`Ada ${tag}`, `Bo ${tag}`, `Cy ${tag}`, `Di ${tag}`]);
+    // A team sport's entrants are teams (`assertRosterFits` refuses an individual football entrant).
+    const added = await addEntrantsViaApi(api, divisionId, [`Ada ${tag}`, `Bo ${tag}`, `Cy ${tag}`, `Di ${tag}`], "team");
     expect(added.status).toBe(201);
     const stage = await apiJson<{ id: string }>(api, `/api/v1/divisions/${divisionId}/stages`, "POST", {
       seq: 1,
@@ -891,7 +906,7 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
     // in French, by CHARACTER count — found by the board's own function, not
     // typed here. It is the reset, the one match whose Confirm this bracket
     // can show last. What paints WIDEST is measured, not counted: see the
-    // forfeited case below (in es the widest word is not the reset's).
+    // widest-status case below (in es the widest word is not the reset's).
     const drawn = await draw();
     const frLabels = boardRoundCodes(drawn, [de], lookup(FR));
     const longest = [...frLabels.entries()].sort(([, a], [, b]) => b.label.length - a.label.length)[0]!;
@@ -933,11 +948,19 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
     })();
     const byWidth = (a: { width: number }, b: { width: number }) => b.width - a.width;
     const statusesByWidth = statusKeys.map((key) => ({ key, ...measured.get(ES[key]!)! })).sort(byWidth);
+    expect(statusesByWidth.length, "es statuses measured").toBeGreaterThan(1);
     const widestStatus = statusesByWidth[0]!;
-    // The reach below forfeits (a no-show, the organiser's own event), so the
-    // widest status must be the forfeit's; a copy change that makes another
-    // status wider moves this case to that status, not past it.
-    expect(widestStatus.key, `the widest es status: ${JSON.stringify(statusesByWidth)}`).toBe("score.status.forfeited");
+    // The status is the fixture's own token: `score.status.<status>` is the
+    // word the scorebug prints for it (`scoreStatusLabel`).
+    const widestToken = widestStatus.key.slice("score.status.".length);
+    // The case is only as strong as the pick: no measured status paints wider
+    // than the one it reads (every one compared, none skipped).
+    let compared = 0;
+    for (const other of statusesByWidth) {
+      expect(other.width, `${other.key} paints no wider than ${widestStatus.key}`).toBeLessThanOrEqual(widestStatus.width);
+      compared++;
+    }
+    expect(compared, "es statuses compared with the widest").toBe(statusKeys.length);
     const labelsByWidth = drawn
       .map((f) => ({ f, ...measured.get(esLabels.get(f.id)!.label)! }))
       .sort((a, b) => b.widestWord - a.widestWord || b.width - a.width);
@@ -949,20 +972,103 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
       contentType: "application/json",
     });
 
-    /** One match decided, the home side winning: by the away side's no-show
-     *  forfeit when it is the widest-label match (its scorebug must then read
-     *  "forfeited"), by a result otherwise. `f` is read fresh (its seats). */
-    const settle = async (f: Fx, homeWins: boolean) => {
-      if (f.id !== widest.f.id) return scoreFixture(api, f.id, homeWins ? 2 : 1, homeWins ? 1 : 2);
-      const state = await apiJson<{ last_seq: number }>(api, `/api/v1/fixtures/${f.id}/state`);
+    // ---- The record, over the organiser's API --------------------------------
+    const post = async (id: string, type: string, payload: Record<string, unknown> = {}) => {
+      const state = await apiJson<{ last_seq: number }>(api, `/api/v1/fixtures/${id}/state`);
       expect(state.status, `state read: ${JSON.stringify(state.error)}`).toBe(200);
-      const forfeit = await apiJson(api, `/api/v1/fixtures/${f.id}/events`, "POST", {
+      const res = await apiJson(api, `/api/v1/fixtures/${id}/events`, "POST", {
         expected_seq: state.data!.last_seq,
-        type: "core.forfeit",
-        payload: { by: homeWins ? f.away_entrant_id : f.home_entrant_id, reason: "no-show" },
+        type,
+        payload,
         idempotency_key: randomUUID(),
       });
-      expect(forfeit.status, `the organiser's forfeit: ${JSON.stringify(forfeit.error)}`).toBe(201);
+      expect(res.status, `${type} on ${id}: ${JSON.stringify(res.error)}`).toBe(201);
+    };
+    /** Ninety minutes: kick-off, the winner's goal (none for a 0–0), half time,
+     *  full time — the stream `settle-seating.test.ts` pins for football. */
+    const play = async (id: string, winner: string | null) => {
+      await post(id, "core.start");
+      if (winner !== null) await post(id, "football.goal", { by: winner });
+      await post(id, "football.period", { phase: "HT" });
+      await post(id, "football.period", { phase: "FT" });
+    };
+    /** How the record reaches each status the widest-status case can land on.
+     *  The status is MEASURED, so the case goes wherever the widest es word is;
+     *  `release` puts the bracket back on its way when the status seats nobody
+     *  (the home side advancing, as every other match here). */
+    const REACH_STATUS: Record<string, { reach: (f: Fx, homeWins: boolean) => Promise<void>; release?: (f: Fx, homeWins: boolean) => Promise<void> }> = {
+      // the organiser records the other side's no-show: decided, nothing held
+      forfeited: {
+        reach: (f, homeWins) => post(f.id, "core.forfeit", { by: homeWins ? f.away_entrant_id : f.home_entrant_id, reason: "no-show" }),
+      },
+      // 0–0 at full time: 11-a-side configures no extra time or shootout, so a
+      // knockout HOLDS it (X-BR-2); the organiser's settle then seats the winner
+      needs_decision: {
+        reach: (f) => play(f.id, null),
+        release: (f, homeWins) => post(f.id, "core.settle", { winner: homeWins ? f.home_entrant_id : f.away_entrant_id, method: "lot" }),
+      },
+    };
+    const widestReach = REACH_STATUS[widestToken];
+    expect(
+      widestReach,
+      `the widest es status is "${widestToken}" (${JSON.stringify(statusesByWidth)}) and the record has no reach to it here: add one to REACH_STATUS`,
+    ).toBeDefined();
+
+    // ---- The test: the widest combination, at 320 (review round 3, D-R2) ----
+    const shots: string[] = [];
+    let widestRead = 0;
+    /** The widest-label match in the widest status, read in every language at
+     *  320 beside that status and the logo. Called the moment the record puts
+     *  it there — before a release moves it on. */
+    const readWidest = async (secret: string) => {
+      for (const loc of DE_LOCALES) {
+        const dict = DICTS[loc];
+        const label = boardRoundCodes(drawn, [de], lookup(dict)).get(widest.f.id)!.label;
+        const phone = await phoneIn(browser, loc);
+        try {
+          await phone.setViewportSize({ width: 320, height: 900 });
+          await phone.goto(`/score/${secret}`);
+          const status = phone.locator("header").getByText(say(dict, widestStatus.key), { exact: true });
+          await expect(status, `${loc}: the scorebug says the match is ${widestToken}`).toBeVisible({ timeout: STEP_MS });
+          await expect(phone.locator("header p img"), `${loc}: the org logo is on the scorebug's line`).toBeVisible();
+          await expect(phone.getByTestId("scan-scorebug-round")).toContainText(label);
+          if (loc === "es") {
+            // The measurement is the status's own width, not a stand-in for it…
+            const shown = await status.evaluate((el) => el.getBoundingClientRect().width);
+            expect(Math.abs(shown - widestStatus.width), `es: the status paints ${shown}px, measured ${widestStatus.width}px`).toBeLessThanOrEqual(1);
+            // …and the case is the one that clipped: the widest word is wider
+            // than all the room the label has on its line.
+            const room = await phone.getByTestId("scan-scorebug-round-label").evaluate((el) => {
+              const clip = el.closest('[data-testid="scan-scorebug-clip"]')!;
+              return clip.getBoundingClientRect().right - el.getBoundingClientRect().left;
+            });
+            expect(
+              widest.widestWord,
+              `es 320: precondition — the widest word of "${label}" (${widest.widestWord}px) is wider than its room (${room}px)`,
+            ).toBeGreaterThan(room);
+          }
+          await expectRoundWhole(phone, label, `${loc} ${widestToken} "${label}"`);
+          await phone.setViewportSize({ width: 320, height: 900 });
+          const path = testInfo.outputPath(`${loc}-${widestToken}-widest-320.png`);
+          await phone.screenshot({ path, fullPage: true, animations: "disabled" });
+          await testInfo.attach(`${loc}-${widestToken}-widest-320`, { path, contentType: "image/png" });
+          shots.push(path);
+        } finally {
+          await phone.context().close();
+        }
+      }
+      widestRead++;
+    };
+
+    /** One match decided, the home side winning — by a result, or, for the
+     *  widest-label match, by the reach to the widest status, read there, then
+     *  released if that status seats nobody. `f` is read fresh (its seats). */
+    const settle = async (f: Fx, homeWins: boolean, secret?: string) => {
+      if (f.id !== widest.f.id) return play(f.id, homeWins ? f.home_entrant_id : f.away_entrant_id);
+      await widestReach!.reach(f, homeWins);
+      expect((await one(f.id)).status, `the record: the widest-label match is ${widestToken}`).toBe(widestToken);
+      await readWidest(secret ?? (await mintFor(f.id)).secret);
+      if (widestReach!.release !== undefined) await widestReach!.release(f, homeWins);
     };
 
     // ---- Reach: play every match before the grand final (home wins) ----------
@@ -1000,7 +1106,6 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
     const link = await mintFor(reset.id);
 
     // ---- The test: the reset's Confirm scorebug, at 320, in four languages ---
-    const shots: string[] = [];
     for (const loc of DE_LOCALES) {
       const label = boardRoundCodes(drawn, [de], lookup(DICTS[loc])).get(reset.id)!.label;
       const phone = await phoneIn(browser, loc);
@@ -1025,48 +1130,11 @@ test("the scorebug's LONGEST round label — a double-elimination reset — is w
       }
     }
 
-    // ---- The test: the widest combination, forfeited, at 320 (review round 3)
-    // A reset that is itself the widest is forfeited only now, after its
-    // Confirm was read above; any other was forfeited where it was played.
-    if (widest.f.id === reset.id) await settle(await one(reset.id), true);
-    expect((await one(widest.f.id)).status, "the record: the widest-label match was forfeited").toBe("forfeited");
-    const forfeitLink = widest.f.id === reset.id ? link : await mintFor(widest.f.id);
-    for (const loc of DE_LOCALES) {
-      const dict = DICTS[loc];
-      const label = boardRoundCodes(drawn, [de], lookup(dict)).get(widest.f.id)!.label;
-      const phone = await phoneIn(browser, loc);
-      try {
-        await phone.setViewportSize({ width: 320, height: 900 });
-        await phone.goto(`/score/${forfeitLink.secret}`);
-        const status = phone.locator("header").getByText(say(dict, "score.status.forfeited"), { exact: true });
-        await expect(status, `${loc}: the scorebug says the match was forfeited`).toBeVisible({ timeout: STEP_MS });
-        await expect(phone.locator("header p img"), `${loc}: the org logo is on the scorebug's line`).toBeVisible();
-        await expect(phone.getByTestId("scan-scorebug-round")).toContainText(label);
-        if (loc === "es") {
-          // The measurement is the status's own width, not a stand-in for it…
-          const shown = await status.evaluate((el) => el.getBoundingClientRect().width);
-          expect(Math.abs(shown - widestStatus.width), `es: the status paints ${shown}px, measured ${widestStatus.width}px`).toBeLessThanOrEqual(1);
-          // …and the case is the one that clipped: the widest word is wider
-          // than all the room the label has on its line.
-          const room = await phone.getByTestId("scan-scorebug-round-label").evaluate((el) => {
-            const clip = el.closest('[data-testid="scan-scorebug-clip"]')!;
-            return clip.getBoundingClientRect().right - el.getBoundingClientRect().left;
-          });
-          expect(
-            widest.widestWord,
-            `es 320: precondition — the widest word of "${label}" (${widest.widestWord}px) is wider than its room (${room}px)`,
-          ).toBeGreaterThan(room);
-        }
-        await expectRoundWhole(phone, label, `${loc} forfeited "${label}"`);
-        await phone.setViewportSize({ width: 320, height: 900 });
-        const path = testInfo.outputPath(`${loc}-forfeited-widest-320.png`);
-        await phone.screenshot({ path, fullPage: true, animations: "disabled" });
-        await testInfo.attach(`${loc}-forfeited-widest-320`, { path, contentType: "image/png" });
-        shots.push(path);
-      } finally {
-        await phone.context().close();
-      }
-    }
+    // A reset that is itself the widest-label match reaches the widest status
+    // only now, after its Confirm was read above; any other was read where it
+    // was played.
+    if (widest.f.id === reset.id) await settle(await one(reset.id), true, link.secret);
+    expect(widestRead, "the widest combination was read once").toBe(1);
     // Eight pictures, and eight DIFFERENT ones (AGENTS.md 10).
     expect(shots).toHaveLength(2 * DE_LOCALES.length);
     expect(new Set(shots.map((p) => readFileSync(p).toString("base64"))).size, "no two captures are identical").toBe(
