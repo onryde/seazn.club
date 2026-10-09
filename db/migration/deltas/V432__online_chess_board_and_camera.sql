@@ -105,3 +105,18 @@ create policy fixture_external_play_tenant on fixture_external_play
   using (org_id = current_org_id())
   with check (org_id = current_org_id());
 grant select, insert, update, delete on fixture_external_play to app_user;
+
+-- =============================================================================
+-- Camera policy (design §5.1, D5). COLUMNS, not config keys: divisions.config
+-- and stages.config are sport-module-validated snapshots and would strip a
+-- foreign key — the same reason V209 put scorer_can_finalize in a column.
+-- The competition is the floor (NOT NULL, 'off' for all existing data, so no
+-- legacy competition can accidentally start spending on video); a stage's
+-- null means "inherit". effectivePolicy (T6) reads exactly these two levels.
+-- =============================================================================
+alter table competitions
+  add column camera_policy text not null default 'off'
+    check (camera_policy in ('off', 'optional', 'required'));
+alter table stages
+  add column camera_policy text null
+    check (camera_policy in ('off', 'optional', 'required'));
