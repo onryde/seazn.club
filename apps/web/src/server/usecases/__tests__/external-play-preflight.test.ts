@@ -6,6 +6,10 @@
 // REST surface, so every seat below passes through the adapter's real
 // response parsing — a double that answered `true`/`false` directly would
 // prove only the double (AGENTS.md, "the inert seam").
+//
+// Single sport, deliberately: online play exists only for boardgame
+// (supportsOnlinePlay / ONLINE_PLAY_SPORT), so every other sport is refused by
+// the guard before the seat is reached — asserted once below ("another sport").
 import { randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync } from "node:fs";
