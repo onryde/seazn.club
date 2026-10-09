@@ -113,6 +113,7 @@ function viewOf(
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 
@@ -467,6 +468,7 @@ describe("hockey and ice hockey own the headline in the states where it says som
       contextOverrides: {},
       stageKind: null,
       canOrganise: true,
+      entrantNames: {},
     };
   }
 

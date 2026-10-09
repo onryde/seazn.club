@@ -107,6 +107,7 @@ function view(events: readonly EventEnvelope[]): PadHostView {
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 

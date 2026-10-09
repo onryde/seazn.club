@@ -275,6 +275,24 @@ describe("OfficiatingLane — held fixtures and localised statuses (W2a)", () =>
     expect(fr["score.status.needs_decision"]).not.toBe(en["score.status.needs_decision"]);
   });
 
+  it("D-H3: a held duty's link reads View match — the official has nothing to score there; a live duty still reads Score", () => {
+    const held = makeAssignment({ fixture_status: "needs_decision" });
+    const html = lane(held, "assignments");
+    expect(html).toMatch(new RegExp(`<a[^>]*href="${scoreHref(held)}"[^>]*>${en["me.off.view"]} →</a>`));
+    expect(html).not.toContain(en["me.off.score"]);
+    expect(lane(held, "assignments", fr)).toContain(`${fr["me.off.view"]} →`);
+    expect(fr["me.off.view"]).not.toBe(en["me.off.view"]);
+    // The positive pairs: a scheduled and an in-play duty keep "Score this match".
+    let checked = 0;
+    for (const status of ["scheduled", "in_play"]) {
+      const live = lane(makeAssignment({ fixture_status: status }), "assignments");
+      expect(live, status).toContain(`${en["me.off.score"]} →`);
+      expect(live, status).not.toContain(en["me.off.view"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("a declined held duty keeps no link (the existing decline rule still wins)", () => {
     const a = makeAssignment({ fixture_status: "needs_decision", response: "declined" });
     expect(lane(a, "assignments")).not.toContain(`href="${scoreHref(a)}"`);

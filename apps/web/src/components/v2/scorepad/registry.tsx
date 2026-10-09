@@ -162,6 +162,15 @@ export function personNamesFrom(home: SideInfo, away: SideInfo): Readonly<Record
   return names;
 }
 
+/**
+ * W2a fix round 1 (I2) — each side's ENTRANT display name, for `PadHostView.entrantNames`. The loaders' `SideInfo.name`
+ * is the name the console heading and the device-link header already show, so the pad's "who advances" options name
+ * the same two entrants (spec §5.5) — never a person, which is all `personNamesFrom` above can key.
+ */
+export function entrantNamesFrom(home: SideInfo, away: SideInfo): Readonly<Record<"home" | "away", string>> {
+  return { home: home.name, away: away.name };
+}
+
 // ---------------------------------------------------------------------------
 // <ScorePad/> — the single mount both dispatchers use
 // ---------------------------------------------------------------------------
@@ -264,6 +273,7 @@ export function ScorePad(props: ScorePadProps) {
 
   const lineups = useMemo(() => lineupPairFrom(props.home, props.away), [props.home, props.away]);
   const personNames = useMemo(() => personNamesFrom(props.home, props.away), [props.home, props.away]);
+  const entrantNames = useMemo(() => entrantNamesFrom(props.home, props.away), [props.home, props.away]);
   const transport = useMemo(
     () => (props.auth.kind === "device_link" ? deviceLinkTransport(props.auth.token) : sessionTransport()),
     [props.auth],
@@ -303,6 +313,7 @@ export function ScorePad(props: ScorePadProps) {
       cfg={props.resolvedConfig}
       stageKind={props.stageKind}
       canOrganise={props.canOrganise}
+      entrantNames={entrantNames}
       fixtureId={props.fixtureId}
       lineups={lineups}
       identity={props.identity}

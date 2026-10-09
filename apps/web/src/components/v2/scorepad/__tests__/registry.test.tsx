@@ -303,8 +303,9 @@ vi.mock("../v3/registry", async (importOriginal) => {
 });
 
 describe("ScorePad — the v3 lane renders PadHostV3 with the resolved skin (R2/task B)", () => {
-  const home: SideInfo = { id: "ent-h", name: "Home", lineup: [], members: [] };
-  const away: SideInfo = { id: "ent-a", name: "Away", lineup: [], members: [] };
+  // Names that differ from any side-label fallback, so a dropped `entrantNames` cannot pass (fix round 1, I2).
+  const home: SideInfo = { id: "ent-h", name: "Riverside Chess Club", lineup: [], members: [] };
+  const away: SideInfo = { id: "ent-a", name: "Summit Knights", lineup: [], members: [] };
   const genericConfig = { resultMode: "win_loss", allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
   it("a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin", () => {
@@ -328,6 +329,8 @@ describe("ScorePad — the v3 lane renders PadHostV3 with the resolved skin (R2/
     // value that differs from either default, so a dropped prop cannot pass.
     expect((output?.props as { stageKind?: unknown }).stageKind).toBe("knockout");
     expect((output?.props as { canOrganise?: unknown }).canOrganise).toBe(false);
+    // Fix round 1 (I2): each side's ENTRANT name reaches the host keyed by side, for the tie-break's "who advances".
+    expect((output?.props as { entrantNames?: unknown }).entrantNames).toEqual({ home: "Riverside Chess Club", away: "Summit Knights" });
     expect((output?.props as { skin?: unknown }).skin).toBe(FAKE_V3_SKIN);
     expect((output?.props as { fixtureId?: unknown }).fixtureId).toBe("fx-1");
     expect((output?.props as { queueDbName?: unknown }).queueDbName).toBe("scorepad-fx-1");

@@ -118,8 +118,9 @@ function FixtureCard({
   tz: string;
   locale: string;
 }) {
-  // W2a (spec §5.5): a held fixture (`needs_decision` — a bracket game that ended level, or an abandon that decided
-  // nobody) has no winner until the organiser settles it, whatever a stray outcome says: the card never highlights one.
+  // W2a (spec §5.5): a held fixture (`needs_decision` — a bracket game that ended level) has no winner until the
+  // organiser settles it, whatever a stray outcome says: the card never highlights one. (A recorded abandon that decided
+  // nobody is ALSO held, but it is stored `abandoned` — this status test does not see it, and its card reads abandoned.)
   const held = fixture.status === "needs_decision";
   const winner = held ? undefined : fixture.outcome?.winner;
   const side = (id: string | null, slotLabel: SlotLabel | null) => {

@@ -542,7 +542,8 @@ function winnerSideOf(answers: Readonly<Record<string, string>>): Side {
  * the scorer taps who that is — colours are W2c's, ruling 82); step 3 the optional score, rapid and blitz only.
  *
  * Two winner steps, each gated on the rung, keep the hint off rapid and blitz without a dynamic step. Option labels
- * are keys; a winner option also carries the player's name (`labelText`) when the lineup seats one.
+ * are keys; a winner option also carries a name (`labelText`): the side's ENTRANT (fix round 1, I2 — the tie-break
+ * advances an entrant, and with no pairing card nobody else is named), else the player the lineup seats.
  */
 function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
   const state = asState(view.state);
@@ -550,7 +551,9 @@ function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
     const names = onFieldPlayers(view.squads, side)
       .map((member) => view.personNames[member.personId])
       .filter((name): name is string => typeof name === "string" && name.length > 0);
-    return { id: side, label: SIDE_LABEL[side], ...(names.length > 0 ? { labelText: names.join(" & ") } : {}) };
+    const entrant = view.entrantNames[side];
+    const labelText = entrant !== undefined && entrant.length > 0 ? entrant : names.length > 0 ? names.join(" & ") : undefined;
+    return { id: side, label: SIDE_LABEL[side], ...(labelText !== undefined ? { labelText } : {}) };
   });
   void t;
   return {

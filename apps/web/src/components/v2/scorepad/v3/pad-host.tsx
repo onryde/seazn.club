@@ -1479,6 +1479,8 @@ export interface PadHostV3Props {
   stageKind: string | null;
   /** W2a D-O1 — copied into `PadHostView.canOrganise`; see its doc (types.ts). False for every device link. */
   canOrganise: boolean;
+  /** W2a fix round 1 (I2) — copied into `PadHostView.entrantNames`; see its doc (types.ts). */
+  entrantNames: PadHostView["entrantNames"];
   fixtureId: string;
   lineups: LineupPair;
   identity: OwnIdentity;
@@ -1825,8 +1827,9 @@ export function PadHostV3(props: PadHostV3Props) {
       contextOverrides,
       stageKind: props.stageKind,
       canOrganise: props.canOrganise,
+      entrantNames: props.entrantNames,
     }),
-    [props.cfg, props.stageKind, props.canOrganise, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
+    [props.cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
   );
 
   // `sheets` is resolved BEFORE the tiles so the band filter below can read a
@@ -2549,7 +2552,9 @@ export function PadHostV3(props: PadHostV3Props) {
           data-role="v3-ribbon"
           className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 max-md:order-1"
         >
-          <span className="min-w-0 flex-1 truncate text-sm text-slate-700">{ribbon.text}</span>
+          {/* W2a fix round 1: two lines, clamped — not `truncate`. The ribbon is standing context now ("Result
+              recorded — …" for a whole chess tie-break), and at 320 truncate cut it to a word and an ellipsis. */}
+          <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm text-slate-700">{ribbon.text}</span>
           {/* Withdrawn, not disabled, when nothing on the strip can be taken
               back (R7/C4) — a disabled control still reads as "there is an
               action here", and after a void there is not. The strip's TEXT

@@ -140,7 +140,37 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
     expect(sheet.buildPayload({ rung: "armageddon", "winner-armageddon": "home" })).toEqual({ rung: "armageddon", winner: "H" });
   });
 
-  it("the winner options name the players the lineup puts on the board, and fall back to Home/Away", () => {
+  it("I2 (spec §5.5 'two entrants, always'): with NO pairing card the winner and armageddon options read the ENTRANTS' names, ids stay home/away", () => {
+    // The production shape the review caught: a chess knockout with no pairing card, so no person is named on the board,
+    // and every option read "Home"/"Away". The entrant display names arrive in the view (registry.tsx `entrantNamesFrom`).
+    const view = liveView("boardgame", {
+      stageKind: "knockout",
+      cfg: TB_CFG,
+      events: [START, DRAWN],
+      entrantNames: { home: "Riverside Chess Club", away: "Summit Knights" },
+    });
+    const sheet = buildSheets(view, echo)[TIEBREAK_TILE_ID]!;
+    let checked = 0;
+    for (const id of ["winner", "winner-armageddon"]) {
+      const step = sheet.steps.find((s) => s.id === id)!;
+      expect(step.kind === "choice" && step.options.map((o) => o.id), id).toEqual(["home", "away"]);
+      expect(step.kind === "choice" && step.options.map((o) => o.labelText), id).toEqual(["Riverside Chess Club", "Summit Knights"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The entrant still wins over a person the lineup seats: the tie-break advances an ENTRANT.
+    const seated = liveView("boardgame", {
+      stageKind: "knockout",
+      cfg: TB_CFG,
+      events: [START, DRAWN],
+      personNames: { "H-p1": "Magnus Carlsen", "A-p1": "Hou Yifan" },
+      entrantNames: { home: "Riverside Chess Club", away: "Summit Knights" },
+    });
+    const winner = buildSheets(seated, echo)[TIEBREAK_TILE_ID]!.steps.find((s) => s.id === "winner")!;
+    expect(winner.kind === "choice" && winner.options.map((o) => o.labelText)).toEqual(["Riverside Chess Club", "Summit Knights"]);
+  });
+
+  it("with no entrant name the winner options fall back to the players the lineup puts on the board, then to Home/Away", () => {
     const names = { "H-p1": "Magnus Carlsen", "A-p1": "Hou Yifan" }; // defaultLineupPair seats `<entrant>-p1`
     const winnerStep = (personNames: Record<string, string>) =>
       buildSheets(liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN], personNames }), echo)[TIEBREAK_TILE_ID]!.steps.find(
@@ -250,12 +280,12 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
     expect(ids(false).length).toBe(ids(true).length - 1);
   });
 
-  it("the host builds its view from its props: the stage kind and organiser flag reach every skin (source audit)", () => {
+  it("the host builds its view from its props: the stage kind, organiser flag and entrant names reach every skin (source audit)", () => {
     // pad-host.tsx is not renderable in this node workspace (no DOM); this mirror is the same audit clock.test.ts keeps
     // for clockAt. The behavioural witness is bracket-finish.spec.ts (a generic bracket shows no Draw on the pad).
     const src = readFileSync(fileURLToPath(new URL("../pad-host.tsx", import.meta.url)), "utf8");
-    expect(src).toContain("      stageKind: props.stageKind,\n      canOrganise: props.canOrganise,\n");
-    expect(src).toContain("[props.cfg, props.stageKind, props.canOrganise, pipeline.state,");
+    expect(src).toContain("      stageKind: props.stageKind,\n      canOrganise: props.canOrganise,\n      entrantNames: props.entrantNames,\n");
+    expect(src).toContain("[props.cfg, props.stageKind, props.canOrganise, props.entrantNames, pipeline.state,");
   });
 
   it("D-P1: the organiser keeps Draw and the double-forfeit chip in every stage kind while live", () => {

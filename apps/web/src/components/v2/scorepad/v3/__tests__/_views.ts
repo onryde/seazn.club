@@ -18,6 +18,7 @@ export interface LiveViewOpts {
   band?: FidelityBand;
   canOrganise?: boolean;
   personNames?: Readonly<Record<string, string>>;
+  entrantNames?: PadHostView["entrantNames"];
 }
 
 export function liveView(sportKey: string, o: LiveViewOpts = {}): PadHostView {
@@ -42,5 +43,6 @@ export function liveView(sportKey: string, o: LiveViewOpts = {}): PadHostView {
     contextOverrides: {},
     stageKind: o.stageKind ?? null,
     canOrganise: o.canOrganise ?? true,
+    entrantNames: o.entrantNames ?? {},
   };
 }

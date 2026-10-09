@@ -184,6 +184,8 @@ export const DISMISSAL_KINDS = [...CricketWicket.shape.kind.options, "not_out", 
 // own sentence and the dictionary gates below cover it. Before W2a they fell through to `regulation`.
 const WIN_METHODS = ["regulation", "dls", "innings", "super_over", "boundary_count", "shootout", ...BRACKET_DECIDER_METHODS] as const;
 export const RESULT_KINDS = [...WIN_METHODS, "tie", "no_result", "draw", "forfeit"] as const;
+/** The decider methods `resultMsg` answers before the cricket margin (fix round 1, M13). */
+const DECIDER_METHOD_SET: ReadonlySet<string> = new Set(BRACKET_DECIDER_METHODS);
 /** W2a — the scored tie-break sentences ("won on rapid tie-break (1½–½)"), one per rung with a match score. Exported
  *  for the dictionary gates: these keys are built from a template, so no source scan finds them. */
 export const RESULT_SCORED_KEYS: readonly string[] = TIEBREAK_SCORED_RUNGS.map((r) => `matchCentre.result.tiebreak_${r}.scored`);
@@ -788,11 +790,12 @@ function resultMsg(
           return { key: `matchCentre.result.${kind}.scored`, params: { winner, score: margins.tiebreakScore } };
         }
       }
-      // A method that IS the sentence ("won on the super over") needs no count. A W2a decider ("advanced on lot", "won
-      // on Armageddon") needs no branch of its own: it reaches the bare sentence below, because a settle or tie-break
-      // only ever follows a LEVEL result and every level cricket fold carries `margin: null` (cricket.ts, each
-      // tie/draw/no_result return) — so the cricket branch cannot word a count for it.
-      if (kind === "super_over" || kind === "boundary_count") {
+      // A method that IS the sentence ("won on the super over", and every W2a decider: "advanced on lot", "won on
+      // Armageddon") needs no count, and is answered BEFORE the cricket margin. Fix round 1 (M13) restores the decider
+      // half as a guard: today a settle or tie-break only ever follows a LEVEL result, whose cricket fold carries
+      // `margin: null` (cricket.ts), so the margin branch would not fire — but that is a premise about the ledger, and
+      // the guard keeps the method's sentence when it breaks (match-centre.test.ts's crafted case).
+      if (kind === "super_over" || kind === "boundary_count" || DECIDER_METHOD_SET.has(kind)) {
         return { key: `matchCentre.result.${kind}`, params: { winner } };
       }
       // Cricket: word the fold's own margin. An unrecognised method still gets

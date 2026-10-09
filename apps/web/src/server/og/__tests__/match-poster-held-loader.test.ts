@@ -3,6 +3,7 @@
 // never happened; this pins the seam from the loader's own read (class 1: the model test alone would prove a fixture).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
+import publicEn from "@/dictionaries/en/public.json";
 
 const getPublicFixture = vi.fn();
 vi.mock("@/server/public-site/data", () => ({ getPublicFixture: (...a: unknown[]) => getPublicFixture(...a) }));
@@ -38,7 +39,9 @@ describe("loadMatchPosterModel — held comes from the raw status (W2a)", () => 
     const m = (await loadMatchPosterModel("o", "c", "d", "f"))!;
     expect(m.variant).toBe("held");
     expect([m.sides[0].score, m.sides[1].score]).toEqual(["½", "½"]);
-    expect(m.hero).toBe("Needs a decision");
+    // The public held line (ruling D-H3, read from the dictionary the poster ships with — never typed here).
+    expect(m.hero).toBe((publicEn as Record<string, string>)["matchCentre.status.needs_decision"]);
+    expect(m.hero, "D-H3's spectator wording, not the organiser's").not.toBe("Needs a decision");
   });
 
   it("the positive pair: an abandoned fixture on the same folded header stays the upcoming poster", async () => {

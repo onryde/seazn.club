@@ -212,7 +212,8 @@ describe("the console renders people, not entry labels (D-6)", () => {
         viewerPlan="community"
       />,
     );
-    expect(html).toContain("Ada Okonkwo won on rapid tie-break (1½–½)");
+    // Fix round 1 (M1): the score is glued (a nowrap span) so it never splits across lines on a phone.
+    expect(html).toContain('Ada Okonkwo won on rapid tie-break (<span class="whitespace-nowrap">1½–½</span>)');
   });
 
   it("still shows a football team by its team name", () => {

@@ -184,9 +184,10 @@ export interface MatchPosterInput {
   stageName: string | null;
   header: MatchCentreDocT["header"];
   /**
-   * W2a — the fixture is HELD (`needs_decision`: a bracket game that ended level, or an abandon that decided nobody).
-   * Said by the caller from the raw fixture status, because the header folds it into "other" beside a match that never
-   * happened. A held poster shows the level board under the held line, never a "Result".
+   * W2a — the fixture is HELD (`needs_decision`: a bracket game that ended level). Said by the caller from the raw
+   * fixture status, because the header folds it into "other" beside a match that never happened. A held poster shows
+   * the level board under the held line, never a "Result". (A recorded abandon that decided nobody is held too, but is
+   * stored `abandoned`, so this flag — read off the status — is false for it, and its poster reads abandoned.)
    */
   held: boolean;
   /**

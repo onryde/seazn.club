@@ -124,6 +124,7 @@ function view(over: Partial<PadHostView> = {}): PadHostView {
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
     ...over,
   };
 }

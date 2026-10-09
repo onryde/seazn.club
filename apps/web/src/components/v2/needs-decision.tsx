@@ -31,6 +31,21 @@ export function needsDecision(
   return settleApplies(module, { outcome: f.outcome as MatchOutcome | null, abandoned: hasActiveAbandon(f.events), state: f.state });
 }
 
+/** Ruling D-H3 — WHY a held fixture is held, so the block can say so: an active abandon (it wins: an abandon over a level
+ *  score is still an abandon), else no outcome at all (only a drawn chess knockout game whose tie-break is owed is held
+ *  with none — `settleApplies`' third arm), else a level result. Read only for a fixture `needsDecision` holds. */
+export type HeldCause = "level" | "abandoned" | "tiebreak";
+export function heldCause(f: { outcome: unknown; events: readonly LedgerRow[] }): HeldCause {
+  if (hasActiveAbandon(f.events)) return "abandoned";
+  return f.outcome == null ? "tiebreak" : "level";
+}
+
+const BODY_KEY: Record<HeldCause, MessageKey> = {
+  level: "score.needsDecision.body",
+  abandoned: "score.needsDecision.body.abandoned",
+  tiebreak: "score.needsDecision.body.tiebreak",
+};
+
 /** The confirm stays disabled until both questions are answered, and from the first tap until the answer comes back
  *  (Review Focus 2: a double submit must send one settle). */
 export const confirmBlocked = (s: { winner: string | null; method: string | null; sending: boolean }): boolean =>
@@ -49,6 +64,8 @@ export type SettleResult = { ok: true } | { ok: false; message: string };
 
 interface BlockProps {
   msg: Msg;
+  /** Ruling D-H3 — which sentence the block says (`heldCause`). */
+  cause: HeldCause;
   home: { id: string; name: string };
   away: { id: string; name: string };
   busy: boolean;
@@ -72,7 +89,9 @@ export function NeedsDecisionBlock(props: BlockProps) {
         <h2 id={titleId} className="text-sm font-semibold text-orange-900">
           {msg("score.needsDecision.title")}
         </h2>
-        <p className="mt-1 text-sm text-slate-700">{msg("score.needsDecision.body")}</p>
+        <p data-cause={props.cause} className="mt-1 text-sm text-slate-700">
+          {msg(BODY_KEY[props.cause])}
+        </p>
         {refusal !== null && (
           <p data-testid="settle-error" role="alert" className="mt-2 text-sm font-medium text-red-700">
             {refusal}
@@ -107,7 +126,8 @@ export function NeedsDecisionBlock(props: BlockProps) {
 
 const FOCUSABLE = 'button:not([disabled]),input:not([disabled]),[href],[tabindex]:not([tabindex="-1"])';
 
-function SettleDialog(props: BlockProps & { onClose: () => void; onRefused: (message: string) => void }) {
+/** Exported for its node test (needs-decision.test.tsx renders it closed-over, effects inert); mounted only by the block. */
+export function SettleDialog(props: BlockProps & { onClose: () => void; onRefused: (message: string) => void }) {
   const { msg } = props;
   const [winner, setWinner] = useState<string | null>(null);
   const [method, setMethod] = useState<SettleMethod | null>(null);
@@ -191,16 +211,16 @@ function SettleDialog(props: BlockProps & { onClose: () => void; onRefused: (mes
                 type="button"
                 data-testid={`settle-winner-${e.id}`}
                 aria-pressed={winner === e.id}
-                // The name truncates on a narrow screen; the whole of it stays one hover (and the accessible name) away.
-                title={e.name}
+                // Fix round 1 (M12): the name WRAPS (two long names side by side at ≥640 lost their tails, the one thing
+                // being chosen between); the button grows to fit, and a long single word breaks rather than overflows.
                 onClick={() => setWinner(e.id)}
-                className={`flex min-h-12 min-w-0 items-center rounded-xl border px-3 text-left text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
+                className={`flex min-h-12 min-w-0 items-center rounded-xl border px-3 py-2 text-left text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
                   winner === e.id
                     ? "border-purple-600 bg-purple-600 text-white"
                     : "border-slate-200 bg-white text-slate-800 hover:border-purple-300 hover:bg-purple-50"
                 }`}
               >
-                <span className="min-w-0 truncate">{e.name}</span>
+                <span className="min-w-0 break-words">{e.name}</span>
               </button>
             ))}
           </div>

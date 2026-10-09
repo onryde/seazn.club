@@ -192,7 +192,9 @@ function ScorebugRow({
   dateTag: string;
 }) {
   const live = f.status === "in_play";
-  const decided = f.status === "decided" || f.status === "finalized";
+  // W2a fix round 1 (M5): a HELD bracket match (`needs_decision`) was played to a level score — only who advances is
+  // owed — so it reads Ended with its score lines, as a decided one does. Nobody won, so no name is bolded.
+  const decided = f.status === "decided" || f.status === "finalized" || f.status === "needs_decision";
   const winner = f.outcome?.winner ?? null;
   const lines = decided || live ? sideLines(f) : null;
   const homeName = f.home_entrant_id

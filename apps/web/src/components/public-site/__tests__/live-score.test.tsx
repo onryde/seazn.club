@@ -760,7 +760,10 @@ describe("LiveScoreBody — W2a chess tie-break sentence", () => {
     );
 
   it("states the recorded score", () => {
-    expect(render({ tiebreak: { rung: "rapid", score: "1½–½" } })).toContain("Bela Nakamura won on rapid tie-break (1½–½)");
+    // Fix round 1 (M1): the score is glued — a nowrap span, so "(1½–" / "½)" can never split at 320.
+    expect(render({ tiebreak: { rung: "rapid", score: "1½–½" } })).toContain(
+      'Bela Nakamura won on rapid tie-break (<span class="whitespace-nowrap">1½–½</span>)',
+    );
   });
 
   it("invents no score when the tie-break recorded none", () => {

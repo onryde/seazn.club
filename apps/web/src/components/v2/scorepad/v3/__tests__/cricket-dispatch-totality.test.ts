@@ -131,6 +131,7 @@ function baseView(cfg: unknown, state: unknown): PadHostView {
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 

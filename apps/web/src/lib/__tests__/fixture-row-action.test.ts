@@ -30,6 +30,7 @@ function row(over: Partial<RowActionInput> = {}): RowActionInput {
     tz: TZ,
     nowMs: NOW,
     awaitingDraw: false,
+    awaitsSettle: false,
     ...over,
   };
 }
@@ -90,6 +91,13 @@ describe("fixtureRowAction — a held fixture (W2a, needs_decision)", () => {
       }
     }
     expect(checked).toBe(6);
+  });
+
+  it("M10 (fix round 1): a recorded abandon awaiting its settle (stored `abandoned`) is held too — Settle, not a result", () => {
+    expect(fixtureRowAction(row({ status: "abandoned", awaitsSettle: true })).kind).toBe("decide");
+    expect(fixtureRowAction(row({ status: "abandoned", awaitsSettle: true, canEdit: false })).kind).toBe("view");
+    // The positive pair: the generator's void (abandoned, nothing owed) stays a result.
+    expect(fixtureRowAction(row({ status: "abandoned", awaitsSettle: false })).kind).toBe("result");
   });
 
   it("a viewer who cannot edit only views it — the settle is organiser-only on the server", () => {
@@ -290,6 +298,7 @@ describe("hasAssignedScorer — the officials cache is response-bearing", () => 
         tz: TZ,
         nowMs: NOW,
         awaitingDraw: false,
+        awaitsSettle: false,
       }),
     ).toEqual({ kind: "assign_scorer" });
     // ...and the same row with an accepted official does NOT — the pair is what
@@ -303,6 +312,7 @@ describe("hasAssignedScorer — the officials cache is response-bearing", () => 
         tz: TZ,
         nowMs: NOW,
         awaitingDraw: false,
+        awaitsSettle: false,
       }),
     ).toEqual({ kind: "score" });
   });

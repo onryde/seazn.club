@@ -895,7 +895,7 @@ describe("public Bracket — a held fixture (W2a)", () => {
     const html = render([held({ kind: "draw" })]);
     expect(html).toContain('data-held="true"');
     expect(html).toContain(enCopy.held);
-    expect(enCopy.held).toBe("Needs a decision");
+    expect(enCopy.held).toBe("Level — winner to be decided"); // ruling D-H3 (fix round 1)
     expect(html, "the level score stays").toContain("1–1");
     expect(html).not.toContain("truncate font-semibold text-ink");
     expect(html).not.toContain(enCopy.live);

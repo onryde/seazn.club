@@ -92,6 +92,7 @@ function viewAt(folded: { cfg: unknown; state: unknown }, band: FidelityBand): P
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 
@@ -115,6 +116,7 @@ function badmintonView(
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 

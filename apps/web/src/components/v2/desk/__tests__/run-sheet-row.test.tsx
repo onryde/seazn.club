@@ -64,10 +64,11 @@ function fx(o: Partial<RunSheetFixture> = {}): RunSheetFixture {
   };
 }
 
-function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | null): string {
+function rowHtml(fixture: RunSheetFixture, canEdit = true, stageName?: string | null, awaitsSettle = false): string {
   return renderToStaticMarkup(
     <RunSheetRow
       fixture={fixture}
+      awaitsSettle={awaitsSettle}
       href="/f/1"
       tz={TZ}
       orgTz={TZ}
@@ -217,6 +218,36 @@ describe("a held fixture (needs_decision) reads Needs a decision and offers Sett
     const html = rowHtml(HELD, false);
     expect(html).toContain('data-testid="run-sheet-held-chip"');
     expect(rowAction(html)).toBe("view");
+  });
+
+  it("M10 (fix round 1): a recorded abandon awaiting its settle — stored `abandoned` — is held too: chip and Settle", () => {
+    const abandoned = fx({ status: "abandoned", outcome: null });
+    const held = rowHtml(abandoned, true, undefined, true);
+    expectRowRendered(held);
+    expect(held).toContain('data-testid="run-sheet-held-chip"');
+    expect(rowAction(held)).toBe("decide");
+    // The positive pair: the generator's void (abandoned, nothing owed) is a result with no chip.
+    const voided = rowHtml(abandoned, true, undefined, false);
+    expectRowRendered(voided);
+    expect(voided).not.toContain('data-testid="run-sheet-held-chip"');
+    expect(rowAction(voided)).not.toBe("decide");
+  });
+
+  it("M10 (fix round 1): a held abandon's names are NOT struck through — the row is owed work, not a void; the void keeps its strike", () => {
+    // Seen on the 320/1280 crops: a struck-through pair beside "Needs a decision" and Settle read as two contradicting
+    // facts in one row (the void says "does not count"; the settle seats a winner). The reason line still says abandoned.
+    const abandoned = fx({ status: "abandoned", outcome: null });
+    const held = rowHtml(abandoned, true, undefined, true);
+    const voided = rowHtml(abandoned, true, undefined, false);
+    expectRowRendered(held);
+    expectRowRendered(voided);
+    expect(voided, "the positive pair: a void is struck").toContain("line-through");
+    expect(held).not.toContain("line-through");
+    expect(held, "the reason line stays").toContain(fixtureStatusLabel(msg, "abandoned"));
+    // And a played row is never struck, held flag or not.
+    const played = rowHtml(fx({ status: "decided", outcome: { kind: "win", winner: "e1", loser: "e2" } }));
+    expectRowRendered(played);
+    expect(played).not.toContain("line-through");
   });
 
   it("the positive pair: a decided row carries no held chip", () => {

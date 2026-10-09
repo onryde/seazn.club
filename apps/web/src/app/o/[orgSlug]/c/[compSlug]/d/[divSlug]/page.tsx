@@ -783,6 +783,7 @@ export default async function DivisionPage({
               matchMinutes={matchMinutes}
               viewerPlan={viewerPlan}
               streamStates={streamStates}
+              awaitingSettle={[...awaitingSettle]}
             />
           </>
         )}

@@ -69,7 +69,8 @@ import { ActivityPanel, type ActivityDetailResolver, type ActivityEvent } from "
 import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
-import { NeedsDecisionBlock, finalizeVisible, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
+import { NeedsDecisionBlock, finalizeVisible, heldCause, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
+import { ScoreSentence } from "@/components/score-sentence";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -852,8 +853,11 @@ export function FixtureConsole({
   // renders (two gates for one fact would each cover for the other, and neither would be tested).
   //  - Finding 27: a held fixture's Finalize is refused (LEVEL_RESULT_IN_BRACKET), so it is not offered.
   //  - Finding 11 / X-ST-2: forfeit and abandon are organiser-only on the server; a scorer is never offered them.
+  //  - Fix round 1 (I1): nor while HELD — a chess knockout in its tie-break is in play and undecided; the engine refuses
+  //    a forfeit there (WRONG_PHASE, boardgame.ts) but would take an abandon, so THIS gate is what keeps both off a held
+  //    match, and the settle above is the organiser's way out.
   const offerFinalize = finalizeVisible({ decided, held });
-  const offerOrganiserActions = !decided && canOrganise;
+  const offerOrganiserActions = !decided && !held && canOrganise;
   // Owner ruling 17 — the padSpec resolved purely to decide whether a
   // DECIDED fixture still keeps the pad mounted (`shouldMountPad` above).
   // `scorePadV2?.resolvedConfig ?? sport.config` is the SAME cfg fallback
@@ -1053,7 +1057,8 @@ export function FixtureConsole({
             <span className="text-slate-600">{msg("schedule.vs")}</span>{" "}
             {awayName ?? resolveSlotLabel(fixture.away_slot_label ?? null, msg, "schedule.tbd")}
           </h1>
-          <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
+          {/* Fix round 1 (M6): `normal-case` — `.badge` capitalizes, which Title-Cased the localised status word. */}
+          <span className={`badge normal-case ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}
           </span>
           {/* Spec 2026-09-30 §2 — Stream's phone twin, BEFORE ⇄. Same classes as the hand-over icon. */}
@@ -1122,7 +1127,11 @@ export function FixtureConsole({
         </div>
         {/* R3.5/Task G — the v3 pad unmounts once decided; this is the
             organiser console's surviving surface for "who won, and how". */}
-        {decidedLine && <p className="mt-1 text-sm font-medium text-slate-700">{decidedLine}</p>}
+        {decidedLine && (
+          <p className="mt-1 text-sm font-medium text-slate-700">
+            <ScoreSentence text={decidedLine} />
+          </p>
+        )}
         {/* Phone-only: the round/venue/time line sits behind
             `match-details-toggle` below md (spec §3.1) — wrapped in this div
             rather than folded into the <p>'s own className so
@@ -1461,11 +1470,19 @@ export function FixtureConsole({
       {scoring && home && away && canOrganise && held && (
         <NeedsDecisionBlock
           msg={msg}
+          cause={heldCause({ outcome: live.outcome, events })}
           home={{ id: home.id, name: homeName! }}
           away={{ id: away.id, name: awayName! }}
           busy={busy || padSyncing}
           settle={settle}
         />
+      )}
+      {/* Fix round 1 (M7): an official scorer on a held fixture gets no block (the settle is organiser-only) — but one
+          line saying why the match is held, rather than a status word and silence. */}
+      {scoring && home && away && !canOrganise && held && (
+        <p data-testid="held-note" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          {msg("score.needsDecision.waiting")}
+        </p>
       )}
 
       {/* W2a: rendered only when it holds a control — a scorer on an in-play match, or anyone on a held one, would

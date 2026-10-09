@@ -172,6 +172,7 @@ function view(opts: ViewOpts = {}): PadHostView {
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 
@@ -191,6 +192,7 @@ function degenerateView(over: Partial<PadHostView> = {}): PadHostView {
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
     ...over,
   };
 }

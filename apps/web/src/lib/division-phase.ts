@@ -430,8 +430,10 @@ function isLiveFixture(f: PhaseFixture): boolean {
  *  purely-derived phase check agrees with what the desk's own played/total
  *  count shows — never abandoned/forfeited/cancelled, which are terminal but
  *  not a played result. (Generation-time award byes are counted in card-stats
- *  via a one-sided-null clause, not this set — see card-stats.ts.) */
-const PLAYED_STATUSES = new Set(["decided", "finalized"]);
+ *  via a one-sided-null clause, not this set — see card-stats.ts.)
+ *  W2a ruling D-H2: a HELD level result (`needs_decision`) is played — the match happened, only who advances is owed —
+ *  so a division whose only fixture is a level final reads in progress, never "Setting up". */
+const PLAYED_STATUSES = new Set(["decided", "finalized", "needs_decision"]);
 
 /**
  * "Has anything actually been played?" — the PROGRESS question, which is the
@@ -454,8 +456,10 @@ const PLAYED_STATUSES = new Set(["decided", "finalized"]);
  * count comes from, so an answer here can never disagree with the number the
  * row beside it already shows.
  */
-export function hasPlayedFixture(fixtures: readonly { status: string }[]): boolean {
-  return fixtures.some((f) => PLAYED_STATUSES.has(f.status));
+export function hasPlayedFixture(fixtures: readonly { status: string; awaitsSettle?: boolean }[]): boolean {
+  // D-H2: the other held shape too — a recorded abandon awaiting its settle is stored `abandoned` (not a played status)
+  // but the match was under way. A caller with no `awaitsSettle` (a display row) reads it as not played, as before.
+  return fixtures.some((f) => PLAYED_STATUSES.has(f.status) || f.awaitsSettle === true);
 }
 
 /**

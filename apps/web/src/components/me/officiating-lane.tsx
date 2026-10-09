@@ -115,9 +115,10 @@ export function OfficiatingLane({
 const REPORTABLE = new Set(["decided", "finalized", "abandoned"]);
 /** W2a: a held bracket fixture (`needs_decision`) — played level, the verdict waits on the organiser. */
 const HELD_STATUS = "needs_decision";
-/** The statuses whose card links to the fixture's scoring page: still to play, in play, or held — a chess tie-break
- *  is the scorer's to record on that page (W2a Task 12). */
-const SCOREABLE = new Set(["scheduled", "in_play", HELD_STATUS]);
+/** The statuses whose card links to the fixture's page: still to play, in play, or held. A held fixture's link reads
+ *  "View match" (ruling D-H3): the settle is the organiser's, so the official has nothing to score there. (A chess
+ *  tie-break still owed is `in_play`, not held, so its card keeps "Score this match".) */
+const SCOREABLE = new Set(["scheduled", "in_play", "needs_decision"]); // the literal, not HELD_STATUS: status-set-sweep pins it IN
 
 /** Read-only row for a finished match (no accept/decline/score) — shown inside
  *  the collapsed "completed" disclosure. Reportable rows carry the match-report
@@ -399,7 +400,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
             href={routes.fixture(a.org_slug, a.competition_slug, a.division_slug, a.fixture_no)}
             className="text-xs font-medium text-purple-600 hover:underline"
           >
-            {msg("me.off.score")} →
+            {msg(a.fixture_status === HELD_STATUS ? "me.off.view" : "me.off.score")} →
           </Link>
         </div>
       )}

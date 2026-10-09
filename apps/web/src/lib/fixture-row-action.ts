@@ -47,6 +47,10 @@ export type RowActionInput = {
    *  SAME fact, threaded in rather than re-derived, so the label and the
    *  action can never disagree about which fixtures are undrawn. */
   awaitingDraw: boolean;
+  /** W2a fix round 1 (M10) — a recorded abandon that decided nobody, stored `abandoned` like the generator's void but
+   *  still owed the organiser's settle (`listFixturesAwaitingSettle`, read by the division page). Required: the status
+   *  alone cannot say it, and a forgotten producer must not read as "a result". */
+  awaitsSettle: boolean;
 };
 
 /**
@@ -126,7 +130,7 @@ export function canEditFixtureTime(input: {
 }
 
 export function fixtureRowAction(input: RowActionInput): RowAction {
-  const { status, scheduledAt, hasOfficials, canEdit, tz, nowMs, awaitingDraw } = input;
+  const { status, scheduledAt, hasOfficials, canEdit, tz, nowMs, awaitingDraw, awaitsSettle } = input;
 
   // 1. Live beats everything. A match in play is the one thing an organiser
   //    standing at the venue is looking for, whatever its time says.
@@ -134,8 +138,10 @@ export function fixtureRowAction(input: RowActionInput): RowAction {
 
   // 1b. W2a (finding 25): HELD — a bracket match that ended level is owed the organiser's settle, and nothing else
   //     moves until it gets one. Neither a result (nobody advanced) nor open scoring (the match is over). The settle
-  //     is organiser-only on the server, so a viewer who cannot edit only views it.
-  if (status === "needs_decision") return canEdit ? { kind: "decide" } : { kind: "view" };
+  //     is organiser-only on the server, so a viewer who cannot edit only views it. Fix round 1 (M10): a recorded
+  //     abandon awaiting its settle is held the same way — before rule 2, where its stored `abandoned` would read as a
+  //     result.
+  if (status === "needs_decision" || awaitsSettle) return canEdit ? { kind: "decide" } : { kind: "view" };
 
   // 2. Settled. Checked before the scheduling rules below so a cancelled match
   //    never invites an organiser to score a match that will not be played —

@@ -339,3 +339,48 @@ describe("public Schedule — the round view reads stage by stage, then round (N
     expect(bare.some((h) => h.includes("\u00b7"))).toBe(false);
   });
 });
+
+// W2a fix round 1 (M5): a HELD bracket match (`needs_decision`) was played — level — and only who advances is owed. The
+// row read like an unplayed fixture (its kick-off time, no score); it reads Ended with both score lines, as a decided
+// match does, with neither name bolded (nobody won).
+describe("public Schedule — a held match reads Ended with its score (W2a fix round 1, M5)", () => {
+  const render = (over: Partial<PublicFixture>) =>
+    renderToStaticMarkup(
+      createElement(Schedule, {
+        fixtures: [
+          F({
+            id: "final",
+            home_entrant_id: "e1",
+            away_entrant_id: "e2",
+            summary: { headline: "1 — 1", perSide: [{ entrantId: "e1", line: "1" }, { entrantId: "e2", line: "1" }] } as never,
+            ...over,
+          }),
+        ],
+        entrantNames: { e1: "Riverside", e2: "Summit" },
+        divisionPath: "/shared/org/comp/div",
+        tz: "UTC",
+        roundLabels: ROUND_LABELS,
+        copy: COPY,
+        locale: LOCALE,
+        stageOrder: STAGE_ORDER,
+        stageNames: STAGE_NAMES,
+        slotLabels: {},
+      }),
+    );
+  const scoreCells = (html: string) => (html.match(/font-display text-lg tabular-nums/g) ?? []).length;
+
+  it("needs_decision: the rail says Ended and both score lines show, like a decided match", () => {
+    const held = render({ status: "needs_decision" });
+    expect(held).toContain("(ended)");
+    expect(held).not.toContain("09:00");
+    expect(scoreCells(held), "both sides' score lines").toBe(2);
+    // The positive pairs: a decided match reads the same; a scheduled one reads its time and no score.
+    const decided = render({ status: "decided" });
+    expect(decided).toContain("(ended)");
+    expect(scoreCells(decided)).toBe(2);
+    const scheduled = render({ status: "scheduled", summary: null });
+    expect(scheduled).not.toContain("(ended)");
+    expect(scheduled).toContain("09:00");
+    expect(scoreCells(scheduled)).toBe(0);
+  });
+});

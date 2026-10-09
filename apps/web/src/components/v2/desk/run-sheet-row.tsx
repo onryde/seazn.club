@@ -110,6 +110,7 @@ export function RunSheetRow({
   onRescheduled,
   stageName,
   streamState,
+  awaitsSettle = false,
   feedLabels,
 }: {
   fixture: RunSheetFixture;
@@ -157,6 +158,9 @@ export function RunSheetRow({
    *  (false on a billing-frozen page) — the chip replaced the frozen page's stop probes, so it must show there. The
    *  organiser gate is the page's: a viewer is never handed a state. */
   streamState?: HoldState;
+  /** W2a fix round 1 (M10) — this fixture is a recorded abandon awaiting its settle (stored `abandoned`): held, like
+   *  a `needs_decision` one — the chip and Settle. From the division page's `listFixturesAwaitingSettle`. */
+  awaitsSettle?: boolean;
   /** Feeder labels for seats no result has filled yet, keyed by fixture id —
    *  `feedLabels()`'s output (lib/schedule-board.ts), the SAME builder and the
    *  SAME `{key, params}` vocabulary the schedule board reads.
@@ -253,6 +257,7 @@ export function RunSheetRow({
     tz,
     nowMs,
     awaitingDraw,
+    awaitsSettle,
   });
 
   // C3: copied verbatim from FixtureLine's own derivation — never reinvented.
@@ -283,6 +288,10 @@ export function RunSheetRow({
   // that reads like an ordinary played one at a glance is the "two
   // contradicting facts in one row" class this wave exists to remove.
   const voided = VOID_STATUSES.has(fixture.status);
+  // W2a fix round 1 (M10): a recorded abandon awaiting its settle is stored `abandoned` but is owed work — the settle
+  // seats a winner — so its names are not struck as a void's are (that beside "Needs a decision" read as two
+  // contradicting facts). Its reason line still says abandoned.
+  const struck = voided && !awaitsSettle;
 
   // The sub-line: ONE computed string, ONE guard below.
   //
@@ -490,7 +499,7 @@ export function RunSheetRow({
                 route to its own fixture console at all. */}
             <Link
               href={href}
-              className={`block min-w-0 truncate text-sm font-medium hover:text-purple-700 ${voided ? "text-slate-500 line-through" : "text-slate-800"}`}
+              className={`block min-w-0 truncate text-sm font-medium hover:text-purple-700 ${struck ? "text-slate-500 line-through" : "text-slate-800"}`}
             >
               {home}
               {/* slate-500, not slate-400. `#94a3b8` on white measures ~2.9:1
@@ -552,7 +561,7 @@ export function RunSheetRow({
           )}
           {/* W2a Task 11 (finding 25): a HELD bracket fixture says so, in the desk's red attention tone (attention
               outranks phase, competition-desk _RULES). Every viewer sees it; only an editor is offered Settle. */}
-          {fixture.status === "needs_decision" && (
+          {(fixture.status === "needs_decision" || awaitsSettle) && (
             <span
               data-testid="run-sheet-held-chip"
               className="badge inline-flex shrink-0 items-center normal-case bg-red-50 text-red-700 md:order-first"

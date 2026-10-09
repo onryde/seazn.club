@@ -57,6 +57,8 @@ describe.skipIf(!HAS_DB)("the desk reads a held bracket fixture as owed work (W2
     expect(d.phase, "every fixture is stored terminal, so the old read said Finished").not.toBe("finished");
     expect(d.held).toEqual({ kind: "needs_decision", count: 1, fixtureIds: [t.f] });
     expect([...(await listFixturesAwaitingSettle(t.auth, t.divisionId))]).toEqual([t.f]);
+    // Ruling D-H2: the abandoned final was under way — in progress, never "Setting up".
+    expect(d.phase).toBe("scheduled");
   });
 
   it("sequence: the void of the abandon makes it live again (no row); the settle decides it (no row, Finished)", async () => {
@@ -91,6 +93,10 @@ describe.skipIf(!HAS_DB)("the desk reads a held bracket fixture as owed work (W2
     const d = await desk(t);
     expect(d.held).toEqual({ kind: "needs_decision", count: 1, fixtureIds: [t.f] });
     expect(d.phase).not.toBe("finished");
+    // Ruling D-H2 (fix round 1): the level final WAS played — the phase reads in progress, never "Setting up", and the
+    // "N of M played" beside it (card-stats) counts it, so the two agree.
+    expect(d.phase).toBe("scheduled");
+    expect({ played: d.played, total: d.total }).toEqual({ played: 1, total: 1 });
     // The page's read is the ABANDON half only; the status half needs no ledger.
     expect([...(await listFixturesAwaitingSettle(t.auth, t.divisionId))]).toEqual([]);
   });

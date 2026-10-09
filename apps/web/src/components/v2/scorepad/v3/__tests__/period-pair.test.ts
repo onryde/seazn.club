@@ -106,6 +106,7 @@ function viewFor(sport: Sport, cfg: unknown, state: PeriodStateLike, band = 3): 
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 

@@ -205,6 +205,7 @@ function cricketView(battingSide: "home" | "away"): PadHostView {
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 

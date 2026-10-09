@@ -43,7 +43,7 @@
   "matchCentre.status.forfeited": "Forfait",
   "matchCentre.status.postponed": "Uitgesteld",
   "matchCentre.status.walkover": "Walkover",
-  "matchCentre.status.needs_decision": "Beslissing nodig",
+  "matchCentre.status.needs_decision": "Gelijkspel — winnaar nog te bepalen",
   "matchCentre.status.timeTbd": "Tijd NNB",
   "matchCentre.status.timeNotRecorded": "Tijd niet vastgelegd",
   "matchCentre.winner": "Winnaar:",

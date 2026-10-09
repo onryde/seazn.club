@@ -395,6 +395,7 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
       contextOverrides: {},
       stageKind: null,
       canOrganise: true,
+      entrantNames: {},
     };
     const skin = footballSkinV3((key: string) => key);
     const goalTile = skin.tiles(view).find((tile) => "event" in tile.action && tile.action.event.type === "football.goal");
@@ -424,6 +425,7 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
         contextOverrides: {},
         stageKind: null,
         canOrganise: true,
+        entrantNames: {},
       },
       (key: string) => key,
     ).strip ?? [];
@@ -538,6 +540,7 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
       contextOverrides: {},
       stageKind: null,
       canOrganise: true,
+      entrantNames: {},
     });
     const built = slots[0]!.buildEvent("p-off", "p-on");
     expect(built.payload).toMatchObject({ at: { period: "H1", elapsed: 761 } });
@@ -572,6 +575,7 @@ describe("END TO END: a tile tapped on a clocked pad reaches the fold WITH its `
         contextOverrides: {},
         stageKind: null,
         canOrganise: true,
+        entrantNames: {},
       })
       .find((tile) => "event" in tile.action && tile.action.event.type === "football.goal")!;
     expect(tap.payload).toEqual((untouched.action as { event: { payload: unknown } }).event.payload);

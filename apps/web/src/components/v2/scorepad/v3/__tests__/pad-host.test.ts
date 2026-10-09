@@ -1012,6 +1012,7 @@ function padHostView(): PadHostView {
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 

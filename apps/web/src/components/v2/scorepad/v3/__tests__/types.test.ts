@@ -122,6 +122,7 @@ describe("PadHostView.contextOverrides — G5 (required, not optional)", () => {
     events: [],
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 
   it("a full object with contextOverrides is assignable", () => {

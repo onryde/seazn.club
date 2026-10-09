@@ -157,6 +157,7 @@ function cricketView(band: 0 | 1 | 2 | 3, state: Record<string, unknown>): PadHo
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 
@@ -214,6 +215,7 @@ function footballView(band: 0 | 1 | 2 | 3): PadHostView {
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 

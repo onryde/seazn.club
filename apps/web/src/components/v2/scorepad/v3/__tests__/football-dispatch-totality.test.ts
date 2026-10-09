@@ -128,6 +128,7 @@ function viewFor(s: Situation): PadHostView {
     contextOverrides: {},
     stageKind: null,
     canOrganise: true,
+    entrantNames: {},
   };
 }
 

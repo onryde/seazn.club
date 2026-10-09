@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { BRACKET_KINDS, StageKind, foldMatch, outcomeOf, foldMatchWithStoppage } from "@seazn/engine/core";
 import { boardgame } from "@seazn/engine/sports/boardgame"; // the "./sports/*" subpath export (engine package.json)
 import { declaredCfgs, defaultLineupPair, forEachSport, makeEnvelope } from "@seazn/engine/testkit";
-import { confirmBlocked, finalizeVisible, hasActiveAbandon, needsDecision } from "../needs-decision";
+import { renderToStaticMarkup } from "react-dom/server";
+import { NeedsDecisionBlock, SettleDialog, confirmBlocked, finalizeVisible, hasActiveAbandon, heldCause, needsDecision, type HeldCause } from "../needs-decision";
+import en from "@/dictionaries/en/ui.json";
 
 // W2a Task 11 (spec §5.5, UI-1 option A; controller ruling C12). The console's "Needs a decision" block shows iff the
 // stage is a bracket kind AND the kernel's own `settleApplies` is true, fed the same facts. Pure predicates — the
@@ -132,5 +134,91 @@ describe("needsDecision = bracket kind AND the kernel's settleApplies (ruling C1
     expect(finalizeVisible({ decided: true, held: false })).toBe(true);
     expect(finalizeVisible({ decided: true, held: true })).toBe(false);
     expect(finalizeVisible({ decided: false, held: false })).toBe(false);
+  });
+});
+
+// Ruling D-H3 (fix round 1): the block's sentence names WHY the match is held — a level result, an abandon that decided
+// nobody, or a drawn chess game whose tie-break is still owed — instead of one sentence ("can't end level") that was
+// false for the other two. The cause is read from the same facts `needsDecision` reads, real folds where a sport has one.
+describe("heldCause and the block's sentence (ruling D-H3)", () => {
+  const LEVEL = { kind: "draw" };
+  const body = (cause: HeldCause) =>
+    renderToStaticMarkup(
+      <NeedsDecisionBlock
+        msg={(k) => (en as Record<string, string>)[k] ?? k}
+        cause={cause}
+        home={{ id: "h", name: "Riverside" }}
+        away={{ id: "a", name: "Summit" }}
+        busy={false}
+        settle={async () => ({ ok: true })}
+      />,
+    );
+
+  it("each held shape names its own cause; an abandon wins over the outcome it left behind", () => {
+    const { outcome: pending } = chessKnockout();
+    expect(pending, "a drawn chess knockout game owes its tie-break: no outcome yet").toBeNull();
+    const rows: [string, Parameters<typeof heldCause>[0], HeldCause][] = [
+      ["a level result", { outcome: LEVEL, events: [start] }, "level"],
+      ["an abandon that decided nobody (outcome null)", { outcome: null, events: [start, abandon] }, "abandoned"],
+      ["an abandon over a level outcome", { outcome: LEVEL, events: [start, abandon] }, "abandoned"],
+      ["a chess tie-break still owed (the real fold)", { outcome: pending, events: [start] }, "tiebreak"],
+      ["a VOIDED abandon in a tie-break", { outcome: null, events: [start, abandon, voidOfAbandon] }, "tiebreak"],
+    ];
+    let checked = 0;
+    for (const [why, facts, cause] of rows) {
+      expect(heldCause(facts), why).toBe(cause);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("the block says the cause's own sentence, and only that one", () => {
+    const sentences: Record<HeldCause, string> = {
+      level: en["score.needsDecision.body"]!,
+      abandoned: en["score.needsDecision.body.abandoned"]!,
+      tiebreak: en["score.needsDecision.body.tiebreak"]!,
+    };
+    expect(new Set(Object.values(sentences)).size, "three different sentences").toBe(3);
+    let checked = 0;
+    for (const [cause, sentence] of Object.entries(sentences) as [HeldCause, string][]) {
+      const html = body(cause);
+      expect(html, cause).toContain(sentence.replace(/'/g, "&#x27;"));
+      for (const other of Object.values(sentences).filter((s) => s !== sentence)) {
+        expect(html, `${cause} must not say another cause's sentence`).not.toContain(other.replace(/'/g, "&#x27;"));
+      }
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+// Fix round 1 (M12): at ≥640 the dialog's two winner buttons sit side by side, and the names were `truncate` — two long
+// entrant names ("Riverside Chess Club Juniors A" v "Summit Knights Academy Second XI") lost their tails, the one
+// thing the organiser is choosing between. They wrap now; the button grows to fit.
+describe("the settle dialog never truncates a name (M12)", () => {
+  const LONG = { home: "Riverside Chess Club Juniors A", away: "Summit Knights Academy Second XI" };
+  it("each winner button carries its whole name, wrapping — no truncate, no ellipsis", () => {
+    const html = renderToStaticMarkup(
+      <SettleDialog
+        msg={(k) => (en as Record<string, string>)[k] ?? k}
+        cause="level"
+        home={{ id: "h", name: LONG.home }}
+        away={{ id: "a", name: LONG.away }}
+        busy={false}
+        settle={async () => ({ ok: true })}
+        onClose={() => {}}
+        onRefused={() => {}}
+      />,
+    );
+    let checked = 0;
+    for (const [id, name] of [["h", LONG.home], ["a", LONG.away]] as const) {
+      const button = new RegExp(`<button[^>]*data-testid="settle-winner-${id}"[^>]*>(.*?)</button>`).exec(html);
+      expect(button, id).not.toBeNull();
+      expect(button![1], id).toContain(name);
+      expect(button![1], `${id}: the name must wrap, not truncate`).not.toMatch(/\btruncate\b/);
+      expect(button![1], `${id}: and break a long word rather than overflow`).toMatch(/\bbreak-words\b/);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });

@@ -128,5 +128,17 @@ describe("match centre — W2a decider methods name HOW the bracket was decided 
     const d = doc({ status: "needs_decision", outcome: f.outcome as PublicFixture["outcome"], summary: f.summary as PublicFixture["summary"] }, f.events);
     expect(d.header.statusLine).toEqual({ key: "matchCentre.status.needs_decision" });
     expect(t(DICTS.en!, "matchCentre.status.needs_decision")).not.toMatch(/won|advanced/);
+    // Ruling D-H3 (fix round 1): the spectator's words — the match was level, and the winner is still to be decided
+    // (the old "Needs a decision" was the organiser's words, read by every spectator). Pinned in en; the other three
+    // locales are their own sentence, never the English one.
+    expect(t(DICTS.en!, "matchCentre.status.needs_decision")).toBe("Level — winner to be decided");
+    let checked = 0;
+    for (const locale of ["fr", "es", "nl"]) {
+      const word = t(DICTS[locale]!, "matchCentre.status.needs_decision");
+      expect(word, locale).not.toBe("Level — winner to be decided");
+      expect(word, `${locale} keeps the two halves`).toContain(" — ");
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });

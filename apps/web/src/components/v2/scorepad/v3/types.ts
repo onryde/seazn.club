@@ -1431,6 +1431,14 @@ export interface PadHostView {
    */
   readonly canOrganise: boolean;
   /**
+   * W2a fix round 1 (I2; spec §5.5 "two entrants, always") — each side's ENTRANT display name, the same name the
+   * console's heading shows. `personNames` cannot answer this: it is keyed by person id and only names someone a
+   * lineup or pairing card seats, so a chess knockout with no pairing card read "Home"/"Away" on its tie-break winner
+   * step. Built once by `entrantNamesFrom` (registry.tsx) from the loaders' `SideInfo.name`. Required so a forgotten
+   * producer is a tsc error; a side with no name (`{}` in a test view) falls back to the skin's own key.
+   */
+  readonly entrantNames: Readonly<Partial<Record<"home" | "away", string>>>;
+  /**
    * R6 fix pass 2 (gap 2) — THE HOST CLOCK'S LIVE READING, so a skin can show a
    * number that changes between events.
    *

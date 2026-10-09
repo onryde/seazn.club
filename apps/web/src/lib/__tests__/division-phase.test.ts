@@ -1223,6 +1223,22 @@ describe("held fixtures — needs_decision attention and never Finished (W2a)", 
     expect(leadingAttention([{ attention }])?.kind).toBe("needs_decision");
   });
 
+  it("D-H2 (fix round 1): a held fixture counts as PLAYED — a held-only division reads in progress, never 'Setting up'", () => {
+    // Both held shapes, alone in the division, nothing dated: before D-H2 rule 5's fallback read `setting_up` ("nothing
+    // has happened yet") beside a final that was played to a level score.
+    let checked = 0;
+    for (const held of [final({ status: "needs_decision" }), final({ status: "abandoned", awaitsSettle: true })]) {
+      const shape = input({ stages: [ko], fixtures: [held] });
+      expect(hasPlayedFixture([held]), held.status).toBe(true);
+      expect(resolvePhase(shape), held.status).toBe("scheduled");
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The positive pairs: a generator void (abandoned, nothing owed) and an undated scheduled fixture are not played.
+    expect(hasPlayedFixture([final({ status: "abandoned", awaitsSettle: false })])).toBe(false);
+    expect(resolvePhase(input({ stages: [ko], fixtures: [final({ status: "scheduled" })] }))).toBe("setting_up");
+  });
+
   it("a later stage's empty draw is not raised past a held fixture: it is still LIVE work", () => {
     const later = stage({ id: "nx", name: "Next", seq: 2, status: "pending", hasFixtures: false, timing: "on_complete" });
     const attention = resolveAttention(
