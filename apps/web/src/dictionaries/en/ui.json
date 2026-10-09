@@ -5614,6 +5614,7 @@
   "stream.restart.used": "Free restarts used ({used} of {limit})",
   "stream.restart.usedCredit": "Free restarts used ({used} of {limit}) — this one uses 1 credit",
   "stream.error.phone_not_paired": "No phone is paired. Scan the code with Seazn Capture, then go live.",
+  "stream.error.phone_not_responding": "The camera phone isn't responding. Open Seazn Capture on the phone and keep it unlocked, then go live.",
   "qr.tapToEnlarge": "Tap to enlarge",
   "qr.enlarge": "Enlarge QR code",
   "qr.enlarged.name": "Enlarged QR code",

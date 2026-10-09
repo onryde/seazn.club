@@ -6271,6 +6271,7 @@ export type DictionaryKey =
   | "stream.error.no_credits"
   | "stream.error.overlay_required"
   | "stream.error.phone_not_paired"
+  | "stream.error.phone_not_responding"
   | "stream.error.plan_lacks_relay"
   | "stream.error.stop"
   | "stream.error.storage_exhausted"

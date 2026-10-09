@@ -325,7 +325,7 @@ unless a status is shown.
 | T7 | beat with no claim from P | P is not current | nothing changes | `replaced` |
 | T8 | beat from current P | — | latest beat stored (§6.10). Session ticked (§6.11). | per §6.3.3 |
 | T9 | beat from P naming an ended sid X, by its `sid` or its `stopped` | X is terminal | — | `200 over X` with X's endReason (ask 8; **first**, whatever has opened since, except a refused claim's `taken` or `replaced` and a non-current caller's `replaced`, G0-g). Never 410. |
-| T10 | organiser Go live | no current present phone | refused | `409 phone_not_paired` (panel) |
+| T10 | organiser Go live | no current present phone | refused | `409 phone_not_paired` (panel). **Amended 2026-10-09 (owner ruling, Option 1):** split in two — no current pairing on the active code → `409 phone_not_paired`; a current pairing whose phone is silent past §6.9's window → `409 phone_not_responding`. Console-only: never sent to the phone. |
 | T11 | organiser Go live | current phone present | session created, `startCause organiser`, phone = C | current phone's next beat: `waiting` (5 s) while starting, then `go-live S` |
 | T12 | `POST start` from P | P is not current | refused | `409 replaced` |
 | T13 | `POST start` from current P | an open session exists | refused | `409 already_live {sid, startedBy}` |
@@ -749,6 +749,15 @@ plan task (house rule "new write path").
   `storage_exhausted`. W5 is answered before the storage read, and after the destination doors (amended, §17.10).
   - The organiser route asks it of slot 0's current pairing.
   - The phone route and auto start pass `true`, because the caller **is** the current phone (T12 checked it first).
+  - **Amended 2026-10-09 (owner ruling, Option 1).** The boolean is now a standing,
+    `phone: "present" | "silent" | "unpaired"`, and W5 has two refusals on the same rung (after `active_session`,
+    before `no_credits`; both answered before the storage read; a free restart waives neither):
+    - `unpaired` → `phone_not_paired`: the active code has no current pairing (never claimed, reissued, expired by C2,
+      or ended by the phone's own stop, T21).
+    - `silent` → `phone_not_responding`: a current pairing exists, but its phone has sent no beat within §6.9's window,
+      `max(floor, answered cadence + slack)`. The organiser wakes the phone; no rescan is owed.
+    - The phone route and auto start pass `"present"`, and both refusal mappers refuse either answer by name. The two
+      codes are console-only and never reach the phone, so the capture contracts do not change.
 
 #### 6.7.2 The phone's refusals (W6; capture's start shape)
 
@@ -1370,7 +1379,7 @@ alter table fixture_stream_settings
 | `POST /api/v1/fixtures/{id}/stream-code/reissue` | 1 | → `200 {qr, issuedAt}` | as above |
 | `GET /api/v1/fixtures/{id}/stream-phone` | 1 | → `{code: {issuedAt, state: "active" \| "finishing" \| "ended", endCause} \| null, phone: {present, silent, notResponding, model, appVersion, mode, state, notReady, startFailed, lastBeatAt, elapsedMs, beat: {battery, bitrateKbps, delivery, thermal, dataUsedMB}} \| null, destination: {id, label} \| null, lastTakeover: {at, model} \| null, auto: {...} \| null}` (no secret). PR-2 fills `auto` and uses `lastTakeover`. | `404` |
 | `PUT /api/v1/fixtures/{id}/stream-settings` | 1 / 2 | `{targetId?}` (PR-1), `{autoStream?}` (PR-2) → the settings | `404` (target not in org, or archived) |
-| `POST /api/v1/fixtures/{id}/stream-sessions` | 1 | existing. It saves the pre-pick. | **new `409 phone_not_paired`** |
+| `POST /api/v1/fixtures/{id}/stream-sessions` | 1 | existing. It saves the pre-pick. | **new `409 phone_not_paired`**; **amended 2026-10-09 (owner ruling, Option 1):** also `409 phone_not_responding` (paired, but silent past §6.9's window; console-only) |
 | `GET …/stream-sessions/current` | 1 | existing **minus `qr`** and `?reveal`. It gains `startCause`. `endReason` widens (§6.8.4). | — |
 | `POST …/stream-sessions/{sid}/stop` | 1 / 2 | existing. PR-2 stamps `auto_start_blocked_at`. | — |
 
@@ -1534,6 +1543,7 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
 | T24a: drop the "current phone holds X" check | A's late stop ends B's live X → red (the two-phone sequence, §11.1.4) |
 | T23: apply the hold check to the current phone too | the current phone's own late stop of X is ignored → red |
 | `phone_not_paired` gate removed | the organiser Go live with no phone → red |
+| `phone_not_responding` answered as `phone_not_paired` (amended 2026-10-09, owner ruling, Option 1) | a current pairing silent just past §6.9's window (edge taken from the constants) → the Go live must answer `phone_not_responding` → red |
 | pollSeconds near window off by one | T−30 boundary |
 | ask 10 without `first_ingest_at IS NULL` | a live session with a silent phone is ended at 60 s → red (W8, W19's 15 min) |
 | W19: drop the beat conjunct | a beating phone with the input down 15 min is ended → red |

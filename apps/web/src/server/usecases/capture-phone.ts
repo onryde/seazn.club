@@ -667,10 +667,12 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
     case TARGET_UNREADABLE: return noDestination("the picked destination's saved key cannot be read");
     case "storage_exhausted":
     case "ingest_unavailable": return new CaptureRefusalError(503, "unavailable", `the stream cannot start: ${err.code}`);
-    // An assumption made a guard: a phone start passes phonePresent: true because the caller IS the current phone (T12,
-    // checked first), so W5 cannot answer it. Refused by name, never mapped to an answer the phone would act on.
+    // An assumption made a guard: a phone start passes phone: "present" because the caller IS the current phone (T12,
+    // checked first), so W5 cannot answer it — neither of its answers (owner ruling 2026-10-09 split it in two). Refused by
+    // name, never mapped to an answer the phone would act on: both are the organiser console's, never the phone's.
     case "phone_not_paired":
-      throw new Error("postStart: startBroadcast answered phone_not_paired to a phone start, which passes phonePresent: true");
+    case "phone_not_responding":
+      throw new Error(`postStart: startBroadcast answered ${err.code} to a phone start, which passes phone: "present"`);
   }
   // admit's target_not_found (the pre-pick vanished between the read and the row lock) has no code.
   if (err.status === 404 && err.code === undefined && err.message === "stream target not found") return noDestination("the picked destination is gone");
@@ -679,7 +681,7 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
 
 /**
  * `POST /capture/codes/{code}/start` (§6.3.4): the CURRENT phone starts its match on the organiser's pre-pick, through
- * the ONE start path (`startBroadcast`, cause `operator`, phonePresent: true, the claim's pairing, attributed to the
+ * the ONE start path (`startBroadcast`, cause `operator`, phone `present`, the claim's pairing, attributed to the
  * code's `issued_by` — T6 m-2). In order:
  *  - resolve as a `start` call: an ENDED code starts nothing, even for its open session's phone (C1b) → 401;
  *  - T12: a phone that is not §5.5's C → 409 replaced (first, so it is never told a sid). C is `holderOf`, the SAME
@@ -704,7 +706,7 @@ export async function postStart(rawCode: string, tok: string, body: CaptureStart
     const { sessionId } = await startBroadcast(
       { userId: resolved.issuedBy, orgId: resolved.orgId, source: "phone", pairingId: current.id },
       resolved.fixtureId,
-      { targetId: pick.id, startCause: "operator", phonePresent: true },
+      { targetId: pick.id, startCause: "operator", phone: "present" },
       deps,
     );
     return { sid: sessionId };

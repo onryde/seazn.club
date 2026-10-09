@@ -5614,6 +5614,7 @@
   "stream.restart.used": "Relances gratuites utilisées ({used} sur {limit})",
   "stream.restart.usedCredit": "Relances gratuites utilisées ({used} sur {limit}) — celle-ci utilise 1 crédit",
   "stream.error.phone_not_paired": "Aucun téléphone n'est associé. Scannez le code avec Seazn Capture, puis passez en direct.",
+  "stream.error.phone_not_responding": "Le téléphone caméra ne répond pas. Ouvrez Seazn Capture sur le téléphone et gardez-le déverrouillé, puis passez en direct.",
   "qr.tapToEnlarge": "Touchez pour agrandir",
   "qr.enlarge": "Agrandir le code QR",
   "qr.enlarged.name": "Code QR agrandi",
