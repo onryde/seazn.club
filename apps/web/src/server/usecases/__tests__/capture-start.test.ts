@@ -114,8 +114,13 @@ describe("phoneStartRefusal — §6.7.2's table, every internal refusal (pure)",
     }
   });
 
-  it("an assumption made a guard: phone_not_paired cannot reach a phone start (it passes phonePresent: true) — refused by name, never mapped", () => {
-    expect(() => phoneStartRefusal(new HttpError(409, "x", "phone_not_paired"))).toThrow(/phone_not_paired/);
+  it("an assumption made a guard: neither W5 answer — phone_not_paired, nor phone_not_responding (owner ruling 2026-10-09) — can reach a phone start (it passes phone: \"present\") — each refused by name, never mapped to an answer the phone would act on", () => {
+    let checked = 0;
+    for (const code of ["phone_not_paired", "phone_not_responding"]) {
+      expect(() => phoneStartRefusal(new HttpError(409, "x", code)), code).toThrow(new RegExp(`answered ${code} to a phone start`));
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("anything else is NOT a phone refusal (null: the caller rethrows it, a logged 500)", () => {

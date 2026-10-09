@@ -8,7 +8,7 @@ import {
 import { evaluate, type Expiry } from "../expiry";
 import {
   ACTIVE_STATES, InvalidTransition, TERMINAL_STATES, admit, decide, eventRowsOf, isActive, isTerminal,
-  type Command, type Effect, type Session, type SessionState, type StopReason,
+  type Command, type Effect, type PhoneStanding, type Session, type SessionState, type StopReason,
 } from "../session";
 import { DB_END_REASONS } from "../end-reason";
 import {
@@ -22,7 +22,7 @@ const S = (over: Partial<Session> = {}): Session => ({
   heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null,
   startCause: "organiser", warmingAt: null, ...over,
 });
-const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false, phonePresent: true };
+const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false, phone: "present" as PhoneStanding };
 
 // The §6.3 gates IN ORDER — one row per gate: the fields that trip it, and the refusal it yields. Shared by the
 // per-gate `it.each` and the whole-ladder ORDER test, so the order is typed once. Order amended by owner ruling
@@ -33,7 +33,10 @@ const REFUSAL_LADDER = [
   [{ overlay: false, relay: true }, "overlay_required"],       // r5: relay without overlay is the implication check
   [{ relay: false }, "plan_lacks_relay"],
   [{ activeSessionId: "s0" }, "active_session"],
-  [{ phonePresent: false }, "phone_not_paired"],             // W5 / T10 (capture QR v2 §6.7.1): after active_session, before credits
+  [{ phone: "unpaired" }, "phone_not_paired"],             // W5 / T10 (capture QR v2 §6.7.1): after active_session, before credits
+  // Owner ruling 2026-10-09 (Option 1): a phone that IS paired but has gone silent (§6.9) is told apart from no phone at all.
+  // Same rung as W5 — the same field, so the two can never trip together.
+  [{ phone: "silent" }, "phone_not_responding"],
   [{ balance: 0 }, "no_credits"],
   [{ targetBelongsToOrg: false }, "target_not_found"],
   [{ headroomMinutes: 299 }, "storage_exhausted"],           // C3: headroom < max_duration refuses
@@ -66,7 +69,9 @@ describe("admit — the §6.3 gates, in order", () => {
         expect(admit({ ...OK, ...a, ...b }), `${earlier} beside ${later}`).toMatchObject({ ok: false, refusal: earlier });
       }
     }
-    expect(pairs).toBe(26);   // C(8,2) = 28, minus overlay_required beside plan_lacks_overlay and beside plan_lacks_relay
+    // C(9,2) = 36, minus overlay_required beside plan_lacks_overlay and beside plan_lacks_relay, minus the two phone rungs
+    // beside each other (one field: a phone is unpaired or silent, never both).
+    expect(pairs).toBe(33);
   });
   it("F-A5 (owner 2026-09-29): a second start on a match already streaming is told so even when STORAGE is exhausted — active_session, not storage_exhausted", () => {
     expect(admit({ ...OK, activeSessionId: "s0", headroomMinutes: 0 })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
@@ -77,14 +82,34 @@ describe("admit — the §6.3 gates, in order", () => {
     expect(admit({ ...OK, activeSessionId: null, balance: 0, restartWithinReuseWindow: false }), "the positive pair: no running session → no_credits").toMatchObject({ refusal: "no_credits" });
   });
   it("W5 ORDER differential (§6.7.1): no present phone AND no credits → phone_not_paired, never no_credits; a running session AND no phone → active_session; each with its positive pair", () => {
-    expect(admit({ ...OK, phonePresent: false, balance: 0, restartWithinReuseWindow: false })).toEqual({ ok: false, refusal: "phone_not_paired" });
-    expect(admit({ ...OK, phonePresent: true, balance: 0, restartWithinReuseWindow: false }), "the phone back: the credit gate answers").toMatchObject({ refusal: "no_credits" });
-    expect(admit({ ...OK, phonePresent: false, activeSessionId: "s0" })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
-    expect(admit({ ...OK, phonePresent: false, activeSessionId: null })).toEqual({ ok: false, refusal: "phone_not_paired" });
+    expect(admit({ ...OK, phone: "unpaired", balance: 0, restartWithinReuseWindow: false })).toEqual({ ok: false, refusal: "phone_not_paired" });
+    expect(admit({ ...OK, phone: "present", balance: 0, restartWithinReuseWindow: false }), "the phone back: the credit gate answers").toMatchObject({ refusal: "no_credits" });
+    expect(admit({ ...OK, phone: "unpaired", activeSessionId: "s0" })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
+    expect(admit({ ...OK, phone: "unpaired", activeSessionId: null })).toEqual({ ok: false, refusal: "phone_not_paired" });
     // A plan gate still outranks the phone: an org that cannot stream is told that first.
-    expect(admit({ ...OK, phonePresent: false, relay: false })).toMatchObject({ refusal: "plan_lacks_relay" });
+    expect(admit({ ...OK, phone: "unpaired", relay: false })).toMatchObject({ refusal: "plan_lacks_relay" });
     // The reuse waiver is the BALANCE gate's alone — it never waives the phone.
-    expect(admit({ ...OK, phonePresent: false, balance: 0, restartWithinReuseWindow: true })).toEqual({ ok: false, refusal: "phone_not_paired" });
+    expect(admit({ ...OK, phone: "unpaired", balance: 0, restartWithinReuseWindow: true })).toEqual({ ok: false, refusal: "phone_not_paired" });
+  });
+  it("owner ruling 2026-10-09 (Option 1): every phone standing, in order — none → phone_not_paired, paired but silent → phone_not_responding, present → admitted; the silent phone keeps W5's place in the ladder (after active_session and the plan gates, before credits, never waived by a free restart)", () => {
+    // The empty case first: no phone on the code is the old answer, unchanged.
+    const want: Record<PhoneStanding, ReturnType<typeof admit>> = {
+      unpaired: { ok: false, refusal: "phone_not_paired" },
+      silent: { ok: false, refusal: "phone_not_responding" },
+      present: { ok: true },
+    };
+    let checked = 0;
+    for (const [phone, verdict] of Object.entries(want) as [PhoneStanding, ReturnType<typeof admit>][]) {
+      expect(admit({ ...OK, phone }), phone).toEqual(verdict);
+      checked++;
+    }
+    expect(checked, "every standing the type names").toBe(3);
+    // Where the right answer differs from the old one's constant: a silent phone is NOT told to pair.
+    expect(admit({ ...OK, phone: "silent" })).not.toMatchObject({ refusal: "phone_not_paired" });
+    expect(admit({ ...OK, phone: "silent", balance: 0, restartWithinReuseWindow: false }), "silent AND no credits → the phone first").toEqual({ ok: false, refusal: "phone_not_responding" });
+    expect(admit({ ...OK, phone: "silent", balance: 0, restartWithinReuseWindow: true }), "the reuse waiver never waives the phone").toEqual({ ok: false, refusal: "phone_not_responding" });
+    expect(admit({ ...OK, phone: "silent", activeSessionId: "s0" }), "a running session outranks a silent phone (F-A5)").toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
+    expect(admit({ ...OK, phone: "silent", relay: false }), "a plan gate outranks it").toMatchObject({ refusal: "plan_lacks_relay" });
   });
   it("active_session carries the running id", () => {
     expect(admit({ ...OK, activeSessionId: "s0" })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });

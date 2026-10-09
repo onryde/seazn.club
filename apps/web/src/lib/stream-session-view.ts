@@ -131,7 +131,7 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
 
 /** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. */
 export const CREATE_ERROR_CODES = [
-  "no_credits", "overlay_required", "active_session", "phone_not_paired", "storage_exhausted", "ingest_unavailable",
+  "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
   "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
@@ -140,8 +140,10 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   no_credits: "stream.error.no_credits",
   overlay_required: "stream.error.overlay_required",
   active_session: "stream.error.active_session",
-  // Capture QR v2 W5: no phone paired and answering on the stream code (an expired code answers it too, B7 m-b).
+  // Capture QR v2 W5: no phone paired on the stream code (an expired code answers it too, B7 m-b).
   phone_not_paired: "stream.error.phone_not_paired",
+  // Owner ruling 2026-10-09 (Option 1): a phone IS paired but has stopped answering (§6.9 silent) — wake it, don't rescan.
+  phone_not_responding: "stream.error.phone_not_responding",
   storage_exhausted: "stream.error.storage_exhausted",
   ingest_unavailable: "stream.error.ingest_unavailable",
   // T3: the ONE holder-less "elsewhere" sentence; a holder with a match is named by `inUseText` (stream.inUse.*).
@@ -157,7 +159,8 @@ const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unkn
 
 /** The lower-case domain codes createSession puts on the wire VERBATIM (stream-sessions.ts `refuse`, `targetInUse`). */
 const VERBATIM_CODES: readonly CreateErrorCode[] = [
-  "no_credits", "overlay_required", "active_session", "phone_not_paired", "storage_exhausted", "ingest_unavailable", "target_in_use",
+  "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
+  "target_in_use",
 ];
 
 /** The plan gates createSession refuses with `PaymentRequiredError(featureKey)` — read from the ONE authority the
@@ -323,7 +326,8 @@ export function readyStateOf(phone: StreamPhone | null, session: StreamSessionCu
   return phone.phone.present ? "paired" : "silent";
 }
 
-/** §6.12: Go live is enabled ONLY with a phone paired and answering — W5's own gate (`phone_not_paired`) on the server. */
+/** §6.12: Go live is enabled ONLY with a phone paired and answering — W5's own gate on the server (`phone_not_paired`, or
+ *  `phone_not_responding` for a paired phone gone silent since the panel's last read, owner ruling 2026-10-09). */
 export const canGoLive = (state: ReadyState): boolean => state === "paired";
 
 /** O5 (§6.12, ruled 2026-10-01): why a live phone that still beats sends no video. */

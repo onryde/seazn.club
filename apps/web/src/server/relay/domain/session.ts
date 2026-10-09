@@ -71,7 +71,11 @@ export type StopReason = Exclude<DbEndReason, "max_duration">;
 
 // ---- admission (§6.3 order, amended by owner ruling 2026-09-29 (F-A5): active_session moves up to directly after the
 // plan gates; E5: storage_exhausted is a refusal, never a state)
-export type AdmitRefusal = "plan_lacks_overlay" | "overlay_required" | "plan_lacks_relay" | "no_credits" | "target_not_found" | "storage_exhausted" | "active_session" | "phone_not_paired";
+export type AdmitRefusal = "plan_lacks_overlay" | "overlay_required" | "plan_lacks_relay" | "no_credits" | "target_not_found" | "storage_exhausted" | "active_session" | "phone_not_paired" | "phone_not_responding";
+/** Capture QR v2 W5 (§6.9), split by owner ruling 2026-10-09 (Option 1): the fixture's phone as admission sees it — no
+ *  current pairing on slot 0 of the active code (`unpaired`), current and beating (`present`), or current but silent
+ *  (`silent`: no beat within max(floor, answered cadence + slack)). Only `present` is admitted. */
+export type PhoneStanding = "present" | "silent" | "unpaired";
 export interface AdmitInput {
   overlay: boolean; relay: boolean; balance: number; targetBelongsToOrg: boolean;
   headroomMinutes: number; maxDurationMinutes: number; activeSessionId: string | null;
@@ -82,10 +86,10 @@ export interface AdmitInput {
    *  usecase computes it through stream-credits.ts's `restartAllowance(...).free` — the same authority consumeForSession
    *  asks at go-live — and the domain stays pure. Required, so no caller can forget it and silently refuse. */
   restartWithinReuseWindow: boolean;
-  /** Capture QR v2 W5 / T10 (§6.7.1): slot 0's current pairing is present (§6.9). The organiser's Go live asks it of the
-   *  fixture's code; the phone's start and the auto start pass true — the caller IS the current phone. Required, so no
-   *  start path can forget it. */
-  phonePresent: boolean;
+  /** Capture QR v2 W5 / T10 (§6.7.1): slot 0's current pairing, and whether it is present (§6.9). The organiser's Go
+   *  live asks it of the fixture's code; the phone's start and the auto start pass `present` — the caller IS the current
+   *  phone. Required, so no start path can forget it. */
+  phone: PhoneStanding;
 }
 export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: AdmitRefusal; activeSessionId?: string } {
   if (i.relay && !i.overlay) return { ok: false, refusal: "overlay_required" };  // r5: the implication check
@@ -96,8 +100,10 @@ export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: Admit
   // wrong way while their stream is up.
   if (i.activeSessionId) return { ok: false, refusal: "active_session", activeSessionId: i.activeSessionId };
   // W5 (§6.7.1, F-A5 kept): nothing to stream from outranks what it would cost — the organiser is sent to pair a phone
-  // before being sold credits.
-  if (!i.phonePresent) return { ok: false, refusal: "phone_not_paired" };
+  // before being sold credits. Owner ruling 2026-10-09: a phone that IS paired but has gone silent is told so, not sent
+  // to scan again — same rung, the other answer.
+  if (i.phone === "unpaired") return { ok: false, refusal: "phone_not_paired" };
+  if (i.phone === "silent") return { ok: false, refusal: "phone_not_responding" };
   if (i.balance < 1 && !i.restartWithinReuseWindow) return { ok: false, refusal: "no_credits" };   // I2: ONLY this gate is waived
   if (!i.targetBelongsToOrg) return { ok: false, refusal: "target_not_found" };
   if (i.headroomMinutes < i.maxDurationMinutes) return { ok: false, refusal: "storage_exhausted" };

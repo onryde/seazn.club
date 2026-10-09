@@ -562,6 +562,20 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     expect(doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.summary).toContain("409 phone_not_paired");
   });
 
+  it("owner ruling 2026-10-09 over HTTP: a Go live whose phone IS paired but silent (last beat 10 min ago, past §6.9's window for any cadence) is 409 phone_not_responding on the wire — never phone_not_paired — documented on the route, and writes nothing; the phone's next beat → 201", async () => {
+    const o = await organiser({ phone: false });
+    await pairPresentPhone(o.fixtureId, { at: new Date(Date.now() - 10 * 60_000) });
+    const r = await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toMatchObject({ code: "phone_not_responding" });
+    expect(await sessionsOn(o.fixtureId)).toBe(0);
+    expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${o.fixtureId}`).toHaveLength(0);
+    const doc = buildOpenApiDocument() as { paths: Record<string, { post?: { summary?: string } }> };
+    expect(doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.summary).toContain("409 phone_not_responding");
+    await pairPresentPhone(o.fixtureId);   // the next beat, on the wall clock
+    expect((await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id })).status, "the positive pair").toBe(201);
+  });
+
   it("create: an empty body, a non-JSON body and an unknown field are 400 VALIDATION, and no row is written", async () => {
     const o = await organiser();
     const cases: [string, unknown][] = [

@@ -169,7 +169,7 @@ const OUTCOMES = [
   "beat:T8", "beat:T7-replaced", "beat:401", "beat:c1b-served",
   "lateStop:applied-current", "lateStop:ignored-held", "lateStop:stale",
   "get:cred", "get:no-cred", "get:401",
-  "phoneStop:T21", "goLive:200", "goLive:phone_not_paired", "goLive:refused-open",
+  "phoneStop:T21", "goLive:200", "goLive:phone_not_paired", "goLive:phone_not_responding", "goLive:refused-open",
   "start:200", "start:already_live", "start:replaced", "start:401",
   "video:first-paid", "video:free-restart", "video:paid-restart",
   "end:phone_lost-live", "end:phone_lost-warming", "end:no_inbound_timeout", "orgStop:stopped", "rescan:I-2",
@@ -667,7 +667,8 @@ async function get(m: Model, x: Real, p: P): Promise<void> {
 }
 
 /** W5 (§6.6): the organiser's Go live on the destination the organiser names — admitted only on a PRESENT current phone of
- *  the active code, then §6.7.1's order: the balance gate (waived for a free restart, W23), then the destination (T36). */
+ *  the active code (no current phone: phone_not_paired; a current one gone silent: phone_not_responding, owner ruling
+ *  2026-10-09), then §6.7.1's order: the balance gate (waived for a free restart, W23), then the destination (T36). */
 async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
   let result: "200" | "refused" = "refused";
   await step(m, x, async (info, pre) => {
@@ -705,9 +706,15 @@ async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
       t.outcome("goLive:code-ended");
       return;
     }
-    if (!present) {
-      expect(refusal, "W5: no present phone on the active code").toBe("phone_not_paired");
+    if (cur === null) {
+      expect(refusal, "W5: no current phone on the active code").toBe("phone_not_paired");
       t.outcome("goLive:phone_not_paired");
+      return;
+    }
+    if (!present) {
+      // Owner ruling 2026-10-09 (Option 1): a CURRENT phone gone silent is told apart from no phone at all.
+      expect(refusal, "W5: the active code's current phone is silent (§6.9)").toBe("phone_not_responding");
+      t.outcome("goLive:phone_not_responding");
       return;
     }
     const { free } = restartOf(m, x.r.now().getTime());

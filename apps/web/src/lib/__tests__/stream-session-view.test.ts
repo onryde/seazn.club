@@ -198,6 +198,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["active_session 409", new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: "s-1" }), "active_session"],
     // Capture QR v2 W5 (carry): no phone paired and answering on the code — the refusal createSession throws (`refuse`).
     ["phone_not_paired 409", new HttpError(409, "no phone is paired and answering on this match's stream code", "phone_not_paired"), "phone_not_paired"],
+    // Owner ruling 2026-10-09 (Option 1): a phone IS paired but has gone silent — its own sentence, never the "scan" one.
+    ["phone_not_responding 409", new HttpError(409, "the phone paired on this match's stream code is not responding", "phone_not_responding"), "phone_not_responding"],
     ["storage_exhausted 503", new HttpError(503, "recording storage is exhausted", "storage_exhausted", { headroomMinutes: 12 }), "storage_exhausted"],
     ["ingest_unavailable 503", new HttpError(503, "the ingest service is unavailable", "ingest_unavailable"), "ingest_unavailable"],
     ["target_in_use 409, a holder with a court", new HttpError(409, "in use", "target_in_use", { holder: { fixtureId: "f-2", courtName: "Court 3", label: "Club channel" } }), "target_in_use"],

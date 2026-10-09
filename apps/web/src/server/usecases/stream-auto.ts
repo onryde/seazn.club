@@ -40,10 +40,12 @@ export function autoStartRefusalOf(err: unknown): AutoStartRefusal | "already_ru
     case "storage_exhausted":
     case "ingest_unavailable": return "unavailable";
     case "active_session": return "already_running";
-    // An assumption made a guard: an automatic start passes phonePresent: true because the arriving beat IS the current
-    // phone's, so W5 cannot answer it. Refused by name, never mapped to a refusal the panel would show.
+    // An assumption made a guard: an automatic start passes phone: "present" because the arriving beat IS the current
+    // phone's, so W5 cannot answer it — neither of its answers (owner ruling 2026-10-09 split it in two). Refused by name,
+    // never mapped to a refusal the panel would show.
     case "phone_not_paired":
-      throw new Error("maybeAutoStart: startBroadcast answered phone_not_paired to an automatic start, which passes phonePresent: true");
+    case "phone_not_responding":
+      throw new Error(`maybeAutoStart: startBroadcast answered ${err.code} to an automatic start, which passes phone: "present"`);
   }
   // admit's target_not_found (the destination vanished between the read and the row lock) has no code.
   if (err.status === 404 && err.code === undefined && err.message === "stream target not found") return "no_destination";
@@ -124,7 +126,7 @@ export async function maybeAutoStart(
     const { sessionId } = await startBroadcast(
       { userId: facts.issued_by, orgId: a.orgId, source: "auto", pairingId: a.pairingId },
       a.fixtureId,
-      { targetId: pick.id, startCause: "automatic", phonePresent: true, autoStartedAt: now },
+      { targetId: pick.id, startCause: "automatic", phone: "present", autoStartedAt: now },
       deps,
     );
     return { fired: true, sessionId };

@@ -29,7 +29,7 @@ import {
 } from "@/server/relay/config";
 import {
   ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, holdStateOf, isTerminal,
-  type Command, type Decision, type Effect, type HoldState, type Session, type SessionState, type StartCause,
+  type Command, type Decision, type Effect, type HoldState, type PhoneStanding, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
 import { isPresent } from "@/server/relay/domain/pairing";
 import { autoStopApplies, autoStopVerdict, type PhoneMode } from "@/server/relay/domain/auto-stream";
@@ -1128,6 +1128,8 @@ function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headro
     case "active_session": throw new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: refusal.activeSessionId ?? null });
     // W5 / T10 (capture QR v2 §6.7.1): nothing to stream from — the organiser pairs a phone before anything is weighed.
     case "phone_not_paired": throw new HttpError(409, "no phone is paired and answering on this match's stream code", "phone_not_paired");
+    // Owner ruling 2026-10-09 (Option 1): a phone IS paired but has gone silent (§6.9) — woken, not rescanned.
+    case "phone_not_responding": throw new HttpError(409, "the phone paired on this match's stream code is not responding", "phone_not_responding");
   }
 }
 
@@ -1175,8 +1177,9 @@ export interface StartActor {
  *  the automatic start is the domain's own decision. */
 const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain" } as const satisfies Record<StartActor["source"], EventSource>;
 
-/** W5 / T10 (§6.7.1, §6.9): slot 0's CURRENT pairing on the fixture's ACTIVE stream code, and whether it is present —
- *  current and not silent on `now` (admission's clock). Through the non-tenant `sql` (R1): V430's tables are FORCE RLS
+/** W5 / T10 (§6.7.1, §6.9): slot 0's CURRENT pairing on the fixture's ACTIVE stream code, and its standing — `present`
+ *  (current and not silent on `now`, admission's clock) or `silent` (owner ruling 2026-10-09: refused
+ *  `phone_not_responding`, never `phone_not_paired`). Null is no current phone: `unpaired` to admission. Through the non-tenant `sql` (R1): V430's tables are FORCE RLS
  *  with no policy. At most one row: one active code per fixture, one current pairing per (code, slot) — V430's indexes.
  *  Both filters are load-bearing, and `c.ended_at is null` is the ONLY authority for a revoked code: T30 leaves a reissued
  *  code's pairings current "until they call", so without it the revoked phone would read present (witnesses: "W5 after
@@ -1185,7 +1188,7 @@ const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain"
  *  expired, the first evaluation writes it (ended `expired`, tok wiped), as resolve, ensure and the panel's read do, and
  *  the code has no current phone: W5 answers `phone_not_paired`. An open session defers it (C2), so a Go live over one
  *  meets `active_session` as before. */
-async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId: string; present: boolean } | null> {
+async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId: string; standing: Exclude<PhoneStanding, "unpaired"> } | null> {
   const [c] = await sql<{
     id: string; finished_at: Date | null; open: boolean; pairing_id: string | null; last_beat_at: Date | null; answered_poll_seconds: number | null;
   }[]>`
@@ -1208,7 +1211,7 @@ async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId
     { current: true, lastBeatAt: new Date(p.last_beat_at), answeredPoll: p.answered_poll_seconds },
     now, tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS),
   );
-  return { pairingId: p.id, present };
+  return { pairingId: p.id, standing: present ? "present" : "silent" };
 }
 
 /** The organiser's Go live (the route's caller; unchanged signature). It resolves the actor, asks whether the fixture's
@@ -1229,7 +1232,7 @@ export async function createSession(
   const started = await startBroadcast(
     { userId: actorUserId, orgId, source: "organiser", pairingId: phone?.pairingId ?? null },
     fixtureId,
-    { targetId: body.targetId, startCause: "organiser", phonePresent: phone?.present ?? false, mode: body.mode, themeId: body.themeId ?? null },
+    { targetId: body.targetId, startCause: "organiser", phone: phone?.standing ?? "unpaired", mode: body.mode, themeId: body.themeId ?? null },
     deps,
   );
   // T6 (§6.6): the destination this Go live used becomes the fixture's pre-pick, which the phone's own start reads.
@@ -1246,14 +1249,14 @@ export async function createSession(
 
 /** Capture QR v2 §5.3 / §6.7 (T6): the ONE start path. The organiser's Go live (`createSession`), the phone operator's
  *  start and the automatic start all come through here, so admission, the destination doors, the storage read, the
- *  insert and provisioning are the same code for all three (A23); only the actor, `startCause` and `phonePresent`
- *  differ. `phonePresent` is the caller's answer: the organiser's is read from the pairing, the phone's is true (the
- *  caller IS the current phone). */
+ *  insert and provisioning are the same code for all three (A23); only the actor, `startCause` and `phone` differ.
+ *  `phone` is the caller's answer: the organiser's is read from the pairing (unpaired, silent or present), the phone's
+ *  and the automatic start's is `present` (the caller IS the current phone). */
 export async function startBroadcast(
   actor: StartActor,
   fixtureId: string,
   opts: {
-    targetId: string; startCause: StartCause; phonePresent: boolean; mode?: CreateStreamSession["mode"]; themeId?: string | null;
+    targetId: string; startCause: StartCause; phone: PhoneStanding; mode?: CreateStreamSession["mode"]; themeId?: string | null;
     /** The automatic start's instant (§7.2, final review m-1): stamped as `auto_started_at` IN the insert's transaction, so
      *  the session and "once per match" commit together. Given exactly when `actor.source` is `auto`. */
     autoStartedAt?: Date;
@@ -1366,22 +1369,23 @@ export async function startBroadcast(
   ]);
   // W5 BEFORE the storage read (controller ruling, B4 fix round): a Go live with no phone to stream from asks Cloudflare
   // nothing. The probe is `admit` itself on everything it can weigh without storage, so the plan gates and
-  // `active_session` (F-A5) still outrank W5 in admit's own order; only a `phone_not_paired` answer is taken here, and
-  // every other refusal is left to the admission below, measurement included (ruling 13). Nothing was measured, so this
-  // refusal records no storage snapshot. The destination doors above still answer first (§17.10).
+  // `active_session` (F-A5) still outrank W5 in admit's own order; only W5's answers are taken here — `phone_not_paired`
+  // and, since the owner's 2026-10-09 split, `phone_not_responding` — and every other refusal is left to the admission
+  // below, measurement included (ruling 13). Nothing was measured, so this refusal records no storage snapshot. The
+  // destination doors above still answer first (§17.10).
   const early = admit({
-    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phonePresent: opts.phonePresent,
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone,
     headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,
     activeSessionId: (await activeSessionIdFor(fixtureId)) ?? priorMachineSessionId,
   });
-  if (!early.ok && early.refusal === "phone_not_paired") refuse(early, 0);
+  if (!early.ok && (early.refusal === "phone_not_paired" || early.refusal === "phone_not_responding")) refuse(early, 0);
   // M1 (B2 review): a saved key that will not open is refused BEFORE the storage read below — the first provider call a
   // create makes for itself — so an unreadable Go live asks Cloudflare nothing at all. A PROBE only: it answers solely for
   // this org's ACTIVE row (an archived or foreign id falls through to `admit`'s 404, never an oracle), only when `admit`
   // would otherwise pass (F-A5, see `refuseUnreadableTarget`), and the read inside the admission transaction stays the
   // authority for everything that row lock protects.
   await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
-    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phonePresent: opts.phonePresent,
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone,
     headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here
     activeSessionId: activeSessionId ?? priorMachineSessionId,
   }).ok);
@@ -1397,7 +1401,7 @@ export async function startBroadcast(
     const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
-      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom, phonePresent: opts.phonePresent,
+      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom, phone: opts.phone,
       maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: (await activeSessionIdFor(fixtureId, tx)) ?? priorMachineSessionId,   // m2: on the tx, never a 2nd pooled connection
     });
     if (!verdict.ok) {

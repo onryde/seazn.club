@@ -96,14 +96,16 @@ async function pairingOf(r: CaptureRig, phone: string) {
 /** §6.9: silent at max(PHONE_SILENT_FLOOR_SECONDS, the answered cadence + PHONE_SILENT_SLACK_SECONDS). */
 const silentMs = (answered: number) => Math.max(PHONE_SILENT_FLOOR_SECONDS, answered + PHONE_SILENT_SLACK_SECONDS) * 1000;
 
-/** W5's own answer (the other reader of "present"): the organiser's Go live, refused `phone_not_paired` or not. */
-async function goLiveRefusedNoPhone(r: CaptureRig): Promise<boolean> {
+/** W5's own answer (the other reader of "present"): the organiser's Go live, refused by W5 — `phone_not_paired` (no
+ *  current phone) or, since the owner's 2026-10-09 split, `phone_not_responding` (a current phone gone silent) — or
+ *  `null`: W5 admitted the phone (the start went through, or another admission gate refused it). */
+async function w5Answer(r: CaptureRig): Promise<"phone_not_paired" | "phone_not_responding" | null> {
   try {
     await createSession(r.auth, r.fixtureId, { mode: "passthrough", targetId: r.target.id }, r.deps);
-    return false;
+    return null;
   } catch (e) {
-    if (e instanceof HttpError && e.code === "phone_not_paired") return true;
-    if (e instanceof HttpError) return false;   // another admission refusal: W5 itself admitted the phone
+    if (e instanceof HttpError && (e.code === "phone_not_paired" || e.code === "phone_not_responding")) return e.code;
+    if (e instanceof HttpError) return null;   // another admission refusal: W5 itself admitted the phone
     throw e;
   }
 }
@@ -197,12 +199,14 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     const at = await readRig(r);
     expect([at.phone?.present, at.phone?.silent, at.phone?.elapsedMs]).toEqual([false, true, threshold]);
     expect(at.phone?.notResponding, "not held: never not-responding (§6.9, W8)").toBe(false);
-    // The other reader of the same fact: W5 refuses Go live on the silent phone the read calls not present ...
-    expect(await goLiveRefusedNoPhone(r), "W5 on the silent phone").toBe(true);
+    // The other reader of the same fact: W5 refuses Go live on the silent phone the read calls not present — and, the
+    // read still naming the phone, says it is not responding rather than unpaired (owner ruling 2026-10-09) ...
+    expect(at.phone, "PREMISE: the read still names the paired phone").not.toBeNull();
+    expect(await w5Answer(r), "W5 on the silent phone").toBe("phone_not_responding");
     // ... and admits it once the phone beats again, which the read calls present.
     await beat(r, a);
     expect((await readRig(r)).phone?.present).toBe(true);
-    expect(await goLiveRefusedNoPhone(r), "W5 on the present phone").toBe(false);
+    expect(await w5Answer(r), "W5 on the present phone").toBeNull();
   });
 
   it("W8: a HELD phone (the open session's) is not responding at NOT_RESPONDING_BEATS × its answered cadence — not 1 ms before", async () => {
@@ -281,7 +285,7 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     expect((await readRig(idle)).phone?.present, "PREMISE: paired and present before the reissue").toBe(true);
     await reissueStreamCode(idle.auth, idle.fixtureId);
     expect((await readRig(idle)).phone, "only a claim on the NEW code pairs a phone for the next Go live").toBeNull();
-    expect(await goLiveRefusedNoPhone(idle), "W5: the same answer").toBe(true);
+    expect(await w5Answer(idle), "W5: the same answer — no phone, so pair one (not 'not responding')").toBe("phone_not_paired");
   });
 
   it("I-2: the session's phone RESCANNING the new code is the same phone moving — never a takeover", async () => {

@@ -1722,7 +1722,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
 
   it("§6.12's new copy, in every locale: the same placeholders as English (a lost {remaining} renders a countdown with no time), and every sentence translated", () => {
     const en = uiDict("en");
-    const keys = Object.keys(en).filter((k) => /^stream\.(restart\.|code\.|phone\.(countdown|paused)\.|phone\.(pairFirst|silent|waitingVideo|pollFar|matchOver)$|error\.phone_not_paired$)/.test(k));
+    const keys = Object.keys(en).filter((k) => /^stream\.(restart\.|code\.|phone\.(countdown|paused)\.|phone\.(pairFirst|silent|waitingVideo|pollFar|matchOver)$|error\.phone_not_(paired|responding)$)/.test(k));
     const holes = (t: string) => [...t.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
     let checked = 0;
     let sentences = 0;
@@ -1738,8 +1738,9 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
         checked++;
       }
     }
-    // 2 restart + 8 code + 3 countdown + 5 paused + 5 phone sentences + phone_not_paired.
-    expect(keys.length, "PREMISE: the sweep found §6.12's keys").toBe(24);
+    // 2 restart + 8 code + 3 countdown + 5 paused + 5 phone sentences + phone_not_paired + phone_not_responding (owner
+    // ruling 2026-10-09).
+    expect(keys.length, "PREMISE: the sweep found §6.12's keys").toBe(25);
     expect(checked).toBe(keys.length * LOCALES.length);
     expect(sentences).toBeGreaterThan(0);
     // The countdown sentences name the time left; the live one also the time gone (W24).
