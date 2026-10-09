@@ -10,6 +10,7 @@ import "server-only";
 // Columns, not config keys: divisions.config / stages.config are
 // sport-module-validated snapshots that strip unknown keys.
 import { HttpError } from "@/lib/errors";
+import { sql } from "@/lib/db";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 
 export { CAMERA_POLICIES, type CameraPolicy };
@@ -75,4 +76,31 @@ export function assertCameraPolicyValue(value: unknown): CameraPolicy | null {
     );
   }
   return found;
+}
+
+// ---------------------------------------------------------------------------
+// Database reader.
+
+/** The effective policy for one fixture: its stage's own value, else its
+ *  division's, else its competition's (NOT NULL — the floor). One query; a
+ *  fixture that does not exist reads `off` rather than throwing, because every
+ *  caller's answer to "no such fixture" is already "no camera to gate on". */
+export async function fixtureCameraPolicy(fixtureId: string): Promise<CameraPolicy> {
+  const [row] = await sql<
+    { stagePolicy: unknown; divisionPolicy: unknown; competitionPolicy: unknown }[]
+  >`
+    select s.camera_policy as "stagePolicy",
+           d.camera_policy as "divisionPolicy",
+           c.camera_policy as "competitionPolicy"
+      from fixtures f
+      left join stages s on s.id = f.stage_id
+      join divisions d on d.id = f.division_id
+      join competitions c on c.id = d.competition_id
+     where f.id = ${fixtureId}`;
+  if (!row) return "off";
+  return effectivePolicy({
+    stage: readCameraPolicy(row.stagePolicy),
+    division: readCameraPolicy(row.divisionPolicy),
+    competition: readCameraPolicy(row.competitionPolicy),
+  });
 }

@@ -10,6 +10,7 @@ import { sql } from "@/lib/db";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import type { CameraPolicy } from "@/lib/camera-policy";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -89,11 +90,27 @@ export type SeedOnlineChessFixtureOpts = {
    *  maps cleanly onto a Lichess challenge clock. Pass `delay` to build a
    *  fixture whose clock config is NOT Lichess-mappable. */
   clock?: { base: number; increment?: number; delay?: number };
+  /** `divisions.camera_policy`. Omitted ⇒ null (inherit), which is what
+   *  every pre-existing division looks like (spec §5.1). */
+  cameraPolicy?: CameraPolicy;
+  /** `stages.camera_policy`, the nearest level. Omitted ⇒ null (inherit). */
+  stageCameraPolicy?: CameraPolicy;
+  /** `competitions.camera_policy`, the NOT NULL floor. Omitted ⇒ the column
+   *  default 'off'. */
+  competitionCameraPolicy?: CameraPolicy;
+  /** D12: inserts the `stage_round_opens` row for the fixture's round (1),
+   *  opened by the seeded owner. Omitted ⇒ the round has never been opened,
+   *  which is the DEFAULT state of a freshly paired round. */
+  roundOpenedAt?: Date;
 };
 
 export type SeedOnlineChessFixtureResult = {
   orgId: string;
+  competitionId: string;
   divisionId: string;
+  stageId: string;
+  /** The seeded org owner — the actor for patchDivision / the round open. */
+  ownerUserId: string;
   fixtureId: string;
   home: { entrantId: string; personId: string; userId: string; lichessId: string };
   away: { entrantId: string; personId: string; userId: string; lichessId: string };
@@ -108,6 +125,8 @@ export async function seedOnlineChessFixture(
   opts: SeedOnlineChessFixtureOpts,
 ): Promise<SeedOnlineChessFixtureResult> {
   const owner = await seedOwner();
+  const ownerUserId = owner.userId;
+  if (!ownerUserId) throw new Error("seedOwner returned a session with no userId");
   const competition = await createCompetition(owner, {
     name: "EP7 Cup",
     visibility: "public",
@@ -135,6 +154,13 @@ export async function seedOnlineChessFixture(
       clock: opts.clock ?? { base: 900, increment: 0 },
     },
   });
+  if (opts.competitionCameraPolicy) {
+    await sql`update competitions set camera_policy = ${opts.competitionCameraPolicy}
+               where id = ${competition.id}`;
+  }
+  if (opts.cameraPolicy) {
+    await sql`update divisions set camera_policy = ${opts.cameraPolicy} where id = ${division.id}`;
+  }
   const homeLichess = `w-${randomUUID().slice(0, 8)}`;
   const awayLichess = `b-${randomUUID().slice(0, 8)}`;
   const white = await seedPlayer(owner.orgId, "White", homeLichess, opts.linked);
@@ -168,12 +194,23 @@ export async function seedOnlineChessFixture(
     values (${stage.id}, ${division.id}, ${owner.orgId}, 1, 1, ${`ep7-${randomUUID().slice(0, 6)}`},
             'scheduled', ${home.id}, ${away.id}, ${opts.scheduledAt})
     returning id`;
+  if (opts.stageCameraPolicy) {
+    await sql`update stages set camera_policy = ${opts.stageCameraPolicy} where id = ${stage.id}`;
+  }
+  if (opts.roundOpenedAt) {
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+      values (${stage.id}, ${owner.orgId}, 1, ${opts.roundOpenedAt}, ${ownerUserId})`;
+  }
   if (opts.divisionStarted) {
     await startDivision(owner, division.id);
   }
   return {
     orgId: owner.orgId,
+    competitionId: competition.id,
     divisionId: division.id,
+    stageId: stage.id,
+    ownerUserId,
     fixtureId: fixture.id,
     home: { entrantId: home.id, personId: white.personId, userId: white.userId, lichessId: white.lichessId },
     away: { entrantId: away.id, personId: black.personId, userId: black.userId, lichessId: black.lichessId },
