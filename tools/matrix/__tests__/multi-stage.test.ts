@@ -952,3 +952,61 @@ describe("I2 structural on the later bracket stages the fake draws (W1-driving T
     expect(unreached.terminalFinals).toBeUndefined();
   });
 });
+
+// W2a Task 14, phase 3: the bracket-finish scenarios' pick (RoundHooks.bracketPick) is the scenario's rule for EVERY
+// bracket match. playDivision gave the round hooks to stage 1 only (D12), so on ko_plate and qualifying_main the second
+// bracket was decided by bracketPolicy while its scenario's check counted it as a match that must take the forced path:
+// 48 truth-run reds on the bracket-root rows (33 abandon, 9 level, 3 tie-break, 3 extra board), none a product defect. league_ko is the fake's one row
+// with a bracket BEHIND a table, so a bracket stage after stage 1 is reached with a real producer and consumer.
+describe("W2a: a scenario's bracketPick reaches a bracket stage after stage 1 (playDivision)", () => {
+  it("every match of the later knockout is asked by the pick, not bracketPolicy: n counts run-wide from 0, `higher` is the better seed's side; stage 1's table is untouched by it", async () => {
+    const driver = new FakeMultiStageDriver();
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "league_ko" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor("league_ko", "LIFECYCLE"));
+    const calls: { fixtureId: string; n: number; higher: string }[] = [];
+    // The side the policy would NOT pick, so a match bracketPolicy decided is told from one the pick decided.
+    const against = (f: FixtureRow, n: number, higher: "home" | "away") => { calls.push({ fixtureId: f.id, n, higher }); return { kind: "win", winner: higher === "home" ? "away" : "home" } as const; };
+    await playDivision(ctx, rec, setup, { bracketPick: against });
+    // The rule: the better seed is the LOWER seed number (setup.seedOf). The drives are what the product was asked.
+    expect(rec.bracketDrives.length, "the later knockout drove some matches").toBeGreaterThan(0);
+    expect(calls.length, "the pick was asked for every one of them").toBe(rec.bracketDrives.length);
+    expect(calls.map((c) => c.n), "n is the run-wide bracket ordinal").toEqual(rec.bracketDrives.map((_, i) => i));
+    for (const d of rec.bracketDrives) {
+      const better = setup.seedOf(d.home) < setup.seedOf(d.away) ? "home" : "away";
+      const call = calls.find((c) => c.fixtureId === d.fixtureId)!;
+      expect(call.higher, d.fixtureId).toBe(better);
+      expect(d.asked, d.fixtureId).toEqual({ kind: "win", winner: better === "home" ? "away" : "home" });
+    }
+    // Stage 1 is a league: no bracket fixture, so none of its matches reached the pick.
+    const stage1 = new Set(driver.fixturesOfStage(1).map((f) => f.id));
+    expect(calls.filter((c) => stage1.has(c.fixtureId))).toEqual([]);
+    expect(stage1.size).toBeGreaterThan(0);
+  });
+  it("the round hooks stay on stage 1 (D12): the pick goes to later stages, beforeRound and afterRound do not", async () => {
+    const driver = new FakeMultiStageDriver();
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "league_ko" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor("league_ko", "LIFECYCLE"));
+    const hooked: string[] = [];
+    const stage1 = new Set(driver.fixturesOfStage(1).map((f) => f.id));
+    const note = async (_round: number, batch: FixtureRow[]) => { for (const f of batch) hooked.push(f.id); };
+    await playDivision(ctx, rec, setup, { beforeRound: note, afterRound: note, bracketPick: (_f, _n, higher) => ({ kind: "win", winner: higher }) });
+    expect(hooked.length, "the hooks ran on stage 1").toBeGreaterThan(0);
+    expect(hooked.filter((id) => !stage1.has(id)), "no later-stage fixture reached a round hook").toEqual([]);
+    expect(rec.bracketDrives.length, "while the pick did reach the later stage").toBeGreaterThan(0);
+  });
+  it("no pick: the later knockout is asked by bracketPolicy byte for byte (the hard path on the first of each three, a plain win for the better seed otherwise)", async () => {
+    const driver = new FakeMultiStageDriver();
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "league_ko" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor("league_ko", "LIFECYCLE"));
+    await playDivision(ctx, rec, setup, {});
+    expect(rec.bracketDrives.length).toBeGreaterThan(0);
+    rec.bracketDrives.forEach((d, i) => {
+      const better = setup.seedOf(d.home) < setup.seedOf(d.away) ? "home" : "away";
+      if (i % 3 !== 0) expect(d.asked, `match ${i}`).toEqual({ kind: "win", winner: better });
+      else expect(d.asked.kind, `match ${i} is the hard path`).not.toBe("win");
+    });
+  });
+});

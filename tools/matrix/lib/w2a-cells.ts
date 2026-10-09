@@ -15,8 +15,9 @@ import { GeneratorUnsupported, OutcomeUnreachable, type RequestedOutcome } from 
 import type { W2aScenarioKey } from "./scenarios/types.ts";
 import { offlineBuilderDefault } from "./variants.ts";
 
-/** The rows whose first (root) stage is a bracket kind: the scenarios play the root stage's bracket through the hooks
- *  playDivision gives stage 1 only (D12), and a bracket behind a table is LIFECYCLE's. */
+/** The rows whose first (root) stage is a bracket kind: the scenarios' probe runs through the round hooks playDivision
+ *  gives stage 1 only (D12), and a bracket behind a table is LIFECYCLE's. The scenarios' pick decides the bracket
+ *  matches of every stage of such a row (ko_plate's plate, qualifying_main's main) and of a ladder. */
 export function bracketRootRows(): RowKey[] {
   return ROW_KEYS.filter((row) => forbidsLevelResult(stagesForRow(row)[0].kind as StageKind));
 }

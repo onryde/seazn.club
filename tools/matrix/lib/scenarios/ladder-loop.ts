@@ -8,7 +8,7 @@
 // the same order — so the expected order needs no ladder rulebook (W7's).
 import { RefusedCall, type ChallengeOut, type StageRef } from "../driver/types.ts";
 import type { RequestedOutcome, Side } from "../streams/types.ts";
-import { decideFixture, hardPath, type DivisionSetup, type Recorder, type RoundHook } from "./common.ts";
+import { decideFixture, hardPath, type DivisionSetup, type Recorder, type RoundHooks } from "./common.ts";
 import { stageCfg } from "../sport-cfg.ts";
 import type { StageKind } from "@seazn/engine/core";
 import type { ScenarioContext } from "./types.ts";
@@ -38,13 +38,16 @@ export function ladderSchedule(n: number): readonly LadderStep[] {
  *  (common.ts hardPath: a tie-break for chess, else a settle after a level result or an abandon). The order D8 expects is
  *  unchanged: the winner of each step is the one the plain win would have named. `hard` is how many hard paths this stage
  *  has asked for so far. */
+/** The side D8 scripts to win step `c`: the challenger on a climbing step, else the opponent. */
+const stepWinner = (c: LadderStep, challengerHome: boolean): Side => (c.challengerWins === challengerHome ? "home" : "away");
+
 function stepOutcome(c: LadderStep, challengerHome: boolean, hard: number, firstLoss: boolean, sport: string, cfg: unknown): RequestedOutcome {
-  const winner: Side = c.challengerWins === challengerHome ? "home" : "away";
+  const winner = stepWinner(c, challengerHome);
   if (c.step === 1 || firstLoss) return hardPath(sport, cfg, hard, winner);
   return { kind: "win", winner };
 }
 
-export async function playLadder(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, hooks: { beforeRound?: RoundHook; afterRound?: RoundHook }): Promise<void> {
+export async function playLadder(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, hooks: RoundHooks): Promise<void> {
   const track = rec.track(stage.id);
   const plan = ladderSchedule(setup.entrants.length); // bound = field size − 1, derived
   if (plan.length === 0) {
@@ -78,7 +81,11 @@ export async function playLadder(ctx: ScenarioContext, rec: Recorder, setup: Div
     const f = (await ctx.driver.listFixtures(setup.division.id)).find((x) => x.id === out.fixture_id);
     if (f === undefined) throw new Error(`ladder: challenge answered fixture ${out.fixture_id}, which the division list does not hold`);
     await hooks.beforeRound?.(c.step, [f]);
-    const outcome = stepOutcome(c, f.home_entrant_id === challenger, hard, !c.challengerWins && !lossAsked, ctx.spec.sport, cfg);
+    // W2a: a bracket-finish scenario's pick decides every step (a ladder is a bracket kind), told the scripted winner's side;
+    // absent, the ladder asks its own hardPath on the first step and the first non-climb, as before.
+    const outcome = hooks.bracketPick !== undefined
+      ? hooks.bracketPick(f, rec.bracketOrdinal++, stepWinner(c, f.home_entrant_id === challenger), cfg)
+      : stepOutcome(c, f.home_entrant_id === challenger, hard, !c.challengerWins && !lossAsked, ctx.spec.sport, cfg);
     if (outcome.kind !== "win") { hard++; if (!c.challengerWins) lossAsked = true; }
     await decideFixture(ctx, rec, setup, f, outcome, stage);
     await hooks.afterRound?.(c.step, [f]);

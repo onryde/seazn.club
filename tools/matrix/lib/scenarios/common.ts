@@ -625,8 +625,11 @@ export async function dateFirstRound(ctx: ScenarioContext, rec: Recorder, setup:
 export type RoundHook = (round: number, batch: FixtureRow[]) => Promise<void>;
 
 /** W2a (Task 14): a scenario's own choice of outcome for a BRACKET fixture, in place of bracketPolicy's. `n` counts
- *  bracket fixtures (Recorder.bracketOrdinal), `higher` is the better seed's side, `cfg` is the stage-overlaid cfg the
- *  product folds the fixture under. Absent, every bracket fixture is asked by bracketPolicy, byte for byte. */
+ *  bracket fixtures run-wide (Recorder.bracketOrdinal), `higher` is the side the pick should make win — the better
+ *  seed's in a bracket, the SCRIPTED winner's on a ladder (D8 scripts who wins, so the order it expects holds) — and
+ *  `cfg` is the stage-overlaid cfg the product folds the fixture under. It decides EVERY bracket match of the run, in
+ *  every stage and on a ladder (playDivision, playLadder), unlike the round hooks; absent, every bracket fixture is
+ *  asked by bracketPolicy, byte for byte. */
 export type BracketPick = (f: FixtureRow, n: number, higher: Side, cfg: unknown) => RequestedOutcome;
 export interface RoundHooks { beforeRound?: RoundHook; afterRound?: RoundHook; bracketPick?: BracketPick }
 
@@ -776,7 +779,9 @@ export async function playDivision(
         continue;
       }
     }
-    await playStage(ctx, rec, setup, i === 0 ? hooks : {}, stage); // D12: hooks on stage 1 only
+    // D12: the round hooks run on stage 1 only; the bracket pick is the scenario's rule for every bracket match, so it
+    // goes to each stage (a later stage it does not apply to — a table — never asks it).
+    await playStage(ctx, rec, setup, i === 0 ? hooks : hooks.bracketPick === undefined ? {} : { bracketPick: hooks.bracketPick }, stage);
     if (i === 0) await hooks.beforeComplete?.(stage);
     const complete = await finishStage(ctx, rec, stage.id);
     plays.push({ stage, field, advance, complete });

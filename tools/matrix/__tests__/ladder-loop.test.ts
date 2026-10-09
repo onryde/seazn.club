@@ -22,7 +22,7 @@ import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, snap, type FixtureSnap, type ObservedFixture, type ObservedOutcome } from "../lib/observed.ts";
 import { decideState, type CheckResult } from "../lib/results.ts";
-import { Recorder, decideFixture, setUpDivision, type DivisionSetup } from "../lib/scenarios/common.ts";
+import { Recorder, decideFixture, setUpDivision, type BracketPick, type DivisionSetup } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ladderSchedule, playLadder } from "../lib/scenarios/ladder-loop.ts";
 import { cascadeItems, notChallengedLater } from "../lib/scenarios/r4-withdrawal.ts";
@@ -751,5 +751,45 @@ describe("playLadder's guards and the fake's refusals (review m-2, m-6)", () => 
     expect(driver.issuedChallenges()[0]).toMatchObject({ challenger: seeds.at(-1), opponent: seeds.at(-2) });
     expect(driver.ladderOrder()).toEqual(swapRule(seeds));
     expect(state).toBe("works");
+  });
+});
+
+// W2a Task 14, phase 3: a ladder is a bracket kind (X-DR-1), so a bracket-finish scenario's pick owes it too. playLadder
+// asked its own hardPath on step 1 and the first non-climb and a plain win elsewhere, never the pick, so the 16 ladder
+// cells of the settle, tie-break and extra-board scenarios (11 + 3 + 1 + 1) reddened on the scenario's own check. The pick is told
+// the SCRIPTED winner's side in its `higher` slot (D8 scripts who wins, not the seeds), so the order D8 expects survives.
+describe("W2a: a scenario's bracketPick decides every ladder step (playLadder)", () => {
+  async function playWith(pick: BracketPick | undefined) {
+    const driver = new FakeLadderDriver({ challengeRange: 3 });
+    const ctx = ctxFor(driver, "LIFECYCLE");
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 8);
+    await playLadder(ctx, rec, setup, setup.stage, pick === undefined ? {} : { bracketPick: pick });
+    return { driver, rec, setup };
+  }
+  it("every step is asked by the pick, n counts from 0, and the final order is still the adjacent-swap rule (the pick's winner is the scripted one)", async () => {
+    const calls: { n: number; higher: string }[] = [];
+    // Every step an abandoned-then-settled match: the plain win stepOutcome asks on steps 2.. is a different kind.
+    const settleEvery: BracketPick = (_f, n, higher) => { calls.push({ n, higher }); return { kind: "settle", then: higher, method: SETTLE_METHODS[n % SETTLE_METHODS.length]!, after: "abandon" }; };
+    const { driver, rec } = await playWith(settleEvery);
+    const steps = ladderSchedule(8);
+    expect(steps.length).toBe(7);
+    expect(calls.map((c) => c.n)).toEqual(steps.map((_, i) => i));
+    expect(rec.bracketDrives.length).toBe(steps.length);
+    rec.bracketDrives.forEach((d, i) => {
+      expect(d.asked, `step ${i + 1}`).toEqual({ kind: "settle", then: calls[i]!.higher, method: SETTLE_METHODS[i % SETTLE_METHODS.length], after: "abandon" });
+      expect(d.status, `step ${i + 1}`).toBe("decided");
+      expect(d.outcome, `step ${i + 1}`).toMatchObject({ kind: "win", method: `settled_${SETTLE_METHODS[i % SETTLE_METHODS.length]}` });
+    });
+    // The scripted winner is the challenger on odd steps (D8): the order is the rule's, not the seeds'.
+    expect(driver.ladderOrder()).toEqual(swapRule(driver.entrantsBySeed()));
+    expect(rec.exit).toBe("drained");
+  });
+  it("no pick: the ladder asks its own hardPath on the first step and the first non-climb and a plain win elsewhere, and counts no bracket ordinal", async () => {
+    const { rec } = await playWith(undefined);
+    expect(rec.bracketDrives.length).toBe(7);
+    const hard = rec.bracketDrives.map((d, i) => [i + 1, d.asked.kind] as const).filter(([, k]) => k !== "win").map(([s]) => s);
+    expect(hard).toEqual([1, firstNonClimb(8)]);
+    expect(rec.bracketOrdinal).toBe(0);
   });
 });
