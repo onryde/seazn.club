@@ -400,3 +400,86 @@ describe.skipIf(!HAS_DB)("camera_policy through patchDivision — downgrade-only
     expect(await storedPolicy(b.division.id)).toBeNull();
   });
 });
+
+// Fix round (controller, M-4): the settings select now offers "Use the
+// competition setting", which saves null. A pinned division must be able to go
+// back to inheriting; the move is audited like any other change and judged by
+// the EFFECTIVE policy it produces. Expected values are typed from the seeded
+// levels, never read from effectivePolicy.
+describe.skipIf(!HAS_DB)("M-4: a pinned division returns to inherit (camera_policy null)", () => {
+  it("the SEQUENCE: pinned → inherit (audited, readers now give the competition's value) → re-send null is a no-op → pinned again", async () => {
+    const s = await seedOnlineChessFixture({ ...base, competitionCameraPolicy: "optional", cameraPolicy: "required" });
+    // Premise: the pin is what players get, and it differs from the competition's.
+    expect(await fixtureCameraPolicy(s.fixtureId), "premise: the pin wins").toBe("required");
+    expect(await competitionCameraPolicy(s.competitionId), "premise: the competition says optional").toBe("optional");
+
+    await patchDivision(authFor(s), s.divisionId, { camera_policy: null });
+    expect(await storedPolicy(s.divisionId), "stored row: inherit").toBeNull();
+    expect((await getDivision(authFor(s), s.divisionId)).camera_policy, "returned row: inherit").toBeNull();
+    expect(await fixtureCameraPolicy(s.fixtureId), "the effective reader now gives the competition's value").toBe("optional");
+    const one = await auditRows(s.competitionId);
+    expect(one).toHaveLength(1);
+    expect(one[0]?.payload).toMatchObject({
+      divisionId: s.divisionId,
+      from: "required",
+      to: null,
+      effectiveFrom: "required",
+      effectiveTo: "optional",
+      roundOpened: false,
+    });
+    expect(one[0]?.actor_id).toBe(s.ownerUserId);
+
+    // A second inherit save changes nothing: no row, no error.
+    await patchDivision(authFor(s), s.divisionId, { camera_policy: null });
+    expect(await auditRows(s.competitionId), "re-sending null is a no-op").toHaveLength(1);
+
+    // And it can be pinned again from there.
+    await patchDivision(authFor(s), s.divisionId, { camera_policy: "off" });
+    expect(await storedPolicy(s.divisionId)).toBe("off");
+    expect(await fixtureCameraPolicy(s.fixtureId)).toBe("off");
+    const two = await auditRows(s.competitionId);
+    expect(two).toHaveLength(2);
+    expect(two[1]?.payload).toMatchObject({ from: null, to: "off", effectiveFrom: "optional", effectiveTo: "off" });
+  });
+
+  it("after a round opens, inherit that leaves what players get UNCHANGED is allowed and audited", async () => {
+    // Pinned 'required' under a 'required' competition: clearing the pin is
+    // not a tightening (required → required), so the downgrade-only rule does
+    // not refuse it — the stored value changes, the effective one does not.
+    const s = await seedOnlineChessFixture({
+      ...base,
+      competitionCameraPolicy: "required",
+      cameraPolicy: "required",
+      roundOpenedAt: OPENED,
+    });
+    await patchDivision(authFor(s), s.divisionId, { camera_policy: null });
+    expect(await storedPolicy(s.divisionId)).toBeNull();
+    expect(await fixtureCameraPolicy(s.fixtureId)).toBe("required");
+    const [row] = await auditRows(s.competitionId);
+    expect(row?.payload).toMatchObject({
+      from: "required",
+      to: null,
+      effectiveFrom: "required",
+      effectiveTo: "required",
+      roundOpened: true,
+    });
+  });
+
+  it("after a round opens, inherit that TIGHTENS what players get is refused 409 and leaves no row", async () => {
+    // Pinned 'optional' under a 'required' competition (the existing case
+    // covers 'off'): inheriting would raise optional → required.
+    const s = await seedOnlineChessFixture({
+      ...base,
+      competitionCameraPolicy: "required",
+      cameraPolicy: "optional",
+      roundOpenedAt: OPENED,
+    });
+    expect(await refusal(patchDivision(authFor(s), s.divisionId, { camera_policy: null }))).toEqual({
+      status: 409,
+      code: "POLICY_LOCKED",
+    });
+    expect(await storedPolicy(s.divisionId)).toBe("optional");
+    expect(await fixtureCameraPolicy(s.fixtureId)).toBe("optional");
+    expect(await auditRows(s.competitionId)).toHaveLength(0);
+  });
+});

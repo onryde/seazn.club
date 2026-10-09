@@ -1788,6 +1788,7 @@ export type DictionaryKey =
   | "division.view.round"
   | "divset.advanced"
   | "divset.camera.help"
+  | "divset.camera.inheritOption"
   | "divset.camera.inherited"
   | "divset.camera.label"
   | "divset.camera.needsOnlinePlay"
