@@ -7,6 +7,7 @@
 // response parsing — a double that answered `true`/`false` directly would
 // prove only the double (AGENTS.md, "the inert seam").
 import { randomUUID } from "node:crypto";
+import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1073,4 +1074,199 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
     ).rejects.toMatchObject({ status: 404, code: "NOT_FOUND" });
     expect(await auditRows(s.fixtureId)).toEqual([]);
   });
+});
+
+// ─── Property: random orderings of the seat's world ────────────────────────
+//
+// Actions: open the round, a player joins / leaves the meeting (only with a
+// token the server actually issued them), a player claims the seat, and the
+// organiser DOWNGRADES the policy through the real writer (patchDivision —
+// after a round opens, T6's guard allows only relaxing). Every run starts
+// under `required` with the round unopened.
+//
+// The expected result of every claim comes from a MODEL of the rules
+// (spec §5.1/§5.2, D12, rulings Q1/Q3), never from the code:
+//   round not open            ⇒ round_not_open, no token, no RealtimeKit call
+//   off                       ⇒ seated, no tile, no RealtimeKit call
+//   optional                  ⇒ seated with the caller's own tile, publisher never asked
+//   required, live now        ⇒ seated with the caller's own tile
+//   required, not live now    ⇒ camera_lost if this player was ever verified
+//                               live before, else camera_required; own token
+// plus the two invariants the controller named, counted separately.
+
+type Side = "home" | "away";
+type Act =
+  | { kind: "open" }
+  | { kind: "join"; side: Side }
+  | { kind: "leave"; side: Side }
+  | { kind: "seat"; side: Side }
+  | { kind: "downgrade" };
+
+const side = fc.constantFrom<Side>("home", "away");
+const act: fc.Arbitrary<Act> = fc.oneof(
+  { arbitrary: fc.constant<Act>({ kind: "open" }), weight: 2 },
+  { arbitrary: side.map((x): Act => ({ kind: "join", side: x })), weight: 3 },
+  { arbitrary: side.map((x): Act => ({ kind: "leave", side: x })), weight: 2 },
+  { arbitrary: side.map((x): Act => ({ kind: "seat", side: x })), weight: 5 },
+  { arbitrary: fc.constant<Act>({ kind: "downgrade" }), weight: 1 },
+);
+/** Edge weighting: about half the runs start from a seated-and-live player,
+ *  so the lose/re-verify paths (camera_lost) are reached, not just possible. */
+const LIVE_PREFIX: Act[] = [
+  { kind: "open" },
+  { kind: "seat", side: "home" },
+  { kind: "join", side: "home" },
+  { kind: "seat", side: "home" },
+];
+const scenario = fc
+  .tuple(fc.boolean(), fc.array(act, { minLength: 1, maxLength: 14 }))
+  .map(([prefix, rest]) => (prefix ? [...LIVE_PREFIX, ...rest] : rest));
+
+const LOWER = { required: "optional", optional: "off", off: "off" } as const;
+
+describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open / join / leave / seat / downgrade", () => {
+  it(
+    "nobody is seated under required without being live at the claim, nor before the round opens — and every claim matches the model",
+    async () => {
+      const totals = {
+        runs: 0,
+        actions: 0,
+        claims: 0,
+        roundNotOpen: 0,
+        seatedRequiredLive: 0,
+        cameraRequired: 0,
+        cameraLost: 0,
+        seatedOptional: 0,
+        seatedOff: 0,
+        downgrades: 0,
+        joinsApplied: 0,
+        leavesApplied: 0,
+        // The controller's two invariants, counted on their own.
+        violationsRequiredNotLive: 0,
+        violationsBeforeOpen: 0,
+      };
+
+      await fc.assert(
+        fc.asyncProperty(scenario, async (acts) => {
+          totals.runs += 1;
+          const s = await seed({ cameraPolicy: "required", roundOpenedAt: undefined });
+          const owner = await mintOrgOwnerAuth(s.orgId);
+          const rtk = fakeRealtimeKit();
+          // The model.
+          let roundOpen = false;
+          // An object field, not a local: the policy changes inside the loop,
+          // and a narrowed local would be read stale by the type checker.
+          const m: { policy: "required" | "optional" | "off" } = { policy: "required" };
+          const token: Record<Side, string | null> = { home: null, away: null };
+          const pid: Record<Side, string | null> = { home: null, away: null };
+          const peers: Record<Side, number> = { home: 0, away: 0 };
+          const verified: Record<Side, boolean> = { home: false, away: false };
+
+          for (const x of acts) {
+            totals.actions += 1;
+            if (x.kind === "open") {
+              if (!roundOpen) {
+                await sql`
+                  insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+                  values (${s.stageId}, ${s.orgId}, 1, ${OPENED}, ${s.ownerUserId})`;
+                roundOpen = true;
+              }
+            } else if (x.kind === "join") {
+              if (token[x.side] !== null) {
+                rtk.joinWith(token[x.side]!);
+                peers[x.side] += 1;
+                totals.joinsApplied += 1;
+              }
+            } else if (x.kind === "leave") {
+              if (peers[x.side] > 0) {
+                rtk.leave(pid[x.side]!);
+                peers[x.side] -= 1;
+                totals.leavesApplied += 1;
+              }
+            } else if (x.kind === "downgrade") {
+              if (m.policy !== "off") {
+                m.policy = LOWER[m.policy];
+                await patchDivision(owner, s.divisionId, { camera_policy: m.policy });
+                totals.downgrades += 1;
+              }
+            } else {
+              totals.claims += 1;
+              const httpBefore = rtk.http.length;
+              const adapterBefore = rtk.adapter.length;
+              const got = await claim(s, x.side, rtk);
+              const live = peers[x.side] > 0;
+              const where = `${JSON.stringify(acts)} → seat ${x.side}`;
+
+              // The two named invariants.
+              if (got.seated && !roundOpen) totals.violationsBeforeOpen += 1;
+              // No override is ever applied here, so EVERY seat under required
+              // needs a live player — a null tile is no exemption.
+              if (got.seated && m.policy === "required" && !live) totals.violationsRequiredNotLive += 1;
+
+              if (!roundOpen) {
+                expect(got, where).toEqual({ seated: false, reason: "round_not_open" });
+                expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+                totals.roundNotOpen += 1;
+                continue;
+              }
+              if (m.policy === "off") {
+                expect(got, where).toEqual({ seated: true, participant: null });
+                expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+                totals.seatedOff += 1;
+                continue;
+              }
+              const carried = "participant" in got ? got.participant : null;
+              expect(carried, `${where}: a token`).not.toBeNull();
+              if (pid[x.side] === null) pid[x.side] = carried!.participantId;
+              expect(carried!.participantId, `${where}: the caller's own, single participant`).toBe(pid[x.side]);
+              const other: Side = x.side === "home" ? "away" : "home";
+              if (pid[other] !== null) expect(carried!.participantId, `${where}: never the opponent's`).not.toBe(pid[other]);
+              token[x.side] = carried!.authToken;
+
+              if (m.policy === "optional") {
+                expect(got.seated, where).toBe(true);
+                expect(rtk.adapter.slice(adapterBefore), `${where}: optional never asks`).not.toContain(
+                  "hasLiveVideoPublisher",
+                );
+                totals.seatedOptional += 1;
+              } else if (live) {
+                expect(got.seated, where).toBe(true);
+                verified[x.side] = true;
+                totals.seatedRequiredLive += 1;
+              } else {
+                const want = verified[x.side] ? "camera_lost" : "camera_required";
+                expect(!got.seated && got.reason, where).toBe(want);
+                if (want === "camera_lost") totals.cameraLost += 1;
+                else totals.cameraRequired += 1;
+              }
+            }
+          }
+          // Per run: one stored player participant per side that ever claimed.
+          const rows = await participantRows(s.fixtureId);
+          for (const sd of ["home", "away"] as const) {
+            const mine = rows.filter((r) => r.person_id === s[sd].personId);
+            expect(mine.length, `${JSON.stringify(acts)}: ${sd} participants`).toBe(pid[sd] === null ? 0 : 1);
+          }
+        }),
+        // endOnFailure: every replay seeds a whole fixture, so shrinking is
+        // switched off; the failing sequence is printed in each message.
+        { numRuns: 30, seed: 20261009, endOnFailure: true },
+      );
+
+      console.log(`PROPERTY_COUNTS ${JSON.stringify(totals)}`);
+      expect(totals.violationsBeforeOpen, "INVARIANT: nobody seated before the round opens").toBe(0);
+      expect(totals.violationsRequiredNotLive, "INVARIANT: nobody seated under required without being live").toBe(0);
+      // Anti-vacuity: zero checked is a failure, per path the property is named for.
+      expect(totals.runs, "runs").toBeGreaterThanOrEqual(30);
+      expect(totals.claims, "claims").toBeGreaterThan(0);
+      expect(totals.roundNotOpen, "claims before the round opened").toBeGreaterThan(0);
+      expect(totals.seatedRequiredLive, "seats under required with a live player").toBeGreaterThan(0);
+      expect(totals.cameraRequired, "camera_required refusals").toBeGreaterThan(0);
+      expect(totals.cameraLost, "camera_lost refusals").toBeGreaterThan(0);
+      expect(totals.seatedOptional, "seats after a downgrade to optional").toBeGreaterThan(0);
+      expect(totals.seatedOff, "seats after a downgrade to off").toBeGreaterThan(0);
+      expect(totals.leavesApplied, "leaves").toBeGreaterThan(0);
+    },
+    240_000,
+  );
 });
