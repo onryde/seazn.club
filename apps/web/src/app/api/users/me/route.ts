@@ -12,6 +12,7 @@ import { sendAccountDeletionEmail } from "@/lib/email";
 import { cancelBillingGroup } from "@/lib/billing";
 import { groupIdsOwnedBy } from "@/lib/billing-group";
 import { toLocale } from "@/lib/i18n";
+import { unlinkLichess } from "@/server/usecases/external-accounts";
 
 /**
  * Whoami (task-8): resolves the same identity AnalyticsBootstrap used to read
@@ -148,6 +149,15 @@ export async function DELETE(req: Request) {
         );
       }
     }
+
+    // The Lichess link holds a SEALED board:play token (V432) — a credential
+    // that can move pieces in any of this player's Lichess games. Deleting the
+    // account is the strongest withdrawal of consent, so revoke the grant at
+    // Lichess and drop the row, exactly as Unlink does. Placed AFTER every
+    // refusal above (a refused deletion keeps its account, so it keeps its
+    // link) and BEFORE the anonymisation, which is the irreversible half.
+    // Idempotent: a retried deletion finds no row and sends nothing.
+    await unlinkLichess(user.id);
 
     const purgeAfter = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const anonEmail = `deleted-${user.id}@deleted.invalid`;
