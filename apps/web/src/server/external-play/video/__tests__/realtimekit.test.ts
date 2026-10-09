@@ -9,6 +9,7 @@ import {
   addParticipant,
   endMeeting,
   ensureMeeting,
+  fetchVideoOffCoverage,
   hasLiveVideoPublisher,
   realtimeKitConfigured,
 } from "../realtimekit";
@@ -699,6 +700,94 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     configure({ CLOUDFLARE_API_TOKEN: "" });
     const stub = stubFetch([]);
     await expect(endMeeting(mtg("unconfigured"), { fetch: stub.fetch })).rejects.toMatchObject({
+      code: "unconfigured",
+    });
+    expect(stub.calls.length).toBe(0);
+  });
+});
+
+describe("fetchVideoOffCoverage", () => {
+  // The peer id is the SDK's `meeting.self.id` / a peer_events peer_id —
+  // NOT the participant id (Cloudflare FAQ: a participant id 404s here).
+  const PEER = "c4736b31-83f6-42d0-a18b-019f498fb347"; // the spike's peer id (rtk-peer-report.log)
+
+  it("END TO END: the recorded response through the real fetch path into the real parser", async () => {
+    configure();
+    const stub = stubFetch([{ status: 200, body: RECORDED }]);
+    const got = await fetchVideoOffCoverage(PEER, { fetch: stub.fetch });
+    expect(stub.calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      `GET https://api.cloudflare.com/client/v4/accounts/acct-1/realtime/kit/app-1/sessions/peer-report/${PEER}`,
+    ]);
+    if (got.incomplete) throw new Error("premise: the recorded report is final");
+    // Driver log: ONE gap 18:09:11 -> 18:12:20 (189 s), n=51.
+    expect(got.sampleCount).toBe(51);
+    expect(got.offIntervals.map((i) => [i.from.slice(0, 19), i.to.slice(0, 19), Math.round(i.seconds)])).toEqual([
+      ["2026-10-09T18:09:11", "2026-10-09T18:12:20", 189],
+    ]);
+    expect(got.offIntervals[0]?.confirmedByEvents).toBe(true);
+  });
+
+  it("returns ONLY the coverage — no raw report field leaves the adapter", async () => {
+    // The unredacted report carries IP, device and browser metadata; what a
+    // caller stores or shows must be the coverage and nothing else.
+    configure();
+    const p = RECORDED.data.participant;
+    const raw = [p.user_id, p.custom_participant_id, p.id, "spike-white", "web-core"];
+    expect(JSON.stringify(RECORDED), "premise: the raw identifiers ARE in the response").toContain(raw[0]!);
+    const got = await fetchVideoOffCoverage(PEER, { fetch: stubFetch([{ status: 200, body: RECORDED }]).fetch });
+    const out = JSON.stringify(got);
+    let checked = 0;
+    for (const value of raw) {
+      expect(out, value).not.toContain(value);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(raw.length);
+    expect(Object.keys(got).sort()).toEqual([
+      "cadenceSeconds",
+      "coveredSeconds",
+      "eventOffSeconds",
+      "incomplete",
+      "offIntervals",
+      "offSeconds",
+      "sampleCount",
+    ]);
+  });
+
+  it("SEQUENCE: frozen during the session ⇒ incomplete; after leave ⇒ final", async () => {
+    configure();
+    const frozen = structuredClone(RECORDED);
+    frozen.data.participant.peer_report.quality.video_producer =
+      frozen.data.participant.peer_report.quality.video_producer.slice(0, 1);
+    frozen.data.participant.left_at = null;
+    frozen.data.participant.duration = 0;
+    const stub = stubFetch([
+      { status: 200, body: frozen },
+      { status: 200, body: RECORDED },
+    ]);
+    expect(await fetchVideoOffCoverage(PEER, { fetch: stub.fetch })).toEqual({
+      incomplete: true,
+      reason: "not_left",
+      sampleCount: 1,
+    });
+    const second = await fetchVideoOffCoverage(PEER, { fetch: stub.fetch });
+    expect(second.incomplete).toBe(false);
+  });
+
+  it("a 404 (e.g. a participant id passed instead of a peer id) throws not_found", async () => {
+    configure();
+    const stub = stubFetch([
+      { status: 404, body: { success: false, error: { code: 404, message: "No peer event exists for id x" } } },
+    ]);
+    await expect(fetchVideoOffCoverage("participant-not-peer", { fetch: stub.fetch })).rejects.toMatchObject({
+      name: "RealtimeKitError",
+      code: "not_found",
+    });
+  });
+
+  it("an unconfigured process refuses before any call", async () => {
+    configure({ REALTIMEKIT_APP_ID: "" });
+    const stub = stubFetch([]);
+    await expect(fetchVideoOffCoverage(PEER, { fetch: stub.fetch })).rejects.toMatchObject({
       code: "unconfigured",
     });
     expect(stub.calls.length).toBe(0);
