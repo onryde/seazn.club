@@ -88,30 +88,55 @@ const CF_BASE = "https://api.cloudflare.com/client/v4";
 export type MeetingRef = { meetingId: string };
 export type ParticipantToken = { participantId: string; authToken: string };
 
-type CfBody = { success?: unknown; data?: unknown; error?: { code?: unknown } | null };
+type CfBody = { success?: unknown; data?: unknown; error?: { code?: unknown } | null; errors?: unknown };
 
-/** RealtimeKit's own "not found". OpenAPI documents the active-session 404 as
- *  `{ success: false, error: { code, message } }`, both required, with `code`
- *  the HTTP status ("Active Session is not found for the given meetingId").
- *  No 404 body has been recorded yet — T17 owes one. A 404 in any other shape
- *  (Cloudflare's own routing envelope with `errors[]`, an HTML page from a
- *  proxy, a wrong REALTIMEKIT_BASE_URL) is not "nothing there": it is an
- *  answer we cannot read, and reading it as "no session" would turn an outage
- *  into "camera off". */
+/** RealtimeKit's own "not found", for every endpoint except active-session
+ *  (which has its own reading, below). OpenAPI documents RealtimeKit's error
+ *  body as `{ success: false, error: { code, message } }`, both required,
+ *  with `code` the HTTP status. A 404 in any other shape (Cloudflare's own
+ *  routing envelope with `errors[]`, an HTML page from a proxy, a wrong
+ *  REALTIMEKIT_BASE_URL) is not "nothing there": it is an answer we cannot
+ *  read. */
 function isRealtimeKitNotFound(body: unknown): boolean {
   if (typeof body !== "object" || body === null) return false;
   const b = body as CfBody;
   return b.success === false && typeof b.error === "object" && b.error !== null && b.error.code === 404;
 }
 
+/** Cloudflare's API gateway answers a path it cannot route with its own v4
+ *  envelope, `errors: [{ code: 7000 "No route for that URI" | 7003 "Could not
+ *  route to …" }]`. That is never RealtimeKit saying "no session". */
+const CF_GATEWAY_NO_ROUTE = new Set([7000, 7003]);
+
+/** The active-session 404: "no live session yet" — the NORMAL state before
+ *  the first player joins, and what the T8 seat gate meets on every Required
+ *  fixture's first claim. Measured: an ended meeting answers HTTP 404
+ *  (progress.md); the body is still unrecorded (T17 owes it), so this reads
+ *  the envelope rather than its exact typing — `success === false` and
+ *  `Number(error.code) === 404`, extra fields and a string "404" allowed.
+ *  Anything else (HTML, an empty or non-JSON body, a gateway no-route code
+ *  anywhere in `errors[]`) is an answer we cannot read, and reading it as
+ *  "no session" would turn an outage into "camera off". */
+function isActiveSessionAbsent(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const b = body as CfBody;
+  const gatewayNoRoute =
+    Array.isArray(b.errors) &&
+    b.errors.some((e) => CF_GATEWAY_NO_ROUTE.has(Number((e as { code?: unknown } | null)?.code)));
+  if (gatewayNoRoute) return false;
+  return b.success === false && Number(b.error?.code) === 404;
+}
+
 /** One request. Maps transport and HTTP failure onto RealtimeKitError, and
  *  NEVER puts the API token or a response body into the message — a
  *  RealtimeKit error body can echo the request, and these messages reach
- *  logs and Sentry. */
+ *  logs and Sentry. A 404 is `not_found` only when `notFound` (default:
+ *  RealtimeKit's documented error body) recognises its body; any other 404
+ *  is `unavailable` — but both carry status 404. */
 async function cf(
   cfg: Config,
   path: string,
-  init: { method: string; body?: unknown },
+  init: { method: string; body?: unknown; notFound?: (body: unknown) => boolean },
   deps: RealtimeKitDeps,
 ): Promise<unknown> {
   const base = (deps.baseUrl ?? process.env.REALTIMEKIT_BASE_URL ?? CF_BASE).replace(/\/$/, "");
@@ -140,7 +165,7 @@ async function cf(
     );
   }
   if (res.status === 404) {
-    const notFound = await res.json().then(isRealtimeKitNotFound, () => false);
+    const notFound = await res.json().then(init.notFound ?? isRealtimeKitNotFound, () => false);
     if (notFound) {
       throw new RealtimeKitError(404, "not_found", `RealtimeKit ${init.method} ${path} returned 404`);
     }
@@ -315,7 +340,7 @@ export async function hasLiveVideoPublisher(
     session = (await cf(
       cfg,
       `/meetings/${encodeURIComponent(a.meetingId)}/active-session`,
-      { method: "GET" },
+      { method: "GET", notFound: isActiveSessionAbsent },
       deps,
     )) as { id?: unknown; status?: unknown };
   } catch (err) {
@@ -363,7 +388,10 @@ export async function hasLiveVideoPublisher(
  *  no "delete meeting" endpoint — the recipe is kick-all then
  *  status INACTIVE, which is what stops anyone joining afterwards. The
  *  kick's 404 ("no active session") is the ordinary quiet-room case and must
- *  not skip the deactivate. The row is stamped only AFTER the deactivate
+ *  not skip the deactivate. OpenAPI documents no 404 for kick-all, so ANY
+ *  404 there is tolerated, whatever its body: the PATCH that follows travels
+ *  the same path prefix, so a routing or proxy 404 fails it too, and its
+ *  success is the proof of teardown. The row is stamped only AFTER the deactivate
  *  succeeds — a failed PATCH leaves a joinable meeting upstream, so the row
  *  must stay unended for the next sweep to retry — and only once: a repeat
  *  call keeps the first teardown time. */
@@ -373,7 +401,7 @@ export async function endMeeting(meetingId: string, deps: RealtimeKitDeps = {}):
   try {
     await cf(cfg, `/meetings/${id}/active-session/kick-all`, { method: "POST" }, deps);
   } catch (err) {
-    if (!(err instanceof RealtimeKitError) || err.code !== "not_found") throw err;
+    if (!(err instanceof RealtimeKitError) || err.status !== 404) throw err;
   }
   await cf(cfg, `/meetings/${id}`, { method: "PATCH", body: { status: "INACTIVE" } }, deps);
   await sql`
