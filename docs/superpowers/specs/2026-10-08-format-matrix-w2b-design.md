@@ -109,6 +109,7 @@ number then). `_INDEX.md` is not edited before W2a merges (rule 18).
 | W2b-UI-2 | Public: short tag where space is tight (`w/o`, `ret.`, `DQ`, `2× w/o`, `Aband. · DLS`, `Aband. · NR`; per locale), the full sentence as tooltip and accessible name and in the match centre. Wireframe `public-copy.html`. | "A" |
 | W2b-R12 | Legacy stages already complete that hold a V432-moved fixture: no reopen path; pre-ship count on staging and prod, stop and ask if non-zero (W2a item 5). | "A" |
 | W2b-R13 | `division_has_results` (quota slot) counts only results with a verdict: excludes `no_result` and `double_walkover` whatever the status; single walkover still counts. | "A" |
+| W2b-R14 | Chess tie-break pending (classical drawn, decider not played): a withdrawal walks the fixture over to the remaining side (`core.forfeit{reason:"withdrew"}` accepted in phase `tiebreak`), and an organiser may record a walkover when a player does not turn up for the tie-break games; the classical game stays a draw in stats (D-C6). Replaces W2a's interim hold (D-R1) and the pinned WRONG_PHASE forfeit in `tiebreak`. | "A" |
 | W2b-A1 | Approach 1: extend `core.forfeit`; strict schema, no legacy free-text mapping (owner: "we don't have any forfeit old data") — verified before ship (§5.4). | "1" |
 
 Wireframes are for flow and structure only (W2a owner ruling, 2026-10-08): the build applies house UI — v2
@@ -149,7 +150,8 @@ rules would live outside the engine, against ruling 75 and the engine split).
 - **Phase guard (kernel, before the module fold).** `walkover` (one side or `"both"`): only in the module's declared
   walkover phases — `pre` for every sport, plus `live` for boardgame, where a no-show is a forfeit after the session
   starts (FIDE Laws Art. 6.7.1) and the pad's dock already lives in `live` (D-P1). `"both"` is only ever a walkover.
-  `retired`, `disqualified`: only after `core.start`. `withdrew`: either (written only by the withdrawal cascade). Refusal:
+  `retired`, `disqualified`: only after `core.start`. Boardgame also accepts `withdrew` and `walkover` (one side) in
+  phase `tiebreak` (W2b-R14); `"both"` there is refused — the classical game was played. `withdrew`: either (written only by the withdrawal cascade). Refusal:
   `FORFEIT_REASON_WRONG_PHASE` with the phase. The module's own phase guards stay for done/final.
 - **Abandon guard.** A forfeit while an unvoided `core.abandon` is active → `ABANDONED_SETTLE_OR_VOID` (W2b-R7). Today
   the module phase guards refuse it incidentally ("already over"); the named refusal replaces that message.
@@ -325,7 +327,7 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
 
 ## 6. The rules reference
 
-Appendix A lists the 53 rows (23 cross-sport, 30 per sport) to add at build; 7 new sport files (football, hockey,
+Appendix A lists the 54 rows (23 cross-sport, 31 per sport) to add at build; 7 new sport files (football, hockey,
 icehockey, volleyball, badminton, tabletennis, tennis). Ids are new and unique against the W2a seed (X-BR-1, X-BR-2,
 X-ST-1, X-ST-2, X-DR-1, BG-KO-1, BG-KO-2, CA-KO-1, CK-KO-1, GN-KO-1). X-BR-1's text is amended (W2b-R2), not
 renumbered. Each signed or deviation row ships with a proving test whose title contains its id
@@ -380,7 +382,7 @@ renumbered. Each signed or deviation row ships with a proving test whose title c
   clauses, no-next-match, the migration selection); Stryker probe + touched families dispatched before merge; floors
   never auto-raised.
 - **Pins to rewrite (from f-w2):** `needs-decision-status.test.ts:43`, the V432 migration test, the reference HELD
-  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7, the D-G2 and D-G3 characterisation pins (§5.4), and W2a's D-O1 gate derivation test (it assumes
+  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7, the D-G2 and D-G3 characterisation pins (§5.4), W2a's "forfeit refused in phase `tiebreak`" pin and its D-R1 withdrawal-hold pin (W2b-R14), and W2a's D-O1 gate derivation test (it assumes
   `boardgame.result{double_forfeit}` is still written). Each rewrite says why in its commit.
 - **UI:** screenshot verdicts per screen at 1280 / 768 / 320 (console dialog before and after play and the final
   guidance; match centre; results list; bracket tile), no horizontal scroll; the whole `mobile.spec.ts`, never a `-g`
@@ -451,7 +453,7 @@ Format: `packages/engine/rules/README.md` on `feat/format-matrix-w2a`. Status `s
 `signed <_INDEX ruling number> 2026-10-08` when the rulings are folded (§10). `enforced at` and `proved by` are filled
 at build; a signed or deviation row ships only with a proving test whose title contains the id.
 
-53 rows: cross-sport.md 23, football.md 3, hockey.md 3, icehockey.md 3, volleyball.md 2, tabletennis.md 2, tennis.md 2, badminton.md 3, cricket.md 3, boardgame.md 3, carrom.md 3, generic.md 3.
+54 rows: cross-sport.md 23, football.md 3, hockey.md 3, icehockey.md 3, volleyball.md 2, tabletennis.md 2, tennis.md 2, badminton.md 3, cricket.md 3, boardgame.md 4, carrom.md 3, generic.md 3.
 
 ### `cross-sport.md`
 
@@ -549,6 +551,7 @@ at build; a signed or deviation row ships only with a proving test whose title c
 | BG-WO-1 | Chess walkover or post-start forfeit = 1-0, counts as a game for table tie-breaks, excluded from colour history. | FIDE C.07 (read, summary) | signed W2b-R4/R5 2026-10-08 | — | — |
 | BG-DW-1 | Chess double_forfeit folds to the double walkover outcome in every stage kind (retires T15-R1's hold). | FIDE Laws Art. 11.8 | signed W2b-R2 2026-10-08 | — | — |
 | BG-WO-2 | A chess forfeit is recordable before the game starts (no-show), credited as a walkover. | FIDE Laws Art. 6.7.1 | signed W2b-R8 2026-10-08 | — | — |
+| BG-WO-3 | A chess fixture whose tie-break is pending is walked over to the remaining side when one player withdraws or does not turn up for the tie-break games; the classical game stays a draw in player stats. | product rule W2b-R14 | signed W2b-R14 2026-10-09 | — | — |
 
 ### `carrom.md`
 
