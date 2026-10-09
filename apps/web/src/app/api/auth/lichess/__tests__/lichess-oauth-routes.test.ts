@@ -86,12 +86,15 @@ describe("GET /api/auth/lichess — start", () => {
     expect(cookieJar.get(NEXT_COOKIE)).toBe("/shared/o/c/d/fixtures/f1/play");
   });
 
-  it("asks for exactly board:play and challenge:write — the grant that submits moves", async () => {
+  it("asks for exactly board:play, challenge:write and challenge:read — the grant that submits moves and recovers a crashed create", async () => {
     const res = await GET(new Request("http://localhost/api/auth/lichess"));
     const loc = new URL(res.headers.get("location")!);
     // Anti-vacuity first: an EMPTY constant (the state this task reverses)
     // would make the equality below pass against a missing grant.
     expect(LICHESS_OAUTH_SCOPES.split(" ")).toContain("board:play");
+    // Spec §3.1 amended 2026-10-10: the crash-recovery lookup lists White's
+    // challenges, which a grant without challenge:read is refused (403).
+    expect(LICHESS_OAUTH_SCOPES.split(" ")).toContain("challenge:read");
     // Then derived from the declaration, never retyped: a change to the scope
     // list moves this assertion with it. The list itself is pinned against
     // design §3.1 by external-accounts.test.ts ("PLAY_SCOPES is what the

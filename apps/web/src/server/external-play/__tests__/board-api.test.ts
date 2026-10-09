@@ -498,7 +498,9 @@ describe("exportGame — the reconcile read (M10, M11)", () => {
 // it may re-create, and the cancel that closes a stray game. MEASURED
 // 2026-10-10 with the programme's spike tokens (scratchpad
 // t9/lookup-spike.log), except where a comment says "spec": a token carrying
-// exactly PLAY_SCOPES' board:play + challenge:write.
+// exactly board:play + challenge:write (no challenge:read — the grant before
+// spec §3.1's 2026-10-10 amendment). OUT_CHALLENGE's shape is from the API
+// spec; measurement owed (T17).
 const MISSING_CHALLENGE_READ = '{"error":"Missing scope: challenge:read"}'; // measured, HTTP 403
 /** One measured nowPlaying entry: White's view of a game created by White's
  *  challenge and accepted by Black, no move yet. gameId IS the challenge id. */
@@ -533,7 +535,7 @@ describe("recovery lookups — White's outgoing challenges and ongoing games (T9
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer lio_w");
   });
 
-  it("MEASURED: a PLAY_SCOPES token is refused the list — 403 'Missing scope: challenge:read' is unauthorized, never an empty list", async () => {
+  it("MEASURED: a token without challenge:read is refused the list — 403 'Missing scope: challenge:read' is unauthorized, never an empty list", async () => {
     const f = vi.fn(async () => res(MISSING_CHALLENGE_READ, 403));
     expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("lio_w")).toEqual({
       ok: false, code: "unauthorized", raw: MISSING_CHALLENGE_READ,

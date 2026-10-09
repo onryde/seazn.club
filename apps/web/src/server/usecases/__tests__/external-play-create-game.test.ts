@@ -38,8 +38,8 @@ const board = vi.hoisted(() => ({
   acceptChallenge: vi.fn(),
   // Fix round 1 (I2 + Minor b): the stale-marker recovery's two lookups and
   // the stray-game cancel. Defaults are "both lookups succeed, nothing
-  // found" and "cancel ok"; production's PLAY_SCOPES token actually gets a
-  // 403 from the first (board-api.test.ts, measured), which a case below pins.
+  // found" and "cancel ok"; a token without challenge:read gets a 403 from
+  // the first (board-api.test.ts, measured), which a case below pins.
   listOutgoingChallenges: vi.fn(),
   listOngoingGames: vi.fn(),
   cancelChallenge: vi.fn(),
@@ -298,13 +298,27 @@ describe.skipIf(!process.env.DATABASE_URL)("readiness", () => {
     noHttp();
   });
 
+  it("a player holding the PRE-AMENDMENT grant (board:play + challenge:write, no challenge:read) ⇒ not_ready", async () => {
+    // Spec §3.1 amended 2026-10-10: without challenge:read the crash-recovery
+    // lookup is a measured 403, so such a link must re-consent before a game
+    // is made for it. Typed: it is what the earlier consent screen granted.
+    const s = await seed();
+    await narrowScopes(s.home.userId, ["board:play", "challenge:write"]);
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({
+      created: false,
+      reason: "not_ready",
+    });
+    noHttp();
+  });
+
   it("sweeps every required scope on BOTH sides, dropping one at a time, and reports the count", async () => {
     // Derived from T2's PLAY_SCOPES — the one authority for "the grant that
     // is enough to play" — never a list typed in here. The premise line pins
-    // it to spec §3.1's two scopes, so a shrunken PLAY_SCOPES fails loudly.
+    // it to spec §3.1's three scopes, so a shrunken PLAY_SCOPES fails loudly.
     const required = [...PLAY_SCOPES];
     expect([...required].sort(), "premise: spec §3.1 asks for exactly these").toEqual([
       "board:play",
+      "challenge:read",
       "challenge:write",
     ]);
     let checked = 0;
@@ -1322,7 +1336,7 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
     expect(board.createChallengeToUser).not.toHaveBeenCalled();
   });
 
-  it("ANY lookup failing ⇒ needs_organiser / create_outcome_unknown, never a re-create — swept and counted (the first is production's measured 403)", async () => {
+  it("ANY lookup failing ⇒ needs_organiser / create_outcome_unknown, never a re-create — swept and counted (the first is the measured 403 a grant without challenge:read gets)", async () => {
     const cases: { name: string; arrange: () => void }[] = [
       { name: "lookup A refused: Missing scope challenge:read (measured)", arrange: () =>
         board.listOutgoingChallenges.mockResolvedValue({ ok: false, code: "unauthorized", raw: '{"error":"Missing scope: challenge:read"}' }) },

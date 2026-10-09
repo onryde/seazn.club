@@ -18,8 +18,9 @@ import { hasValidKek } from "@/server/relay/crypto";
  *  linked to ONE Seazn user. */
 const ALREADY_LINKED_CONSTRAINT = "user_external_accounts_provider_external_user_id_key";
 
-/** The grant design §3.1 asks for: submit moves (`board:play`) and create the
- *  challenge (`challenge:write`). Any linked row that does not carry EVERY
+/** The grant design §3.1 asks for: submit moves (`board:play`), create the
+ *  challenge (`challenge:write`) and list White's challenges when recovering a
+ *  crashed create (`challenge:read`). Any linked row that does not carry EVERY
  *  one of these owes a re-consent, whatever else it carries.
  *
  *  DERIVED from `lib/oauth.ts`'s `LICHESS_OAUTH_SCOPES`, which is the string
@@ -244,8 +245,9 @@ export async function assertPersonIdsLinkedForOnlinePlay(
 
 /** PLAY gate (§3.1). A link is not enough: the row must carry a consent
  *  timestamp AND every scope in PLAY_SCOPES, because a grant from the
- *  identity-only flow cannot submit a move and would 401 mid-game, and one
- *  without `challenge:write` cannot create White's challenge. Called by T8 (seat) and T9
+ *  identity-only flow cannot submit a move and would 401 mid-game, one
+ *  without `challenge:write` cannot create White's challenge, and one without
+ *  `challenge:read` cannot be recovered after a crashed create. Called by T8 (seat) and T9
  *  (creation); T14 renders the re-consent screen on this code. */
 export async function assertLichessConsentForPlay(userId: string | null): Promise<void> {
   if (!userId) {
