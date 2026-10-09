@@ -120,7 +120,10 @@ function consoleTree(over: ConsoleOver = {}) {
     status,
     last_seq: 2,
     summary: { headline: "1 — 0" },
-    state: over.other?.state ?? {},
+    // P1 follow-up: a SCHEDULED fixture has no match_states row, so the page serves `state: null`
+    // (getFixtureState: `row.state ?? null`). This harness used to pass `{}` for every fixture, so no console test
+    // ever rendered the shape a scheduled fixture really has — and a scheduled chess knockout crashed in production.
+    state: over.other !== undefined ? over.other.state : status === "scheduled" ? null : {},
     outcome: over.outcome ?? null,
   };
   const tree = (
@@ -367,6 +370,15 @@ describe("W2a: held bracket fixtures and organiser-only actions (finding 11, fin
     expect(open).not.toContain(BLOCK);
     expect(bandHtml(open)).toContain('data-testid="score-forfeit"');
     expect(bandHtml(open)).toContain(">Abandon…<");
+  });
+
+  it("P1 follow-up: a SCHEDULED chess knockout renders its console — not held, Start match offered (the page serves state null before kickoff)", () => {
+    const rig = chessTiebreak();
+    const html = consoleHtml({ status: "scheduled", outcome: null, stageKind: "knockout", other: { ...rig, state: null, events: [] } });
+    expect(html).toContain("Start match");
+    expect(html, "nothing is owed before the game is played").not.toContain(BLOCK);
+    expect(html).not.toContain(FINALIZE);
+    // The positive pair is I1 above: the same sport, stage kind and module pin, drawn, IS held.
   });
 
   it("an official scorer on a held fixture sees no block and no Settle (the settle is organiser-only)", () => {

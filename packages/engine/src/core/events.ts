@@ -129,7 +129,9 @@ export interface SettleFacts { readonly outcome: MatchOutcome | null; readonly a
 export function settleApplies(module: { awaitingDecider?(state: never): boolean }, f: SettleFacts): boolean {
   if (isLevelOutcome(f.outcome)) return true;
   if (f.outcome !== null) return false; // decided (D-C5): never re-settled, whatever the phase
-  return f.abandoned || module.awaitingDecider?.(f.state as never) === true;
+  // P1 follow-up: a fixture nobody started has no fold — the console is fed `match_states.state ?? null` — and a
+  // module's hook reads its own state shape (boardgame: `s.phase`). No state, no decider owed; never ask the hook.
+  return f.abandoned || (f.state != null && module.awaitingDecider?.(f.state as never) === true);
 }
 
 /** THE outcome of a fold. A settlement outranks the module's own outcome (a
@@ -152,7 +154,8 @@ export function deciderPending<Cfg, State>(
   module: Pick<FoldableModule<Cfg, State>, "outcome" | "awaitingDecider">,
   folded: { readonly state: State; readonly settlement: Settlement | null },
 ): boolean {
-  return module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;
+  // P1 follow-up: the same null guard as settleApplies — no fold (a scheduled fixture's state is null), no decider.
+  return folded.state != null && module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;
 }
 
 export const CORE_EVENT_SCHEMAS = {

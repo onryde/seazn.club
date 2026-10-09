@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { EngineError } from "./errors.ts";
-import { CORE_EVENT_SCHEMAS, KERNEL_OWNED_CORE, SETTLE_METHODS, foldMatchWithStoppage, isKernelOwnedEventType, kernelOwnsEvent, outcomeOf, settleApplies, settledMethod, type EventEnvelope } from "./events.ts";
+import { CORE_EVENT_SCHEMAS, KERNEL_OWNED_CORE, SETTLE_METHODS, deciderPending, foldMatchWithStoppage, isKernelOwnedEventType, kernelOwnsEvent, outcomeOf, settleApplies, settledMethod, type EventEnvelope } from "./events.ts";
 import { LINEUP_EVENT_SCHEMAS } from "./lineup.ts";
 import { isLevelOutcome } from "./types.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
@@ -135,6 +135,31 @@ describe("X-ST-1: core.settle (spec §5.1)", () => {
     const pending = { ...generic, awaitingDecider: () => true };
     expect(outcomeOf(pending as never, foldMatchWithStoppage(pending as never, cfg as never, l, stream))).toEqual({ kind: "win", winner: l.away.entrantId, loser: l.home.entrantId, method: "settled_lot" });
     expect(codeOf(() => foldMatchWithStoppage(generic as never, cfg as never, l, stream))).toBe("SETTLE_NOT_APPLICABLE"); // the positive pair's negative
+  });
+
+  it("P1 follow-up: a SCHEDULED fixture has no fold (getFixtureState serves state null) — settleApplies and deciderPending answer false for every module declaring awaitingDecider, never throw, and the abandon arm still holds", () => {
+    // The console feeds the kernel's predicates the page's `state.state`, which is `match_states.state ?? null`: a
+    // fixture nobody started has no row. Boardgame's hook read `s.phase` off that null and crashed its own console.
+    const declarers: string[] = [];
+    let checked = 0;
+    forEachSport(({ key, module }) => {
+      if (module.awaitingDecider === undefined) return;
+      declarers.push(key);
+      for (const state of [null, undefined]) {
+        expect(settleApplies(module, { outcome: null, abandoned: false, state }), `${key} ${String(state)}`).toBe(false);
+        expect(settleApplies(module, { outcome: null, abandoned: true, state }), `${key} ${String(state)} abandoned`).toBe(true);
+        expect(deciderPending(module as never, { state: state as never, settlement: null }), `${key} ${String(state)}`).toBe(false);
+        checked++;
+      }
+    });
+    expect(checked).toBeGreaterThan(0);
+    // A new declarer owes its own positive pair below — the sweep alone would pass a guard that answers false always.
+    expect(declarers).toEqual(["boardgame"]);
+    // The positive pair: a REAL pending decider (a drawn chess knockout game) still answers true through both.
+    const ko = boardgame.configSchema.parse({ ...boardgame.bracketDeciders(boardgame.configSchema.parse({})) });
+    const pending = foldMatchWithStoppage(boardgame, ko, bgLineups, drawn);
+    expect(deciderPending(boardgame, pending)).toBe(true);
+    expect(settleApplies(boardgame, { outcome: outcomeOf(boardgame, pending), abandoned: false, state: pending.state })).toBe(true);
   });
 
   it("X-ST-1: closes an abandon whose module outcome is null", () => {

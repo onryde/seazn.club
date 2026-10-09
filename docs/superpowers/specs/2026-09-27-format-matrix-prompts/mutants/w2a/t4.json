@@ -48,8 +48,8 @@
   {
     "id": "abandoned-dropped-from-precondition",
     "file": "packages/engine/src/core/events.ts",
-    "find": "  return f.abandoned || module.awaitingDecider",
-    "replace": "  return module.awaitingDecider",
+    "find": "  return f.abandoned || (f.state != null && module.awaitingDecider",
+    "replace": "  return (f.state != null && module.awaitingDecider",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -565,6 +565,65 @@
           "src/server/engine-db/__tests__/outcome-readers.test.ts"
         ],
         "name": "each module\\.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason"
+      }
+    ]
+  },
+  {
+    "id": "p1-settle-applies-null-guard-dropped",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return f.abandoned || (f.state != null && module.awaitingDecider?.(f.state as never) === true);",
+    "replace": "  return f.abandoned || module.awaitingDecider?.(f.state as never) === true;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "P1 follow-up: a SCHEDULED fixture has no fold \\(getFixtureState serves state null\\)"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "P1 follow-up — empty case, every sport, every bracket kind: a SCHEDULED fixture"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "P1 follow-up: a SCHEDULED chess knockout renders its console"
+      }
+    ]
+  },
+  {
+    "id": "p1-settle-applies-null-guard-eats-the-abandon-arm",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return f.abandoned || (f.state != null && module.awaitingDecider?.(f.state as never) === true);",
+    "replace": "  return f.state != null && (f.abandoned || module.awaitingDecider?.(f.state as never) === true);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "P1 follow-up: a SCHEDULED fixture has no fold \\(getFixtureState serves state null\\)"
+      }
+    ]
+  },
+  {
+    "id": "p1-decider-pending-null-guard-dropped",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "  return folded.state != null && module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;",
+    "replace": "  return module.awaitingDecider?.(folded.state) === true && outcomeOf(module, folded) === null;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/settle.test.ts"
+        ],
+        "name": "P1 follow-up: a SCHEDULED fixture has no fold \\(getFixtureState serves state null\\)"
       }
     ]
   }
