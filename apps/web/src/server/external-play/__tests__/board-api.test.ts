@@ -494,8 +494,145 @@ describe("exportGame — the reconcile read (M10, M11)", () => {
   });
 });
 
+// T9 fix round 1 (I2): the two lookups a stale "create sent" claim runs before
+// it may re-create, and the cancel that closes a stray game. MEASURED
+// 2026-10-10 with the programme's spike tokens (scratchpad
+// t9/lookup-spike.log), except where a comment says "spec": a token carrying
+// exactly PLAY_SCOPES' board:play + challenge:write.
+const MISSING_CHALLENGE_READ = '{"error":"Missing scope: challenge:read"}'; // measured, HTTP 403
+/** One measured nowPlaying entry: White's view of a game created by White's
+ *  challenge and accepted by Black, no move yet. gameId IS the challenge id. */
+const PLAYING_ENTRY = {
+  fullId: "Q0DxE3WcLNH4", gameId: "Q0DxE3Wc",
+  fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+  color: "white", lastMove: "", source: "friend", status: { id: 20, name: "started" },
+  variant: { key: "standard", name: "Standard" }, speed: "blitz", perf: "blitz", rated: false,
+  hasMoved: false, opponent: { id: "ashokhein", username: "ashokhein", rating: 1699 },
+  isMyTurn: true, secondsLeft: 300, rating: 1500,
+};
+/** SPEC, not measured (the measured token cannot read this list): the
+ *  lichess-org/api challengeList example's shape, as an outgoing challenge. */
+const OUT_CHALLENGE = {
+  id: "C8fNpisS", url: "https://lichess.org/C8fNpisS", status: "created",
+  challenger: { id: "bobby", name: "Bobby", rating: 1657 },
+  destUser: { id: "mary", name: "Mary", rating: 1079 },
+  variant: { key: "standard", name: "Standard", short: "Std" }, rated: false, speed: "blitz",
+  timeControl: { type: "clock", limit: 300, increment: 3, show: "5+3" },
+  color: "white", finalColor: "white", perf: { icon: "", name: "Blitz" }, direction: "out",
+};
+
+describe("recovery lookups — White's outgoing challenges and ongoing games (T9 I2)", () => {
+  it("listOutgoingChallenges GETs /api/challenge with the token as a bearer", async () => {
+    const f = vi.fn(async () => res(JSON.stringify({ in: [], out: [OUT_CHALLENGE] }), 200));
+    expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("lio_w")).toEqual({
+      ok: true, challenges: [{ id: "C8fNpisS", destUserId: "mary", status: "created" }],
+    });
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://li.test/api/challenge");
+    expect(init.method).toBe("GET");
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer lio_w");
+  });
+
+  it("MEASURED: a PLAY_SCOPES token is refused the list — 403 'Missing scope: challenge:read' is unauthorized, never an empty list", async () => {
+    const f = vi.fn(async () => res(MISSING_CHALLENGE_READ, 403));
+    expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("lio_w")).toEqual({
+      ok: false, code: "unauthorized", raw: MISSING_CHALLENGE_READ,
+    });
+  });
+
+  it("listOutgoingChallenges: any body it cannot fully read is a failure, never 'nothing found' — swept and counted", async () => {
+    const bad = [
+      "not json", "null", "[]", "{}", '{"in":[]}', '{"out":{}}',
+      JSON.stringify({ out: [{ ...OUT_CHALLENGE, id: 7 }] }),
+      JSON.stringify({ out: [{ ...OUT_CHALLENGE, id: "" }] }),
+      JSON.stringify({ out: [{ ...OUT_CHALLENGE, status: undefined }] }),
+      JSON.stringify({ out: [{ ...OUT_CHALLENGE, destUser: { name: "Mary" } }] }),
+      JSON.stringify({ out: [null] }),
+    ];
+    let checked = 0;
+    for (const body of bad) {
+      const f = vi.fn(async () => res(body, 200));
+      expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("t"), body)
+        .toMatchObject({ ok: false, code: "unavailable" });
+      checked += 1;
+    }
+    expect(checked).toBe(11);
+  });
+
+  it("listOutgoingChallenges: an open challenge (destUser null, spec) is read, with no destination", async () => {
+    const f = vi.fn(async () => res(JSON.stringify({ out: [{ ...OUT_CHALLENGE, destUser: null }] }), 200));
+    expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("t")).toEqual({
+      ok: true, challenges: [{ id: "C8fNpisS", destUserId: null, status: "created" }],
+    });
+  });
+
+  it("listOngoingGames GETs /api/account/playing?nb=50 and reads the MEASURED entry", async () => {
+    const f = vi.fn(async () => res(JSON.stringify({ nowPlaying: [PLAYING_ENTRY], nbMyTurn: 1 }), 200));
+    expect(await api(f as unknown as typeof fetch).listOngoingGames("lio_w")).toEqual({
+      ok: true, complete: true, games: [{ gameId: "Q0DxE3Wc", color: "white", opponentId: "ashokhein" }],
+    });
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://li.test/api/account/playing?nb=50");
+    expect(init.method).toBe("GET");
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer lio_w");
+  });
+
+  it("listOngoingGames: a FULL page (50, the API's maximum) cannot prove absence — complete is false", async () => {
+    const page = Array.from({ length: 50 }, (_, i) => ({ ...PLAYING_ENTRY, gameId: `g${String(i).padStart(7, "0")}` }));
+    const f = vi.fn(async () => res(JSON.stringify({ nowPlaying: page, nbMyTurn: 0 }), 200));
+    const out = await api(f as unknown as typeof fetch).listOngoingGames("t");
+    expect(out).toMatchObject({ ok: true, complete: false });
+    const short = vi.fn(async () => res(JSON.stringify({ nowPlaying: page.slice(1), nbMyTurn: 0 }), 200));
+    expect(await api(short as unknown as typeof fetch).listOngoingGames("t")).toMatchObject({ ok: true, complete: true });
+  });
+
+  it("listOngoingGames: an anonymous or AI opponent (id null, spec) is read with no opponent id", async () => {
+    const anon = { ...PLAYING_ENTRY, opponent: { id: null, username: "Anonymous" } };
+    const f = vi.fn(async () => res(JSON.stringify({ nowPlaying: [anon], nbMyTurn: 0 }), 200));
+    expect(await api(f as unknown as typeof fetch).listOngoingGames("t")).toMatchObject({
+      ok: true, games: [{ gameId: "Q0DxE3Wc", color: "white", opponentId: null }],
+    });
+  });
+
+  it("listOngoingGames: any body it cannot fully read, or a refusal, is a failure — swept and counted", async () => {
+    const cases: [string, number, string][] = [
+      ["not json", 200, "unavailable"], ["null", 200, "unavailable"], ["{}", 200, "unavailable"],
+      ['{"nowPlaying":{}}', 200, "unavailable"],
+      [JSON.stringify({ nowPlaying: [{ ...PLAYING_ENTRY, gameId: 1 }] }), 200, "unavailable"],
+      [JSON.stringify({ nowPlaying: [{ ...PLAYING_ENTRY, color: "red" }] }), 200, "unavailable"],
+      [JSON.stringify({ nowPlaying: [{ ...PLAYING_ENTRY, opponent: undefined }] }), 200, "unavailable"],
+      [JSON.stringify({ nowPlaying: [{ ...PLAYING_ENTRY, opponent: { username: "x" } }] }), 200, "unavailable"],
+      ["nope", 401, "unauthorized"], ["boom", 503, "unavailable"],
+    ];
+    let checked = 0;
+    for (const [body, status, code] of cases) {
+      const f = vi.fn(async () => res(body, status));
+      expect(await api(f as unknown as typeof fetch).listOngoingGames("t"), `${status} ${body}`)
+        .toMatchObject({ ok: false, code });
+      checked += 1;
+    }
+    const thrown = vi.fn(async () => { throw new Error("socket hang up"); });
+    expect(await api(thrown as unknown as typeof fetch).listOngoingGames("t")).toMatchObject({ ok: false, code: "unavailable" });
+    checked += 1;
+    expect(checked).toBe(11);
+  });
+
+  it("cancelChallenge POSTs /api/challenge/{id}/cancel with White's token (MEASURED: aborts an accepted, unplayed game, 200 {ok:true})", async () => {
+    const f = vi.fn(async () => res('{"ok":true}', 200));
+    expect(await api(f as unknown as typeof fetch).cancelChallenge({ token: "lio_w", challengeId: "Q0DxE3Wc" }))
+      .toEqual({ ok: true });
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://li.test/api/challenge/Q0DxE3Wc/cancel");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer lio_w");
+    const gone = vi.fn(async () => res('{"error":"Not found"}', 404));
+    expect(await api(gone as unknown as typeof fetch).cancelChallenge({ token: "t", challengeId: "x" }))
+      .toMatchObject({ ok: false, code: "unavailable" });
+  });
+});
+
 describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () => {
-  it("each of the seven functions arms AbortSignal.timeout with the shared constant", async () => {
+  it("each of the ten functions arms AbortSignal.timeout with the shared constant", async () => {
     const spy = vi.spyOn(AbortSignal, "timeout");
     const f = vi.fn(async () => res('{"ok":true,"id":"ch1"}', 200));
     const client = api(f as unknown as typeof fetch);
@@ -508,6 +645,9 @@ describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () =
       ["offerOrAcceptDraw", () => client.offerOrAcceptDraw({ token: "t", gameId: "g", accept: true })],
       ["abortGame", () => client.abortGame({ token: "t", gameId: "g" })],
       ["exportGame", () => client.exportGame("g")],
+      ["listOutgoingChallenges", () => client.listOutgoingChallenges("t")],
+      ["listOngoingGames", () => client.listOngoingGames("t")],
+      ["cancelChallenge", () => client.cancelChallenge({ token: "t", challengeId: "c" })],
     ];
     let checked = 0;
     for (const [name, run] of calls) {
@@ -518,8 +658,8 @@ describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () =
     }
     // Anti-vacuity: the sweep must cover the whole surface, and zero is a
     // failure. If a function is added to the module, this count reds.
-    expect(checked).toBe(7);
-    expect(Object.keys(client).length).toBe(7);
+    expect(checked).toBe(10);
+    expect(Object.keys(client).length).toBe(10);
     spy.mockRestore();
   });
 

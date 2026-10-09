@@ -11,7 +11,7 @@ export type ExternalPlayStatus =
   | "needs_organiser";
 
 /** Spec §9 / row `needs_reason` — why a fixture landed in `needs_organiser`.
- *  EXACTLY V432's `needs_reason` CHECK, in its order (the last two are §3.6:
+ *  EXACTLY V432's `needs_reason` CHECK (as V434 re-declares it), in its order (the last two are §3.6:
  *  a revoked token is not a no-show; a blocked double walkover is its own
  *  state). external-play-needs-organiser.test.ts reads the CHECK back from
  *  pg_constraint and fails if the two ever differ. */
@@ -25,6 +25,9 @@ export const NEEDS_REASONS = [
   "provider_error",
   "token_revoked",
   "double_walkover_blocked",
+  // V434 (T9 fix round 1, I2): a stale create whose outcome a lookup could
+  // not prove — held for an organiser, never re-created blind.
+  "create_outcome_unknown",
 ] as const;
 export type NeedsReason = (typeof NEEDS_REASONS)[number];
 

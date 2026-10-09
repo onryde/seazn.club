@@ -34,11 +34,33 @@ import "server-only";
 // not, so nothing re-creates the fixture behind the organiser's back. A
 // rejected token is its own reason (spec §3.6: `token_revoked`, never a
 // no-show).
+//
+// A CREATE THAT MAY HAVE REACHED LICHESS IS NEVER RE-SENT BLIND (fix round 1,
+// I2). Before the challenge HTTP call, `create_sent_at` is written as its own
+// committed statement; it is cleared only where the outcome is KNOWN (the game
+// recorded, or a 429 lila refused before acting). A claim that carries it —
+// stale because its minter died after Lichess answered and before the commit,
+// or re-armed by an organiser — first looks the game up: White's outgoing
+// challenges to Black, and White's ongoing games against Black. Found ⇒
+// adopt; both lookups succeed and find nothing ⇒ re-create; any lookup
+// fails ⇒ hold (`create_outcome_unknown`). The lookups run in parallel and
+// the marker write renews the claim, so no stretch of a claim's life spans
+// more than two Lichess calls (2 × LICHESS_TIMEOUT_MS < MINT_CLAIM_STALE_MS).
+//
+// A GAME THIS CALL MADE BUT COULD NOT RECORD (its claim lost mid-flight) is
+// cancelled at Lichess, best-effort, with White's token — unless another
+// claimant has since recorded it as its own (fix round 1, Minor b).
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { publishExternalPlayLobby } from "@/lib/realtime";
 import { CreationRateLimited, enqueueCreation } from "@/server/external-play/creation-queue";
-import { acceptChallenge, createChallengeToUser } from "@/server/external-play/lichess/board-api";
+import {
+  acceptChallenge,
+  cancelChallenge,
+  createChallengeToUser,
+  listOngoingGames,
+  listOutgoingChallenges,
+} from "@/server/external-play/lichess/board-api";
 import { roundOpenFor } from "@/server/external-play/round-open";
 import { assertTimeControl, type TimeControl } from "@/server/external-play/time-controls";
 import type { BoardErrorCode, NeedsReason } from "@/server/external-play/types";
@@ -178,11 +200,16 @@ export async function createGameIfReady(
     tc,
   };
 
+  // The queue's in-flight dedupe hands a follower the leader's result
+  // without running its job: only the caller whose job ran created anything
+  // (fix round 1, Minor a).
+  let ranHere = false;
   let step: QueueStep;
   try {
-    step = await enqueueCreation({ key: fixtureId, challenger: whiteLichess.id }, () =>
-      createAtDequeue(plan, deps.now),
-    );
+    step = await enqueueCreation({ key: fixtureId, challenger: whiteLichess.id }, () => {
+      ranHere = true;
+      return createAtDequeue(plan, deps.now);
+    });
   } catch (err) {
     if (!(err instanceof CreationRateLimited)) throw err;
     // The queue refused (a held or spent challenger) or Lichess 429'd. Either
@@ -195,6 +222,7 @@ export async function createGameIfReady(
 
   switch (step.stage) {
     case "created":
+      if (!ranHere) return { created: false, reason: "already" };
       await (deps.publish ?? publishExternalPlayLobby)(fixtureId);
       return { created: true, gameId: step.gameId };
     case "already":
@@ -265,13 +293,16 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   await ensureBridgeRow(g);
 
   // Claim: conditional on pending, no challenge, and either never claimed or
-  // claimed stale — so a crashed minter recovers without a human.
-  const claimed = await sql<{ fixture_id: string }[]>`
+  // claimed stale — so a crashed minter recovers without a human. RETURNING
+  // the marker: a claim on a row that carries it is never sent blind (I2).
+  const claimed = await sql<{ create_sent_at: Date | null }[]>`
     update fixture_external_play set mint_claimed_at = ${claimAt}, updated_at = now()
      where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null
        and (mint_claimed_at is null or mint_claimed_at < ${new Date(claimAt.getTime() - MINT_CLAIM_STALE_MS)})
-     returning fixture_id`;
-  if (claimed.length === 0) return { stage: "lost" };
+     returning create_sent_at`;
+  const [claimRow] = claimed;
+  if (!claimRow) return { stage: "lost" };
+  let claim = claimAt;
 
   // Both tokens BEFORE the create: a challenge Black's token cannot accept
   // must never be made. Read here, at the call, so a plaintext token lives
@@ -284,49 +315,88 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
     whiteToken = await getLichessAccessToken(plan.white.userId);
     blackToken = await getLichessAccessToken(plan.black.userId);
   } catch (err) {
-    await releaseClaim(fixtureId, claimAt, "token_unavailable");
+    await releaseClaim(fixtureId, claim, "token_unavailable");
     throw err;
   }
   if (!whiteToken || !blackToken) {
-    await releaseClaim(fixtureId, claimAt, "no_stored_token");
+    await releaseClaim(fixtureId, claim, "no_stored_token");
     return { stage: "refused" };
   }
 
-  // HTTP, outside every transaction.
-  const made = await createChallengeToUser({
-    whiteToken,
-    blackUsername: plan.black.username,
-    limitSeconds: plan.tc.limitSeconds,
-    incrementSeconds: plan.tc.incrementSeconds,
-  });
-  if (!made.ok) {
-    if (made.code === "rate_limited") {
-      // M3: lila refused before it acted — nothing exists. Release, then
-      // THROW, so the queue holds this challenger (CREATION_429_HOLD_MS).
-      // Returning a value here would leave the hold unset and let every
-      // retry hit Lichess again inside the same minute.
-      await releaseClaim(fixtureId, claimAt, `create:rate_limited: ${made.raw}`);
-      throw new CreationRateLimited({ message: made.raw || "Lichess rate limited the create" });
+  // The game to commit: adopted from an earlier claimant's send, or sent now.
+  let gameId: string | null = null;
+  let accepted = false;
+  let sentHere = false;
+  if (claimRow.create_sent_at !== null) {
+    const found = await findSentGame(plan, whiteToken);
+    if (found.kind === "unknown") {
+      const held = await holdForOrganiser(fixtureId, claim, {
+        needsReason: "create_outcome_unknown",
+        lastError: `recover:${found.why}`,
+      });
+      return held ? { stage: "held" } : { stage: "lost" };
     }
-    await holdForOrganiser(fixtureId, claimAt, {
-      needsReason: needsReasonFor(made.code),
-      lastError: `create:${made.code}: ${made.raw}`,
-    });
-    return { stage: "held" };
+    if (found.kind !== "none") {
+      gameId = found.id;
+      accepted = found.kind === "game";
+    }
   }
 
-  const accepted = await acceptChallenge({ blackToken, challengeId: made.challengeId });
-  if (!accepted.ok) {
-    // The challenge EXISTS at Lichess. Record it, so the unique index makes a
-    // second create impossible and reconcile can still find the game, and
-    // hand the fixture to an organiser.
-    const recorded = await holdForOrganiser(fixtureId, claimAt, {
-      needsReason: needsReasonFor(accepted.code),
-      lastError: `accept:${accepted.code}: ${accepted.raw}`,
-      game: { challengeId: made.challengeId, plan },
+  if (gameId === null) {
+    // The marker, as its own committed write, BEFORE the HTTP call — and the
+    // claim renewed to this instant, so the two calls below cannot outlive it.
+    const sentAt = fixedNow ?? new Date();
+    const marked = await sql<{ fixture_id: string }[]>`
+      update fixture_external_play
+         set create_sent_at = ${sentAt}, mint_claimed_at = ${sentAt}, updated_at = now()
+       where fixture_id = ${fixtureId} and status = 'pending' and challenge_id is null
+         and mint_claimed_at = ${claim}
+       returning fixture_id`;
+    if (marked.length === 0) return { stage: "lost" }; // nothing sent
+    claim = sentAt;
+
+    // HTTP, outside every transaction.
+    const made = await createChallengeToUser({
+      whiteToken,
+      blackUsername: plan.black.username,
+      limitSeconds: plan.tc.limitSeconds,
+      incrementSeconds: plan.tc.incrementSeconds,
     });
-    if (!recorded) reportUnrecorded(fixtureId, made.challengeId, "accept_failed_claim_lost");
-    return recorded ? { stage: "held" } : { stage: "lost" };
+    if (!made.ok) {
+      if (made.code === "rate_limited") {
+        // M3: lila refused before it acted — nothing exists, so the marker
+        // goes with the claim. Then THROW, so the queue holds this challenger
+        // (CREATION_429_HOLD_MS). Returning a value here would leave the hold
+        // unset and let every retry hit Lichess again inside the same minute.
+        await releaseClaim(fixtureId, claim, `create:rate_limited: ${made.raw}`, { outcomeKnown: true });
+        throw new CreationRateLimited({ message: made.raw || "Lichess rate limited the create" });
+      }
+      // The marker STAYS: whatever this was, a game may exist.
+      await holdForOrganiser(fixtureId, claim, {
+        needsReason: needsReasonFor(made.code),
+        lastError: `create:${made.code}: ${made.raw}`,
+      });
+      return { stage: "held" };
+    }
+    gameId = made.challengeId;
+    sentHere = true;
+  }
+
+  if (!accepted) {
+    const acc = await acceptChallenge({ blackToken, challengeId: gameId });
+    if (!acc.ok) {
+      // The challenge EXISTS at Lichess. Record it, so the unique index makes
+      // a second create impossible and reconcile can still find the game, and
+      // hand the fixture to an organiser.
+      const recorded = await holdForOrganiser(fixtureId, claim, {
+        needsReason: needsReasonFor(acc.code),
+        lastError: `accept:${acc.code}: ${acc.raw}`,
+        game: { challengeId: gameId, plan },
+      });
+      if (recorded) return { stage: "held" };
+      if (sentHere) await closeStray(fixtureId, gameId, whiteToken, "accept_failed_claim_lost");
+      return { stage: "lost" };
+    }
   }
 
   // Ready: create + accept. T10's first accepted move flips it to `live`;
@@ -334,18 +404,87 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   // re-entry after T+20 reads to recognise a seated player.
   const ready = await sql<{ fixture_id: string }[]>`
     update fixture_external_play
-       set status = 'ready', challenge_id = ${made.challengeId}, white_side = ${plan.whiteSide},
+       set status = 'ready', challenge_id = ${gameId}, white_side = ${plan.whiteSide},
            white_lichess_id = ${plan.white.lichessId}, black_lichess_id = ${plan.black.lichessId},
            expires_at = ${windowFor(plan.roundOpenedAt).deadline},
-           mint_claimed_at = null, last_error = null, updated_at = now()
-     where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claimAt}
+           mint_claimed_at = null, create_sent_at = null, last_error = null, updated_at = now()
+     where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claim}
      returning fixture_id`;
   if (ready.length === 0) {
     // Lost the claim to a takeover mid-flight: do NOT record, do not publish.
-    reportUnrecorded(fixtureId, made.challengeId, "claim_lost_mid_flight");
+    // A game THIS call made is closed; an adopted one is left for whoever
+    // holds the claim now (they will find it the same way this call did).
+    if (sentHere) await closeStray(fixtureId, gameId, whiteToken, "claim_lost_mid_flight");
     return { stage: "lost" };
   }
-  return { stage: "created", gameId: made.challengeId };
+  return { stage: "created", gameId };
+}
+
+type SentGame =
+  | { kind: "none" }
+  | { kind: "challenge"; id: string }
+  | { kind: "game"; id: string }
+  | { kind: "unknown"; why: string };
+
+/** Challenge statuses that are not a live invitation (ChallengeStatus,
+ *  lichess-org/api spec): such a challenge can never become this game. */
+const CLOSED_CHALLENGE = new Set(["canceled", "declined"]);
+
+/**
+ * I2's lookup: did an earlier claimant's create reach Lichess? Both lists are
+ * read with White's token — the challenger's — in parallel, and either one
+ * failing (or a page too full to prove absence) is "unknown", never "none":
+ * only proof of absence may re-create. A candidate is White's challenge to
+ * Black that is still open, or White's ongoing game, as White, against Black;
+ * one already recorded on any bridge row is another fixture's game, not ours.
+ * Two candidates cannot be told apart, so they are "unknown" too.
+ */
+async function findSentGame(plan: CreationPlan, whiteToken: string): Promise<SentGame> {
+  const [outgoing, ongoing] = await Promise.all([
+    listOutgoingChallenges(whiteToken),
+    listOngoingGames(whiteToken),
+  ]);
+  if (!outgoing.ok) return { kind: "unknown", why: `challenge_list:${outgoing.code}: ${outgoing.raw}` };
+  if (!ongoing.ok) return { kind: "unknown", why: `ongoing_list:${ongoing.code}: ${ongoing.raw}` };
+  if (!ongoing.complete) return { kind: "unknown", why: "ongoing_list:page_full" };
+
+  const black = plan.black.lichessId.toLowerCase();
+  const candidates = new Map<string, "challenge" | "game">();
+  for (const c of outgoing.challenges) {
+    if (c.destUserId?.toLowerCase() === black && !CLOSED_CHALLENGE.has(c.status)) candidates.set(c.id, "challenge");
+  }
+  for (const g of ongoing.games) {
+    if (g.color === "white" && g.opponentId?.toLowerCase() === black) candidates.set(g.gameId, "game");
+  }
+  if (candidates.size > 0) {
+    const recorded = await sql<{ challenge_id: string }[]>`
+      select challenge_id from fixture_external_play where challenge_id = any(${[...candidates.keys()]})`;
+    for (const r of recorded) candidates.delete(r.challenge_id);
+  }
+  const ids = [...candidates.keys()];
+  if (ids.length === 0) return { kind: "none" };
+  if (ids.length > 1) return { kind: "unknown", why: `ambiguous: ${ids.join(",")}` };
+  const id = ids[0]!;
+  return { kind: candidates.get(id)!, id };
+}
+
+/** Minor b: a game this call created and could not record. Cancel it with
+ *  White's token (cancel also aborts an accepted, unplayed game — measured),
+ *  unless some other claimant has recorded it since. Best-effort: never
+ *  throws; logs the ids, never a token. */
+async function closeStray(fixtureId: string, challengeId: string, whiteToken: string, why: string): Promise<void> {
+  const [owner] = await sql<{ fixture_id: string }[]>`
+    select fixture_id from fixture_external_play where challenge_id = ${challengeId}`;
+  if (owner) {
+    log.warn({ fixtureId, challengeId, why, recordedBy: owner.fixture_id }, "lichess: lost the claim; the game is recorded by its new claimant");
+    return;
+  }
+  const out = await cancelChallenge({ token: whiteToken, challengeId });
+  if (out.ok) {
+    log.warn({ fixtureId, challengeId, why }, "lichess: cancelled a challenge this fixture could not record");
+    return;
+  }
+  reportUnrecorded(fixtureId, challengeId, `${why}; cancel failed: ${out.code}`);
 }
 
 /** Spec §3.6: a token Lichess rejects is not a provider fault and not a
@@ -357,10 +496,19 @@ function needsReasonFor(code: BoardErrorCode): NeedsReason {
 /** Release THIS call's claim (conditional on its own stamp, so a claim some
  *  other caller holds is never cleared) and leave the fixture pending for a
  *  retry. Used only where nothing can exist at Lichess. */
-async function releaseClaim(fixtureId: string, claimAt: Date, error: string): Promise<void> {
+async function releaseClaim(
+  fixtureId: string,
+  claimAt: Date,
+  error: string,
+  o: { outcomeKnown?: boolean } = {},
+): Promise<void> {
+  // The sent marker survives a release unless THIS call proved nothing exists
+  // (a 429): a claim released before its own send may sit on an earlier
+  // claimant's unknown outcome.
   await sql`
     update fixture_external_play
-       set mint_claimed_at = null, last_error = ${error.slice(0, 500)}, updated_at = now()
+       set mint_claimed_at = null, last_error = ${error.slice(0, 500)}, updated_at = now(),
+           create_sent_at = case when ${o.outcomeKnown === true}::boolean then null else create_sent_at end
      where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claimAt}`;
 }
 
@@ -381,6 +529,8 @@ async function holdForOrganiser(
            white_side = ${g ? g.plan.whiteSide : null},
            white_lichess_id = ${g ? g.plan.white.lichessId : null},
            black_lichess_id = ${g ? g.plan.black.lichessId : null},
+           -- a recorded game is a known outcome; an unrecorded one stays marked
+           create_sent_at = case when ${g !== undefined}::boolean then null else create_sent_at end,
            mint_claimed_at = null, last_error = ${a.lastError.slice(0, 500)}, updated_at = now()
      where fixture_id = ${fixtureId} and status = 'pending' and mint_claimed_at = ${claimAt}
      returning fixture_id`;

@@ -15,7 +15,8 @@ import {
   __setCreationQueueDeps,
   enqueueCreation,
 } from "@/server/external-play/creation-queue";
-import { MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
+import { LICHESS_TIMEOUT_MS, MINT_CLAIM_STALE_MS, windowFor } from "@/server/external-play/window";
+import { log } from "@/server/logger";
 import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { PLAY_SCOPES, getLichessLink } from "../external-accounts";
 import { mintOrgOwnerAuth } from "../external-play/auth";
@@ -35,6 +36,13 @@ const NOW = new Date("2026-10-01T12:05:00.000Z");
 const board = vi.hoisted(() => ({
   createChallengeToUser: vi.fn(),
   acceptChallenge: vi.fn(),
+  // Fix round 1 (I2 + Minor b): the stale-marker recovery's two lookups and
+  // the stray-game cancel. Defaults are "both lookups succeed, nothing
+  // found" and "cancel ok"; production's PLAY_SCOPES token actually gets a
+  // 403 from the first (board-api.test.ts, measured), which a case below pins.
+  listOutgoingChallenges: vi.fn(),
+  listOngoingGames: vi.fn(),
+  cancelChallenge: vi.fn(),
 }));
 vi.mock("@/server/external-play/lichess/board-api", () => board);
 
@@ -78,6 +86,9 @@ beforeEach(() => {
   GM = freshGameId();
   board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
   board.acceptChallenge.mockResolvedValue({ ok: true });
+  board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [] });
+  board.listOngoingGames.mockResolvedValue({ ok: true, games: [], complete: true });
+  board.cancelChallenge.mockResolvedValue({ ok: true });
   preflight.seatPlayer.mockResolvedValue({ seated: true, participant: null });
 });
 
@@ -516,17 +527,24 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
     expect(board.createChallengeToUser, "exactly one challenge for one fixture").toHaveBeenCalledTimes(1);
   });
 
-  it("sequence: two CONCURRENT creates for one fixture make exactly one challenge", async () => {
+  it("sequence: two CONCURRENT creates for one fixture make exactly one challenge — only the claim winner answers created and publishes", async () => {
+    // Fix round 1, Minor a: the queue's in-flight dedupe hands the follower the
+    // leader's result; the follower did not create the game, so it answers
+    // `already` and does not publish a second time.
     const s = await seed();
+    const publish = vi.fn(async () => undefined);
     const results = await Promise.all([
-      createGameIfReady(s.fixtureId, { now: NOW }),
-      createGameIfReady(s.fixtureId, { now: NOW }),
+      createGameIfReady(s.fixtureId, { now: NOW, publish }),
+      createGameIfReady(s.fixtureId, { now: NOW, publish }),
     ]);
     expect(board.createChallengeToUser, "exactly one challenge").toHaveBeenCalledTimes(1);
-    expect(results).toContainEqual({ created: true, gameId: GM });
-    for (const r of results) {
-      expect([{ created: true, gameId: GM }, { created: false, reason: "already" }]).toContainEqual(r);
-    }
+    // Which caller enqueues first (and so leads) is a race between their
+    // pre-queue reads, so the pair is compared as a multiset.
+    const key = (r: CreateOutcome) => JSON.stringify(r);
+    expect(results.map(key).sort()).toEqual(
+      [{ created: true, gameId: GM }, { created: false, reason: "already" }].map((r) => key(r as CreateOutcome)).sort(),
+    );
+    expect(publish, "one game, one publish").toHaveBeenCalledTimes(1);
     expect((await bridge(s.fixtureId))?.challenge_id).toBe(GM);
   });
 
@@ -541,12 +559,34 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
     noHttp();
   });
 
-  it("a STALE claim (a crashed minter) is taken over without a human", async () => {
+  it("a STALE claim that never SENT (crashed before the create) is taken over without a human, and nothing is looked up", async () => {
+    // No create_sent_at: the minter died between its claim and its send, so
+    // nothing can exist at Lichess and the takeover is safe.
     const s = await seed();
     await sql`
       insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, mint_claimed_at)
       values (${s.fixtureId}, ${s.orgId}, ${T}, ${new Date(NOW.getTime() - MINT_CLAIM_STALE_MS - 1)})`;
     expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+    expect(board.listOutgoingChallenges, "no marker, no lookup").not.toHaveBeenCalled();
+    expect(board.listOngoingGames).not.toHaveBeenCalled();
+  });
+
+  it("a STALE claim that carries the SENT marker is never retaken blind: both lookups run BEFORE any create (I2, flipped)", async () => {
+    // The minter died after Lichess answered 2xx and before our commit — the
+    // purest outcome_unknown there is. Until fix round 1 this case re-created
+    // with no lookup.
+    const s = await seed();
+    const stale = new Date(NOW.getTime() - MINT_CLAIM_STALE_MS - 1);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, mint_claimed_at, create_sent_at)
+      values (${s.fixtureId}, ${s.orgId}, ${T}, ${stale}, ${stale})`;
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+    const whiteToken = `lio_seed_${s.home.lichessId}`;
+    expect(board.listOutgoingChallenges).toHaveBeenCalledWith(whiteToken);
+    expect(board.listOngoingGames).toHaveBeenCalledWith(whiteToken);
+    const create = board.createChallengeToUser.mock.invocationCallOrder[0]!;
+    expect(board.listOutgoingChallenges.mock.invocationCallOrder[0]!, "lookup A before the create").toBeLessThan(create);
+    expect(board.listOngoingGames.mock.invocationCallOrder[0]!, "lookup B before the create").toBeLessThan(create);
   });
 
   it("the lobby is published once, on success only", async () => {
@@ -821,6 +861,10 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
     const row = await bridge(s.fixtureId);
     expect(row?.challenge_id, "the loser's challenge is NOT recorded").toBeNull();
     expect(row?.status).toBe("pending");
+    // Minor b: the stray game this call made is closed at Lichess, with
+    // White's token (the challenger's), best-effort.
+    expect(board.cancelChallenge).toHaveBeenCalledTimes(1);
+    expect(board.cancelChallenge).toHaveBeenCalledWith({ token: `lio_seed_${s.home.lichessId}`, challengeId: stomp });
   });
 
   it("creation goes through the throttle queue, keyed per fixture, White as the challenger", async () => {
@@ -1051,5 +1095,454 @@ describe.skipIf(!process.env.DATABASE_URL)("creation", () => {
     }
     expect([...produced].sort(), "every declared reason is reachable").toEqual([...declared].sort());
     expect(produced.size, "anti-vacuity: five reasons, five cases").toBe(5);
+  });
+});
+
+// Fix round 1, I1 (controller ruling 2026-10-10): a bridge row that carries a
+// challenge_id is NEVER stale, whatever its status, and a reschedule resets
+// only a `pending` row with no challenge. D12 anchors the window on the
+// round's open, so a moved timetable cannot un-create a game. Each case below
+// was reproduced by the reviewer's probe as a SECOND create (2 upstream calls).
+describe.skipIf(!process.env.DATABASE_URL)("I1 — a reschedule never makes a second game", () => {
+  const reschedule = async (fixtureId: string, minutes: number) => {
+    await sql`update fixtures set scheduled_at = ${new Date(T.getTime() + minutes * 60_000)} where id = ${fixtureId}`;
+  };
+
+  it("a reschedule AFTER a ready create: the second call is already, one create, A's id kept", async () => {
+    const s = await seed();
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+    const a = GM;
+    await reschedule(s.fixtureId, 2);
+    GM = freshGameId(); // what a second create WOULD be answered with
+    board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "already" });
+    expect(board.createChallengeToUser, "exactly one create for one board").toHaveBeenCalledTimes(1);
+    const row = await bridge(s.fixtureId);
+    expect(row?.status).toBe("ready");
+    expect(row?.challenge_id, "A's id still recorded").toBe(a);
+  });
+
+  it("a reschedule after an ACCEPT failure that recorded the challenge: one create, A's id kept, still held", async () => {
+    const s = await seed();
+    board.acceptChallenge.mockResolvedValueOnce({ ok: false, code: "unavailable", raw: "x" });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    const a = GM;
+    await reschedule(s.fixtureId, 2);
+    GM = freshGameId();
+    board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: GM });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "already" });
+    expect(board.createChallengeToUser).toHaveBeenCalledTimes(1);
+    const row = await bridge(s.fixtureId);
+    expect(row?.status, "the organiser's hold survives the reschedule").toBe("needs_organiser");
+    expect(row?.challenge_id).toBe(a);
+  });
+
+  it("a reschedule after an outcome_unknown hold (no id to record): one create, still held", async () => {
+    const s = await seed();
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "outcome_unknown", raw: "" });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    await reschedule(s.fixtureId, 2);
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(board.createChallengeToUser, "a held unknown outcome is never re-created").toHaveBeenCalledTimes(1);
+    expect((await bridge(s.fixtureId))?.status).toBe("needs_organiser");
+  });
+
+  it("a challenge-less PENDING row still resets: it is rebased onto the new time and created", async () => {
+    const s = await seed();
+    const oldBasis = new Date(T.getTime() - 60 * 60_000);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, last_error)
+      values (${s.fixtureId}, ${s.orgId}, ${oldBasis}, 'create:rate_limited (challenger) retry_at=unknown')`;
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+    const [row] = await sql<{ scheduled_at_basis: Date; challenge_id: string | null }[]>`
+      select scheduled_at_basis, challenge_id from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    expect(row?.scheduled_at_basis.getTime(), "rebased onto the fixture's current time").toBe(T.getTime());
+    expect(row?.challenge_id).toBe(GM);
+  });
+
+  it("a reschedule never clears ANOTHER process's in-flight claim on a pending row", async () => {
+    // Another process claimed and is mid-create; the board's time then moved.
+    // Clearing its claim would let this call create a second game beside it.
+    const s = await seed();
+    const oldBasis = new Date(T.getTime() - 60 * 60_000);
+    const theirs = new Date(NOW.getTime() - 1_000);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, mint_claimed_at)
+      values (${s.fixtureId}, ${s.orgId}, ${oldBasis}, ${theirs})`;
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    noHttp();
+    expect((await bridge(s.fixtureId))?.mint_claimed_at?.getTime(), "their claim intact").toBe(theirs.getTime());
+  });
+
+  it("T8 re-entry still holds on a RESCHEDULED ready game (real seat, real game)", async () => {
+    const real = await vi.importActual<typeof import("../external-play/preflight")>("../external-play/preflight");
+    preflight.seatPlayer.mockImplementation(real.seatPlayer);
+    const s = await seed();
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+    await reschedule(s.fixtureId, 15);
+    const T40 = new Date(OPENED.getTime() + 40 * 60_000);
+    let checked = 0;
+    for (const personId of [s.home.personId, s.away.personId]) {
+      expect(await real.seatPlayer({ fixtureId: s.fixtureId, personId }, { now: T40 })).toEqual({
+        seated: true,
+        participant: null,
+      });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both players").toBe(2);
+  });
+});
+
+// Fix round 1, I2 (controller ruling 2026-10-10): a durable "create sent"
+// marker is written as its own committed statement BEFORE the challenge HTTP
+// call. A claim (stale, or re-armed) that carries it is never created blind:
+// White's outgoing challenges to Black and White's ongoing games against
+// Black are looked up first. Found ⇒ adopt (record, then accept or proceed as
+// if created); BOTH lookups succeed and find nothing ⇒ re-create; ANY lookup
+// fails ⇒ needs_organiser / create_outcome_unknown, never a re-create.
+describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reached Lichess is looked up, never re-sent blind", () => {
+  type MarkerRow = { status: string; challenge_id: string | null; needs_reason: string | null;
+    mint_claimed_at: Date | null; create_sent_at: Date | null; last_error: string | null };
+  const marker = async (fixtureId: string): Promise<MarkerRow | undefined> =>
+    (await sql<MarkerRow[]>`
+      select status, challenge_id, needs_reason, mint_claimed_at, create_sent_at, last_error
+        from fixture_external_play where fixture_id = ${fixtureId}`)[0];
+  /** A minter that claimed, SENT, and died before its commit. */
+  const crashedAfterSend = async (s: Awaited<ReturnType<typeof seed>>) => {
+    const stale = new Date(NOW.getTime() - MINT_CLAIM_STALE_MS - 1);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, mint_claimed_at, create_sent_at)
+      values (${s.fixtureId}, ${s.orgId}, ${T}, ${stale}, ${stale})`;
+  };
+  const playing = (gameId: string, opponentId: string, color: "white" | "black" = "white") =>
+    ({ gameId, color, opponentId });
+
+  it("premise: every claim segment (two Lichess calls) fits inside the stale window, by the declared constants", () => {
+    // The lookups run in parallel (one timeout), and the marker write renews
+    // the claim, so no stretch of a claim's life spans more than two calls.
+    expect(2 * LICHESS_TIMEOUT_MS).toBeLessThan(MINT_CLAIM_STALE_MS);
+  });
+
+  it("the marker is committed BEFORE the create is sent, on this call's claim; the ready commit clears it", async () => {
+    const s = await seed();
+    let seenAtSend: MarkerRow | undefined;
+    board.createChallengeToUser.mockImplementation(async () => {
+      seenAtSend = await marker(s.fixtureId); // a separate statement: it sees only COMMITTED state
+      return { ok: true, challengeId: GM };
+    });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+    expect(seenAtSend?.create_sent_at, "durable before the HTTP call").not.toBeNull();
+    expect(seenAtSend?.mint_claimed_at?.getTime(), "written on this call's claim").toBe(seenAtSend?.create_sent_at?.getTime());
+    const after = await marker(s.fixtureId);
+    expect(after?.create_sent_at, "a recorded game is a known outcome").toBeNull();
+    expect(after?.challenge_id).toBe(GM);
+  });
+
+  it("FOUND among White's ongoing games (accepted before the crash) ⇒ adopted: recorded and ready, no create, no accept", async () => {
+    const s = await seed();
+    await crashedAfterSend(s);
+    const theirs = freshGameId();
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
+    const publish = vi.fn(async () => undefined);
+    expect(await createGameIfReady(s.fixtureId, { now: NOW, publish })).toEqual({ created: true, gameId: theirs });
+    expect(board.createChallengeToUser, "never re-sent").not.toHaveBeenCalled();
+    expect(board.acceptChallenge, "already accepted at Lichess").not.toHaveBeenCalled();
+    const row = await bridge(s.fixtureId);
+    expect(row).toMatchObject({ status: "ready", challenge_id: theirs, white_side: "home",
+      white_lichess_id: s.home.lichessId, black_lichess_id: s.away.lichessId, mint_claimed_at: null });
+    expect((await marker(s.fixtureId))?.create_sent_at).toBeNull();
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("FOUND among White's outgoing challenges (not yet accepted) ⇒ adopted, then Black's token accepts it", async () => {
+    const s = await seed();
+    await crashedAfterSend(s);
+    const theirs = freshGameId();
+    board.listOutgoingChallenges.mockResolvedValue({
+      ok: true, challenges: [{ id: theirs, destUserId: s.away.lichessId, status: "created" }],
+    });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: theirs });
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+    expect(board.acceptChallenge).toHaveBeenCalledWith({ blackToken: `lio_seed_${s.away.lichessId}`, challengeId: theirs });
+    expect((await bridge(s.fixtureId))).toMatchObject({ status: "ready", challenge_id: theirs });
+  });
+
+  it("an adopted challenge whose ACCEPT fails is recorded and held, exactly as a fresh one would be", async () => {
+    const s = await seed();
+    await crashedAfterSend(s);
+    const theirs = freshGameId();
+    board.listOutgoingChallenges.mockResolvedValue({
+      ok: true, challenges: [{ id: theirs, destUserId: s.away.lichessId, status: "created" }],
+    });
+    board.acceptChallenge.mockResolvedValue({ ok: false, code: "unavailable", raw: "x" });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    expect(await marker(s.fixtureId)).toMatchObject({ status: "needs_organiser", challenge_id: theirs, create_sent_at: null });
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+  });
+
+  it("BOTH lookups succeed and find nothing of ours ⇒ re-created — the filters are swept: other opponents, the wrong colour, closed challenges, another fixture's game", async () => {
+    const s = await seed();
+    await crashedAfterSend(s);
+    const elsewhere = await seed();
+    const recordedElsewhere = freshGameId();
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, challenge_id)
+      values (${elsewhere.fixtureId}, ${elsewhere.orgId}, ${T}, 'ready', ${recordedElsewhere})`;
+    const black = s.away.lichessId;
+    const noise = {
+      challenges: [
+        { id: freshGameId(), destUserId: "someone-else", status: "created" },
+        { id: freshGameId(), destUserId: null, status: "created" }, // an open challenge
+        { id: freshGameId(), destUserId: black, status: "canceled" },
+        { id: freshGameId(), destUserId: black, status: "declined" },
+        { id: recordedElsewhere, destUserId: black, status: "created" },
+      ],
+      games: [
+        playing(freshGameId(), "someone-else"),
+        playing(freshGameId(), black, "black"), // White plays black in it: not our game
+        { gameId: freshGameId(), color: "white" as const, opponentId: null }, // anonymous / AI
+        playing(recordedElsewhere, black),
+      ],
+    };
+    board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: noise.challenges });
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: noise.games });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: GM });
+    expect(board.createChallengeToUser).toHaveBeenCalledTimes(1);
+    expect(noise.challenges.length + noise.games.length, "anti-vacuity: nine non-matches offered").toBe(9);
+  });
+
+  it("the match is case-blind on Black's Lichess id (lila ids are lowercase; ours may not be)", async () => {
+    const s = await seed();
+    await crashedAfterSend(s);
+    const theirs = freshGameId();
+    board.listOngoingGames.mockResolvedValue({
+      ok: true, complete: true, games: [playing(theirs, s.away.lichessId.toUpperCase())],
+    });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: theirs });
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+  });
+
+  it("ANY lookup failing ⇒ needs_organiser / create_outcome_unknown, never a re-create — swept and counted (the first is production's measured 403)", async () => {
+    const cases: { name: string; arrange: () => void }[] = [
+      { name: "lookup A refused: Missing scope challenge:read (measured)", arrange: () =>
+        board.listOutgoingChallenges.mockResolvedValue({ ok: false, code: "unauthorized", raw: '{"error":"Missing scope: challenge:read"}' }) },
+      { name: "lookup A unreadable", arrange: () =>
+        board.listOutgoingChallenges.mockResolvedValue({ ok: false, code: "unavailable", raw: "<html>" }) },
+      { name: "lookup B timed out", arrange: () =>
+        board.listOngoingGames.mockResolvedValue({ ok: false, code: "unavailable", raw: "" }) },
+      { name: "lookup B a full page (absence unproven)", arrange: () =>
+        board.listOngoingGames.mockResolvedValue({ ok: true, complete: false, games: [] }) },
+      { name: "both failed", arrange: () => {
+        board.listOutgoingChallenges.mockResolvedValue({ ok: false, code: "unavailable", raw: "" });
+        board.listOngoingGames.mockResolvedValue({ ok: false, code: "unavailable", raw: "" });
+      } },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      board.listOutgoingChallenges.mockResolvedValue({ ok: true, challenges: [] });
+      board.listOngoingGames.mockResolvedValue({ ok: true, games: [], complete: true });
+      board.createChallengeToUser.mockClear();
+      c.arrange();
+      const s = await seed();
+      await crashedAfterSend(s);
+      expect(await createGameIfReady(s.fixtureId, { now: NOW }), c.name).toEqual({ created: false, reason: "provider_error" });
+      expect(board.createChallengeToUser, c.name).not.toHaveBeenCalled();
+      const row = await marker(s.fixtureId);
+      expect(row, c.name).toMatchObject({ status: "needs_organiser", needs_reason: "create_outcome_unknown",
+        challenge_id: null, mint_claimed_at: null });
+      expect(row?.create_sent_at, `${c.name}: the unknown outcome stays marked`).not.toBeNull();
+      // And a retry does not re-create either: the hold is a status.
+      expect(await createGameIfReady(s.fixtureId, { now: NOW }), c.name).toEqual({ created: false, reason: "not_ready" });
+      expect(board.createChallengeToUser, c.name).not.toHaveBeenCalled();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: five ways a lookup fails").toBe(5);
+  });
+
+  it("TWO candidates of ours ⇒ ambiguous: held as create_outcome_unknown, nothing adopted, nothing cancelled", async () => {
+    const s = await seed();
+    await crashedAfterSend(s);
+    const [a, b] = [freshGameId(), freshGameId()];
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true,
+      games: [playing(a, s.away.lichessId), playing(b, s.away.lichessId)] });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    expect(await marker(s.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "create_outcome_unknown", challenge_id: null });
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+    expect(board.cancelChallenge, "a guess is never closed either").not.toHaveBeenCalled();
+  });
+
+  it("a challenge listed in BOTH lookups (accepted between the two reads) is one candidate, adopted as a game", async () => {
+    const s = await seed();
+    await crashedAfterSend(s);
+    const theirs = freshGameId();
+    board.listOutgoingChallenges.mockResolvedValue({ ok: true,
+      challenges: [{ id: theirs, destUserId: s.away.lichessId, status: "accepted" }] });
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: true, gameId: theirs });
+    expect(board.acceptChallenge, "a game needs no accept").not.toHaveBeenCalled();
+  });
+
+  it("a RE-ARMED row (pending, no claim, the marker still set) is looked up too", async () => {
+    // e.g. an organiser's resolve putting a held unknown-outcome row back to
+    // pending (T16): the marker is what remembers a create went out.
+    const s = await seed();
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, create_sent_at)
+      values (${s.fixtureId}, ${s.orgId}, ${T}, ${new Date(NOW.getTime() - 3_600_000)})`;
+    board.listOutgoingChallenges.mockResolvedValue({ ok: false, code: "unauthorized", raw: "x" });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "provider_error" });
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+  });
+
+  it("a claim LOST during the lookups sends nothing: the marker write is conditional on this call's claim", async () => {
+    const s = await seed();
+    await crashedAfterSend(s);
+    board.listOngoingGames.mockImplementation(async () => {
+      await sql`update fixture_external_play set mint_claimed_at = ${new Date(NOW.getTime() + 1_000)} where fixture_id = ${s.fixtureId}`;
+      return { ok: true, complete: true, games: [] };
+    });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(board.createChallengeToUser, "a lost claim never sends").not.toHaveBeenCalled();
+  });
+
+  it("an ADOPTED game whose commit loses the claim is left alone — never cancelled; it is the new claimant's to find", async () => {
+    const s = await seed();
+    await crashedAfterSend(s);
+    const theirs = freshGameId();
+    board.listOngoingGames.mockImplementation(async () => {
+      await sql`update fixture_external_play set mint_claimed_at = ${new Date(NOW.getTime() + 1_000)} where fixture_id = ${s.fixtureId}`;
+      return { ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] };
+    });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(board.cancelChallenge, "this call did not make it").not.toHaveBeenCalled();
+    expect(board.createChallengeToUser).not.toHaveBeenCalled();
+  });
+
+  it("the marker write RENEWS the claim to the send instant (production clock): lookups cannot age it out", async () => {
+    // Only Date is faked, after the seed; the call takes no `now`.
+    const s = await seed();
+    await crashedAfterSend(s);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(NOW);
+      const LOOKUP_MS = 15_000;
+      board.listOngoingGames.mockImplementation(async () => {
+        vi.setSystemTime(new Date(NOW.getTime() + LOOKUP_MS)); // the lookups took 15s
+        return { ok: true, complete: true, games: [] };
+      });
+      let claimAtSend: Date | null | undefined;
+      board.createChallengeToUser.mockImplementation(async () => {
+        claimAtSend = (await marker(s.fixtureId))?.mint_claimed_at;
+        return { ok: true, challengeId: GM };
+      });
+      expect(await createGameIfReady(s.fixtureId)).toEqual({ created: true, gameId: GM });
+      expect(claimAtSend?.getTime(), "renewed to the send, not the claim").toBe(NOW.getTime() + LOOKUP_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marker lifecycle: a 429 clears it (lila refused before acting); an outcome_unknown keeps it; a recorded accept failure clears it", async () => {
+    const r429 = await seed();
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "rate_limited", raw: "Too many requests" });
+    await createGameIfReady(r429.fixtureId, { now: NOW });
+    expect(await marker(r429.fixtureId)).toMatchObject({ status: "pending", mint_claimed_at: null, create_sent_at: null });
+
+    const unknown = await seed();
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "outcome_unknown", raw: "" });
+    await createGameIfReady(unknown.fixtureId, { now: NOW });
+    const u = await marker(unknown.fixtureId);
+    expect(u?.status).toBe("needs_organiser");
+    expect(u?.create_sent_at, "the outcome is still unknown").not.toBeNull();
+
+    const acc = await seed();
+    GM = freshGameId();
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: true, challengeId: GM });
+    board.acceptChallenge.mockResolvedValueOnce({ ok: false, code: "unavailable", raw: "x" });
+    await createGameIfReady(acc.fixtureId, { now: NOW });
+    expect(await marker(acc.fixtureId)).toMatchObject({ status: "needs_organiser", challenge_id: GM, create_sent_at: null });
+  });
+});
+
+// Fix round 1, Minor b: a game this call made but could not record is closed
+// at Lichess, best-effort, with White's token; the ids are logged, never a
+// token.
+describe.skipIf(!process.env.DATABASE_URL)("Minor b — a stray game is cancelled, best-effort", () => {
+  const stompDuring = (fixtureId: string, at: "create" | "accept", id: string) => {
+    const bump = async () => {
+      await sql`
+        update fixture_external_play set mint_claimed_at = ${new Date(NOW.getTime() + 1_000)}
+         where fixture_id = ${fixtureId}`;
+    };
+    if (at === "create") {
+      board.createChallengeToUser.mockImplementation(async () => {
+        await bump();
+        return { ok: true, challengeId: id };
+      });
+    } else {
+      board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: id });
+      board.acceptChallenge.mockImplementation(async () => {
+        await bump();
+        return { ok: false, code: "unavailable", raw: "x" };
+      });
+    }
+  };
+
+  it("both stray paths cancel with White's token and log the ids — never a token — swept and counted", async () => {
+    const errors = vi.spyOn(log, "error");
+    const warns = vi.spyOn(log, "warn");
+    const infos = vi.spyOn(log, "info");
+    try {
+      let checked = 0;
+      for (const at of ["create", "accept"] as const) {
+        errors.mockClear(); warns.mockClear(); infos.mockClear();
+        board.cancelChallenge.mockClear();
+        const s = await seed();
+        const stray = freshGameId();
+        stompDuring(s.fixtureId, at, stray);
+        expect(await createGameIfReady(s.fixtureId, { now: NOW }), at).toEqual({ created: false, reason: "not_ready" });
+        const whiteToken = `lio_seed_${s.home.lichessId}`;
+        expect(board.cancelChallenge, at).toHaveBeenCalledWith({ token: whiteToken, challengeId: stray });
+        const logged = JSON.stringify([...errors.mock.calls, ...warns.mock.calls, ...infos.mock.calls]);
+        expect(logged, `${at}: the ids are logged`).toContain(stray);
+        expect(logged, `${at}: the ids are logged`).toContain(s.fixtureId);
+        expect(logged, `${at}: never a token`).not.toContain(whiteToken);
+        expect(logged, `${at}: never a token`).not.toContain(`lio_seed_${s.away.lichessId}`);
+        checked += 1;
+      }
+      expect(checked).toBe(2);
+    } finally {
+      errors.mockRestore(); warns.mockRestore(); infos.mockRestore();
+    }
+  });
+
+  it("a cancel that FAILS is logged, never thrown; the caller's answer is unchanged", async () => {
+    const errors = vi.spyOn(log, "error");
+    try {
+      const s = await seed();
+      const stray = freshGameId();
+      stompDuring(s.fixtureId, "create", stray);
+      board.cancelChallenge.mockResolvedValue({ ok: false, code: "unavailable", raw: "boom" });
+      expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+      expect(JSON.stringify(errors.mock.calls)).toContain(stray);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("a stray some OTHER claimant has since recorded is not cancelled (it is that fixture's game now)", async () => {
+    const s = await seed();
+    const stray = freshGameId();
+    board.createChallengeToUser.mockImplementation(async () => {
+      // The takeover claimant adopted this very game and committed it.
+      await sql`
+        update fixture_external_play
+           set mint_claimed_at = null, status = 'ready', challenge_id = ${stray}
+         where fixture_id = ${s.fixtureId}`;
+      return { ok: true, challengeId: stray };
+    });
+    expect(await createGameIfReady(s.fixtureId, { now: NOW })).toEqual({ created: false, reason: "not_ready" });
+    expect(board.cancelChallenge, "never close a recorded game").not.toHaveBeenCalled();
+    expect((await bridge(s.fixtureId))?.challenge_id).toBe(stray);
   });
 });
