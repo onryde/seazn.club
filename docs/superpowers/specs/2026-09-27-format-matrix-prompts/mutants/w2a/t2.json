@@ -31,9 +31,9 @@
   },
   {
     "id": "awaiting-entry-deleted",
-    "file": "packages/engine/test/rules-reference.test.ts",
-    "find": "  [\"X-ST-2\", \"Task 9\"],\n",
-    "replace": "",
+    "file": "packages/engine/rules/boardgame.md",
+    "find": "| `apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx` | `apps/web/src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts` |",
+    "replace": "| `apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx` | — |",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -47,8 +47,8 @@
   {
     "id": "awaiting-entry-stale",
     "file": "packages/engine/test/rules-reference.test.ts",
-    "find": "[\"X-ST-2\", \"Task 9\"],",
-    "replace": "[\"X-ST-2\", \"Task 9\"],\n  [\"X-ZZ-9\", \"Task 99\"],",
+    "find": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);",
+    "replace": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([[\"X-ZZ-9\", \"Task 99\"]]);",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -181,9 +181,9 @@
   },
   {
     "id": "awaiting-row-claims-proof",
-    "file": "packages/engine/rules/cross-sport.md",
-    "find": "ruling 77 | signed 77 2026-10-08 | `apps/web/src/server/usecases/scoring.ts` | — |",
-    "replace": "ruling 77 | signed 77 2026-10-08 | `apps/web/src/server/usecases/scoring.ts` | `packages/engine/test/rules-reference.test.ts` |",
+    "file": "packages/engine/test/rules-reference.test.ts",
+    "find": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([]);",
+    "replace": "const AWAITING_PROOF: ReadonlyMap<string, string> = new Map([[\"BG-KO-2\", \"Task 12\"]]);",
     "killers": [
       {
         "cwd": "packages/engine",
