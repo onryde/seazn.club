@@ -32,10 +32,13 @@ const HEADER_LEN = 1 + IV_LEN + KEY_LEN + TAG_LEN + IV_LEN + TAG_LEN; // 89
  *  or a pasted trailing newline. Neither message echoes the value. */
 const KEK_HEX = /^[0-9a-f]{64}$/i;
 
-/** The two envelope keys. Separate on purpose (scorer sheets §4.1): a leaked
- *  RELAY_KEK opens stream keys, a leaked DEVICE_LINK_KEK opens printed scoring
- *  QRs, and neither opens the other. */
-export type KekName = "RELAY_KEK" | "DEVICE_LINK_KEK";
+/** The three envelope keys. Separate on purpose (scorer sheets §4.1; chess
+ *  design §3.1): a leaked RELAY_KEK opens stream keys, a leaked
+ *  DEVICE_LINK_KEK opens printed scoring QRs, a leaked LICHESS_TOKEN_KEK
+ *  opens players' Lichess tokens — and none of them opens another. The last
+ *  one is the sharpest: that token can submit moves in games that are not
+ *  ours, so it must not ride on a key that is also printed on paper. */
+export type KekName = "RELAY_KEK" | "DEVICE_LINK_KEK" | "LICHESS_TOKEN_KEK";
 
 function kek(name: KekName): Buffer {
   const hex = process.env[name];
