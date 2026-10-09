@@ -57,10 +57,15 @@
       "phaseSeconds": 3771
     },
     "core-2": {
-      "mutants": 403,
-      "wallSeconds": 3686,
-      "dryRunSeconds": 133,
-      "phaseSeconds": 3518
+      "mutants": 541,
+      "wallSeconds": 5034,
+      "dryRunSeconds": 208,
+      "phaseSeconds": 4788,
+      "run": {
+        "id": 37923872826,
+        "job": 113798142175,
+        "sha": "7569ed0fc"
+      }
     },
     "core-3": {
       "mutants": 190,

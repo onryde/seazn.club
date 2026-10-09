@@ -206,7 +206,7 @@ jobs:
     # other groups' wall times).
     # max-parallel (T20-FIX1, ruling T20-FIX1): the org is on GitHub's Free plan, about 20 concurrent hosted jobs account-wide,
     # and `group=all` queues one job per leg (81, about 1.5 hours each, 119 job-hours at the measured walls). Uncapped, one dispatch
-    # holds every slot for about 7.7 hours and ci.yml's PR runs (13-16 jobs) and e2e.yml's push fan-out (11 jobs) queue behind it.
+    # holds every slot for about 7.8 hours and ci.yml's PR runs (13-16 jobs) and e2e.yml's push fan-out (11 jobs) queue behind it.
     # At 12 a dispatch leaves 8 slots for CI and takes about 11.5 hours (about 16.1 at 8). A literal on purpose: an input or a variable
     # would let a dispatch lift it unseen (tools/matrix/__tests__/matrix-workflow.test.ts pins the number; the figures here are
     # derived from stryker-measured.json by test/stryker-sizing.test.ts).
