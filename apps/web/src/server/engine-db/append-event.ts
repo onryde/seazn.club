@@ -107,6 +107,8 @@ interface EventRow {
 // thing the snapshot exists to prevent, so the two guards may not drift apart.
 export const LOCKED_FIXTURE_STATUSES: ReadonlySet<string> = new Set(["finalized", "cancelled"]);
 const LOCKED = LOCKED_FIXTURE_STATUSES;
+/** The shape of `entrants.id` (a Postgres uuid) — the C17/D-R7 winner lookup runs only on it (review N2). */
+const ENTRANT_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Map the folded ledger onto the fixtures.status enum. Derived from the
 // ACTIVE (void-resolved) events, not from event-type transitions: a void can
@@ -328,7 +330,9 @@ export async function appendEventInTx(
   // entrant; the auto-walkover of a held fixture is W2b's (spec §2.3).
   if (candidate.type === "core.settle" || (sportModule.deciderTypes ?? []).includes(candidate.type)) {
     const winner = (candidate.payload as { winner?: unknown } | null)?.winner;
-    if (typeof winner === "string") {
+    // Review N2: `entrants.id` is a uuid, so a malformed winner never reaches the lookup (Postgres 22P02 → a 500). It
+    // names no entrant either way; the fold refuses it below with its own 4xx, as before D-R7.
+    if (typeof winner === "string" && ENTRANT_ID_SHAPE.test(winner)) {
       const [w] = await tx<{ status: string }[]>`select status from entrants where id = ${winner}`;
       if (w?.status === "withdrawn") {
         throw new EngineError("SETTLE_NOT_APPLICABLE", "that entrant has withdrawn — settle for the remaining entrant", {

@@ -264,6 +264,51 @@ describe.skipIf(!HAS_DB)("D-R7: a held decider cannot seat a withdrawn entrant t
     expect(checked).toBe(deciders.length * WHO.length);
   }, 120_000);
 
+  it("N2: a malformed winner on core.settle and on every decider event is a 4xx refusal (never a 500) that writes nothing; a uuid of no entrant keeps its refusal; the withdrawn winner is still SETTLE_NOT_APPLICABLE withdrawn", async () => {
+    // `entrants.id` is a uuid: the C17/D-R7 lookup must never hand Postgres a non-uuid (22P02 → a 500 on the wire).
+    const t = await started("boardgame", "knockout", "classical");
+    await DECIDER_DRIVERS.boardgame!(t.auth, t.id);
+    await withdrawEntrantCascade(t.auth, t.away);
+    const types = ["core.settle", ...builtinModules.flatMap((m) => m.deciderTypes ?? [])];
+    expect(types.length, "settle plus at least one decider type").toBeGreaterThan(1);
+    const payloadFor = (type: string, winner: string) =>
+      type === "core.settle" ? { winner, method: "organiser" } : DECIDER_EVENT_PAYLOADS[type]!(winner);
+    const wire = async (type: string, winner: string) => {
+      const err = await post(t.auth, t.id, type, payloadFor(type, winner)).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err, `${type} ${winner}: refused`).not.toBeNull();
+      const res = await v1(async () => {
+        throw err;
+      });
+      return { status: res.status, error: ((await res.json()) as { error: { code: string; reason?: string } }).error };
+    };
+    const before = await seq(t.id);
+    let checked = 0;
+    for (const type of types) {
+      for (const winner of ["not-a-uuid", "", "12345", `${t.home}x`]) {
+        const r = await wire(type, winner);
+        expect(r.status, `${type} ${JSON.stringify(winner)}`).toBeGreaterThanOrEqual(400);
+        expect(r.status, `${type} ${JSON.stringify(winner)}`).toBeLessThan(500);
+        expect(await seq(t.id), `${type} ${JSON.stringify(winner)}: nothing written`).toBe(before);
+        checked++;
+      }
+      // A well-formed uuid that names no entrant: the lookup finds nobody, so the fold's own refusal stands.
+      const stranger = await wire(type, randomUUID());
+      expect(stranger.status, `${type} stranger`).toBeGreaterThanOrEqual(400);
+      expect(stranger.status, `${type} stranger`).toBeLessThan(500);
+      expect(stranger.error.reason, `${type} stranger is not the withdrawn refusal`).not.toBe("withdrawn");
+      // The withdrawn winner: unchanged.
+      const gone = await wire(type, t.away);
+      expect(gone.status, `${type} withdrawn`).toBe(409);
+      expect(gone.error, `${type} withdrawn`).toMatchObject({ code: "SETTLE_NOT_APPLICABLE", reason: "withdrawn" });
+      expect(await seq(t.id), `${type}: nothing written`).toBe(before);
+    }
+    expect(checked).toBe(types.length * 4);
+    expect((await row(t.id)).status, "still held").toBe("in_play");
+  });
+
   it("D-R7 negative pair: with nobody withdrawn, a scorer's decider naming either entrant is accepted (the refusal is the withdrawal's, not the decider's)", async () => {
     const t = await started("boardgame", "knockout", "classical");
     await DECIDER_DRIVERS.boardgame!(t.auth, t.id);

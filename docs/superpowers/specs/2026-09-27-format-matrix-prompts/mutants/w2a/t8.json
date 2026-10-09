@@ -229,6 +229,36 @@
     ]
   },
   {
+    "id": "winner-lookup-unshaped",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (typeof winner === \"string\" && ENTRANT_ID_SHAPE.test(winner)) {",
+    "replace": "if (typeof winner === \"string\") {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "N2: a malformed winner on core\\.settle and on every decider event is a 4xx refusal \\(never a 500\\) that writes nothing; a uuid of no entrant keeps its refusal; the withdrawn winner is still SETTLE_NOT_APPLICABLE withdrawn"
+      }
+    ]
+  },
+  {
+    "id": "winner-shape-unanchored",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "const ENTRANT_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;",
+    "replace": "const ENTRANT_ID_SHAPE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "N2: a malformed winner on core\\.settle and on every decider event is a 4xx refusal \\(never a 500\\) that writes nothing; a uuid of no entrant keeps its refusal; the withdrawn winner is still SETTLE_NOT_APPLICABLE withdrawn"
+      }
+    ]
+  },
+  {
     "id": "finalize-held",
     "file": "apps/web/src/server/engine-db/append-event.ts",
     "find": "if (candidate.type === \"core.finalize\" && forbidsLevelResult(stageKind)) {",
