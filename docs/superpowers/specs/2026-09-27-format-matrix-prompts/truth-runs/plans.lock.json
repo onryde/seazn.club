@@ -20991,6 +20991,46 @@
         "stepladder_only|boardgame|BRACKET_TIEBREAK"
       ],
       "planned": {}
+    },
+    "w2b-repro/L3/w2b-repro-1": {
+      "plan": "--set w1-driving --only double_elim|boardgame --scenario R4",
+      "layered": false,
+      "driven": [
+        "double_elim|boardgame|R4"
+      ],
+      "planned": {}
+    },
+    "w2b-repro/L3/w2b-repro-2": {
+      "plan": "--set w1-driving --only knockout_third_place|boardgame --scenario R4",
+      "layered": false,
+      "driven": [
+        "knockout_third_place|boardgame|R4"
+      ],
+      "planned": {}
+    },
+    "w2b-repro/L3/w2b-repro-3": {
+      "plan": "--set w1-driving --only knockout|boardgame --scenario R4",
+      "layered": false,
+      "driven": [
+        "knockout|boardgame|R4"
+      ],
+      "planned": {}
+    },
+    "w2b-repro/L3/w2b-repro-4": {
+      "plan": "--set w1-driving --only ko_plate|boardgame --scenario R4",
+      "layered": false,
+      "driven": [
+        "ko_plate|boardgame|R4"
+      ],
+      "planned": {}
+    },
+    "w2b-repro/L3/w2b-repro-5": {
+      "plan": "--set w1-driving --only qualifying_main|boardgame --scenario R4",
+      "layered": false,
+      "driven": [
+        "qualifying_main|boardgame|R4"
+      ],
+      "planned": {}
     }
   }
 }

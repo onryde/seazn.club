@@ -1,0 +1,40 @@
+{
+  "note": "W2b local truth-run selection (plan Global Constraints). cases: the 5 boardgame R4 cells W2a re-keyed SC-O1 -> CD-T13 (w2a-repro/expect-77-rekeys.json, wave W2b; Task 1). `only` is <row>|<sport>: matrix:l3 refuses a three-part <row>|<sport>|<variant> (UnknownFilter, EXIT=2; Task 1 finding), and the w1-driving set drives boardgame at blitz, so `caseId` names the judged cell. newScenarios: the W2b scenarios (Task 2).",
+  "cases": [
+    {
+      "layer": "L3",
+      "only": "knockout|boardgame",
+      "scenario": "R4",
+      "caseId": "knockout|boardgame|blitz|R4"
+    },
+    {
+      "layer": "L3",
+      "only": "knockout_third_place|boardgame",
+      "scenario": "R4",
+      "caseId": "knockout_third_place|boardgame|blitz|R4"
+    },
+    {
+      "layer": "L3",
+      "only": "double_elim|boardgame",
+      "scenario": "R4",
+      "caseId": "double_elim|boardgame|blitz|R4"
+    },
+    {
+      "layer": "L3",
+      "only": "ko_plate|boardgame",
+      "scenario": "R4",
+      "caseId": "ko_plate|boardgame|blitz|R4"
+    },
+    {
+      "layer": "L3",
+      "only": "qualifying_main|boardgame",
+      "scenario": "R4",
+      "caseId": "qualifying_main|boardgame|blitz|R4"
+    }
+  ],
+  "browserShards": {
+    "L1": [],
+    "L2": []
+  },
+  "newScenarios": []
+}
