@@ -3654,10 +3654,31 @@ async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
  *  production reference reads it. It is a valid value in the v1 output schema,
  *  so it may arrive on an import path, and the clause is pinned by a test that
  *  inserts the row through raw SQL and says so. Do not assume coverage from a
- *  product path — there is none. */
-function feederIsDead(f: { status: string; outcome: { winner?: string } | null }): boolean {
+ *  product path — there is none.
+ *
+ *  W2a NEW-H1 (D4, reproduced by apps/web/e2e/bracket-new-h1.spec.ts):
+ *  `abandoned` with NO outcome is ALSO what a recorded abandon folds to in most
+ *  sports (`dead-feeder-cascade.test.ts` sweeps the registry and counts both
+ *  shapes) — a match that was played and stopped, which the ruling above says
+ *  stays stuck and visible until the organiser settles it (X-ST-1). The
+ *  generator and this cascade write their voids WITHOUT an event; a recorded
+ *  abandon is an ACTIVE `core.abandon` in the ledger (voids are not voidable,
+ *  core/events.ts `resolveVoids`, so "active" is "no row voids it"). That is
+ *  the line between them. A withdrawal's own abandon (withdrawal.ts, the
+ *  open-format branch page_playoff takes) is a recorded one too: its line
+ *  waits for the settle instead of eliminating the departed entrant's opponent.
+ *
+ *  `needs_decision` (a held level result, X-BR-2) is not dead either: it is
+ *  neither decided nor void. A future "decided, nobody advances" outcome
+ *  belongs in its OWN clause beside these two, never folded into the abandon
+ *  test. */
+function feederIsDead(f: {
+  status: string;
+  outcome: { winner?: string } | null;
+  has_active_abandon: boolean;
+}): boolean {
   if (f.status === "cancelled") return true;
-  return f.status === "abandoned" && f.outcome === null;
+  return f.status === "abandoned" && f.outcome === null && !f.has_active_abandon;
 }
 
 /** A feeder that can never hand a LOSER onward (review round 5, N1). There are
@@ -3689,6 +3710,7 @@ function feederIsDead(f: { status: string; outcome: { winner?: string } | null }
 function loserFeederIsDead(f: {
   status: string;
   outcome: { kind?: string; winner?: string } | null;
+  has_active_abandon: boolean;
 }): boolean {
   if (feederIsDead(f)) return true;
   return f.outcome?.kind === "award";
@@ -3727,6 +3749,8 @@ interface SeatRow {
   winner_to_slot: number | null;
   loser_to_fixture: string | null;
   loser_to_slot: number | null;
+  /** W2a NEW-H1 (D4): the ledger holds a `core.abandon` no `core.void` targets — see `feederIsDead`. */
+  has_active_abandon: boolean;
 }
 
 /** Push the winners of the lines `awardSeededByes` just settled into the seats
@@ -3835,7 +3859,11 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
     const rows = await tx<SeatRow[]>`
       select id, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
              status, outcome, winner_to_fixture, winner_to_slot,
-             loser_to_fixture, loser_to_slot
+             loser_to_fixture, loser_to_slot,
+             exists (select 1 from score_events a
+                     where a.fixture_id = fixtures.id and a.type = 'core.abandon'
+                       and not exists (select 1 from score_events v
+                                        where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)) as has_active_abandon
       from fixtures where stage_id = ${stageId}`;
     const feederOf = new Map<string, FeederEdge>();
     for (const r of rows) {
