@@ -994,9 +994,18 @@ export async function patchDivision(
       }
       // T5-I1/T6 (M12): the setup gate for an online clock, as on create.
       // AFTER the lock so a locked division keeps answering 409 for any
-      // format change, never 400. Judged on the FINAL config, so it catches
-      // both a new clock and online play turned on over a stored one.
-      if (readOnlinePlay(finalConfig) === "lichess") {
+      // format change, never 400. Judged on the FINAL config, and only when
+      // the clock or online play CHANGES against the stored row: a save that
+      // re-sends both as stored (the Entrants save re-sends the whole config,
+      // the format lock's one exception) must not be refused for a clock
+      // saved before this gate existed — on a locked division the only
+      // repair, changing the clock, is itself 409, so that save would be
+      // refused for good (review T6-I1).
+      const storedConfig = (current.config ?? {}) as Record<string, unknown>;
+      const clockOrOnlineChanged =
+        canonicalJson(finalConfig.clock ?? null) !== canonicalJson(storedConfig.clock ?? null) ||
+        readOnlinePlay(finalConfig) !== readOnlinePlay(storedConfig);
+      if (clockOrOnlineChanged && readOnlinePlay(finalConfig) === "lichess") {
         assertTimeControl(finalConfig.clock as BoardgameClockInput | undefined);
       }
       // Narrowing the allowed kinds must not orphan entrants that already exist:
