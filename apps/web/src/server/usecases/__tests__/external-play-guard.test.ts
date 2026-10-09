@@ -124,8 +124,15 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
       divisionStarted: true,
       scheduledAt: T,
       linked: true,
-      clock: { base: 900, increment: 0, delay: 5 },
     });
+    // PRE-GATE LEGACY DATA. Since T6 the division save path refuses a delay
+    // clock on an online division (INVALID_TIME_CONTROL at setup), so the
+    // product can no longer CREATE this row — it is written by SQL to model a
+    // division saved before that gate existed. The guard must still refuse it.
+    await sql`
+      update divisions
+         set config = jsonb_set(config, '{clock}', '{"base":900,"increment":0,"delay":5}'::jsonb)
+       where id = ${s.divisionId}`;
     expect(await loadOnlinePlayFixture(s.fixtureId)).toBeNull();
   });
 
@@ -142,7 +149,7 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
       orgId: s.orgId,
       homeEntrantId: s.home.entrantId,
       awayEntrantId: s.away.entrantId,
-      clock: { limit: 900, increment: 0 },
+      clock: { limit: 900, increment: 10 },
       bridge: null,
     });
     if (!f) throw new Error("unreachable — toMatchObject above requires non-null");

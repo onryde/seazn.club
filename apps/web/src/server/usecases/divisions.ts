@@ -58,6 +58,8 @@ import {
   type CameraPolicy,
 } from "@/server/external-play/camera-policy";
 import { anyRoundOpened } from "@/server/external-play/round-open";
+import { assertTimeControl } from "@/server/external-play/time-controls";
+import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { audit } from "./audit";
 
 export interface DivisionRow {
@@ -308,6 +310,13 @@ export async function createDivision(
     // nothing changed to audit.
     const cameraPolicy = assertCameraPolicyValue(input.camera_policy);
     assertCameraPolicyForSport(input.sport_key, cameraPolicy);
+    // T5-I1/T6 (M12): a division played online must have a clock the Board
+    // API will actually play, and the organiser learns that HERE, at setup —
+    // a 1+0 is CREATED by Lichess and then every move is refused, so a later
+    // check would only fire at round open. Over-the-board chess is untouched.
+    if (readOnlinePlay(finalConfig) === "lichess") {
+      assertTimeControl(finalConfig.clock as BoardgameClockInput | undefined);
+    }
 
     // Shared by both slug paths so the generated one can be RETRIED against
     // the unique index — `q` is the savepoint, and replaces `tx` inside it.
@@ -982,6 +991,13 @@ export async function patchDivision(
           canonicalJson(withoutEntrants(finalConfig)) !==
           canonicalJson(withoutEntrants((current.config ?? {}) as Record<string, unknown>));
         if (nonEntrantsChanged) throw formatLocked();
+      }
+      // T5-I1/T6 (M12): the setup gate for an online clock, as on create.
+      // AFTER the lock so a locked division keeps answering 409 for any
+      // format change, never 400. Judged on the FINAL config, so it catches
+      // both a new clock and online play turned on over a stored one.
+      if (readOnlinePlay(finalConfig) === "lichess") {
+        assertTimeControl(finalConfig.clock as BoardgameClockInput | undefined);
       }
       // Narrowing the allowed kinds must not orphan entrants that already exist:
       // an active entrant of a kind the new model no longer accepts would become

@@ -58,11 +58,14 @@ describe.skipIf(!HAS_DB)("onlinePlay division + enrollment gate", () => {
       starts_on: "2026-10-01",
       ends_on: "2026-10-02",
     });
+    // A curated clock (10+5): since T6 the division save path refuses online
+    // play without a Board-API-playable clock, so turning onlinePlay on below
+    // needs one already stored.
     const division = await createDivision(owner, competition.id, {
       name: "Open",
       sport_key: "boardgame",
       variant_key: "classical",
-      config: { variant: "classical" },
+      config: { variant: "classical", clock: { base: 600, increment: 5 } },
     });
 
     const patched = await patchDivision(owner, division.id, {
@@ -95,7 +98,8 @@ describe.skipIf(!HAS_DB)("onlinePlay division + enrollment gate", () => {
       name: "Open",
       sport_key: "boardgame",
       variant_key: "classical",
-      config: { variant: "classical", onlinePlay: "lichess" },
+      // A curated clock (10+5): online play needs one at setup since T6.
+      config: { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } },
     });
     expect((division.config as Record<string, unknown>).onlinePlay).toBe("lichess");
 

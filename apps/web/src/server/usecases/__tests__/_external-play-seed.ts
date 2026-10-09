@@ -86,9 +86,12 @@ export type SeedOnlineChessFixtureOpts = {
   divisionStarted: boolean;
   scheduledAt: Date;
   linked: boolean;
-  /** Defaults to a 15-minute sudden-death clock (900s / no increment), which
-   *  maps cleanly onto a Lichess challenge clock. Pass `delay` to build a
-   *  fixture whose clock config is NOT Lichess-mappable. */
+  /** Defaults to 15+10 (900s base, 10s increment) — a ship-1 curated control
+   *  (time-controls.ts), because createDivision now REFUSES an online clock
+   *  outside the catalogue (T6). The default used to be 15+0, which the
+   *  setup gate refuses. A clock the gate refuses (a delay, 1+0) can no
+   *  longer be built through this helper with onlinePlay 'lichess': write it
+   *  by SQL after a valid create, and say it models pre-gate legacy data. */
   clock?: { base: number; increment?: number; delay?: number };
   /** `divisions.camera_policy`, written by createDivision. Omitted ⇒ null
    *  (inherit), which is what every pre-existing division looks like. */
@@ -151,7 +154,7 @@ export async function seedOnlineChessFixture(
     config: {
       variant: "classical",
       onlinePlay: deferOnlinePlay ? "off" : opts.onlinePlay,
-      clock: opts.clock ?? { base: 900, increment: 0 },
+      clock: opts.clock ?? { base: 900, increment: 10 },
     },
     // Through the product path (T6), not a raw UPDATE: the division's own
     // camera requirement is what createDivision stores.
