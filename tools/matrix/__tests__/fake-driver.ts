@@ -785,7 +785,20 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     if (typeof w !== "string" || (to === undefined && lo === undefined) || !this.carriesForward(f)) return;
     if (to !== undefined) this.fill(to.to, to.slot, w);
     const loser = w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id;
-    if (lo !== undefined && loser !== null) this.fill(lo.to, lo.slot, loser);
+    if (lo === undefined || loser === null) return;
+    // A page playoff's WALKOVER (a forfeit of a fixture with both sides seated) seats its loser nowhere: the product
+    // records the fixture the loser would have played as a bye award, which never reaches a batch (W2a whole-branch
+    // review I-3: the database read of `page_playoff_only|*|M1` - q1 forfeited, elim decided, q2 an award, final decided).
+    // The loser's slot is dead, so the fixture is awarded through to whoever fills the other.
+    if (this.pagePlayoff && f.status === "forfeited") {
+      this.deadSlots.add(`${lo.to}:${lo.slot}`);
+      const target = this.fixtures.find((x) => x.id === lo.to)!;
+      const other: Slot = lo.slot === "home_entrant_id" ? "away_entrant_id" : "home_entrant_id";
+      const waiting = target[other];
+      if (waiting !== null) this.awardThrough(target, waiting);
+      return;
+    }
+    this.fill(lo.to, lo.slot, loser);
   }
   /** Fill a slot; a fixture whose OTHER slot is dead (a bye line's loser) is awarded through and fed on. */
   fill(id: string, slot: Slot, entrant: string): void {
@@ -793,7 +806,10 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     Object.assign(target, { [slot]: entrant });
     const other: Slot = slot === "home_entrant_id" ? "away_entrant_id" : "home_entrant_id";
     if (!this.deadSlots.has(`${id}:${other}`)) return;
-    Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner: entrant } });
+    this.awardThrough(target, entrant);
+  }
+  awardThrough(target: FakeFixture, winner: string): void {
+    Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner } });
     this.feed(target);
   }
   override async withdraw(entrantId: string): Promise<WithdrawOut> {
@@ -823,8 +839,9 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       for (const f of this.fixtures) {
         const w = (f.outcome as { winner?: unknown } | null)?.winner;
         if (typeof w !== "string" || f.home_entrant_id === null || f.away_entrant_id === null) continue;
-        // A loser that plays on (a page playoff's pp-q1) is not out yet.
-        if (!this.loserFeeds.has(f.id)) out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
+        // A loser that plays on (a page playoff's pp-q1) is not out yet - unless its next seat is dead (a walkover's loser).
+        const lo = this.loserFeeds.get(f.id);
+        if (lo === undefined || this.deadSlots.has(`${lo.to}:${lo.slot}`)) out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
         if (!this.feeds.has(f.id)) champion = w;
       }
       out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));
