@@ -33,7 +33,6 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V432)", () => {
    *  `seedOnlineChessFixture` creates exactly one fixture, so this suite seeds
    *  the second one itself. */
   let meetinglessFixtureId = "";
-  let stageId = "";
   let personId = "";
   let userId = "";
 
@@ -46,9 +45,6 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V432)", () => {
     fixtureId = s.fixtureId;
     personId = s.home.personId;
     userId = s.home.userId;
-    const [st] = await sql<{ id: string }[]>`
-      select id from stages where division_id = ${s.divisionId}`;
-    stageId = st!.id;
     const [other] = await sql<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
                             status, home_entrant_id, away_entrant_id, scheduled_at)
@@ -146,13 +142,15 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V432)", () => {
   // shape check that also rejects an unknown kind (`else false`). Rolled back
   // so a mutant that lets it in leaves nothing behind.
   it("policy_downgrade is no longer an audit kind here — refused by the kind check", async () => {
+    // Otherwise well-formed (it has a fixture, which the shape check wants for
+    // the only kind left), so the kind check is the one that must refuse it.
     const ROLLBACK = new Error("rollback sentinel");
     let outcome: Outcome | undefined;
     await sql
       .begin(async (tx) => {
         outcome = await attempt(tx`
-          insert into online_chess_audit (org_id, stage_id, kind, actor_user_id, from_policy, to_policy, note)
-          values (${orgId}, ${stageId}, 'policy_downgrade', ${userId}, 'required', 'optional', 'vendor outage')`);
+          insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, note)
+          values (${orgId}, ${fixtureId}, 'policy_downgrade', ${userId}, 'vendor outage')`);
         throw ROLLBACK;
       })
       .catch((err: unknown) => {
@@ -163,14 +161,27 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V432)", () => {
     });
   });
 
-  it("a video override audit row needs its fixture and no policies", async () => {
+  // T6 fix round 1 (review M-3): with policy_downgrade gone, the columns only
+  // it used (stage_id, from_policy, to_policy) were dropped from the unmerged
+  // V432. Expected set typed from that ruling, not read from the table.
+  it("the audit table carries only what a video override needs", async () => {
+    const cols = await sql<{ column_name: string }[]>`
+      select column_name from information_schema.columns
+       where table_schema = current_schema() and table_name = 'online_chess_audit'
+       order by column_name`;
+    expect(cols.map((c) => c.column_name)).toEqual(
+      ["actor_user_id", "created_at", "fixture_id", "id", "kind", "note", "org_id"],
+    );
+  });
+
+  it("a video override audit row needs its fixture", async () => {
     expect(await attempt(sql`
       insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, note)
       values (${orgId}, ${fixtureId}, 'video_override', ${userId}, 'realtimekit 503, proceeding')`,
     )).toEqual({ accepted: true });
     expect(await attempt(sql`
-      insert into online_chess_audit (org_id, fixture_id, kind, actor_user_id, from_policy, to_policy, note)
-      values (${orgId}, ${fixtureId}, 'video_override', ${userId}, 'required', 'off', 'wrong shape')`,
+      insert into online_chess_audit (org_id, kind, actor_user_id, note)
+      values (${orgId}, 'video_override', ${userId}, 'no fixture')`,
     )).toEqual({
       accepted: false, code: CHECK_VIOLATION, constraint: "online_chess_audit_shape_check",
     });

@@ -308,17 +308,17 @@ create index fixture_play_flags_open_idx
 -- (`chess.camera_policy_changed`, written by patchDivision in the same
 -- transaction as the change) — one authority per fact (T6 ruling Q2,
 -- 2026-10-09). `policy_downgrade` was removed from both CHECKs below for that
--- reason; stage_id/from_policy/to_policy stay, held NULL by the shape check.
+-- reason, and the columns only it used (stage_id, from_policy, to_policy) were
+-- dropped with it (T6 review M-3). fixture_id stays nullable and is demanded
+-- per kind by the shape check, so a later kind that is not about one fixture
+-- needs a new CASE arm, not a column change.
 -- =============================================================================
 create table online_chess_audit (
   id            uuid primary key default gen_random_uuid(),
   org_id        uuid not null references organizations(id) on delete cascade,
   fixture_id    uuid null references fixtures(id) on delete cascade,
-  stage_id      uuid null references stages(id) on delete cascade,
   kind          text not null check (kind in ('video_override')),
   actor_user_id uuid not null references users(id) on delete restrict,
-  from_policy   text null check (from_policy in ('off', 'optional', 'required')),
-  to_policy     text null check (to_policy   in ('off', 'optional', 'required')),
   note          text not null,
   created_at    timestamptz not null default now(),
   -- `else false`, not a bare CASE: a CASE with no ELSE yields NULL for an
@@ -326,9 +326,7 @@ create table online_chess_audit (
   -- covered for by the kind CHECK instead of standing on its own.
   constraint online_chess_audit_shape_check check (
     case kind
-      when 'video_override' then
-        fixture_id is not null and stage_id is null
-        and from_policy is null and to_policy is null
+      when 'video_override' then fixture_id is not null
       else false
     end
   )
