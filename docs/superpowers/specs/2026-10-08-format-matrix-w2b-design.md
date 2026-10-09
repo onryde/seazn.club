@@ -10,9 +10,10 @@
   `docs/superpowers/specs/2026-09-27-format-matrix-prompts/_RULES.md` and `_INDEX.md`, the W2a design
   `docs/superpowers/specs/2026-10-08-format-matrix-w2a-design.md` (on `feat/format-matrix-w2a` until it merges), and the
   rulebooks `rulebook-W2-sets-cricket.md` (RB2A-n) and `rulebook-W2-goals-boards.md` (RB2B-n).
-- **Code read at:** `feat/format-matrix-w2a` `1eb60c9ae` (W2a T0–T7 built; T8+ not yet) and W2a spec `f1d09f58d`.
-  Every file:line below is from that branch. **Re-pin every line at plan time** — W2a is still building over this
-  surface.
+- **Code read at:** `feat/format-matrix-w2a` `1eb60c9ae` during the brainstorm; **re-pinned against main `a99147bd0`
+  on 2026-10-09** (73 citations: 48 hold, 24 moved, 1 false; 10 changed claims folded into this spec as "re-pin C-n").
+  The current pin for every citation is in `.superpowers/w2b-brainstorm/repin-main-a99147bd0.md` (gitignored); the
+  plan cites main, not the line numbers in this text.
 
 ## 1. Why, and what done means
 
@@ -147,7 +148,10 @@ rules would live outside the engine, against ruling 75 and the engine split).
 
 - **Event.** `CoreForfeit = {by: EntrantId | "both", reason: "walkover" | "retired" | "disqualified" | "withdrew"}`,
   strict. `forfeitOf()` returns the typed pair; every caller is enumerated (`grep -a`) and updated.
-- **Phase guard (kernel, before the module fold).** `walkover` (one side or `"both"`): only in the module's declared
+- **Phase guard (kernel, before the module fold) — new code** (re-pin C-1: today only module guards check phase, and
+  `DURING_STOPPAGE`, `events.ts:578-591`, admits `core.forfeit` during a suspension). During a suspension
+  `retired`/`disqualified`/`withdrew` stay admitted (an injury during a stoppage is the normal retirement);
+  `walkover` follows the phase rule below like anywhere else. `walkover` (one side or `"both"`): only in the module's declared
   walkover phases — `pre` for every sport, plus `live` for boardgame, where a no-show is a forfeit after the session
   starts (FIDE Laws Art. 6.7.1) and the pad's dock already lives in `live` (D-P1). `"both"` is only ever a walkover.
   `retired`, `disqualified`: only after `core.start`. Boardgame also accepts `withdrew` and `walkover` (one side) in
@@ -157,7 +161,12 @@ rules would live outside the engine, against ruling 75 and the engine split).
   the module phase guards refuse it incidentally ("already over"); the named refusal replaces that message.
 - **Outcome kinds** (`types.ts:134-158`). The set becomes `win | draw | tie | no_result | award | double_walkover`.
   `award` = `{winner, loser, reason}` (the free-text `method` and optional `score` are removed; the credited score comes
-  from the hook). `double_walkover` = `{kind}` — the sides are the fixture's two entrants. **The first W2b test pins the
+  from the hook). **Byes (re-pin C-5):** four writers emit a bare `{kind:"award", winner}` with no event —
+  `stages.ts` Swiss bye, generator bye, `awardSeededByes`, and `competition.ts` `awardByeDelta` (which feeds
+  `standingsDelta(award)` a phantom opponent). They become `{winner, loser: null, reason: "bye"}`; `"bye"` is a
+  system-only reason (never accepted on `core.forfeit`), and `forfeitCredit(…, "bye")` returns exactly today's bye
+  delta, so no bye credits walkover goals or sets. A characterisation test pins today's bye deltas per sport before
+  the change. `double_walkover` = `{kind}` — the sides are the fixture's two entrants. **The first W2b test pins the
   set** (none does today). `isLevelOutcome` is unchanged — `double_walkover` must not be level, or it becomes held and
   settleable.
 - **`advancesNobody(outcome)`** — new kernel predicate, true for `double_walkover` only. One authority; every bracket
@@ -201,8 +210,11 @@ is no longer emitted. Owner confirmed with the spec approval (2026-10-08).
 **Schema tightening (f-w2, W2a loop F review).** `BoardgameResult` (`boardgame.ts:140`) does not tie `winner` to
 `method`, so `{winner:"H", method:"double_forfeit"}` parses today. W2b's schema refuses it (`double_forfeit` ⇒ `winner`
 null; `forfeit` ⇒ `winner` present), and the write path refuses both forfeit methods once the dock sends
-`core.forfeit`. W2a is adjusting its D-O1 derivation test so this tightening does not red it; W2a's gate keeps the
-`boardgame.result` entries as a defensive no-op.
+`core.forfeit`. **Re-pin C-4:** W2a's D-O1 derivation test (`organiser-only-events.test.ts:10-13`) derives the gated list
+from values ending as `award` or forfeit-vocabulary `no_result`; once `double_forfeit` folds to `double_walkover` the
+derived list and `ORGANISER_ONLY_SPORT_EVENTS` disagree. Since W2b refuses both methods on write, W2b removes the two
+`boardgame.result` entries from `ORGANISER_ONLY_SPORT_EVENTS` and rewrites the derivation to the post-W2b vocabulary
+(`award` or `advancesNobody`), so the gate list and the derivation agree again; `core.forfeit` remains gated.
 
 Compile-time: football `:2623`, cricket `:3910`, period `:2616`, generic `:624` and `:212` have no `default` — the new
 kind becomes a compile error there, by design. Runtime throws at setbased `:2439`, nested `:2207`, carrom `:941`,
@@ -223,6 +235,9 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
   W2a's follow-up applies the same distinction to stage completion and ranking (an abandoned final completes the stage
   today) — re-read it before planning. W2a's NEW-H1 split (scorer abandon vs generator void, Task 10) is
   not touched. Without the clause the fed seat waits forever, silently (f-w2 Q3).
+- **Seat assertion (re-pin D):** `double_walkover` is not level, so W2a's `assertNoLevelSeat` does not see it; W2b adds
+  its own assert at the same three seating callers — an `advancesNobody` outcome seats nobody, and any other decided
+  outcome seats its winner.
 - **No next match.** A double walkover on a fixture that feeds no seat — final, last rung, third-place match — is
   refused `DOUBLE_WALKOVER_NO_NEXT_MATCH`, derived from the stage's feed graph, never from round names.
 - `completeTableStage`: `double_walkover` fixtures count (status §5.4). `PointsRule.forfeit` keeps overriding points;
@@ -234,15 +249,26 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
 
 ### 5.4 Server and data (`apps/web/src/server/`)
 
-- **`fixtureStatusFromFold`** (`append-event.ts:143-161`), new order: settled → `decided`; active abandon **and null
-  outcome** → `abandoned`; level in a bracket → `needs_decision`; `double_walkover` or `award` → `forfeited`; any other
-  outcome → `decided` (this is ST-G1's fix). The "Abandoned — …" label on surfaces reads the ledger (active
+- **`fixtureStatusFromFold`** (re-pin C-6), new order: settled → `decided`; an active abandon with a null outcome, or
+  with a level outcome in a bracket kind → `abandoned` (**unchanged** — W2a's `recorded-abandon.ts` readers, the
+  desk's awaits-settle path and `needs-decision.tsx` keep seeing exactly the rows they see today); level in a bracket
+  → `needs_decision`; an active `core.forfeit` → `forfeited` (**keyed on the event, as today**, not on the outcome
+  kind — so football/period award-policy abandons do not become `forfeited`); any other outcome → `decided`. The last
+  line is ST-G1's fix: an abandon with a decisive result, or any result in a draw kind (cricket NR, award-policy
+  draw), is `decided`.
+- **Expunge stays out of tables (re-pin C-6, found at re-pin).** A table withdrawal under 50% expunges with `core.void`
+  + `core.abandon` (`withdrawal.ts`, kept as events so undo works). Under the new order a cricket expunge abandon
+  folds to `no_result` and would score 1 NR point. `core.abandon` gains `expunge?: true`, written only by the
+  withdrawal cascade; the kernel's `outcomeOf` returns null while an expunge abandon is active, so the fixture stays
+  `abandoned` → `void` in tables whatever the sport. Organiser-only like every abandon. The "Abandoned — …" label on surfaces reads the ledger (active
   `core.abandon` + its reason), not the status. Stored statuses are not recomputed (no backfill, X-AB-3).
 - **Append guards.** Strict `core.forfeit` schema → `INVALID_PAYLOAD`. `DOUBLE_WALKOVER_NO_NEXT_MATCH` is checked
   server-side, where the feed graph is known. The organiser gate is W2a's.
 - **Withdrawal cascade** (`withdrawal.ts:130-232`, `competition/stage.ts:412-472`): reason `"withdrew"` (the English
   `"entrant withdrew"`, `withdrawal.ts:42`, goes); `needs_decision` fixtures walk over to the remaining side instead of
-  being skipped as settled (`withdrawal.ts:195`); page_playoff and ladder join the walk-over kinds (`stages.ts:880-884`);
+  being skipped as settled (`withdrawal.ts:195`); page_playoff and ladder join the walk-over kinds (today their open-format branch records a held abandon — re-pin
+  C-8); `bracketWithdrawalStatus` / `deciderOwed` (W2a D-R1) are rewritten for W2b-R8 and R14, and
+  `WithdrawCascadeOut` gains a held/walked-over count (merge notice N1);
   a seat whose opponent is TBD is reproduced first and, if the throw is real, marked dead so the arriving opponent
   advances by walkover; (W2a's fix round names `needs_decision` explicitly at `withdrawal.ts:192-201`, reviewer M-7 — build on that, not
   on today's lines); a fixture whose other side has already withdrawn becomes a double walkover (final: stays open);
@@ -275,7 +301,7 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
   writes a recorded abandon there); `abandonAwaitsSettle` equals `settleApplies` for abandoned rows; `bracketRanks`
   refuses an in-field entrant ranked −1 (`CONFIG_INVALID`). W2b's ST-G1 status change (§5.4) must agree with this
   source — `double_walkover` and abandon-with-result go through it, not around it.
-- **Migration** (next free version after W2a's V432): re-classify **unsettled** `needs_decision` bracket rows whose
+- **Migration** (next free version at merge time — V433 is free on main but used on `feat/chess-lichess-external-play`; if the delta touches statuses it redefines V432's trigger, `division_has_results` and the partial index together): re-classify **unsettled** `needs_decision` bracket rows whose
   active result is `boardgame.result{double_forfeit}` to `forfeited` + `double_walkover`, then run the dead-seat
   cascade for each. Settled rows are untouched. The migration reports examined and changed counts; its test fails on
   zero examined (it seeds the row it expects). Prod count is probably 0.
@@ -297,8 +323,10 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
 - **Console** (`v2/fixture-console.tsx`): `ForfeitButton` + its `TextPromptDialog` are replaced by one dialog (UI-1,
   existing v2 dialog pattern): who → why → credit preview → Confirm ("Record walkover", "Record retirement", "Record
   double walkover", "Record disqualification"). "Neither" only in the sport's walkover phases, hidden where refused (R10 guidance shown
-  instead). The preview calls the same `forfeitCredit` the engine exports. The console's `decided` (`:800`) becomes
-  outcome present, or status abandoned with a null outcome.
+  instead). The preview calls the same `forfeitCredit` the engine exports. The console's `decided` is
+  unchanged (re-pin C-7: the planned rewrite was a no-op); the real gate is `offerOrganiserActions = !decided && !held
+  && canOrganise` (`fixture-console.tsx:860`), which hides Forfeit on a held fixture — W2b-R14 opens it for a chess
+  fixture whose tie-break is pending (the authority-band pin `:342` is rewritten).
 - **Pad.** The chess dock's forfeit / double forfeit are organiser-only through W2a's shared predicate; the
   double-forfeit tile records a double walkover. Ribbon, ledger and timeline copy (`lib/event-copy.ts:110-116`,
   `scorepad/v3/ribbon.ts:111`, `lib/scoring-vocab.ts:82, 543`) speak the four reasons and the double walkover.
@@ -382,7 +410,7 @@ renumbered. Each signed or deviation row ships with a proving test whose title c
   clauses, no-next-match, the migration selection); Stryker probe + touched families dispatched before merge; floors
   never auto-raised.
 - **Pins to rewrite (from f-w2):** `needs-decision-status.test.ts:43`, the V432 migration test, the reference HELD
-  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7, the D-G2 and D-G3 characterisation pins (§5.4), W2a's "forfeit refused in phase `tiebreak`" pin and its D-R1 withdrawal-hold pin (W2b-R14), and W2a's D-O1 gate derivation test (it assumes
+  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7, `core/forfeit-reason.test.ts` (#772: pins the reason verbatim in `award.method`), the D-G2 and D-G3 characterisation pins (§5.4), W2a's "forfeit refused in phase `tiebreak`" pin and its D-R1 withdrawal-hold pin (W2b-R14), and W2a's D-O1 gate derivation test (it assumes
   `boardgame.result{double_forfeit}` is still written). Each rewrite says why in its commit.
 - **UI:** screenshot verdicts per screen at 1280 / 768 / 320 (console dialog before and after play and the final
   guidance; match centre; results list; bracket tile), no horizontal scroll; the whole `mobile.spec.ts`, never a `-g`
