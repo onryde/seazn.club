@@ -14,3 +14,7 @@
 18:09:00 same (n=1) — 4 min into camera ON
 18:11:37 same (n=1), no video_off event — 2.5 min into camera OFF
 18:15:24 (70s after leave) FINAL: n=51 samples ~7s cadence; ONE gap 18:09:11 -> 18:12:20 (189s) = exactly the OFF phase; 0 samples inside it; events + video_off 18:09:14, video_on 18:12:14, video_off 18:14:14, disconnect 18:14:14; left_at 18:14:14.778; duration 9.02 min; session ENDED; video_producer_cumulative.issues.no_video_fraction = 0 (despite 3 of 9 min off); fps avg 19.94
+# Follow-up probe (controller, after the session ENDED): GET /sessions/561b3ee9-.../participants?include_peer_events=true
+# -> one row: id=ca9beb6c-... (session participant id), user_id=aaae7f73-... (= add-participant id = client self.userId),
+#    peer_events: PEER_JOINING peer=c4736b31-... pid=ca9beb6c-..., PEER_LEAVING peer=c4736b31-... pid=ca9beb6c-...
+# => the PEER id (what /sessions/peer-report/{peer_id} takes; = client meeting.self.id) appears ONLY in peer_events[].peer_id. The row's id is NOT the peer id, despite OpenAPI wording.
