@@ -61,7 +61,7 @@ Owner decisions taken 2026-10-09, in order:
 Everything in this section was measured against live lichess.org on 2026-10-09, not
 inferred. The raw logs are committed beside this spec at
 `docs/superpowers/specs/evidence/2026-10-09-chess-spikes/` — `flag-spike.log`,
-`spike-battery2.log`, `tc-boundary.log`, plus `spike-battery-v1-invalid.log`, which is
+`spike-battery2.log`, `tc-boundary.log`, `b3-spike.log`, plus `spike-battery-v1-invalid.log`, which is
 kept deliberately: its run was wrecked by two bugs of mine (a logging function writing to
 stdout inside a command substitution, and an illegal stalemate FEN that put the side not
 to move in check), and the 429 wall it hit is the evidence for M3.
@@ -84,6 +84,9 @@ Each line that follows is a design input; several contradict the brainstorming d
 | M13 | **The cutoff is blitz or slower.** 120+1 (est 160s) → `speed=bullet` → refused; 180+0 (est 180s) → `speed=blitz` → played. Estimated duration = `limit + 40 × increment`. Two points tested, not the whole curve | tc-boundary |
 | M14 | **`clock.limit` is an enumerated set, not a free integer.** 170+0 and 140+1 were refused at creation with `{"clock.limit":["Invalid value"]}` | tc-boundary |
 | M15 | `claim-victory` is for an opponent who **left**, not for flagging: "Claim victory when the opponent has left the game for a while". The board stream carries an `opponentGone` event | Lichess OpenAPI |
+| M16 | **The game export STALLS mid-game; it does not trail by a fixed lag.** Live 10+5 game `Cq2oQ5C7`, player-authenticated `/game/export` read after each ply: plies 1–8 returned 1, 2, 3, 4, 5, 5, 5, 5 moves, and still 5 a further 5s after ply 8. The Board API stream (`gameFull` `state.moves`) was exact at every ply (1–8). The unauthenticated export read errored at every probe. So the export is **never mid-game truth**: moves come from our ledger plus the board stream, and the export is trusted only for a terminal status | b3-spike (1) |
+| M17 | **Per-challenger creation limit confirmed live (M3):** seven rapid creates, each cancelled — five `200`, then `429 {"error":"Too many requests. Try again later."}` on the sixth and seventh, all within ~2s (18:01:45Z–18:01:47Z) | b3-spike (2) |
+| M18 | **10+0 and 15+0 are playable through the Board API:** each was created (`t2NsZaZR`, `a03eINh0`) and a move by each side returned `200`. Basis for adding both to the ship-1 list (§3.7) | b3-spike (3) |
 
 Premises from the brainstorming document that these falsify or qualify:
 - §6 "never poll, keep one connection per game" — **reversed**. See §4.
