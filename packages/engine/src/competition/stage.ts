@@ -55,6 +55,11 @@ export interface BracketFixture {
   away?: EntrantId;
   winner?: EntrantId; // set once decided/walkover
   loser?: EntrantId;
+  /** W2b (spec §5.3, W2b-R11), set by the web's `bracketWinnerLoser`: "loser" — the loser forfeited (an `award`), so it
+   *  is out of the tournament here and never drops to a losers'-bracket or third-place seat (X-DE-1); "both" — a double
+   *  walkover, no winner and no loser, both sides out here (X-DW-2). Ranks pin these entrants' elimination round to
+   *  this fixture, so they read the same answer seating does. */
+  walkedOver?: "loser" | "both";
 }
 
 // Everything the ranking pass needs about a table stage that isn't in the
@@ -298,6 +303,21 @@ export function completeBracketStage(
   };
 }
 
+// The entrants a `walkedOver` fixture puts out. Assumptions are guards: a double walkover decided nobody, so a row that
+// names a winner or a loser is a wiring bug; a forfeit always names who forfeited.
+function walkedOverSides(fixture: BracketFixture): EntrantId[] {
+  if (fixture.walkedOver === "both") {
+    if (fixture.winner !== undefined || fixture.loser !== undefined) {
+      throw new Error(`bracket fixture ${fixture.id}: a double walkover (walkedOver "both") names a winner or a loser`);
+    }
+    return [fixture.home, fixture.away].filter((id): id is EntrantId => id !== undefined);
+  }
+  if (fixture.loser === undefined) {
+    throw new Error(`bracket fixture ${fixture.id}: a forfeit (walkedOver "loser") names no loser`);
+  }
+  return [fixture.loser];
+}
+
 // Rank entrants by bracket position (spec 05 §1 "ranking" column). Champion =
 // winner of the last `isFinal` game; runner-up = its loser; everyone else is
 // ordered by how late they were eliminated (later round = better), then by
@@ -331,12 +351,25 @@ export function bracketRanks(
     const prev = lastLossRound.get(fixture.loser) ?? -1;
     if (fixture.round > prev) lastLossRound.set(fixture.loser, fixture.round);
   }
+  // W2b (X-DE-1, X-DW-2): a forfeit loser and both sides of a double walkover are OUT at that fixture — seating never
+  // drops them — so their elimination round is pinned there, the earliest such fixture, and a later loss a stale row
+  // still names cannot move it. Every other entrant is eliminated at its LAST loss (a double-elim drop is not out).
+  const outAt = new Map<EntrantId, number>();
+  for (const fixture of fixtures) {
+    if (!SETTLED.has(fixture.status) || fixture.walkedOver === undefined) continue;
+    const out = walkedOverSides(fixture);
+    for (const id of out) {
+      const prev = outAt.get(id);
+      if (prev === undefined || fixture.round < prev) outAt.set(id, fixture.round);
+    }
+  }
+  const eliminatedIn = (id: EntrantId): number => outAt.get(id) ?? lastLossRound.get(id) ?? -1;
 
   const seedOf = (id: EntrantId): number => stage.seeds?.get(id) ?? Number.MAX_SAFE_INTEGER;
   const rankRest = (ids: EntrantId[]): EntrantId[] =>
     ids.sort((a, b) => {
-      const ra = lastLossRound.get(a) ?? -1;
-      const rb = lastLossRound.get(b) ?? -1;
+      const ra = eliminatedIn(a);
+      const rb = eliminatedIn(b);
       if (ra !== rb) return rb - ra; // eliminated later ⇒ ranked higher
       const sa = seedOf(a);
       const sb = seedOf(b);

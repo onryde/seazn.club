@@ -376,7 +376,8 @@ export function runCustomPointsScenario(module: AnySportModule, seed: number): C
     const pair = module.standingsDelta(outcome, cfg, { kind: "league" }, played.state);
     const mapped = applyPointsRule(outcome, pair, CUSTOM_RULE);
     for (const [i, delta] of mapped.entries()) {
-      const want = delta.won === 1 ? 5 : delta.drawn === 1 ? 2 : delta.lost === 1 ? 1 : 0;
+      // W2b D14 (X-DW-4): a double walkover is a 0-point loss under any rule (a boardgame double forfeit decides one).
+      const want = outcome.kind === "double_walkover" ? 0 : delta.won === 1 ? 5 : delta.drawn === 1 ? 2 : delta.lost === 1 ? 1 : 0;
       // Forfeits without a configured forfeit block still pay base points.
       if (delta.points !== want) {
         throw new SimInvariantError(
