@@ -15,6 +15,8 @@ import "server-only";
 // core.void + core.abandon for expunges — so standings recompute, undo works
 // and the public cache invalidates exactly like any other scoring write.
 // Finalized fixtures are locked (spec 03) and are reported, not touched.
+import { deciderPending } from "@seazn/engine/core";
+import type { AnySportModule } from "@seazn/engine/sport";
 import {
   withdrawBracketEntrant,
   withdrawTableEntrant,
@@ -22,6 +24,7 @@ import {
   type FixtureUpdate,
 } from "@seazn/engine/competition";
 import { HttpError } from "@/lib/errors";
+import { resolveModule } from "@/server/engine-db/registry";
 import {
   WITHDRAWAL_PENDING_STATUSES,
   WITHDRAWAL_PLAYED_STATUSES,
@@ -41,8 +44,18 @@ const SETTLED = WITHDRAWAL_PLAYED_STATUSES;
 const PENDING = WITHDRAWAL_PENDING_STATUSES;
 
 /** A bracket fixture's status as the engine's withdrawal planner reads it. Every fixtures.status is named; an unknown
- *  one throws (review N4, as `engineFixtureStatus` does) rather than silently reading as "void". */
-export function bracketWithdrawalStatus(status: string): "decided" | "scheduled" | "void" {
+ *  one throws (review N4, as `engineFixtureStatus` does) rather than silently reading as "void".
+ *  `deciderPending` is the engine's verdict on the fixture's fold (`deciderOwed`). */
+export function bracketWithdrawalStatus(status: string, deciderPending: boolean): "decided" | "scheduled" | "void" {
+  if (deciderPending) {
+    // W2a loop R I-1 (ruling D-R1, option a): a game whose decider is still owed — a chess knockout draw in its
+    // tie-break, `in_play` with no outcome — is a HOLD, the C17 shape below: walking it over would send
+    // `core.forfeit`, which boardgame refuses outside phase "live" (422 WRONG_PHASE, the entrant never withdrawn).
+    // The organiser settles it for the remaining entrant. A decider owes a started game with no outcome and no
+    // abandon, which folds to `in_play` and nothing else — any other status here is a contradiction, not a hold.
+    if (status !== "in_play") throw new Error(`bracketWithdrawalStatus: a pending decider on a "${status}" fixture`);
+    return "void";
+  }
   if (SETTLED.has(status)) return "decided";
   if (PENDING.has(status)) return "scheduled";
   switch (status) {
@@ -59,6 +72,13 @@ export function bracketWithdrawalStatus(status: string): "decided" | "scheduled"
   }
 }
 const REASON = "entrant withdrew";
+
+/** D-R1 — does this `in_play` fixture still owe its decider? The engine's own `deciderPending`, fed the stored fold.
+ *  The settlement is null because the caller asks only of an `in_play` row: an active settle folds to `decided`. */
+async function deciderOwed(auth: AuthCtx, sportModule: AnySportModule, fixtureId: string): Promise<boolean> {
+  const { state } = await getFixtureState(auth, fixtureId);
+  return deciderPending(sportModule as never, { state: state as never, settlement: null });
+}
 
 export interface WithdrawCascadeOut {
   entrant_id: string;
@@ -208,13 +228,18 @@ export async function withdrawEntrantCascade(
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f });
         }
       } else if (BRACKET_WALKOVER_KINDS.has(stage.kind)) {
-        const bracketFixtures: BracketFixture[] = mine.map((f) => ({
-          id: f.id,
-          round: f.round_no,
-          status: bracketWithdrawalStatus(f.status),
-          home: f.home_entrant_id ?? undefined,
-          away: f.away_entrant_id ?? undefined,
-        }));
+        const sportModule = resolveModule(division.sport_key, division.module_version);
+        const bracketFixtures: BracketFixture[] = [];
+        for (const f of mine) {
+          const owed = f.status === "in_play" && (await deciderOwed(auth, sportModule, f.id));
+          bracketFixtures.push({
+            id: f.id,
+            round: f.round_no,
+            status: bracketWithdrawalStatus(f.status, owed),
+            home: f.home_entrant_id ?? undefined,
+            away: f.away_entrant_id ?? undefined,
+          });
+        }
         const result = withdrawBracketEntrant(
           { id: stage.id, kind: stage.kind as "knockout" | "double_elim" | "stepladder" },
           entrantId,

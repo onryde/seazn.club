@@ -9,6 +9,7 @@ import { ZodError, type ZodType } from "zod";
 import * as Sentry from "@sentry/nextjs";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { isLevelResultReason } from "@/lib/level-result-reason";
+import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { log } from "@/server/logger";
@@ -235,6 +236,12 @@ async function v1Inner<T>(
       if (err.code === "LEVEL_RESULT_IN_BRACKET") {
         const reason = (err.data as { reason?: unknown } | undefined)?.reason;
         if (isLevelResultReason(reason)) extra = { reason };
+      }
+      // W2a ruling D-R8: SETTLE_NOT_APPLICABLE for a withdrawn winner (C17, D-R7) has its own copy; every other
+      // SETTLE_NOT_APPLICABLE keeps the code's — so only a reason this codebase names is forwarded.
+      if (err.code === "SETTLE_NOT_APPLICABLE") {
+        const reason = (err.data as { reason?: unknown } | undefined)?.reason;
+        if (isSettleRefusalReason(reason)) extra = { reason };
       }
       return errorResponse(requestId, status, err.code, err.message, extra);
     }

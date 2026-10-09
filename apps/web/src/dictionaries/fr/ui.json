@@ -3921,6 +3921,7 @@
   "engineError.TIEBREAK_NOT_APPLICABLE": "Un départage ne peut suivre qu'une partie nulle à élimination directe.",
   "engineError.LEVEL_RESULT_IN_BRACKET": "Saisissez le vainqueur — un match à élimination directe ne peut pas finir à égalité.",
   "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled": "Tranchez le match ou saisissez son départage avant de le finaliser — un match à élimination directe ne peut pas finir à égalité.",
+  "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn": "Ce participant s'est retiré — choisissez l'autre.",
   "engineError.LEVEL_RESULT_SEATED": "Un problème est survenu en plaçant ce résultat. Nous avons été prévenus.",
   "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS": "Ces groupes n'ont pas joué le même nombre de matchs, leurs classements ne peuvent donc pas encore être comparés.",
   "scoring.position.set": "Set",

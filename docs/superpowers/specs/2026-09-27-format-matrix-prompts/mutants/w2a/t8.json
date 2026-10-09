@@ -141,6 +141,94 @@
     ]
   },
   {
+    "id": "decider-withdrawn-settle-only",
+    "file": "apps/web/src/server/engine-db/append-event.ts",
+    "find": "if (candidate.type === \"core.settle\" || (sportModule.deciderTypes ?? []).includes(candidate.type)) {",
+    "replace": "if (candidate.type === \"core.settle\") {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "D-R7: every engine decider event naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE \\(withdrawn\\) and writes nothing; naming the remaining entrant is accepted and seats them — for a scorer and for the organiser"
+      }
+    ]
+  },
+  {
+    "id": "http-settle-withdrawn-unforwarded",
+    "file": "apps/web/src/server/api-v1/http.ts",
+    "find": "if (isSettleRefusalReason(reason)) extra = { reason };",
+    "replace": "if (false) extra = { reason };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/api-v1/__tests__/http.test.ts"
+        ],
+        "name": "D-R8: SETTLE_NOT_APPLICABLE forwards reason withdrawn, and nothing else from \\.data"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "D-R8: the REAL refusal \\(a scorer's tie-break, the organiser's settle\\) crosses the v1 envelope with reason withdrawn and reads as the withdrawn copy on the console \\(apiV1 → scoringErrorText\\) and on the pad \\(transport → refusalText\\)"
+      }
+    ]
+  },
+  {
+    "id": "transport-settle-withdrawn-dropped",
+    "file": "apps/web/src/components/v2/scorepad/transport.ts",
+    "find": "...(isLevelResultReason(reason) || isSettleRefusalReason(reason) ? { reason } : {}),",
+    "replace": "...(isLevelResultReason(reason) ? { reason } : {}),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/transport.test.ts"
+        ],
+        "name": "D-R8: a SETTLE_NOT_APPLICABLE refusal carries reason withdrawn to the pad; any other reason is not carried"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "D-R8: the REAL refusal \\(a scorer's tie-break, the organiser's settle\\) crosses the v1 envelope with reason withdrawn and reads as the withdrawn copy on the console \\(apiV1 → scoringErrorText\\) and on the pad \\(transport → refusalText\\)"
+      }
+    ]
+  },
+  {
+    "id": "vocab-settle-withdrawn-generic",
+    "file": "apps/web/src/lib/scoring-vocab.ts",
+    "find": "  SETTLE_NOT_APPLICABLE: {\n    [SETTLE_REFUSAL_REASON.withdrawn]: \"engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn\",\n  },\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/scoring-vocab.test.ts"
+        ],
+        "name": "D-R8: SETTLE_NOT_APPLICABLE for a withdrawn winner says so in every locale; every other settle refusal keeps the code's own copy"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/refusal-copy.test.ts"
+        ],
+        "name": "D-R8: a SETTLE_NOT_APPLICABLE refusal for a withdrawn winner reads its own copy \\(the pad's tie-break path\\); any other keeps the code's"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "D-R8: the REAL refusal \\(a scorer's tie-break, the organiser's settle\\) crosses the v1 envelope with reason withdrawn and reads as the withdrawn copy on the console \\(apiV1 → scoringErrorText\\) and on the pad \\(transport → refusalText\\)"
+      }
+    ]
+  },
+  {
     "id": "finalize-held",
     "file": "apps/web/src/server/engine-db/append-event.ts",
     "find": "if (candidate.type === \"core.finalize\" && forbidsLevelResult(stageKind)) {",
@@ -433,7 +521,7 @@
   {
     "id": "transport-reason-drop",
     "file": "apps/web/src/components/v2/scorepad/transport.ts",
-    "find": "            ...(isLevelResultReason(reason) ? { reason } : {}),",
+    "find": "            ...(isLevelResultReason(reason) || isSettleRefusalReason(reason) ? { reason } : {}),",
     "replace": "",
     "killers": [
       {

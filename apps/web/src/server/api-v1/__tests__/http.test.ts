@@ -241,6 +241,28 @@ describe("v1 envelope", () => {
     }
   });
 
+  // W2a ruling D-R8: a settle or a decider naming a withdrawn winner (C17, D-R7) is refused SETTLE_NOT_APPLICABLE
+  // with reason "withdrawn", and that reason reaches the wire so the copy can say so — the code's own copy ("it isn't
+  // level, or it's already settled") is false for it.
+  it("D-R8: SETTLE_NOT_APPLICABLE forwards reason withdrawn, and nothing else from .data", async () => {
+    const res = await v1(async () => {
+      throw new EngineError("SETTLE_NOT_APPLICABLE", "m", { fixtureId: "f1", reason: "withdrawn", winner: "e1" });
+    });
+    expect(res.status).toBe(409);
+    expect((await body(res)).error).toEqual({ code: "SETTLE_NOT_APPLICABLE", message: "m", reason: "withdrawn" });
+    // The positive pair: every other SETTLE_NOT_APPLICABLE (the not-a-bracket refusal, the kernel's own precondition
+    // with no reason) keeps forwarding code + message only, so it keeps the code's own copy.
+    let checked = 0;
+    for (const data of [{ fixtureId: "f1", reason: "not_bracket", stage: "league" }, { fixtureId: "f1" }, { reason: "made_up" }]) {
+      const r = await v1(async () => {
+        throw new EngineError("SETTLE_NOT_APPLICABLE", "m", data);
+      });
+      expect((await body(r)).error, JSON.stringify(data)).toEqual({ code: "SETTLE_NOT_APPLICABLE", message: "m" });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   // The empty case of the block above: every OTHER STAGE_NOT_READY (Swiss
   // round guards, "need at least 2 active entrants", departed qualifiers…)
   // carries no reason and must keep forwarding nothing but code + message —

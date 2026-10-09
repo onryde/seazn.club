@@ -515,6 +515,79 @@
     ]
   },
   {
+    "id": "withdrawal-decider-hold",
+    "file": "apps/web/src/server/usecases/withdrawal.ts",
+    "find": "    return \"void\";\n  }\n  if (SETTLED.has(status)) return \"decided\";",
+    "replace": "    return \"scheduled\";\n  }\n  if (SETTLED.has(status)) return \"decided\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
+        ],
+        "name": "D-R1: an in_play fixture whose decider is pending is a hold \\(\"void\"\\), not a pending fixture to walk over"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "I-1: chess knockout — a drawn game in its tie-break HOLDS on a withdrawal: the entrant is withdrawn, nobody is walked over, and the organiser's settle seats the remaining entrant"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "I-1 sweep: every sport × every engine bracket kind — a live fixture is walked over \\(walkover kinds\\) or voided \\(the others\\); only a pending decider holds"
+      }
+    ]
+  },
+  {
+    "id": "withdrawal-decider-contradiction-throws",
+    "file": "apps/web/src/server/usecases/withdrawal.ts",
+    "find": "    if (status !== \"in_play\") throw new Error(`bracketWithdrawalStatus: a pending decider on a \"${status}\" fixture`);\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-bracket-status.test.ts"
+        ],
+        "name": "D-R1: a pending decider on any status but in_play is a contradiction \\(a decider owes no outcome yet and a started, unabandoned game\\) and throws"
+      }
+    ]
+  },
+  {
+    "id": "withdrawal-decider-owed-unread",
+    "file": "apps/web/src/server/usecases/withdrawal.ts",
+    "find": "const owed = f.status === \"in_play\" && (await deciderOwed(auth, sportModule, f.id));",
+    "replace": "const owed = false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "I-1: chess knockout — a drawn game in its tie-break HOLDS on a withdrawal: the entrant is withdrawn, nobody is walked over, and the organiser's settle seats the remaining entrant"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "I-1 \\(partial cascade\\): pending league games AND a drawn knockout decider — the whole cascade completes: the league games void, the decider holds, the entrant is withdrawn"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/withdrawal-decider-hold.test.ts"
+        ],
+        "name": "I-1 sweep: every sport × every engine bracket kind — a live fixture is walked over \\(walkover kinds\\) or voided \\(the others\\); only a pending decider holds"
+      }
+    ]
+  },
+  {
     "id": "v432-complete-filter",
     "file": "db/migration/deltas/V432__fixture_status_needs_decision.sql",
     "find": "   where f.status = 'needs_decision'\n     and s.status = 'complete';",

@@ -15,6 +15,7 @@ import {
   type StageKind,
 } from "@seazn/engine/core";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
+import { SETTLE_REFUSAL_REASON } from "@/lib/settle-refusal-reason";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
@@ -320,15 +321,19 @@ export async function appendEventInTx(
         stage: stageKind,
       });
     }
-    // Controller ruling C17: a settle may not advance an entrant who has withdrawn. The organiser settles for the
-    // remaining one; the auto-walkover of a held fixture is W2b's (spec §2.3).
+  }
+  // Controller ruling C17, widened by D-R7: no event that names a DECIDER WINNER may advance an entrant who has
+  // withdrawn — the organiser's core.settle, and every decider event the sport declares (`deciderTypes`: chess's
+  // boardgame.tiebreak), which a scorer may record on a held tie-break. The settle or the decider goes to the remaining
+  // entrant; the auto-walkover of a held fixture is W2b's (spec §2.3).
+  if (candidate.type === "core.settle" || (sportModule.deciderTypes ?? []).includes(candidate.type)) {
     const winner = (candidate.payload as { winner?: unknown } | null)?.winner;
     if (typeof winner === "string") {
       const [w] = await tx<{ status: string }[]>`select status from entrants where id = ${winner}`;
       if (w?.status === "withdrawn") {
         throw new EngineError("SETTLE_NOT_APPLICABLE", "that entrant has withdrawn — settle for the remaining entrant", {
           fixtureId,
-          reason: "withdrawn",
+          reason: SETTLE_REFUSAL_REASON.withdrawn,
           winner,
         });
       }

@@ -3921,6 +3921,7 @@
   "engineError.TIEBREAK_NOT_APPLICABLE": "Een tiebreak kan alleen volgen op een remise in een knock-outpartij.",
   "engineError.LEVEL_RESULT_IN_BRACKET": "Voer de winnaar in — een knock-outwedstrijd kan niet gelijk eindigen.",
   "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled": "Beslis de wedstrijd of leg de beslissing vast voordat je afrondt — een knock-outwedstrijd kan niet gelijk eindigen.",
+  "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn": "Die deelnemer heeft zich teruggetrokken — kies de andere.",
   "engineError.LEVEL_RESULT_SEATED": "Er ging iets mis bij het plaatsen van deze uitslag. We zijn op de hoogte.",
   "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS": "Deze groepen hebben een verschillend aantal wedstrijden gespeeld, dus hun standen kunnen nog niet met elkaar worden vergeleken.",
   "scoring.position.set": "Set",

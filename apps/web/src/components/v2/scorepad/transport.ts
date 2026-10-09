@@ -25,6 +25,7 @@ import type { AppendCallResult, AppendEventBody, ScoringTransport } from "./pipe
 import type { AppendSuccess, LedgerSlotEvent } from "./types";
 import { NEXT_MATCH_STARTED_CODE, nextMatchRefOf } from "../../../lib/next-match-started";
 import { isLevelResultReason } from "../../../lib/level-result-reason";
+import { isSettleRefusalReason } from "../../../lib/settle-refusal-reason";
 
 // Review finding 1: listEventsSince previously cast the ledger JSON straight
 // to LedgerSlotEvent[] with no runtime validation, so an OMITTED
@@ -373,14 +374,15 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
           // The next-match refusal names the match to void first; carried only
           // when well-formed, so the copy never renders a sentence with a hole.
           const nextMatch = nextMatchRefOf(envelope.error);
-          // M-1: the reason a LEVEL_RESULT_IN_BRACKET names picks its copy; carried only when it is one we name.
+          // M-1 / D-R8: the reason a LEVEL_RESULT_IN_BRACKET or a SETTLE_NOT_APPLICABLE names picks its copy;
+          // carried only when it is one we name.
           const reason = envelope.error?.reason;
           return {
             kind: "rejected",
             code,
             message,
             ...(nextMatch ? { nextMatch } : {}),
-            ...(isLevelResultReason(reason) ? { reason } : {}),
+            ...(isLevelResultReason(reason) || isSettleRefusalReason(reason) ? { reason } : {}),
           };
         }
         const currentSeq = typeof envelope.error?.current_seq === "number" ? envelope.error.current_seq : null;

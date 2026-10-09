@@ -468,6 +468,22 @@ describe("409 classification", () => {
     });
   });
 
+  it("D-R8: a SETTLE_NOT_APPLICABLE refusal carries reason withdrawn to the pad; any other reason is not carried", async () => {
+    const { fn } = fakeFetch(() => fakeResponse(409, body("SETTLE_NOT_APPLICABLE", { reason: "withdrawn" })));
+    expect(await sessionTransport({ fetchFn: fn }).appendEvent("fx-1", BODY)).toEqual({
+      kind: "rejected",
+      code: "SETTLE_NOT_APPLICABLE",
+      message: "nope",
+      reason: "withdrawn",
+    });
+    const { fn: fn2 } = fakeFetch(() => fakeResponse(409, body("SETTLE_NOT_APPLICABLE", { reason: "not_bracket" })));
+    expect(await sessionTransport({ fetchFn: fn2 }).appendEvent("fx-1", BODY)).toEqual({
+      kind: "rejected",
+      code: "SETTLE_NOT_APPLICABLE",
+      message: "nope",
+    });
+  });
+
   // The positive pair. Without it, "terminal" would also pass if EVERY 409
   // became terminal — which would silently break the replay ruling and drop
   // real writes.
