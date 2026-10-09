@@ -1,0 +1,15 @@
+# RealtimeKit token-regeneration spike, 2026-10-09 20:27Z (controller; owner-approved RTK spike). Meeting seazn-spike-token-regen-20261009 (INACTIVE after).
+# Participant P: token A from add-participant, then token B from POST participants/{id}/token (B != A; both JWTs, exp +100 days).
+# tab1 joined with A AFTER B was issued; 20 s later tab2 joined with B; tab1 polled every 10 s for 30 s.
+2026-10-09T20:27:19.423Z tab1(A, issued before B) JOIN {"ok":true,"peer":"fc351ba5-77c1-4bf7-9ec2-311f95aeb9b2","joined":true,"video":true}
+2026-10-09T20:27:39.429Z tab1 STATE {"joined":true,"video":true,"peer":"fc351ba5-77c1-4bf7-9ec2-311f95aeb9b2","ev":["roomJoined:{\"reconnected\":false}"]}
+2026-10-09T20:27:42.032Z tab2(B) JOIN {"ok":true,"peer":"e762f005-46c0-42fe-a10a-ca7a0d3cecbf","joined":true,"video":true}
+2026-10-09T20:27:52.036Z tab1 STATE {"joined":true,"video":true,"peer":"fc351ba5-77c1-4bf7-9ec2-311f95aeb9b2","ev":["roomJoined:{\"reconnected\":false}"]}
+2026-10-09T20:27:52.038Z tab2 STATE {"joined":true,"video":true,"peer":"e762f005-46c0-42fe-a10a-ca7a0d3cecbf","ev":["roomJoined:{\"reconnected\":false}"]}
+2026-10-09T20:28:02.041Z tab1 STATE {"joined":true,"video":true,"peer":"fc351ba5-77c1-4bf7-9ec2-311f95aeb9b2","ev":["roomJoined:{\"reconnected\":false}"]}
+2026-10-09T20:28:02.042Z tab2 STATE {"joined":true,"video":true,"peer":"e762f005-46c0-42fe-a10a-ca7a0d3cecbf","ev":["roomJoined:{\"reconnected\":false}"]}
+2026-10-09T20:28:12.044Z tab1 STATE {"joined":true,"video":true,"peer":"fc351ba5-77c1-4bf7-9ec2-311f95aeb9b2","ev":["roomJoined:{\"reconnected\":false}"]}
+2026-10-09T20:28:12.047Z tab2 STATE {"joined":true,"video":true,"peer":"e762f005-46c0-42fe-a10a-ca7a0d3cecbf","ev":["roomJoined:{\"reconnected\":false}"]}
+2026-10-09T20:28:12.081Z DONE
+# Server view (sessions/{id}/participants?include_peer_events=true): ONE row for P (user_id = P), peer_events carry BOTH peers fc351ba5 (tab1) and e762f005 (tab2); session status still LIVE ~1 s after both left.
+# => regeneration does NOT invalidate earlier tokens; a second tab does NOT kick the first; both tabs publish as separate peers of one participant row.
