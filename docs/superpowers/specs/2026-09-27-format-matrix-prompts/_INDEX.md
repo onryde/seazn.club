@@ -2270,6 +2270,41 @@ brief stated and the tree did not hold):
    the judges' stdout) reds the secret sweep, so the evidence keeps the `--json-out` files and quotes the verdict lines
    in `truth-runs/w2a-final/README.md`.
 
+### W2a per-screen verdicts (Task 17 Step 3, 2026-10-09)
+
+Element crops from `apps/web/e2e/bracket-finish.spec.ts`, run with `W2A_SHOTS_DIR` against label `w2ae2`'s production
+build at `9ae6b64a5`. 63 crops = 21 screens × 1280, 768 and 320, in
+`docs/superpowers/specs/2026-09-27-format-matrix-prompts/evidence/w2a/<screen>-<width>.png`.
+- **Horizontal scroll** is not eyeballed: the spec runs `expectNoHorizontalScroll` before every crop, and that file passed (parallel 235/235).
+- **Tap targets** are measured where stated (the spec's own ≥44px asserts cover the console Settle, the dialog's controls and the pad's tie-break options).
+- ✅ means the crop is clean on alignment, text size, tap size, truncation and scroll. ⚠ names what is off and whether it predates W2a.
+
+**Owner verdict: PENDING for every row. The controller collects it; nothing here is approved.**
+
+| screen | 1280 | 768 | 320 |
+|---|---|---|---|
+| console-held-block | ✅ sentence left, Settle right, 44px | ✅ same (focus ring shown) | ✅ sentence wraps to 2 lines, Settle full width 44px |
+| console-settle-dialog | ✅ the 43-char name wraps whole (only at its own hyphen); Confirm disabled until winner and reason are chosen | ✅ same 448px dialog | ✅ bottom sheet, entrants stacked full width, Confirm above Cancel |
+| console-official-held | ⚠ the **"Scoring" card renders empty** (header only) above the held note; the note is clear; Void stays (a scorer may void) | ⚠ same empty Scoring card | ✅ no empty card at this width; note wraps; recorder meta truncated "recorded by deli…" (meta line, pre-existing) |
+| console-official-tiebreak | ✅ the pad offers only Tie-break; the pending note sits under the pad; status "in play" | ✅ same | ✅ Tie-break above the ribbon (phone order), note wraps |
+| pad-chess-live-draw | ✅ "Draw / no result" full width | ✅ same | ⚠ board hint "Tap to record the wi…" truncated on both halves (**pre-existing**: `pad.boardgame.scorebug.result.hint` on main, `scorebug.tsx` untouched by W2a) |
+| pad-tiebreak-tile | ✅ ½–½ board, only Tie-break offered | ✅ same | ✅ same, phone order |
+| pad-tiebreak-rung | ✅ Rapid, Blitz, Armageddon and the lot hint; Cancel | ✅ same | ✅ title wraps to 2 lines; Armageddon wraps to row 2 |
+| pad-tiebreak-winner | ✅ entrants' names, not Home/Away; Back right | ✅ same | ⚠ heading breaks "TIE-" / "BREAK?" at its hyphen; Back moves above the options (no overlap) |
+| pad-tiebreak-score | ✅ No score, 2–0, 1½–½ | ✅ same | ⚠ the same heading wrap ("(OPTIONAL)" on line 2) |
+| pad-tiebreak-armageddon | ✅ "In Armageddon a draw means Black advances." above the names | ✅ same | ✅ wraps; the heading splits as in -winner. Customer lens: the sheet never says which entrant had Black |
+| pad-generic-bracket | ✅ "RUNNING SCORE · NO DRAWS", Level strip, no Draw tile | ✅ same | ⚠ "Enter final score" and "Correction" are each two-thirds width and flush left (span-2 tiles in the 3-column phone grid, `tile-grid.tsx:245`, **pre-existing rule**); "Level" left-aligned, centred at 768+ |
+| device-pad-generic-bracket | ✅ as the console pad, on the device link; "CUP · SEMI-FINALS" header | ✅ same | ⚠ the same two-thirds-width tiles |
+| pad-chess-dock-scorer | ✅ dock offers Checkmate, Resignation, Flag fall, Adjudication, Illegal move: no forfeit chips for a scorer | ✅ same | ✅ chips stacked full width |
+| public-match-held | ✅ long name on one line; "Level — winner to be decided"; no status chip on a held card (a settled card reads ENDED) | ✅ same | ⚠ long name truncated "W2A MAXIMILIANA KON…" (court-card truncation, pre-existing) |
+| public-match-settled | ✅ ENDED; "W2a Di advanced as higher seed" | ✅ same | ⚠ the same name truncation |
+| public-match-tiebreak | ✅ "W2a Ana won on rapid tie-break (1½–½)" | ✅ same | ✅ the score wraps whole to line 2 (the nowrap span) |
+| public-bracket-held | ✅ amber rail, held chip, 0–0, no winner marked; ⚠ the chip wraps to 2 lines inside its pill; first name truncated "Konsta…" (fixed-width node, pre-existing) | same 188px node | same 188px node |
+| run-sheet-held-abandon | ✅ red "Needs a decision" chip and Settle | ✅ same | ⚠ meta "Round 1 · …" truncated, so the word "abandoned" is hidden (the chip carries the state) |
+| me-lane-held | ✅ "Needs a decision" badge in the dictionary's case; "View match →" | ✅ same | ✅ badges wrap to their own row |
+| desk-needs-decision | ⚠ "Settle the match" is **28px** tall (measured from the crop); desktop | ⚠ **28px at a touch width**: the Needs-you row's existing button style | ✅ full width, 44px; title wraps |
+| desk-pill-needs-decision | ✅ red dot + "Needs a decision" (129×21, a pill, not a tap target) | ✅ same | ✅ same |
+
 ## Findings routed (W1b)
 
 Every live ❌ and every confirmed hypothesis from W1b, with its case or leg,
