@@ -66,18 +66,33 @@ export const cameraPatchValue = (choice: CameraChoice): CameraPolicy | null =>
 export const effectiveCameraChoice = (choice: CameraChoice, inherited: CameraPolicy): CameraPolicy =>
   choice === CAMERA_INHERIT ? inherited : choice;
 
-/** The select's options: return-to-inherit FIRST, naming the competition's
- *  current value, then each declared policy once by its SHORT label — the
- *  explanation lives in the help text under the select (at 320px a long
- *  label clipped inside it). */
-export function cameraSelectOptions(
-  inherited: CameraPolicy,
-  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
-): { value: CameraChoice; label: string }[] {
+type CameraMsg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+
+/** The select's options: return-to-inherit FIRST, then each declared policy
+ *  once — every label SHORT, with no value inside (controller ruling r3): a
+ *  select cannot wrap, and at 320px the long labels clipped exactly the part
+ *  that mattered. Explanations live in the help text; the competition's value
+ *  in the hint line (cameraInheritHint) and the summary (cameraSummary). */
+export function cameraSelectOptions(msg: CameraMsg): { value: CameraChoice; label: string }[] {
   return [
-    { value: CAMERA_INHERIT, label: msg("divset.camera.inheritOption", { policy: msg(CAMERA_OPTION_KEY[inherited]) }) },
+    { value: CAMERA_INHERIT, label: msg("divset.camera.inheritOption") },
     ...CAMERA_POLICIES.map((p) => ({ value: p, label: msg(CAMERA_OPTION_KEY[p]) })),
   ];
+}
+
+/** The hint under the select naming the competition's current value — shown
+ *  only while inherit is SELECTED (a select is never the only place a value
+ *  is visible, and this line can wrap where an option cannot). */
+export function cameraInheritHint(choice: CameraChoice, inherited: CameraPolicy, msg: CameraMsg): string | null {
+  return choice === CAMERA_INHERIT ? msg("divset.camera.inherited", { policy: msg(CAMERA_OPTION_KEY[inherited]) }) : null;
+}
+
+/** The collapsed Group's summary for the STORED choice: a pin's short label,
+ *  or the competition setting with its value. */
+export function cameraSummary(choice: CameraChoice, inherited: CameraPolicy, msg: CameraMsg): string {
+  return choice === CAMERA_INHERIT
+    ? msg("divset.camera.inheritSummary", { policy: msg(CAMERA_OPTION_KEY[inherited]) })
+    : msg(CAMERA_OPTION_KEY[choice]);
 }
 
 export interface DivisionSettingsInfo {
@@ -487,9 +502,10 @@ export function DivisionSettings({
   const ownCamera: CameraPolicy | null = division.camera_policy ?? null;
   const inheritedCamera: CameraPolicy = division.inherited_camera_policy ?? "off";
   const storedCameraChoice = cameraChoiceOf(ownCamera);
-  const cameraOptions = cameraSelectOptions(inheritedCamera, msg);
+  const cameraOptions = cameraSelectOptions(msg);
   const onlinePlaySaved = cfg.onlinePlay === "lichess";
   const [cameraChoice, setCameraChoice] = useState<CameraChoice>(storedCameraChoice);
+  const cameraHint = cameraInheritHint(cameraChoice, inheritedCamera, msg);
   // Same derive-from-props resync as the config block above: a saved change
   // (or another tab's) arrives as new props after router.refresh().
   const cameraSignature = `${storedCameraChoice}|${inheritedCamera}`;
@@ -1128,7 +1144,7 @@ export function DivisionSettings({
       {division.sport_key === "boardgame" && (
         <Group
           title={msg("divset.camera.label")}
-          summary={cameraOptions.find((o) => o.value === storedCameraChoice)?.label}
+          summary={cameraSummary(storedCameraChoice, inheritedCamera, msg)}
         >
           <select
             aria-label={msg("divset.camera.label")}
@@ -1149,9 +1165,9 @@ export function DivisionSettings({
               {msg("divset.camera.needsOnlinePlay")}
             </p>
           )}
-          {ownCamera === null && (
+          {cameraHint && (
             <p data-testid="division-camera-inherited" className="text-[11px] text-slate-500">
-              {msg("divset.camera.inherited")}
+              {cameraHint}
             </p>
           )}
           <p className="text-[11px] text-slate-500">{msg("divset.camera.help")}</p>

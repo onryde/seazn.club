@@ -20,8 +20,10 @@ import {
   CAMERA_INHERIT,
   DivisionSettings,
   cameraChoiceOf,
+  cameraInheritHint,
   cameraPatchValue,
   cameraSelectOptions,
+  cameraSummary,
   effectiveCameraChoice,
 } from "@/components/v2/division-settings";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
@@ -106,25 +108,20 @@ function cameraHeader(html: string, title: string): string {
 const text = (markup: string) => markup.replace(/<[^>]+>/g, "\u0000").split("\u0000").filter(Boolean);
 
 describe("camera select options (M-4 + short labels)", () => {
-  it("the FIRST option returns to the competition's setting and names its value; then each policy once, short", () => {
-    // Typed from the controller's ruling: "Use the competition setting
-    // (<current competition value>)", then Off / Optional / Required.
-    expect(cameraSelectOptions("required", msgFor(EN))).toEqual([
-      { value: CAMERA_INHERIT, label: "Use the competition setting (Required)" },
+  it("the FIRST option returns to the competition's setting — short, no value inside; then each policy once, short", () => {
+    // Typed from the controller's rulings (r2 short labels; r3 "Competition
+    // setting", no value in the option).
+    expect(cameraSelectOptions(msgFor(EN))).toEqual([
+      { value: CAMERA_INHERIT, label: "Competition setting" },
       { value: "off", label: "Off" },
       { value: "optional", label: "Optional" },
       { value: "required", label: "Required" },
     ]);
-    // The named value FOLLOWS the competition, not a constant.
-    expect(cameraSelectOptions("off", msgFor(EN))[0]).toEqual({
-      value: CAMERA_INHERIT,
-      label: "Use the competition setting (Off)",
-    });
   });
 
-  it("in Spanish, the longest locale here", () => {
-    expect(cameraSelectOptions("required", msgFor(ES)).map((o) => o.label)).toEqual([
-      "Usar el ajuste de la competición (Obligatoria)",
+  it("in Spanish", () => {
+    expect(cameraSelectOptions(msgFor(ES)).map((o) => o.label)).toEqual([
+      "Ajuste de la competición",
       "Desactivada",
       "Opcional",
       "Obligatoria",
@@ -132,7 +129,7 @@ describe("camera select options (M-4 + short labels)", () => {
   });
 
   it("every declared policy is offered exactly once, after inherit — swept, with the count", () => {
-    const values = cameraSelectOptions("optional", msgFor(EN)).map((o) => o.value);
+    const values = cameraSelectOptions(msgFor(EN)).map((o) => o.value);
     let checked = 0;
     for (const p of CAMERA_POLICIES) {
       expect(values.filter((v) => v === p), p).toHaveLength(1);
@@ -168,16 +165,38 @@ describe("camera choice <-> stored value", () => {
   });
 });
 
+describe("where the competition's value is visible while inheriting (never only in the select)", () => {
+  it("the hint under the select names it — only while inherit is selected", () => {
+    expect(cameraInheritHint(CAMERA_INHERIT, "required", msgFor(EN))).toBe(
+      "Not set for this division — the competition's setting applies: Required. Saving a choice above sets it for this division.",
+    );
+    // The value FOLLOWS the competition, not a constant.
+    expect(cameraInheritHint(CAMERA_INHERIT, "off", msgFor(EN))).toContain("applies: Off.");
+    let checked = 0;
+    for (const p of CAMERA_POLICIES) {
+      expect(cameraInheritHint(p, "required", msgFor(EN)), `a pinned ${p} shows no inherit hint`).toBeNull();
+      checked += 1;
+    }
+    expect(checked).toBe(CAMERA_POLICIES.length);
+  });
+
+  it("the collapsed summary names it too; a pin's summary is its short label", () => {
+    expect(cameraSummary(CAMERA_INHERIT, "required", msgFor(EN))).toBe("Competition setting (Required)");
+    expect(cameraSummary(CAMERA_INHERIT, "required", msgFor(ES))).toBe("Ajuste de la competición (Obligatoria)");
+    expect(cameraSummary("optional", "required", msgFor(EN))).toBe("Optional");
+  });
+});
+
 describe("the collapsed camera Group header", () => {
-  it("an unset division's summary is the inherit label with the competition's value", () => {
+  it("an unset division's summary is the competition setting with its value", () => {
     const header = cameraHeader(renderChess(null, "required"), EN["divset.camera.label"]!);
-    expect(text(header)).toContain("Use the competition setting (Required)");
+    expect(text(header)).toContain("Competition setting (Required)");
   });
 
   it("a pinned division's summary is its short label", () => {
     const header = cameraHeader(renderChess("optional", "required"), EN["divset.camera.label"]!);
     expect(text(header)).toContain("Optional");
-    expect(text(header).join(" ")).not.toContain("Use the competition setting");
+    expect(text(header).join(" ")).not.toContain("Competition setting");
   });
 
   it("below md the summary stacks under the title instead of squeezing it (shared Group)", () => {

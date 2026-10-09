@@ -64,6 +64,7 @@ describe("camera policy copy", () => {
       "divset.camera.saved",
       "divset.camera.inherited",
       "divset.camera.inheritOption",
+      "divset.camera.inheritSummary",
       "divset.camera.needsOnlinePlay",
       "divset.err.cameraPolicyLocked",
       "divset.err.timeControlUnsupported",
@@ -104,16 +105,33 @@ describe("camera policy copy", () => {
     expect(checked).toBe(4 * CAMERA_POLICIES.length);
   });
 
-  it("the return-to-inherit option names the competition's value through its {policy} slot in every locale", () => {
+  // Controller ruling (r3, 2026-10-09): the return-to-inherit OPTION is short
+  // and carries no value — a select cannot wrap, and at 320px the value was
+  // the part it hid. The value lives in the hint line under the select (which
+  // can wrap), shown only while inherit is selected, and in the collapsed
+  // summary. A select is never the only place a value is visible.
+  it("the return-to-inherit option is short and carries NO value, in every locale", () => {
     let checked = 0;
     for (const loc of LOCALES) {
-      const text = DICTS[loc]["divset.camera.inheritOption"];
-      expect(text, loc).toContain("{policy}");
-      expect(text.split("{policy}").length - 1, `${loc}: exactly one slot`).toBe(1);
+      expect(DICTS[loc]["divset.camera.inheritOption"], loc).not.toMatch(/\{\w+\}/);
       checked += 1;
     }
     expect(checked).toBe(4);
-    expect(DICTS.en["divset.camera.inheritOption"]).toBe("Use the competition setting ({policy})");
+    expect(DICTS.en["divset.camera.inheritOption"]).toBe("Competition setting");
+  });
+
+  it("the hint under the select and the collapsed summary name the competition's value through one {policy} slot", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      for (const key of ["divset.camera.inherited", "divset.camera.inheritSummary"]) {
+        expect(DICTS[loc][key]!.split("{policy}").length - 1, `${loc} ${key}: exactly one slot`).toBe(1);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(8);
+    expect(DICTS.en["divset.camera.inherited"]).toBe(
+      "Not set for this division — the competition's setting applies: {policy}. Saving a choice above sets it for this division.",
+    );
   });
 
   it("the time-control refusal names the catalogue through its {controls} slot in every locale", () => {
@@ -134,9 +152,9 @@ describe("camera policy copy", () => {
       }
     }
     // 4 locales × (label, help, playerNoticeLabel, save, saved, inherited,
-    // inheritOption, needsOnlinePlay, 3 options, the lock error, the notice)
-    // = 4 × 13.
-    expect(checked, "anti-vacuity: every camera sentence in every locale").toBe(52);
+    // inheritOption, inheritSummary, needsOnlinePlay, 3 options, the lock
+    // error, the notice) = 4 × 14.
+    expect(checked, "anti-vacuity: every camera sentence in every locale").toBe(56);
   });
 
   it("the online-play help no longer promises games played on Lichess (D3 deleted that mode)", () => {
