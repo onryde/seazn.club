@@ -2035,6 +2035,12 @@ controller's review. None is the controller's ruling, and none is the seazn.club
 - **The code line follows the phone past Ready (ruling A).** The folded "Show the code again" line, with Revoke &
   reissue inside it, also shows under Waiting and Live for a session with a pairing. It does not show for a legacy
   session. The mockup draws it only at Ready.
+- **A W5 Go live error clears when the phone reads present (owner ruling 2026-10-09 ("A"); added 2026-10-09).** A
+  `phone_not_paired` / `phone_not_responding` Go live error clears once the panel's phone read, sent after the refusal,
+  reads present; other errors are unchanged. Unlike the readings above, this bullet is the seazn.club owner's ruling, and
+  it is a DIFFERENT ruling from the code line's "ruling A" in the bullet before it: the two only share a letter. Built in
+  #930; the panel asks `readClearsW5` (`lib/stream-session-view.ts`): the first present answer to a read sent after the
+  refusal clears it, and an answer to a read already in flight when the click was refused does not.
 - **No Revoke & reissue on a finished fixture.** The reissue route answers 422 there, so the control is not drawn.
   While the code is still `finishing`, Show the code again keeps the code.
 - **Code ended is one line.** At Ready with the match over (finished, and the code ended or absent), the tab shows "This

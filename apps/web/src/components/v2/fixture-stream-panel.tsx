@@ -67,8 +67,8 @@ import {
   TARGET_REMOVED,
   canGoLive,
   isW5Refusal,
-  presenceAfterRead,
   presenceAfterRefusal,
+  readClearsW5,
   type PresenceWatch,
   createErrorCode,
   createErrorHolder,
@@ -946,8 +946,8 @@ export function PhoneTab({
   const [phone, setPhone] = useState<StreamPhone | null>(null);
   const [phoneLoaded, setPhoneLoaded] = useState(false);
   const phoneSeq = useRef(0);
-  // Owner ruling 2026-10-09 ("A"): a Go live refused for want of a phone clears when this read FLIPS to present
-  // (`presenceAfterRead`); the watch lives in a ref so the interval's callback never reads a stale one.
+  // Owner ruling 2026-10-09 ("A"): a Go live refused for want of a phone clears on the first present answer to a read
+  // sent after the refusal (`readClearsW5`); the watch lives in a ref so the interval's callback never reads a stale one.
   const presence = useRef<PresenceWatch>(PRESENCE_WATCH_START);
   const readPhone = useCallback(async () => {
     const seq = ++phoneSeq.current;
@@ -955,9 +955,9 @@ export function PhoneTab({
       const got = await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`);
       if (seq !== phoneSeq.current) return;
       setPhone(got);
-      const seen = presenceAfterRead(presence.current, { seq, present: got.phone?.present === true });
-      presence.current = seen.watch;
-      if (seen.clearW5) setCreateError((e) => (e !== null && isW5Refusal(e.code) ? null : e));
+      if (readClearsW5(presence.current, { seq, present: got.phone?.present === true })) {
+        setCreateError((e) => (e !== null && isW5Refusal(e.code) ? null : e));
+      }
       const answer = got.destination?.id ?? null;
       // B8 final re-review n-6: "couldn't save" is news only while the server's answer is the one it was said beside —
       // an answer that CHANGES (saved from another device or tab) retires it. A poll answering the same keeps it.
