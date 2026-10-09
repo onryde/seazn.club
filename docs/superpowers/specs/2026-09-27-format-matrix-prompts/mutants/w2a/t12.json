@@ -633,5 +633,65 @@
         "name": "N1 \\(fix round 2, D-6\\): a SINGLES entrant"
       }
     ]
+  },
+  {
+    "id": "rR-m7c-header-wraps",
+    "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+    "find": "      <div className=\"flex items-center justify-between gap-2 px-4 pt-3\">",
+    "replace": "      <div className=\"flex flex-wrap items-center justify-between gap-2 px-4 pt-3\">",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+        ],
+        "name": "on a later step the header row does not wrap"
+      }
+    ]
+  },
+  {
+    "id": "rR-m7c-hyphen-split",
+    "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+    "find": "{keepHyphenatedWordsWhole(t(step.title))}",
+    "replace": "{t(step.title)}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+        ],
+        "name": "on a later step the header row does not wrap"
+      }
+    ]
+  },
+  {
+    "id": "rR-m7c-helper-whole-title",
+    "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+    "find": "  return text.split(/(\\s+)/).map((part, i) =>",
+    "replace": "  return [text].map((part, i) =>",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+        ],
+        "name": "keepHyphenatedWordsWhole: each hyphenated word becomes one nowrap run"
+      }
+    ]
+  },
+  {
+    "id": "rR-m7c-title-one-item",
+    "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+    "find": "          <span>{keepHyphenatedWordsWhole(t(step.title))}</span>",
+    "replace": "          {keepHyphenatedWordsWhole(t(step.title))}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+        ],
+        "name": "on a later step the header row does not wrap"
+      }
+    ]
   }
 ]

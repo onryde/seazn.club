@@ -919,4 +919,23 @@ describe("public Bracket — a held fixture (W2a)", () => {
     }
     expect(checked).toBe(LOCALES.length);
   });
+
+  it("loop R M7(b): the held note and the level score share ONE row — the note wraps as a block, never as a two-line pill", () => {
+    // The held words ("Level — winner to be decided", 28–35 characters in the four locales) do not fit a 188px node on
+    // one line. In a rounded-full pill on a wrapping row they broke inside the pill AND pushed the score to a third line,
+    // past the node's height. The row no longer wraps: the note takes the room left of the score and wraps inside a
+    // block (rounded-md, balanced lines); the score never shrinks or breaks.
+    const html = render([held({ kind: "draw" })]);
+    const row = /<span data-held="true" class="([^"]*)">/.exec(html)?.[1]?.split(/\s+/);
+    expect(row, "the held row renders").toBeDefined();
+    expect(row).toContain("flex");
+    expect(row, "the row does not wrap the score under the note").not.toContain("flex-wrap");
+    const note = new RegExp(`<span class="([^"]*)">${enCopy.held}</span>`).exec(html)?.[1]?.split(/\s+/);
+    expect(note, "the note renders the held words").toBeDefined();
+    expect(note).not.toContain("rounded-full");
+    expect(note).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "rounded-md", "text-balance"]));
+    const score = /<span class="([^"]*)">1–1<\/span>/.exec(html)?.[1]?.split(/\s+/);
+    expect(score, "the level score renders").toBeDefined();
+    expect(score).toEqual(expect.arrayContaining(["shrink-0", "whitespace-nowrap"]));
+  });
 });

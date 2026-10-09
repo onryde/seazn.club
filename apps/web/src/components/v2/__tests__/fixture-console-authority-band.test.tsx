@@ -451,6 +451,31 @@ describe("W2a: held bracket fixtures and organiser-only actions (finding 11, fin
     expect(note, "above the ledger").toBeLessThan(ledger);
     expect(note, "above the lineups").toBeLessThan(lineups);
   });
+  it("loop R M7(a): an official on a held fixture gets NO empty Scoring card at any width — and the card stays wherever it holds something", () => {
+    // At 1280 and 768 the card rendered its "Scoring" heading over nothing (no pad once held, no hand-over, no stream):
+    // the phone gate (`consoleScoringEmptyOnPhone`) hid it below md only. The class token is read exactly — "hidden",
+    // never the phone-only "max-md:hidden".
+    const tokens = (html: string) => /<section class="([^"]*)" data-role="console-scoring"/.exec(html)?.[1]?.split(/\s+/) ?? null;
+    // Empty case first: nothing in the card at ANY width.
+    const empty = tokens(consoleHtml({ ...HELD, canOrganise: false, deviceHandover: false }));
+    expect(empty, "the section still renders, hidden, so the held note keeps its place after it").not.toBeNull();
+    expect(empty).toContain("hidden");
+    // Each thing that does fill the card keeps it shown — one row per content source.
+    const rows: [string, string][] = [
+      ["organiser (hand-over button)", consoleHtml(HELD)],
+      ["official with the hand-over", consoleHtml({ ...HELD, canOrganise: false })],
+      ["official with a stream", consoleHtml({ ...HELD, canOrganise: false, deviceHandover: false, stream: PANEL_MOUNT })],
+      ["official on a live match (the pad)", consoleHtml({ canOrganise: false, deviceHandover: false })],
+    ];
+    let checked = 0;
+    for (const [name, html] of rows) {
+      const t = tokens(html);
+      expect(t, name).not.toBeNull();
+      expect(t!.includes("hidden"), name).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
 });
 
 describe("device handover moves up beside the pad (D-19)", () => {

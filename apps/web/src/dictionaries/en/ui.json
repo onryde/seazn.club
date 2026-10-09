@@ -5595,6 +5595,7 @@
   "stream.phone.again": "Start another",
   "stream.phone.retry": "Try again",
   "stream.phone.decided": "Match decided — still streaming",
+  "stream.phone.held": "Needs a decision — still streaming",
   "stream.target.kind.other": "Other",
   "stream.credits.error.owner": "Ask the club's billing owner to buy credits.",
   "stream.credits.close": "Close",

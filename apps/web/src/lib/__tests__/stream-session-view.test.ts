@@ -71,7 +71,7 @@ const view = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s", fixtureId: "f", mode: "passthrough", state: "live", desiredState: "live", failReason: null,
   health: null, ingest: { state: "connected", protocol: "srt" }, output: null, balance: 2,
   startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null,
-  target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: true, startCause: "organiser", restart: null, countdown: null, ...over,
+  target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: true, startCause: "organiser", restart: null, countdown: null, ...over,
 });
 
 /** A server error through the REAL v1 envelope and the REAL client transport — the ApiV1Error the Phone tab catches. */

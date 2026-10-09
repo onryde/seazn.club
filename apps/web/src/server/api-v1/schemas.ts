@@ -1434,6 +1434,10 @@ export const StreamSessionCurrent = z
     replayUrl: z.string().nullable(),
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
+    /** W2a loop R, M2: the fixture is HELD (`needs_decision` — a level bracket result awaiting the organiser's settle).
+     *  It arms the automatic stop like a decided one (ruling D-M1) but is NOT decided, so it has its own flag and its own
+     *  Phone-tab chip. Never true together with `fixtureDecided`. */
+    fixtureHeld: z.boolean(),
     endReason: StreamEndReason.nullable(),
     /** True iff THIS session's own consume still stands: the sum of its `consume` + `refund` credit rows is below zero.
      *  A restart inside the reuse window consumed nothing, and a refund linked to the session nets its consume out —

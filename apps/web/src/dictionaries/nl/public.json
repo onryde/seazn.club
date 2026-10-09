@@ -588,6 +588,7 @@
   "overlay.status.cancelled": "Geannuleerd",
   "overlay.status.abandoned": "Gestaakt",
   "overlay.status.forfeited": "Forfait",
+  "overlay.status.held": "Wacht op beslissing",
   "overlay.detail.serving": "{side} serveert",
   "overlay.detail.card": "{side} {card}",
   "overlay.card.green": "Groene kaart",

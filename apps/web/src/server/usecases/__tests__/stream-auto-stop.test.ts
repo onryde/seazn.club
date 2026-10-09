@@ -723,3 +723,40 @@ describe.skipIf(!HAS_DB)("automatic stop — a composed (runner) session ends th
     expect(s.end_reason).toBe("auto_stopped");
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("the organiser's poll names a HELD fixture before the stop it arms (W2a loop R, M2)", () => {
+  // Ruling D-M1 arms the automatic stop on a held `needs_decision` fixture, and the Phone tab's chip ("Match decided —
+  // still streaming") read decided/finalized only: the organiser had no warning before the stop. A held fixture is not
+  // decided (its winner awaits the settle), so it gets its own flag, never `fixtureDecided`. The vocabulary is the app's
+  // one list; the two chip sets are named by the status they read.
+  it("every status the app declares: fixtureHeld iff needs_decision, fixtureDecided iff decided or finalized — one rig, each status in turn", async () => {
+    const { r } = await liveRig();
+    let checked = 0;
+    for (const status of FIXTURE_STATUSES) {
+      await setStatus(r.fixtureId, status);
+      const view = await currentSession(r.auth, r.fixtureId, r.deps);
+      expect(view?.state, `${status}: PREMISE — the session is still live at this instant`).toBe("live");
+      expect({ held: view!.fixtureHeld, decided: view!.fixtureDecided }, status).toEqual({
+        held: status === "needs_decision",
+        decided: status === "decided" || status === "finalized",
+      });
+      checked++;
+    }
+    expect(checked).toBe(FIXTURE_STATUSES.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("the sequence: in play → held → settled (decided) flips the flag from held to decided, never both", async () => {
+    const { r } = await liveRig();
+    const read = async () => {
+      const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      return { held: v.fixtureHeld, decided: v.fixtureDecided };
+    };
+    expect(await read()).toEqual({ held: false, decided: false });
+    await setStatus(r.fixtureId, "needs_decision");
+    expect(await read()).toEqual({ held: true, decided: false });
+    await setStatus(r.fixtureId, "decided");
+    expect(await read()).toEqual({ held: false, decided: true });
+  });
+});

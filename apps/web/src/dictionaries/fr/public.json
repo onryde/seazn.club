@@ -588,6 +588,7 @@
   "overlay.status.cancelled": "Annulé",
   "overlay.status.abandoned": "Abandonné",
   "overlay.status.forfeited": "Forfait",
+  "overlay.status.held": "En attente de décision",
   "overlay.detail.serving": "{side} au service",
   "overlay.detail.card": "{side} {card}",
   "overlay.card.green": "Carton vert",

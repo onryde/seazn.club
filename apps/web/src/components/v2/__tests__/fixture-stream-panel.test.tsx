@@ -643,7 +643,7 @@ const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", state: "warming", desiredState: "live",
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
   balance: 2, startedAt: null, endedAt: null, replayUrl: null,
-  target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
+  target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
   startCause: "organiser", restart: null, countdown: null,
   ...over,
 });
@@ -1067,6 +1067,7 @@ function bodyStates(): [string, ReactElement[]][] {
     ["live, paused (O5)", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: readModel({ phone: facts({ notReady: "camera", state: "publishing" }) }) })],
     ["live, a legacy session", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: LEGACY })],
     ["live", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", fixtureDecided: true, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } }), balance: 1 })],
+    ["live, the fixture held (W2a M2)", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", fixtureHeld: true }), balance: 1 })],
     // PR-2 (Option A): the switch on, a refused automatic start, a takeover notice, the live line + Details data, an amber.
     ["ready, the switch on", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ auto: { enabled: true, refusal: null, wontStart: null, stopApplies: null } }) })],
     ["ready, the automatic start refused", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ auto: { enabled: true, refusal: "no_destination", wontStart: null, stopApplies: null } }) })],
@@ -1545,6 +1546,18 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(textOf(stop)).toBe(m("stream.phone.stop"));
     expect(byTestId(tree, "stream-decided-chip")).toBeUndefined();
     expect(byTestId(body({ view: { ...live, fixtureDecided: true }, balance: 1 }), "stream-decided-chip")).toBeDefined();
+    // W2a loop R, M2 — a HELD fixture arms the automatic stop (ruling D-M1), so the organiser is warned with the held
+    // chip and its own words; "Match decided" would be false (the winner awaits the settle). Never both chips.
+    const held = body({ view: { ...live, fixtureHeld: true }, balance: 1 });
+    expect(textAt(held, "stream-held-chip")).toBe(m("stream.phone.held"));
+    expect(byTestId(held, "stream-decided-chip"), "a held fixture is not decided").toBeUndefined();
+    expect(byTestId(tree, "stream-held-chip"), "the empty case: in play, no held chip").toBeUndefined();
+    expect(byTestId(body({ view: { ...live, fixtureDecided: true }, balance: 1 }), "stream-held-chip")).toBeUndefined();
+    expect(
+      byTestId(body({ view: session({ fixtureHeld: true }), balance: 2 }), "stream-held-chip"),
+      "warming: nothing is streaming yet, so there is nothing to warn about",
+    ).toBeUndefined();
+    expect(byTestId(body({ view: session({ state: "ending", fixtureHeld: true }), balance: 1 }), "stream-held-chip")).toBeDefined();
     // A stale beat turns its chip amber — the one chip, not the line.
     const stale = body({ view: { ...live, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:58:00Z" } }, balance: 1 });
     const beat = allTestIds(stale, "stream-health-chip").at(-1)!;

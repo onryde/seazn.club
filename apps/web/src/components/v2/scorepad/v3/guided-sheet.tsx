@@ -67,7 +67,7 @@
 // (lime-400), matching every sibling primitive's "one hue per signal" rule
 // (tile-grid.tsx's own header) — nothing on this surface is `primary` or
 // `destructive` in the TileGrid sense, so violet/red have no place here.
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
 import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetChoiceOption, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
 import { SPORT_TONE_CLASSES } from "./tokens";
@@ -339,6 +339,22 @@ export function answerStep(spec: GuidedSheetSpec, state: GuidedSheetState, value
 export function backStep(spec: GuidedSheetSpec, state: GuidedSheetState): GuidedSheetState {
   if (state.stepIndex === 0) return state;
   return { stepIndex: lastVisibleBefore(spec, state.answers, state.stepIndex), answers: state.answers };
+}
+
+/** Loop R M7(c) — a sheet title with each hyphenated word ("tie-break") held in one nowrap run, so a line never breaks
+ *  at its hyphen: under the eyebrow's uppercase tracking, 320 split "TIE-" / "BREAK?". Whitespace between words is kept
+ *  as written; a title with no hyphenated word is returned unchanged. */
+export function keepHyphenatedWordsWhole(text: string): ReactNode {
+  if (!/\S-\S/.test(text)) return text;
+  return text.split(/(\s+)/).map((part, i) =>
+    /\S-\S/.test(part) ? (
+      <span key={i} className="whitespace-nowrap">
+        {part}
+      </span>
+    ) : (
+      part
+    ),
+  );
 }
 
 const backButtonClass =
@@ -640,8 +656,16 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pt-3">
-        <p className="mk-eyebrow min-w-0 break-words text-slate-600">{t(step.title)}</p>
+      {/* Loop R M7(c): the header row does not wrap. At 320 a title that filled the width pushed Back onto a line of
+          its own ABOVE the options; now the title shrinks and wraps beside Back, and a hyphenated word ("tie-break")
+          is one unbreakable run, so the eyebrow never splits it "TIE-" / "BREAK?". */}
+      <div className="flex items-center justify-between gap-2 px-4 pt-3">
+        {/* `.mk-eyebrow` is an inline-flex (its lime bar is a ::before): the title's words go in ONE span, so the flex
+            row is bar + one text item — loose text nodes beside the nowrap run would each become a flex item and
+            stack out of order. The bar keeps its width (`before:shrink-0`) while the words wrap beside Back. */}
+        <p className="mk-eyebrow min-w-0 flex-1 break-words text-slate-600 before:shrink-0">
+          <span>{keepHyphenatedWordsWhole(t(step.title))}</span>
+        </p>
         {state.stepIndex > 0 && (
           <button type="button" onClick={handleBack} style={{ minHeight: 44 }} className={backButtonClass}>
             {t("pad.sheet.back")}
