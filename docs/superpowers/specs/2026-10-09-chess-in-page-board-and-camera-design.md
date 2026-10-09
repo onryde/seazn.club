@@ -35,6 +35,7 @@ Owner decisions taken 2026-10-09, in order:
 | D9 | Policy changes after a round opens are **downgrade-only, with an audit row** |
 | D10 | Camera failure mid-game = **flag; the organiser decides**. The board never freezes |
 | D11 | RealtimeKit outage under `Required` = **organiser override with an audit row** |
+| D12 | **Pairing is automatic; inviting is not.** Swiss pairs the next round by itself once the previous round is complete. The organiser then opens the round, which sends the invites and starts the window. The schedule is the time shown to players, not the trigger |
 
 ---
 
@@ -58,7 +59,12 @@ Owner decisions taken 2026-10-09, in order:
 ## 2. Measured facts
 
 Everything in this section was measured against live lichess.org on 2026-10-09, not
-inferred. Logs: `scratchpad/flag-spike.log`, `spike-battery2.log`, `tc-boundary.log`.
+inferred. The raw logs are committed beside this spec at
+`docs/superpowers/specs/evidence/2026-10-09-chess-spikes/` — `flag-spike.log`,
+`spike-battery2.log`, `tc-boundary.log`, plus `spike-battery-v1-invalid.log`, which is
+kept deliberately: its run was wrecked by two bugs of mine (a logging function writing to
+stdout inside a command substitution, and an illegal stalemate FEN that put the side not
+to move in check), and the 429 wall it hit is the evidence for M3.
 Each line that follows is a design input; several contradict the brainstorming document.
 
 | # | Fact | Evidence |
@@ -101,9 +107,29 @@ after reading the account. Players already linked under that flow get a **re-con
 screen** before their first online fixture. The copy states plainly that the scope lets
 us submit moves in their games — including games that are not ours.
 
-### 3.2 Window and seat
-Unchanged: window opens T−10, deadline T+20, check-in stamps the fixture. Under policy
-`Required`, the seat is granted only after camera preflight passes (§5).
+### 3.2 Round lifecycle, window and seat
+
+**Pairing happens by itself; opening does not** (D12). Once the previous round is
+complete, Swiss pairs the next round and the fixtures exist — unopened and uninvited.
+Nothing is sent. **The organiser then opens the round**, and that action stamps
+`round_opened_at`, sends every pairing's invite, and starts the window.
+
+The split matters: pairing is a computation and can be trusted to a scheduler, but an
+invite starts a clock against real people who have to be at a screen. The organiser is
+the only one who knows the room is ready. A Swiss round almost never begins exactly when
+the timetable said, and a system that opens windows on a stale schedule marks people
+no-shows for a round that had not started.
+
+**T−10 and T+20 are therefore relative to `round_opened_at`**, not to the fixture's
+scheduled time. The scheduled time is what players are *shown*; it is not the trigger.
+A fixture with no `round_opened_at` is not yet playable and says so.
+
+Check-in stamps the fixture. Under policy `Required`, the seat is granted only after
+camera preflight passes (§5).
+
+**Round N+1 cannot be paired until Round N's results are all in** — which is why the
+abandoned-board sweep in §3.5 matters operationally, not just tidily. One unresolved
+board blocks the next round.
 
 ### 3.3 Creation
 Claim-then-call, already built: claim the mint with a conditional UPDATE, call Lichess
@@ -129,11 +155,17 @@ outside any transaction, then conditionally record. One claimant per fixture.
 We submit both sides, so we own the move stream without asking Lichess for it.
 
 ### 3.5 Reconcile
-One export read, on exactly four triggers:
+One export read, on exactly five triggers:
 - a rejected move (M6 — the message covers two states, so reconcile, never assume);
 - a local clock reaching zero;
 - game end;
-- an organiser pressing resync.
+- an organiser pressing resync;
+- **the cron sweep**, for a live game past its expected end.
+
+The fifth exists because the other four all require a client to be open. If both
+players close their tabs mid-game the game stays live on Lichess, flags eventually, and
+nobody reads the result — the fixture would sit unresolved forever. The sweep is what
+closes a game nobody is watching.
 
 The read returns status, winner **and authoritative clocks** (M11), so every reconcile
 corrects our locally-derived clocks instead of letting them drift to the flag.
@@ -146,12 +178,19 @@ organiser-only.
 | Lichess | Our outcome |
 |---|---|
 | `mate`, `resign`, `outoftime` | decided result, winner as reported |
-| `draw`, `stalemate` | draw. In a knockout this becomes `needs_decision` / phase `tiebreak`; **never written as decided** |
+| `draw`, `stalemate` | draw. In a knockout it is **held, never written as decided** — see the note below |
 | `aborted` | no result. Note M9: an early resign lands here with no winner |
 | no-show at T+20 | `core.forfeit {by, reason: "walkover"}` |
 | both absent | `core.forfeit {by: "both", reason: "walkover"}`; refused `DOUBLE_WALKOVER_NO_NEXT_MATCH` on a final, last rung or third-place match, where the fixture stays open for the organiser |
 
 A Lichess **timeout is a normal win, not a forfeit**. Only a no-show is a forfeit.
+
+**How a knockout draw is held, today.** `needs_decision` and a division phase `tiebreak`
+do **not exist** in this repo — `DIVISION_PHASES` is `setting_up | scheduled | match_day
+| finished` (`apps/web/src/lib/division-phase.ts:26`), verified 2026-10-09. They are
+W2a/W2b's future work, not ours to invent. Until they land, a knockout draw is held as
+`fixture_external_play.needs_organiser` with the reason `tiebreak_owed`. The invariant
+is what matters and it holds either way: **a drawn game is never written as decided.**
 
 **A token revoked or rejected mid-match** is not a no-show and must not be recorded as
 one. It produces a distinct reason value and sends the fixture to the organiser queue.
@@ -180,8 +219,11 @@ tell us that our own writes do not are: a flag, a Lichess-declared terminal stat
 move made out of band. Each has a cheaper answer — M1 for the flag, the end-of-game
 reconcile for terminal states, and a rejected submission for out-of-band play.
 
-The 5-minute cron stays what it is: sweeps and no-shows. It does not become a live
-service.
+The 5-minute cron stays what it is and does not become a live service, but it is NOT
+optional. Under D12 the invite is sent by the organiser's own action, so the cron owns
+four jobs, every one of which happens when no page is open: the T+20 no-show, the mint
+retry for a creation that hit the 429 wall, meeting teardown when nobody came, and the
+reconcile sweep for a live game nobody is watching.
 
 **Known blind spot, accepted:** a draw offer made on lichess.org is invisible to us
 (M10). Offers made on our page are fine — our server sends them, so our server
@@ -217,6 +259,28 @@ forgeable and is on the do-not-copy list (§10).
 Consequence: the meeting is created when the **first** player arrives in the window, not
 after both check in, because preflight needs something to join. Torn down at the result,
 or at T+20 if nobody comes.
+
+**What RealtimeKit can and cannot prove (measured 2026-10-09 against Cloudflare's live
+OpenAPI spec).** There is **no synchronous per-participant publishing signal**: the
+meeting, participant, active-session and webhook surfaces give joined/left and a count,
+never media state. `videoEnabled` exists only in the client SDK, which is the forgeable
+surface this section rejects. So the **preflight gate** proves exactly two things — the
+participant joined a live session and has not left — and **camera-on is enforced by the
+preset**, which is why presets are env-pinned with no defaults and why a RealtimeKit
+outage must THROW rather than read as "camera off".
+
+**But there IS server-side video evidence, after the fact.**
+`GET /accounts/{account_id}/realtime/kit/{app_id}/sessions/peer-report/{peer_id}`
+("participant details ... along with call statistics") carries `video_producer`,
+`video_producer_cumulative`, `frames_encoded`, `key_frames_encoded`, `no_video_fraction`
+and `bytes_sent`. That is a non-forgeable, server-held answer to "did this player's
+camera actually publish, and for how much of the match?" — which is strictly more than
+the preset gives us and exactly what a deterrent product wants for an after-the-fact
+check, with no mandatory observer.
+
+It is a **report**, so its lag is unknown and must be MEASURED against a live session
+before anything depends on it. Until measured it is evidence for an organiser reviewing a
+finished match, never an input to the seat gate.
 
 ### 5.3 What each person sees
 - **A player sees their own tile only** (D7). Local preview; no subscription to the
@@ -354,8 +418,12 @@ The sample is a mechanism reference, not a code source. Specifically rejected:
   `core.forfeit` strict: `{by: <entrant> | "both", reason: "walkover" | "retired" |
   "disqualified" | "withdrew"}`; free text is refused. Contract supplied by session
   f-w2b, signed by their owner 2026-10-08 — **information to us, not a ruling**.
-- W2a makes forfeit/settle/abandon organiser-only. Verify our sweep's actor against the
-  **merged** gate, not the branch.
+- **W2a is NOT merged.** `apps/web/src/lib/organiser-only-events.ts` and
+  `isOrganiserOnlyEvent` do not exist on this branch or on `origin/main` (verified
+  2026-10-09); W2a lives on `feat/format-matrix-w2a`. So the organiser-only gate is a
+  **future** constraint, not a present one. We write results under organiser authority
+  regardless — that is correct before the gate exists and required after it — and the
+  implementer re-checks the gate as merged rather than coding against this paragraph.
 - **W3 owns Swiss colour alternation.** We read colour; we do not fix allocation.
 - Migrations: V405/V407 sit below main's high-water mark (V431) and `flyway.toml` sets no
   `outOfOrder`, so they are refused on any DB past V431. **Amend them to V432/V433 as

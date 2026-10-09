@@ -1,0 +1,5 @@
+10:32:04Z 170+0 (est 170s): CHALLENGE REFUSED -> {"clock.limit":["Invalid value"],"error":{"clock.limit":["Invalid value"]}}
+10:32:36Z 120+1 (est 160s, lichess speed=bullet): move http=400 body={"error":"This game cannot be played with the Board API."}
+10:33:06Z 140+1 (est 180s): CHALLENGE REFUSED -> {"clock.limit":["Invalid value"],"error":{"clock.limit":["Invalid value"]}}
+10:33:39Z 180+0 (est 180s, lichess speed=blitz): move http=200 body={"ok":true}
+10:33:39Z BOUNDARY PROBE DONE
