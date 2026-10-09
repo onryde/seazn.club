@@ -1,5 +1,5 @@
 {
-  "note": "Controller ruling D-P2 (progress.md, 'P1 phase 3 review'): six boardgame L3 cells in expect-77.json are not W2a's to turn green. Task 16's judge (tools/matrix/w2a-expect.ts) passes for 71 works + these 6 red, each for its pinned reason; any other red, or one of these red for a different reason, fails it. `reason` is compared with double quotes dropped on both sides (the product writes phase \"pre\"). Moved by the ruling, not by a run: the ids stay in expect-77.json.",
+  "note": "Controller ruling D-P2 (progress.md, 'P1 phase 3 review'): six boardgame L3 cells in expect-77.json are not W2a's to turn green. Task 16's judge (tools/matrix/w2a-expect.ts) passes for 71 works + these 6 red, each for its pinned reason; any other red, one of these red for a different reason, or one of these also failing a check outside its `failing` list, fails it. `reason` is compared with double quotes dropped on both sides (the product writes phase \"pre\"). Moved by the ruling, not by a run: the ids stay in expect-77.json. `failing` is the check ids the cell fails today, from the post-W2a drive of these cells (p1d, run ids w2a-p1-fin2-*): the five R4 cells end in a case-level error and fail no check, ko_plate F1 fails three. The committed repro runs beside this file predate W2a and show SC-O1's own checks.",
   "rekeys": [
     {
       "caseId": "knockout|boardgame|blitz|R4",
@@ -8,6 +8,7 @@
       "wave": "W2b",
       "rule": "BG-WO-2",
       "reason": "forfeit not allowed in phase \"pre\"",
+      "failing": [],
       "ruling": "D-P2"
     },
     {
@@ -17,6 +18,7 @@
       "wave": "W2b",
       "rule": "BG-WO-2",
       "reason": "forfeit not allowed in phase \"pre\"",
+      "failing": [],
       "ruling": "D-P2"
     },
     {
@@ -26,6 +28,7 @@
       "wave": "W2b",
       "rule": "BG-WO-2",
       "reason": "forfeit not allowed in phase \"pre\"",
+      "failing": [],
       "ruling": "D-P2"
     },
     {
@@ -35,6 +38,7 @@
       "wave": "W2b",
       "rule": "BG-WO-2",
       "reason": "forfeit not allowed in phase \"pre\"",
+      "failing": [],
       "ruling": "D-P2"
     },
     {
@@ -44,6 +48,7 @@
       "wave": "W2b",
       "rule": "BG-WO-2",
       "reason": "forfeit not allowed in phase \"pre\"",
+      "failing": [],
       "ruling": "D-P2"
     },
     {
@@ -52,6 +57,11 @@
       "now": "FX-G14",
       "wave": "W4",
       "reason": "STAGE_COMPLETED_SEEDING_FAILED",
+      "failing": [
+        "I4-nothing-ends-stuck",
+        "life-loop-bounded",
+        "advance-seeded-as-declared"
+      ],
       "ruling": "D-P2"
     }
   ]

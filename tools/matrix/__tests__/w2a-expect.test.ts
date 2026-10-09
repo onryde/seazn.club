@@ -7,8 +7,9 @@
 //         reads as a product defect. The guard counts what it checked (77 of 77, 0 missing).
 //   D-P2  six boardgame L3 cells are not W2a's to turn green (controller ruling, ledgered in progress.md under "P1 phase 3
 //         review"): five R4 cells re-key SC-O1 -> CD-T13 (W2b, BG-WO-2), and the ko_plate F1 cell SC-O1 -> FX-G14 (W4).
-//         The judge passes for "71 works + 6 red with the pinned reason"; any OTHER red, or a re-keyed cell red for a
-//         different reason, fails it. Right reason passes, wrong reason fails, an unexpected red fails.
+//         The judge passes for "71 works + 6 red with the pinned reason"; any OTHER red, a re-keyed cell red for a
+//         different reason, or a re-keyed cell that ALSO fails a check outside the ones its re-key pins (`failing`), fails
+//         it. Right reason passes, wrong reason fails, an extra failing check fails, an unexpected red fails.
 //
 // Expected values here come from the ruling's own text (ids, owners, reasons) and the plan's declarations (livePlan),
 // never from the judge's output.
@@ -36,17 +37,20 @@ const R4_REASON = 'forfeit not allowed in phase "pre"';
 /** Controller ruling D-P2: the five boardgame R4 cells, W2b's (BG-WO-2). */
 const R4_CELLS = ["knockout", "knockout_third_place", "double_elim", "ko_plate", "qualifying_main"].map((row) => `${row}|boardgame|blitz|R4`);
 const F1_CELL = "ko_plate|boardgame|blitz|F1";
+/** The checks the ko_plate F1 cell fails today, from the post-W2a drive of the repro cells (p1d, run ids w2a-p1-fin2-*), as
+ *  the coordinator's review minor 1 names them. The five R4 cells fail NO check: they end in a case-level error. */
+const F1_FAILING = ["I4-nothing-ends-stuck", "life-loop-bounded", "advance-seeded-as-declared"];
 const SIX = [...R4_CELLS, F1_CELL];
 
 // --- builders -------------------------------------------------------------------------------------------------------
 
-const check = (verdict: "pass" | "fail", reason = "", evidence: string[] = []): CheckResult => ({ id: verdict === "pass" ? "k-pass" : "k-fail", kind: "invariant", verdict, checked: 1, reason, evidence });
+const check = (verdict: "pass" | "fail" | "abstain", reason = "", evidence: string[] = [], id?: string): CheckResult => ({ id: id ?? (verdict === "pass" ? "k-pass" : verdict === "abstain" ? "k-abstain" : "k-fail"), kind: "invariant", verdict, checked: verdict === "abstain" ? 0 : 1, reason, evidence });
 function kase(caseId: string, state: CaseState = "works", reason = "", checks: CheckResult[] = state === "works" ? [check("pass")] : []): CaseResult {
   const [row, sport, variant, scenario] = caseId.replace(/@\d+$/, "").split("|") as [string, string, string, string];
   return { caseId, row, sport, variant, scenario, canary: false, state, reason, checks, counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 5, notes: [], layer: "L3", driver: "http", width: null };
 }
 const R4_RED = (id: string): CaseResult => kase(id, "red", `error: RefusedCall: POST /api/v1/entrants/e1/withdraw → HTTP 422 WRONG_PHASE: ${R4_REASON}`);
-const F1_RED = (id: string): CaseResult => kase(id, "red", "I4-nothing-ends-stuck: stage 2: never asked to complete; advance-seeded-as-declared: stage 2: no proposal — stage 1's /complete answered 409 STAGE_COMPLETED_SEEDING_FAILED", [check("fail", "stage 2: never asked to complete")]);
+const F1_RED = (id: string): CaseResult => kase(id, "red", "I4-nothing-ends-stuck: stage 2: never asked to complete; advance-seeded-as-declared: stage 2: no proposal — stage 1's /complete answered 409 STAGE_COMPLETED_SEEDING_FAILED", F1_FAILING.map((id) => check("fail", `${id}: stage 2`, [], id)));
 /** The 77, each as the ruling expects it: green, except the six, red for their pinned reason. */
 function expectedRun(over: (c: CaseResult) => CaseResult = (c) => c): CaseResult[] {
   return WANT.map((id) => over(R4_CELLS.includes(id) ? R4_RED(id) : id === F1_CELL ? F1_RED(id) : kase(id)));
@@ -126,9 +130,11 @@ describe("expect-77-rekeys.json - the six cells D-P2 re-keys", () => {
       expect(r.was, id).toBe("SC-O1");
       if (R4_CELLS.includes(id)) {
         expect([r.now, r.wave, r.rule, r.reason], id).toEqual(["CD-T13", "W2b", "BG-WO-2", R4_REASON]);
+        expect(r.failing, `${id}: an R4 cell ends in a case-level error and fails no check`).toEqual([]);
       } else {
         expect([r.now, r.wave], id).toEqual(["FX-G14", "W4"]);
         expect(r.reason, id).toContain("STAGE_COMPLETED_SEEDING_FAILED");
+        expect([...r.failing].sort(), id).toEqual([...F1_FAILING].sort());
       }
       checked++;
     }
@@ -181,9 +187,37 @@ describe("judgeExpectation - 71 works + 6 red with the pinned reason", () => {
 
   it("the pinned reason is found in a failing CHECK too, not only the case's own reason line", () => {
     const id = F1_CELL;
-    const v = judge(expectedRun((c) => (c.caseId === id ? kase(id, "red", "life-loop-bounded: play loop exited not_reached", [check("fail", "x", ["stage 1's /complete answered 409 STAGE_COMPLETED_SEEDING_FAILED"])]) : c)));
+    const v = judge(expectedRun((c) => (c.caseId === id ? kase(id, "red", "life-loop-bounded: play loop exited not_reached", [check("fail", "x", ["stage 1's /complete answered 409 STAGE_COMPLETED_SEEDING_FAILED"], "life-loop-bounded")]) : c)));
     expect(v).toMatchObject({ exit: 0, wrongReason: [] });
     expect(v.pinnedRed.map((p) => p.caseId)).toContain(id);
+  });
+
+  // Review minor 1: the pinned reason is matched over everything a case says, so a re-keyed cell red for its pinned reason
+  // that ALSO fails a new check would have passed (ko_plate F1 already fails three; a fourth hid behind them). Each re-key
+  // pins the check ids the cell fails, and a failing check outside that set is a wrong reason.
+  it("a re-keyed cell red for its pinned reason PLUS a failing check outside its pin fails, naming the check - swept over all six (extra failing check fails)", () => {
+    let checked = 0;
+    for (const id of SIX) {
+      const v = judge(expectedRun((c) => (c.caseId === id ? { ...c, checks: [...c.checks, check("fail", "a pair met twice", [], "I1-rr-pair-once-per-leg")] } : c)));
+      expect(v.exit, id).toBe(1);
+      expect(v.wrongReason.map((w) => w.caseId), id).toEqual([id]);
+      // Only the check outside the pin is named as the extra one; the pinned ones are listed after it, as the pin.
+      expect(v.wrongReason[0]!.got, id).toMatch(/^red for the pinned reason, but also failing I1-rr-pair-once-per-leg \(pinned: /);
+      expect([v.unexpectedRed.length, v.pinnedRed.length, v.works], id).toEqual([0, 5, 71]);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("only a FAILING check outside the pin counts: passing and abstaining checks beside it, and a pinned check that no longer fails, leave the cell pinned", () => {
+    let checked = 0;
+    for (const id of SIX) {
+      const v = judge(expectedRun((c) => (c.caseId === id ? { ...c, checks: [...c.checks.slice(1), check("pass", "", [], "I2-fine"), check("abstain", "", [], "I9-not-applicable")] } : c)));
+      expect(v, id).toMatchObject({ exit: 0, wrongReason: [], unexpectedRed: [] });
+      expect(v.pinnedRed.map((p) => p.caseId), id).toContain(id);
+      checked++;
+    }
+    expect(checked).toBe(6);
   });
 
   it("a red that is NOT one of the six fails, named, with its state and reason (unexpected red fails)", () => {
@@ -250,6 +284,12 @@ describe("the re-keys are held to the expectation they re-key", () => {
     expect(refusal(() => parseRekeys({ note: "n", rekeys: [good, good] }, WANT, "f")).name).toBe("RekeyRepeated");
     expect(refusal(() => parseRekeys({ note: "n", rekeys: [{ ...good, reason: "  " }] }, WANT, "f")).name).toBe("RekeysUnreadable");
     expect(refusal(() => parseRekeys({ note: "n", rekeys: [{ ...good, extra: 1 }] }, WANT, "f")).name).toBe("RekeysUnreadable");
+    // `failing` is required (an empty list says "no check fails" and is a statement; an absent one is a pin nobody made) and distinct.
+    const { failing: _dropped, ...noFailing } = good;
+    expect(refusal(() => parseRekeys({ note: "n", rekeys: [noFailing] }, WANT, "f")).name).toBe("RekeysUnreadable");
+    expect(refusal(() => parseRekeys({ note: "n", rekeys: [{ ...good, failing: ["a", "a"] }] }, WANT, "f")).name).toBe("RekeysUnreadable");
+    expect(refusal(() => parseRekeys({ note: "n", rekeys: [{ ...good, failing: [""] }] }, WANT, "f")).name).toBe("RekeysUnreadable");
+    expect(parseRekeys({ note: "n", rekeys: [{ ...good, failing: ["a", "b"] }] }, WANT, "f")[0]!.failing).toEqual(["a", "b"]);
     expect(refusal(() => parseRekeys({ note: "n" }, WANT, "f")).name).toBe("RekeysUnreadable");
   });
   it("an expectation that is not a list of distinct ids, or is empty, is refused", () => {

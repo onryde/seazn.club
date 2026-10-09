@@ -5,9 +5,9 @@
 // are given in the order they are read: the first that holds a case decides it (the CI artifact before the local run).
 // Exit codes, each with one meaning:
 //   0  done - a verdict was reached and it is clean: every cell not re-keyed is works, every re-keyed one is works or red
-//      for its pinned reason (a works one is listed as greened, a stale pin);
+//      for its pinned reason with no failing check beyond its pinned ones (a works one is listed as greened, a stale pin);
 //   1  a negative signal, the verdict written: a cell not re-keyed that is not works, or a re-keyed cell that is not red
-//      for its pinned reason - each named on stdout;
+//      for its pinned reason or fails a check its re-key does not pin - each named on stdout;
 //   2  refused, nothing written: usage; unreadable input (the expectation, the re-key file or a results.json); a re-key
 //      of an id the expectation does not hold, or twice; a case in no run given (ExpectedAbsent); nothing read (NoCases);
 //      a case twice in one run. Each refusal prints its own name (lib/w2a-expect.ts EXPECT_REFUSALS);

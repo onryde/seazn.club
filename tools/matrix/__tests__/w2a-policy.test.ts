@@ -2,6 +2,7 @@
 // declarations (SETTLE_METHODS, TIEBREAK_RUNGS, StageKind.options, supportsDraws) and the rule rows (BG-KO-1, GN-KO-1,
 // X-ST-1), never from the policy's own text. Needs loop D's exports (merged into this lane).
 import { SETTLE_METHODS, StageKind, forbidsLevelResult } from "@seazn/engine/core";
+import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { describe, expect, it } from "vitest";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
@@ -244,5 +245,44 @@ describe("F1, M1 and R4 on a bracket row play THROUGH a decider too (M-6)", () =
       }
     }
     expect(judged).toBe(3 * SPORT_KEYS.length);
+  });
+
+  // Review minor 2: the walkover takes ordinal 0 of the run's bracket fixtures, the policy's next hard-path slot is
+  // ordinal 3. The smallest bracket root is a page playoff of 4 entrants (the engine's generatePagePlayoff: q1, elim, q2,
+  // final): there the slot lands on the FINAL, so M1's check is not vacuous on the smallest bracket - and a root with
+  // fewer than 4 fixtures would owe the decider nowhere (the check would red "no decider posted").
+  it("M1 on the smallest bracket root (page_playoff_only, 4 entrants): the walkover takes the first match, and the decider is posted at the final, on every sport", async () => {
+    let judged = 0;
+    for (const sport of SPORT_KEYS) {
+      const variant = offlineBuilderDefault(sport);
+      const spec: CaseSpec = { caseId: `page_playoff_only|${sport}|${variant}|M1`, row: "page_playoff_only", sport, variant, scenario: "M1", canary: false };
+      const out = await SCENARIOS.M1.run({ driver: new FakeKnockoutDriver({ pagePlayoff: true }), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+      const checks = [...evaluateInvariants(out.observed), ...out.assertions];
+      expect(checks.filter((c) => c.verdict === "fail").map((c) => `${c.id}: ${c.reason}`), sport).toEqual([]);
+      const stage = out.observed.stages[0]!;
+      expect(stage.kind, sport).toBe("page_playoff");
+      // The engine's own declarations: four entrants, and the page playoff's four matches with one final.
+      const shape = generatePagePlayoff({ entrants: ["e1", "e2", "e3", "e4"] }).fixtures;
+      expect(stage.field, sport).toHaveLength(4);
+      expect(stage.fixtures, sport).toHaveLength(shape.length);
+      const finals = stage.fixtures.filter((f) => f.extKey != null && (stage.terminalFinals ?? []).includes(f.extKey));
+      expect(finals, `${sport}: one final`).toHaveLength(1);
+      // The walkover is the first match (q1, ordinal 0): a forfeit, no decider.
+      const forfeited = stage.fixtures.filter((f) => f.status === "forfeited");
+      expect(forfeited.map((f) => f.extKey), sport).toEqual([shape[0]!.id]);
+      // The bracket fixtures run in play order, so the final is the last: ordinal shape.length - 1, a hard-path slot.
+      expect((shape.length - 1) % 3, `${sport}: the final lands on a hard-path slot`).toBe(0);
+      const prefix = sport === "boardgame" ? "tiebreak_" : "settled_";
+      const methodOf = (f: (typeof stage.fixtures)[number]): string => (f.outcome?.kind === "win" ? ((f.outcome as { method?: string }).method ?? "") : "");
+      expect(methodOf(finals[0]!).startsWith(prefix), `${sport}: the final's method is ${methodOf(finals[0]!)}`).toBe(true);
+      // And it is the ONLY decider: q1 was forfeited, elim and q2 play out.
+      expect(stage.fixtures.filter((f) => methodOf(f).startsWith(prefix)).map((f) => f.id), sport).toEqual([finals[0]!.id]);
+      const check = checks.find((c) => c.id === "life-bracket-decider-exercised")!;
+      expect(check.verdict, `${sport}: ${check.reason}`).toBe("pass");
+      expect(check.checked, sport).toBeGreaterThan(0);
+      judged++;
+    }
+    expect(judged).toBe(SPORT_KEYS.length);
+    expect(judged).toBeGreaterThan(0);
   });
 });

@@ -5,8 +5,9 @@
 // They are RE-KEYED to the programme item that owns them (expect-77-rekeys.json: the gap they now belong to, its wave,
 // and the reason the product must still give), and the judge passes for "71 works + 6 red with the pinned reason":
 //   - a cell not re-keyed must be `works`;
-//   - a re-keyed cell must be `red` AND say its pinned reason - red for any other reason fails, so a re-key can never
-//     excuse a NEW defect on the same cell;
+//   - a re-keyed cell must be `red`, say its pinned reason AND fail no check outside the set its re-key pins (`failing`:
+//     the check ids the cell fails today, empty for a cell that ends in a case-level error) - red for any other reason, or
+//     with one more failing check, fails, so a re-key can never excuse a NEW defect on the same cell;
 //   - a re-keyed cell that is `works` passes and is reported (`greened`): the pin is stale, drop it;
 //   - an id no run holds is a refusal (ExpectedAbsent), never a pass over fewer cells; nothing read at all is NoCases.
 // Pure: tools/matrix/w2a-expect.ts reads the files, this decides.
@@ -25,8 +26,9 @@ export class ExpectRefused extends Error {
 
 const issuesOf = (e: z.ZodError): string => e.issues.slice(0, 3).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
 
-/** One re-keyed cell: where it was (`was`), where it is owned now (`now`, in `wave`, by `rule` when one is named) and the
- *  reason it must still be red for. `ruling` names the ruling that moved it. */
+/** One re-keyed cell: where it was (`was`), where it is owned now (`now`, in `wave`, by `rule` when one is named), the
+ *  reason it must still be red for, and the check ids it fails today (`failing`, required: `[]` says no check fails - the
+ *  cell ends in a case-level error - and an absent list would be a pin nobody made). `ruling` names the ruling that moved it. */
 const RekeySchema = z.strictObject({
   caseId: z.string().min(1),
   was: z.string().min(1),
@@ -34,6 +36,7 @@ const RekeySchema = z.strictObject({
   wave: z.string().min(1),
   rule: z.string().min(1).optional(),
   reason: z.string().trim().min(1),
+  failing: z.array(z.string().min(1)).refine((ids) => new Set(ids).size === ids.length, "a check id is listed twice"),
   ruling: z.string().min(1),
 });
 export type Rekey = z.infer<typeof RekeySchema>;
@@ -71,6 +74,11 @@ function sayings(c: Pick<CaseResult, "reason" | "checks">): string {
   return [c.reason, ...c.checks.filter((k) => k.verdict === "fail").flatMap((k) => [k.reason, ...k.evidence])].join("\n");
 }
 
+/** The failing checks (by id) a cell has beyond the ones its re-key pins. A pinned check that no longer fails is progress,
+ *  not a fault; only `fail` counts (a pass or an abstention is not a defect). */
+const unpinnedFailing = (c: Pick<CaseResult, "checks">, rk: Pick<Rekey, "failing">): string[] =>
+  [...new Set(c.checks.filter((k) => k.verdict === "fail" && !rk.failing.includes(k.id)).map((k) => k.id))];
+
 export interface ExpectVerdict {
   expected: number;
   /** Cases read across every source (zero is NoCases, never a pass). */
@@ -84,7 +92,7 @@ export interface ExpectVerdict {
   greened: string[];
   /** A cell not re-keyed that is not `works`. */
   unexpectedRed: { caseId: string; state: string; reason: string }[];
-  /** A re-keyed cell that is not red for its pinned reason. */
+  /** A re-keyed cell that is not red for its pinned reason, or is red for it but fails a check its re-key does not pin. */
   wrongReason: { caseId: string; wanted: string; got: string }[];
   exit: 0 | 1;
 }
@@ -119,7 +127,9 @@ export function judgeExpectation(a: { want: readonly string[]; rekeys: readonly 
     } else if (c.state === "works") {
       v.greened.push(id);
     } else if (c.state === "red" && bare(sayings(c)).includes(bare(rk.reason))) {
-      v.pinnedRed.push({ caseId: id, now: rk.now, wave: rk.wave });
+      const extra = unpinnedFailing(c, rk);
+      if (extra.length === 0) v.pinnedRed.push({ caseId: id, now: rk.now, wave: rk.wave });
+      else v.wrongReason.push({ caseId: id, wanted: rk.reason, got: `red for the pinned reason, but also failing ${extra.join(", ")} (pinned: ${rk.failing.length === 0 ? "no check" : rk.failing.join(", ")})` });
     } else {
       v.wrongReason.push({ caseId: id, wanted: rk.reason, got: c.state === "red" ? c.reason : `${c.state}: ${c.reason}` });
     }
