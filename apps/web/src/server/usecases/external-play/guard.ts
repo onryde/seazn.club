@@ -153,15 +153,19 @@ export async function loadOnlinePlayFixture(fixtureId: string): Promise<OnlinePl
 }
 
 /** A bridge row minted for an OLDER `scheduled_at` than the fixture's
- *  current one (a reschedule happened after the mint) is stale — UNLESS it
- *  is already `live`/`finished`, in which case the game already exists and a
- *  later reschedule cannot un-happen it. */
+ *  current one (a reschedule happened after the mint) is stale — but ONLY a
+ *  `pending` row with no challenge (fix round 1 ruling, 2026-10-10). A row
+ *  that carries a `challenge_id` is NEVER stale, whatever its status: the game
+ *  exists at Lichess, and a moved timetable cannot un-create it (D12 anchors
+ *  the window on the round's open, not on `scheduled_at`). A
+ *  `needs_organiser` row is not stale either — the organiser's void/resolve
+ *  (T16) handles a late reschedule, never a silent reset. */
 export function isStale(f: OnlinePlayFixture): boolean {
   const b = f.bridge;
   return (
     !!b &&
-    b.status !== "live" &&
-    b.status !== "finished" &&
+    b.status === "pending" &&
+    b.challenge_id === null &&
     b.scheduled_at_basis.getTime() !== f.scheduledAt.getTime()
   );
 }
@@ -173,25 +177,29 @@ export function effectiveBridge(f: OnlinePlayFixture): BridgeRow | null {
 }
 
 /**
- * Writes only when `f`'s OWN snapshot judges the bridge stale. The SQL's own
- * `status in (...)` repeats `isStale`'s live/finished exclusion — belt and
- * suspenders against a race: `f` is a snapshot, so if the row moved to
- * `live`/`finished` in the database after `f` was read (e.g. a poll job
- * landed between the read and this call), the UPDATE below still refuses to
- * touch it even though the stale caller's copy of `f` does not know that yet.
+ * Writes only when `f`'s OWN snapshot judges the bridge stale. The SQL repeats
+ * `isStale`'s `pending and challenge_id is null` — belt and suspenders against
+ * a race: `f` is a snapshot, so if a game was recorded in the database after
+ * `f` was read (T9 committed a create between the read and this call), the
+ * UPDATE still refuses to touch it even though the stale caller's copy of `f`
+ * does not know that yet.
+ *
+ * The claim (`mint_claimed_at`) is never touched: a pending row can be
+ * mid-create in another process, and clearing its claim would hand the
+ * create to a second claimant — two games at Lichess for one board.
  */
 export async function resetStaleBridge(f: OnlinePlayFixture): Promise<void> {
   if (!isStale(f)) return;
   await sql`
     update fixture_external_play
-       set status = 'pending', scheduled_at_basis = ${f.scheduledAt}, challenge_id = null,
+       set scheduled_at_basis = ${f.scheduledAt},
            white_side = null, white_lichess_id = null,
-           black_lichess_id = null, expires_at = null, mint_claimed_at = null,
-           white_emailed_at = null, black_emailed_at = null, needs_reason = null,
+           black_lichess_id = null, expires_at = null,
+           white_emailed_at = null, black_emailed_at = null,
            started_at = null, finished_at = null,
            last_error = null, updated_at = now()
      where fixture_id = ${f.fixtureId}
-       and status in ('pending', 'ready', 'needs_organiser')
+       and status = 'pending' and challenge_id is null
        and scheduled_at_basis <> ${f.scheduledAt}`;
 }
 

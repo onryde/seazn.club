@@ -25,6 +25,54 @@ const DEFAULT_BASE = "https://lichess.org";
 
 export type BoardApiDeps = { fetch?: typeof fetch; baseUrl?: string };
 
+/** One of the caller's outgoing challenges, as the recovery lookup needs it. */
+export type OutgoingChallenge = { id: string; destUserId: string | null; status: string };
+/** One of the caller's ongoing games, from the caller's side. */
+export type OngoingGame = { gameId: string; color: "white" | "black"; opponentId: string | null };
+type Listed<T> = { ok: true } & T | { ok: false; code: BoardErrorCode; raw: string };
+
+/** `nb`'s maximum on /api/account/playing (lichess-org/api spec). A page this
+ *  full cannot prove a game is absent. */
+const ONGOING_PAGE = 50;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+const nonEmpty = (v: unknown): v is string => typeof v === "string" && v !== "";
+
+/** Every item or nothing: one entry we cannot read could be the very game a
+ *  recovery is looking for, so it fails the whole list (`null`). */
+function readOutgoing(raw: string): OutgoingChallenge[] | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!isRecord(parsed) || !Array.isArray(parsed.out)) return null;
+  const out: OutgoingChallenge[] = [];
+  for (const c of parsed.out) {
+    if (!isRecord(c) || !nonEmpty(c.id) || typeof c.status !== "string") return null;
+    if (c.destUser === null) {
+      out.push({ id: c.id, destUserId: null, status: c.status });
+      continue;
+    }
+    if (!isRecord(c.destUser) || !nonEmpty(c.destUser.id)) return null;
+    out.push({ id: c.id, destUserId: c.destUser.id, status: c.status });
+  }
+  return out;
+}
+
+function readOngoing(raw: string): OngoingGame[] | null {
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!isRecord(parsed) || !Array.isArray(parsed.nowPlaying)) return null;
+  const games: OngoingGame[] = [];
+  for (const g of parsed.nowPlaying) {
+    if (!isRecord(g) || !nonEmpty(g.gameId)) return null;
+    if (g.color !== "white" && g.color !== "black") return null;
+    if (!isRecord(g.opponent)) return null;
+    const id = g.opponent.id;
+    if (id !== null && !nonEmpty(id)) return null;
+    games.push({ gameId: g.gameId, color: g.color, opponentId: id });
+  }
+  return games;
+}
+
 /** M6 and M12 are both 400s. Matched on the measured sentence, not on a
  *  substring that could drift: `includes`, so a trailing-field change in the
  *  JSON envelope does not silently reclassify a known state as unknown. */
@@ -195,6 +243,54 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
       ));
     },
 
+    /** Cancel a challenge the token's owner SENT — and, if it was accepted but
+     *  not yet played, abort the game (lila apiCancel; it accepts board:play
+     *  and challenge:write). MEASURED 2026-10-10 (t9/lookup-spike.log): on an
+     *  accepted game with no move, 200 {"ok":true}, and the game left White's
+     *  ongoing list. T9 uses it to close a stray game it could not record —
+     *  one call for both the unaccepted challenge and the accepted game, which
+     *  /api/board/game/{id}/abort cannot do (a challenge is not yet a game). */
+    async cancelChallenge(a: { token: string; challengeId: string }): Promise<BoardCall> {
+      return asCall(await call(
+        `/api/challenge/${encodeURIComponent(a.challengeId)}/cancel`,
+        { method: "POST", token: a.token },
+      ));
+    },
+
+    /** Recovery lookup A (T9 fix round 1, I2): the caller's OUTGOING
+     *  challenges. GET /api/challenge is gated on `challenge:read` (lila
+     *  `apiList = ScopedBody(_.Challenge.Read, _.Web.Mobile)`), which
+     *  PLAY_SCOPES does not carry — MEASURED 2026-10-10 with a board:play +
+     *  challenge:write token: 403 {"error":"Missing scope: challenge:read"}. So
+     *  with today's scopes this always answers `unauthorized`. The success
+     *  shape is the lichess-org/api spec's (challengeList ⇒ {in, out}:
+     *  ChallengeJson[], `destUser` a ChallengeUser or null), NOT measured. */
+    async listOutgoingChallenges(token: string): Promise<Listed<{ challenges: OutgoingChallenge[] }>> {
+      const out = await call("/api/challenge", { method: "GET", token });
+      if (out.status < 200 || out.status >= 300) {
+        return { ok: false, code: classifyBoardError(out.status, out.raw), raw: out.raw };
+      }
+      const challenges = readOutgoing(out.raw);
+      return challenges === null ? { ok: false, code: "unavailable", raw: out.raw } : { ok: true, challenges };
+    },
+
+    /** Recovery lookup B: the caller's ongoing games (no scope needed).
+     *  MEASURED 2026-10-10: each entry carries `gameId` (equal to the id of
+     *  the challenge that made it), `color` from the caller's side, and
+     *  `opponent.id` — an accepted challenge appears here, an unaccepted one
+     *  does not. `complete` is false on a full page: absence is then
+     *  unproven. */
+    async listOngoingGames(token: string): Promise<Listed<{ games: OngoingGame[]; complete: boolean }>> {
+      const out = await call(`/api/account/playing?nb=${ONGOING_PAGE}`, { method: "GET", token });
+      if (out.status < 200 || out.status >= 300) {
+        return { ok: false, code: classifyBoardError(out.status, out.raw), raw: out.raw };
+      }
+      const games = readOngoing(out.raw);
+      return games === null
+        ? { ok: false, code: "unavailable", raw: out.raw }
+        : { ok: true, games, complete: games.length < ONGOING_PAGE };
+    },
+
     /** The reconcile read (§3.5). `clocks=true` because M11 makes this the
      *  authority on both clocks; `pgnInJson=false` because we read `moves`.
      *  No Authorization header — the export is public. null on 404, on a 5xx,
@@ -258,3 +354,6 @@ export const resignGame = defaultApi.resignGame;
 export const offerOrAcceptDraw = defaultApi.offerOrAcceptDraw;
 export const abortGame = defaultApi.abortGame;
 export const exportGame = defaultApi.exportGame;
+export const cancelChallenge = defaultApi.cancelChallenge;
+export const listOutgoingChallenges = defaultApi.listOutgoingChallenges;
+export const listOngoingGames = defaultApi.listOngoingGames;

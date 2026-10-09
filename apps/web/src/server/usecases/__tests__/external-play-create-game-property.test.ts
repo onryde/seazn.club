@@ -1,5 +1,6 @@
 // T9 — the property the controller asked for: random interleavings of
-// {seat White, seat Black, queue release, 429, timeout, withdrawal, retry}
+// {seat White, seat Black, queue release, 429, timeout, withdrawal, retry,
+// reschedule (fix round 1, I1)}
 // against the REAL creation queue (T4) and the real database. Invariants: at
 // most one Lichess challenge per fixture, and never a game on a board that is
 // no longer playable. Every call's outcome is also checked against a model
@@ -28,7 +29,13 @@ const T = new Date("2026-10-01T12:10:00.000Z");
 const OPENED = new Date("2026-10-01T12:00:00.000Z");
 const NOW = new Date("2026-10-01T12:05:00.000Z");
 
-const board = vi.hoisted(() => ({ createChallengeToUser: vi.fn(), acceptChallenge: vi.fn() }));
+const board = vi.hoisted(() => ({
+  createChallengeToUser: vi.fn(),
+  acceptChallenge: vi.fn(),
+  listOutgoingChallenges: vi.fn(),
+  listOngoingGames: vi.fn(),
+  cancelChallenge: vi.fn(),
+}));
 vi.mock("@/server/external-play/lichess/board-api", () => board);
 
 const preflight = vi.hoisted(() => ({ seatPlayer: vi.fn() }));
@@ -61,6 +68,7 @@ type Act =
   | { kind: "timeout" }
   | { kind: "withdraw" }
   | { kind: "retry" }
+  | { kind: "reschedule" }
   | { kind: "wait" };
 
 const act: fc.Arbitrary<Act> = fc.oneof(
@@ -72,6 +80,7 @@ const act: fc.Arbitrary<Act> = fc.oneof(
   { arbitrary: fc.constant<Act>({ kind: "timeout" }), weight: 1 },
   { arbitrary: fc.constant<Act>({ kind: "withdraw" }), weight: 1 },
   { arbitrary: fc.constant<Act>({ kind: "wait" }), weight: 1 },
+  { arbitrary: fc.constant<Act>({ kind: "reschedule" }), weight: 1 },
 );
 const W: Act = { kind: "arrive", colour: "white" };
 const B: Act = { kind: "arrive", colour: "black" };
@@ -84,6 +93,11 @@ const prefix = fc.oneof(
   { arbitrary: fc.constant<Act[]>([W, { kind: "block" }, B, { kind: "retry" }, { kind: "release" }]), weight: 1 },
   { arbitrary: fc.constant<Act[]>([{ kind: "429" }, W, B, { kind: "retry" }, { kind: "wait" }, { kind: "retry" }]), weight: 1 },
   { arbitrary: fc.constant<Act[]>([{ kind: "timeout" }, B, W, { kind: "retry" }]), weight: 1 },
+  // Fix round 1, I1: a reschedule after a game, after a held unknown
+  // outcome, and while a create waits in the queue.
+  { arbitrary: fc.constant<Act[]>([B, W, { kind: "reschedule" }, { kind: "retry" }]), weight: 1 },
+  { arbitrary: fc.constant<Act[]>([{ kind: "timeout" }, B, W, { kind: "reschedule" }, { kind: "retry" }]), weight: 1 },
+  { arbitrary: fc.constant<Act[]>([W, { kind: "block" }, B, { kind: "reschedule" }, { kind: "release" }, { kind: "retry" }]), weight: 1 },
 );
 const scenario = fc
   .tuple(prefix, fc.array(act, { minLength: 1, maxLength: 12 }))
@@ -108,6 +122,8 @@ type Run = {
   /** Creates that may have made a challenge at Lichess (ok, or a timeout). */
   maybeCreated: number;
   lastId: string | null;
+  /** Minutes the fixture has been moved by (a fresh time per reschedule). */
+  moves: number;
 };
 let current: Run | null = null;
 /** A call's outcome, or what it threw — kept so a queued call never rejects
@@ -137,6 +153,13 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
         withdrawnWhileQueued: 0,
         pendingGroups: 0,
         dedupedCalls: 0,
+        // Fix round 1: distinct games made, followers told `already`, and the
+        // three reschedule paths.
+        games: 0,
+        alreadyFollowers: 0,
+        rescheduledAfterGame: 0,
+        rescheduledAfterHold: 0,
+        rescheduledWhileQueued: 0,
         // The invariants, counted on their own.
         violationsDuplicate: 0,
         violationsUnplayable: 0,
@@ -172,6 +195,12 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
         },
       );
       board.acceptChallenge.mockResolvedValue({ ok: true });
+      // No create in this property can leave a marker on a claimable row (a
+      // 429 clears it; an unknown outcome is held), so the recovery lookups
+      // are never reached: answering "unknown" would surface as a mismatch.
+      board.listOutgoingChallenges.mockResolvedValue({ ok: false, code: "unavailable", raw: "unexpected lookup" });
+      board.listOngoingGames.mockResolvedValue({ ok: false, code: "unavailable", raw: "unexpected lookup" });
+      board.cancelChallenge.mockResolvedValue({ ok: true });
       preflight.seatPlayer.mockImplementation(async (a: { personId: string }) =>
         current!.arrived.has(a.personId)
           ? { seated: true, participant: null }
@@ -196,7 +225,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
             roundOpenedAt: OPENED,
             clock: { base: 300, increment: 3 },
           });
-          const r: Run = { s, arrived: new Set(), withdrawn: false, slot: "ok", maybeCreated: 0, lastId: null };
+          const r: Run = { s, arrived: new Set(), withdrawn: false, slot: "ok", maybeCreated: 0, lastId: null, moves: 0 };
           current = r;
           // The model. Object fields: they change inside the loop.
           const m: {
@@ -204,7 +233,8 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
             held: boolean; // a 429 hold on White is in force
             stamps: number; // White's creates charged in this minute
             saw429: boolean;
-          } = { game: "none", held: false, stamps: 0, saw429: false };
+            movedWhileQueued: boolean; // a reschedule landed after the queued group's first call
+          } = { game: "none", held: false, stamps: 0, saw429: false, movedWhileQueued: false };
           let blocker: { release: () => Promise<void> } | null = null;
           let pending: { where: string; got: Promise<Settled> }[] = [];
 
@@ -242,6 +272,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
               totals.withdrawnWhileQueued += 1;
               return NOT_READY;
             }
+            if (m.movedWhileQueued) return NOT_READY; // rescheduled while queued: refused before any claim
             const slot = r.slot;
             if (slot === "429") {
               m.held = true;
@@ -255,6 +286,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
               return PROVIDER;
             }
             m.game = "ready";
+            totals.games += 1;
             return { kind: "created" };
           };
           const settle = (want: Expect, got: CreateOutcome, where: string) => {
@@ -302,13 +334,21 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
             // One create per fixture in flight: every caller queued behind the
             // blocker shares the one run, so the model answers once for all.
             const want = group.length > 0 ? atDequeue() : null;
+            m.movedWhileQueued = false;
             await b.release();
             if (group.length > 0) totals.pendingGroups += 1;
             if (group.length > 1) totals.dedupedCalls += group.length - 1;
-            for (const g of group) {
+            for (const [i, g] of group.entries()) {
               const out = await g.got;
               if (out.e) throw out.e;
-              settle(want!, out.v!, `${g.where} (released)`);
+              // Minor a: the group's FIRST call is the leader whose job ran;
+              // a follower made nothing and answers `already`.
+              if (i > 0 && want!.kind === "created") {
+                settle(ALREADY, out.v!, `${g.where} (released, follower)`);
+                totals.alreadyFollowers += 1;
+              } else {
+                settle(want!, out.v!, `${g.where} (released)`);
+              }
             }
           };
 
@@ -343,6 +383,15 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
               r.slot = "429";
             } else if (x.kind === "timeout") {
               r.slot = "timeout";
+            } else if (x.kind === "reschedule") {
+              r.moves += 2;
+              await sql`update fixtures set scheduled_at = ${new Date(T.getTime() + r.moves * 60_000)} where id = ${s.fixtureId}`;
+              if (m.game === "ready") totals.rescheduledAfterGame += 1;
+              if (m.game === "held") totals.rescheduledAfterHold += 1;
+              if (pending.length > 0) {
+                m.movedWhileQueued = true;
+                totals.rescheduledWhileQueued += 1;
+              }
             } else if (x.kind === "withdraw") {
               if (!r.withdrawn) {
                 await withdrawEntrantCascade(await mintOrgOwnerAuth(s.orgId), s.away.entrantId);
@@ -388,7 +437,10 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
       expect(totals.violationsUnclaimed, "INVARIANT: no create without this caller's claim on a pending row").toBe(0);
       expect(totals.violationsUnseated, "INVARIANT: no create before both players are seated").toBe(0);
       expect(totals.violationsStuckClaim, "INVARIANT: no claim left behind").toBe(0);
-      expect(totals.publishes, "one lobby publish per game created").toBe(totals.created);
+      // Minor a: counted against DISTINCT games the model let through to
+      // Lichess, not against outcomes — a follower's answer is not a game.
+      expect(totals.publishes, "one lobby publish per distinct game").toBe(totals.games);
+      expect(totals.created, "one `created` answer per distinct game").toBe(totals.games);
       // Anti-vacuity: zero checked is a failure, per path the property is named for.
       expect(totals.runs, "runs").toBeGreaterThanOrEqual(60);
       expect(totals.calls, "calls").toBeGreaterThan(0);
@@ -405,6 +457,11 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
       expect(totals.withdrawnWhileQueued, "withdrawn while queued").toBeGreaterThan(0);
       expect(totals.pendingGroups, "creates released from the queue").toBeGreaterThan(0);
       expect(totals.dedupedCalls, "concurrent creates sharing one run").toBeGreaterThan(0);
+      expect(totals.games, "distinct games").toBeGreaterThan(0);
+      expect(totals.alreadyFollowers, "followers of a created run").toBeGreaterThan(0);
+      expect(totals.rescheduledAfterGame, "a reschedule after a game").toBeGreaterThan(0);
+      expect(totals.rescheduledAfterHold, "a reschedule after a held unknown outcome").toBeGreaterThan(0);
+      expect(totals.rescheduledWhileQueued, "a reschedule while queued").toBeGreaterThan(0);
     },
     300_000,
   );

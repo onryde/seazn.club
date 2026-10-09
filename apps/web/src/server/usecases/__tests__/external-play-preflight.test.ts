@@ -1105,14 +1105,6 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
         },
       },
       {
-        name: "(b) alone: a STALE bridge (minted for an older timetable, never live) is not this fixture's game",
-        as: "home",
-        arrange: async (s, rtk) => {
-          await seatBothLive(s, rtk);
-          await recordGame(s, { basis: new Date(T.getTime() - 86_400_000) });
-        },
-      },
-      {
         name: "(c) alone: the game is over (`finished`)",
         as: "home",
         arrange: async (s, rtk) => {
@@ -1140,7 +1132,27 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
       expectInertRefusal(got, "window_closed", late);
       checked += 1;
     }
-    expect(checked, "anti-vacuity: eight ways not to re-enter").toBe(8);
+    expect(checked, "anti-vacuity: seven ways not to re-enter").toBe(7);
+  });
+
+  it("a game recorded for an OLDER timetable is still this fixture's game: the seated player re-enters (fix round 1)", async () => {
+    // Controller ruling 2026-10-10 (T9 fix round 1, I1): a bridge row that
+    // carries a challenge_id is never stale, whatever its status — a
+    // reschedule after the create cannot un-create the game, so it cannot
+    // lock its players out either. This was "(b) alone" in the sweep above
+    // until the ruling; it is now the positive pair.
+    let checked = 0;
+    for (const status of ["ready", "live"] as const) {
+      const s = await seed({ cameraPolicy: "off" });
+      const rtk = fakeRealtimeKit();
+      for (const sd of ["home", "away"] as const) {
+        expect((await claim(s, sd, rtk)).seated, `premise: ${sd} seated in the window`).toBe(true);
+      }
+      await recordGame(s, { status, basis: new Date(T.getTime() - 86_400_000) });
+      expect(await claim(s, "home", rtk, LATE), status).toEqual({ seated: true, participant: null });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: ready and live").toBe(2);
   });
 
   it("a previously seated player whose board has been settled is refused, no token — swept and counted", async () => {

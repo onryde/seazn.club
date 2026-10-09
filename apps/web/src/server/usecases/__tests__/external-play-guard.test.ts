@@ -157,8 +157,8 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
   });
 
   it(
-    "effectiveBridge hides a row minted for an older scheduled_at; " +
-      "resetStaleBridge clears it; live rows are never reset",
+    "effectiveBridge hides a challenge-less pending row minted for an older scheduled_at; " +
+      "resetStaleBridge rebases it; live rows are never reset",
     async () => {
       const s = await seedOnlineChessFixture({
         onlinePlay: "lichess",
@@ -167,12 +167,14 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
         linked: true,
       });
 
-      // Phase A: a 'pending' bridge minted for an OLDER scheduled_at (a
-      // reschedule happened after the mint) is stale — hidden, then reset.
+      // Phase A: a 'pending' bridge with NO challenge, minted for an OLDER
+      // scheduled_at (a reschedule happened after the mint) is stale —
+      // hidden, then reset. (A row carrying a challenge is never stale:
+      // fix round 1 ruling, swept below.)
       const oldBasis = new Date(T.getTime() - 60 * 60_000);
       await sql`
-        insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id)
-        values (${s.fixtureId}, ${s.orgId}, 'pending', ${oldBasis}, ${`chal-old-${randomUUID()}`})`;
+        insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis)
+        values (${s.fixtureId}, ${s.orgId}, 'pending', ${oldBasis})`;
 
       const f1 = await loadOnlinePlayFixture(s.fixtureId);
       if (!f1 || !f1.bridge) throw new Error("guard/bridge unexpectedly missing after insert");
@@ -209,11 +211,11 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
     },
   );
 
-  it("resetStaleBridge does not clobber a bridge that raced to live after the read (status guard)", async () => {
-    // f's own snapshot says 'pending' (stale) — but between the read and the
-    // call, something else (a poll job) marked the row 'live'. The SQL's own
-    // `status in (...)` clause must protect it even though `isStale(f)`,
-    // computed from the STALE in-memory `f`, still says true.
+  it("resetStaleBridge does not clobber a bridge that raced to a CREATED game after the read (SQL guard)", async () => {
+    // f's own snapshot says 'pending', no challenge (stale) — but between the
+    // read and the call, T9 created the game and recorded it. The SQL's own
+    // guard must protect the row even though `isStale(f)`, computed from the
+    // stale in-memory `f`, still says true.
     const s = await seedOnlineChessFixture({
       onlinePlay: "lichess",
       divisionStarted: true,
@@ -223,23 +225,141 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
     const oldBasis = new Date(T.getTime() - 60 * 60_000);
     const challengeId = `chal-race-${randomUUID()}`;
     await sql`
-      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id)
-      values (${s.fixtureId}, ${s.orgId}, 'pending', ${oldBasis}, ${challengeId})`;
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis)
+      values (${s.fixtureId}, ${s.orgId}, 'pending', ${oldBasis})`;
 
     const f = await loadOnlinePlayFixture(s.fixtureId);
     if (!f) throw new Error("guard refused a fixture the seed built to pass it");
     expect(isStale(f)).toBe(true); // f's own (stale) view
 
-    // Race: the row moves to 'live' in the database after f was read.
-    await sql`update fixture_external_play set status = 'live' where fixture_id = ${s.fixtureId}`;
+    let checked = 0;
+    for (const raced of ["pending", "ready"] as const) {
+      // Race: a challenge is recorded in the database after f was read — on
+      // a row still 'pending' (a legacy mint) and on a 'ready' one (T9).
+      await sql`
+        update fixture_external_play set status = ${raced}, challenge_id = ${challengeId}
+         where fixture_id = ${s.fixtureId}`;
+      await resetStaleBridge(f); // uses the STALE f — must not clobber the recorded game
+      const [row] = await sql<{ status: string; challenge_id: string | null; scheduled_at_basis: Date }[]>`
+        select status, challenge_id, scheduled_at_basis from fixture_external_play where fixture_id = ${s.fixtureId}`;
+      if (!row) throw new Error("row vanished");
+      expect(row.status, raced).toBe(raced);
+      expect(row.challenge_id, raced).toBe(challengeId); // untouched, not reset to null
+      expect(row.scheduled_at_basis.getTime(), raced).toBe(oldBasis.getTime());
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
 
-    await resetStaleBridge(f); // uses the STALE f — must not clobber the now-live row
+  it("resetStaleBridge does not clobber a row HELD with no challenge after the read (SQL guard: status, not only challenge_id)", async () => {
+    // f read the row as stale 'pending'; before the reset, the creation queue
+    // held it — an unknown create outcome records no challenge. The hold's
+    // reason, its operator text and its sent marker are what an organiser
+    // acts on, so the reset's own SQL must refuse every status but 'pending'.
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+    });
+    const oldBasis = new Date(T.getTime() - 60 * 60_000);
+    const sentAt = new Date(T.getTime() - 61 * 60_000);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis)
+      values (${s.fixtureId}, ${s.orgId}, 'pending', ${oldBasis})`;
+    const f = await loadOnlinePlayFixture(s.fixtureId);
+    if (!f) throw new Error("guard refused a fixture the seed built to pass it");
+    expect(isStale(f)).toBe(true); // f's own (stale) view
 
-    const [row] = await sql<{ status: string; challenge_id: string | null }[]>`
-      select status, challenge_id from fixture_external_play where fixture_id = ${s.fixtureId}`;
-    if (!row) throw new Error("row vanished");
-    expect(row.status).toBe("live");
-    expect(row.challenge_id).toBe(challengeId); // untouched, not reset to null
+    let checked = 0;
+    for (const raced of ["needs_organiser", "ready"] as const) {
+      await sql`
+        update fixture_external_play
+           set status = ${raced}, challenge_id = null,
+               needs_reason = ${raced === "needs_organiser" ? "create_outcome_unknown" : null},
+               last_error = 'create:timeout: held', create_sent_at = ${sentAt},
+               scheduled_at_basis = ${oldBasis}
+         where fixture_id = ${s.fixtureId}`;
+      await resetStaleBridge(f);
+      const [row] = await sql<{ status: string; last_error: string | null; create_sent_at: Date | null; scheduled_at_basis: Date }[]>`
+        select status, last_error, create_sent_at, scheduled_at_basis from fixture_external_play where fixture_id = ${s.fixtureId}`;
+      if (!row) throw new Error("row vanished");
+      expect(row.status, raced).toBe(raced);
+      expect(row.last_error, `${raced}: the hold's operator text survives`).toBe("create:timeout: held");
+      expect(row.create_sent_at?.getTime(), `${raced}: the sent marker survives`).toBe(sentAt.getTime());
+      expect(row.scheduled_at_basis.getTime(), `${raced}: not rebased`).toBe(oldBasis.getTime());
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("resetStaleBridge leaves an in-flight claim alone (a reschedule cannot hand the create to a second claimant)", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+    });
+    const oldBasis = new Date(T.getTime() - 60 * 60_000);
+    const claim = new Date(T.getTime() - 5_000);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, mint_claimed_at)
+      values (${s.fixtureId}, ${s.orgId}, 'pending', ${oldBasis}, ${claim})`;
+    const f = await loadOnlinePlayFixture(s.fixtureId);
+    if (!f) throw new Error("guard refused a fixture the seed built to pass it");
+    expect(isStale(f)).toBe(true);
+    await resetStaleBridge(f);
+    const [row] = await sql<{ mint_claimed_at: Date | null; scheduled_at_basis: Date }[]>`
+      select mint_claimed_at, scheduled_at_basis from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    expect(row?.scheduled_at_basis.getTime(), "rebased").toBe(T.getTime());
+    expect(row?.mint_claimed_at?.getTime(), "the claimant still holds its claim").toBe(claim.getTime());
+  });
+
+  it("sweep: ONLY a pending row with no challenge is stale; every other status × challenge is never hidden or reset", async () => {
+    // Fix round 1 ruling (2026-10-10): a row that carries a challenge_id is
+    // NEVER stale, whatever its status, and only a pending row with no
+    // challenge may be reset by a reschedule. Supersedes R15, which reset a
+    // needs_organiser row after a reschedule: T16's void/resolve owns that.
+    // Expected value from the ruling, never from isStale.
+    const statuses = ["pending", "ready", "live", "finished", "needs_organiser"] as const;
+    let checked = 0;
+    for (const status of statuses) {
+      for (const withChallenge of [false, true]) {
+        const s = await seedOnlineChessFixture({
+          onlinePlay: "lichess",
+          divisionStarted: true,
+          scheduledAt: T,
+          linked: true,
+        });
+        const oldBasis = new Date(T.getTime() - 60 * 60_000);
+        const challengeId = withChallenge ? `chal-sweep-${randomUUID()}` : null;
+        const startedAt = status === "needs_organiser" ? new Date(oldBasis.getTime() + 5 * 60_000) : null;
+        await sql`
+          insert into fixture_external_play
+            (fixture_id, org_id, status, scheduled_at_basis, challenge_id, needs_reason, started_at)
+          values (${s.fixtureId}, ${s.orgId}, ${status}, ${oldBasis}, ${challengeId},
+                  ${status === "needs_organiser" ? "aborted" : null}, ${startedAt})`;
+        const f = await loadOnlinePlayFixture(s.fixtureId);
+        if (!f) throw new Error("guard refused a fixture the seed built to pass it");
+        const label = `${status}${withChallenge ? "+challenge" : ""}`;
+        const resettable = status === "pending" && !withChallenge;
+        expect(isStale(f), label).toBe(resettable);
+        expect(effectiveBridge(f) === null, label).toBe(resettable);
+        await resetStaleBridge(f);
+        const [row] = await sql<{
+          status: string; challenge_id: string | null; scheduled_at_basis: Date; started_at: Date | null;
+        }[]>`
+          select status, challenge_id, scheduled_at_basis, started_at
+            from fixture_external_play where fixture_id = ${s.fixtureId}`;
+        if (!row) throw new Error("row vanished");
+        expect(row.status, label).toBe(status);
+        expect(row.challenge_id, label).toBe(challengeId);
+        expect(row.started_at?.getTime() ?? null, label).toBe(startedAt?.getTime() ?? null);
+        expect(row.scheduled_at_basis.getTime(), label).toBe(resettable ? T.getTime() : oldBasis.getTime());
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 5 statuses × with/without a challenge").toBe(10);
   });
 
   it("ensureBridgeRow inserts a pending row once; a second call does not clobber an existing one", async () => {
@@ -363,44 +483,5 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
     expect(home.personId).toBeNull();
     expect(home.userId).toBeNull();
     expect(home.lichess).toBeNull();
-  });
-
-  it("resetStaleBridge also clears started_at/finished_at (a reschedule is a new game)", async () => {
-    // Ruling R15 (review fix round 1): a bridge can reach
-    // needs_organiser/aborted AFTER the game went live (started_at stamped,
-    // possibly finished_at too). If that fixture is then rescheduled, the
-    // reset must treat it as a brand-new game — clearing started_at and
-    // finished_at, not just status/needs_reason.
-    const s = await seedOnlineChessFixture({
-      onlinePlay: "lichess",
-      divisionStarted: true,
-      scheduledAt: T,
-      linked: true,
-    });
-    const oldBasis = new Date(T.getTime() - 60 * 60_000);
-    const startedAt = new Date(oldBasis.getTime() + 5 * 60_000);
-    const finishedAt = new Date(oldBasis.getTime() + 25 * 60_000);
-    await sql`
-      insert into fixture_external_play
-        (fixture_id, org_id, status, scheduled_at_basis, needs_reason, started_at, finished_at)
-      values
-        (${s.fixtureId}, ${s.orgId}, 'needs_organiser', ${oldBasis}, 'aborted', ${startedAt}, ${finishedAt})`;
-
-    const f = await loadOnlinePlayFixture(s.fixtureId);
-    if (!f) throw new Error("guard refused a fixture the seed built to pass it");
-    expect(isStale(f)).toBe(true);
-
-    await resetStaleBridge(f);
-
-    const [row] = await sql<
-      { status: string; needs_reason: string | null; started_at: Date | null; finished_at: Date | null }[]
-    >`
-      select status, needs_reason, started_at, finished_at
-        from fixture_external_play where fixture_id = ${s.fixtureId}`;
-    if (!row) throw new Error("row vanished");
-    expect(row.status).toBe("pending");
-    expect(row.needs_reason).toBeNull();
-    expect(row.started_at).toBeNull();
-    expect(row.finished_at).toBeNull();
   });
 });

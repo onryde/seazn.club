@@ -185,9 +185,10 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", (
     // D12 adds round_open_id ONLY: the invite stamps are the pre-existing
     // per-seat white_emailed_at / black_emailed_at — no second invite column.
     // V434 drops url_white / url_black: under D3 there is no per-colour
-    // lichess.org link to hand a player.
+    // lichess.org link to hand a player. V434 also adds create_sent_at, T9's
+    // durable "a create was sent" marker (fix round 1, I2).
     expect(await columns("fixture_external_play")).toEqual([
-      "black_emailed_at", "black_lichess_id", "challenge_id", "created_at", "expires_at",
+      "black_emailed_at", "black_lichess_id", "challenge_id", "create_sent_at", "created_at", "expires_at",
       "finished_at", "fixture_id", "last_error", "last_polled_at",
       "mint_claimed_at", "needs_reason", "org_id", "provider", "round_open_id",
       "scheduled_at_basis", "started_at", "status", "updated_at",
