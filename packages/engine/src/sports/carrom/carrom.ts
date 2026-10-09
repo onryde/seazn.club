@@ -35,7 +35,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
-import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -1033,7 +1033,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
         // Walkover — carrom.md §7: match points as a win. W2b (spec §5.2): the CREDITED games and points
         // (`carromForfeitCredit`); boards stay as played (no phantom boards).
         const winnerSide = sideOf(state, outcome.winner);
-        const offender = opponent(winnerSide);
+        const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
         const credit = carromForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
         const winner = credited(winnerSide, 1, 0, cfg.points.win, credit);
         const loser = credited(offender, 0, 1, cfg.points.loss, credit);

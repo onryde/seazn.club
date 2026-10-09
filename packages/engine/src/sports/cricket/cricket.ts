@@ -30,7 +30,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
-import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -3964,7 +3964,7 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
         // Forfeit: full points; W2b (spec §5.2, CK-WO-1) the ledger is `cricketForfeitCredit`'s, never the played one —
         // laid over a zeroed ledger, so no run that was played reaches NRR.
         const winnerSide = sideOf(state, outcome.winner);
-        const offender = opponent(winnerSide);
+        const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
         const credit = cricketForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
         const winner = build(winnerSide, 1, 0, 0, cfg.points.win, creditedMetrics(zeroLedger(), credit, winnerSide));
         const loser = build(offender, 0, 0, 1, cfg.points.loss, creditedMetrics(zeroLedger(), credit, offender));

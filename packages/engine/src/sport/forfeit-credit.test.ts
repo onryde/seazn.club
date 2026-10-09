@@ -3,7 +3,7 @@
 // game target, `awardScore`, overs) and the played numbers of the stream — never read back from `forfeitCredit` or
 // from `standingsDelta`. A rule that cannot be stated without the module's code is a finding, not a test.
 import { describe, expect, it } from "vitest";
-import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "../core/events.ts";
+import { foldMatchWithStoppage, outcomeOf, summaryOf, type EventEnvelope } from "../core/events.ts";
 import type { StandingsDelta } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
@@ -232,6 +232,26 @@ const ROWS: RetirementRow[] = [
     },
   },
   {
+    // M-7 (FIVB 6.4.3, VB-RT-1): the retiree leads 2-1 (25-20, 20-25, 25-20) and retires early in set 4 at 2-1. A
+    // completes set 4 to max(setTo, 2 + winBy) and is given the deciding set at ITS target, finalSetTo-0 — not setTo.
+    id: "VB-RT-1 (2-1 to the retiree: the deciding set at finalSetTo)", key: "volleyball", cfg: parsed("volleyball"),
+    played: [
+      ...rallies("volleyball.rally", 20, H, 5),
+      ...rallies("volleyball.rally", 20, A, 5),
+      ...rallies("volleyball.rally", 20, H, 5),
+      ...rallies("volleyball.rally", 1, H, 1),
+    ],
+    want: (c) => {
+      expect([c.bestOf, c.finalSetTo === c.setTo], "a best-of-5 whose deciding set has its own target").toEqual([5, false]);
+      const aPts = 20 + 25 + 20 + Math.max(c.setTo as number, 2 + (c.winBy as number)) + (c.finalSetTo as number);
+      const hPts = 25 + 20 + 25 + 2;
+      return [
+        { sets_won: 2, sets_lost: 3, points_won: hPts, points_lost: aPts },
+        { sets_won: 3, sets_lost: 2, points_won: aPts, points_lost: hPts },
+      ];
+    },
+  },
+  {
     // One game each (H 11-7, A 11-6), the third at 5-3 to the retiree: A completes it at max(setTo, 5 + winBy), the rest
     // at setTo-0; every point played stands.
     id: "TT-RT-1 (third game 5-3 to the retiree)", key: "tabletennis", cfg: parsed("tabletennis"),
@@ -369,6 +389,8 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
     expectRetirement(row("IH-RT-1 (1-0 to the offender: the awarded 0-5)"));
   });
   it("VB-RT-1: volleyball retirement — the winner gets the sets and points it needed, the retiree keeps its own", () => expectRetirement(row("VB-RT-1")));
+  it("VB-RT-1 (M-7): a deciding set the retiree never reached is credited at its own target, FIVB 6.4.3", () =>
+    expectRetirement(row("VB-RT-1 (2-1 to the retiree: the deciding set at finalSetTo)")));
   it("TT-RT-1: table tennis retirement — points stand, the current game completes for the winner, the rest 11-0", () => {
     expectRetirement(row("TT-RT-1 (third game 5-3 to the retiree)"));
     expectRetirement(row("TT-RT-1 (deuce: the current game completes at the retiree + 2, not at setTo)"));
@@ -446,6 +468,153 @@ describe("X-WO-1: one credited score — the goal sports' headline shows it (spe
     expect(m.summary(rt.state as never).headline, "retirement by A").toBe("1 — 0");
     const dw = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: "both", reason: "walkover" })]);
     expect(m.summary(dw.state as never).headline, "double walkover: nobody scores").toBe("0 — 0");
+  });
+});
+
+describe("M-4: an award arm seats its offender from the award's typed `loser`, never as \"whoever is not the winner\"", () => {
+  it("every sport: the typed loser is the offender; a loser who is no seat of the fixture, or the winner's own, is refused", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      const cfg = parsed(m.key);
+      const l = defaultLineupPair(m.positions);
+      const state = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: A, reason: "walkover" })]).state;
+      const delta = (outcome: unknown) => m.standingsDelta(outcome as never, cfg, { kind: "league" } as never, state);
+      // positive pair: the typed loser A is the seat that lost
+      const [home, away] = delta({ kind: "award", winner: H, loser: A, reason: "walkover" });
+      expect([home.entrantId, home.won, away.entrantId, away.lost], m.key).toEqual([H, 1, A, 1]);
+      // a bye has no loser: the seat that is not the winner's (C-5)
+      expect(delta({ kind: "award", winner: H, loser: null, reason: "bye" }).map((d) => d.won), `${m.key} bye`).toEqual([1, 0]);
+      expect(() => delta({ kind: "award", winner: H, loser: "Z", reason: "walkover" }), `${m.key} stranger`).toThrow();
+      expect(() => delta({ kind: "award", winner: H, loser: H, reason: "walkover" }), `${m.key} winner as loser`).toThrow(/loser/);
+      checked++;
+    });
+    expect(checked).toBe(11);
+  });
+});
+
+/** PF-1 rows: a level result per level-capable sport, then H withdraws (so A wins, reason withdrew). The credit is the
+ *  sport's RETIREMENT credit (orchestrator ruling on review I-1, under X-WO-1's one-score rule), written from Appendix
+ *  A — never read back from forfeitCredit — and the headline must read that same credit. */
+interface Pf1Row {
+  id: string;
+  key: string;
+  cfg: Record<string, unknown>;
+  level: Spec;
+  /** [withdrawer H, winner A] table metrics, from the rule. */
+  table: (c: Record<string, unknown>) => [Metrics, Metrics];
+  /** The headline's credited-score prefix, from the rule; `null` ⇒ the sport's headline is its scorecard (cricket). */
+  headline: (c: Record<string, unknown>) => string | null;
+}
+const awarded = (c: Record<string, unknown>) => (c.awardScore as { goals: number }).goals;
+const PF1: Pf1Row[] = [
+  {
+    // 1-1 at full time. FB-RT-1: a margin of 0 is not worse for the withdrawer than the awarded 3-0, so 0-3.
+    id: "FB-RT-1", key: "football", cfg: parsed("football"),
+    level: [["core.start"], ["football.goal", { by: H }], ["football.goal", { by: A }], ["football.period", { phase: "HT" }], ["football.period", { phase: "FT" }]],
+    table: (c) => { const r = goalRule(awarded(c), { winner: 1, offender: 1 }); return [goals(r.offender, r.winner), goals(r.winner, r.offender)]; },
+    headline: (c) => { const r = goalRule(awarded(c), { winner: 1, offender: 1 }); return `${r.offender} — ${r.winner}`; },
+  },
+  {
+    // 1-1 after four quarters. HK-RT-1: the awarded 0-5.
+    id: "HK-RT-1", key: "hockey", cfg: parsed("hockey"),
+    level: [["core.start"], ["hockey.goal", { by: H }], ["hockey.goal", { by: A }], ...["Q2", "Q3", "Q4", "FT"].map((to): [string, unknown] => ["hockey.period.advance", { to }])],
+    table: (c) => { const r = goalRule(awarded(c), { winner: 1, offender: 1 }); return [goals(r.offender, r.winner), goals(r.winner, r.offender)]; },
+    headline: (c) => { const r = goalRule(awarded(c), { winner: 1, offender: 1 }); return `${r.offender} — ${r.winner}`; },
+  },
+  {
+    // A drawn game. BG-WO-1: a post-start forfeit is 1-0 to the opponent, out of colour history.
+    id: "BG-WO-1", key: "boardgame", cfg: parsed("boardgame"),
+    level: [["core.start"], ["boardgame.result", { winner: null, method: "agreement" }]],
+    table: () => [{ wins: 0, white: 0, black: 0 }, { wins: 1, white: 0, black: 0 }],
+    headline: () => "0 — 1",
+  },
+  {
+    // A 2-2 result card. GN-RT-1: the winner's points, the recorded score kept — so the headline still reads 2 — 2.
+    id: "GN-RT-1", key: "generic", cfg: parsed("generic", { resultMode: "score", allowDraws: true }),
+    level: [["core.start"], ["generic.result", { p1Score: 2, p2Score: 2 }]],
+    table: () => [{ for: 2, against: 2, diff: 0 }, { for: 2, against: 2, diff: 0 }],
+    headline: () => "2 — 2",
+  },
+  {
+    // A tie: 150/4 off 120 balls, then 150 all out. CK-WO-1 (the cricket retirement row): none of what was played is
+    // credited, the withdrawer is charged its full quota at 0 runs. A cricket headline is the scorecard — there is no
+    // credited score to show — so it reads exactly what a retirement over the same innings reads.
+    id: "CK-WO-1", key: "cricket", cfg: parsed("cricket", { superOver: false }),
+    level: [["core.start"], ["cricket.innings.summary", { runs: 150, wickets: 4, legalBalls: 120 }], ["cricket.innings.summary", { runs: 150, wickets: 10, legalBalls: 100 }]],
+    table: (c) => [
+      { runs_for: 0, balls_faced_eff: (c.ballsPerInnings as number) * (c.inningsPerSide as number), runs_against: 0, balls_bowled_eff: 0, run_diff: 0 },
+      { runs_for: 0, balls_faced_eff: 0, runs_against: 0, balls_bowled_eff: 0, run_diff: 0 },
+    ],
+    headline: () => null,
+  },
+];
+
+describe("PF-1 / X-WO-1: a withdrawal over a held level result — the headline reads the table's credit (review I-1)", () => {
+  const foldOf = (r: Pf1Row, spec: Spec) => {
+    const m = mod(r.key);
+    return { m, f: foldMatchWithStoppage(m as never, r.cfg as never, defaultLineupPair(m.positions), spec.map(([t, p], i) => ev(i + 1, t, p ?? {}))) };
+  };
+
+  it("empty case first: every row's level prefix is held level, and its headline is the played one", () => {
+    let checked = 0;
+    for (const r of PF1) {
+      const { m, f } = foldOf(r, r.level);
+      expect(["draw", "tie"], r.id).toContain(outcomeOf(m as never, f as never)?.kind);
+      expect(summaryOf(m as never, f as never), r.id).toEqual(m.summary(f.state as never));
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("each level-capable sport: the table credits the retirement, and the headline reads the same credit", () => {
+    let checked = 0;
+    let moved = 0;
+    for (const r of PF1) {
+      const { m, f: plain } = foldOf(r, r.level);
+      const { f } = foldOf(r, [...r.level, ["core.forfeit", { by: H, reason: "withdrew" }]]);
+      const o = outcomeOf(m as never, f as never);
+      expect(o, r.id).toEqual({ kind: "award", winner: A, loser: H, reason: "withdrew" });
+      const [home, away] = m.standingsDelta(o!, r.cfg, { kind: "league" } as never, f.state);
+      const [wantH, wantA] = r.table(r.cfg);
+      expect([home.metrics, away.metrics], `${r.id} table`).toMatchObject([wantH, wantA]);
+      expect([home.won, home.lost, away.won, away.lost], `${r.id} W/L`).toEqual([0, 1, 1, 0]);
+      const want = r.headline(r.cfg) ?? m.summary(plain.state).headline;
+      const got = summaryOf(m as never, f as never).headline;
+      expect(got.startsWith(want), `${r.id} headline ${JSON.stringify(got)} reads ${want}`).toBe(true);
+      if (got !== m.summary(plain.state).headline) moved++;
+      checked++;
+    }
+    expect(checked).toBe(5);
+    // the goal sports and chess show a credited score the played level result did not
+    expect(moved).toBe(3);
+  });
+
+  it("no withdrawal, no overlay: a plain retirement's summary is the module's own", () => {
+    const r = PF1[0]!;
+    const { m, f } = foldOf(r, [["core.start"], ["football.goal", { by: H }], ["core.forfeit", { by: H, reason: "retired" }]]);
+    expect(summaryOf(m as never, f as never)).toEqual(m.summary(f.state as never));
+  });
+
+  it("the overlay's premise: every sport keeps its decision in `state.outcome`, before and after it is decided", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      const cfg = parsed(m.key);
+      const l = defaultLineupPair(m.positions);
+      const init = m.init(cfg, l) as Record<string, unknown>;
+      expect(Object.hasOwn(init, "outcome") && m.outcome(init as never) === init.outcome, `${m.key} init`).toBe(true);
+      const done = foldMatchWithStoppage(m as never, cfg as never, l, [ev(1, "core.forfeit", { by: A, reason: "walkover" })]).state as Record<string, unknown>;
+      expect(m.outcome(done as never), m.key).toEqual(done.outcome);
+      expect(done.outcome, m.key).toMatchObject({ kind: "award", loser: A });
+      checked++;
+    });
+    expect(checked).toBe(11);
+  });
+
+  it("guard: an overlay asked of a state with no `outcome` field is a named refusal, not a silent pass-through", () => {
+    const fake = { summary: () => ({ headline: "x", perSide: [] }), outcome: () => ({ kind: "draw" as const }) };
+    expect(() => summaryOf(fake as never, { state: { phase: "done" }, settlement: null, levelWithdrawal: { winner: A, loser: H, eventId: "e-9" } })).toThrow(
+      /summaryOf: the module's state has no `outcome` field/,
+    );
   });
 });
 

@@ -702,5 +702,50 @@
         "name": "BG-WO-1: a chess forfeit's headline reads the credited 1-0"
       }
     ]
+  },
+  {
+    "id": "award-offender-not-loser",
+    "file": "packages/engine/src/sport/forfeit-credit.ts",
+    "find": "const side = sideOfEntrant(loser);",
+    "replace": "const side = winnerSide === \"home\" ? \"away\" : \"home\";",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "every sport: the typed loser is the offender"
+      }
+    ]
+  },
+  {
+    "id": "award-offender-winner-seat-ok",
+    "file": "packages/engine/src/sport/forfeit-credit.ts",
+    "find": "if (side === winnerSide) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "every sport: the typed loser is the offender"
+      }
+    ]
+  },
+  {
+    "id": "vb-deciding-set-at-setto",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "points[winner] += next === null ? cfg.setTo : setTarget(cfg, next++);",
+    "replace": "points[winner] += cfg.setTo;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "a deciding set the retiree never reached"
+      }
+    ]
   }
 ]

@@ -25,6 +25,7 @@ import {
   type ForfeitReason,
   type LineupPair,
   type MatchOutcome,
+  type ScoreSummary,
 } from "./types.ts";
 
 // spec 03 §2 — ids and time are injected (uuid in prod, `e-${n}` in tests);
@@ -195,6 +196,25 @@ export function outcomeOf<Cfg, State>(
   const w = folded.levelWithdrawal;
   if (w != null) return { kind: "award", winner: w.winner, loser: w.loser, reason: "withdrew" };
   return module.outcome(folded.state);
+}
+
+/** THE summary of a fold (W2b PF-1, review I-1; X-WO-1's one-score rule). Exactly `module.summary(state)`, except
+ *  when the kernel admitted a withdrawal over a held level result: the module never saw that event, so its state
+ *  still reads the draw while `outcomeOf` reads the award. The overlay hands the module its own state with the
+ *  effective award in `outcome`, so the module renders the credit it already renders for any award — the same
+ *  `forfeitCredit` its `standingsDelta` reads — and the headline and the table cannot disagree. Every module keeps
+ *  its decision in `state.outcome`; a state without that field is refused rather than silently left on the draw.
+ *  A settlement is deliberately NOT overlaid: a settled level game shows the score that was played. */
+export function summaryOf<State>(
+  module: { summary(state: State): ScoreSummary; outcome(state: State): MatchOutcome | null },
+  folded: FoldedOutcomeFacts<State>,
+): ScoreSummary {
+  if (folded.levelWithdrawal == null) return module.summary(folded.state);
+  const state: unknown = folded.state;
+  if (typeof state !== "object" || state === null || !("outcome" in state)) {
+    throw new Error("summaryOf: the module's state has no `outcome` field, so a withdrawal over its level result cannot be shown");
+  }
+  return module.summary({ ...state, outcome: outcomeOf(module, folded) } as State);
 }
 
 /** Ruling D-C5 — a module-declared decider is still OWED: the module's hook says one is pending AND the fold is not
@@ -837,8 +857,10 @@ export function foldMatchWithStoppage<Cfg, State>(
     // W2b D4 (X-AB-4) — a forfeit while an unvoided abandon is active. ABOVE guarantee 4 on purpose: a football
     // award-policy abandon DECIDES the match, so guarantee 4 would answer ALREADY_DECIDED first and hide the guidance
     // the organiser needs (settle to decide; void the abandon to replay). Voids resolve first, so void-then-forfeit
-    // reaches the phase guard below instead (play started: retired, disqualified or withdrew).
-    if (event.type === "core.forfeit" && abandonActive) {
+    // reaches the phase guard below instead (play started: retired, disqualified or withdrew). Once a settle decided
+    // the abandoned match there is nothing left to settle or replay, so it falls to guarantee 4: ALREADY_DECIDED
+    // (review M-6).
+    if (event.type === "core.forfeit" && abandonActive && settlement === null) {
       throw new EngineError(
         "ABANDONED_SETTLE_OR_VOID",
         "this match was abandoned — settle it to decide it, or void the abandon first if it is being replayed",

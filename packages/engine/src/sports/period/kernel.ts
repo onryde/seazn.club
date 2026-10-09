@@ -42,7 +42,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
-import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -2300,7 +2300,7 @@ export function makePeriodModule(
     const { home, away } = state.goals;
     const outcome = state.outcome;
     if (outcome?.kind === "award" && awardReasonOf(outcome) !== "bye") {
-      return creditedGoals(state.cfg, state, opponent(sideOf(state, outcome.winner)));
+      return creditedGoals(state.cfg, state, awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id)));
     }
     if (
       preset.shootoutWinnerGoal !== true ||
@@ -2689,7 +2689,7 @@ export function makePeriodModule(
           // W2b (spec §5.2): the credited score (`periodForfeitCredit`) over the played ledger; the offender is the side
           // that is not the winner — the award's typed `loser` (D9), or a bye's phantom seat.
           const winnerSide = sideOf(state, outcome.winner);
-          const offender = opponent(winnerSide);
+          const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
           const credit = periodForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
           const [wp, lp] = winPoints(cfg, undefined);
           const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({

@@ -12,7 +12,8 @@
         ],
         "name": "X-RS-1: 11 sports × 4 reasons × \\{before, after start\\}, plus both sides"
       }
-    ]
+    ],
+    "note": "R0 (the kernel does not judge a forfeit in phase \"over\") has no row: it is EQUIVALENT. Every \"over\" state is either decided — guarantee 4 answers ALREADY_DECIDED before the phase guard — or under an active abandon — D4 answers first (and a settled abandon is decided, M-6) — so judging \"over\" here could never change a verdict. The dead `phase === \"over\"` arm in forfeitReasonsAllowed was deleted in 8cd0ee392 (its type now excludes \"over\")."
   },
   {
     "id": "walkover-any-phase",
@@ -84,7 +85,7 @@
   {
     "id": "abandon-guard-off",
     "file": "packages/engine/src/core/events.ts",
-    "find": "if (event.type === \"core.forfeit\" && abandonActive) {",
+    "find": "if (event.type === \"core.forfeit\" && abandonActive && settlement === null) {",
     "replace": "if (false) {",
     "killers": [
       {
@@ -99,8 +100,8 @@
   {
     "id": "abandon-guard-below-g4",
     "file": "packages/engine/src/core/events.ts",
-    "find": "if (event.type === \"core.forfeit\" && abandonActive) {",
-    "replace": "if (event.type === \"core.forfeit\" && abandonActive && !decided) {",
+    "find": "if (event.type === \"core.forfeit\" && abandonActive && settlement === null) {",
+    "replace": "if (event.type === \"core.forfeit\" && abandonActive && settlement === null && !decided) {",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -497,6 +498,66 @@
           "src/core/forfeit-guard.test.ts"
         ],
         "name": "X-RS-1: 11 sports × 4 reasons × \\{before, after start\\}, plus both sides"
+      }
+    ]
+  },
+  {
+    "id": "forfeit-bye-reason-ok",
+    "file": "packages/engine/src/core/events.ts",
+    "find": ".strictObject({ by: EntrantId, reason: z.enum(FORFEIT_REASONS) })",
+    "replace": ".strictObject({ by: EntrantId, reason: z.enum([...FORFEIT_REASONS, \"bye\"]) })",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "X-RS-1: free text, an unknown reason, and both with a non-walkover reason are INVALID_EVENT"
+      }
+    ]
+  },
+  {
+    "id": "pf1-summary-overlay-off",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "return module.summary({ ...state, outcome: outcomeOf(module, folded) } as State);",
+    "replace": "return module.summary(folded.state);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "each level-capable sport: the table credits the retirement"
+      }
+    ]
+  },
+  {
+    "id": "pf1-summary-guard-off",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (typeof state !== \"object\" || state === null || !(\"outcome\" in state)) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "guard: an overlay asked of a state with no"
+      }
+    ]
+  },
+  {
+    "id": "abandon-guard-settled-ok",
+    "file": "packages/engine/src/core/events.ts",
+    "find": "if (event.type === \"core.forfeit\" && abandonActive && settlement === null) {",
+    "replace": "if (event.type === \"core.forfeit\" && abandonActive) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/core/forfeit-guard.test.ts"
+        ],
+        "name": "M-6: abandon"
       }
     ]
   }

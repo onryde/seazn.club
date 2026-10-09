@@ -28,7 +28,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
-import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -914,7 +914,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         //
         // The metrics are `boardgameForfeitCredit`'s: 1-0, out of colour history.
         const winnerSide = sideOf(state, outcome.winner);
-        const offender = opponent(winnerSide);
+        const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
         const credit = boardgameForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
         const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
           ...build(side, w, 0, l, pts, w === 1),

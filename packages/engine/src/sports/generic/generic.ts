@@ -21,7 +21,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
-import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -675,7 +675,7 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
       case "award": {
         // W2b (spec §5.2): the credited score (`genericForfeitCredit`) — GN-WO-1 0-0, GN-RT-1 the recorded score.
         const winnerSide = sideOf(state, outcome.winner);
-        const loserSide = opponent(winnerSide);
+        const loserSide = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
         const credit = genericForfeitCredit(cfg, state, awardReasonOf(outcome), loserSide);
         const winner = build(winnerSide, 1, 0, 0, points.w, creditedMetrics(sideMetrics(state, winnerSide), credit, winnerSide));
         const loser = build(loserSide, 0, 0, 1, points.l, creditedMetrics(sideMetrics(state, loserSide), credit, loserSide));

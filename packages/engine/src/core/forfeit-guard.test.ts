@@ -4,13 +4,13 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { EngineError } from "./errors.ts";
-import { foldMatchWithStoppage, kernelOwnsEvent, outcomeOf, type EventEnvelope, type FoldableModule } from "./events.ts";
+import { foldMatchWithStoppage, kernelOwnsEvent, outcomeOf, resolveVoids, type EventEnvelope, type FoldableModule } from "./events.ts";
 import { FORFEIT_REASONS, OUTCOME_KINDS, type ForfeitPhase, type MatchOutcome } from "./types.ts";
 import { builtinModules } from "../sports/index.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/index.ts";
 
-const ev = (seq: number, type: string, payload: unknown = {}, voids?: string): EventEnvelope => makeEnvelope(seq, { type, payload } as never, voids);
+const ev = (seq: number, type: string, payload: unknown = {}, voids?: string): EventEnvelope => makeEnvelope(seq, { type, payload }, voids);
 const codeOf = (f: () => unknown): string | null => { try { f(); return null; } catch (e) { return EngineError.is(e) ? e.code : String(e); } };
 const errOf = (f: () => unknown): EngineError => { try { f(); } catch (e) { if (EngineError.is(e)) return e; throw e; } throw new Error("expected an EngineError, got none"); };
 const firstCfg = (m: (typeof builtinModules)[number]) => m.configSchema.parse(Object.values(m.variants)[0] ?? {});
@@ -45,7 +45,7 @@ describe("D3: each module reads its own phase union (Task 3 table; ruling 102 Q5
       const l = defaultLineupPair(m.positions);
       const init = m.init(firstCfg(m) as never, l) as Record<string, unknown>;
       for (const [phase, want] of Object.entries(table!)) {
-        expect(m.forfeitPhase({ ...init, phase } as never), `${m.key} ${phase}`).toBe(want);
+        expect(m.forfeitPhase({ ...init, phase }), `${m.key} ${phase}`).toBe(want);
         rows++;
       }
       // Only boardgame widens the walkover phases (plan D3 R2); every other module leaves the default.
@@ -173,6 +173,23 @@ describe("X-AB-4 abandon guard (D4)", () => {
     expect(codeOf(() => foldMatchWithStoppage(fb as never, awardCfg as never, l, decided))).toBe("ABANDONED_SETTLE_OR_VOID"); // not ALREADY_DECIDED: the guard sits above guarantee 4
     expect(checked + refusesAbandon.length).toBe(11);
     expect(checked).toBeGreaterThan(0);
+  });
+  it("M-6: abandon → settle → forfeit is ALREADY_DECIDED — the settle decided it, so 'settle it' is not the guidance — every sport", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      const l = defaultLineupPair(m.positions);
+      const abandoned = [ev(1, "core.start"), ev(2, "core.abandon", { reason: "rain" })];
+      const settled = [...abandoned, ev(3, "core.settle", { winner: l.home.entrantId, method: "lot" })];
+      expect(codeOf(() => foldMatchWithStoppage(m as never, firstCfg(m) as never, l, settled)), `${m.key} settle`).toBeNull();
+      for (const reason of ["walkover", "retired", "disqualified", "withdrew"] as const) {
+        const forfeit = ev(4, "core.forfeit", { by: l.away.entrantId, reason });
+        expect(codeOf(() => foldMatchWithStoppage(m as never, firstCfg(m) as never, l, [...settled, forfeit])), `${m.key} ${reason}`).toBe("ALREADY_DECIDED");
+        // positive pair: with no settle, the same forfeit is still the abandon guard's
+        expect(codeOf(() => foldMatchWithStoppage(m as never, firstCfg(m) as never, l, [...abandoned, { ...forfeit, seq: 3, id: "e-3" }])), `${m.key} ${reason} unsettled`).toBe("ABANDONED_SETTLE_OR_VOID");
+        checked++;
+      }
+    });
+    expect(checked).toBe(44);
   });
   it("X-AB-4: void-then-forfeit is allowed and credited as a retirement; a walkover after the void is refused (play started)", () => {
     const m = builtinModules.find((x) => x.key === "generic")!;
@@ -312,6 +329,9 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
     let accepted = 0;
     let forfeitsAccepted = 0;
     let levelWithdrawals = 0;
+    let doubleWalkovers = 0;
+    let awards = 0;
+    let walkoversChecked = 0;
     fc.assert(fc.property(fc.constantFrom(...keys), fc.array(step, { maxLength: 8 }), (key, steps) => {
       const m = builtinModules.find((x) => x.key === key)!;
       const cfg = m.configSchema.parse(LEVEL[key]!.cfg);
@@ -330,20 +350,32 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
         for (const candidate of candidates) {
           const e = { ...candidate, seq: ledger.length + 1, id: `e-${ledger.length + 1}` };
           const before = ledger.length > 0 ? outcomeOf(m as never, foldMatchWithStoppage(m as never, cfg as never, l, ledger) as never) : null;
+          const activeBefore = resolveVoids(ledger);
           let f;
           try { f = foldMatchWithStoppage(m as never, cfg as never, l, [...ledger, e], { strictFromSeq: e.seq }); } catch (err) { if (EngineError.is(err)) break; throw err; }
           ledger.push(e);
           accepted++;
           const o = outcomeOf(m as never, f as never);
           if (o !== null) expect(OUTCOME_KINDS).toContain(o.kind);
-          if (o?.kind === "double_walkover") expect(ledger.some((x) => x.type === "core.forfeit" && (x.payload as { by: string }).by === "both")).toBe(true);
-          if (o?.kind === "award") expect(o.loser).not.toBe(o.winner);
+          // The ACTIVE forfeit (the last unvoided one) is the one that decides (M-3): a double walkover is its "both",
+          // and an award's loser is its `by` — forfeit A, void, forfeit H ⇒ the loser is H (Review Focus 2).
+          const activeForfeit = resolveVoids(ledger).filter((x) => x.type === "core.forfeit").at(-1)?.payload as { by: string } | undefined;
+          if (o?.kind === "double_walkover") { expect(activeForfeit?.by).toBe("both"); doubleWalkovers++; }
+          if (o?.kind === "award") { expect(o.loser).not.toBe(o.winner); expect(o.loser).toBe(activeForfeit?.by); awards++; }
           if (f.expunged) expect(o).toBeNull();
           // A replay of the accepted ledger reaches the same outcome as the write did (refused writes left no trace).
           expect(outcomeOf(m as never, foldMatchWithStoppage(m as never, cfg as never, l, ledger) as never)).toEqual(o);
           if (e.type === "core.forfeit") {
             forfeitsAccepted++;
             const p = e.payload as { reason: string };
+            // M-3: an accepted forfeit never sits on an active abandon (D4; a settled one is ALREADY_DECIDED, M-6) …
+            expect(activeBefore.some((x) => x.type === "core.abandon"), `forfeit over an active abandon: ${JSON.stringify(ledger.map((x) => x.type))}`).toBe(false);
+            // … and an accepted walkover never follows an active start, unless the module declares a walkover phase
+            // past "pre" (chess, FIDE Laws 6.7.1).
+            if (p.reason === "walkover" && m.walkoverPhases === undefined) {
+              expect(activeBefore.some((x) => x.type === "core.start"), `walkover after start: ${JSON.stringify(ledger.map((x) => x.type))}`).toBe(false);
+              walkoversChecked++;
+            }
             if (p.reason === "withdrew" && before !== null && ["draw", "tie", "no_result"].includes(before.kind)) {
               levelWithdrawals++;
               expect(o).toMatchObject({ kind: "award", reason: "withdrew" });
@@ -355,5 +387,21 @@ describe("rule 10: forfeit, abandon, void and settle in any order (spec §9 sequ
     expect(accepted).toBeGreaterThan(0);
     expect(forfeitsAccepted).toBeGreaterThan(0);
     expect(levelWithdrawals).toBeGreaterThan(0); // the PF-1 path is reached, not just declared
+    expect([doubleWalkovers, awards, walkoversChecked].every((n) => n > 0), `dw ${doubleWalkovers} awards ${awards} walkovers ${walkoversChecked}`).toBe(true);
+  });
+
+  it("Review Focus 2 oracle: forfeit A, void it, forfeit H — the loser is H, every sport (the void restores the undecided match)", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      const l = defaultLineupPair(m.positions);
+      const f = foldMatchWithStoppage(m as never, firstCfg(m) as never, l, [
+        ev(1, "core.forfeit", { by: l.away.entrantId, reason: "walkover" }),
+        ev(2, "core.void", {}, "e-1"),
+        ev(3, "core.forfeit", { by: l.home.entrantId, reason: "walkover" }),
+      ]);
+      expect(outcomeOf(m as never, f as never), m.key).toEqual({ kind: "award", winner: l.away.entrantId, loser: l.home.entrantId, reason: "walkover" });
+      checked++;
+    });
+    expect(checked).toBe(11);
   });
 });

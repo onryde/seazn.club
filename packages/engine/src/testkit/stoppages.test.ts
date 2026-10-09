@@ -83,7 +83,9 @@ const enders = (c: Case) => [
   { type: "core.abandon", payload: { reason: "storm" } },
   {
     type: "core.forfeit",
-    payload: { by: c.lineups.home.entrantId, reason: "walkover" },
+    // W2b D3: a stoppage reads as the phase it interrupted (play), where a walkover is refused (R2) — a retirement is
+    // the forfeit that is legal there in every sport (review M-1: "walkover" was refused in 10/11 and swallowed below).
+    payload: { by: c.lineups.home.entrantId, reason: "retired" },
   },
 ];
 
@@ -194,6 +196,7 @@ describe("generated stoppages — fold guarantee 5", () => {
     let checked = 0;
     let replays = 0;
     const replayedBy = new Set<string>();
+    const forfeitCheckedBy = new Map<string, number>();
     for (const c of unresumed) {
       for (const ender of enders(c)) {
         const abandoned = [
@@ -226,6 +229,7 @@ describe("generated stoppages — fold guarantee 5", () => {
           `${label(c)} stoppage outlived ${ender.type}`,
         ).toBeNull();
         checked += 1;
+        if (ender.type === "core.forfeit") forfeitCheckedBy.set(c.module.key, (forfeitCheckedBy.get(c.module.key) ?? 0) + 1);
       }
     }
     // The floor is over every ender case (unchanged by W2b); the decided share fell when carrom's and generic's abandon
@@ -233,5 +237,11 @@ describe("generated stoppages — fold guarantee 5", () => {
     expect(checked + replays, "cases that reached an abandon").toBeGreaterThan(30);
     expect(checked, "decided cases whose stoppage was checked").toBeGreaterThan(0);
     expect([...replayedBy].filter((key) => key === "carrom" || key === "generic").sort()).toEqual(["carrom", "generic"]);
+    // M-1: the forfeit ender reaches the assertion in EVERY sport — a refused ender is swallowed by the catch above,
+    // so without this count a guard that refused every mid-stoppage forfeit would leave this test green.
+    expect([...forfeitCheckedBy.keys()].sort(), `forfeit enders checked per sport: ${JSON.stringify([...forfeitCheckedBy])}`).toEqual(
+      builtinModules.map((m) => m.key).sort(),
+    );
+    expect(forfeitCheckedBy.size).toBe(11);
   });
 });

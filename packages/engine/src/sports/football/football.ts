@@ -51,7 +51,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
-import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
   PadAction,
@@ -1757,7 +1757,7 @@ function displayedGoals(state: FootballState): { home: number; away: number } {
   if (outcome?.kind !== "award") return state.goals;
   const reason = awardReasonOf(outcome);
   if (reason === "bye") return state.goals;
-  const credit = footballForfeitCredit(state.cfg, state, reason, opponent(sideOf(state, outcome.winner)));
+  const credit = footballForfeitCredit(state.cfg, state, reason, awardOffenderSide(outcome, sideOf(state, outcome.winner), (id) => sideOf(state, id)));
   return { home: credit.perSide[0].gf ?? state.goals.home, away: credit.perSide[1].gf ?? state.goals.away };
 }
 
@@ -2700,7 +2700,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         // W2b (spec §5.2): the credited score, never the played one (`footballForfeitCredit`). The offender is the side
         // that is not the winner — the award's typed `loser` (D9), or the phantom seat of a bye.
         const winnerSide = sideOf(state, outcome.winner);
-        const offender = opponent(winnerSide);
+        const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
         const credit = footballForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
         const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
           ...build(side, w, 0, l, pts),

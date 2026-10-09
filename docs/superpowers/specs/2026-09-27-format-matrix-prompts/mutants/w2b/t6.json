@@ -133,5 +133,20 @@
         "name": "X-DW-2: a double walkover row that names a winner or a loser"
       }
     ]
+  },
+  {
+    "id": "dw-missing-side-unguarded",
+    "file": "packages/engine/src/competition/stage.ts",
+    "find": "if (fixture.home === undefined || fixture.away === undefined) {",
+    "replace": "if (false) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/w2b-tables.test.ts"
+        ],
+        "name": "X-DW-2: a double walkover row that names a winner or a loser, or a forfeit row that names no loser, is refused"
+      }
+    ]
   }
 ]

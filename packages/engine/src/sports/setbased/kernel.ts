@@ -40,7 +40,7 @@ import {
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
-import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import {
   forfeitStatsRole,
   personsForEntrant,
@@ -2289,8 +2289,9 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
    * never `finalSetTo`; ITTF and BWF likewise.
    * RETIREMENT, in-match disqualification, a withdrawal (PF-7): every closed set stands; the open set completes for
    * the winner at max(its target, the retiree's points + winBy), capped; every further set the winner still needs is
-   * `setTo`-0; the retiree keeps everything it won. Before play there are no sets, so this is the walkover credit —
-   * which is why a withdrawal before the start needs no branch of its own.
+   * credited at that set's own target, 0 (the deciding set's `finalSetTo`, FIVB 6.4.3); the retiree keeps everything
+   * it won. Before play there are no sets, so this is the walkover credit (no declared cfg is a one-set match, whose
+   * only set would be the deciding one) — which is why a withdrawal before the start needs no branch of its own.
    */
   const setBasedForfeitCredit = (cfg: SetBasedCfg, state: SetBasedState, reason: AwardReason, by: ForfeitBy): ForfeitCredit => {
     const played = [sideMetrics(state, "home"), sideMetrics(state, "away")] as const;
@@ -2312,9 +2313,12 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
         sets[winner] += 1;
       });
     }
+    // Every further set the winner still needs is credited at ITS OWN target (FIVB 6.4.3, review M-7): the deciding
+    // set at `finalSetTo` once the count reaches it. A walkover is 0-25 every set (FIVB 6.4.1), so it keeps `setTo`.
+    let next = reason === "walkover" ? null : state.sets.length;
     while (sets[winner] < need) {
       sets[winner] += 1;
-      points[winner] += cfg.setTo;
+      points[winner] += next === null ? cfg.setTo : setTarget(cfg, next++);
     }
     const record = (side: Side) => ({
       sets_won: sets[side],
@@ -2516,7 +2520,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
           // Forfeit: clean-sweep pair to keep the total inside declaredPointsSets; W2b (spec §5.2) the CREDITED sets and
           // points (`setBasedForfeitCredit`) over the played ledger. The offender is the side that is not the winner.
           const winnerSide = sideOf(state, outcome.winner);
-          const offender = opponent(winnerSide);
+          const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
           const credit = setBasedForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
           const [wp, lp] = cleanSweepPair(cfg);
           const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({

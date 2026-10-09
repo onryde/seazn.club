@@ -46,7 +46,7 @@ import {
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
-import { awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
+import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   FidelityBand,
   ModuleEvent,
@@ -2251,7 +2251,7 @@ export function makeNestedModule(
         case "award": {
           // W2b (spec §5.2): the credited sets (`nestedForfeitCredit`) over the played ledger.
           const winnerSide = sideOf(state, outcome.winner);
-          const offender = opponent(winnerSide);
+          const offender = awardOffenderSide(outcome, winnerSide, (id) => sideOf(state, id));
           const credit = nestedForfeitCredit(cfg, state, awardReasonOf(outcome), offender);
           const at = (side: Side, w: number, l: number, pts: number): StandingsDelta => ({
             ...build(side, w, l, pts),
