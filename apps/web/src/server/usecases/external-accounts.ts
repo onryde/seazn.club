@@ -11,14 +11,16 @@ import { HttpError } from "@/lib/errors";
 import { LICHESS_OAUTH_SCOPES, LICHESS_TOKEN_URL } from "@/lib/oauth";
 import { LICHESS_TIMEOUT_MS } from "@/server/external-play/window";
 import { openPlayerToken, sealPlayerToken } from "@/server/external-play/secrets";
+import { log } from "@/server/logger";
+import { hasValidKek } from "@/server/relay/crypto";
 
 /** V432's second unique constraint — a Lichess account can only ever be
  *  linked to ONE Seazn user. */
 const ALREADY_LINKED_CONSTRAINT = "user_external_accounts_provider_external_user_id_key";
 
 /** The grant design §3.1 asks for: submit moves (`board:play`) and create the
- *  challenge (`challenge:write`). Any linked row that does not carry
- *  `board:play` owes a re-consent, whatever else it carries.
+ *  challenge (`challenge:write`). Any linked row that does not carry EVERY
+ *  one of these owes a re-consent, whatever else it carries.
  *
  *  DERIVED from `lib/oauth.ts`'s `LICHESS_OAUTH_SCOPES`, which is the string
  *  the OAuth start actually sends, so the two cannot drift. The dependency
@@ -53,16 +55,74 @@ export async function getLichessLink(userId: string): Promise<LichessLink | null
   };
 }
 
-/** The plaintext token, or null when there is none (no link, or a legacy
- *  identity-only row). Every caller treats null as "cannot play yet", never
- *  as "play without a token". */
-export async function getLichessAccessToken(userId: string): Promise<string | null> {
+/** Why a STORED token could not be opened. A classification an operator can
+ *  act on — never the token, never the ciphertext, never the crypto error's
+ *  text: `key_unavailable` is LICHESS_TOKEN_KEK unset or malformed;
+ *  `decrypt_failed` is a valid key that does not open this row (rotated,
+ *  wrong, or the ciphertext was damaged). */
+type TokenOpenFailure = "key_unavailable" | "decrypt_failed";
+
+/** The stored token, opened. `null` means there is NO token — no link, or a
+ *  legacy identity-only row — and is the only "absent" answer. A row that
+ *  HOLDS a token we cannot open is a different fact (review T2-I2: unlink's
+ *  old `.catch(() => null)` made a missing or rotated key look like "nothing
+ *  stored"), so it comes back as a failure each caller must handle. */
+async function readStoredToken(
+  userId: string,
+): Promise<{ token: string } | { failure: TokenOpenFailure } | null> {
   const rows = await sql<{ access_token_enc: Uint8Array | null }[]>`
     select access_token_enc from user_external_accounts
      where user_id = ${userId} and provider = 'lichess'`;
   const enc = rows[0]?.access_token_enc ?? null;
   if (!enc) return null;
-  return openPlayerToken(Buffer.from(enc).toString("base64"));
+  try {
+    return { token: await openPlayerToken(Buffer.from(enc).toString("base64")) };
+  } catch {
+    return { failure: hasValidKek("LICHESS_TOKEN_KEK") ? "decrypt_failed" : "key_unavailable" };
+  }
+}
+
+/** The plaintext token, or null when there is none (no link, or a legacy
+ *  identity-only row). Every caller treats null as "cannot play yet", never
+ *  as "play without a token".
+ *
+ *  A token that is stored but cannot be opened fails CLOSED with its own
+ *  code, LICHESS_TOKEN_UNAVAILABLE — NOT a re-consent prompt: re-linking
+ *  cannot fix an operator's key, and sending a player round an OAuth trip
+ *  for it would mint a fresh grant we then could not open either. */
+export async function getLichessAccessToken(userId: string): Promise<string | null> {
+  const stored = await readStoredToken(userId);
+  if (stored === null) return null;
+  if ("failure" in stored) {
+    log.error(
+      { userId, reason: stored.failure },
+      "lichess: the player's stored token cannot be opened — online play refused",
+    );
+    throw new HttpError(
+      503,
+      "Online play is unavailable right now because of a problem on Seazn's side. Please try again later.",
+      "LICHESS_TOKEN_UNAVAILABLE",
+    );
+  }
+  return stored.token;
+}
+
+/** Best-effort `DELETE /api/token`: null when Lichess accepted it, else why
+ *  not — a classification, so a caller can report a grant left live without
+ *  ever handling the token. */
+async function revokeAtLichess(
+  token: string,
+): Promise<null | { reason: "revoke_rejected"; status: number } | { reason: "revoke_unreachable" }> {
+  try {
+    const res = await fetch(LICHESS_TOKEN_URL, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
+    });
+    return res.ok ? null : { reason: "revoke_rejected", status: res.status };
+  } catch {
+    return { reason: "revoke_unreachable" };
+  }
 }
 
 /** Upsert on `(user_id, provider)`. V432's second unique constraint,
@@ -108,15 +168,27 @@ export async function upsertLichessLink(
 
 /** Revoke at Lichess, THEN delete. Best-effort revoke: a failure leaves an
  *  orphaned grant on Lichess's side, which is not a reason to keep a token we
- *  were told to forget. A legacy row has no token, so nothing is sent. */
+ *  were told to forget. A legacy row has no token, so nothing is sent.
+ *
+ *  Never SILENT, though (review T2-I2): a token we cannot open, a revoke
+ *  Lichess refuses, and a revoke that never arrives all leave a move-capable
+ *  grant live, so each is reported to the error channel with the user id and
+ *  a reason — never the token — and the row is deleted anyway. */
 export async function unlinkLichess(userId: string): Promise<void> {
-  const token = await getLichessAccessToken(userId).catch(() => null);
-  if (token) {
-    await fetch(LICHESS_TOKEN_URL, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
-    }).catch(() => undefined);
+  const stored = await readStoredToken(userId);
+  if (stored !== null && "failure" in stored) {
+    log.error(
+      { userId, reason: stored.failure },
+      "lichess: unlink could not open the stored token — the grant was NOT revoked at Lichess and stays live until the player revokes it there",
+    );
+  } else if (stored !== null) {
+    const failure = await revokeAtLichess(stored.token);
+    if (failure) {
+      log.error(
+        { userId, ...failure },
+        "lichess: unlink could not revoke the grant at Lichess — it stays live until the player revokes it there",
+      );
+    }
   }
   await sql`
     delete from user_external_accounts
@@ -171,8 +243,9 @@ export async function assertPersonIdsLinkedForOnlinePlay(
 }
 
 /** PLAY gate (§3.1). A link is not enough: the row must carry a consent
- *  timestamp AND `board:play`, because a grant from the identity-only flow
- *  cannot submit a move and would 401 mid-game. Called by T8 (seat) and T9
+ *  timestamp AND every scope in PLAY_SCOPES, because a grant from the
+ *  identity-only flow cannot submit a move and would 401 mid-game, and one
+ *  without `challenge:write` cannot create White's challenge. Called by T8 (seat) and T9
  *  (creation); T14 renders the re-consent screen on this code. */
 export async function assertLichessConsentForPlay(userId: string | null): Promise<void> {
   if (!userId) {
@@ -190,7 +263,10 @@ export async function assertLichessConsentForPlay(userId: string | null): Promis
       "LICHESS_LINK_REQUIRED",
     );
   }
-  if (link.consentedAt === null || !link.scopes.includes("board:play")) {
+  // EVERY scope the design asks for (review T2-I3) — one authority for "the
+  // grant that is enough to play", so a PLAY_SCOPES that grows demands
+  // re-consent from everyone whose grant predates it.
+  if (link.consentedAt === null || !PLAY_SCOPES.every((s) => link.scopes.includes(s))) {
     throw new HttpError(
       422,
       "Re-link your Lichess account so Seazn can submit your moves",

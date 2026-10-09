@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import {
   PLAY_SCOPES,
   assertLichessConsentForPlay,
@@ -26,15 +27,24 @@ const newUser = async (tag: string): Promise<string> => {
 // Every case here seals a token, so every case needs the key; unlink revokes
 // at Lichess, so every case stubs that call and the assertions below check it
 // was (or was not) made with the OPENED token.
+// The error channel is spied on in every case, so a path that should stay
+// quiet is asserted quiet — the positive pair of every "it was reported".
+let errorSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.stubEnv("LICHESS_TOKEN_KEK", randomBytes(32).toString("hex"));
   vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+  errorSpy = vi.spyOn(log, "error").mockImplementation(() => undefined);
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
+
+/** Every argument every log.error call received, as one string — the
+ *  haystack a "never the token" assertion searches. */
+const loggedText = (): string => JSON.stringify(errorSpy.mock.calls);
 
 afterAll(async () => {
   if (HAS_DB) await sql.end({ timeout: 2 }).catch(() => undefined);
@@ -99,6 +109,35 @@ describe.skipIf(!HAS_DB)("external-accounts — token at rest", () => {
     });
   });
 
+  // Review T2-I3: the gate demanded the literal "board:play", so a consented
+  // grant WITHOUT challenge:write passed — although White's token must create
+  // the challenge (design §3.3) — and a PLAY_SCOPES that grew would never ask
+  // anyone to re-consent. The scope list here is typed, not read from
+  // PLAY_SCOPES: it is the grant an older consent screen would have produced.
+  it("a consented row carrying board:play but NOT challenge:write still owes re-consent", async () => {
+    const userId = await newUser("halfgrant");
+    await upsertLichessLink(userId, {
+      externalUserId: lid("lid-halfgrant"), username: "Half",
+      scopes: ["board:play"], token: "lio_half",
+    });
+    const link = await getLichessLink(userId);
+    expect(link!.scopes).toEqual(["board:play"]);
+    expect(link!.consentedAt).not.toBeNull();
+    await expect(assertLichessConsentForPlay(userId)).rejects.toMatchObject({
+      status: 422, code: "LICHESS_RECONSENT_REQUIRED",
+    });
+  });
+
+  // ...and the positive pair: the full grant, consented, plays.
+  it("a consented row carrying the full grant passes the play gate", async () => {
+    const userId = await newUser("fullgrant");
+    await upsertLichessLink(userId, {
+      externalUserId: lid("lid-fullgrant"), username: "Full",
+      scopes: ["board:play", "challenge:write"], token: "lio_full",
+    });
+    await expect(assertLichessConsentForPlay(userId)).resolves.toBeUndefined();
+  });
+
   // The OTHER half of the same `if`, which the legacy row above cannot reach:
   // scopes that look right with NO consent stamp — and therefore, by V432's
   // consent_token CHECK, no token to submit with either. Mutating the gate
@@ -161,17 +200,37 @@ describe.skipIf(!HAS_DB)("external-accounts — token at rest", () => {
     expect(revoke![0]).toBe("https://lichess.org/api/token");
     expect(new Headers(revoke![1].headers).get("authorization")).toBe("Bearer lio_revoke_me");
     expect(await getLichessLink(userId)).toBeNull();
+    // A clean revoke is not an incident.
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it("a revoke that FAILS still deletes the row — an orphaned grant is not a reason to keep ours", async () => {
     const userId = await newUser("revokefail");
     await upsertLichessLink(userId, {
       externalUserId: lid("lid-revokefail"), username: "Failer",
-      scopes: [...PLAY_SCOPES], token: "lio_t",
+      scopes: [...PLAY_SCOPES], token: "lio_unreachable_token",
     });
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network down"); }));
     await expect(unlinkLichess(userId)).resolves.toBeUndefined();
     expect(await getLichessLink(userId)).toBeNull();
+    // Review T2-I2: the grant is still live at Lichess — say so, by user id.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]![0]).toEqual({ userId, reason: "revoke_unreachable" });
+    expect(loggedText()).not.toContain("lio_unreachable_token");
+  });
+
+  it("a revoke Lichess REFUSES (non-2xx) still deletes the row, and is reported with its status", async () => {
+    const userId = await newUser("revoke400");
+    await upsertLichessLink(userId, {
+      externalUserId: lid("lid-revoke400"), username: "Refused",
+      scopes: [...PLAY_SCOPES], token: "lio_refused_token",
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 400 })));
+    await expect(unlinkLichess(userId)).resolves.toBeUndefined();
+    expect(await getLichessLink(userId)).toBeNull();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]![0]).toEqual({ userId, reason: "revoke_rejected", status: 400 });
+    expect(loggedText()).not.toContain("lio_refused_token");
   });
 
   it("unlinking a legacy row with no token sends no revoke at all", async () => {
@@ -187,10 +246,81 @@ describe.skipIf(!HAS_DB)("external-accounts — token at rest", () => {
 
   it("unlinking a user with no link is a no-op, not a throw", async () => {
     await expect(unlinkLichess(await newUser("absent"))).resolves.toBeUndefined();
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 
   it("PLAY_SCOPES is what the design asks for, and the OAuth start sends exactly it", () => {
     expect([...PLAY_SCOPES]).toEqual(["board:play", "challenge:write"]);
+  });
+});
+
+// Review T2-I2: a row that HOLDS a token we cannot open — the KEK unset,
+// rotated, or the ciphertext damaged — is a different fact from a row with no
+// token. Each case below seals under key A and then reaches the open with the
+// key changed, so the decrypt genuinely fails; nothing is mocked in crypto.
+describe.skipIf(!HAS_DB)("external-accounts — a stored token we cannot open", () => {
+  const otherKey = (): string => randomBytes(32).toString("hex");
+
+  async function linkedUnderKeyA(tag: string, token: string): Promise<string> {
+    const userId = await newUser(tag);
+    await upsertLichessLink(userId, {
+      externalUserId: lid(`lid-${tag}`), username: tag,
+      scopes: [...PLAY_SCOPES], token,
+    });
+    return userId;
+  }
+
+  // Play path: fail CLOSED, under its own code — never "re-link", which would
+  // send a player round an OAuth trip that cannot fix an operator's key.
+  it("play path, KEK ROTATED: refuses with LICHESS_TOKEN_UNAVAILABLE and reports decrypt_failed", async () => {
+    const userId = await linkedUnderKeyA("rotated", "lio_rotated_secret");
+    vi.stubEnv("LICHESS_TOKEN_KEK", otherKey());
+    const err = await getLichessAccessToken(userId).then(
+      () => { throw new Error("resolved — the accessor treated an unopenable token as playable"); },
+      (e: unknown) => e as { status?: number; code?: string; message?: string },
+    );
+    expect(err).toMatchObject({ status: 503, code: "LICHESS_TOKEN_UNAVAILABLE" });
+    expect(err.message).not.toMatch(/re-?link/i);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]![0]).toEqual({ userId, reason: "decrypt_failed" });
+    expect(loggedText()).not.toContain("lio_rotated_secret");
+  });
+
+  it("play path, KEK UNSET: refuses with LICHESS_TOKEN_UNAVAILABLE and reports key_unavailable", async () => {
+    const userId = await linkedUnderKeyA("unset", "lio_unset_secret");
+    vi.stubEnv("LICHESS_TOKEN_KEK", "");
+    await expect(getLichessAccessToken(userId)).rejects.toMatchObject({
+      status: 503, code: "LICHESS_TOKEN_UNAVAILABLE",
+    });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]![0]).toEqual({ userId, reason: "key_unavailable" });
+    expect(loggedText()).not.toContain("lio_unset_secret");
+  });
+
+  // The link itself is untouched by a refused open: the row stays, so fixing
+  // the key restores play without the player doing anything.
+  it("play path: the refusal leaves the link in place, and the right key opens it again", async () => {
+    const key = randomBytes(32).toString("hex");
+    vi.stubEnv("LICHESS_TOKEN_KEK", key);
+    const userId = await linkedUnderKeyA("restore", "lio_restore_secret");
+    vi.stubEnv("LICHESS_TOKEN_KEK", otherKey());
+    await expect(getLichessAccessToken(userId)).rejects.toMatchObject({ code: "LICHESS_TOKEN_UNAVAILABLE" });
+    vi.stubEnv("LICHESS_TOKEN_KEK", key);
+    expect(await getLichessAccessToken(userId)).toBe("lio_restore_secret");
+  });
+
+  // Unlink path: honour the unlink — delete our row — but do not do it
+  // silently: the grant could not be revoked and is still live at Lichess.
+  it("unlink path, KEK ROTATED: deletes the row, sends no revoke, and reports it by user id", async () => {
+    const userId = await linkedUnderKeyA("unlinkrot", "lio_unlink_rotated");
+    vi.stubEnv("LICHESS_TOKEN_KEK", otherKey());
+    await expect(unlinkLichess(userId)).resolves.toBeUndefined();
+    expect(await getLichessLink(userId)).toBeNull();
+    const calls = (fetch as unknown as { mock: { calls: unknown[] } }).mock.calls;
+    expect(calls).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]![0]).toEqual({ userId, reason: "decrypt_failed" });
+    expect(loggedText()).not.toContain("lio_unlink_rotated");
   });
 });
 
