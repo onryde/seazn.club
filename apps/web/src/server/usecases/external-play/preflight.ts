@@ -24,7 +24,14 @@ import {
   refreshParticipantToken,
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
-import { ensureBridgeRow, loadOnlinePlayFixture, loadSides, type SidePlayer } from "./guard";
+import {
+  effectiveBridge,
+  ensureBridgeRow,
+  loadOnlinePlayFixture,
+  loadSides,
+  type OnlinePlayFixture,
+  type SidePlayer,
+} from "./guard";
 
 /** Every reason a seat can be refused. The two camera refusals carry the
  *  caller's OWN participant token (controller ruling Q1, 2026-10-09): under
@@ -101,7 +108,9 @@ export async function seatPlayer(
   // "before" is a stamp more than T−10 in the future: the window has not
   // started, which is the round_not_open story, never "closed".
   if (phase === "before") return { seated: false, reason: "round_not_open" };
-  if (phase === "closed") return { seated: false, reason: "window_closed" };
+  // T+20 is the deadline to be seated and have the game created, not a cap on
+  // the game (spec §3.6): a seated player reloading mid-game comes back in.
+  if (phase === "closed" && !isReentry(f, player)) return { seated: false, reason: "window_closed" };
 
   const policy = await fixtureCameraPolicy(a.fixtureId);
   if (policy === "off") {
@@ -146,6 +155,32 @@ export async function seatPlayer(
     reportOutage(err, f.orgId, a.fixtureId, policy);
     return { seated: false, reason: "video_unavailable" };
   }
+}
+
+/** Controller ruling I1 (fix round 1, amending Q1): after the window, a
+ *  caller passes the window check only when ALL THREE hold. Every other check
+ *  before and after it still applies — the camera included.
+ *
+ *  (a) they were seated on this fixture. Seats are re-verified on every claim
+ *      and never stored as a pass (T9: "not a stored stamp"), so the durable
+ *      record of a seat is the game T9 created immediately after seating both
+ *      players through seatPlayer: it names the two Lichess accounts it seated,
+ *      by colour. The caller's own account must be the one recorded for THEIR
+ *      colour. This holds under every policy — Off and an overridden Required
+ *      seat leave no video row at all, so a video row cannot be the record.
+ *  (b) the game exists: T9 records the Lichess game id exactly when it
+ *      creates one. A stale bridge (minted for an older timetable and never
+ *      live) is not this fixture's game (`effectiveBridge`).
+ *  (c) the board is being played: `in_play`. A board settled since is refused
+ *      earlier as fixture_not_playable; a game created but not yet started is
+ *      a seat still owed inside the window, which has closed. */
+function isReentry(f: OnlinePlayFixture, player: SidePlayer): boolean {
+  const game = effectiveBridge(f);
+  if (game === null || game.challenge_id === null) return false; // (b)
+  if (f.fixtureStatus !== "in_play") return false; // (c)
+  if (game.white_side === null || player.lichess === null) return false; // (a)
+  const seatedAccount = game.white_side === player.side ? game.white_lichess_id : game.black_lichess_id;
+  return seatedAccount === player.lichess.id; // (a)
 }
 
 /** `required`: seated only when the meeting reports this participant joined to
@@ -272,6 +307,16 @@ export async function organiserOverrideVideo(a: {
   }
   const f = await loadOnlinePlayFixture(a.fixtureId);
   if (!f) throw new HttpError(404, "fixture not found", "NOT_FOUND");
+  // The override exists for ONE situation: video required, RealtimeKit down,
+  // on a board still being played. Anywhere else it would be a "proceeded
+  // without video" record for a board that never needed video, or is over.
+  // Both refusals come before anything is written.
+  if (!isPlayableFixtureStatus(f.fixtureStatus)) {
+    throw new HttpError(409, "this match can no longer be played", "FIXTURE_NOT_PLAYABLE");
+  }
+  if ((await fixtureCameraPolicy(a.fixtureId)) !== "required") {
+    throw new HttpError(409, "video is not required for this match", "VIDEO_NOT_REQUIRED");
+  }
   await ensureBridgeRow(f);
   await sql.begin(async (tx) => {
     const claimed = await tx<{ fixture_id: string }[]>`
