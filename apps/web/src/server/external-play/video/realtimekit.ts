@@ -333,3 +333,196 @@ export async function endMeeting(meetingId: string, deps: RealtimeKitDeps = {}):
     update fixture_video_meetings set ended_at = now()
      where meeting_id = ${meetingId} and ended_at is null`;
 }
+
+// ─── Camera evidence after the match: the peer report ──────────────────────
+//
+// GET /sessions/peer-report/{peer_id}. SDK telemetry (see the header): the
+// RealtimeKit client uploads encoder-side `video_producer` samples and
+// `metadata.events`. Measured 2026-10-09 (rtk-peer-report.log): frozen at the
+// join snapshot until the participant leaves, final ~70 s after; a camera
+// turned off is a GAP in the samples plus `video_off`/`video_on` events, and
+// `video_producer_cumulative.issues.no_video_fraction` stayed 0 through three
+// minutes off — so that field is never read here. Organiser evidence only:
+// never a seat-gate input, never an automatic outcome (spec §5.2).
+
+/** Sample cadence measured in the spike: 51 samples ~7 s apart (web SDK
+ *  2.0.2). Used when a report has too few samples to measure its own, and as
+ *  a CEILING on the measured one — see videoOffCoverage. */
+export const PEER_REPORT_SAMPLE_CADENCE_MS = 7_000;
+/** A gap is camera-off when consecutive points are MORE than this many
+ *  cadences apart (controller ruling 2026-10-09). */
+export const VIDEO_OFF_GAP_CADENCES = 3;
+
+export type VideoOffInterval = {
+  /** ISO timestamps of the last sample (or joined_at) before the gap and the
+   *  first sample (or left_at) after it. The interval BRACKETS the time the
+   *  camera was off, so it overstates by up to one cadence on each side. */
+  from: string;
+  to: string;
+  seconds: number;
+  /** A `video_off`…`video_on` span from the events overlaps this gap. */
+  confirmedByEvents: boolean;
+};
+
+export type VideoOffCoverage =
+  | {
+      /** Not final yet — the report is frozen until the participant leaves and
+       *  settles ~70 s later. The caller retries; it never shows a partial. */
+      incomplete: true;
+      reason: "not_left" | "not_finalised";
+      sampleCount: number;
+    }
+  | {
+      incomplete: false;
+      /** Seconds of [joined_at, left_at] this report covers — the denominator. */
+      coveredSeconds: number;
+      /** Sum of offIntervals' seconds. */
+      offSeconds: number;
+      offIntervals: VideoOffInterval[];
+      /** `video_producer` samples in the report. */
+      sampleCount: number;
+      /** The cadence the gap threshold was computed from. */
+      cadenceSeconds: number;
+      /** Seconds the `video_off`/`video_on` events alone say the camera was
+       *  off, clamped to the window. Shown beside offSeconds, so a
+       *  disagreement between the two sources is visible, not resolved by us. */
+      eventOffSeconds: number;
+    };
+
+function malformed(what: string): RealtimeKitError {
+  return new RealtimeKitError(502, "unavailable", `RealtimeKit peer report is malformed: ${what}`);
+}
+
+function parseTime(v: unknown, what: string): number {
+  const ms = typeof v === "string" ? Date.parse(v) : Number.NaN;
+  if (!Number.isFinite(ms)) throw malformed(what);
+  return ms;
+}
+
+/** Off-coverage over [joined_at, left_at] from ONE peer report's `data`.
+ *
+ *  Points are joined_at, every sample inside the window, and left_at; any two
+ *  consecutive points more than VIDEO_OFF_GAP_CADENCES × cadence apart are an
+ *  off interval — which covers the join→first-sample and last-sample→leave
+ *  edges, and a report with no samples at all (the whole window is off).
+ *
+ *  Cadence is the median gap between samples, CAPPED at the measured 7 s.
+ *  The cap is not cosmetic: a camera flashed on for one sample every three
+ *  minutes has a median gap of 180 s, a raw threshold of 540 s, and would
+ *  read as 0 s off. A faster cadence than 7 s is used as measured.
+ *
+ *  A report that cannot be read THROWS rather than reading as camera on or
+ *  off; an unfinished one returns `incomplete` so the caller retries. */
+export function videoOffCoverage(data: unknown): VideoOffCoverage {
+  const p = (data as { participant?: unknown } | null)?.participant as
+    | {
+        joined_at?: unknown;
+        left_at?: unknown;
+        duration?: unknown;
+        peer_report?: {
+          metadata?: { events?: unknown };
+          quality?: { video_producer?: unknown };
+        };
+      }
+    | undefined;
+  if (typeof p !== "object" || p === null) throw malformed("no participant");
+  const joined = parseTime(p.joined_at, "joined_at");
+  const rawSamples = p.peer_report?.quality?.video_producer ?? [];
+  if (!Array.isArray(rawSamples)) throw malformed("video_producer is not a list");
+  const sampleCount = rawSamples.length;
+
+  if (p.left_at === null || p.left_at === undefined) return { incomplete: true, reason: "not_left", sampleCount };
+  if (typeof p.duration !== "number" || !(p.duration > 0)) {
+    return { incomplete: true, reason: "not_finalised", sampleCount };
+  }
+  const left = parseTime(p.left_at, "left_at");
+  if (left < joined) throw malformed("left_at is before joined_at");
+
+  const inWindow = rawSamples
+    .map((s, i) => parseTime((s as { timestamp?: unknown } | null)?.timestamp, `video_producer[${i}].timestamp`))
+    .filter((t) => t >= joined && t <= left)
+    .sort((a, b) => a - b);
+
+  const deltas: number[] = [];
+  for (let i = 1; i < inWindow.length; i += 1) deltas.push(inWindow[i]! - inWindow[i - 1]!);
+  const cadence =
+    deltas.length === 0 ? PEER_REPORT_SAMPLE_CADENCE_MS : Math.min(median(deltas), PEER_REPORT_SAMPLE_CADENCE_MS);
+  const threshold = VIDEO_OFF_GAP_CADENCES * cadence;
+
+  const eventSpans = videoOffEventSpans(p.peer_report?.metadata?.events, joined, left);
+
+  const points = [joined, ...inWindow, left];
+  const offIntervals: VideoOffInterval[] = [];
+  for (let i = 1; i < points.length; i += 1) {
+    const from = points[i - 1]!;
+    const to = points[i]!;
+    if (to - from > threshold) {
+      offIntervals.push({
+        from: new Date(from).toISOString(),
+        to: new Date(to).toISOString(),
+        seconds: (to - from) / 1000,
+        confirmedByEvents: eventSpans.some(([a, b]) => a < to && b > from),
+      });
+    }
+  }
+  return {
+    incomplete: false,
+    coveredSeconds: (left - joined) / 1000,
+    offSeconds: offIntervals.reduce((n, iv) => n + iv.seconds, 0),
+    offIntervals,
+    sampleCount,
+    cadenceSeconds: cadence / 1000,
+    eventOffSeconds: eventSpans.reduce((n, [a, b]) => n + (b - a), 0) / 1000,
+  };
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
+}
+
+/** `video_off` opens a span (a repeat while already off is ignored),
+ *  `video_on` closes it, and a span still open at the end closes at left_at.
+ *  Spans are clamped to [joined, left]; empty ones are dropped. Every other
+ *  event name is ignored. */
+function videoOffEventSpans(raw: unknown, joined: number, left: number): [number, number][] {
+  const events = (Array.isArray(raw) ? raw : [])
+    .map((e, i) => {
+      const ev = e as { name?: unknown; timestamp?: unknown } | null;
+      return { name: ev?.name, at: parseTime(ev?.timestamp, `events[${i}].timestamp`) };
+    })
+    .filter((e) => e.name === "video_off" || e.name === "video_on")
+    .sort((a, b) => a.at - b.at);
+  const spans: [number, number][] = [];
+  let offSince: number | null = null;
+  for (const e of events) {
+    if (e.name === "video_off" && offSince === null) offSince = e.at;
+    else if (e.name === "video_on" && offSince !== null) {
+      spans.push([offSince, e.at]);
+      offSince = null;
+    }
+  }
+  if (offSince !== null) spans.push([offSince, left]);
+  return spans
+    .map(([a, b]): [number, number] => [Math.max(a, joined), Math.min(b, left)])
+    .filter(([a, b]) => b > a);
+}
+
+/** Fetch one peer's report and return ONLY its off-coverage. The unredacted
+ *  report carries IP, device and browser metadata; nothing of it leaves this
+ *  function except the coverage, so a caller cannot store it by accident.
+ *
+ *  `peerId` is a PEER id — the SDK's `meeting.self.id`, or a `peer_id` from
+ *  the session participant's `peer_events` — never the participant id
+ *  addParticipant returned (that 404s: Cloudflare RealtimeKit FAQ). Fetch it
+ *  at least ~2 minutes after the participant leaves (final ~70 s after,
+ *  measured) and retry while the answer is `incomplete`. */
+export async function fetchVideoOffCoverage(
+  peerId: string,
+  deps: RealtimeKitDeps = {},
+): Promise<VideoOffCoverage> {
+  const cfg = requireConfig();
+  const data = await cf(cfg, `/sessions/peer-report/${encodeURIComponent(peerId)}`, { method: "GET" }, deps);
+  return videoOffCoverage(data);
+}
