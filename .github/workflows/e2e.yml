@@ -377,6 +377,9 @@ jobs:
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
       # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
       DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
+      # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
+      LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
       # Public realtime-token minting (mintPublicFixtureToken, lib/realtime.ts).
       # Prefer ES256 (project JWKS shape); HS256 remains as fallback for older
       # helpers. CI-only dummy keypair (kid e2e-ci-dummy-es256) — generated for
@@ -1050,6 +1053,9 @@ jobs:
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
       # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
       DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
+      # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
+      LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
       # CI-only dummy keypair (kid e2e-ci-dummy-es256). Previous inlined JWK
       # rotated out. Pass through every Start server / Playwright step; do
       # not introduce SUPABASE_JWT_PRIVATE_KEY.
@@ -1400,6 +1406,9 @@ jobs:
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
       # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
       DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
+      # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
+      LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
       # CI-only dummy keypair (kid e2e-ci-dummy-es256). Previous inlined JWK
       # rotated out. Pass through every Start server / Playwright step; do
       # not introduce SUPABASE_JWT_PRIVATE_KEY.
