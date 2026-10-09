@@ -590,11 +590,42 @@ describe("hasLiveVideoPublisher", () => {
       { name: "a status outside the enum", first: { status: 200, body: { success: true, data: { id: SESSION, status: "PAUSED" } } }, message: /status/ },
       {
         // Cloudflare's own envelope for an unroutable path: errors[], not error.
-        name: "a 404 that is not RealtimeKit's answer (a routing 404)",
-        first: { status: 404, body: { success: false, errors: [{ code: 7003, message: "Could not route" }], result: null } },
+        name: "a 404 that is not RealtimeKit's answer (gateway 7003, could not route)",
+        first: {
+          status: 404,
+          body: {
+            success: false,
+            errors: [{ code: 7003, message: "Could not route to /accounts/acct-1/realtime/kit/app-1/meetings/mtg-1/active-session, perhaps your object identifier is invalid?" }],
+            messages: [],
+            result: null,
+          },
+        },
         message: /404/,
       },
+      {
+        name: "a 404 that is not RealtimeKit's answer (gateway 7000, no route for that URI)",
+        first: { status: 404, body: { success: false, errors: [{ code: 7000, message: "No route for that URI" }], messages: [], result: null } },
+        message: /404/,
+      },
+      {
+        // Extra fields are tolerated, but a gateway no-route code is always
+        // an outage, whatever else the body carries.
+        name: "RealtimeKit's envelope that ALSO carries gateway 7003",
+        first: { status: 404, body: { success: false, error: { code: 404, message: "x" }, errors: [{ code: 7003, message: "Could not route" }] } },
+        message: /404/,
+      },
+      {
+        name: "RealtimeKit's envelope that ALSO carries gateway 7000",
+        first: { status: 404, body: { success: false, error: { code: 404, message: "x" }, errors: [{ code: 7000, message: "No route for that URI" }] } },
+        message: /404/,
+      },
+      { name: "a 404 without success:false", first: { status: 404, body: { error: { code: 404, message: "x" } } }, message: /404/ },
+      { name: "a 404 whose success is the STRING 'false'", first: { status: 404, body: { success: "false", error: { code: 404 } } }, message: /404/ },
+      { name: "a 404 whose error.code is not 404", first: { status: 404, body: { success: false, error: { code: "NOT_FOUND", message: "x" } } }, message: /404/ },
+      { name: "a 404 whose error is null", first: { status: 404, body: { success: false, error: null } }, message: /404/ },
+      { name: "a 404 whose JSON body is null", first: { status: 404, body: null }, message: /404/ },
       { name: "an HTML 404", first: { status: 404, text: "<html>Not Found</html>" }, message: /404/ },
+      { name: "an empty 404", first: { status: 404, text: "" }, message: /404/ },
     ];
     let checked = 0;
     for (const c of cases) {
@@ -606,10 +637,46 @@ describe("hasLiveVideoPublisher", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity").toBe(cases.length);
-    expect(checked).toBeGreaterThanOrEqual(8);
+    expect(checked).toBeGreaterThanOrEqual(17);
     // Positive controls: the two answers that DO mean "not live".
     expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stubFetch([noSession]).fetch })).toBe(false);
     expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stubFetch([ended]).fetch })).toBe(false);
+  });
+
+  it("RealtimeKit's 'no session yet' 404 is read by its envelope, not by the exact typing of its code", async () => {
+    // No live session is the NORMAL state before the first player joins, and
+    // the T8 seat gate asks in the same request that creates the participant:
+    // every Required fixture's first claim meets this 404. Measured: an ended
+    // meeting answers HTTP 404 (progress.md); the body is still unrecorded.
+    // So the predicate is the envelope — status 404, JSON, success === false,
+    // Number(error.code) === 404 — with extra fields and a string code allowed.
+    configure();
+    const answerable = participants([row(ME, null)]);
+    const cases: { name: string; body: unknown }[] = [
+      { name: "the documented shape", body: { success: false, error: { code: 404, message: "Active Session is not found for the given meetingId" } } },
+      { name: "a STRING code", body: { success: false, error: { code: "404", message: "Active Session is not found for the given meetingId" } } },
+      {
+        name: "extra fields everywhere",
+        body: { success: false, error: { code: 404, message: "x", details: { meetingId: "mtg-1" } }, message: "top-level", request_id: "r-1" },
+      },
+      { name: "a string code with extra fields", body: { success: false, error: { code: "404", message: "x", hint: "join first" }, meta: {} } },
+      { name: "no message", body: { success: false, error: { code: 404 } } },
+      { name: "an EMPTY errors[] beside RealtimeKit's error", body: { success: false, error: { code: 404, message: "x" }, errors: [] } },
+      {
+        name: "an errors[] entry that is not a gateway no-route code",
+        body: { success: false, error: { code: 404, message: "x" }, errors: [{ code: 404, message: "x" }] },
+      },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      // The second response would answer TRUE if the code went on to ask.
+      const stub = stubFetch([{ status: 404, body: c.body }, answerable]);
+      expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch }), c.name).toBe(false);
+      expect(stub.calls.length, `${c.name}: answered from the 404 alone`).toBe(1);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+    expect(checked).toBeGreaterThanOrEqual(7);
   });
 
   it("an upstream outage or a malformed answer is NEVER silently a false", async () => {
@@ -714,6 +781,77 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
     await endMeeting(mtg("quiet"), { fetch: stub.fetch });
     expect(stub.calls.length).toBe(2);
     expect(stub.calls[1]?.method).toBe("PATCH");
+  });
+
+  it("a kick-all 404 in ANY shape means nothing to kick: the deactivate still happens and the row is stamped", async () => {
+    // OpenAPI documents NO 404 for kick-all, so its body shape is unknowable
+    // until recorded. Reading a non-documented one as an outage wedged
+    // teardown on the ordinary quiet-room path: the PATCH never went, the
+    // meeting stayed joinable, the row was never stamped and every sweep
+    // retried and threw again (re-review N1). The PATCH that follows travels
+    // the same path prefix and is the proof of teardown.
+    configure();
+    const cases: { name: string; kick: { status: number; body?: unknown; text?: string } }[] = [
+      { name: "the active-session 404 shape", kick: noActive },
+      {
+        name: "Cloudflare's gateway envelope (errors[], code 7003)",
+        kick: { status: 404, body: { success: false, errors: [{ code: 7003, message: "Could not route" }], messages: [], result: null } },
+      },
+      { name: "a string error.code", kick: { status: 404, body: { success: false, error: { code: "404", message: "no active session" } } } },
+      { name: "an HTML 404", kick: { status: 404, text: "<html>Not Found</html>" } },
+      { name: "an empty 404", kick: { status: 404, text: "" } },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const s = await seedFixture();
+      const id = mtg(`kick404-${checked}`);
+      await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+      expect(await endedAt(id), `${c.name}: premise — a fresh meeting is not ended`).toBeNull();
+      const stub = stubFetch([c.kick, inactive]);
+      await endMeeting(id, { fetch: stub.fetch });
+      expect(stub.calls.map((x) => `${x.method} ${route(x.url)}`), c.name).toEqual([
+        `POST /meetings/${id}/active-session/kick-all`,
+        `PATCH /meetings/${id}`,
+      ]);
+      expect(stub.calls[1]?.body, c.name).toEqual({ status: "INACTIVE" });
+      expect(await endedAt(id), c.name).not.toBeNull();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+    expect(checked).toBeGreaterThanOrEqual(5);
+  });
+
+  it("after a tolerated kick 404 the PATCH is the proof: any PATCH failure throws and leaves the row UNSTAMPED", async () => {
+    // A routing or proxy 404 would fail the PATCH too, so tolerating the
+    // kick's 404 cannot turn an outage into a recorded teardown.
+    configure();
+    const gateway404 = { status: 404, body: { success: false, errors: [{ code: 7003, message: "Could not route" }], messages: [], result: null } };
+    const cases: { name: string; patch: { status: number; body?: unknown; text?: string }; code: string }[] = [
+      { name: "the PATCH 404s through the gateway too", patch: gateway404, code: "unavailable" },
+      {
+        name: "the PATCH 404s in RealtimeKit's own shape",
+        patch: { status: 404, body: { success: false, error: { code: 404, message: "meeting not found" } } },
+        code: "not_found",
+      },
+      { name: "the PATCH 500s", patch: { status: 500, body: { success: false } }, code: "unavailable" },
+      { name: "the PATCH answers an HTML 200", patch: { status: 200, text: "<html>ok</html>" }, code: "unavailable" },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const s = await seedFixture();
+      const id = mtg(`patch-proof-${checked}`);
+      await ensureMeeting(s.fixtureId, { fetch: stubFetch([{ status: 200, body: { success: true, data: { id } } }]).fetch });
+      const stub = stubFetch([gateway404, c.patch]);
+      await expect(endMeeting(id, { fetch: stub.fetch }), c.name).rejects.toMatchObject({
+        name: "RealtimeKitError",
+        code: c.code,
+      });
+      expect(stub.calls.map((x) => x.method), `${c.name}: premise — the PATCH was attempted`).toEqual(["POST", "PATCH"]);
+      expect(await endedAt(id), c.name).toBeNull();
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+    expect(checked).toBeGreaterThanOrEqual(4);
   });
 
   it("SEQUENCE: ensure → end → ensure refuses (409) with no HTTP call", async () => {
