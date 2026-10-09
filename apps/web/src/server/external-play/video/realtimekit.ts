@@ -57,7 +57,9 @@ type Config = {
 
 function readConfig(): Config | null {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID ?? "";
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN ?? "";
+  // NOT CLOUDFLARE_API_TOKEN: that name is the GitHub Actions secret that
+  // deploys the cron worker with wrangler, with different scopes.
+  const apiToken = process.env.REALTIMEKIT_API_TOKEN ?? "";
   const appId = process.env.REALTIMEKIT_APP_ID ?? "";
   const player = process.env.REALTIMEKIT_PLAYER_PRESET ?? "";
   const arbiter = process.env.REALTIMEKIT_ARBITER_PRESET ?? "";
@@ -86,13 +88,21 @@ const CF_BASE = "https://api.cloudflare.com/client/v4";
 export type MeetingRef = { meetingId: string };
 export type ParticipantToken = { participantId: string; authToken: string };
 
-type CfBody = {
-  success?: boolean;
-  data?: unknown;
-  result?: unknown;
-  errors?: { message?: string }[];
-  error?: { message?: string };
-};
+type CfBody = { success?: unknown; data?: unknown; error?: { code?: unknown } | null };
+
+/** RealtimeKit's own "not found". OpenAPI documents the active-session 404 as
+ *  `{ success: false, error: { code, message } }`, both required, with `code`
+ *  the HTTP status ("Active Session is not found for the given meetingId").
+ *  No 404 body has been recorded yet — T17 owes one. A 404 in any other shape
+ *  (Cloudflare's own routing envelope with `errors[]`, an HTML page from a
+ *  proxy, a wrong REALTIMEKIT_BASE_URL) is not "nothing there": it is an
+ *  answer we cannot read, and reading it as "no session" would turn an outage
+ *  into "camera off". */
+function isRealtimeKitNotFound(body: unknown): boolean {
+  if (typeof body !== "object" || body === null) return false;
+  const b = body as CfBody;
+  return b.success === false && typeof b.error === "object" && b.error !== null && b.error.code === 404;
+}
 
 /** One request. Maps transport and HTTP failure onto RealtimeKitError, and
  *  NEVER puts the API token or a response body into the message — a
@@ -122,9 +132,6 @@ async function cf(
   } catch {
     throw new RealtimeKitError(503, "unavailable", `RealtimeKit ${init.method} ${path} did not complete`);
   }
-  if (res.status === 404) {
-    throw new RealtimeKitError(404, "not_found", `RealtimeKit ${init.method} ${path} returned 404`);
-  }
   if (res.status === 401 || res.status === 403) {
     throw new RealtimeKitError(
       res.status,
@@ -132,15 +139,48 @@ async function cf(
       `RealtimeKit ${init.method} ${path} rejected our credentials`,
     );
   }
-  const body = (await res.json().catch(() => ({}))) as CfBody;
-  if (!res.ok || body.success === false) {
+  if (res.status === 404) {
+    const notFound = await res.json().then(isRealtimeKitNotFound, () => false);
+    if (notFound) {
+      throw new RealtimeKitError(404, "not_found", `RealtimeKit ${init.method} ${path} returned 404`);
+    }
+    throw new RealtimeKitError(
+      404,
+      "unavailable",
+      `RealtimeKit ${init.method} ${path} returned a 404 that is not RealtimeKit's not-found answer`,
+    );
+  }
+  if (!res.ok) {
     throw new RealtimeKitError(
       res.status,
       "unavailable",
       `RealtimeKit ${init.method} ${path} failed with ${res.status}`,
     );
   }
-  return body.data ?? body.result ?? body;
+  // Every 2xx we call is documented with a `data` member (OpenAPI; none
+  // documents a 204). A body we cannot parse, or one without data, is an
+  // outage — never an empty answer a caller could read as "not live".
+  let body: CfBody | null;
+  try {
+    body = (await res.json()) as CfBody | null;
+  } catch {
+    throw new RealtimeKitError(
+      502,
+      "unavailable",
+      `RealtimeKit ${init.method} ${path} returned an unreadable body (${res.status})`,
+    );
+  }
+  if (typeof body !== "object" || body === null || body.success === false) {
+    throw new RealtimeKitError(
+      res.status,
+      "unavailable",
+      `RealtimeKit ${init.method} ${path} failed with ${res.status}`,
+    );
+  }
+  if (body.data === undefined || body.data === null) {
+    throw new RealtimeKitError(502, "unavailable", `RealtimeKit ${init.method} ${path} returned no data`);
+  }
+  return body.data;
 }
 
 /** `fixture_id` is the table's primary key, so a fixture has exactly one
@@ -253,14 +293,15 @@ const PARTICIPANTS_PER_PAGE = 200;
  *  endpoint and no webhook exposes one. Camera-on is the preset's job.
  *
  *  `participantId` is what addParticipant returned. In a session-participant
- *  row that value is `user_id`; the row's own `id` is a per-connection id
- *  that changes on every reload (OpenAPI; Cloudflare's "Understanding IDs";
- *  and the recorded peer report, where the two differ). A participant who
- *  reloaded has one row per connection, so the question is whether ANY of
- *  their rows has not left.
+ *  row that value is `user_id`; the row's own `id` is the session participant
+ *  id, which is neither our id nor a peer id (measured 2026-10-09,
+ *  rtk-peer-report.log tail / 7dde4a246; the recorded report agrees). Whether
+ *  a reload adds a row or only new peer events is unmeasured, so the question
+ *  is whether ANY of this participant's rows has not left.
  *
- *  A 404 on the active session is a normal "nobody has joined yet" and
- *  answers false; any other failure, and any answer we cannot read, THROWS,
+ *  RealtimeKit's own well-formed 404 on the active session is a normal
+ *  "nobody has joined yet" and answers false, as does an exact ENDED; any
+ *  other failure, and any answer we cannot read, THROWS,
  *  because a silent false would refuse a seat during a vendor outage, and
  *  D11's organiser override exists precisely so an outage is handled by a
  *  person, not by a guess. */
@@ -281,7 +322,13 @@ export async function hasLiveVideoPublisher(
     if (err instanceof RealtimeKitError && err.code === "not_found") return false;
     throw err;
   }
-  if (session.status !== "LIVE") return false;
+  // OpenAPI closes the enum at LIVE | ENDED. Only an exact ENDED (or the
+  // well-formed 404 above) means "not live"; any other value is an answer we
+  // cannot read, and a false would refuse the seat as "camera off".
+  if (session.status === "ENDED") return false;
+  if (session.status !== "LIVE") {
+    throw new RealtimeKitError(502, "unavailable", "RealtimeKit active session has a status outside LIVE | ENDED");
+  }
   if (typeof session.id !== "string" || session.id === "") {
     throw new RealtimeKitError(502, "unavailable", "RealtimeKit active session is LIVE but has no id");
   }
@@ -349,6 +396,12 @@ export async function endMeeting(meetingId: string, deps: RealtimeKitDeps = {}):
  *  2.0.2). Used when a report has too few samples to measure its own, and as
  *  a CEILING on the measured one — see videoOffCoverage. */
 export const PEER_REPORT_SAMPLE_CADENCE_MS = 7_000;
+/** FLOOR on the cadence. The spike's 50 deltas were 6.99–7.003 s, so a
+ *  median under 5 s is a data-shape artefact (duplicate or burst samples),
+ *  not the SDK's cadence — and left alone it collapses the threshold to
+ *  ~0 and reads a camera that was on throughout as off for the whole match
+ *  (review I3). 5 s keeps the gap threshold at >= 15 s. */
+export const PEER_REPORT_MIN_CADENCE_MS = 5_000;
 /** A gap is camera-off when consecutive points are MORE than this many
  *  cadences apart (controller ruling 2026-10-09). */
 export const VIDEO_OFF_GAP_CADENCES = 3;
@@ -406,10 +459,12 @@ function parseTime(v: unknown, what: string): number {
  *  off interval — which covers the join→first-sample and last-sample→leave
  *  edges, and a report with no samples at all (the whole window is off).
  *
- *  Cadence is the median gap between samples, CAPPED at the measured 7 s.
- *  The cap is not cosmetic: a camera flashed on for one sample every three
- *  minutes has a median gap of 180 s, a raw threshold of 540 s, and would
- *  read as 0 s off. A faster cadence than 7 s is used as measured.
+ *  Cadence is the median gap between distinct sample times, clamped to
+ *  [5 s, 7 s]. The 7 s CAP is not cosmetic: a camera flashed on for one
+ *  sample every three minutes has a median gap of 180 s, a raw threshold of
+ *  540 s, and would read as 0 s off. The 5 s FLOOR stops duplicate or burst
+ *  samples dragging the median to ~0 and reading a camera that was on
+ *  throughout as off.
  *
  *  A report that cannot be read THROWS rather than reading as camera on or
  *  off; an unfinished one returns `incomplete` so the caller retries. */
@@ -438,15 +493,22 @@ export function videoOffCoverage(data: unknown): VideoOffCoverage {
   const left = parseTime(p.left_at, "left_at");
   if (left < joined) throw malformed("left_at is before joined_at");
 
-  const inWindow = rawSamples
-    .map((s, i) => parseTime((s as { timestamp?: unknown } | null)?.timestamp, `video_producer[${i}].timestamp`))
-    .filter((t) => t >= joined && t <= left)
-    .sort((a, b) => a - b);
+  // De-duplicated: a sample reported twice at the same instant is one
+  // sample, not a 0 s cadence.
+  const inWindow = [
+    ...new Set(
+      rawSamples
+        .map((s, i) => parseTime((s as { timestamp?: unknown } | null)?.timestamp, `video_producer[${i}].timestamp`))
+        .filter((t) => t >= joined && t <= left),
+    ),
+  ].sort((a, b) => a - b);
 
   const deltas: number[] = [];
   for (let i = 1; i < inWindow.length; i += 1) deltas.push(inWindow[i]! - inWindow[i - 1]!);
   const cadence =
-    deltas.length === 0 ? PEER_REPORT_SAMPLE_CADENCE_MS : Math.min(median(deltas), PEER_REPORT_SAMPLE_CADENCE_MS);
+    deltas.length === 0
+      ? PEER_REPORT_SAMPLE_CADENCE_MS
+      : Math.max(PEER_REPORT_MIN_CADENCE_MS, Math.min(median(deltas), PEER_REPORT_SAMPLE_CADENCE_MS));
   const threshold = VIDEO_OFF_GAP_CADENCES * cadence;
 
   const eventSpans = videoOffEventSpans(p.peer_report?.metadata?.events, joined, left);
@@ -525,4 +587,61 @@ export async function fetchVideoOffCoverage(
   const cfg = requireConfig();
   const data = await cf(cfg, `/sessions/peer-report/${encodeURIComponent(peerId)}`, { method: "GET" }, deps);
   return videoOffCoverage(data);
+}
+
+function malformedList(what: string): RealtimeKitError {
+  return new RealtimeKitError(502, "unavailable", `RealtimeKit session participants are malformed: ${what}`);
+}
+
+/** Every PEER id one participant had in one session — the ids the peer report
+ *  takes (fetchVideoOffCoverage). MEASURED 2026-10-09 on the spike's ended
+ *  session (rtk-peer-report.log tail, 7dde4a246): with
+ *  `include_peer_events=true` a row carries `id` (the session participant id —
+ *  NOT a peer id, whatever the OpenAPI wording says), `user_id` (our
+ *  add-participant id) and `peer_events[]` (PEER_JOINING / PEER_LEAVING) whose
+ *  `peer_id` is the client's `meeting.self.id`. Discovered server-side, so
+ *  the evidence never rests on a peer id a client chose to report.
+ *
+ *  The answer is the union of peer_events[].peer_id over every row whose
+ *  `user_id` matches, first-seen order, each once — a reload may add a row or
+ *  only new events, and both are covered. A body that cannot prove the list
+ *  complete THROWS: a short list would hide a reconnect's coverage, and an
+ *  empty one reads as "never joined". */
+export async function listPeerIds(
+  sessionId: string,
+  participantUserId: string,
+  deps: RealtimeKitDeps = {},
+): Promise<string[]> {
+  if (!sessionId || !participantUserId) {
+    throw new Error("listPeerIds needs a session id and a participant user id");
+  }
+  const cfg = requireConfig();
+  const data = (await cf(
+    cfg,
+    `/sessions/${encodeURIComponent(sessionId)}/participants?include_peer_events=true&per_page=${PARTICIPANTS_PER_PAGE}`,
+    { method: "GET" },
+    deps,
+  )) as { participants?: unknown };
+  if (!Array.isArray(data.participants)) throw malformedList("no participants list");
+  const rows = data.participants as unknown[];
+  if (rows.length >= PARTICIPANTS_PER_PAGE) {
+    throw malformedList(`${PARTICIPANTS_PER_PAGE}+ rows; the peer list is not provable from one page`);
+  }
+  const peers: string[] = [];
+  rows.forEach((r, i) => {
+    const row = r as { user_id?: unknown; peer_events?: unknown } | null;
+    if (typeof row !== "object" || row === null || typeof row.user_id !== "string") {
+      throw malformedList(`participants[${i}] has no user_id`);
+    }
+    if (row.user_id !== participantUserId) return;
+    if (!Array.isArray(row.peer_events)) throw malformedList(`participants[${i}].peer_events is not a list`);
+    (row.peer_events as unknown[]).forEach((e, j) => {
+      const peer = (e as { peer_id?: unknown } | null)?.peer_id;
+      if (typeof peer !== "string" || peer === "") {
+        throw malformedList(`participants[${i}].peer_events[${j}] has no peer_id`);
+      }
+      if (!peers.includes(peer)) peers.push(peer);
+    });
+  });
+  return peers;
 }

@@ -11,12 +11,13 @@ import {
   ensureMeeting,
   fetchVideoOffCoverage,
   hasLiveVideoPublisher,
+  listPeerIds,
   realtimeKitConfigured,
 } from "../realtimekit";
 
 const ENV_KEYS = [
   "CLOUDFLARE_ACCOUNT_ID",
-  "CLOUDFLARE_API_TOKEN",
+  "REALTIMEKIT_API_TOKEN",
   "REALTIMEKIT_APP_ID",
   "REALTIMEKIT_PLAYER_PRESET",
   "REALTIMEKIT_ARBITER_PRESET",
@@ -25,7 +26,7 @@ const ENV_KEYS = [
 function configure(overrides: Partial<Record<(typeof ENV_KEYS)[number], string>> = {}) {
   const full: Record<string, string> = {
     CLOUDFLARE_ACCOUNT_ID: "acct-1",
-    CLOUDFLARE_API_TOKEN: "cf-token-do-not-leak-0123456789",
+    REALTIMEKIT_API_TOKEN: "cf-token-do-not-leak-0123456789",
     REALTIMEKIT_APP_ID: "app-1",
     REALTIMEKIT_PLAYER_PRESET: "seazn_chess_player",
     REALTIMEKIT_ARBITER_PRESET: "seazn_chess_arbiter",
@@ -62,6 +63,20 @@ describe("realtimeKitConfigured", () => {
   });
 });
 
+describe("the API token's name", () => {
+  it("is REALTIMEKIT_API_TOKEN: the wrangler deploy secret CLOUDFLARE_API_TOKEN never configures RealtimeKit", () => {
+    // CLOUDFLARE_API_TOKEN is the GitHub Actions secret that deploys the cron
+    // worker (prod.yml / stg.yml), with different scopes. One name per
+    // credential, so a deploy token can never be pasted into runtime here.
+    configure({ REALTIMEKIT_API_TOKEN: "" });
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "wrangler-deploy-token-0123456789");
+    expect(realtimeKitConfigured(), "the old name alone must not configure it").toBe(false);
+    // Positive control: the right name, everything else equal, does.
+    configure();
+    expect(realtimeKitConfigured()).toBe(true);
+  });
+});
+
 describe("RealtimeKitError", () => {
   it("carries a status and a code", () => {
     const err = new RealtimeKitError(503, "unavailable", "upstream down");
@@ -86,7 +101,7 @@ type StubCall = { url: string; method: string; headers: Headers; body: unknown }
 
 /** A stub that answers one JSON body per call, in order, and records every
  *  request. Nothing here touches the network. */
-function stubFetch(responses: { status: number; body: unknown }[]) {
+function stubFetch(responses: { status: number; body?: unknown; text?: string }[]) {
   const calls: StubCall[] = [];
   const fn = vi.fn(async (url: string | URL, init?: RequestInit) => {
     const next = responses[calls.length];
@@ -97,9 +112,10 @@ function stubFetch(responses: { status: number; body: unknown }[]) {
       body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
     });
     if (!next) throw new Error(`unexpected RealtimeKit call #${calls.length}: ${String(url)}`);
-    return new Response(JSON.stringify(next.body), {
+    // `text` sends a raw, possibly non-JSON body (an HTML error page).
+    return new Response(next.text ?? JSON.stringify(next.body), {
       status: next.status,
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": next.text === undefined ? "application/json" : "text/html" },
     });
   });
   return { fetch: fn as unknown as typeof fetch, calls };
@@ -326,9 +342,26 @@ describe("addParticipant", () => {
     const cases: { name: string; fetch: typeof fetch; code: string }[] = [
       ...[400, 401, 403, 404, 429, 500, 502].map((status) => ({
         name: `HTTP ${status}`,
-        fetch: stubFetch([{ status, body: echo }]).fetch,
+        // RealtimeKit's error shape carries the status as error.code — a 404
+        // in that shape is its "not found"; the body is read on that branch.
+        fetch: stubFetch([{ status, body: { ...echo, error: { ...echo.error, code: status } } }]).fetch,
         code: status === 404 ? "not_found" : status === 401 || status === 403 ? "unauthorized" : "unavailable",
       })),
+      {
+        name: "HTTP 404 that is NOT RealtimeKit's shape, echoing the token",
+        fetch: stubFetch([{ status: 404, body: { success: false, errors: [{ message: `bad token ${API_TOKEN}` }] } }]).fetch,
+        code: "unavailable",
+      },
+      {
+        name: "HTTP 200 whose unreadable body echoes the token",
+        fetch: stubFetch([{ status: 200, text: `<html>${API_TOKEN} ${PARTICIPANT_TOKEN}</html>` }]).fetch,
+        code: "unavailable",
+      },
+      {
+        name: "HTTP 200 with no data, echoing the token elsewhere",
+        fetch: stubFetch([{ status: 200, body: { success: true, note: `${API_TOKEN} ${PARTICIPANT_TOKEN}` } }]).fetch,
+        code: "unavailable",
+      },
       {
         name: "HTTP 200 with success:false",
         fetch: stubFetch([{ status: 200, body: echo }]).fetch,
@@ -369,7 +402,7 @@ describe("addParticipant", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every failure branch").toBe(cases.length);
-    expect(checked).toBeGreaterThanOrEqual(9);
+    expect(checked).toBeGreaterThanOrEqual(12);
     expect([...codes].sort(), "every non-config error code was reached").toEqual([
       "not_found",
       "unauthorized",
@@ -430,9 +463,9 @@ describe("hasLiveVideoPublisher", () => {
     status: 200,
     body: { success: true, data: { participants: rows } },
   });
-  /** A session-participant row. `id` is RealtimeKit's per-CONNECTION id and
-   *  `user_id` the persistent participant id addParticipant returned — the
-   *  recorded payload has them as two different values (README beside it). */
+  /** A session-participant row. `id` is the SESSION PARTICIPANT id and
+   *  `user_id` the participant id addParticipant returned — measured as two
+   *  different values (README beside the fixture; 7dde4a246). */
   const row = (userId: string, leftAt: string | null, n = 0) => ({
     id: `conn-${userId}-${n}`,
     user_id: userId,
@@ -444,7 +477,7 @@ describe("hasLiveVideoPublisher", () => {
   it("sweeps every reachable state and reports the count", async () => {
     configure();
     const rec = RECORDED.data.participant;
-    // Premise for the recorded-shape case: the per-connection id and the
+    // Premise for the recorded-shape case: the session participant id and the
     // persistent participant id really are different values.
     expect(rec.id, "premise: recorded row has distinct id and user_id").not.toBe(rec.user_id);
     const cases: { name: string; me?: string; responses: { status: number; body: unknown }[]; want: boolean }[] = [
@@ -473,14 +506,14 @@ describe("hasLiveVideoPublisher", () => {
       },
       {
         // Matching on the row's `id` (the brief's original predicate) would
-        // never see this participant: that is a per-connection id.
+        // never see this participant: that is the session participant id.
         name: "recorded row shape: matched by user_id, present",
         me: rec.user_id,
         responses: [live, participants([{ ...rec, peer_report: undefined, left_at: null }])],
         want: true,
       },
       {
-        name: "a row whose per-connection id equals our participantId but belongs to someone else",
+        name: "a row whose session participant id equals our participantId but belongs to someone else",
         responses: [live, participants([{ ...row("someone-else", null), id: ME }])],
         want: false,
       },
@@ -540,6 +573,45 @@ describe("hasLiveVideoPublisher", () => {
     expect(stub.calls.length).toBe(1);
   });
 
+  it("an UNREADABLE answer is never 'not live': only exact ENDED or RealtimeKit's own 404 are", async () => {
+    // OpenAPI (realtime/kit active-session): 200 carries data.status in the
+    // CLOSED enum LIVE | ENDED; 404 "Active Session is not found for the given
+    // meetingId" carries { success: false, error: { code, message } }, both
+    // required. Anything else is a body we cannot read, and under Required a
+    // false here refuses the seat as "camera off" (addendum 5, D11).
+    configure();
+    const answerable = participants([row(ME, null)]);
+    const cases: { name: string; first: { status: number; body?: unknown; text?: string }; message: RegExp }[] = [
+      { name: "an HTML 200", first: { status: 200, text: "<html><body>502 Bad Gateway</body></html>" }, message: /unreadable/ },
+      { name: "data: null", first: { status: 200, body: { success: true, data: null } }, message: /no data/ },
+      { name: "an empty object", first: { status: 200, body: {} }, message: /no data/ },
+      { name: "lowercase 'live'", first: { status: 200, body: { data: { id: SESSION, status: "live" } } }, message: /status/ },
+      { name: "status missing", first: { status: 200, body: { success: true, data: { id: SESSION } } }, message: /status/ },
+      { name: "a status outside the enum", first: { status: 200, body: { success: true, data: { id: SESSION, status: "PAUSED" } } }, message: /status/ },
+      {
+        // Cloudflare's own envelope for an unroutable path: errors[], not error.
+        name: "a 404 that is not RealtimeKit's answer (a routing 404)",
+        first: { status: 404, body: { success: false, errors: [{ code: 7003, message: "Could not route" }], result: null } },
+        message: /404/,
+      },
+      { name: "an HTML 404", first: { status: 404, text: "<html>Not Found</html>" }, message: /404/ },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const stub = stubFetch([c.first, answerable]);
+      await expect(
+        hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stub.fetch }),
+        c.name,
+      ).rejects.toMatchObject({ name: "RealtimeKitError", code: "unavailable", message: expect.stringMatching(c.message) });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+    expect(checked).toBeGreaterThanOrEqual(8);
+    // Positive controls: the two answers that DO mean "not live".
+    expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stubFetch([noSession]).fetch })).toBe(false);
+    expect(await hasLiveVideoPublisher({ meetingId: "mtg-1", participantId: ME }, { fetch: stubFetch([ended]).fetch })).toBe(false);
+  });
+
   it("an upstream outage or a malformed answer is NEVER silently a false", async () => {
     // A false here would read as "camera off" and refuse a seat on a
     // division that is otherwise fine; D11's organiser override is the
@@ -567,7 +639,7 @@ describe("hasLiveVideoPublisher", () => {
       { name: "participants 500", responses: [live, { status: 500, body: { success: false } }], code: "unavailable" },
       {
         name: "participants 404 (the session vanished between the two reads)",
-        responses: [live, { status: 404, body: { success: false } }],
+        responses: [live, { status: 404, body: { success: false, error: { code: 404, message: "session not found" } } }],
         code: "not_found",
       },
       {
@@ -697,7 +769,7 @@ describe.skipIf(!process.env.DATABASE_URL)("endMeeting", () => {
   });
 
   it("an unconfigured process refuses before any call", async () => {
-    configure({ CLOUDFLARE_API_TOKEN: "" });
+    configure({ REALTIMEKIT_API_TOKEN: "" });
     const stub = stubFetch([]);
     await expect(endMeeting(mtg("unconfigured"), { fetch: stub.fetch })).rejects.toMatchObject({
       code: "unconfigured",
@@ -790,6 +862,157 @@ describe("fetchVideoOffCoverage", () => {
     await expect(fetchVideoOffCoverage(PEER, { fetch: stub.fetch })).rejects.toMatchObject({
       code: "unconfigured",
     });
+    expect(stub.calls.length).toBe(0);
+  });
+});
+
+describe("listPeerIds", () => {
+  // MEASURED 2026-10-09 by the controller on the spike's ended session
+  // (rtk-peer-report.log tail, commit 7dde4a246):
+  //   GET /sessions/{sid}/participants?include_peer_events=true → one row:
+  //   id = session participant id (= the report's participant.id), user_id =
+  //   the add-participant id, and peer_events PEER_JOINING / PEER_LEAVING whose
+  //   peer_id is the driver's self.id — the key the peer report takes. The
+  //   row's id is NOT a peer id, whatever the OpenAPI wording says.
+  const SID = "561b3ee9-fba7-4b9f-9f78-f467ab8fe695"; // driver log sessionId
+  const PEER = "c4736b31-83f6-42d0-a18b-019f498fb347"; // driver log selfId
+  const rec = RECORDED.data.participant;
+  const peerEvents = (rowId: string, peer: string) => [
+    { event_name: "PEER_JOINING", peer_id: peer, participant_id: rowId, session_id: SID },
+    { event_name: "PEER_LEAVING", peer_id: peer, participant_id: rowId, session_id: SID },
+  ];
+  const measuredRow = {
+    id: rec.id,
+    user_id: rec.user_id,
+    custom_participant_id: rec.custom_participant_id,
+    joined_at: rec.joined_at,
+    left_at: rec.left_at,
+    peer_events: peerEvents(rec.id, PEER),
+  };
+  const list = (rows: unknown[]) => ({ status: 200, body: { success: true, data: { participants: rows } } });
+
+  it("MEASURED shape: returns the peer id from peer_events, never the row's id", async () => {
+    configure();
+    expect(rec.id, "premise: the row id is not the peer id").not.toBe(PEER);
+    const stub = stubFetch([list([measuredRow])]);
+    const got = await listPeerIds(SID, rec.user_id, { fetch: stub.fetch });
+    expect(got).toEqual([PEER]);
+    expect(got).not.toContain(rec.id);
+    expect(stub.calls.map((c) => `${c.method} ${c.url.split("/realtime/kit/app-1")[1]}`)).toEqual([
+      `GET /sessions/${SID}/participants?include_peer_events=true&per_page=200`,
+    ]);
+  });
+
+  it("sweeps the well-formed shapes and reports the count", async () => {
+    configure();
+    const ME = rec.user_id;
+    const cases: { name: string; rows: unknown[]; want: string[] }[] = [
+      { name: "EMPTY: nobody in the session", rows: [], want: [] },
+      {
+        name: "our participant never joined (only someone else's row)",
+        rows: [{ id: "row-x", user_id: "someone-else", peer_events: peerEvents("row-x", "peer-x") }],
+        want: [],
+      },
+      {
+        name: "SEQUENCE: reloaded as a NEW row — both peers, in order, and nobody else's",
+        rows: [
+          { id: "row-1", user_id: ME, peer_events: peerEvents("row-1", "peer-1") },
+          { id: "row-x", user_id: "someone-else", peer_events: peerEvents("row-x", "peer-x") },
+          { id: "row-2", user_id: ME, peer_events: peerEvents("row-2", "peer-2") },
+        ],
+        want: ["peer-1", "peer-2"],
+      },
+      {
+        name: "SEQUENCE: reloaded within the SAME row — both peers, each once",
+        rows: [{ id: "row-1", user_id: ME, peer_events: [...peerEvents("row-1", "peer-1"), ...peerEvents("row-1", "peer-2")] }],
+        want: ["peer-1", "peer-2"],
+      },
+      {
+        name: "our row with no peer events yet",
+        rows: [{ id: "row-1", user_id: ME, peer_events: [] }],
+        want: [],
+      },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const got = await listPeerIds(SID, ME, { fetch: stubFetch([list(c.rows)]).fetch });
+      expect(got, c.name).toEqual(c.want);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+    expect(checked).toBeGreaterThanOrEqual(5);
+  });
+
+  it("END TO END: the discovered peer id is the one the peer report is fetched by", async () => {
+    configure();
+    const [peer] = await listPeerIds(SID, rec.user_id, { fetch: stubFetch([list([measuredRow])]).fetch });
+    const report = stubFetch([{ status: 200, body: RECORDED }]);
+    const got = await fetchVideoOffCoverage(peer!, { fetch: report.fetch });
+    expect(report.calls[0]?.url.endsWith(`/sessions/peer-report/${PEER}`)).toBe(true);
+    if (got.incomplete) throw new Error("premise: the recorded report is final");
+    // Driver log: ONE gap 18:09:11 -> 18:12:20 (189 s).
+    expect(got.offIntervals.map((i) => Math.round(i.seconds))).toEqual([189]);
+  });
+
+  it("fails CLOSED on a body it cannot read — never a short peer list", async () => {
+    configure();
+    const ME = rec.user_id;
+    const full = Array.from({ length: 200 }, (_, i) => ({ id: `r-${i}`, user_id: `other-${i}`, peer_events: [] }));
+    const cases: { name: string; first: { status: number; body?: unknown; text?: string }; code: string }[] = [
+      { name: "an HTML 200", first: { status: 200, text: "<html>oops</html>" }, code: "unavailable" },
+      { name: "no participants list", first: { status: 200, body: { success: true, data: {} } }, code: "unavailable" },
+      { name: "a row that is not an object", first: list([measuredRow, "row"]), code: "unavailable" },
+      { name: "a row with no user_id (it might be ours)", first: list([{ id: "row-1", peer_events: [] }]), code: "unavailable" },
+      { name: "OUR row without peer_events", first: list([{ id: "row-1", user_id: ME }]), code: "unavailable" },
+      { name: "OUR row with peer_events not a list", first: list([{ id: "row-1", user_id: ME, peer_events: {} }]), code: "unavailable" },
+      {
+        name: "OUR peer event without a peer_id",
+        first: list([{ id: "row-1", user_id: ME, peer_events: [{ event_name: "PEER_JOINING" }] }]),
+        code: "unavailable",
+      },
+      {
+        name: "OUR peer event with an empty peer_id",
+        first: list([{ id: "row-1", user_id: ME, peer_events: [{ event_name: "PEER_JOINING", peer_id: "" }] }]),
+        code: "unavailable",
+      },
+      { name: "a FULL page (200 rows): more of our peers may be on page 2", first: list(full), code: "unavailable" },
+      {
+        name: "RealtimeKit's own 404 (no such session)",
+        first: { status: 404, body: { success: false, error: { code: 404, message: "session not found" } } },
+        code: "not_found",
+      },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      await expect(listPeerIds(SID, ME, { fetch: stubFetch([c.first]).fetch }), c.name).rejects.toMatchObject({
+        name: "RealtimeKitError",
+        code: c.code,
+      });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(cases.length);
+    expect(checked).toBeGreaterThanOrEqual(10);
+    // Positive control for the full page: 199 rows plus ours is complete.
+    const almost = [...full.slice(0, 198), measuredRow];
+    expect(await listPeerIds(SID, ME, { fetch: stubFetch([list(almost)]).fetch })).toEqual([PEER]);
+  });
+
+  it("refuses empty ids before any call — an empty user id would read as 'never joined'", async () => {
+    configure();
+    let checked = 0;
+    for (const [sid, uid] of [["", rec.user_id], [SID, ""]] as const) {
+      const stub = stubFetch([list([measuredRow])]);
+      await expect(listPeerIds(sid, uid, { fetch: stub.fetch })).rejects.toThrow(/session id and a participant user id/);
+      expect(stub.calls.length).toBe(0);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("an unconfigured process refuses before any call", async () => {
+    configure({ REALTIMEKIT_API_TOKEN: "" });
+    const stub = stubFetch([]);
+    await expect(listPeerIds(SID, rec.user_id, { fetch: stub.fetch })).rejects.toMatchObject({ code: "unconfigured" });
     expect(stub.calls.length).toBe(0);
   });
 });
