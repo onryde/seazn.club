@@ -1,7 +1,8 @@
 /**
  * Task 9 — chess external-play UI regression:
  * - OTB (onlinePlay absent): public fixture page has no Play CTA; pad still loads.
- * - Online ready bridge: public page shows Play on Lichess CTA.
+ * - Online ready bridge: the public page loads and links to NO Lichess game
+ *   (D3 deleted the lichess.org mode; T9 2026-10-09 rewrite).
  * - needs_organiser: division queue visible and resolve settles the fixture.
  */
 import { test, expect } from "@playwright/test";
@@ -59,7 +60,7 @@ test("OTB boardgame: no Play CTA on public page; console pad still mounts", asyn
   await expect(page.locator('[data-testid="score-pad"]')).toBeVisible({ timeout: 20_000 });
 });
 
-test("ready bridge: public fixture page shows Play on Lichess CTA", async ({ page }) => {
+test("ready bridge: public fixture page loads and shows no Lichess play link", async ({ page }) => {
   test.setTimeout(120_000);
   const fx = await seedRosteredFixture(page.request, {
     label: `EP Ready ${TAG}`,
@@ -73,15 +74,17 @@ test("ready bridge: public fixture page shows Play on Lichess CTA", async ({ pag
 
   await seedFixtureExternalPlaySql(fx.fixtureId, {
     status: "ready",
-    playUrl: "https://lichess.org/e2eReadyGame",
-    externalChallengeId: "e2eReadyGame",
+    challengeId: `e2eReady-${TAG}`,
   });
 
   const pub = await sharedPath(page.request, fx.competitionId, fx.divisionId, fx.fixtureId);
-  await page.goto(pub);
-  const cta = page.getByTestId("external-play-cta");
-  await expect(cta).toBeVisible({ timeout: 20_000 });
-  await expect(cta).toHaveAttribute("href", "https://lichess.org/e2eReadyGame");
+  const res = await page.goto(pub);
+  expect(res?.status(), "the public fixture page renders with a bridge row").toBe(200);
+  await expect(page.locator("main"), "the match centre rendered").toContainText(`EP Ready Home ${TAG}`, {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId("external-play-cta")).toHaveCount(0);
+  await expect(page.locator('a[href*="lichess.org"]')).toHaveCount(0);
 });
 
 test("needs_organiser queue: organiser can resolve from division page", async ({ page }) => {
@@ -98,8 +101,9 @@ test("needs_organiser queue: organiser can resolve from division page", async ({
 
   await seedFixtureExternalPlaySql(fx.fixtureId, {
     status: "needs_organiser",
+    needsReason: "provider_error",
     lastError: "e2e-needs-organiser",
-    externalChallengeId: "e2eNeedsOrg",
+    challengeId: `e2eNeedsOrg-${TAG}`,
   });
 
   await page.goto(await divisionPath(page.request, fx.divisionId));

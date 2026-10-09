@@ -1,13 +1,6 @@
-/** Public-safe external-play bridge snapshot (no tokens). */
+/** Public-safe external-play bridge snapshot: the status, and nothing else.
+ *  No play URL (D3 deleted the lichess.org mode, so a public page links to no
+ *  Lichess game), and never `last_error` (operator text). */
 export type PublicExternalPlay = {
   status: "pending" | "ready" | "live" | "finished" | "needs_organiser";
-  playUrl: string | null;
-  whitePlayUrl: string | null;
-  blackPlayUrl: string | null;
-  lastError: string | null;
 };
-
-export function playUrlForStatus(ep: PublicExternalPlay): string | null {
-  if (ep.status !== "ready" && ep.status !== "live") return null;
-  return ep.playUrl ?? ep.whitePlayUrl ?? ep.blackPlayUrl;
-}

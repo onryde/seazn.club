@@ -934,32 +934,37 @@ export async function seedFixtureExternalPlaySql(
   fixtureId: string,
   opts: {
     status: "pending" | "ready" | "live" | "finished" | "needs_organiser";
-    playUrl?: string | null;
+    /** Required by V432's CHECK exactly when status is needs_organiser. */
+    needsReason?: string | null;
     lastError?: string | null;
-    externalChallengeId?: string | null;
+    challengeId?: string | null;
   },
 ): Promise<void> {
+  // V432's columns (the 2026-10-09 model): there is no play URL any more
+  // (V434 dropped url_white/url_black; play_url / external_challenge_id were
+  // never in V432), and scheduled_at_basis is NOT NULL.
   await withDb(async (sql) => {
-    const [fx] = await sql<{ org_id: string }[]>`
-      select org_id from fixtures where id = ${fixtureId}`;
+    const [fx] = await sql<{ org_id: string; scheduled_at: Date | null }[]>`
+      select org_id, scheduled_at from fixtures where id = ${fixtureId}`;
     if (!fx) throw new Error(`seedFixtureExternalPlaySql: fixture ${fixtureId} not found`);
     await sql`
       insert into fixture_external_play (
-        fixture_id, org_id, provider, status, play_url, last_error, external_challenge_id
+        fixture_id, org_id, provider, status, scheduled_at_basis, needs_reason, last_error, challenge_id
       ) values (
         ${fixtureId},
         ${fx.org_id},
         'lichess',
         ${opts.status},
-        ${opts.playUrl ?? null},
+        ${fx.scheduled_at ?? new Date()},
+        ${opts.needsReason ?? null},
         ${opts.lastError ?? null},
-        ${opts.externalChallengeId ?? null}
+        ${opts.challengeId ?? null}
       )
       on conflict (fixture_id) do update set
         status = excluded.status,
-        play_url = excluded.play_url,
+        needs_reason = excluded.needs_reason,
         last_error = excluded.last_error,
-        external_challenge_id = excluded.external_challenge_id,
+        challenge_id = excluded.challenge_id,
         updated_at = now()`;
   });
 }
