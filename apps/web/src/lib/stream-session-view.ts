@@ -335,24 +335,25 @@ export const W5_REFUSAL_CODES = ["phone_not_paired", "phone_not_responding"] as 
 export const isW5Refusal = (code: string): boolean => (W5_REFUSAL_CODES as readonly string[]).includes(code);
 
 /**
- * Owner ruling 2026-10-09 ("A"): a Go live refused for want of a phone (either W5 answer) is retired as soon as the
- * panel's phone read FLIPS to present — the phone the sentence asked for has arrived. Every other refusal keeps its own
- * rules. The watch is what the panel last knew of the phone (`seen`), and the newest read asked when the last W5 refusal
- * landed (`refusedAtRead`, the panel's read sequence number):
- *  - a W5 refusal is itself news that there was no phone to stream from, whatever the panel last read — so the watch
- *    forgets "present", and the next present answer is the flip (otherwise a stale "present" read before the click would
- *    leave the sentence beside an enabled Go live after the phone woke up);
- *  - only an answer to a read ASKED after the refusal counts: one already in flight when the click was refused says
- *    nothing about that click, so it neither clears the error nor moves the watch.
+ * Owner ruling 2026-10-09 ("A"): a Go live refused for want of a phone (either W5 answer) is retired by the first
+ * PRESENT answer to a phone read sent after the refusal — the phone the sentence asked for has arrived. Every other
+ * refusal keeps its own rules. The watch is the newest read already sent when the last W5 refusal landed
+ * (`refusedAtRead`, the panel's read sequence number):
+ *  - a W5 refusal is itself news that there was no phone to stream from, whatever the panel last read, so a present
+ *    answer read before the click never retires it;
+ *  - only an answer to a read SENT after the refusal counts: one already in flight when the click was refused says
+ *    nothing about that click.
+ * A later present answer may say "clear" again; by then no W5 error is pending (the first one retired it, and a new W5
+ * refusal moves the watch), and the panel only ever clears a W5 error.
  */
-export type PresenceWatch = { seen: boolean; refusedAtRead: number };
-export const PRESENCE_WATCH_START: PresenceWatch = { seen: false, refusedAtRead: 0 };
+export type PresenceWatch = { refusedAtRead: number };
+export const PRESENCE_WATCH_START: PresenceWatch = { refusedAtRead: 0 };
 export function presenceAfterRefusal(watch: PresenceWatch, code: string, newestRead: number): PresenceWatch {
-  return isW5Refusal(code) ? { seen: false, refusedAtRead: newestRead } : watch;
+  return isW5Refusal(code) ? { refusedAtRead: newestRead } : watch;
 }
-export function presenceAfterRead(watch: PresenceWatch, read: { seq: number; present: boolean }): { watch: PresenceWatch; clearW5: boolean } {
-  if (read.seq <= watch.refusedAtRead) return { watch, clearW5: false };
-  return { watch: { seen: read.present, refusedAtRead: watch.refusedAtRead }, clearW5: read.present && !watch.seen };
+/** Whether this landed phone read retires a pending W5 error: it reads present, and it was sent after the refusal. */
+export function readClearsW5(watch: PresenceWatch, read: { seq: number; present: boolean }): boolean {
+  return read.present && read.seq > watch.refusedAtRead;
 }
 
 /** O5 (§6.12, ruled 2026-10-01): why a live phone that still beats sends no video. */

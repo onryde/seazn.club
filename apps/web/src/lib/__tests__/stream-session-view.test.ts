@@ -39,7 +39,7 @@ import {
   readyStateOf, reconnectReasonOf, restartLine,
   AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, AUTO_WONT_START_KEY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoOperatorHint, autoRefusalStrip, autoStopLine, autoSwitchNote,
   healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
-  PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRead, presenceAfterRefusal, type CreateFailureCode, type PresenceWatch,
+  PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
 } from "../stream-session-view";
 import fc from "fast-check";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
@@ -1308,12 +1308,12 @@ describe("PR-2 §7.1 — Live's read-only line, and §7.4's Details data (owner 
 // Owner ruling 2026-10-09 ("A"): a W5 refusal clears once the phone read flips to present
 // ---------------------------------------------------------------------------------------------------------------------
 /** The panel's glue, exactly as fixture-stream-panel.tsx wires the two helpers: a refusal sets the error and tells the
- *  watch; a read that LANDS tells the watch, and `clearW5` retires a W5 error (any other error stays). */
+ *  watch; a read that LANDS asks `readClearsW5`, and a yes retires a W5 error (any other error stays). */
 type Panel = { watch: PresenceWatch; error: CreateFailureCode | null };
 const refuse = (p: Panel, code: CreateFailureCode, issued: number): Panel => ({ watch: presenceAfterRefusal(p.watch, code, issued), error: code });
 const land = (p: Panel, seq: number, present: boolean): Panel => {
-  const { watch, clearW5 } = presenceAfterRead(p.watch, { seq, present });
-  return { watch, error: clearW5 && p.error !== null && isW5Refusal(p.error) ? null : p.error };
+  const clear = readClearsW5(p.watch, { seq, present });
+  return { watch: p.watch, error: clear && p.error !== null && isW5Refusal(p.error) ? null : p.error };
 };
 
 describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone clears when the phone read flips to present", () => {
@@ -1328,9 +1328,9 @@ describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone cle
     expect(checked).toBe(2);
   });
 
-  it("EMPTY first: nothing refused, nothing read — the start watch has seen no phone, and a present read clears nothing", () => {
-    expect(PRESENCE_WATCH_START).toEqual({ seen: false, refusedAtRead: 0 });
-    expect(land({ watch: PRESENCE_WATCH_START, error: null }, 1, true)).toEqual({ watch: { seen: true, refusedAtRead: 0 }, error: null });
+  it("EMPTY first: nothing refused, nothing read — the start watch waits on no refusal, and a present read clears nothing", () => {
+    expect(PRESENCE_WATCH_START).toEqual({ refusedAtRead: 0 });
+    expect(land({ watch: PRESENCE_WATCH_START, error: null }, 1, true)).toEqual({ watch: { refusedAtRead: 0 }, error: null });
   });
 
   it("the sequence: error shown → the phone present → error gone → silent again → a later Go live's error shows again and stays while silent → present → gone", () => {
@@ -1366,7 +1366,7 @@ describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone cle
     p = refuse(p, "phone_not_paired", 2);
     p = land(p, 2, true);
     expect(p.error, "a stale present answer is not news about this click").toBe("phone_not_paired");
-    expect(p.watch, "…and it is not recorded as seen either").toEqual({ seen: false, refusedAtRead: 2 });
+    expect(p.watch, "…and the watch still waits for a read sent after read 2").toEqual({ refusedAtRead: 2 });
     p = land(p, 3, true);
     expect(p.error).toBeNull();
   });
@@ -1376,9 +1376,9 @@ describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone cle
     const all: CreateFailureCode[] = [...others, TARGET_REMOVED];
     let checked = 0;
     for (const code of all) {
-      const before: PresenceWatch = { seen: true, refusedAtRead: 0 };
+      const before: PresenceWatch = { refusedAtRead: 0 };
       expect(presenceAfterRefusal(before, code, 5), code).toBe(before);
-      let p: Panel = refuse({ watch: { seen: false, refusedAtRead: 0 }, error: null }, code, 1);
+      let p: Panel = refuse({ watch: PRESENCE_WATCH_START, error: null }, code, 1);
       p = land(p, 2, true);
       expect(p.error, `${code} survives a flip to present`).toBe(code);
       checked++;
@@ -1387,8 +1387,8 @@ describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone cle
   });
 
   it("property: over any interleaving of polls, answers and refusals, a W5 error is cleared exactly at the first PRESENT answer to a read asked after it — never earlier, never by a stale answer, never another code", () => {
-    // The oracle never looks at `seen`, nor at the helpers' own W5 list: it knows the owner's two codes and which read was
-    // asked after the refusal.
+    // The oracle never looks at the watch, nor at the helpers' own W5 list: it knows the owner's two codes and which read
+    // was asked after the refusal.
     const W5 = new Set<string>(["phone_not_paired", "phone_not_responding"]);
     type Ev = { k: "ask" } | { k: "land"; present: boolean } | { k: "refuse"; code: CreateFailureCode };
     const code = fc.constantFrom<CreateFailureCode>(...CREATE_ERROR_CODES, TARGET_REMOVED);
