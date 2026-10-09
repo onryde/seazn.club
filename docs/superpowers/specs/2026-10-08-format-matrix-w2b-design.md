@@ -255,6 +255,22 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
      removes the ordinary path (a held fixture is walked over at withdrawal, so no settle follows). As a guard, not a
      comment: seating a withdrawn entrant on any loser edge is refused at the seating callers and the seat is treated
      as dead, so its opponent walks over (X-WD-5).
+- **Two more corners deferred by W2a (ruling D-G3; pinned in W2a):**
+  3. *A stepladder qualifier departs before the draw* → `completeStage` refuses `CONFIG_INVALID` with generic copy;
+     today's escape is `core.start` + `core.forfeit` by the departed seed. W2b: the departed seed's seat is dead
+     (X-WD-3), so its rung opponent advances by walkover with no organiser step; where a seat still cannot be
+     resolved, the refusal is named (`STAGE_SEAT_DEPARTED`, 409, organiser copy in 4 locales naming the entrant and
+     the fixture) instead of `CONFIG_INVALID`.
+  4. *A ladder withdrawal's recorded abandon on a pending challenge holds ladder completion until settled.* Under
+     X-WD-2 the ladder cascade writes `core.forfeit{reason:"withdrew"}`, never an abandon, so the hold does not arise;
+     the W2a pin is rewritten to that.
+
+  W2a interface (loop G, `cea1a52c8`): `apps/web/src/server/engine-db/recorded-abandon.ts` is the single status-gated
+  source for "a recorded abandon"; the seat resolver and `loadStageInputs` read it; in bracket and ladder completion an
+  active abandon with a null or level outcome reads `in_play` (tables still read `void`, because withdrawal expunge
+  writes a recorded abandon there); `abandonAwaitsSettle` equals `settleApplies` for abandoned rows; `bracketRanks`
+  refuses an in-field entrant ranked −1 (`CONFIG_INVALID`). W2b's ST-G1 status change (§5.4) must agree with this
+  source — `double_walkover` and abandon-with-result go through it, not around it.
 - **Migration** (next free version after W2a's V432): re-classify **unsettled** `needs_decision` bracket rows whose
   active result is `boardgame.result{double_forfeit}` to `forfeited` + `double_walkover`, then run the dead-seat
   cascade for each. Settled rows are untouched. The migration reports examined and changed counts; its test fails on
@@ -305,6 +321,7 @@ renumbered. Each signed or deviation row ships with a proving test whose title c
 | `FORFEIT_REASON_WRONG_PHASE` | 409 | walkover / both after start; retired / disqualified before start | Names the phase and the reasons it allows. |
 | `ABANDONED_SETTLE_OR_VOID` | 409 | forfeit while an abandon is active | "This match was abandoned. To decide it, settle the match. If it is being replayed, void the abandon first." |
 | `DOUBLE_WALKOVER_NO_NEXT_MATCH` | 409 | double walkover on a fixture that feeds no seat | "A final needs a result. Reschedule it, or record a walkover if one side turned up. If the competition must close without a match, settle it." |
+| `STAGE_SEAT_DEPARTED` | 409 | a bracket/stepladder seat whose entrant departed cannot be resolved to a walkover | Names the entrant and the fixture; tells the organiser which match to record. |
 | `INVALID_PAYLOAD` | 400 | free-text or unknown reason | existing |
 
 ## 8. Truth run and proof
@@ -334,7 +351,7 @@ renumbered. Each signed or deviation row ships with a proving test whose title c
   clauses, no-next-match, the migration selection); Stryker probe + touched families dispatched before merge; floors
   never auto-raised.
 - **Pins to rewrite (from f-w2):** `needs-decision-status.test.ts:43`, the V432 migration test, the reference HELD
-  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7, the two D-G2 characterisation pins (§5.4), and W2a's D-O1 gate derivation test (it assumes
+  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7, the D-G2 and D-G3 characterisation pins (§5.4), and W2a's D-O1 gate derivation test (it assumes
   `boardgame.result{double_forfeit}` is still written). Each rewrite says why in its commit.
 - **UI:** screenshot verdicts per screen at 1280 / 768 / 320 (console dialog before and after play and the final
   guidance; match centre; results list; bracket tile), no horizontal scroll; the whole `mobile.spec.ts`, never a `-g`
