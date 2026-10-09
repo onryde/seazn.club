@@ -107,6 +107,7 @@ number then). `_INDEX.md` is not edited before W2a merges (rule 18).
 | W2b-R11 | Double elimination: any forfeit loser is out (no losers'-bracket drop); ranks reader aligned with seating. | "a" |
 | W2b-UI-1 | Console: one dialog — who (Home / Away / Neither) → why (chips by phase) → credit preview → one specific Confirm. Wireframe in `.superpowers/brainstorm/51672-1791493602/content/forfeit-dialog.html` (gitignored; flow only). | "A" (against the session's recommendation B) |
 | W2b-UI-2 | Public: short tag where space is tight (`w/o`, `ret.`, `DQ`, `2× w/o`, `Aband. · DLS`, `Aband. · NR`; per locale), the full sentence as tooltip and accessible name and in the match centre. Wireframe `public-copy.html`. | "A" |
+| W2b-R12 | Legacy stages already complete that hold a V432-moved fixture: no reopen path; pre-ship count on staging and prod, stop and ask if non-zero (W2a item 5). | "A" |
 | W2b-A1 | Approach 1: extend `core.forfeit`; strict schema, no legacy free-text mapping (owner: "we don't have any forfeit old data") — verified before ship (§5.4). | "1" |
 
 Wireframes are for flow and structure only (W2a owner ruling, 2026-10-08): the build applies house UI — v2
@@ -275,6 +276,10 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
   active result is `boardgame.result{double_forfeit}` to `forfeited` + `double_walkover`, then run the dead-seat
   cascade for each. Settled rows are untouched. The migration reports examined and changed counts; its test fails on
   zero examined (it seeds the row it expects). Prod count is probably 0.
+- **Legacy completed stages holding a fixture (W2b-R12).** A stage already marked complete keeps `stages.status`
+  when W2a's V432 moves one of its fixtures to `needs_decision` (stored flag, `competition.ts:679`, early return
+  `:580`); W2a's V432 notice counts them (`complete_stages_holding_one`). W2b builds no reopen path: before ship, read
+  that count on staging and prod; 0 → nothing; non-zero → stop and bring the owner the actual rows.
 - **Pre-ship check (W2b-A1).** Before the strict schema ships, count `core.forfeit` events in staging and prod
   (`list_projects` first). Non-zero → stop and ask the owner; do not ship a schema that cannot read stored events.
 
