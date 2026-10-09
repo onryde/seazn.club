@@ -5844,7 +5844,7 @@ cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && jq '{cases:
 
 Expected: `cases` equals the distinct `(layer, only, scenario)` triples Task 1 wrote from the 77 (its Step 2b printed the number), and `newScenarios` is 5. Then run the loop; every line prints `EXIT=0`.
 
-The judge is the Task 1 Step 5 node check pointed at `$TMPDIR/w2a-local-final`, with the expectation inverted: every one of the 77 baseline reds is now green, and every new-scenario case is green with `life-bracket-decider-exercised` `checked > 0`. Copy the run directory to `TR/w2a-final/local/`.
+The judge is the Task 1 Step 5 node check pointed at `$TMPDIR/w2a-local-final`, with the expectation inverted, as amended by controller ruling D-P2 (2026-10-09): the judge is `tools/matrix/w2a-expect.ts` (Step 3 command), which passes only for 71 of the 77 `works` plus the six re-keyed cells in `truth-runs/w2a-repro/expect-77-rekeys.json` red for exactly their pinned reason and failing checks (five boardgame R4 → CD-T13/W2b, boardgame ko_plate F1 → FX-G14/W4); any other red, a wrong reason, an added failing check or an absent id fails it. Every new-scenario case is green with `life-bracket-decider-exercised` at verdict `pass` (not `checked > 0`: `checked` is always 3, so it witnesses nothing; a pass implies at least one decider was posted). Record the judge's `greened` (stale-pin) list in the evidence README so W2b removes those pins. Copy the run directory to `TR/w2a-final/local/`.
 
 - [ ] **Step 2: The full matrix once, on CI.** Dispatch it on the branch; never locally.
 
@@ -5879,20 +5879,13 @@ Expected, per layer the artifact holds:
 - the first line's `compared N` with N > 0, and `newlyRed: 0`;
 - `absent` is read and recorded (a case the W1d baseline held and the CI run lacks); a non-zero `absent` goes to the orchestrator.
 
-Then "the 77 are green", per layer. The ids that CI's artifact does not hold (L1/L2 if the full dispatch did not run them) are read from Step 1's local runs, `TR/w2a-final/local/<L>/results.json`:
+Then "the 77 are judged", per ruling D-P2 (2026-10-09). The plan's original inline node script demanded all 77 `works` and knows nothing of the re-keys, so it is REPLACED by the lane's CLI. The ids that CI's artifact does not hold (L1/L2 if the full dispatch did not run them) are read from Step 1's local runs, `TR/w2a-final/local/<L>/results.json`; pass every results file that exists:
 
 ```bash
-cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && R=docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs && node -e '
-const fs=require("fs"),p=require("path");const R=process.argv[1];const want=JSON.parse(fs.readFileSync(R+"/w2a-repro/expect-77.json","utf8"));
-const seen=new Map();let read=0;
-for(const L of ["L1","L2","L3"]){for(const src of [R+"/w2a-final/ci/"+L+"/results.json",R+"/w2a-final/local/"+L+"/results.json"]){if(!fs.existsSync(src))continue;
- for(const c of JSON.parse(fs.readFileSync(src,"utf8")).cases){read++;if(want.includes(c.caseId)&&!seen.has(c.caseId))seen.set(c.caseId,{layer:L,state:c.state,src:p.relative(R,src)});}}}
-const missing=want.filter((id)=>!seen.has(id));const notGreen=[...seen].filter(([,v])=>v.state!=="works");
-console.log(JSON.stringify({expected:want.length,read,found:seen.size,works:seen.size-notGreen.length,missing:missing.slice(0,10),notGreen:notGreen.slice(0,10)}));
-process.exit(want.length>0&&read>0&&missing.length===0&&notGreen.length===0?0:1)' "$R"; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2a && R=docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs && A=(); for L in L1 L2 L3; do for src in "$R/w2a-final/ci/$L/results.json" "$R/w2a-final/local/$L/results.json"; do [ -f "$src" ] && A+=(--now "$src"); done; done; echo "results files: $((${#A[@]}/2))"; node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/w2a-expect.ts --expect "$R/w2a-repro/expect-77.json" --rekeys "$R/w2a-repro/expect-77-rekeys.json" "${A[@]}"; echo EXIT=$?
 ```
 
-Expected: `EXIT=0`, with `found` = `works` = `expected` (77, or Task 1's recorded count if it removed a non-reproducing id), `missing: []` and `notGreen: []`. `works` is `CASE_STATES`'s ✅ (`tools/matrix/lib/results.ts:44-48`).
+Expected: `results files` > 0 and `EXIT=0`, with the verdict "71 works + 6 red with the pinned reason" (exit 1 = an unexpected red or a wrong reason; exit 2 = an absent id or zero cases — neither is a pass). Any `greened` re-keyed cell is a stale pin: record it, never fail on it.
 
 - [ ] **Step 4: The swiss_playoff R4 cells, read against the SW-H1 flip note (spec §8 item 3; ruling 70).** Read the swiss_playoff R4 cells from the CI results with `jq` (the field names are pinned from the file first), and print the count read. Zero read is a failure.
 
