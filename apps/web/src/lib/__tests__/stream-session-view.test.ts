@@ -39,7 +39,9 @@ import {
   readyStateOf, reconnectReasonOf, restartLine,
   AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, AUTO_WONT_START_KEY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoOperatorHint, autoRefusalStrip, autoStopLine, autoSwitchNote,
   healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
+  PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRead, presenceAfterRefusal, type CreateFailureCode, type PresenceWatch,
 } from "../stream-session-view";
+import fc from "fast-check";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
 
@@ -1299,5 +1301,128 @@ describe("PR-2 §7.1 — Live's read-only line, and §7.4's Details data (owner 
     expect(phoneDetails(f(null, "1.4.0"))).toEqual([{ kind: "appVersion", version: "1.4.0" }]);
     expect(phoneDetails(f(0, null)), "a real 0 MB is a reading").toEqual([{ kind: "dataUsed", mb: 0 }]);
     expect(phoneDetails(f(null, null))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Owner ruling 2026-10-09 ("A"): a W5 refusal clears once the phone read flips to present
+// ---------------------------------------------------------------------------------------------------------------------
+/** The panel's glue, exactly as fixture-stream-panel.tsx wires the two helpers: a refusal sets the error and tells the
+ *  watch; a read that LANDS tells the watch, and `clearW5` retires a W5 error (any other error stays). */
+type Panel = { watch: PresenceWatch; error: CreateFailureCode | null };
+const refuse = (p: Panel, code: CreateFailureCode, issued: number): Panel => ({ watch: presenceAfterRefusal(p.watch, code, issued), error: code });
+const land = (p: Panel, seq: number, present: boolean): Panel => {
+  const { watch, clearW5 } = presenceAfterRead(p.watch, { seq, present });
+  return { watch, error: clearW5 && p.error !== null && isW5Refusal(p.error) ? null : p.error };
+};
+
+describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone clears when the phone read flips to present", () => {
+  it("the W5 codes are exactly the two W5 answers, both console codes the tab tells apart", () => {
+    expect([...W5_REFUSAL_CODES].sort()).toEqual(["phone_not_paired", "phone_not_responding"]);
+    let checked = 0;
+    for (const c of W5_REFUSAL_CODES) {
+      expect(CREATE_ERROR_CODES as readonly string[], c).toContain(c);
+      expect(isW5Refusal(c), c).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("EMPTY first: nothing refused, nothing read — the start watch has seen no phone, and a present read clears nothing", () => {
+    expect(PRESENCE_WATCH_START).toEqual({ seen: false, refusedAtRead: 0 });
+    expect(land({ watch: PRESENCE_WATCH_START, error: null }, 1, true)).toEqual({ watch: { seen: true, refusedAtRead: 0 }, error: null });
+  });
+
+  it("the sequence: error shown → the phone present → error gone → silent again → a later Go live's error shows again and stays while silent → present → gone", () => {
+    let p: Panel = { watch: PRESENCE_WATCH_START, error: null };
+    p = land(p, 1, true);                                   // the panel reads the phone present: Go live
+    p = refuse(p, "phone_not_responding", 1);               // …it went quiet before the click
+    expect(p.error, "error shown").toBe("phone_not_responding");
+    p = land(p, 2, true);                                   // the organiser wakes it: the next read is present
+    expect(p.error, "phone present → error gone").toBeNull();
+    p = land(p, 3, false);                                  // silent again
+    p = land(p, 4, true);                                   // the panel reads it present one more time
+    p = refuse(p, "phone_not_responding", 4);               // and a LATER click is refused again
+    expect(p.error, "the new error shows again").toBe("phone_not_responding");
+    p = land(p, 5, false);
+    p = land(p, 6, false);
+    expect(p.error, "silent reads keep it — only a flip to present clears").toBe("phone_not_responding");
+    p = land(p, 7, true);
+    expect(p.error).toBeNull();
+  });
+
+  it("the never-paired answer clears the same way (a reissued code, then a phone scans it)", () => {
+    let p: Panel = land({ watch: PRESENCE_WATCH_START, error: null }, 1, true);
+    p = refuse(p, "phone_not_paired", 1);
+    p = land(p, 2, false);                                  // the panel catches up: no phone on the new code
+    expect(p.error).toBe("phone_not_paired");
+    p = land(p, 3, true);                                   // a phone scans it
+    expect(p.error).toBeNull();
+  });
+
+  it("a read ASKED before the refusal cannot answer it: it lands present after the click and the error stays; the next read asked after clears it", () => {
+    let p: Panel = land({ watch: PRESENCE_WATCH_START, error: null }, 1, true);
+    // read 2 was in flight when the click was refused (the refusal saw 2 issued)…
+    p = refuse(p, "phone_not_paired", 2);
+    p = land(p, 2, true);
+    expect(p.error, "a stale present answer is not news about this click").toBe("phone_not_paired");
+    expect(p.watch, "…and it is not recorded as seen either").toEqual({ seen: false, refusedAtRead: 2 });
+    p = land(p, 3, true);
+    expect(p.error).toBeNull();
+  });
+
+  it("every other refusal is untouched: the watch ignores it and a flip to present never clears it", () => {
+    const others = CREATE_ERROR_CODES.filter((c) => !isW5Refusal(c));
+    const all: CreateFailureCode[] = [...others, TARGET_REMOVED];
+    let checked = 0;
+    for (const code of all) {
+      const before: PresenceWatch = { seen: true, refusedAtRead: 0 };
+      expect(presenceAfterRefusal(before, code, 5), code).toBe(before);
+      let p: Panel = refuse({ watch: { seen: false, refusedAtRead: 0 }, error: null }, code, 1);
+      p = land(p, 2, true);
+      expect(p.error, `${code} survives a flip to present`).toBe(code);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(CREATE_ERROR_CODES.length - 2 + 1);
+  });
+
+  it("property: over any interleaving of polls, answers and refusals, a W5 error is cleared exactly at the first PRESENT answer to a read asked after it — never earlier, never by a stale answer, never another code", () => {
+    // The oracle never looks at `seen`, nor at the helpers' own W5 list: it knows the owner's two codes and which read was
+    // asked after the refusal.
+    const W5 = new Set<string>(["phone_not_paired", "phone_not_responding"]);
+    type Ev = { k: "ask" } | { k: "land"; present: boolean } | { k: "refuse"; code: CreateFailureCode };
+    const code = fc.constantFrom<CreateFailureCode>(...CREATE_ERROR_CODES, TARGET_REMOVED);
+    const ev: fc.Arbitrary<Ev> = fc.oneof(
+      fc.constant<Ev>({ k: "ask" }),
+      fc.boolean().map<Ev>((present) => ({ k: "land", present })),
+      code.map<Ev>((c) => ({ k: "refuse", code: c })),
+    );
+    let clears = 0, staleKept = 0, steps = 0;
+    fc.assert(
+      fc.property(fc.array(ev, { maxLength: 40 }), (evs) => {
+        let p: Panel = { watch: PRESENCE_WATCH_START, error: null };
+        let asked = 0, newestLanded = 0;          // only the NEWEST read lands (phoneSeq); an older answer is dropped
+        let oracle: { code: CreateFailureCode; at: number } | null = null;
+        for (const e of evs) {
+          steps++;
+          if (e.k === "ask") { asked++; continue; }
+          if (e.k === "refuse") { p = refuse(p, e.code, asked); oracle = { code: e.code, at: asked }; }
+          else {
+            if (asked === 0 || asked === newestLanded) continue;   // nothing in flight
+            newestLanded = asked;
+            const want = oracle !== null && W5.has(oracle.code) && asked > oracle.at && e.present ? null : (oracle?.code ?? null);
+            if (oracle !== null && want === null && p.error !== null) clears++;
+            if (oracle !== null && W5.has(oracle.code) && asked <= oracle.at && e.present) staleKept++;
+            p = land(p, asked, e.present);
+            if (want === null) oracle = null;
+          }
+          expect(p.error).toBe(oracle?.code ?? null);
+        }
+      }),
+      { numRuns: 400, seed: 20261009 },
+    );
+    expect(steps, "anti-vacuity: steps driven").toBeGreaterThan(0);
+    expect(clears, "anti-vacuity: some W5 errors were cleared").toBeGreaterThan(0);
+    expect(staleKept, "anti-vacuity: some stale present answers landed over a W5 error").toBeGreaterThan(0);
   });
 });

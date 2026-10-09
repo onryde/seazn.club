@@ -330,6 +330,31 @@ export function readyStateOf(phone: StreamPhone | null, session: StreamSessionCu
  *  `phone_not_responding` for a paired phone gone silent since the panel's last read, owner ruling 2026-10-09). */
 export const canGoLive = (state: ReadyState): boolean => state === "paired";
 
+/** W5's two answers (§6.7.1; owner ruling 2026-10-09, Option 1): no phone on the code, or a paired phone gone silent. */
+export const W5_REFUSAL_CODES = ["phone_not_paired", "phone_not_responding"] as const satisfies readonly CreateErrorCode[];
+export const isW5Refusal = (code: string): boolean => (W5_REFUSAL_CODES as readonly string[]).includes(code);
+
+/**
+ * Owner ruling 2026-10-09 ("A"): a Go live refused for want of a phone (either W5 answer) is retired as soon as the
+ * panel's phone read FLIPS to present — the phone the sentence asked for has arrived. Every other refusal keeps its own
+ * rules. The watch is what the panel last knew of the phone (`seen`), and the newest read asked when the last W5 refusal
+ * landed (`refusedAtRead`, the panel's read sequence number):
+ *  - a W5 refusal is itself news that there was no phone to stream from, whatever the panel last read — so the watch
+ *    forgets "present", and the next present answer is the flip (otherwise a stale "present" read before the click would
+ *    leave the sentence beside an enabled Go live after the phone woke up);
+ *  - only an answer to a read ASKED after the refusal counts: one already in flight when the click was refused says
+ *    nothing about that click, so it neither clears the error nor moves the watch.
+ */
+export type PresenceWatch = { seen: boolean; refusedAtRead: number };
+export const PRESENCE_WATCH_START: PresenceWatch = { seen: false, refusedAtRead: 0 };
+export function presenceAfterRefusal(watch: PresenceWatch, code: string, newestRead: number): PresenceWatch {
+  return isW5Refusal(code) ? { seen: false, refusedAtRead: newestRead } : watch;
+}
+export function presenceAfterRead(watch: PresenceWatch, read: { seq: number; present: boolean }): { watch: PresenceWatch; clearW5: boolean } {
+  if (read.seq <= watch.refusedAtRead) return { watch, clearW5: false };
+  return { watch: { seen: read.present, refusedAtRead: watch.refusedAtRead }, clearW5: read.present && !watch.seen };
+}
+
 /** O5 (§6.12, ruled 2026-10-01): why a live phone that still beats sends no video. */
 export type ReconnectReason = "camera" | "sound" | "network" | "held" | "weak";
 export const RECONNECT_REASON_KEYS: Record<ReconnectReason, MessageKey> = {
