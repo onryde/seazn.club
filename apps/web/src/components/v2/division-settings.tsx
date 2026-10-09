@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
+import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { MatchRuleFields, buildRuleOverride, hydrateRuleValues, SPORT_RULES } from "./match-rules";
 import {
   STAGE_TEMPLATES,
@@ -38,6 +39,14 @@ const KIND_LABEL_KEY: Record<(typeof ENTRANT_KINDS)[number], MessageKey> = {
   team: "divset.entrants.kind.team",
 };
 
+// One option label per declared camera policy (lib/camera-policy.ts is the
+// vocabulary; camera-policy-copy.test.ts sweeps it against all four locales).
+const CAMERA_OPTION_KEY: Record<CameraPolicy, MessageKey> = {
+  off: "divset.camera.off",
+  optional: "divset.camera.optional",
+  required: "divset.camera.required",
+};
+
 export interface DivisionSettingsInfo {
   id: string;
   name: string;
@@ -56,6 +65,12 @@ export interface DivisionSettingsInfo {
    *  component defaults a missing value to "no requirement" rather than
    *  throwing. */
   required_court_tags?: string[];
+  /** T6 — the division's OWN camera policy; null = inherit the competition's.
+   *  Optional for the same reason as required_court_tags: fixtures that
+   *  predate the field keep compiling, and a missing value reads as inherit. */
+  camera_policy?: CameraPolicy | null;
+  /** The competition's policy — what an unset division inherits. */
+  inherited_camera_policy?: CameraPolicy;
 }
 
 function Group({
@@ -412,6 +427,13 @@ export function DivisionSettings({
   // save elsewhere in this same component — name, logo, entrants — refreshes
   // too), and reference comparison would resync on every one of those and
   // discard an in-progress edit here for no reason.
+  // Declared ABOVE the resync below, which calls its setter: a `const` read
+  // before its declaration is a temporal-dead-zone ReferenceError, so the
+  // first config change after mount (any rules save → router.refresh())
+  // crashed this tab (tsc TS2448 had been reporting it).
+  const [onlinePlay, setOnlinePlay] = useState<"off" | "lichess">(
+    cfg.onlinePlay === "lichess" ? "lichess" : "off",
+  );
   const configSignature = JSON.stringify(division.config);
   const [syncedConfigSignature, setSyncedConfigSignature] = useState(configSignature);
   if (configSignature !== syncedConfigSignature) {
@@ -421,9 +443,23 @@ export function DivisionSettings({
     setOnlinePlay(cfg.onlinePlay === "lichess" ? "lichess" : "off");
   }
   const [advancedText, setAdvancedText] = useState("");
-  const [onlinePlay, setOnlinePlay] = useState<"off" | "lichess">(
-    cfg.onlinePlay === "lichess" ? "lichess" : "off",
-  );
+  // T6 camera policy. The control shows the EFFECTIVE value (own, else the
+  // competition's, else off); `ownCamera === null` is surfaced as inherited
+  // rather than collapsed into "off" — the server keeps that distinction.
+  // Online play gates the control on its SAVED value: the camera has its own
+  // Save, so an unsaved choice in the Format group must not unlock it.
+  const ownCamera: CameraPolicy | null = division.camera_policy ?? null;
+  const shownCamera: CameraPolicy = ownCamera ?? division.inherited_camera_policy ?? "off";
+  const onlinePlaySaved = cfg.onlinePlay === "lichess";
+  const [cameraChoice, setCameraChoice] = useState<CameraPolicy>(shownCamera);
+  // Same derive-from-props resync as the config block above: a saved change
+  // (or another tab's) arrives as new props after router.refresh().
+  const cameraSignature = `${ownCamera ?? "inherit"}|${shownCamera}`;
+  const [syncedCameraSignature, setSyncedCameraSignature] = useState(cameraSignature);
+  if (cameraSignature !== syncedCameraSignature) {
+    setSyncedCameraSignature(cameraSignature);
+    setCameraChoice(shownCamera);
+  }
   // Entrants block (spec 2026-07-18): the ticked kinds, the default, and the
   // team extras seed from the resolved effective model.
   const [entrantKinds, setEntrantKinds] = useState<string[]>(entrantModel.kinds);
@@ -493,6 +529,14 @@ export function DivisionSettings({
         // The server's message is English-only (no server-side i18n in this
         // repo), so the CODE is what gets localised here rather than shown raw.
         setError(msg("stage.err.swissRoundsRequired"));
+      } else if (err instanceof ApiV1Error && err.code === "POLICY_LOCKED") {
+        // Server English otherwise (no server-side i18n): localise the code.
+        setError(msg("divset.err.cameraPolicyLocked"));
+      } else if (err instanceof ApiV1Error && err.code === "INVALID_TIME_CONTROL") {
+        // The refusal carries the catalogue keys ("3+0", "10+5"…), which read
+        // the same in every locale; only the sentence around them is ours.
+        const controls = Array.isArray(err.extra.controls) ? err.extra.controls.map(String).join(", ") : "";
+        setError(msg("divset.err.timeControlUnsupported", { controls }));
       } else {
         setError(err instanceof Error ? err.message : msg("divset.failed"));
       }
@@ -633,6 +677,23 @@ export function DivisionSettings({
         json: { variant_key: variantKey, config: override },
       });
     }, msg("divset.notice.rulesSaved"));
+
+  // Sends ONLY camera_policy, so it works on a format-locked division (any
+  // variant_key in the patch is 409 FORMAT_LOCKED once fixtures exist). On a
+  // refusal the control snaps back to the stored value, so it never shows a
+  // requirement the server did not keep.
+  const saveCameraPolicy = () =>
+    run(async () => {
+      try {
+        await apiV1(`/api/v1/divisions/${division.id}`, {
+          method: "PATCH",
+          json: { camera_policy: cameraChoice },
+        });
+      } catch (err) {
+        setCameraChoice(shownCamera);
+        throw err;
+      }
+    }, msg("divset.camera.saved"));
 
   // Tick/untick a kind, keeping canonical order and never emptying the list;
   // if the current default falls out, re-point it at the first remaining kind.
@@ -1022,6 +1083,56 @@ export function DivisionSettings({
           </>
         )}
       </Group>
+
+      {/* T6 — its own group, OUTSIDE the format lock: the camera requirement
+          is edited mostly on divisions that already have fixtures, where the
+          Format group above is read-only. */}
+      {division.sport_key === "boardgame" && (
+        <Group title={msg("divset.camera.label")} summary={msg(CAMERA_OPTION_KEY[shownCamera])}>
+          <select
+            aria-label={msg("divset.camera.label")}
+            disabled={!canEdit || !onlinePlaySaved}
+            value={cameraChoice}
+            onChange={(e) => setCameraChoice(e.target.value as CameraPolicy)}
+            className="input w-full"
+            data-testid="division-camera-policy"
+          >
+            {CAMERA_POLICIES.map((p) => (
+              <option key={p} value={p}>
+                {msg(CAMERA_OPTION_KEY[p])}
+              </option>
+            ))}
+          </select>
+          {!onlinePlaySaved && (
+            <p data-testid="division-camera-needs-online" className="text-[11px] text-slate-400">
+              {msg("divset.camera.needsOnlinePlay")}
+            </p>
+          )}
+          {ownCamera === null && (
+            <p data-testid="division-camera-inherited" className="text-[11px] text-slate-400">
+              {msg("divset.camera.inherited")}
+            </p>
+          )}
+          <p className="text-[11px] text-slate-400">{msg("divset.camera.help")}</p>
+          {cameraChoice === "required" && (
+            <div data-testid="division-camera-player-notice" className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
+              <p className="font-medium text-slate-700">{msg("divset.camera.playerNoticeLabel")}</p>
+              <p className="mt-1">{msg("onlineChess.camera.playerNotice")}</p>
+            </div>
+          )}
+          {canEdit && (
+            <button
+              type="button"
+              disabled={busy || !onlinePlaySaved || cameraChoice === shownCamera}
+              onClick={saveCameraPolicy}
+              className="btn btn-primary text-xs"
+              data-testid="division-camera-save"
+            >
+              {msg("divset.camera.save")}
+            </button>
+          )}
+        </Group>
+      )}
 
       <Group
         title={msg("divset.entrants.title")}

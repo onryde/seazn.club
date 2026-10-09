@@ -3292,7 +3292,7 @@
         ]
       },
       "post": {
-        "summary": "Create a division (pins sport module version)",
+        "summary": "Create a division (pins sport module version). With onlinePlay 'lichess', 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them); camera_policy null or absent inherits the competition's, and a non-off value on a sport that cannot play online is 422 CAMERA_POLICY_SPORT",
         "tags": [
           "divisions"
         ],
@@ -4481,7 +4481,7 @@
         ]
       },
       "patch": {
-        "summary": "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist)",
+        "summary": "Update a division (format edits 409 FORMAT_LOCKED once fixtures exist). With onlinePlay 'lichess' in the final config, 400 INVALID_TIME_CONTROL unless config.clock is one of the curated Board API controls (error.controls lists them). camera_policy is editable at any time, but once a round of the division has been opened it can only be relaxed: a tightening of the effective policy is 409 POLICY_LOCKED. Every change of the stored camera_policy is audited",
         "tags": [
           "divisions"
         ],

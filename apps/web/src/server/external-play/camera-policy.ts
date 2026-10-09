@@ -118,3 +118,15 @@ export async function fixtureCameraPolicy(fixtureId: string): Promise<CameraPoli
     competition: readCameraPolicy(row.competitionPolicy),
   });
 }
+
+/** The competition's own policy — the floor of the chain, and what the
+ *  division settings screen shows as INHERITED when the division sets nothing.
+ *  The caller has already resolved `competitionId` through a tenant-scoped
+ *  read (the division page), so the privileged client only re-reads a row the
+ *  viewer was allowed to reach. A missing row reads "off", like
+ *  `fixtureCameraPolicy`. */
+export async function competitionCameraPolicy(competitionId: string): Promise<CameraPolicy> {
+  const [row] = await sql<{ policy: unknown }[]>`
+    select camera_policy as policy from competitions where id = ${competitionId}`;
+  return readCameraPolicy(row?.policy) ?? "off";
+}

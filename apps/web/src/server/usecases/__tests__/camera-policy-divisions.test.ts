@@ -11,6 +11,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { anyRoundOpened, roundOpenFor } from "@/server/external-play/round-open";
 import {
   CAMERA_POLICIES,
+  competitionCameraPolicy,
   effectivePolicy,
   fixtureCameraPolicy,
   type CameraPolicy,
@@ -74,6 +75,32 @@ describe.skipIf(!HAS_DB)("fixtureCameraPolicy, read off real rows", () => {
   it("the stage overrides the division UPWARDS too", async () => {
     const s = await seedOnlineChessFixture({ ...base, cameraPolicy: "off", stageCameraPolicy: "optional" });
     expect(await fixtureCameraPolicy(s.fixtureId)).toBe("optional");
+  });
+});
+
+// What the division settings screen shows as INHERITED when the division sets
+// nothing: the competition's own column, the floor of the chain.
+describe.skipIf(!HAS_DB)("competitionCameraPolicy — the inherited value the settings screen shows", () => {
+  it("empty case: a competition nobody configured reads its column default, off", async () => {
+    const s = await seedOnlineChessFixture(base);
+    const [row] = await sql<{ c: string }[]>`select camera_policy as c from competitions where id = ${s.competitionId}`;
+    expect(row?.c, "premise: the column default").toBe("off");
+    expect(await competitionCameraPolicy(s.competitionId)).toBe("off");
+  });
+
+  it("reads each stored value, and a second change is read back too", async () => {
+    const s = await seedOnlineChessFixture(base);
+    let checked = 0;
+    for (const p of [...CAMERA_POLICIES].reverse()) {
+      await sql`update competitions set camera_policy = ${p} where id = ${s.competitionId}`;
+      expect(await competitionCameraPolicy(s.competitionId), p).toBe(p);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every declared policy, in sequence").toBe(CAMERA_POLICIES.length);
+  });
+
+  it("a competition id that does not exist reads off, not a throw", async () => {
+    expect(await competitionCameraPolicy("00000000-0000-0000-0000-000000000000")).toBe("off");
   });
 });
 

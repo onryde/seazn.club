@@ -50,6 +50,7 @@ import { withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
 import { DivisionSettings } from "@/components/v2/division-settings";
+import { competitionCameraPolicy } from "@/server/external-play/camera-policy";
 import type { StageDraft } from "@/lib/format-templates";
 import { formatLocked } from "@/lib/format-lock";
 import { resolveLogoUrl } from "@/server/public-site/data";
@@ -963,6 +964,13 @@ export default async function DivisionPage({
               logo_url: resolveLogoUrl(division.logo_storage_path, division.logo_url),
               logo_storage_path: division.logo_storage_path,
               required_court_tags: division.required_court_tags,
+              // T6 — only a chess division shows the camera control, so only
+              // it pays for the inherited (competition) read.
+              camera_policy: division.camera_policy,
+              inherited_camera_policy:
+                division.sport_key === "boardgame"
+                  ? await competitionCameraPolicy(division.competition_id)
+                  : undefined,
             }}
             orgId={auth.orgId}
             variants={await listVariantOptions(auth, division.sport_key)}
