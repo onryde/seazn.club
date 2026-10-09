@@ -18,6 +18,7 @@ import type { EventEnvelope, Lineup, LineupPair, LineupSlot } from "@seazn/engin
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { MemberIn, SideInfo, LineupSlotIn } from "@/components/v2/fixture-console";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { entrantDisplayName } from "@/lib/entrant-name";
 import type { MessageKey } from "@/lib/messages";
 import { resolveModuleClient } from "./module-client";
 import { deviceLinkTransport, sessionTransport, type PadAuthMode } from "./transport";
@@ -163,12 +164,14 @@ export function personNamesFrom(home: SideInfo, away: SideInfo): Readonly<Record
 }
 
 /**
- * W2a fix round 1 (I2) — each side's ENTRANT display name, for `PadHostView.entrantNames`. The loaders' `SideInfo.name`
- * is the name the console heading and the device-link header already show, so the pad's "who advances" options name
- * the same two entrants (spec §5.5) — never a person, which is all `personNamesFrom` above can key.
+ * W2a fix round 1 (I2), fix round 2 (N1) — what each side is CALLED, for `PadHostView.entrantNames`: the same
+ * `entrantDisplayName` (lib/entrant-name.ts, D-6) the console heading and the device-link header render, so the pad's
+ * "who advances" options name the two entrants exactly as the screen around them does (spec §5.5). Never the raw
+ * `SideInfo.name` (`entrants.display_name`): for a singles entrant that snapshot can be "Entry 3" while the heading,
+ * resolving the roster, reads "Ada Okonkwo".
  */
 export function entrantNamesFrom(home: SideInfo, away: SideInfo): Readonly<Record<"home" | "away", string>> {
-  return { home: home.name, away: away.name };
+  return { home: entrantDisplayName(home), away: entrantDisplayName(away) };
 }
 
 // ---------------------------------------------------------------------------

@@ -46,6 +46,24 @@ const BODY_KEY: Record<HeldCause, MessageKey> = {
   tiebreak: "score.needsDecision.body.tiebreak",
 };
 
+/** Fix round 2 (N2) — the OFFICIAL's line, by cause. A level or abandoned hold waits on the organiser's settle; a chess
+ *  tie-break does not: the official's own pad offers the Tie-break tile, and recording it is the scorer's job (BG-KO-1).
+ *  Telling them to wait for the organiser there would stall the match. */
+const WAITING_KEY: Record<HeldCause, MessageKey> = {
+  level: "score.needsDecision.waiting",
+  abandoned: "score.needsDecision.waiting",
+  tiebreak: "score.needsDecision.waiting.tiebreak",
+};
+
+/** Fix round 1 (M7), round 2 (N2): one line for an official scorer on a held fixture, saying what happens next. */
+export function HeldNote({ msg, cause }: { msg: Msg; cause: HeldCause }) {
+  return (
+    <p data-testid="held-note" data-cause={cause} className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+      {msg(WAITING_KEY[cause])}
+    </p>
+  );
+}
+
 /** The confirm stays disabled until both questions are answered, and from the first tap until the answer comes back
  *  (Review Focus 2: a double submit must send one settle). */
 export const confirmBlocked = (s: { winner: string | null; method: string | null; sending: boolean }): boolean =>

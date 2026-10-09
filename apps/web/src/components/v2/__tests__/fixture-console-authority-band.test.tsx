@@ -320,6 +320,21 @@ describe("W2a: held bracket fixtures and organiser-only actions (finding 11, fin
     expect(html).toContain(FINALIZE);
   });
 
+  /** The REAL fold of a drawn chess knockout game (I1's rig): phase "tiebreak", status in_play, outcome null. */
+  function chessTiebreak() {
+    const chess = builtinModules.find((m) => m.key === "boardgame")!;
+    const ko = chess.configSchema.parse({ ...chess.bracketDeciders!(chess.configSchema.parse({})) });
+    const lineups = defaultLineupPair(chess.positions);
+    const ledger = [
+      makeEnvelope(1, { type: "core.start", payload: {} } as never),
+      makeEnvelope(2, { type: "boardgame.result", payload: { winner: null, method: "agreement" } } as never),
+    ];
+    const state = foldMatch(chess, ko, lineups, ledger);
+    expect((state as { phase?: string }).phase, "the rig must reach the tie-break").toBe("tiebreak");
+    const events: EventIn[] = ledger.map((e, i) => ({ ...EVENTS[0]!, id: `ev-${i + 1}`, seq: i + 1, type: e.type, payload: e.payload as Record<string, unknown> }));
+    return { sport: { ...sport, key: "boardgame", scorerLabel: "Arbiter", lineupSize: 1 }, state, events, moduleVersion: chess.version, resolvedConfig: ko };
+  }
+
   it("I1: a chess knockout in its tie-break is HELD — the organiser gets the block and NO Forfeit/Abandon (held: the settle is the way out — the engine refuses forfeit WRONG_PHASE but would take an abandon)", () => {
     // The REAL fold: a drawn knockout game opens phase "tiebreak" with status in_play and outcome null — not `decided`,
     // so only the held gate keeps the band's two organiser writes off it (boardgame.ts refuses a forfeit in this phase;
@@ -373,6 +388,55 @@ describe("W2a: held bracket fixtures and organiser-only actions (finding 11, fin
     expect(scorer).toContain(WAITING);
     expect(consoleHtml(HELD), "the organiser has the block instead").not.toContain(NOTE);
     expect(consoleHtml({ canOrganise: false }), "a scorer on a live match").not.toContain(NOTE);
+  });
+
+  it("N2 (fix round 2): an official on a chess TIE-BREAK is told to record it on the pad — never to wait for the organiser; level and abandoned holds keep the organiser line", () => {
+    const NOTE = /<p data-testid="held-note" data-cause="([a-z]+)"[^>]*>([^<]*)<\/p>/;
+    const WAITING = messages["score.needsDecision.waiting"];
+    const TIEBREAK = messages["score.needsDecision.waiting.tiebreak"];
+    // Empty case first: the two lines are different words (a key that fell back to the other would pass on its inversion).
+    expect(TIEBREAK).toBeTypeOf("string");
+    expect(TIEBREAK).not.toBe(WAITING);
+    const note = (html: string) => {
+      const m = NOTE.exec(html);
+      return m === null ? null : { cause: m[1], text: m[2]!.replaceAll("&#x27;", "'") };
+    };
+    // The REAL fold (I1's rig) at canOrganise false: in_play, outcome null, held by the pending tie-break.
+    const tiebreak = consoleHtml({ status: "in_play", outcome: null, stageKind: "knockout", canOrganise: false, other: chessTiebreak() });
+    expect(note(tiebreak)).toEqual({ cause: "tiebreak", text: TIEBREAK });
+    expect(tiebreak, "the organiser's line is not shown on a tie-break").not.toContain(WAITING);
+    // The organiser line stays where the organiser IS what happens next: a level result, and an abandon that decided nobody.
+    const abandoned = consoleHtml({
+      status: "abandoned",
+      outcome: null,
+      stageKind: "knockout",
+      canOrganise: false,
+      other: { ...chessTiebreak(), events: [{ ...EVENTS[0]! }, { ...EVENTS[0]!, id: "ev-2", seq: 2, type: "core.abandon", payload: { reason: "rain" } }] },
+    });
+    const rows = [
+      { name: "level", html: consoleHtml({ ...HELD, canOrganise: false }), want: { cause: "level", text: WAITING } },
+      { name: "abandoned", html: abandoned, want: { cause: "abandoned", text: WAITING } },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      expect(note(r.html), r.name).toEqual(r.want);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("m5 (fix round 2): the official's held note sits straight under the Scoring card — above the ledger and the lineups", () => {
+    const html = consoleHtml({ ...HELD, canOrganise: false });
+    const scoring = html.indexOf('data-role="console-scoring"');
+    const note = html.indexOf('data-testid="held-note"');
+    const ledger = html.indexOf('data-role="v3-activity"');
+    const lineups = html.indexOf('data-testid="lineup-editor"');
+    expect(scoring).toBeGreaterThan(-1);
+    expect(note, "the note follows the Scoring card").toBeGreaterThan(scoring);
+    expect(ledger, "the rig renders the ledger").toBeGreaterThan(-1);
+    expect(lineups, "the rig renders the lineups").toBeGreaterThan(-1);
+    expect(note, "above the ledger").toBeLessThan(ledger);
+    expect(note, "above the lineups").toBeLessThan(lineups);
   });
 });
 

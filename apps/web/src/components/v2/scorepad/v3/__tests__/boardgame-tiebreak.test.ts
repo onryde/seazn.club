@@ -6,6 +6,9 @@ import { builtinModules } from "@seazn/engine/sports";
 import { TIEBREAK_RUNGS, boardgame } from "@seazn/engine/sports/boardgame";
 import { declaredCfgs, defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
+import { entrantDisplayName } from "@/lib/entrant-name";
+import type { SideInfo } from "@/components/v2/fixture-console";
+import { entrantNamesFrom } from "../../registry";
 import uiEn from "@/dictionaries/en/ui.json";
 import { dockFor, resolveDockSpec } from "../pad-host";
 import { V3_SKINS } from "../registry";
@@ -158,16 +161,57 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
       checked++;
     }
     expect(checked).toBe(2);
-    // The entrant still wins over a person the lineup seats: the tie-break advances an ENTRANT.
+  });
+
+  it("N1 (fix round 2): a pairing card's seated person still wins over the entrant label — on both winner steps; ids stay home/away", () => {
+    // Round 1 let the entrant label beat the person the card seats; the person at the board is who the scorer saw play.
     const seated = liveView("boardgame", {
       stageKind: "knockout",
       cfg: TB_CFG,
       events: [START, DRAWN],
-      personNames: { "H-p1": "Magnus Carlsen", "A-p1": "Hou Yifan" },
+      personNames: { "H-p1": "Magnus Carlsen", "A-p1": "Hou Yifan" }, // defaultLineupPair seats `<entrant>-p1`
       entrantNames: { home: "Riverside Chess Club", away: "Summit Knights" },
     });
-    const winner = buildSheets(seated, echo)[TIEBREAK_TILE_ID]!.steps.find((s) => s.id === "winner")!;
-    expect(winner.kind === "choice" && winner.options.map((o) => o.labelText)).toEqual(["Riverside Chess Club", "Summit Knights"]);
+    const sheet = buildSheets(seated, echo)[TIEBREAK_TILE_ID]!;
+    let checked = 0;
+    for (const id of ["winner", "winner-armageddon"]) {
+      const step = sheet.steps.find((s) => s.id === id)!;
+      expect(step.kind === "choice" && step.options.map((o) => o.id), id).toEqual(["home", "away"]);
+      expect(step.kind === "choice" && step.options.map((o) => o.labelText), id).toEqual(["Magnus Carlsen", "Hou Yifan"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("N1 (fix round 2, D-6): a SINGLES entrant whose snapshot reads 'Entry 3' is named by its member — the same name the heading shows — on both winner steps", () => {
+    // The production shape: an individual entrant's `display_name` is whatever the entry flow wrote ("Entry 3"); the
+    // console heading and the device header resolve the roster (`entrantDisplayName`) and read "Ada Okonkwo". The pad's
+    // names arrive through the REAL producer, `entrantNamesFrom`, which both mounts (console and device link) call.
+    const single = (id: string, name: string, personId: string, fullName: string): SideInfo => ({
+      id,
+      name,
+      kind: "individual",
+      members: [{ person_id: personId, full_name: fullName, squad_number: null, default_position_key: null, is_captain: false, roles: [] }],
+      lineup: [],
+    });
+    const home = single("H", "Entry 3", "p-ada", "Ada Okonkwo");
+    const away = single("A", "Entry 4", "p-bea", "Bea Lindqvist");
+    const team: SideInfo = { id: "T", name: "Riverside Chess Club", kind: "team", members: home.members, lineup: [] };
+    // Empty case first: a team keeps its own name, and a singles entrant with no member yet falls back to its snapshot.
+    expect(entrantNamesFrom(team, { ...away, members: [] })).toEqual({ home: "Riverside Chess Club", away: "Entry 4" });
+    const names = entrantNamesFrom(home, away);
+    expect(names, "the pad's names ARE the heading's").toEqual({ home: entrantDisplayName(home), away: entrantDisplayName(away) });
+    const sheet = buildSheets(liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN], entrantNames: names }), echo)[
+      TIEBREAK_TILE_ID
+    ]!;
+    let checked = 0;
+    for (const id of ["winner", "winner-armageddon"]) {
+      const step = sheet.steps.find((s) => s.id === id)!;
+      expect(step.kind === "choice" && step.options.map((o) => o.id), id).toEqual(["home", "away"]);
+      expect(step.kind === "choice" && step.options.map((o) => o.labelText), id).toEqual(["Ada Okonkwo", "Bea Lindqvist"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("with no entrant name the winner options fall back to the players the lineup puts on the board, then to Home/Away", () => {

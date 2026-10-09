@@ -2588,6 +2588,7 @@
   "score.needsDecision.body.abandoned": "The match was abandoned before anyone won. Choose who advances.",
   "score.needsDecision.body.tiebreak": "The game was drawn and its tie-break isn't recorded yet. Record the tie-break when it's played, or choose who advances.",
   "score.needsDecision.waiting": "This match is held until the organiser decides who advances.",
+  "score.needsDecision.waiting.tiebreak": "The game was drawn and its tie-break isn't recorded yet. Record the tie-break on the pad when it's played.",
   "score.needsDecision.settle": "Settle the match",
   "score.needsDecision.dialogTitle": "Settle the match",
   "score.needsDecision.whoAdvances": "Who advances?",

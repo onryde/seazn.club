@@ -2543,6 +2543,7 @@
   "score.needsDecision.body.abandoned": "De wedstrijd is gestaakt voordat iemand won. Kies wie doorgaat.",
   "score.needsDecision.body.tiebreak": "De partij eindigde in remise en de tiebreak is nog niet vastgelegd. Leg de tiebreak vast zodra die gespeeld is, of kies wie doorgaat.",
   "score.needsDecision.waiting": "Deze wedstrijd wacht tot de organisator beslist wie doorgaat.",
+  "score.needsDecision.waiting.tiebreak": "De partij eindigde in remise en de tiebreak is nog niet vastgelegd. Leg de tiebreak vast op het scorepad zodra die gespeeld is.",
   "score.needsDecision.settle": "Wedstrijd beslissen",
   "score.needsDecision.dialogTitle": "Wedstrijd beslissen",
   "score.needsDecision.whoAdvances": "Wie gaat door?",

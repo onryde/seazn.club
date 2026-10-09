@@ -324,7 +324,7 @@
   {
     "id": "winner-names",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "    const labelText = entrant !== undefined && entrant.length > 0 ? entrant : names.length > 0 ? names.join(\" & \") : undefined;",
+    "find": "    const labelText = names.length > 0 ? names.join(\" & \") : entrant !== undefined && entrant.length > 0 ? entrant : undefined;",
     "replace": "    const labelText = entrant !== undefined && entrant.length > 0 ? entrant : undefined;",
     "killers": [
       {
@@ -333,6 +333,13 @@
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
         "name": "with no entrant name the winner options fall back to the players"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "N1 \\(fix round 2\\): a pairing card's seated person still wins"
       }
     ]
   },
@@ -533,7 +540,7 @@
   {
     "id": "r1-i2-tiebreak-options-name-entrants",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "    const labelText = entrant !== undefined && entrant.length > 0 ? entrant : names.length > 0 ? names.join(\" & \") : undefined;",
+    "find": "    const labelText = names.length > 0 ? names.join(\" & \") : entrant !== undefined && entrant.length > 0 ? entrant : undefined;",
     "replace": "    const labelText = names.length > 0 ? names.join(\" & \") : undefined;",
     "killers": [
       {
@@ -563,8 +570,8 @@
   {
     "id": "r1-i2-entrant-names-keyed-by-side",
     "file": "apps/web/src/components/v2/scorepad/registry.tsx",
-    "find": "  return { home: home.name, away: away.name };",
-    "replace": "  return { home: away.name, away: home.name };",
+    "find": "  return { home: entrantDisplayName(home), away: entrantDisplayName(away) };",
+    "replace": "  return { home: entrantDisplayName(away), away: entrantDisplayName(home) };",
     "killers": [
       {
         "cwd": "apps/web",
@@ -572,6 +579,13 @@
           "src/components/v2/scorepad/__tests__/registry.test.tsx"
         ],
         "name": "a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "N1 \\(fix round 2, D-6\\): a SINGLES entrant"
       }
     ]
   },
@@ -587,6 +601,36 @@
           "src/components/v2/__tests__/device-pad-history-and-undo.test.tsx"
         ],
         "name": "the ribbon's sentence wraps to two lines on a phone"
+      }
+    ]
+  },
+  {
+    "id": "r2-n1-seated-person-wins",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "    const labelText = names.length > 0 ? names.join(\" & \") : entrant !== undefined && entrant.length > 0 ? entrant : undefined;",
+    "replace": "    const labelText = entrant !== undefined && entrant.length > 0 ? entrant : names.length > 0 ? names.join(\" & \") : undefined;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "N1 \\(fix round 2\\): a pairing card's seated person still wins"
+      }
+    ]
+  },
+  {
+    "id": "r2-n1-registry-resolves-display-name",
+    "file": "apps/web/src/components/v2/scorepad/registry.tsx",
+    "find": "  return { home: entrantDisplayName(home), away: entrantDisplayName(away) };",
+    "replace": "  return { home: home.name, away: away.name };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "N1 \\(fix round 2, D-6\\): a SINGLES entrant"
       }
     ]
   }

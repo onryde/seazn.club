@@ -50,12 +50,36 @@ async function crop(target: Locator | Page, name: string, width: number) {
 
 type Visibility = "private" | "public";
 async function knockout(
-  r: APIRequestContext, sport: string, variant: string, names = ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"], visibility: Visibility = "private",
+  r: APIRequestContext, sport: string, variant: string, names = ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"], visibility: Visibility = "private", people?: string[],
 ) {
-  return staged(r, sport, variant, "knockout", names, visibility);
+  return staged(r, sport, variant, "knockout", names, visibility, people);
 }
 
-async function staged(r: APIRequestContext, sport: string, variant: string, kind: "knockout" | "league", names: string[], visibility: Visibility = "private") {
+/** Fix round 2 (N1) — the D-6 shape: SINGLES entrants whose `display_name` snapshot is whatever the entry flow wrote
+ *  ("Entry 1"), each with the one real person behind it. Every scoring surface names such an entrant by its member
+ *  (`entrantDisplayName`); the snapshot is only the fallback. */
+const D6 = { names: ["Entry 1", "Entry 2", "Entry 3", "Entry 4"], people: ["Ada Okonkwo", "Bea Lindqvist", "Cai Moreno", "Dev Anand"] };
+async function addSinglesWithMembers(r: APIRequestContext, divisionId: string, names: string[], people: string[]) {
+  expect(people, "one person per entrant").toHaveLength(names.length);
+  const personIds: string[] = [];
+  for (const fullName of people) {
+    const person = await apiJson<{ id: string }>(r, "/api/v1/persons", "POST", { full_name: fullName, consent: { public_name: true } });
+    expect(person.status, `person ${fullName}: ${JSON.stringify(person.error)}`).toBeLessThan(300);
+    personIds.push(person.data!.id);
+  }
+  const res = await apiJson<{ id: string }[]>(
+    r,
+    `/api/v1/divisions/${divisionId}/entrants`,
+    "POST",
+    names.map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1, members: [{ person_id: personIds[i] }] })),
+  );
+  expect(res.status, `D-6 entrants: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+  return { status: res.status, ids: (res.data ?? []).map((e) => e.id) };
+}
+
+async function staged(
+  r: APIRequestContext, sport: string, variant: string, kind: "knockout" | "league", names: string[], visibility: Visibility = "private", people?: string[],
+) {
   // Preflight C14: the variant is one the sport declares (module.variants), never a guessed literal.
   expect(Object.keys(builtinModules.find((m) => m.key === sport)?.variants ?? {}), `${sport} declares ${variant}`).toContain(variant);
   const comp = await apiJson<{ id: string; slug: string }>(r, "/api/v1/competitions", "POST", {
@@ -65,7 +89,10 @@ async function staged(r: APIRequestContext, sport: string, variant: string, kind
   });
   const div = await apiJson<{ id: string; slug: string }>(r, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Cup", sport_key: sport, variant_key: variant });
   // A team sport's entrants are teams (`assertRosterFits` refuses an individual football entrant).
-  const added = await addEntrantsViaApi(r, div.data!.id, names, sport === "football" ? "team" : "individual");
+  const added =
+    people === undefined
+      ? await addEntrantsViaApi(r, div.data!.id, names, sport === "football" ? "team" : "individual")
+      : await addSinglesWithMembers(r, div.data!.id, names, people);
   expect(added.ids, `entrants for ${sport}`).toHaveLength(names.length);
   const { fixtureIds } = await createStageAndGenerate(r, div.data!.id, { kind, name: "Cup" });
   const started = await apiJson(r, `/api/v1/divisions/${div.data!.id}/start`, "POST");
@@ -75,7 +102,9 @@ async function staged(r: APIRequestContext, sport: string, variant: string, kind
   const sf = ready[0]!;
   expect(sf, "a fixture with both entrants").toBeTruthy();
   const nameOf = new Map(added.ids.map((id, i) => [id, names[i]!]));
-  return { divisionId: div.data!.id, sf, ready, compSlug: comp.data!.slug, divSlug: div.data!.slug, nameOf };
+  /** What the screen CALLS each entrant: its member for a D-6 singles entrant, else the snapshot. */
+  const shownAs = new Map(added.ids.map((id, i) => [id, people?.[i] ?? names[i]!]));
+  return { divisionId: div.data!.id, sf, ready, compSlug: comp.data!.slug, divSlug: div.data!.slug, nameOf, shownAs };
 }
 
 /** Who sits in the fixture a semi's winner feeds — read from the row, not inferred. */
@@ -278,9 +307,16 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
       await expect(p.getByRole("button", { name: ABANDON(), exact: true })).toHaveCount(0);
       // M7 (fix round 1): one line tells them WHY nothing is offered.
       await expect(p.getByTestId("held-note")).toHaveText(ui("score.needsDecision.waiting"));
+      await expect(p.getByTestId("held-note")).toHaveAttribute("data-cause", "level");
       for (const w of [1280, 768, 320]) {
         await p.setViewportSize({ width: w, height: 900 });
         await expectNoHorizontalScroll(p);
+        if (w >= 768) {
+          // m5 (fix round 2): the note sits under the Scoring card, above the ledger and lineups — in the first screen.
+          await p.evaluate(() => window.scrollTo(0, 0));
+          const box = (await p.getByTestId("held-note").boundingBox())!;
+          expect(box.y + box.height, `${w}: the held note is in view without scrolling`).toBeLessThanOrEqual(900);
+        }
         await crop(p, "console-official-held", w);
       }
     } finally {
@@ -376,8 +412,8 @@ const LOTS_HINT = "Decided by lot? Ask the organiser to settle the match.";
 const back = (page: Page) => pad(page).getByRole("button", { name: "Back", exact: true });
 
 /** A chess knockout game drawn into its tie-break (BG-KO-1): the drawn result moves the fold to phase "tiebreak". */
-async function drawnChessKnockout(r: APIRequestContext) {
-  const ko = await knockout(r, "boardgame", "classical");
+async function drawnChessKnockout(r: APIRequestContext, d6?: { names: string[]; people: string[] }) {
+  const ko = d6 === undefined ? await knockout(r, "boardgame", "classical") : await knockout(r, "boardgame", "classical", d6.names, "private", d6.people);
   await post(r, ko.sf.id, "core.start");
   await post(r, ko.sf.id, RESULT_DRAWN.type, RESULT_DRAWN.payload);
   // Preflight C25 / ruling C12: in phase tiebreak the outcome is null, so the status is in_play — never needs_decision.
@@ -589,6 +625,76 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     }
   });
 
+  test("N1 (fix round 2, D-6): a singles entrant whose snapshot reads 'Entry N' is named by its member on the tie-break options — the heading's name — on the console and the device link", async ({ browser, page, request }) => {
+    const { sf, nameOf, shownAs } = await drawnChessKnockout(request, D6);
+    const want = [shownAs.get(sf.home_entrant_id!)!, shownAs.get(sf.away_entrant_id!)!];
+    // Empty case first: the snapshot and the member really differ here, or the test could not see the regression.
+    expect(nameOf.get(sf.home_entrant_id!)).toMatch(/^Entry \d$/);
+    expect(want[0]).not.toBe(nameOf.get(sf.home_entrant_id!));
+    // `root`: the console's pad wrapper (`score-pad`), or the device page itself — the device route mounts its own pad,
+    // without the console's wrapper testid.
+    const winnerTexts = async (root: Locator) => {
+      await root.locator('[data-tile-id="tiebreak"]').click();
+      await root.locator('[data-choice-option-id="rapid"]').click();
+      const [home, away] = [root.locator('[data-choice-option-id="home"]'), root.locator('[data-choice-option-id="away"]')];
+      await expect(home).toBeVisible();
+      return [await home.innerText(), await away.innerText()];
+    };
+    await page.goto(await fixturePath(request, sf.id));
+    await dismissCookieBanner(page);
+    await expect(page.locator("h1").first(), "the console heading resolves the roster").toContainText(want[0]!);
+    expect(await winnerTexts(pad(page)), "console: the options say what the heading says").toEqual(want);
+    let surfaces = 1;
+    const minted = await apiJson<{ id: string; secret: string }>(request, `/api/v1/fixtures/${sf.id}/device-links`, "POST", { label: "W2a N1" });
+    expect(minted.status, `mint: ${JSON.stringify(minted.error)}`).toBe(201);
+    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const p = await ctx.newPage();
+      await p.goto(`/score/${minted.data!.secret}`);
+      await dismissCookieBanner(p);
+      await expect(p.locator('[data-tile-id="tiebreak"]'), "the device pad offers the tie-break").toBeVisible({ timeout: 20_000 });
+      await expect(p.getByText(want[0]!).first(), "the device header resolves the roster too").toBeVisible();
+      expect(await winnerTexts(p.locator("body")), "device link: the same two names").toEqual(want);
+      surfaces++;
+    } finally {
+      await ctx.close();
+    }
+    expect(surfaces).toBe(2);
+    // Opening the steps wrote nothing.
+    const events = (await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${sf.id}/events`)).data!;
+    expect(events.map((e) => e.type)).toEqual(["core.start", "boardgame.result"]);
+  });
+
+  test("N2 (fix round 2): an official scorer on a chess TIE-BREAK is told to record it on the pad, which offers them the tile — never to wait for the organiser", async ({ browser, request }) => {
+    const { sf } = await drawnChessKnockout(request, D6);
+    const official = await officialScorerPage(browser, sf.id);
+    try {
+      const p = official.page;
+      await p.goto(await fixturePath(request, sf.id));
+      await dismissCookieBanner(p);
+      await expect(p.getByText("Void last entry"), "the official is scoring here").toBeVisible();
+      const note = p.getByTestId("held-note");
+      await expect(note).toHaveAttribute("data-cause", "tiebreak");
+      await expect(note).toHaveText(ui("score.needsDecision.waiting.tiebreak"));
+      await expect(p.getByText(ui("score.needsDecision.waiting"), { exact: true }), "never the organiser's line").toHaveCount(0);
+      // What the line says is true: the official's own pad offers the tie-break (BG-KO-1), and nothing organiser-only.
+      await expect(tile(p, "tiebreak")).toBeVisible();
+      await expect(p.getByTestId("needs-decision")).toHaveCount(0);
+      await expect(p.getByTestId("settle-open")).toHaveCount(0);
+      let widths = 0;
+      for (const w of [1280, 768, 320]) {
+        await p.setViewportSize({ width: w, height: 900 });
+        await expect(note).toBeVisible();
+        await expectNoHorizontalScroll(p);
+        await crop(p, "console-official-tiebreak", w);
+        widths++;
+      }
+      expect(widths).toBe(3);
+    } finally {
+      await official.close();
+    }
+  });
+
   test("the pad screens at 1280, 768 and 320: chess live with Draw, the tie-break tile, and each tie-break step — no horizontal scroll", async ({ page, request }) => {
     const live = await knockout(request, "boardgame", "classical");
     await post(request, live.sf.id, "core.start");
@@ -600,7 +706,8 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       await expectNoHorizontalScroll(page);
       await crop(pad(page), "pad-chess-live-draw", w);
     }
-    const { sf } = await drawnChessKnockout(request);
+    // N1 (fix round 2): D-6-shaped entrants, so the winner and Armageddon crops show what the screen calls them.
+    const { sf, shownAs } = await drawnChessKnockout(request, D6);
     await page.goto(await fixturePath(request, sf.id));
     let steps = 0;
     for (const w of [1280, 768, 320]) {
@@ -614,6 +721,7 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       await crop(pad(page), "pad-tiebreak-rung", w);
       await option(page, "rapid").click();
       await expect(option(page, "away")).toBeVisible();
+      await expect(option(page, "away")).toHaveText(shownAs.get(sf.away_entrant_id!)!);
       await expectNoHorizontalScroll(page);
       await crop(pad(page), "pad-tiebreak-winner", w);
       await option(page, "away").click();
@@ -624,6 +732,7 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       await back(page).click();
       await option(page, "armageddon").click();
       await expect(pad(page).getByText(ARMAGEDDON_HINT)).toBeVisible();
+      await expect(option(page, "home")).toHaveText(shownAs.get(sf.home_entrant_id!)!);
       await expectNoHorizontalScroll(page);
       await crop(pad(page), "pad-tiebreak-armageddon", w);
       for (const id of ["home", "away"]) {
@@ -833,7 +942,8 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
     const row = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
     await expect(row.getByTestId("run-sheet-held-chip")).toHaveText("Needs a decision");
     await expect(row.locator("[data-row-action]")).toHaveAttribute("data-row-action", "decide");
-    await expect(page.locator('[data-pill="finished"]'), "nothing on the division page reads Finished").toHaveCount(0);
+    // Fix round 2 (m2): no "[data-pill=finished] count 0" here — the division page renders no pills at all, so that
+    // check passed on any page. The row's held chip and its Decide action above are what it shows of the hold.
   });
 
   test("the public screens at 1280, 768 and 320: held match, settled match, held bracket — no horizontal scroll", async ({ page, request }) => {

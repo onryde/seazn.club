@@ -5503,6 +5503,7 @@ export type DictionaryKey =
   | "score.needsDecision.settle"
   | "score.needsDecision.title"
   | "score.needsDecision.waiting"
+  | "score.needsDecision.waiting.tiebreak"
   | "score.needsDecision.whoAdvances"
   | "score.needsDecision.why"
   | "score.nextMatchStarted"

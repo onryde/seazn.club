@@ -1431,11 +1431,13 @@ export interface PadHostView {
    */
   readonly canOrganise: boolean;
   /**
-   * W2a fix round 1 (I2; spec §5.5 "two entrants, always") — each side's ENTRANT display name, the same name the
-   * console's heading shows. `personNames` cannot answer this: it is keyed by person id and only names someone a
-   * lineup or pairing card seats, so a chess knockout with no pairing card read "Home"/"Away" on its tie-break winner
-   * step. Built once by `entrantNamesFrom` (registry.tsx) from the loaders' `SideInfo.name`. Required so a forgotten
-   * producer is a tsc error; a side with no name (`{}` in a test view) falls back to the skin's own key.
+   * W2a fix round 1 (I2; spec §5.5 "two entrants, always"), fix round 2 (N1) — what each side is CALLED, resolved by
+   * `entrantDisplayName` (lib/entrant-name.ts, D-6): the same name the console heading and the device-link header show.
+   * For a singles entrant that is its one member ("Ada Okonkwo"), never the `entrants.display_name` snapshot
+   * ("Entry 3"). `personNames` cannot answer this on its own: it is keyed by person id and only names someone a lineup
+   * or pairing card seats, so a chess knockout with no pairing card read "Home"/"Away" on its tie-break winner step.
+   * Built once by `entrantNamesFrom` (registry.tsx). Required so a forgotten producer is a tsc error; a side with no
+   * name (`{}` in a test view) falls back to the skin's own key.
    */
   readonly entrantNames: Readonly<Partial<Record<"home" | "away", string>>>;
   /**
