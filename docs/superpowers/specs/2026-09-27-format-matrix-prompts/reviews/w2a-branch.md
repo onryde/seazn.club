@@ -197,3 +197,57 @@ None.
 | M6 | D | `stryker-changed` on `0c6263296` |
 | M7, M8 | owner, then H | per-screen crops |
 | M9 | controller | ledger edit |
+
+---
+
+## Re-review of the loop R fixes (2026-10-09, HEAD 4162e7962, after the PNG rewrite)
+
+- **Read:** `review-loopR-fixes.diff`, `git diff 91229a096 4162e7962` (91229a096 is 806ac17eb after the rewrite), rulings D-R1–D-R8, the loop R sections of task-H-report, and the crops in `screenshots/w2a-R/` and `w2a-R8/`.
+- **Not done:** no suite was run locally.
+
+**Verdict: Ready.**
+- No new Critical or Important finding.
+- The merge still waits on gates that are running at HEAD:
+  - the CI truth run 37951331449, whose `w2a-expect` judge must exit 0;
+  - the per-PR L3 sample;
+  - e2e 37951344351, whose log must show `refs/pull/931/head`;
+  - two smoke jobs.
+- Already green at HEAD: engine coverage, unit tests 1/4–4/4, typecheck and lint, and smoke build+e2e.
+
+| Item | Result | Evidence |
+|---|---|---|
+| I-1 | **Fixed** | `withdrawal.ts:49-58`: a pending decider becomes `"void"`, and any other status throws. The caller folds only `in_play` rows (`:234`) and reads the stored fold through `getFixtureState`. `withdrawal-decider-hold.test.ts:165` sweeps the engine's bracket kinds × every module, with the decider sports derived from `awaitingDecider` and counts asserted as n×k. The partial-cascade case is at `:132`. |
+| I-2 | **Fixed** | The walkthrough measures the widest es status and reaches it through `REACH_STATUS`, failing loudly on any status it cannot reach. Dispatch 37946956371 passed 11/11, and its log shows `refs/pull/931/head`, "HEAD is now at 0cf2994". The re-run on HEAD is in progress. |
+| I-3 | **Fixed (code); gate pending** | `assertions.ts:238-241` abstains only when slots were asked, every asked slot was passed over, and nothing was posted. Tests at `w2a-policy.test.ts` cover: zero slots still fails, an unasked passed-over slot is no exemption, and a reached slot with no post fails. The fake now seats a page playoff walkover's loser nowhere, matching the product's DB read. |
+| M1 | **Fixed** | `overlay-model.ts:336` adds `needs_decision` to `ENDED_STATUSES`, and `:364` gives it the word `overlay.status.held`. There is a sweep over sport × the engine's level kinds, and a cricket open-innings test as the differential. |
+| M2 | **Fixed** | `fixtureHeld` is set from `stream-sessions.ts` (status `needs_decision`). The chip `stream-held-chip` is tested in the panel, and through the DB over all 8 statuses. |
+| M4 | **Fixed** | The scanner gains a switch shape and multi-line chains, and a test asserts each shape finds at least one set. |
+| M5 | **Fixed** | `scorable-overlay.test.ts:22-36` derives the sports from `bracketDeciders`, asserting more than 0 and fewer than all of them. |
+| M6 | **Fixed** | `0c6263296` changed-lines Stryker: 10/10 killed, `--expect` exit 0 (task-D-report.md :572-577). |
+| M7 | **Fixed** | All five a–e. I viewed `w2a-R/pad-tiebreak-winner-320` ("WHO WON THE / TIE-BREAK?" with Back beside it) and `public-bracket-held-1280` (a block note, the score on one line). |
+| M9 | **Fixed** | `progress.md`: "Gates before merge (supersedes the earlier list)" now names e2e, both judges and this re-review. |
+
+**Deviations judged:**
+- **M2's separate `fixtureHeld` field: sanctioned.** Folding held into `fixtureDecided` would make "Match decided" false. The only consumers are in `apps/web`, and the OpenAPI spec was regenerated.
+- **M4's false premise: accepted.** `statusOf` was already found by the map shape. The real blind spots were nested-brace switches and split chains.
+- **Single-literal comparisons are declared out of scope: harmless.** The blind spot is measured (194 lines in 81 files) and stated in the describe title, so the title no longer over-claims.
+- **The I-3 abstain rule: sound and tight.** The owed/not-owed answer is read from the run's own record, not from a table of rows.
+- **SC-O2 pinned to SW-H1: sanctioned** by rulings 70 and D-R3. The pin passes both ways (flaky). The empty-case test reports a greened pin, so a stale pin is still seen.
+- **The sports-other-1 and modules-7 re-measures: sanctioned.** They are written by script from named CI jobs, and the timeout follows the tool's rule. Engine coverage is green at HEAD.
+
+**New Minor findings (3):**
+- **N1. A decider hold is silent.**
+  - Where: `withdrawal.ts:83-92`. `WithdrawCascadeOut` has no `held` count, and the desk and run sheet read no pending decider: only `withdrawal.ts`, `fixture-console.tsx`, `needs-decision.tsx` and the boardgame skin do.
+  - Effect: a chess knockout withdrawn mid-tie-break answers "walkovers 0, voided 0", and the match shows "in play" with no red attention. C17's `needs_decision` hold does raise one.
+  - Why Minor: it is interim, since W2b-R14 replaces it with an auto-walkover.
+  - Fix: return `held: n` and surface it in the withdrawal result. Name it in the W2b merge notice.
+- **N2. A non-uuid `winner` now returns 500, not 422.**
+  - Where: `append-event.ts:330-333`. The C17/D-R7 guard runs `select … from entrants where id = ${winner}` before the fold. `entrants.id` is uuid (`V212__entrants.sql:5`), so a non-uuid `winner` raises Postgres 22P02. The `history.ts:115` precedent has the same shape.
+  - Before D-R7, a `boardgame.tiebreak` with such a winner was a 422 from the fold (`boardgame.ts:257`). For `core.settle` this already existed since T8.
+  - Why Minor: the pad always sends entrant uuids. Only hand-made API calls reach it.
+  - Fix: query only when `winner` is one of the fixture's two seated entrant ids. Any other value falls through to the fold's own refusal.
+  - Read, not run.
+- **N3. The IDX is stale after the fixes.**
+  - "W2a per-screen verdicts" (`_INDEX.md:2317/:2322/:2331/:2332/:2334`) still records the five FAIL rows that M7 fixed. H's post-fix table is only in `task-H-report.md`.
+  - The W2 row still reads "awaiting loop R (the D-P2 judge is negative…)".
+  - Fix: copy H's verdict table and the D-R8 crops' verdicts into the IDX when the merge is recorded.
