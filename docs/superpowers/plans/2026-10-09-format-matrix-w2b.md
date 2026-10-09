@@ -222,6 +222,54 @@ The re-pin's changed claims C-1…C-10 (`.superpowers/w2b-brainstorm/repin-main-
 
 ---
 
+## Pre-flight rulings (orchestrator, 2026-10-09 — binding on every dispatch; they amend the task text below)
+
+The pre-flight scan (`.superpowers/sdd/2026-10-09-format-matrix-w2b/preflight.md`, 74 rows) found 12 conflicts. Each is
+ruled with the spec as the authority. These are orchestrator rulings, not owner rulings; PF-6 and PF-7 add rule rows
+and are reported to the owner at the end.
+
+- **PF-1 (T3, T8; X-WD-1).** Guarantee 4 refuses any `core.forfeit` over a decided outcome. T3 adds a kernel-owned
+  admission mirroring `core.settle`: `core.forfeit{reason:"withdrew"}` is admitted post-decision ONLY when
+  `isLevelOutcome(outcome)` and no settlement is active; it folds to `award{winner: other, loser: by, reason:
+  "withdrew"}` with retirement credit (the played score stands). `walkover`/`retired`/`disqualified` over any level
+  outcome stay `ALREADY_DECIDED`. The server admits that write only from the withdrawal cascade on a `needs_decision`
+  row; a `withdrew` forfeit over a league draw is refused (negative pair). Both in T3's guard sweep, one mutant each.
+- **PF-2 (T11).** The console dialog never offers `withdrew` (spec §5.1: cascade-only). Tie-break chips are
+  `[walkover, retired, disqualified]` (ruling 102 Q5). T7 adds a server append guard: `reason:"withdrew"` and
+  `core.abandon{expunge:true}` are refused from every writer except the withdrawal cascade (`INVALID_EVENT` 422), with
+  a test and a mutant.
+- **PF-3 (T5).** The golden migration follows ruling 102 Q1 literally: a forfeit before any `core.start` → `walkover`,
+  after → `retired`, in every sport (D3 R4 admits `retired` after start everywhere). No boardgame exception.
+- **PF-4 (T8).** EVERY abandon the withdrawal cascade writes carries `expunge: true` — `voidAndAbandon` and the pending
+  branch (`withdrawal.ts:157-161`). T8's D5 test seeds a pending table fixture for every sport and asserts zero table
+  delta (cricket NR/DLS, Test draw, award-policy draw included).
+- **PF-5 (T7; X-DW-2).** The D-G1 un-beaten guard in `completeStageIfReady` counts both entrants of a
+  `double_walkover` fixture as out (added to `lost`), so a stage whose last fixture is a double walkover completes.
+  Test plus mutant.
+- **PF-6 (T4; CK-WO-1).** Unlimited-overs (Test/first-class) cricket has no Appendix A credit rule. Ruling: a walkover
+  credits the result and its table points only; runs and overs credited are 0 and the match is excluded from NRR
+  (NRR is undefined without a quota). CK-WO-1's limited-overs sweep filters unlimited cfgs out with a one-line reason
+  and counts them; a separate test asserts this credit. T14 adds the rule row `CK-WO-2`.
+- **PF-7 (T4, T15; X-WD-1/X-RS-2).** `withdrew` credit is phase-keyed: no `core.start` → walkover credit; after start
+  (incl. over a held level result, PF-1) → retirement credit. T4 tests both, T15 models both, T14 adds rule row
+  `X-WD-6`.
+- **PF-8 (T7, T8).** (a) After X-WD-1 lands, X-WD-5's guard is reachable only from a pre-W2b held row: T8's sole X-WD-5
+  witness forces one (`UPDATE` to the legacy held state, then settle); the E1 probe is re-titled to the walk-over
+  path. (b) `loserFeederIsDead` delegates to `feederIsDead` (`stages.ts:3719`), so the double-walkover clause lives
+  once in `feederIsDead`; the `dead-clause-loser` mutant becomes "`loserFeederIsDead` stops delegating", killed by
+  X-DW-2's third-place case. The spec's "a clause in each" is met by the single-owner delegation (deviation recorded).
+- **PF-9 (T7 → T8).** `STAGE_SEAT_DEPARTED` is implemented, tested and mutated in T8 (D-G3 corner 3), including D11's
+  server-side name lookup and its copy test. T7 does not touch it.
+- **PF-10 (T2, T3).** Lane P1 adds the new error codes to `HM/lib/driver/engine-http.ts` only after loop D is merged
+  into the lane. T3 lists `tools/matrix/__tests__/engine-http.test.ts` as a carried red until P1 merges, if it reds.
+  The "neither set intersects" bullet is wrong for that one file.
+- **PF-11 (T9 → T13).** The match-centre check moves to T13, driven through `buildMatchCentre`: the positive
+  double-walkover key, and status is not `needs_decision`. Loop F's gate carries no red.
+- **PF-12 (T15).** The reference ↔ engine cross-check lives in `tools/matrix/__tests__/` (it depends on both, like W2a's
+  `reference-bracket.test.ts`), not in `packages/engine`. It runs on `WT` after P2 and D merge.
+- **PF-13 (T14, Step 0).** T14's id regex must match `X-` ids too (the count is 53 new ids + `CK-WO-2` + `X-WD-6`, plus
+  the X-BR-1 amendment, asserted by count). `E/core/errors.ts`'s list ends at `:77`, not `:52`.
+
 ## Decisions
 
 - **D1. The reasons.** `FORFEIT_REASONS = ["walkover", "retired", "disqualified", "withdrew"] as const` and `AWARD_REASONS = [...FORFEIT_REASONS, "bye"] as const` live in `E/core/events.ts`, beside `CoreForfeit`. `"bye"` is never accepted on `core.forfeit`; only the server's bye writers emit it (C-5).
