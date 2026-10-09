@@ -879,6 +879,9 @@
       "outcome.method": [
         "string"
       ],
+      "outcome.reason": [
+        "string"
+      ],
       "outcome.winner": [
         "string"
       ],

@@ -729,11 +729,8 @@
       "outcome.method": [
         "string"
       ],
-      "outcome.score": [
-        "object"
-      ],
-      "outcome.score[]": [
-        "number"
+      "outcome.reason": [
+        "string"
       ],
       "outcome.winner": [
         "string"
