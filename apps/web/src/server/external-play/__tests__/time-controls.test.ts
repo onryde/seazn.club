@@ -11,13 +11,42 @@ import {
   assertTimeControl,
   estimatedSeconds,
   isBoardApiPlayable,
-  isCreatableLimit,
 } from "../time-controls";
 import type { TimeControl } from "../time-controls";
+import type { BoardgameClockInput } from "../clock";
 
 /** Spec §3.7's list, written out as the rulebook states it — the catalogue is
  *  checked AGAINST this, not derived from it. */
 const SHIP1_KEYS = ["3+0", "3+2", "5+0", "5+3", "10+5", "15+10"];
+
+/** The stored clock for a ship-1 key, from the KEY's own words (minutes +
+ *  increment seconds; divisions.config.clock is in seconds). */
+const clockOf = (key: string): BoardgameClockInput => {
+  const [mins, inc] = key.split("+").map(Number) as [number, number];
+  return { base: mins * 60, increment: inc };
+};
+
+/** M14 as Lichess DOCUMENTS it — lichess-api.yaml, `clock.limit`: "0, 15, 30,
+ *  45, 60, 90, and any multiple of 60 up to 10800". A rulebook transcription,
+ *  kept in the test: production enforces M14 through the catalogue alone
+ *  (round 0's `isCreatableLimit` had no runtime caller and was removed, fix
+ *  round 1, T5-I1). The next test pins this transcription to every measured
+ *  creation outcome, so it cannot drift from the evidence unnoticed. */
+const documentedCreatable = (limit: number) =>
+  [0, 15, 30, 45, 60, 90].includes(limit) || (limit >= 0 && limit <= 10_800 && limit % 60 === 0);
+
+describe("M14's documented rule agrees with every measured creation", () => {
+  it("accepts each limit a spike created, and refuses each one a spike saw refused", () => {
+    // Accepted: spike-battery2.log §A-§F, tc-boundary.log, flag-spike.log.
+    const accepted = [0, 60, 120, 180, 600];
+    // Refused {"clock.limit":["Invalid value"]}: tc-boundary.log 10:32:04Z, 10:33:06Z.
+    const refused = [170, 140];
+    let checked = 0;
+    for (const limit of accepted) { expect(documentedCreatable(limit), String(limit)).toBe(true); checked++; }
+    for (const limit of refused) { expect(documentedCreatable(limit), String(limit)).toBe(false); checked++; }
+    expect(checked).toBe(accepted.length + refused.length);
+  });
+});
 
 describe("SHIP1_TIME_CONTROLS", () => {
   it("is exactly the spec's six entries, in the spec's order", () => {
@@ -42,7 +71,7 @@ describe("SHIP1_TIME_CONTROLS", () => {
     let checked = 0;
     const failures: string[] = [];
     for (const tc of SHIP1_TIME_CONTROLS) {
-      if (!isCreatableLimit(tc.limitSeconds)) failures.push(`${tc.key}: clock.limit refused`);
+      if (!documentedCreatable(tc.limitSeconds)) failures.push(`${tc.key}: clock.limit refused`);
       if (!isBoardApiPlayable(tc)) {
         failures.push(`${tc.key}: estimated ${estimatedSeconds(tc)}s < ${BOARD_API_MIN_ESTIMATED_SECONDS}s`);
       }
@@ -74,7 +103,7 @@ describe("the two measured rules are INDEPENDENT (M13, M14)", () => {
   it("120+1 is creatable and NOT playable: estimated 160s", () => {
     const tc = { key: "2+1", limitSeconds: 120, incrementSeconds: 1 };
     expect(estimatedSeconds(tc)).toBe(160);
-    expect(isCreatableLimit(tc.limitSeconds)).toBe(true);
+    expect(documentedCreatable(tc.limitSeconds)).toBe(true);
     expect(isBoardApiPlayable(tc)).toBe(false);
   });
 
@@ -85,13 +114,13 @@ describe("the two measured rules are INDEPENDENT (M13, M14)", () => {
     const tc = { key: "140s+1", limitSeconds: 140, incrementSeconds: 1 };
     expect(estimatedSeconds(tc)).toBe(180);
     expect(isBoardApiPlayable(tc)).toBe(true);
-    expect(isCreatableLimit(tc.limitSeconds)).toBe(false);
+    expect(documentedCreatable(tc.limitSeconds)).toBe(false);
   });
 
   // tc-boundary.log, 10:32:04Z — refused at creation; also under the cutoff.
   it("170+0 fails both", () => {
     const tc = { key: "170s+0", limitSeconds: 170, incrementSeconds: 0 };
-    expect(isCreatableLimit(tc.limitSeconds)).toBe(false);
+    expect(documentedCreatable(tc.limitSeconds)).toBe(false);
     expect(isBoardApiPlayable(tc)).toBe(false);
   });
 
@@ -101,7 +130,7 @@ describe("the two measured rules are INDEPENDENT (M13, M14)", () => {
     const tc = { key: "3+0", limitSeconds: 180, incrementSeconds: 0 };
     expect(estimatedSeconds(tc)).toBe(BOARD_API_MIN_ESTIMATED_SECONDS);
     expect(isBoardApiPlayable(tc)).toBe(true);
-    expect(isCreatableLimit(tc.limitSeconds)).toBe(true);
+    expect(documentedCreatable(tc.limitSeconds)).toBe(true);
   });
 
   // spike-battery2.log §A — both created fine, both refused every move.
@@ -110,15 +139,8 @@ describe("the two measured rules are INDEPENDENT (M13, M14)", () => {
   ])("%s was ACCEPTED at creation and is still unplayable (M12)", (_k, limit, inc) => {
     // Added beyond the brief: the title's first half is a measured fact too
     // (§A: "challenge accepted at creation"), so it is asserted, not just named.
-    expect(isCreatableLimit(limit)).toBe(true);
+    expect(documentedCreatable(limit)).toBe(true);
     expect(isBoardApiPlayable({ key: _k, limitSeconds: limit, incrementSeconds: inc })).toBe(false);
-  });
-
-  // Added beyond the brief: the `>= 0` half of isCreatableLimit. -60 is a
-  // multiple of 60, so without that half it would read as creatable.
-  it("a negative limit is not a clock, even when it is a multiple of 60", () => {
-    expect(-60 % 60 === 0).toBe(true); // the trap: JS says -0 === 0
-    expect(isCreatableLimit(-60)).toBe(false);
   });
 
   it("the cutoff is 180s, and one second under it is refused", () => {
@@ -135,12 +157,14 @@ describe("the two measured rules are INDEPENDENT (M13, M14)", () => {
   });
 });
 
-describe("assertTimeControl — the setup gate", () => {
-  it("returns the catalogue entry for every ship-1 key, and reports the count", () => {
+describe("assertTimeControl — the setup gate, on the clock the division STORES", () => {
+  // Fix round 1 (T5-I1): the division stores `clock {base, increment?, delay?}`
+  // in seconds (clock.ts); nothing formats that into a "3+0" key, so the gate
+  // takes the stored shape. Wiring it into the division save is Task 6's.
+  it("returns the catalogue entry for every ship-1 clock, and reports the count", () => {
     let checked = 0;
     for (const key of SHIP1_KEYS) {
-      const tc = assertTimeControl(key);
-      expect(tc.key).toBe(key);
+      expect(assertTimeControl(clockOf(key)).key, key).toBe(key);
       checked++;
     }
     expect(checked).toBe(SHIP1_KEYS.length);
@@ -148,41 +172,55 @@ describe("assertTimeControl — the setup gate", () => {
   });
 
   it("hands back the SAME object the catalogue holds, not a copy", () => {
-    expect(assertTimeControl("5+3")).toBe(
+    expect(assertTimeControl(clockOf("5+3"))).toBe(
       SHIP1_TIME_CONTROLS.find((t) => t.key === "5+3"),
     );
   });
 
-  it.each([
-    ["0+1", "accepted at creation, unplayable (M12)"],
-    ["1+0", "accepted at creation, unplayable (M12)"],
-    ["2+1", "creatable, estimated 160s (M13)"],
-    ["20+0", "playable and creatable, but not on the ship-1 list"],
-    ["3+1", "not on the list — the catalogue is the gate, not the formula"],
-    ["", "the shape a missing field arrives as"],
-    ["3+0 ", "a trailing space is a different key"],
-    ["3 + 0", "whitespace inside"],
-    ["3-0", "wrong separator"],
-    ["__proto__", "a prototype key must not resolve to anything"],
-  ])("refuses %s (%s) with 400 INVALID_TIME_CONTROL", (key) => {
-    expect(() => assertTimeControl(key)).toThrowError(
+  // The engine's own comment (boardgame.ts, `clock`): an absent increment is
+  // behaviourally identical to `increment: 0` — sudden death.
+  it("an ABSENT increment is sudden death, so { base: 180 } is 3+0", () => {
+    expect(assertTimeControl({ base: 180 }).key).toBe("3+0");
+    expect(assertTimeControl({ base: 300 }).key).toBe("5+0");
+  });
+
+  it.each<[string, BoardgameClockInput | undefined]>([
+    ["0+1: accepted at creation, unplayable (M12)", { base: 0, increment: 1 }],
+    ["1+0: accepted at creation, unplayable (M12)", { base: 60 }],
+    ["2+1: creatable, estimated 160s (M13)", { base: 120, increment: 1 }],
+    ["140+1: refused at creation (M14)", { base: 140, increment: 1 }],
+    ["170+0: refused at creation (M14)", { base: 170 }],
+    ["20+0: passes both rules, not on the ship-1 list", { base: 1200, increment: 0 }],
+    ["3+1: not on the list — the catalogue is the gate, not the formula", { base: 180, increment: 1 }],
+    ["a delay clock: Lichess has none (clock.ts)", { base: 180, increment: 0, delay: 2 }],
+    ["a delay of 0 is still a delay clock", { base: 180, delay: 0 }],
+    ["no clock at all", undefined],
+    ["minutes stored where seconds belong", { base: 3, increment: 0 }],
+    ["milliseconds stored where seconds belong", { base: 180_000, increment: 0 }],
+    ["a negative base", { base: -180 }],
+    ["NaN", { base: Number.NaN }],
+    ["a base that drifted to a string in stored JSON", { base: "180" as unknown as number }],
+    ["an increment that drifted to a string", { base: 180, increment: "2" as unknown as number }],
+  ])("refuses %s with 400 INVALID_TIME_CONTROL", (_why, clock) => {
+    expect(() => assertTimeControl(clock)).toThrowError(
       expect.objectContaining({ status: 400, code: "INVALID_TIME_CONTROL" }),
     );
   });
 
-  it("the refusal names the permitted keys, so an organiser can fix it without the docs", () => {
+  it("the refusal names the permitted controls, so an organiser can fix it without the docs", () => {
     let message = "";
-    try { assertTimeControl("3+1"); } catch (e) { message = (e as Error).message; }
+    try { assertTimeControl({ base: 180, increment: 1 }); } catch (e) { message = (e as Error).message; }
+    expect(message).not.toBe("");
     for (const key of SHIP1_KEYS) expect(message, key).toContain(key);
   });
 
   // The gate is the CATALOGUE, not the formula: a time control can satisfy
   // both measured rules and still be refused, because §3.7 says the organiser
-  // picks from a curated list that has been verified playable.
-  it("a formula-passing key off the list is still refused", () => {
+  // picks from a curated list.
+  it("a formula-passing clock off the list is still refused", () => {
     const off = { key: "20+0", limitSeconds: 1200, incrementSeconds: 0 };
     expect(isBoardApiPlayable(off)).toBe(true);
-    expect(isCreatableLimit(off.limitSeconds)).toBe(true);
-    expect(() => assertTimeControl(off.key)).toThrow();
+    expect(documentedCreatable(off.limitSeconds)).toBe(true);
+    expect(() => assertTimeControl({ base: 1200, increment: 0 })).toThrow();
   });
 });
