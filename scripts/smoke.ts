@@ -21309,7 +21309,13 @@ async function v13Suite(admin: Session, proOrgId: string, proOrgSlug: string): P
     type: "generic.result",
     payload: { p1Score: 1, p2Score: 1 },
   });
-  check("v13 knockout refuses a level result (422 DRAW_NOT_ALLOWED)", level.status === 422);
+  // W2a GN-KO-1: generic is the one sport whose level result a bracket REFUSES (every other sport's is held
+  // needs_decision) — 409 LEVEL_RESULT_IN_BRACKET since W2a; it was 422 DRAW_NOT_ALLOWED before.
+  const levelCode: EngineErrorCode = "LEVEL_RESULT_IN_BRACKET";
+  check(
+    `v13 knockout refuses a level result (409 ${levelCode}; got ${level.status} ${level.json.error?.code})`,
+    level.status === 409 && level.json.error?.code === levelCode,
+  );
   const decided = await v1(admin, `/api/v1/fixtures/${kf.id}/events`, "POST", {
     expected_seq: 1,
     type: "generic.result",
