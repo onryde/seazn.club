@@ -111,9 +111,14 @@
     },
     "modules-7": {
       "mutants": 410,
-      "wallSeconds": 383,
-      "dryRunSeconds": 120,
-      "phaseSeconds": 233
+      "wallSeconds": 593,
+      "dryRunSeconds": 178,
+      "phaseSeconds": 378,
+      "run": {
+        "id": 37937855917,
+        "job": 113844473312,
+        "sha": "20b9dce09"
+      }
     },
     "draws-1": {
       "mutants": 297,
@@ -368,10 +373,15 @@
       "phaseSeconds": 10893
     },
     "sports-other-1": {
-      "mutants": 362,
-      "wallSeconds": 8166,
-      "dryRunSeconds": 168,
-      "phaseSeconds": 7971
+      "mutants": 429,
+      "wallSeconds": 8492,
+      "dryRunSeconds": 171,
+      "phaseSeconds": 8276,
+      "run": {
+        "id": 37927448469,
+        "job": 113809766965,
+        "sha": "970286602"
+      }
     },
     "sports-other-2": {
       "mutants": 348,
