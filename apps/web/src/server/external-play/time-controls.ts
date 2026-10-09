@@ -24,13 +24,15 @@
 // removed in fix round 1, T5-I1); the test pins the catalogue to Lichess's
 // documented rule and that rule to every measured outcome.
 //
-// WHERE THIS PLUGS IN — declared, not yet driven: nothing calls
-// assertTimeControl yet, so this module is an inert seam (AGENTS.md failure
-// class 1) until its consumers land. It takes the clock the division STORES —
-// divisions.config.clock {base, increment?, delay?}, seconds — and maps it
-// through clock.ts's `mapBoardgameClockToLichess`, the one authority for that
-// conversion (it refuses a delay). The division settings save is Task 6's to
-// wire; creation is T9's.
+// WHERE THIS PLUGS IN: usecases/divisions.ts calls assertTimeControl on BOTH
+// division save paths (createDivision and patchDivision, T6) whenever the
+// final config has onlinePlay 'lichess' — so an unplayable clock is refused at
+// setup (division-time-control-setup.test.ts). Challenge creation (T9) calls
+// it again. It takes the clock the division STORES — divisions.config.clock
+// {base, increment?, delay?}, seconds — and maps it through clock.ts's
+// `mapBoardgameClockToLichess`, the one authority for that conversion (it
+// refuses a delay). The refusal carries `controls` (the catalogue keys) so the
+// settings screen can localise the sentence and still list the choices.
 import { HttpError } from "@/lib/errors";
 import { mapBoardgameClockToLichess, type BoardgameClockInput } from "./clock";
 
@@ -74,10 +76,12 @@ export function assertTimeControl(clock: BoardgameClockInput | undefined): TimeC
     )
     : undefined;
   if (!found) {
+    const controls = SHIP1_TIME_CONTROLS.map((t) => t.key);
     throw new HttpError(
       400,
-      `Pick one of the supported time controls: ${SHIP1_TIME_CONTROLS.map((t) => t.key).join(", ")}.`,
+      `Pick one of the supported time controls: ${controls.join(", ")}.`,
       "INVALID_TIME_CONTROL",
+      { controls },
     );
   }
   return found;

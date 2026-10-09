@@ -296,7 +296,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
     expect(d.adapter?.createOpenChallenge).toHaveBeenCalledWith({
       whiteUsername: s.home.lichessId,
       blackUsername: s.away.lichessId,
-      clock: { limit: 900, increment: 0 },
+      clock: { limit: 900, increment: 10 },
       expiresAt: windowFor(T).deadline,
     });
     expect(v.playUrl).toBe(`https://l/${adapter.id}?color=black`); // away is Black by default
