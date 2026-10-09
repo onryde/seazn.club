@@ -12,6 +12,7 @@ import "server-only";
 import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
+import { supportsOnlinePlay } from "./online-play";
 
 export { CAMERA_POLICIES, type CameraPolicy };
 
@@ -76,6 +77,19 @@ export function assertCameraPolicyValue(value: unknown): CameraPolicy | null {
     );
   }
   return found;
+}
+
+/** A camera requirement exists only for a sport that can be played online.
+ *  `off` and null (inherit) are accepted for every sport — they require
+ *  nothing — mirroring onlinePlay's own 'off'-for-all, 'lichess'-for-boardgame
+ *  rule (ONLINE_PLAY_SPORT). */
+export function assertCameraPolicyForSport(sportKey: string, policy: CameraPolicy | null): void {
+  if (policy === null || policy === "off" || supportsOnlinePlay(sportKey)) return;
+  throw new HttpError(
+    422,
+    "A camera requirement is only available for divisions that can be played online",
+    "CAMERA_POLICY_SPORT",
+  );
 }
 
 // ---------------------------------------------------------------------------

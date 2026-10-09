@@ -3,9 +3,12 @@
 // 2026-10-09): stage → division → competition, each a COLUMN (V432), the
 // competition's NOT NULL so the chain has a floor.
 import { describe, expect, it } from "vitest";
+import { builtinModules } from "@seazn/engine/sports";
 import { HttpError } from "@/lib/errors";
+import { assertOnlinePlayValue } from "../online-play";
 import {
   CAMERA_POLICIES,
+  assertCameraPolicyForSport,
   assertCameraPolicyValue,
   assertPolicyChange,
   effectivePolicy,
@@ -198,5 +201,48 @@ describe("camera policy value readers", () => {
       expect((caught as HttpError).status).toBe(422);
       expect((caught as HttpError).code).toBe("CAMERA_POLICY_INVALID");
     }
+  });
+});
+
+describe("assertCameraPolicyForSport — sweeps the sport registry", () => {
+  it("a camera can be required exactly where online play is possible; off/inherit everywhere", () => {
+    // Expected verdict from the online-play authority (does this sport accept
+    // onlinePlay 'lichess'?), never from the camera guard under test.
+    const onlineCapable = (key: string): boolean => {
+      try {
+        assertOnlinePlayValue(key, "lichess");
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    let checked = 0;
+    let capable = 0;
+    let refused = 0;
+    for (const mod of builtinModules) {
+      for (const p of [null, ...CAMERA_POLICIES]) {
+        const mustAccept = p === null || p === "off" || onlineCapable(mod.key);
+        if (mustAccept) {
+          expect(() => assertCameraPolicyForSport(mod.key, p), `${mod.key} ${p}`).not.toThrow();
+        } else {
+          let caught: unknown;
+          try {
+            assertCameraPolicyForSport(mod.key, p);
+          } catch (err) {
+            caught = err;
+          }
+          expect(caught, `${mod.key} ${p}`).toBeInstanceOf(HttpError);
+          expect((caught as HttpError).status).toBe(422);
+          expect((caught as HttpError).code).toBe("CAMERA_POLICY_SPORT");
+          refused += 1;
+        }
+        checked += 1;
+      }
+      if (onlineCapable(mod.key)) capable += 1;
+    }
+    expect(builtinModules.length, "premise: the registry is not empty").toBeGreaterThan(1);
+    expect(checked, "anti-vacuity: every sport × 4 values").toBe(builtinModules.length * 4);
+    expect(capable, "premise: exactly one sport plays online today (boardgame)").toBe(1);
+    expect(refused, "two values refused per non-online sport").toBe((builtinModules.length - 1) * 2);
   });
 });

@@ -90,8 +90,8 @@ export type SeedOnlineChessFixtureOpts = {
    *  maps cleanly onto a Lichess challenge clock. Pass `delay` to build a
    *  fixture whose clock config is NOT Lichess-mappable. */
   clock?: { base: number; increment?: number; delay?: number };
-  /** `divisions.camera_policy`. Omitted ⇒ null (inherit), which is what
-   *  every pre-existing division looks like (spec §5.1). */
+  /** `divisions.camera_policy`, written by createDivision. Omitted ⇒ null
+   *  (inherit), which is what every pre-existing division looks like. */
   cameraPolicy?: CameraPolicy;
   /** `stages.camera_policy`, the nearest level. Omitted ⇒ null (inherit). */
   stageCameraPolicy?: CameraPolicy;
@@ -153,13 +153,13 @@ export async function seedOnlineChessFixture(
       onlinePlay: deferOnlinePlay ? "off" : opts.onlinePlay,
       clock: opts.clock ?? { base: 900, increment: 0 },
     },
+    // Through the product path (T6), not a raw UPDATE: the division's own
+    // camera requirement is what createDivision stores.
+    ...(opts.cameraPolicy ? { camera_policy: opts.cameraPolicy } : {}),
   });
   if (opts.competitionCameraPolicy) {
     await sql`update competitions set camera_policy = ${opts.competitionCameraPolicy}
                where id = ${competition.id}`;
-  }
-  if (opts.cameraPolicy) {
-    await sql`update divisions set camera_policy = ${opts.cameraPolicy} where id = ${division.id}`;
   }
   const homeLichess = `w-${randomUUID().slice(0, 8)}`;
   const awayLichess = `b-${randomUUID().slice(0, 8)}`;

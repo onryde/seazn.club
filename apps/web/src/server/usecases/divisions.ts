@@ -49,6 +49,16 @@ import {
   readOnlinePlay,
   withoutDivisionMetaKeys,
 } from "@/server/external-play/online-play";
+import {
+  assertCameraPolicyForSport,
+  assertCameraPolicyValue,
+  assertPolicyChange,
+  effectivePolicy,
+  readCameraPolicy,
+  type CameraPolicy,
+} from "@/server/external-play/camera-policy";
+import { anyRoundOpened } from "@/server/external-play/round-open";
+import { audit } from "./audit";
 
 export interface DivisionRow {
   id: string;
@@ -107,6 +117,10 @@ export interface DivisionRow {
    *  `stages.required_court_tags` (the sibling V367 column, wired the same
    *  pass — CRUD for the stage side still does not exist). */
   required_court_tags: string[];
+  /** V432 online-chess camera requirement for this division; null = inherit
+   *  the competition's (NOT NULL floor). Resolved per fixture, with the stage
+   *  level, by camera-policy.ts's fixtureCameraPolicy. */
+  camera_policy: CameraPolicy | null;
 }
 
 const COLS = [
@@ -115,7 +129,7 @@ const COLS = [
   "age_cutoff_day", "eligibility_note", "status",
   "officials_hide_names", "scheduling_mode", "auto_progress", "auto_posts", "show_seeds", "schedule_locked",
   "archived_at", "created_at", "seq", "youth", "player_name_display", "logo_url",
-  "logo_storage_path", "required_court_tags",
+  "logo_storage_path", "required_court_tags", "camera_policy",
 ] as const;
 
 /** Variant choices for the Settings tab's format editor (v8) — system
@@ -288,6 +302,12 @@ export async function createDivision(
     if (incomingEntrants != null && typeof incomingEntrants === "object") {
       finalConfig.entrants = incomingEntrants;
     }
+    // T6: a column, not a config key — absent ⇒ null ⇒ inherit, exactly like
+    // every division created before the column existed. No round can be open
+    // on a division that does not exist yet, so there is nothing to gate and
+    // nothing changed to audit.
+    const cameraPolicy = assertCameraPolicyValue(input.camera_policy);
+    assertCameraPolicyForSport(input.sport_key, cameraPolicy);
 
     // Shared by both slug paths so the generated one can be RETRIED against
     // the unique index — `q` is the savepoint, and replaces `tx` inside it.
@@ -308,13 +328,15 @@ export async function createDivision(
       const [row] = await q<DivisionRow[]>`
         insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
                                module_version, tiebreakers, category, age_min, age_max,
-                               age_cutoff_month, age_cutoff_day, eligibility_note, youth)
+                               age_cutoff_month, age_cutoff_day, eligibility_note, youth,
+                               camera_policy)
         values (${competitionId}, ${input.name}, ${slug}, ${input.sport_key}, ${input.variant_key},
                 ${q.json(finalConfig as never)}, ${sport.module_version},
                 ${input.tiebreakers ? q.json(input.tiebreakers as never) : null},
                 ${input.category ?? null}, ${input.age_min ?? null}, ${ageMax},
                 ${input.age_cutoff_month ?? null}, ${input.age_cutoff_day ?? null},
-                ${input.eligibility_note ?? null}, ${deriveYouth(ageMax)})
+                ${input.eligibility_note ?? null}, ${deriveYouth(ageMax)},
+                ${cameraPolicy})
         returning ${q(COLS)}`;
       return row!;
     };
@@ -693,6 +715,16 @@ export async function patchDivision(
   if (patch.auto_posts === true) {
     await requireFeature(auth.orgId, "news.auto", competitionId);
   }
+  // T6 / D9: the camera requirement. Validated before anything is read. The
+  // round-open question is asked HERE, on the privileged pooled client and
+  // BEFORE withTenant opens, for two reasons: stage_round_opens is sealed, so
+  // inside the tenant transaction (role app_user) the read is refused 42501
+  // (round-open.ts); and a pooled read inside a tenant transaction is the pool
+  // self-deadlock above. Under READ COMMITTED an in-transaction read would
+  // not hold off a concurrent "Open round" any better.
+  const cameraPolicyNamed = patch.camera_policy !== undefined;
+  const incomingCamera = cameraPolicyNamed ? assertCameraPolicyValue(patch.camera_policy) : null;
+  const roundOpened = cameraPolicyNamed ? await anyRoundOpened(sql, id, new Date()) : false;
   let previousSlug: string | null = null;
   let previousCompetitionId: string | null = null;
   // The public player page masks each opponent's name by their division's
@@ -720,6 +752,59 @@ export async function patchDivision(
   let nameBefore: string | undefined;
   const row = await withTenant(auth.orgId, async (tx) => {
     const effective: Record<string, unknown> = { ...patch };
+    if (cameraPolicyNamed) {
+      // The stored value this write replaces, under the same `for no key
+      // update` the masking/seeds reads below use, plus the competition floor
+      // it inherits when it is null.
+      const [cur] = await tx<
+        {
+          sport_key: string;
+          competition_id: string;
+          camera_policy: string | null;
+          competition_policy: string;
+        }[]
+      >`
+        select d.sport_key, d.competition_id, d.camera_policy,
+               c.camera_policy as competition_policy
+          from divisions d
+          join competitions c on c.id = d.competition_id
+         where d.id = ${id}
+           for no key update of d`;
+      if (!cur) throw new HttpError(404, "division not found");
+      assertCameraPolicyForSport(cur.sport_key, incomingCamera);
+      const storedCamera = readCameraPolicy(cur.camera_policy);
+      // Only a real CHANGE of the stored value is gated and audited: a re-send
+      // of the current value must never 409 or leave a row.
+      if (incomingCamera !== storedCamera) {
+        // The gate judges what PLAYERS get (the division-level effective
+        // policy), not the stored values: clearing 'off' to inherit a
+        // 'required' competition is a tightening even though null has no rank.
+        const floor = readCameraPolicy(cur.competition_policy);
+        const effectiveFrom = effectivePolicy({ stage: null, division: storedCamera, competition: floor });
+        const effectiveTo = effectivePolicy({ stage: null, division: incomingCamera, competition: floor });
+        assertPolicyChange({ from: effectiveFrom, to: effectiveTo, windowOpened: roundOpened });
+        // Same transaction as the write it describes (ruling Q2: one row in
+        // competition_events per change), so a refused or rolled-back change
+        // can never leave a row saying it happened.
+        await audit(
+          tx,
+          cur.competition_id,
+          auth.orgId,
+          "chess.camera_policy_changed",
+          {
+            divisionId: id,
+            stageId: null,
+            from: storedCamera,
+            to: incomingCamera,
+            effectiveFrom,
+            effectiveTo,
+            roundOpened,
+          },
+          auth.userId,
+        );
+      }
+      effective.camera_policy = incomingCamera;
+    }
     if (patch.youth !== undefined || patch.player_name_display !== undefined || patch.age_max !== undefined) {
       [maskingBefore] = await tx<{ youth: boolean; player_name_display: string | null }[]>`
         select youth, player_name_display from divisions where id = ${id} for no key update`;
