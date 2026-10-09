@@ -17,7 +17,7 @@ type Outcome =
   | { accepted: true; row: { status: string; needs_reason: string | null } }
   | { accepted: false; code: string | undefined; constraint: string | undefined };
 
-describe.skipIf(!process.env.DATABASE_URL)("external play schema (V405/V407)", () => {
+describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", () => {
   let orgId = "";
   let fixtureId = "";
 
