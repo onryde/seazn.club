@@ -2365,19 +2365,23 @@ async function bracketFinishSuite(): Promise<void> {
     `bracket finish (football): the final's seat holds the settled winner (${footSeat.reads} read(s) of the final)`,
     footAway !== "" && footSeat.reads > 0 && footSeat.seated,
   );
-  // The public match page names the method: matchCentre.result.settled_lot, "{winner} advanced on lot".
+  // The public match page names the method ON the court card's status line (`mc-status-line`: match-centre.ts
+  // resultMsg → matchCentre.result.settled_lot, "{winner} advanced on lot"). Anchored there, never anywhere in the
+  // body: the page's meta description and share text carry the same sentence from another builder, so a body-wide
+  // search stayed green while the court card read "<winner> won" (Task 17's prod-build mutant on resultMsg).
   const lotLine = (pub["matchCentre.result.settled_lot"] ?? "").replaceAll("{winner}", foot.nameOf.get(footAway) ?? "");
+  const statusLine = (body: string): string | null => /data-testid="mc-status-line"[^>]*>([^<]*)</.exec(body)?.[1] ?? null;
   const matchPath = `/shared/${orgSlug}/${compRow.slug}/${foot.divSlug}/fixtures/${footSf?.id ?? ""}`;
   let matchPage = await html(newSession(), matchPath);
   let pageReads = 1;
-  for (let tries = 0; tries < 20 && !(matchPage.status === 200 && matchPage.body.includes(lotLine)); tries++) {
+  for (let tries = 0; tries < 20 && !(matchPage.status === 200 && statusLine(matchPage.body) === lotLine); tries++) {
     await new Promise((resolve) => setTimeout(resolve, 500));
     matchPage = await html(newSession(), matchPath);
     pageReads++;
   }
   check(
-    `bracket finish (football): the public match page says "${lotLine}" (${pageReads} load(s))`,
-    lotLine.includes("advanced on lot") && !lotLine.includes("{winner}") && matchPage.status === 200 && matchPage.body.includes(lotLine),
+    `bracket finish (football): the public match page's court card says "${lotLine}" (read "${statusLine(matchPage.body) ?? "(no status line)"}", ${pageReads} load(s))`,
+    lotLine.includes("advanced on lot") && !lotLine.includes("{winner}") && matchPage.status === 200 && statusLine(matchPage.body) === lotLine,
   );
 
   // --- 2. Chess: a drawn game goes to its tie-break; Armageddon names the away side. ---
