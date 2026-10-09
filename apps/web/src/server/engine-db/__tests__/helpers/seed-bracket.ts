@@ -13,7 +13,7 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createPerson } from "@/server/usecases/persons";
 import { startDivision } from "@/server/usecases/schedule";
-import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { createStages, generateStageFixtures, issueChallenge } from "@/server/usecases/stages";
 
 /** Preflight C14: a variant key the sport DECLARES in `module.variants` (an engine declaration), never a guessed
  *  literal — "fide"/"fifa" are not declared keys; boardgame declares classical/rapid/blitz, football "11-a-side",
@@ -97,6 +97,13 @@ export async function seedBracket(opts: {
   if (opts.stageKind === "swiss") await generateStageFixtures(auth, stage!.id);
   // `scoreEvent` refuses a division that has not started (division-phase.ts); appendEvent does not ask.
   await startDivision(auth, division.id);
+  // A ladder generates no fixture — a challenge is how one exists. Seed 2 challenges seed 1 (adjacent rungs, inside
+  // any reach), so the contract below (a seated fixture) holds for a ladder too (W2a loop R I-1's bracket-kind sweep).
+  if (opts.stageKind === "ladder") {
+    const [one, two] = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${division.id} order by seed limit 2`;
+    await issueChallenge(auth, stage!.id, { challenger_id: two!.id, opponent_id: one!.id });
+  }
   const rows = await sql<{ id: string }[]>`
     select id from fixtures where stage_id = ${stage!.id}
        and home_entrant_id is not null and away_entrant_id is not null
