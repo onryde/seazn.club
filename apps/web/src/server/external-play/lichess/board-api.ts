@@ -25,7 +25,8 @@ const DEFAULT_BASE = "https://lichess.org";
 
 export type BoardApiDeps = { fetch?: typeof fetch; baseUrl?: string };
 
-/** One of the caller's outgoing challenges, as the recovery lookup needs it. */
+/** One of the caller's outgoing challenges, as the recovery lookup needs it.
+ *  Shape from the API spec; measurement owed (T17). */
 export type OutgoingChallenge = { id: string; destUserId: string | null; status: string };
 /** One of the caller's ongoing games, from the caller's side. */
 export type OngoingGame = { gameId: string; color: "white" | "black"; opponentId: string | null };
@@ -259,12 +260,13 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
 
     /** Recovery lookup A (T9 fix round 1, I2): the caller's OUTGOING
      *  challenges. GET /api/challenge is gated on `challenge:read` (lila
-     *  `apiList = ScopedBody(_.Challenge.Read, _.Web.Mobile)`), which
-     *  PLAY_SCOPES does not carry — MEASURED 2026-10-10 with a board:play +
-     *  challenge:write token: 403 {"error":"Missing scope: challenge:read"}. So
-     *  with today's scopes this always answers `unauthorized`. The success
-     *  shape is the lichess-org/api spec's (challengeList ⇒ {in, out}:
-     *  ChallengeJson[], `destUser` a ChallengeUser or null), NOT measured. */
+     *  `apiList = ScopedBody(_.Challenge.Read, _.Web.Mobile)`) — MEASURED
+     *  2026-10-10 with a board:play + challenge:write token: 403
+     *  {"error":"Missing scope: challenge:read"}. PLAY_SCOPES carries it since
+     *  spec §3.1's 2026-10-10 amendment; a link made before that re-consents.
+     *  Success body: shape from the API spec; measurement owed (T17)
+     *  (challengeList ⇒ {in, out}: ChallengeJson[], `destUser` a
+     *  ChallengeUser or null). */
     async listOutgoingChallenges(token: string): Promise<Listed<{ challenges: OutgoingChallenge[] }>> {
       const out = await call("/api/challenge", { method: "GET", token });
       if (out.status < 200 || out.status >= 300) {

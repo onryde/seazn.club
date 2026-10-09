@@ -60,7 +60,7 @@ describe.skipIf(!HAS_DB)("external-accounts — token at rest", () => {
     const [row] = await sql<{ access_token_enc: Uint8Array; scopes: string[] }[]>`
       select access_token_enc, scopes from user_external_accounts where user_id = ${userId}`;
     expect(Buffer.from(row!.access_token_enc).includes("lio_plaintext_token")).toBe(false);
-    expect(row!.scopes).toEqual(["board:play", "challenge:write"]);
+    expect(row!.scopes).toEqual(["board:play", "challenge:write", "challenge:read"]);
     expect(await getLichessAccessToken(userId)).toBe("lio_plaintext_token");
   });
 
@@ -74,7 +74,7 @@ describe.skipIf(!HAS_DB)("external-accounts — token at rest", () => {
     const link = await getLichessLink(userId);
     expect(link).toMatchObject({
       externalUserId, username: "Consenter",
-      scopes: ["board:play", "challenge:write"],
+      scopes: ["board:play", "challenge:write", "challenge:read"],
     });
     expect(link!.consentedAt).toBeInstanceOf(Date);
     await expect(assertLichessConsentForPlay(userId)).resolves.toBeUndefined();
@@ -128,12 +128,31 @@ describe.skipIf(!HAS_DB)("external-accounts — token at rest", () => {
     });
   });
 
+  // Spec §3.1 amended 2026-10-10 (Task 9 fix round 1): crash recovery lists
+  // White's outgoing challenges, which needs `challenge:read`. Every link made
+  // before the amendment carries exactly the two scopes below — typed, not
+  // read from PLAY_SCOPES, because it is what the earlier consent screen
+  // granted. It must be asked again, not let through to a recovery that 403s.
+  it("a consented row carrying board:play + challenge:write but NOT challenge:read (the pre-amendment grant) owes re-consent", async () => {
+    const userId = await newUser("preread");
+    await upsertLichessLink(userId, {
+      externalUserId: lid("lid-preread"), username: "PreRead",
+      scopes: ["board:play", "challenge:write"], token: "lio_preread",
+    });
+    const link = await getLichessLink(userId);
+    expect(link!.scopes).toEqual(["board:play", "challenge:write"]);
+    expect(link!.consentedAt).not.toBeNull();
+    await expect(assertLichessConsentForPlay(userId)).rejects.toMatchObject({
+      status: 422, code: "LICHESS_RECONSENT_REQUIRED",
+    });
+  });
+
   // ...and the positive pair: the full grant, consented, plays.
   it("a consented row carrying the full grant passes the play gate", async () => {
     const userId = await newUser("fullgrant");
     await upsertLichessLink(userId, {
       externalUserId: lid("lid-fullgrant"), username: "Full",
-      scopes: ["board:play", "challenge:write"], token: "lio_full",
+      scopes: ["board:play", "challenge:write", "challenge:read"], token: "lio_full",
     });
     await expect(assertLichessConsentForPlay(userId)).resolves.toBeUndefined();
   });
@@ -250,7 +269,9 @@ describe.skipIf(!HAS_DB)("external-accounts — token at rest", () => {
   });
 
   it("PLAY_SCOPES is what the design asks for, and the OAuth start sends exactly it", () => {
-    expect([...PLAY_SCOPES]).toEqual(["board:play", "challenge:write"]);
+    // Spec §3.1 (amended 2026-10-10): move, create White's challenge, and
+    // list White's challenges for crash recovery (Task 9, I2).
+    expect([...PLAY_SCOPES]).toEqual(["board:play", "challenge:write", "challenge:read"]);
   });
 });
 

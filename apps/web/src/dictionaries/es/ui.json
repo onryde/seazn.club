@@ -946,7 +946,7 @@
   "settings.account.lichess.consent.title": "Seazn enviará tus movimientos",
   "settings.account.lichess.consent.body": "Para jugar en el tablero de Seazn necesitamos permiso para hacer movimientos en tus partidas de Lichess. Ese permiso no se limita a los partidos de Seazn: cubre cualquier partida de tu cuenta. Puedes retirarlo en cualquier momento desvinculando la cuenta, lo que también lo revoca en Lichess.",
   "settings.account.lichess.consent.cta": "Volver a vincular Lichess",
-  "settings.account.lichess.consent.scopes": "Permisos solicitados: jugar en un tablero y crear desafíos.",
+  "settings.account.lichess.consent.scopes": "Permisos solicitados: jugar en un tablero, crear desafíos y consultar tus desafíos.",
   "settings.account.lichess.reconsentRequired": "Vuelve a vincular tu cuenta de Lichess para que Seazn pueda enviar tus movimientos.",
   "settings.account.export": "Exporta tus datos",
   "settings.account.downloadJson": "Descargar JSON",

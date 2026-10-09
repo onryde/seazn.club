@@ -144,7 +144,8 @@ export async function createGameIfReady(
 
   // T2's play gate, the one authority for "a grant that is enough to play":
   // a consent stamp AND every scope in PLAY_SCOPES (board:play to move,
-  // challenge:write for White's create). Both players, or the game can be
+  // challenge:write for White's create, challenge:read for the crash-recovery
+  // lookup). Both players, or the game can be
   // created and then not played.
   for (const userId of [homeUserId, awayUserId]) {
     if (!(await hasPlayGrant(userId))) return { created: false, reason: "not_ready" };
