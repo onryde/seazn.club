@@ -162,7 +162,9 @@ outside any transaction, then conditionally record. One claimant per fixture.
 We submit both sides, so we own the move stream without asking Lichess for it.
 
 ### 3.5 Reconcile
-One export read, on exactly five triggers:
+One **board-stream read** — open `GET /api/board/game/stream/{id}` with a player's token,
+take the first line (`gameFull`: `state.moves`, `wtime`, `btime`, `status`, `winner`), close —
+on exactly five triggers:
 - a rejected move (M6 — the message covers two states, so reconcile, never assume);
 - a local clock reaching zero;
 - game end;
@@ -174,8 +176,20 @@ players close their tabs mid-game the game stays live on Lichess, flags eventual
 nobody reads the result — the fixture would sit unresolved forever. The sweep is what
 closes a game nobody is watching.
 
-The read returns status, winner **and authoritative clocks** (M11), so every reconcile
-corrects our locally-derived clocks instead of letting them drift to the flag.
+The read returns moves, status, winner **and authoritative clocks**, so every reconcile
+corrects our locally-derived clocks instead of letting them drift to the flag. It is the
+board stream and **not the export** because the export STALLS mid-game (M16): measured, it
+froze at 5 plies while the game went on to 8, and so cannot be mid-game truth for moves,
+clocks or status. The board stream's `gameFull` line was exact at every ply.
+
+The export is a **fallback for a terminal status only** — used when neither player's
+token can be opened (`LICHESS_TOKEN_UNAVAILABLE`), and trusted only when it reports a
+status other than `created`/`started`. M11's export clocks are not used.
+
+Owed by Task 11: whether a board-stream read, like the export read in M2, causes Lichess
+to finalise a flag on an expired clock. Until measured, the local-clock-zero trigger
+retries the read once after 2 s before concluding the game is still live. (Ruling
+2026-10-09.)
 
 ### 3.6 Result
 Terminal status maps to our events, written **under organiser authority**
@@ -277,18 +291,33 @@ participant joined a live session and has not left — and **camera-on is enforc
 preset**, which is why presets are env-pinned with no defaults and why a RealtimeKit
 outage must THROW rather than read as "camera off".
 
-**But there IS server-side video evidence, after the fact.**
+**But there IS video evidence, after the fact.**
 `GET /accounts/{account_id}/realtime/kit/{app_id}/sessions/peer-report/{peer_id}`
-("participant details ... along with call statistics") carries `video_producer`,
-`video_producer_cumulative`, `frames_encoded`, `key_frames_encoded`, `no_video_fraction`
-and `bytes_sent`. That is a non-forgeable, server-held answer to "did this player's
-camera actually publish, and for how much of the match?" — which is strictly more than
-the preset gives us and exactly what a deterrent product wants for an after-the-fact
-check, with no mandatory observer.
+("participant details ... along with call statistics") carries per-sample
+`video_producer` stats (`frames_encoded`, `frames_per_second`, `bytes_sent`, a timestamp)
+and `metadata.events` (`video_on`, `video_off`, `disconnect`, `media_permission`). These
+are **SDK telemetry**: encoder-side numbers the RealtimeKit client uploads. They are
+harder to fake than the POC's `cameraOk` boolean, because a forger has to keep a real
+encoder running, but they are not an independent server observation. That is enough for
+a deterrent product with no mandatory observer, and no more.
 
-It is a **report**, so its lag is unknown and must be MEASURED against a live session
-before anything depends on it. Until measured it is evidence for an organiser reviewing a
-finished match, never an input to the seat gate.
+**Measured 2026-10-09** (`evidence/…/rtk-peer-report.log`, one participant, synthetic
+camera, 4 min on / 3 min off / 2 min on):
+- **Not live.** During the session the report stayed frozen at its join snapshot for all
+  nine minutes: one sample, `duration` 0, and no `video_off` event even 2.5 minutes into
+  the camera being off. It cannot be an in-match signal.
+- **Final about 70 s after the player leaves:** 51 samples at a ~7 s cadence, `left_at`,
+  `duration`, and every event.
+- **Camera-off shows as a GAP, not as `no_video_fraction`.** The three minutes off were a
+  189 s gap in `video_producer` timestamps, exactly matching the off phase, with
+  `video_off`/`video_on` events at its edges. `video_producer_cumulative.issues.no_video_fraction`
+  stayed **0**: it measures a publishing-but-blank feed, not a camera turned off.
+
+So the organiser's camera evidence is **video-off coverage**: gaps longer than 3× the
+sample cadence over `[joined_at, left_at]`, cross-checked against the `video_off`/`video_on`
+events. It is fetched once, at least 2 minutes after the player leaves or the match ends,
+retrying until `left_at` is set and `duration` > 0. It is never `no_video_fraction` alone,
+never an input to the seat gate, and never automatic.
 
 ### 5.3 What each person sees
 - **A player sees their own tile only** (D7). Local preview; no subscription to the
