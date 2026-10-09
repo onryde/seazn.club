@@ -8,7 +8,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
+import { SHIP1_TIME_CONTROLS, assertTimeControl } from "@/server/external-play/time-controls";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
 import { seedOnlineChessFixture, seedOwner } from "./_external-play-seed";
@@ -226,7 +226,30 @@ describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => 
     { label: "no clock at all", clock: null },
   ];
 
+  // The executable premise behind every row (follow-up review, Minor 1): each
+  // clock is REFUSED by the setup gate today. Typed from the ruling — the
+  // §3.7 ship-1 list as ruled 2026-10-09 has no 20+0, no 1+0, no delay clock,
+  // and needs a clock — so a later ruling that legalises one of them reds
+  // HERE instead of leaving its row silently modelling a legal clock (the
+  // decay 15+0 suffered when it was ruled in).
+  function expectRefusedByTheGate(label: string, clock: Clock | null) {
+    expect(() => assertTimeControl(clock ?? undefined), `premise: ${label} is refused by the ruled list`).toThrowError(
+      expect.objectContaining({ status: 400, code: "INVALID_TIME_CONTROL" }),
+    );
+  }
+
+  it("premise: every pre-gate clock is refused by the setup gate today, and the sweep reports how many", () => {
+    let checked = 0;
+    for (const { label, clock } of PRE_GATE) {
+      expectRefusedByTheGate(label, clock);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every pre-gate row").toBe(PRE_GATE.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
   async function lockedPreGateDivision(clock: Clock | null) {
+    expectRefusedByTheGate(clock ? JSON.stringify(clock) : "no clock", clock);
     const s = await seedOnlineChessFixture({
       onlinePlay: "lichess",
       divisionStarted: true,

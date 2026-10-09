@@ -2432,6 +2432,7 @@
   "divset.camera.inherited": "Not set for this division — the competition's setting applies: {policy}. Saving a choice above sets it for this division.",
   "divset.camera.inheritOption": "Competition setting",
   "divset.camera.inheritSummary": "Competition setting ({policy})",
+  "divset.camera.inheritPending": "After saving, this division will use the competition's setting: {policy}.",
   "divset.camera.playerNoticeLabel": "Players are told:",
   "divset.camera.save": "Save camera setting",
   "divset.camera.saved": "Camera setting saved.",

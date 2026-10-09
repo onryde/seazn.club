@@ -65,6 +65,7 @@ describe("camera policy copy", () => {
       "divset.camera.inherited",
       "divset.camera.inheritOption",
       "divset.camera.inheritSummary",
+      "divset.camera.inheritPending",
       "divset.camera.needsOnlinePlay",
       "divset.err.cameraPolicyLocked",
       "divset.err.timeControlUnsupported",
@@ -123,12 +124,18 @@ describe("camera policy copy", () => {
   it("the hint under the select and the collapsed summary name the competition's value through one {policy} slot", () => {
     let checked = 0;
     for (const loc of LOCALES) {
-      for (const key of ["divset.camera.inherited", "divset.camera.inheritSummary"]) {
+      for (const key of ["divset.camera.inherited", "divset.camera.inheritSummary", "divset.camera.inheritPending"]) {
         expect(DICTS[loc][key]!.split("{policy}").length - 1, `${loc} ${key}: exactly one slot`).toBe(1);
         checked += 1;
       }
     }
-    expect(checked).toBe(8);
+    expect(checked).toBe(12);
+    // Review Minor 3: an UNSAVED "Competition setting" choice on a pinned
+    // division is not "not set" yet — it gets its own sentence (controller
+    // wording, en typed).
+    expect(DICTS.en["divset.camera.inheritPending"]).toBe(
+      "After saving, this division will use the competition's setting: {policy}.",
+    );
     expect(DICTS.en["divset.camera.inherited"]).toBe(
       "Not set for this division — the competition's setting applies: {policy}. Saving a choice above sets it for this division.",
     );
@@ -152,9 +159,9 @@ describe("camera policy copy", () => {
       }
     }
     // 4 locales × (label, help, playerNoticeLabel, save, saved, inherited,
-    // inheritOption, inheritSummary, needsOnlinePlay, 3 options, the lock
-    // error, the notice) = 4 × 14.
-    expect(checked, "anti-vacuity: every camera sentence in every locale").toBe(56);
+    // inheritOption, inheritSummary, inheritPending, needsOnlinePlay,
+    // 3 options, the lock error, the notice) = 4 × 15.
+    expect(checked, "anti-vacuity: every camera sentence in every locale").toBe(60);
   });
 
   it("the online-play help no longer promises games played on Lichess (D3 deleted that mode)", () => {

@@ -166,18 +166,37 @@ describe("camera choice <-> stored value", () => {
 });
 
 describe("where the competition's value is visible while inheriting (never only in the select)", () => {
-  it("the hint under the select names it — only while inherit is selected", () => {
-    expect(cameraInheritHint(CAMERA_INHERIT, "required", msgFor(EN))).toBe(
+  it("SAVED inherit: the hint says the division is not set and names the competition's value", () => {
+    expect(cameraInheritHint(CAMERA_INHERIT, CAMERA_INHERIT, "required", msgFor(EN))).toBe(
       "Not set for this division — the competition's setting applies: Required. Saving a choice above sets it for this division.",
     );
     // The value FOLLOWS the competition, not a constant.
-    expect(cameraInheritHint(CAMERA_INHERIT, "off", msgFor(EN))).toContain("applies: Off.");
+    expect(cameraInheritHint(CAMERA_INHERIT, CAMERA_INHERIT, "off", msgFor(EN))).toContain("applies: Off.");
+  });
+
+  it("UNSAVED inherit on a pinned division: not 'not set' yet — what saving will do (review Minor 3), for every pin", () => {
     let checked = 0;
-    for (const p of CAMERA_POLICIES) {
-      expect(cameraInheritHint(p, "required", msgFor(EN)), `a pinned ${p} shows no inherit hint`).toBeNull();
+    for (const stored of CAMERA_POLICIES) {
+      expect(cameraInheritHint(CAMERA_INHERIT, stored, "required", msgFor(EN)), `stored ${stored}`).toBe(
+        "After saving, this division will use the competition's setting: Required.",
+      );
       checked += 1;
     }
     expect(checked).toBe(CAMERA_POLICIES.length);
+    expect(cameraInheritHint(CAMERA_INHERIT, "optional", "required", msgFor(ES))).toBe(
+      "Al guardar, esta división usará el ajuste de la competición: Obligatoria.",
+    );
+  });
+
+  it("a pin selected shows no inherit hint, whatever is stored", () => {
+    let checked = 0;
+    for (const stored of [CAMERA_INHERIT, ...CAMERA_POLICIES] as const) {
+      for (const p of CAMERA_POLICIES) {
+        expect(cameraInheritHint(p, stored, "required", msgFor(EN)), `choice ${p}, stored ${stored}`).toBeNull();
+        checked += 1;
+      }
+    }
+    expect(checked).toBe((CAMERA_POLICIES.length + 1) * CAMERA_POLICIES.length);
   });
 
   it("the collapsed summary names it too; a pin's summary is its short label", () => {

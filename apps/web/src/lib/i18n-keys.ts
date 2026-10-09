@@ -1802,6 +1802,7 @@ export type DictionaryKey =
   | "divset.advanced"
   | "divset.camera.help"
   | "divset.camera.inheritOption"
+  | "divset.camera.inheritPending"
   | "divset.camera.inheritSummary"
   | "divset.camera.inherited"
   | "divset.camera.label"
