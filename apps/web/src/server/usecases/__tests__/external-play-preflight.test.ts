@@ -40,6 +40,7 @@ import {
 } from "../external-play/preflight";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { unlinkLichess } from "../external-accounts";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 
 /** The round is opened ten minutes before the scheduled time in these
@@ -461,7 +462,7 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer on a fixture that can no 
     expect(checked, "anti-vacuity: five settled statuses").toBe(5);
   });
 
-  it("positive pair: in_play is still playable inside the window (re-entry AFTER it: see I1 below)", async () => {
+  it("positive pair: the in_play STATUS is playable (a status sweep — an online board stays scheduled during play; re-entry is pinned below)", async () => {
     const s = await seed();
     await sql`update fixtures set status = 'in_play' where id = ${s.fixtureId}`;
     const rtk = fakeRealtimeKit();
@@ -884,56 +885,91 @@ describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
   });
 });
 
-// ─── Re-entry after T+20 (controller ruling I1, fix round 1 — amends Q1) ───
+// ─── Re-entry after T+20 (controller ruling I1; condition (c) amended in fix round 2) ───
 //
 // "T+20 is the deadline to be seated and have the game created — not a cap on
 // the game" (spec §3.6). After the window, a caller passes the window check
-// only when ALL THREE hold: they were seated on this fixture, its game
-// exists, and it is in_play. The camera checks still apply. A caller never
-// seated still gets window_closed (a no-show is T13's).
+// only when ALL THREE hold:
+//   (a) they were seated on this fixture — T9's game record names their
+//       Lichess account for their colour;
+//   (b) the game exists — the effective bridge carries a game id;
+//   (c) the game is not over — that bridge is `ready` (T9's create + accept)
+//       or `live` (T10's first accepted move); `finished` / `needs_organiser`
+//       refuse.
+// The camera checks still apply. A caller never seated still gets
+// window_closed (a no-show is T13's).
+//
+// Every fixture below stays `scheduled`: that IS the production state of an
+// online game in progress — `fixtures.status` turns `in_play` only through
+// `core.start`, which T12 emits as it writes the result. Nothing here sets
+// `in_play`.
 
 /** Past T+20 of the OPEN stamp, derived from the window's own constants so
  *  moving DEADLINE_AFTER_MS moves this with it. */
 const LATE = new Date(windowFor(OPENED).deadline.getTime() + 20 * 60_000);
 
 type Rtk = ReturnType<typeof fakeRealtimeKit>;
+type BridgeStatus = "ready" | "live" | "finished" | "needs_organiser";
 
-/** T9's create-game record (task-9-brief.md, the `ready` UPDATE): the Lichess
- *  game id, White's side and the two Lichess accounts it SEATED, written
- *  together immediately after T9 re-verified both seats through seatPlayer.
- *  create-game.ts is not built yet, so this writes those columns exactly as
- *  T9 does; `live` is the sync's promotion once the game is under way. */
+/** The bridge as the product writes it. Default: T9's create-game record
+ *  (task-9-brief.md, the `ready` UPDATE) — the Lichess game id, White's side
+ *  and the two Lichess accounts it SEATED, written together immediately after
+ *  T9 re-verified both seats through seatPlayer. create-game.ts is not built
+ *  yet, so this writes those columns exactly as T9 does. `live` is T10's flip
+ *  on the first accepted move; `needs_organiser` is T9's accept-failure write
+ *  (game id recorded, reason provider_error); `finished` is the game over. */
 async function recordGame(
   s: Seeded,
   over: {
     challengeId?: string | null;
-    whiteSide?: Side;
+    whiteSide?: Side | null;
     white?: string;
     black?: string;
-    status?: "ready" | "live";
+    status?: BridgeStatus;
     basis?: Date;
   } = {},
 ): Promise<void> {
-  const whiteSide: Side = over.whiteSide ?? "home";
-  const blackSide: Side = whiteSide === "home" ? "away" : "home";
+  const whiteSide = over.whiteSide === undefined ? "home" : over.whiteSide;
+  const whiteOf: Side = whiteSide ?? "home";
+  const blackOf: Side = whiteOf === "home" ? "away" : "home";
   const challengeId = over.challengeId === undefined ? `g${randomUUID().slice(0, 11)}` : over.challengeId;
-  const status = over.status ?? "live";
+  const status = over.status ?? "ready";
   await sql`
     insert into fixture_external_play
-      (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side,
-       white_lichess_id, black_lichess_id, started_at)
-    values (${s.fixtureId}, ${s.orgId}, ${status}, ${over.basis ?? T}, ${challengeId}, ${whiteSide},
-            ${over.white ?? s[whiteSide].lichessId}, ${over.black ?? s[blackSide].lichessId},
-            ${status === "live" ? OPENED : null})
+      (fixture_id, org_id, status, needs_reason, scheduled_at_basis, challenge_id, white_side,
+       white_lichess_id, black_lichess_id, started_at, finished_at)
+    values (${s.fixtureId}, ${s.orgId}, ${status},
+            ${status === "needs_organiser" ? "provider_error" : null},
+            ${over.basis ?? T}, ${challengeId}, ${whiteSide},
+            ${over.white ?? s[whiteOf].lichessId}, ${over.black ?? s[blackOf].lichessId},
+            ${status === "live" || status === "finished" ? OPENED : null},
+            ${status === "finished" ? NOW : null})
     on conflict (fixture_id) do update set
-      status = excluded.status, scheduled_at_basis = excluded.scheduled_at_basis,
+      status = excluded.status, needs_reason = excluded.needs_reason,
+      scheduled_at_basis = excluded.scheduled_at_basis,
       challenge_id = excluded.challenge_id, white_side = excluded.white_side,
       white_lichess_id = excluded.white_lichess_id, black_lichess_id = excluded.black_lichess_id,
-      started_at = excluded.started_at`;
+      started_at = excluded.started_at, finished_at = excluded.finished_at`;
+}
+
+/** The writes that move a bridge after T9 created it: T10's flip to `live`
+ *  on the first accepted move, the game's end, or the organiser hand-off. */
+async function setBridgeStatus(s: Seeded, status: BridgeStatus): Promise<void> {
+  await sql`
+    update fixture_external_play
+       set status = ${status},
+           needs_reason = ${status === "needs_organiser" ? "provider_error" : null},
+           finished_at = ${status === "finished" ? NOW : null}
+     where fixture_id = ${s.fixtureId}`;
 }
 
 async function setFixtureStatus(s: Seeded, status: string): Promise<void> {
   await sql`update fixtures set status = ${status} where id = ${s.fixtureId}`;
+}
+
+async function fixtureStatus(s: Seeded): Promise<string | undefined> {
+  const [row] = await sql<{ status: string }[]>`select status from fixtures where id = ${s.fixtureId}`;
+  return row?.status;
 }
 
 /** Both players seated in the window under `required`, as T9 needs them
@@ -955,37 +991,38 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
     expect(roomPhase(LATE, OPENED)).toBe("closed");
   });
 
-  it("required: a seated player reloads mid-game after T+20 — their OWN token, and they re-seat once live", async () => {
-    const s = await seed({ cameraPolicy: "required" });
-    const rtk = fakeRealtimeKit();
-    const pid = await seatBothLive(s, rtk);
-    // White is AWAY on this board, so each player's account sits in the
-    // column for their COLOUR, not their side.
-    await recordGame(s, { whiteSide: "away" });
-    await setFixtureStatus(s, "in_play");
+  it("required: a seated player reloads mid-game after T+20 — on a `ready` AND a `live` game, both colours — their OWN token, then re-seated once live", async () => {
     let checked = 0;
-    for (const sd of ["home", "away"] as const) {
-      rtk.leave(pid[sd]); // the reload: the old tab is gone from the meeting
-      const back = await claim(s, sd, rtk, LATE);
-      // T9 verified them live before it created the game, so the evidence
-      // says they HAD the camera: camera_lost, never window_closed.
-      expect(!back.seated && back.reason, `${sd}: a camera refusal, not window_closed`).toBe("camera_lost");
-      expect(await expectOwnToken(s, sd, back), `${sd}: their own participant`).toBe(pid[sd]);
-      rtk.join(back);
-      const seated = await claim(s, sd, rtk, LATE);
-      expect(seated.seated, `${sd}: re-seated once live`).toBe(true);
-      expect(seated.seated && seated.participant?.participantId).toBe(pid[sd]);
-      checked += 1;
+    for (const status of ["ready", "live"] as const) {
+      const s = await seed({ cameraPolicy: "required" });
+      const rtk = fakeRealtimeKit();
+      const pid = await seatBothLive(s, rtk);
+      // White is AWAY on this board, so each player's account sits in the
+      // column for their COLOUR, not their side.
+      await recordGame(s, { whiteSide: "away", status });
+      expect(await fixtureStatus(s), "premise: the production state — the board is still scheduled").toBe("scheduled");
+      for (const sd of ["home", "away"] as const) {
+        rtk.leave(pid[sd]); // the reload: the old tab is gone from the meeting
+        const back = await claim(s, sd, rtk, LATE);
+        // T9 verified them live before it created the game, so the evidence
+        // says they HAD the camera: camera_lost, never window_closed.
+        expect(!back.seated && back.reason, `${status}/${sd}: a camera refusal, not window_closed`).toBe("camera_lost");
+        expect(await expectOwnToken(s, sd, back), `${status}/${sd}: their own participant`).toBe(pid[sd]);
+        rtk.join(back);
+        const seated = await claim(s, sd, rtk, LATE);
+        expect(seated.seated, `${status}/${sd}: re-seated once live`).toBe(true);
+        expect(seated.seated && seated.participant?.participantId).toBe(pid[sd]);
+        checked += 1;
+      }
     }
-    expect(checked, "anti-vacuity: both colours re-entered").toBe(2);
+    expect(checked, "anti-vacuity: two bridge statuses × two colours").toBe(4);
   });
 
   it("required, camera not live yet: a camera refusal WITH their own token, unchanged an hour later, while the live opponent is seated", async () => {
     const s = await seed({ cameraPolicy: "required" });
     const rtk = fakeRealtimeKit();
     const pid = await seatBothLive(s, rtk);
-    await recordGame(s);
-    await setFixtureStatus(s, "in_play");
+    await recordGame(s, { status: "live" });
     rtk.leave(pid.home);
     // A long game: 15+10 runs well past T+20 (SHIP1_TIME_CONTROLS).
     for (const at of [LATE, new Date(LATE.getTime() + 60 * 60_000)]) {
@@ -1008,7 +1045,6 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
         expect((await claim(s, sd, rtk)).seated, `premise: ${policy} ${sd} seated in the window`).toBe(true);
       }
       await recordGame(s);
-      await setFixtureStatus(s, "in_play");
       const mark = rtk.http.length;
       const back = await claim(s, "home", rtk, LATE);
       if (policy === "off") {
@@ -1023,37 +1059,73 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
     expect(checked, "anti-vacuity: two policies").toBe(2);
   });
 
-  it("a caller NEVER seated on this game gets window_closed after T+20 — no token, no RealtimeKit call — each condition failing ALONE, swept and counted", async () => {
-    const cases: { name: string; arrange: (s: Seeded, rtk: Rtk) => Promise<void> }[] = [
-      { name: "a no-show: nobody came in the window and no game exists (T13's)", arrange: async () => undefined },
+  it("a caller NOT re-entering gets window_closed after T+20 — no token, no RealtimeKit call — each condition failing ALONE, swept and counted", async () => {
+    const cases: { name: string; as: Side; arrange: (s: Seeded, rtk: Rtk) => Promise<void> }[] = [
+      { name: "a no-show: nobody came in the window and no game exists (T13's)", as: "home", arrange: async () => undefined },
       {
         name: "(a) alone: the game on record was created for OTHER Lichess accounts",
+        as: "home",
         arrange: async (s) => {
           await recordGame(s, { white: `other-w-${RUN}`, black: `other-b-${RUN}` });
-          await setFixtureStatus(s, "in_play");
         },
       },
       {
-        name: "(b) alone: both seated and in_play, but no game id on record",
+        name: "(a) alone: the caller UNLINKED their Lichess account after the game was created",
+        as: "home",
+        arrange: async (s, rtk) => {
+          await seatBothLive(s, rtk);
+          await recordGame(s);
+          // The real writer. Its revoke goes to Lichess over global fetch.
+          const revoke = vi.fn(async () => new Response(null, { status: 200 }));
+          vi.stubGlobal("fetch", revoke);
+          try {
+            await unlinkLichess(s.home.userId);
+          } finally {
+            vi.unstubAllGlobals();
+          }
+          expect(revoke, "premise: the real unlink ran (it revoked at Lichess)").toHaveBeenCalledTimes(1);
+        },
+      },
+      {
+        name: "(a) alone: a record with no colour cannot say whose account is whose",
+        // The away player's account IS in the black column; without a colour
+        // the record still must not seat them.
+        as: "away",
+        arrange: async (s, rtk) => {
+          await seatBothLive(s, rtk);
+          await recordGame(s, { whiteSide: null });
+        },
+      },
+      {
+        name: "(b) alone: both seated, the accounts recorded, but no game id",
+        as: "home",
         arrange: async (s, rtk) => {
           await seatBothLive(s, rtk);
           await recordGame(s, { challengeId: null });
-          await setFixtureStatus(s, "in_play");
         },
       },
       {
-        name: "(c) alone: both seated and the game created, but the board never started",
+        name: "(b) alone: a STALE bridge (minted for an older timetable, never live) is not this fixture's game",
+        as: "home",
         arrange: async (s, rtk) => {
           await seatBothLive(s, rtk);
-          await recordGame(s, { status: "ready" });
+          await recordGame(s, { basis: new Date(T.getTime() - 86_400_000) });
         },
       },
       {
-        name: "a STALE bridge (minted for an older timetable, never live) is not this fixture's game",
+        name: "(c) alone: the game is over (`finished`)",
+        as: "home",
         arrange: async (s, rtk) => {
           await seatBothLive(s, rtk);
-          await recordGame(s, { status: "ready", basis: new Date(T.getTime() - 86_400_000) });
-          await setFixtureStatus(s, "in_play");
+          await recordGame(s, { status: "finished" });
+        },
+      },
+      {
+        name: "(c) alone: the board went to the organiser (`needs_organiser`, T9's accept failure)",
+        as: "home",
+        arrange: async (s, rtk) => {
+          await seatBothLive(s, rtk);
+          await recordGame(s, { status: "needs_organiser" });
         },
       },
     ];
@@ -1061,21 +1133,22 @@ describe.skipIf(!process.env.DATABASE_URL)("re-entry after T+20 (ruling I1, amen
     for (const c of cases) {
       const s = await seed({ cameraPolicy: "required" });
       await c.arrange(s, fakeRealtimeKit());
+      expect(await fixtureStatus(s), `${c.name}: premise — still scheduled`).toBe("scheduled");
       const late = fakeRealtimeKit();
-      const got = await claim(s, "home", late, LATE);
+      const got = await claim(s, c.as, late, LATE);
       expect(got, c.name).toEqual({ seated: false, reason: "window_closed" });
       expectInertRefusal(got, "window_closed", late);
       checked += 1;
     }
-    expect(checked, "anti-vacuity: five ways not to re-enter").toBe(5);
+    expect(checked, "anti-vacuity: eight ways not to re-enter").toBe(8);
   });
 
-  it("a previously seated player whose board is no longer being played is refused, no token — swept and counted", async () => {
+  it("a previously seated player whose board has been settled is refused, no token — swept and counted", async () => {
     let checked = 0;
     for (const status of ["decided", "forfeited", "abandoned"]) {
       const s = await seed({ cameraPolicy: "required" });
       await seatBothLive(s, fakeRealtimeKit());
-      await recordGame(s);
+      await recordGame(s, { status: "live" });
       await setFixtureStatus(s, status);
       const late = fakeRealtimeKit();
       expectInertRefusal(await claim(s, "home", late, LATE), "fixture_not_playable", late);
@@ -1312,9 +1385,8 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
     expect(checked, "anti-vacuity: three settled statuses").toBe(3);
   });
 
-  it("positive pair: accepted on an in_play board whose EFFECTIVE policy is required (the stage's, over an optional division)", async () => {
+  it("positive pair: accepted when the EFFECTIVE policy is required (the stage's, over an optional division)", async () => {
     const s = await seed({ cameraPolicy: "optional", stageCameraPolicy: "required" });
-    await setFixtureStatus(s, "in_play");
     await organiserOverrideVideo({ fixtureId: s.fixtureId, actorUserId: s.ownerUserId, note: "vendor outage" });
     expect((await auditRows(s.fixtureId)).length).toBe(1);
     expect(await overrideStamp(s.fixtureId)).not.toBeNull();
@@ -1346,8 +1418,7 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
     for (const sd of ["home", "away"] as const) {
       expect(await claim(s, sd, rtk), `premise: ${sd}`).toEqual({ seated: true, participant: null });
     }
-    await recordGame(s);
-    await setFixtureStatus(s, "in_play");
+    await recordGame(s); // T9's `ready` record; the board stays scheduled
     expect(await claim(s, "home", rtk, LATE)).toEqual({ seated: true, participant: null });
     expect(rtk.http).toEqual([]);
   });
@@ -1360,8 +1431,11 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
 // organiser DOWNGRADES the policy through the real writer (patchDivision —
 // after a round opens, T6's guard allows only relaxing), and — fix round 1 —
 // time passes BEYOND T+20, T9 creates the game (it re-verifies BOTH seats
-// through seatPlayer and records the game only if both pass), the board
-// starts (in_play), or a game is on record for OTHER accounts. Every run
+// through seatPlayer and records the game — bridge `ready` — only if both
+// pass), T10's first accepted move flips the bridge to `live`, the game ends
+// (bridge `finished`, or `needs_organiser`), or a game is on record for OTHER
+// accounts. `fixtures.status` is never touched: during a real online game the
+// board stays `scheduled` (core.start is T12's, at the result). Every run
 // starts under `required` with the round unopened.
 //
 // The expected result of every claim comes from a MODEL of the rules
@@ -1369,7 +1443,8 @@ describe.skipIf(!process.env.DATABASE_URL)("organiserOverrideVideo (D11 — a ve
 //   round not open            ⇒ round_not_open, no token, no RealtimeKit call
 //   past T+20, not re-entry   ⇒ window_closed, no token, no RealtimeKit call
 //     (re-entry = seated by the create that recorded this game ∧ the game
-//      exists ∧ the board is in_play — the three conditions of ruling I1)
+//      exists ∧ its bridge is `ready` or `live` — ruling I1, (c) as amended
+//      in fix round 2)
 //   off                       ⇒ seated, no tile, no RealtimeKit call
 //   optional                  ⇒ seated with the caller's own tile, publisher never asked
 //   required, live now        ⇒ seated with the caller's own tile
@@ -1387,6 +1462,7 @@ type Act =
   | { kind: "late" }
   | { kind: "create" }
   | { kind: "start" }
+  | { kind: "end"; to: "finished" | "needs_organiser" }
   | { kind: "foreign" };
 
 const side = fc.constantFrom<Side>("home", "away");
@@ -1399,17 +1475,24 @@ const act: fc.Arbitrary<Act> = fc.oneof(
   { arbitrary: fc.constant<Act>({ kind: "late" }), weight: 3 },
   { arbitrary: fc.constant<Act>({ kind: "create" }), weight: 2 },
   { arbitrary: fc.constant<Act>({ kind: "start" }), weight: 1 },
+  {
+    arbitrary: fc.constantFrom<"finished" | "needs_organiser">("finished", "needs_organiser").map(
+      (to): Act => ({ kind: "end", to }),
+    ),
+    weight: 1,
+  },
   { arbitrary: fc.constant<Act>({ kind: "foreign" }), weight: 1 },
 );
 /** Edge weighting. LIVE: a seated-and-live player, so the lose/re-verify
- *  paths (camera_lost) are reached, not just possible. CREATED: both players
- *  live and T9's game created but not started, then T+20 passes, so the "not
- *  started" refusal is reached. GAME: the game created and started, so
- *  re-entry after T+20 is reached; GAME_LEFT: the same, with home's tab gone
- *  and T+20 passed, so a re-entering camera refusal is reached. FOREIGN: a game
- *  on record for other accounts on a started board, so condition (a) failing
- *  alone is reached. Each is a PREFIX: the random tail can still undo any of
- *  it, and every action in it is checked against the model like any other. */
+ *  paths (camera_lost) are reached, not just possible. CREATED+late: T9's game
+ *  (bridge `ready`) and T+20 passed, so re-entry on a `ready` bridge is
+ *  reached. GAME: the same, flipped `live` by T10's first move; GAME_LEFT:
+ *  that, with home's tab gone and T+20 passed, so a re-entering camera
+ *  refusal is reached. ENDED: the game over, then T+20 passed, so condition
+ *  (c) failing alone is reached. FOREIGN: a game on record for other
+ *  accounts, so condition (a) failing alone is reached. Each is a PREFIX: the
+ *  random tail can still undo any of it, and every action in it is checked
+ *  against the model like any other. */
 const LIVE_PREFIX: Act[] = [
   { kind: "open" },
   { kind: "seat", side: "home" },
@@ -1424,13 +1507,15 @@ const CREATED_PREFIX: Act[] = [
 ];
 const GAME_PREFIX: Act[] = [...CREATED_PREFIX, { kind: "start" }];
 const GAME_LEFT_PREFIX: Act[] = [...GAME_PREFIX, { kind: "leave", side: "home" }, { kind: "late" }];
-const FOREIGN_PREFIX: Act[] = [{ kind: "open" }, { kind: "foreign" }, { kind: "start" }];
+const ENDED_PREFIX: Act[] = [...GAME_PREFIX, { kind: "end", to: "finished" }, { kind: "late" }];
+const FOREIGN_PREFIX: Act[] = [{ kind: "open" }, { kind: "foreign" }];
 const prefix = fc.oneof(
   { arbitrary: fc.constant<Act[]>([]), weight: 2 },
   { arbitrary: fc.constant<Act[]>(LIVE_PREFIX), weight: 1 },
   { arbitrary: fc.constant<Act[]>([...CREATED_PREFIX, { kind: "late" }]), weight: 1 },
   { arbitrary: fc.constant<Act[]>(GAME_PREFIX), weight: 2 },
   { arbitrary: fc.constant<Act[]>(GAME_LEFT_PREFIX), weight: 1 },
+  { arbitrary: fc.constant<Act[]>(ENDED_PREFIX), weight: 1 },
   { arbitrary: fc.constant<Act[]>(FOREIGN_PREFIX), weight: 1 },
 );
 const scenario = fc
@@ -1439,7 +1524,7 @@ const scenario = fc
 
 const LOWER = { required: "optional", optional: "off", off: "off" } as const;
 
-describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open / join / leave / seat / downgrade / late / create / start", () => {
+describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open / join / leave / seat / downgrade / late / create / start / end", () => {
   it(
     "nobody is seated under required without being live, nor before the round opens, nor past T+20 except by re-entry — and every claim matches the model",
     async () => {
@@ -1459,15 +1544,18 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
         gamesCreated: 0,
         gamesForeign: 0,
         starts: 0,
+        ends: 0,
         lateClaims: 0,
         // Past T+20 and NOT re-entry, by the first of the three conditions
         // that fails in the model.
         lateNoGame: 0,
         lateForeignGame: 0,
-        lateNotInPlay: 0,
-        // Past T+20 and re-entry.
+        lateGameOver: 0,
+        // Past T+20 and re-entry, by outcome and by the bridge it re-entered on.
         lateReentrySeated: 0,
         lateReentryCameraRefused: 0,
+        lateReentryOnReady: 0,
+        lateReentryOnLive: 0,
         // The controller's invariants, counted on their own.
         violationsRequiredNotLive: 0,
         violationsBeforeOpen: 0,
@@ -1487,8 +1575,8 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
             roundOpen: boolean;
             late: boolean;
             game: "none" | "players" | "others";
-            inPlay: boolean;
-          } = { policy: "required", roundOpen: false, late: false, game: "none", inPlay: false };
+            bridge: "none" | "ready" | "live" | "finished" | "needs_organiser";
+          } = { policy: "required", roundOpen: false, late: false, game: "none", bridge: "none" };
           const token: Record<Side, string | null> = { home: null, away: null };
           const pid: Record<Side, string | null> = { home: null, away: null };
           const peers: Record<Side, number> = { home: 0, away: 0 };
@@ -1501,7 +1589,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
             const adapterBefore = rtk.adapter.length;
             const got = await claim(s, sd, rtk, m.late ? LATE : NOW);
             const live = peers[sd] > 0;
-            const reentry = m.game === "players" && m.inPlay;
+            const reentry = m.game === "players" && (m.bridge === "ready" || m.bridge === "live");
             const carriesToken = "participant" in got && got.participant !== null;
 
             // The invariants.
@@ -1523,8 +1611,12 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
               expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
               if (m.game === "none") totals.lateNoGame += 1;
               else if (m.game === "others") totals.lateForeignGame += 1;
-              else totals.lateNotInPlay += 1;
+              else totals.lateGameOver += 1;
               return false;
+            }
+            if (m.late) {
+              if (m.bridge === "ready") totals.lateReentryOnReady += 1;
+              if (m.bridge === "live") totals.lateReentryOnLive += 1;
             }
             if (m.policy === "off") {
               expect(got, where).toEqual({ seated: true, participant: null });
@@ -1605,25 +1697,39 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
                 if (home && away) {
                   await recordGame(s, { status: "ready" });
                   m.game = "players";
+                  m.bridge = "ready";
                   totals.gamesCreated += 1;
                 }
               }
             } else if (x.kind === "start") {
-              if (!m.inPlay) {
-                await setFixtureStatus(s, "in_play");
-                m.inPlay = true;
+              // T10: the first accepted move flips a `ready` bridge to `live`.
+              if (m.bridge === "ready") {
+                await setBridgeStatus(s, "live");
+                m.bridge = "live";
                 totals.starts += 1;
+              }
+            } else if (x.kind === "end") {
+              // The game is over, or handed to the organiser — the board
+              // itself stays `scheduled` until T12 writes a result.
+              if (m.bridge === "ready" || m.bridge === "live") {
+                await setBridgeStatus(s, x.to);
+                m.bridge = x.to;
+                totals.ends += 1;
               }
             } else if (x.kind === "foreign") {
               if (m.game === "none") {
                 await recordGame(s, { status: "ready", white: `other-w-${RUN}`, black: `other-b-${RUN}` });
                 m.game = "others";
+                m.bridge = "ready";
                 totals.gamesForeign += 1;
               }
             } else {
               await check(x.side, where);
             }
           }
+          expect(await fixtureStatus(s), `${JSON.stringify(acts)}: the board was never started by the test`).toBe(
+            "scheduled",
+          );
           // Per run: one stored player participant per side that ever claimed.
           const rows = await participantRows(s.fixtureId);
           for (const sd of ["home", "away"] as const) {
@@ -1657,9 +1763,11 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
       expect(totals.lateClaims, "claims past T+20").toBeGreaterThan(0);
       expect(totals.lateNoGame, "past T+20, no game").toBeGreaterThan(0);
       expect(totals.lateForeignGame, "past T+20, a game for other accounts").toBeGreaterThan(0);
-      expect(totals.lateNotInPlay, "past T+20, the game not started").toBeGreaterThan(0);
+      expect(totals.lateGameOver, "past T+20, the game over (finished / needs_organiser)").toBeGreaterThan(0);
       expect(totals.lateReentrySeated, "re-entry past T+20, seated").toBeGreaterThan(0);
       expect(totals.lateReentryCameraRefused, "re-entry past T+20, a camera refusal with a token").toBeGreaterThan(0);
+      expect(totals.lateReentryOnReady, "re-entry on a `ready` bridge").toBeGreaterThan(0);
+      expect(totals.lateReentryOnLive, "re-entry on a `live` bridge").toBeGreaterThan(0);
     },
     300_000,
   );
