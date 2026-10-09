@@ -3,9 +3,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
+// single-sport: the chess tie-break's own rungs and module — no other sport declares a decider
 import { TIEBREAK_RUNGS, boardgame } from "@seazn/engine/sports/boardgame";
 import { declaredCfgs, defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
-import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
+import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import type { SideInfo } from "@/components/v2/fixture-console";
 import { entrantNamesFrom } from "../../registry";
@@ -37,17 +38,35 @@ const TB_CFG = { tiebreak: true };
 const START = { type: "core.start", payload: {} };
 const DRAWN = { type: RESULT_TYPE, payload: { winner: null, method: "agreement" } };
 const SETTLE = { type: "core.settle", payload: { winner: "H", method: "lot" } };
+// single-sport: a chess knockout game drawn into its tie-break — the only sport with one
 const tiebreakView = (o: { canOrganise?: boolean } = {}) =>
   liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN], ...o });
 const winnerKey = (rung: string) => (rung === "armageddon" ? "winner-armageddon" : "winner");
 const shownFor = (step: GuidedSheetStep, answers: Record<string, string>) => step.when?.(answers) ?? true;
 
 describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-2 per ruling 82, D6)", () => {
+  it("the single-sport reasons in this file hold: of every registry sport, only boardgame declares a decider (awaitingDecider, deciderTypes) or an organiser-only result method", () => {
+    const deciders: string[] = [];
+    const organiserMethods: string[] = [];
+    let swept = 0;
+    for (const m of builtinModules) {
+      const mod = m as { key: string; awaitingDecider?: unknown; deciderTypes?: readonly string[] };
+      if (typeof mod.awaitingDecider === "function" || (mod.deciderTypes?.length ?? 0) > 0) deciders.push(mod.key);
+      if (Object.keys(ORGANISER_ONLY_SPORT_EVENTS).some((type) => type.startsWith(`${mod.key}.`))) organiserMethods.push(mod.key);
+      swept++;
+    }
+    expect(swept).toBe(builtinModules.length);
+    expect(swept, "the registry has more than the one sport").toBeGreaterThan(1);
+    expect(deciders).toEqual(["boardgame"]);
+    expect(organiserMethods).toEqual(["boardgame"]);
+  });
+
   it("TIEBREAK_TYPE is the engine's own decider type, not a second spelling", () => {
     expect(boardgame.deciderTypes).toEqual([TIEBREAK_TYPE]);
   });
 
   it("empty case first: in phase live there is no tie-break tile (Draw is there instead)", () => {
+    // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     const v = liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG });
     const ids = buildTiles(v, echo).map((t) => t.id);
     expect(ids).not.toContain(TIEBREAK_TILE_ID);
@@ -55,6 +74,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
   });
 
   it("in phase tiebreak: only the tie-break tile; Draw is gone and the halves are not tappable", () => {
+    // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     const v = tiebreakView();
     expect((v.state as { phase?: string }).phase, "the real fold put the drawn game in tiebreak").toBe("tiebreak");
     expect(buildTiles(v, echo).map((t) => t.id)).toEqual([TIEBREAK_TILE_ID]);
@@ -67,6 +87,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
   });
 
   it("addendum 1 / D-C5: after an organiser's settle in phase tiebreak nothing is offered and the pad reads post", () => {
+    // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     const settled = liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN, SETTLE] });
     expect((settled.state as { phase?: string }).phase, "the settle leaves the module phase untouched").toBe("tiebreak");
     expect(buildTiles(settled, echo)).toEqual([]);
@@ -92,6 +113,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
   });
 
   it("after the tie-break is recorded the match is decided: no tile, no tappable half, phase post", () => {
+    // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     const done = liveView("boardgame", {
       stageKind: "knockout",
       cfg: TB_CFG,
@@ -103,6 +125,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
   });
 
   it("the skin's phase hook is the one the host calls, and it reads the ledger (a settle) as well as the state", () => {
+    // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     const skin = boardgameSkinV3(echo);
     expect(skin.phase?.(tiebreakView())).toBe("live");
     expect(skin.phase?.(liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN, SETTLE] }))).toBe("post");
@@ -144,6 +167,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
   });
 
   it("I2 (spec §5.5 'two entrants, always'): with NO pairing card the winner and armageddon options read the ENTRANTS' names, ids stay home/away", () => {
+    // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     // The production shape the review caught: a chess knockout with no pairing card, so no person is named on the board,
     // and every option read "Home"/"Away". The entrant display names arrive in the view (registry.tsx `entrantNamesFrom`).
     const view = liveView("boardgame", {
@@ -164,6 +188,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
   });
 
   it("N1 (fix round 2): a pairing card's seated person still wins over the entrant label — on both winner steps; ids stay home/away", () => {
+    // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     // Round 1 let the entrant label beat the person the card seats; the person at the board is who the scorer saw play.
     const seated = liveView("boardgame", {
       stageKind: "knockout",
@@ -184,6 +209,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
   });
 
   it("N1 (fix round 2, D-6): a SINGLES entrant whose snapshot reads 'Entry 3' is named by its member — the same name the heading shows — on both winner steps", () => {
+    // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     // The production shape: an individual entrant's `display_name` is whatever the entry flow wrote ("Entry 3"); the
     // console heading and the device header resolve the roster (`entrantDisplayName`) and read "Ada Okonkwo". The pad's
     // names arrive through the REAL producer, `entrantNamesFrom`, which both mounts (console and device link) call.
@@ -215,6 +241,7 @@ describe("the chess three-step tie-break on the pad (spec §5.5, BG-KO-1, BG-KO-
   });
 
   it("with no entrant name the winner options fall back to the players the lineup puts on the board, then to Home/Away", () => {
+    // single-sport: the tie-break is chess's alone — boardgame is the only module declaring awaitingDecider/deciderTypes (pinned by the registry sweep in this describe)
     const names = { "H-p1": "Magnus Carlsen", "A-p1": "Hou Yifan" }; // defaultLineupPair seats `<entrant>-p1`
     const winnerStep = (personNames: Record<string, string>) =>
       buildSheets(liveView("boardgame", { stageKind: "knockout", cfg: TB_CFG, events: [START, DRAWN], personNames }), echo)[TIEBREAK_TILE_ID]!.steps.find(
@@ -303,6 +330,7 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
     dockFor(boardgameSkinV3(echo), RESULT_TYPE, v, payload)?.chips.map((c) => c.id) ?? [];
 
   it("chess: a scorer's decisive dock has no forfeit and the drawn dock no double forfeit; the organiser's has both", () => {
+    // single-sport: only boardgame.result carries an organiser-only method (ORGANISER_ONLY_SPORT_EVENTS); every sport's dock is swept in the last test of this describe
     const scorer = liveView("boardgame", { stageKind: "knockout", canOrganise: false });
     const organiser = liveView("boardgame", { stageKind: "knockout", canOrganise: true });
     expect(chipIds(organiser, { winner: "H" })).toContain("method:forfeit");
@@ -315,6 +343,7 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
   });
 
   it("the dock the host RENDERS is the filtered one (resolveDockSpec reads dockFor)", () => {
+    // single-sport: only boardgame.result carries an organiser-only method (ORGANISER_ONLY_SPORT_EVENTS); every sport's dock is swept in the last test of this describe
     const skin = boardgameSkinV3(echo);
     const held = { eventType: RESULT_TYPE, payload: { winner: "H" } };
     const ids = (canOrganise: boolean) =>
@@ -333,6 +362,7 @@ describe("the dock never offers an organiser-only write to anyone else (D-O1; lo
   });
 
   it("D-P1: the organiser keeps Draw and the double-forfeit chip in every stage kind while live", () => {
+    // single-sport: D-P1 is a chess ruling — chess keeps its Draw in every stage kind (a generic bracket drops it: X-DR-1)
     let checked = 0;
     for (const stageKind of ["knockout", "league", "swiss", null]) {
       const organiser = liveView("boardgame", { stageKind, canOrganise: true });
