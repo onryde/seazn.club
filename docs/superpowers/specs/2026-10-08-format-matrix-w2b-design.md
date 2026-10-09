@@ -349,6 +349,13 @@ renumbered. Each signed or deviation row ships with a proving test whose title c
    with their reason string (`withdrawal.ts:125-130` posts a bare `core.forfeit` on an unstarted chess fixture;
    `boardgame.ts:711` refuses WRONG_PHASE). BG-WO-2 + the W2b reason rules turn them green; W2b then unpins them
    (pin names come with W2a's merge notice). Not W2b's: boardgame ko_plate F1 → FX-G14 (W4).
+   **Same 422 in Swiss** (chess session, via f-w2, 2026-10-09): every withdrawal branch converges on `applyUpdate`
+   (`withdrawal.ts:115`, call `:242`), so a Swiss chess withdrawal on an unstarted board fails too; no test pins it
+   (`swiss-withdrawal-walkover.test.ts:80` is badminton). Reproduce with a chess copy of that test. Line pins here are
+   at W2a `a36c1dcf2` (`boardgame.ts:711`, `withdrawal.ts:129`); a reader citing `:617` / `:108-112` was on another
+   revision — re-pin at plan time.
+   **External caller:** the chess programme's no-show sweep (T+20, player never seated) posts a forfeit on a fixture
+   that never began (phase `pre`) every round; BG-WO-2's `pre` acceptance is its contract.
 3. Fix → the W2b rows green locally (scoped: W2b cases only).
 4. One judge regression dispatched on CI (`matrix:judge regression`) → 0 new reds, including W3–W7 cells.
 5. `MATRIX.md` regenerated.
