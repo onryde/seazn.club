@@ -214,7 +214,10 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
   `double_walkover` → no sides; `award` → winner advances, typed `loser` is never seated on a loser edge, and ranks
   read the same answer (W2b-R11; the readers disagree today).
 - `feederIsDead` (`stages.ts:3657`) and `loserFeederIsDead` (`:3688-3695`) each gain one **separate** clause: the
-  feeder is decided and `advancesNobody(outcome)`. W2a's NEW-H1 split (scorer abandon vs generator void, Task 10) is
+  feeder is decided and `advancesNobody(outcome)`. It sits beside W2a's `has_active_abandon` distinction (T10,
+  `335a24807`: a recorded abandon is not dead, only a generator void or a voided abandon cascades), never inside it.
+  W2a's follow-up applies the same distinction to stage completion and ranking (an abandoned final completes the stage
+  today) — re-read it before planning. W2a's NEW-H1 split (scorer abandon vs generator void, Task 10) is
   not touched. Without the clause the fed seat waits forever, silently (f-w2 Q3).
 - **No next match.** A double walkover on a fixture that feeds no seat — final, last rung, third-place match — is
   refused `DOUBLE_WALKOVER_NO_NEXT_MATCH`, derived from the stage's feed graph, never from round names.
@@ -240,6 +243,18 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
   advances by walkover; (W2a's fix round names `needs_decision` explicitly at `withdrawal.ts:192-201`, reviewer M-7 — build on that, not
   on today's lines); a fixture whose other side has already withdrawn becomes a double walkover (final: stays open);
   a not-started chess fixture gets a pre-start forfeit.
+- **Withdrawal corners deferred by W2a (ruling D-G2, `8d9255d96`; each pinned in W2a as a named characterisation
+  test that W2b rewrites deliberately):**
+  1. *Withdrawal from an abandoned, unsettled bracket fixture* (an active `core.abandon`, null outcome — after NEW-H1,
+     `335a24807`, it is not a dead feeder and must be settled). Under W2b-R8 it is treated like a held fixture: the
+     cascade voids the abandon and records `core.forfeit{by: withdrawn, reason: "withdrew"}` (the void-then-forfeit
+     path W2b-R7 keeps open; retirement credit, the pre-abandon score stands). So when both entrants of that line
+     withdraw in turn, the first withdrawal walks it over to the second, whose own withdrawal then walks over its NEXT
+     fixture — the fed opponent advances, and no settle is ever asked to name a withdrawn entrant (C17 stays intact).
+  2. *A settle seats a withdrawn loser on a loser edge* (page_playoff q2, knockout third place, double_elim). X-WD-1
+     removes the ordinary path (a held fixture is walked over at withdrawal, so no settle follows). As a guard, not a
+     comment: seating a withdrawn entrant on any loser edge is refused at the seating callers and the seat is treated
+     as dead, so its opponent walks over (X-WD-5).
 - **Migration** (next free version after W2a's V432): re-classify **unsettled** `needs_decision` bracket rows whose
   active result is `boardgame.result{double_forfeit}` to `forfeited` + `double_walkover`, then run the dead-seat
   cascade for each. Settled rows are untouched. The migration reports examined and changed counts; its test fails on
@@ -277,7 +292,7 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
 
 ## 6. The rules reference
 
-Appendix A lists the 51 rows (21 cross-sport, 30 per sport) to add at build; 7 new sport files (football, hockey,
+Appendix A lists the 52 rows (22 cross-sport, 30 per sport) to add at build; 7 new sport files (football, hockey,
 icehockey, volleyball, badminton, tabletennis, tennis). Ids are new and unique against the W2a seed (X-BR-1, X-BR-2,
 X-ST-1, X-ST-2, X-DR-1, BG-KO-1, BG-KO-2, CA-KO-1, CK-KO-1, GN-KO-1). X-BR-1's text is amended (W2b-R2), not
 renumbered. Each signed or deviation row ships with a proving test whose title contains its id
@@ -319,7 +334,7 @@ renumbered. Each signed or deviation row ships with a proving test whose title c
   clauses, no-next-match, the migration selection); Stryker probe + touched families dispatched before merge; floors
   never auto-raised.
 - **Pins to rewrite (from f-w2):** `needs-decision-status.test.ts:43`, the V432 migration test, the reference HELD
-  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7, and W2a's D-O1 gate derivation test (it assumes
+  table, BG-KO-1, `tiebreak.test.ts:46/:50`, harness M7, the two D-G2 characterisation pins (§5.4), and W2a's D-O1 gate derivation test (it assumes
   `boardgame.result{double_forfeit}` is still written). Each rewrite says why in its commit.
 - **UI:** screenshot verdicts per screen at 1280 / 768 / 320 (console dialog before and after play and the final
   guidance; match centre; results list; bracket tile), no horizontal scroll; the whole `mobile.spec.ts`, never a `-g`
@@ -390,7 +405,7 @@ Format: `packages/engine/rules/README.md` on `feat/format-matrix-w2a`. Status `s
 `signed <_INDEX ruling number> 2026-10-08` when the rulings are folded (§10). `enforced at` and `proved by` are filled
 at build; a signed or deviation row ships only with a proving test whose title contains the id.
 
-51 rows: cross-sport.md 21, football.md 3, hockey.md 3, icehockey.md 3, volleyball.md 2, tabletennis.md 2, tennis.md 2, badminton.md 3, cricket.md 3, boardgame.md 3, carrom.md 3, generic.md 3.
+52 rows: cross-sport.md 22, football.md 3, hockey.md 3, icehockey.md 3, volleyball.md 2, tabletennis.md 2, tennis.md 2, badminton.md 3, cricket.md 3, boardgame.md 3, carrom.md 3, generic.md 3.
 
 ### `cross-sport.md`
 
@@ -417,6 +432,7 @@ at build; a signed or deviation row ships only with a proving test whose title c
 | X-PS-1 | A walkover, withdrawal or double walkover never counts as a match played in any player's stats, and credits no personal W/L. | product rule W2b-R9 (ATP/ITF/FIDE rating practice) | signed W2b-R9 2026-10-08 | — | — |
 | X-PS-2 | A retirement, in-match DQ or abandon with a result counts as a match for both sides' players, W/L as decided; events already played stay credited. | product rule W2b-R9 | signed W2b-R9 2026-10-08 | — | — |
 | X-DE-1 | In double elimination any forfeit loser (walkover, withdrew, disqualified, retired) is out of the tournament: it never drops to the losers' bracket, its losers'-bracket opponent advances by walkover, and final ranks place it as eliminated in that round (seating and ranks agree). | product rule W2b-R11 | signed W2b-R11 2026-10-08 | — | — |
+| X-WD-5 | A withdrawn entrant is never seated on a loser edge; the seat is dead and its opponent advances by walkover. | product rule W2b-R8 (W2a D-G2) | signed W2b-R8 2026-10-08 | — | — |
 
 ### `football.md (new)`
 
