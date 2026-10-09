@@ -146,6 +146,21 @@ describe("X-PS-1 / X-PS-2: forfeits in player stats (spec §5.2, W2b-R9)", () =>
     expect(checked).toBeGreaterThanOrEqual(20);
   });
 
+  it("X-PS-2: a retirement or a disqualification straight after the start, before any play, still counts the match", () => {
+    let checked = 0;
+    forEachSport(({ module: m }) => {
+      if (m.playerStats === undefined) return;
+      if (!declaredMatchKeys(m.playerStats).includes("matches")) return; // the sports that count appearances as matches
+      for (const reason of ["retired", "disqualified"]) {
+        const { rows, persons } = statsOf(m.key, [["core.start"], ["core.forfeit", { by: H, reason }]]);
+        for (const p of [...persons[H]!, ...persons[A]!]) expect(statOf(rows, p, "matches"), `${m.key} ${reason} ${p}`).toBe(1);
+        checked++;
+      }
+    });
+    // volleyball, table tennis, badminton, tennis, carrom — each with both reasons
+    expect(checked).toBeGreaterThanOrEqual(10);
+  });
+
   it("X-PS-2: an abandon with a result (the award policy) is a match — the leader's keeper keeps the clean sheet", () => {
     let checked = 0;
     for (const [key, goalType] of [["football", "football.goal"], ["hockey", "hockey.goal"], ["icehockey", "icehockey.goal"]] as const) {

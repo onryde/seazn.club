@@ -824,10 +824,10 @@ function foldCarromStats(events: readonly EventEnvelope[], ctx: PlayerStatsFoldC
   // roster with no "matches" row at all, despite unambiguously having played.
   //
   // W2b (X-PS-1/2): a forfeit's `by` names an entrant too, so the gate alone would count a walkover. A walkover, a
-  // withdrawal or a double walkover is no match for anybody; a retirement or an in-match disqualification is one for
-  // both sides even before the first board.
+  // withdrawal or a double walkover is no match for anybody. A retirement or an in-match disqualification is one for
+  // both sides even before the first board — which the gate already gives it, through that same `by`.
   const forfeit = forfeitStatsRole(events);
-  if ((entrantIdsIn(events).length > 0 && forfeit !== "unplayed") || forfeit === "played") {
+  if (entrantIdsIn(events).length > 0 && forfeit !== "unplayed") {
     for (const entrant of ctx.entrants) creditEach(entrant, "matches", 1);
   }
 

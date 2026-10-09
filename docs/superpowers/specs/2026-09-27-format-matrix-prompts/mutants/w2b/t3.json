@@ -353,8 +353,8 @@
   {
     "id": "pf1-kernel-owns-off",
     "file": "packages/engine/src/core/events.ts",
-    "find": "return !folded.settled && isLevelOutcome(module.outcome(folded.state)) && forfeitReasonOf(event.payload) === \"withdrew\";",
-    "replace": "return false;",
+    "find": "? !folded.settled && isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === \"withdrew\"",
+    "replace": "? false",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -368,8 +368,8 @@
   {
     "id": "pf1-kernel-owns-settled",
     "file": "packages/engine/src/core/events.ts",
-    "find": "return !folded.settled && isLevelOutcome(module.outcome(folded.state)) && forfeitReasonOf(event.payload) === \"withdrew\";",
-    "replace": "return isLevelOutcome(module.outcome(folded.state)) && forfeitReasonOf(event.payload) === \"withdrew\";",
+    "find": "? !folded.settled && isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === \"withdrew\"",
+    "replace": "? isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === \"withdrew\"",
     "killers": [
       {
         "cwd": "packages/engine",
@@ -383,8 +383,8 @@
   {
     "id": "pf1-kernel-owns-any-reason",
     "file": "packages/engine/src/core/events.ts",
-    "find": "return !folded.settled && isLevelOutcome(module.outcome(folded.state)) && forfeitReasonOf(event.payload) === \"withdrew\";",
-    "replace": "return !folded.settled && isLevelOutcome(module.outcome(folded.state));",
+    "find": "? !folded.settled && isLevelOutcome(moduleOutcome) && forfeitReasonOf(event.payload) === \"withdrew\"",
+    "replace": "? !folded.settled && isLevelOutcome(moduleOutcome)",
     "killers": [
       {
         "cwd": "packages/engine",

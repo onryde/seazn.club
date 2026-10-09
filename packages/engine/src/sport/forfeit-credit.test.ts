@@ -176,6 +176,13 @@ const ROWS: RetirementRow[] = [
     want: (c) => { const r = goalRule((c.awardScore as { goals: number }).goals, { winner: 5, offender: 0 }); return [goals(r.offender, r.winner), goals(r.winner, r.offender)]; },
   },
   {
+    // The boundary, written out literally: 1-4 is a margin of 3, the awarded margin — not WORSE for the offender, so
+    // the awarded 0-3 stands (not the real 1-4).
+    id: "FB-RT-1 (1-4: an equal margin takes the awarded 0-3)", key: "football", cfg: parsed("football"),
+    played: [["football.goal", { by: H }], ...times(4, ["football.goal", { by: A }])],
+    want: () => [goals(0, 3), goals(3, 0)],
+  },
+  {
     id: "FB-RT-1 (1-0 to the offender: the awarded 0-3)", key: "football", cfg: parsed("football"),
     played: [["football.goal", { by: H }]],
     want: (c) => { const r = goalRule((c.awardScore as { goals: number }).goals, { winner: 0, offender: 1 }); return [goals(r.offender, r.winner), goals(r.winner, r.offender)]; },
@@ -343,6 +350,7 @@ describe("X-RT-1: retirement credit per sport (spec §5.2)", () => {
   it("FB-RT-1: football retirement = 3-0, or the real score when it is worse for the offender", () => {
     expectRetirement(row("FB-RT-1 (0-5: the real score is worse for the offender, it stands)"));
     expectRetirement(row("FB-RT-1 (1-0 to the offender: the awarded 0-3)"));
+    expectRetirement(row("FB-RT-1 (1-4: an equal margin takes the awarded 0-3)"));
   });
   it("HK-RT-1: hockey retirement = 5-0, or the real score when it is worse for the offender", () => {
     expectRetirement(row("HK-RT-1 (0-7: the real score)"));
