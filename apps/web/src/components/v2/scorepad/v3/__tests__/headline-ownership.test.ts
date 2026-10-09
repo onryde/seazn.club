@@ -111,6 +111,8 @@ function viewOf(
     squads: (((state as { squads?: unknown }).squads as PadHostView["squads"]) ?? initSquads(lineups)),
     events,
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 
@@ -463,6 +465,8 @@ describe("hockey and ice hockey own the headline in the states where it says som
       squads: (((state as { squads?: unknown }).squads as PadHostView["squads"]) ?? initSquads(lineups)),
       events: [],
       contextOverrides: {},
+      stageKind: null,
+      canOrganise: true,
     };
   }
 

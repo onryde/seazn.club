@@ -372,6 +372,7 @@ describe("fixture console phone classes — the empty scoring section hides itse
           resolvedConfig: CFG,
           initialEvents: [],
           entitlements: {},
+          stageKind: null,
           identity: { recordedBy: "user-1", deviceLinkId: null },
         }}
         viewerPlan="community"

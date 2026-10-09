@@ -115,6 +115,8 @@ function view(opts: ViewOpts = {}): PadHostView {
     squads: initSquads(lineups),
     events,
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 
@@ -133,6 +135,8 @@ function degenerateView(over: Partial<PadHostView> = {}): PadHostView {
     squads: initSquads(SOLO),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
     ...over,
   };
 }

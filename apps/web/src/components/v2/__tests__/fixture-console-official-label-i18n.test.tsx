@@ -101,6 +101,7 @@ function consoleHtml(locale: Locale): string {
           resolvedConfig: CFG,
           initialEvents: ENVELOPES,
           entitlements: {},
+          stageKind: null,
           identity: { recordedBy: "user-1", deviceLinkId: null },
         }}
         viewerPlan="community"

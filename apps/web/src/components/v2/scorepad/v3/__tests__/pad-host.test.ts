@@ -1010,6 +1010,8 @@ function padHostView(): PadHostView {
     squads: initSquads(lineupPair()),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 

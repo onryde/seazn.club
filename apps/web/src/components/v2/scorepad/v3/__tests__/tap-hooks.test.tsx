@@ -203,6 +203,8 @@ function cricketView(battingSide: "home" | "away"): PadHostView {
     squads: cricketSquads(),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 

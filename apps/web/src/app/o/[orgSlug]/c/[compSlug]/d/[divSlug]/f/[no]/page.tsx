@@ -185,6 +185,7 @@ export default async function FixturePage({
     hasFeatureFn: (key) => hasFeature(auth.orgId, key, division.competition_id),
     initialEvents: events.map((e) => eventOutToEnvelope(fixture.id, e)),
     identity: { recordedBy: auth.userId, deviceLinkId: null },
+    stageKind,
   });
 
   return (

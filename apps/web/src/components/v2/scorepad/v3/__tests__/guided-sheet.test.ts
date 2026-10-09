@@ -390,6 +390,27 @@ describe("GuidedSheet rendering", () => {
   const optionButton = (tree: ReturnType<typeof walk>, id: string) =>
     tree.find((el) => propsOf(el)["data-choice-option-id"] === id)!;
 
+  it("W2a: an option's labelText (a name no dictionary holds) wins over its key; an option without one renders its key", () => {
+    const named: GuidedSheetSpec = {
+      event: "boardgame.tiebreak",
+      steps: [
+        {
+          id: "winner",
+          kind: "choice",
+          title: K("winner.title"),
+          options: [
+            { id: "home", label: "scorepad.attribution.home", labelText: "Magnus Carlsen" },
+            { id: "away", label: "scorepad.attribution.away" },
+          ],
+        },
+      ],
+      buildPayload: (answers) => ({ winner: answers.winner }),
+    };
+    const island = renderIsland(GuidedSheet, { spec: named, views, personNames: names, t, onComplete: () => {} });
+    expect(textOf(optionButton(island.tree(), "home"))).toBe("Magnus Carlsen");
+    expect(textOf(optionButton(island.tree(), "away"))).toBe("scorepad.attribution.away");
+  });
+
   it("washes a toned option in its OUTCOME tone and stamps a locale-independent data hook", () => {
     const island = renderIsland(GuidedSheet, { spec: tonedSpec, views, personNames: names, t, onComplete: () => {} });
     const yellow = propsOf(optionButton(island.tree(), "yellow"));

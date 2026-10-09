@@ -1243,6 +1243,10 @@ export function FixtureConsole({
                   auth={SESSION_AUTH}
                   identity={scorePadV2.identity}
                   entitlements={scorePadV2.entitlements}
+                  // W2a: the console's own stage kind and organiser flag — the SAME values its held block reads, so
+                  // the pad and the block can never disagree about whether this is a bracket or who is asking.
+                  stageKind={stageKind}
+                  canOrganise={canOrganise}
                   onEvents={handlePadEvents}
                   // R7/C1 — this console mounts the one ledger itself, below.
                   hideActivity

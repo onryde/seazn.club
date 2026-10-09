@@ -319,10 +319,15 @@ describe("ScorePad — the v3 lane renders PadHostV3 with the resolved skin (R2/
       auth: { kind: "session" as const },
       identity: { recordedBy: "user-1", deviceLinkId: null },
       entitlements: {},
-      band: 3 as const,
+      stageKind: "knockout",
+      canOrganise: false,
     });
     const [output] = island.tree();
     expect(output?.type).toBe(PadHostV3);
+    // W2a Task 12 (addendum 4, the inert seam): the stage kind and the organiser flag reach the host verbatim — a
+    // value that differs from either default, so a dropped prop cannot pass.
+    expect((output?.props as { stageKind?: unknown }).stageKind).toBe("knockout");
+    expect((output?.props as { canOrganise?: unknown }).canOrganise).toBe(false);
     expect((output?.props as { skin?: unknown }).skin).toBe(FAKE_V3_SKIN);
     expect((output?.props as { fixtureId?: unknown }).fixtureId).toBe("fx-1");
     expect((output?.props as { queueDbName?: unknown }).queueDbName).toBe("scorepad-fx-1");

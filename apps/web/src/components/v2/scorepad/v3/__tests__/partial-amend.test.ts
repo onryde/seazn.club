@@ -105,6 +105,8 @@ function view(events: readonly EventEnvelope[]): PadHostView {
     squads: initSquads(DOUBLES),
     events,
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 

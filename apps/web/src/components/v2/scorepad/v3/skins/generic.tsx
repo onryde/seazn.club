@@ -59,7 +59,7 @@
 //     chassis cannot already compute. Declaring an empty set here would be a
 //     mirror of the engine with nothing to say.
 "use client";
-import type { SquadState } from "@seazn/engine/core";
+import { forbidsLevelResult, type SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import {
@@ -172,9 +172,13 @@ export function resultModeOf(cfg: GenericCfgShape): ResultMode {
 /** `true` only for an EXPLICIT `allowDraws: true`. Absent reads as "no draws"
  *  for the same fail-safe reason `resultModeOf` defaults to the tally: a Draw
  *  affordance the fold refuses is a dead-end tap, and this pad's audience has
- *  no sport vocabulary to explain it with. */
-function allowsDraws(cfg: GenericCfgShape): boolean {
-  return cfg.allowDraws === true;
+ *  no sport vocabulary to explain it with.
+ *
+ *  W2a (spec §5.5; X-DR-1, GN-KO-1) — and never in a bracket kind, whatever the cfg says: the kernel refuses a level
+ *  result there (LEVEL_RESULT_IN_BRACKET), so a Draw tile or a level "Finish from tally" would be the same dead-end
+ *  tap. The stage kind is the engine's own predicate (`forbidsLevelResult`), read off the view, never re-derived. */
+function allowsDraws(cfg: GenericCfgShape, stageKind: string | null): boolean {
+  return cfg.allowDraws === true && !forbidsLevelResult(stageKind);
 }
 
 /** `pre` and `live` are BOTH scoreable — `applyScore`/`applyResult` (generic.ts)
@@ -354,7 +358,7 @@ function buildHalf(view: PadHostView, state: GenericStateShape, side: Side, t: T
 function buildContext(view: PadHostView, t: TFn): string {
   const cfg = cfgOf(view);
   const mode = tallyAvailable(view) ? "pad.generic.context.tally" : "pad.generic.context.resultOnly";
-  const draws = allowsDraws(cfg) ? "pad.generic.context.draws" : "pad.generic.context.noDraws";
+  const draws = allowsDraws(cfg, view.stageKind) ? "pad.generic.context.draws" : "pad.generic.context.noDraws";
   return `${t(mode)} · ${t(draws)}`;
 }
 
@@ -377,7 +381,7 @@ function buildStrip(view: PadHostView, state: GenericStateShape, t: TFn): StripI
     // ACCENTED only where it bites: with draws refused, this exact state is
     // the one the fixture cannot be finished from.
     const level: StripItem = { id: "margin", value: t("pad.generic.scorebug.strip.level") };
-    return [allowsDraws(cfgOf(view)) ? level : { ...level, accent: true }];
+    return [allowsDraws(cfgOf(view), view.stageKind) ? level : { ...level, accent: true }];
   }
   const leader: Side = home > away ? "home" : "away";
   const by = Math.abs(home - away);
@@ -437,7 +441,7 @@ export const MAX_TALLY_STEP = 50;
  *  a generic scorer has no way to have predicted. */
 function settleable(view: PadHostView, state: GenericStateShape): boolean {
   if (!hasTally(state)) return false;
-  return tallyOf(state, "home") !== tallyOf(state, "away") || allowsDraws(cfgOf(view));
+  return tallyOf(state, "home") !== tallyOf(state, "away") || allowsDraws(cfgOf(view), view.stageKind);
 }
 
 /** The biggest correction any side could legally take right now: what the
@@ -503,7 +507,7 @@ export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
         action: { sheet: CORRECTION_TILE_ID },
       });
     }
-  } else if (allowsDraws(cfgOf(view))) {
+  } else if (allowsDraws(cfgOf(view), view.stageKind)) {
     // ABSENT, never disabled, when draws are refused. A disabled Draw tile
     // would be a permanent property of the division wearing a transient
     // affordance's clothes — `TileSpec.disabled`'s own doc draws exactly that

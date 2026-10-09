@@ -143,6 +143,7 @@ function baseProps() {
       resolvedConfig: {},
       initialEvents: [],
       entitlements: {},
+      stageKind: null,
       band: 0 as const,
       identity: { recordedBy: null, deviceLinkId: null },
     },
@@ -526,5 +527,22 @@ describe("FixtureConsole — the ledger's per-row Void during a pad resync", () 
       settled.filter((tag) => tag.includes('disabled=""')),
       "and it must come back once the ledger is fresh again",
     ).toEqual([]);
+  });
+});
+
+// W2a Task 12 (loop-H addendum 4, the inert seam; D-O1) — the console hands its pad the SAME stage kind and organiser
+// flag its own held block reads. Values that differ from every default, both directions, so a dropped or hard-coded
+// prop cannot pass.
+describe("FixtureConsole — the pad gets the stage kind and the organiser flag", () => {
+  it("passes stageKind and canOrganise through to <ScorePad/> verbatim, for an organiser and for a scorer", () => {
+    let checked = 0;
+    for (const [stageKind, canOrganise] of [["knockout", false], ["league", true]] as const) {
+      const island = renderIsland(FixtureConsole, { ...baseProps(), stageKind, canOrganise });
+      const pad = propsOf(findScorePad(island.tree()));
+      expect(pad.stageKind, stageKind).toBe(stageKind);
+      expect(pad.canOrganise, stageKind).toBe(canOrganise);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });

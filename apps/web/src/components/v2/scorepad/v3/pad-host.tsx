@@ -1230,7 +1230,31 @@ export function resolveDockSpec(
   view: PadHostView,
 ): DockSpec | null {
   if (!held) return null;
-  return skin.dock(held.eventType, view, held.payload as Record<string, unknown> | undefined);
+  return dockFor(skin, held.eventType, view, held.payload as Record<string, unknown> | undefined);
+}
+
+/**
+ * W2a (owner ruling D-O1; loop-H addendum 2) — THE dock a viewer is offered: the skin's own, minus every chip whose
+ * write the server refuses this viewer. A chip only rewrites the held payload (`DockChip.mutate`), so "would this chip
+ * write an organiser-only event" is the server's own predicate on the mutated payload — `isOrganiserOnlyEvent`, the
+ * one list (scoring.ts's 403, this file's tile filter), never a second one. Chess is the case today: a scorer's
+ * decisive tap offers "forfeit" and the drawn tap "double forfeit", each a 403 for anyone but an organiser.
+ *
+ * Read by BOTH the render (`resolveDockSpec`) and the dispatch's soft-commit decision, so the dock a scorer sees and
+ * the hold the pad waits out can never disagree. Filtered on the chassis, not in a skin, for the reason
+ * `filterTilesByBand` states: the predicate is sport-agnostic, and the next sport with a payload-scoped authority
+ * write is covered without touching its skin.
+ */
+export function dockFor(
+  skin: SkinDefV3,
+  eventType: string,
+  view: PadHostView,
+  payload: Record<string, unknown> | undefined,
+): DockSpec | null {
+  const spec = skin.dock(eventType, view, payload);
+  if (spec === null || view.canOrganise) return spec;
+  const base = payload ?? {};
+  return { ...spec, chips: spec.chips.filter((chip) => !isOrganiserOnlyEvent(eventType, chip.mutate(base))) };
 }
 
 /**
@@ -1451,6 +1475,10 @@ const EMPTY_SPEC: PadSpec = { panels: [], fidelity: {} };
 export interface PadHostV3Props {
   module: AnySportModule;
   cfg: unknown;
+  /** W2a Task 12 — copied into `PadHostView.stageKind`; see its doc (types.ts). */
+  stageKind: string | null;
+  /** W2a D-O1 — copied into `PadHostView.canOrganise`; see its doc (types.ts). False for every device link. */
+  canOrganise: boolean;
   fixtureId: string;
   lineups: LineupPair;
   identity: OwnIdentity;
@@ -1795,8 +1823,10 @@ export function PadHostV3(props: PadHostV3Props) {
       // types.ts's own doc on PadHostView.contextOverrides and this file's
       // contextOverridesStale/render-phase-reset block above.
       contextOverrides,
+      stageKind: props.stageKind,
+      canOrganise: props.canOrganise,
     }),
-    [props.cfg, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
+    [props.cfg, props.stageKind, props.canOrganise, pipeline.state, pipeline.summary, phase, band, entitlements, personNames, squads, pipeline.events, contextOverrides, clockAt],
   );
 
   // `sheets` is resolved BEFORE the tiles so the band filter below can read a
@@ -1958,7 +1988,7 @@ export function PadHostV3(props: PadHostV3Props) {
   const dispatch = useMemo(
     () =>
       createSkinDispatch(padView, async (type, payload) => {
-        const dock = props.skin.dock(type, view, payload as Record<string, unknown> | undefined);
+        const dock = dockFor(props.skin, type, view, payload as Record<string, unknown> | undefined);
         if (!usesSoftCommit(dock)) {
           await pipeline.submit(type, payload);
           return;

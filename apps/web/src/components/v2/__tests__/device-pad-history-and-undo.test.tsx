@@ -94,6 +94,7 @@ function deviceHtml(events: readonly EventEnvelope[]): string {
         resolvedConfig: CFG,
         initialEvents: events,
         entitlements: {},
+        stageKind: null,
         identity: { recordedBy: null, deviceLinkId: "link-1" },
       }}
     />,

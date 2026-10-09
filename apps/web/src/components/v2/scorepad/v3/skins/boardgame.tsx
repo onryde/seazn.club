@@ -83,7 +83,8 @@
 //     it). There is nothing here the chassis cannot already compute from
 //     `padSpec` alone.
 "use client";
-import type { SquadState } from "@seazn/engine/core";
+import { deciderPending, resolveVoids, type Settlement, type SettleMethod, type SquadState } from "@seazn/engine/core";
+import { boardgame, TIEBREAK_RUNGS, type BoardgameState } from "@seazn/engine/sports/boardgame";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
@@ -108,6 +109,9 @@ export type Side = "home" | "away";
 const SPORT = "boardgame";
 export const RESULT_TYPE = `${SPORT}.result`;
 export const PAIRING_TYPE = `${SPORT}.pairing`;
+/** W2a BG-KO-1 — the engine's decider event (`boardgame.deciderTypes`), restated because the entry does not export
+ *  `BOARDGAME_TIEBREAK_TYPE`; pinned equal to the module's own list in `boardgame-tiebreak.test.ts`. */
+export const TIEBREAK_TYPE = `${SPORT}.tiebreak`;
 
 export const SIDES: readonly Side[] = ["home", "away"];
 const SIDE_LABEL: Record<Side, MessageKey> = {
@@ -126,7 +130,7 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
   [RESULT_TYPE]: 0,
   [PAIRING_TYPE]: 1,
-  "boardgame.tiebreak": 0, // W2a BG-KO-1 — the module's own band (ruling D-C4; Task 12 owns the rest of this skin)
+  [TIEBREAK_TYPE]: 0, // W2a BG-KO-1 — the module's own band (ruling D-C4)
 };
 
 function withinBand(eventType: string, band: FidelityBand): boolean {
@@ -228,11 +232,44 @@ function readPhase(state: BoardgameStateShape): string {
  *  POST_PHASES carries all three terminal values. */
 const POST_PHASES = new Set(["done", "final", "abandoned"]);
 
-export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
+export function resolvePhase(view: Pick<PadHostView, "state" | "events">): PadPhase {
   const phase = readPhase(asState(view.state));
   if (phase === "pre") return "pre";
   if (POST_PHASES.has(phase)) return "post";
+  // W2a (addendum 1; ruling D-C5): a drawn bracket game sits in module phase "tiebreak" until its decider is
+  // recorded — and STAYS there after an organiser settles it (the settle never reaches the module). Live only while
+  // the decider is still owed; settled, the match is over and every tap the pad could offer is refused.
+  if (phase === "tiebreak") return tiebreakPending(view) ? "live" : "post";
   return "live";
+}
+
+/** The ledger's active `core.settle`, as the kernel folds it (core/events.ts): read off the SAME events the pad
+ *  folded, with voids resolved by the engine's own `resolveVoids` — so a voided settle is no settle. The kernel
+ *  accepts at most one active settle (a second is SETTLE_NOT_APPLICABLE), so the last one seen is the one. */
+export function settlementOf(view: Pick<PadHostView, "state" | "events">): Settlement | null {
+  const state = asState(view.state);
+  let settlement: Settlement | null = null;
+  for (const event of resolveVoids(view.events)) {
+    if (event.type !== "core.settle") continue;
+    const payload = asRecord(event.payload);
+    const winnerSide = sideOfEntrant(state, payload.winner);
+    // The kernel refused any settle naming neither side (INVALID_EVENT), so the fold that produced this state never
+    // saw one. Reaching here means this view's events and state disagree — fail loudly, never guess a winner.
+    if (winnerSide === null) throw new Error(`boardgame pad: core.settle ${event.id} names neither side of this fixture`);
+    settlement = {
+      winner: entrantOf(state, winnerSide),
+      loser: entrantOf(state, winnerSide === "home" ? "away" : "home"),
+      method: payload.method as SettleMethod,
+      eventId: event.id,
+    };
+  }
+  return settlement;
+}
+
+/** THE gate for the tie-break panel (addendum 1): the kernel's `deciderPending`, fed the module's own hook and the
+ *  ledger's settle — never the module phase alone, which still says "tiebreak" after a settle. */
+export function tiebreakPending(view: Pick<PadHostView, "state" | "events">): boolean {
+  return deciderPending(boardgame, { state: view.state as BoardgameState, settlement: settlementOf(view) });
 }
 
 function entrantOf(state: BoardgameStateShape, side: Side): string {
@@ -321,7 +358,9 @@ function buildHalf(view: PadHostView, state: BoardgameStateShape, side: Side, t:
   // refuses. `withinBand` is always true today (RESULT_TYPE is band 0 in
   // EVERY fixture), kept for the same defensive-symmetry reason every other
   // converted skin's own `tappable` gate keeps its band check.
-  const tappable = resolvePhase(view) === "live" && withinBand(RESULT_TYPE, view.band);
+  // W2a: never while a tie-break is owed — the result is already recorded (drawn), and the decider is the only write
+  // the engine accepts (the panel below).
+  const tappable = resolvePhase(view) === "live" && !tiebreakPending(view) && withinBand(RESULT_TYPE, view.band);
   // SOLE-NAMED-PLAYER AUTO-SET — the same D-15 reasoning `pairingSheet`'s own
   // doc states: a pairing card can only ever have named ONE person per side,
   // so a tap stamps it straight onto the payload rather than asking again.
@@ -380,10 +419,27 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
 
 export const PAIRING_TILE_ID = "pairing";
 export const DRAW_TILE_ID = "draw";
+export const TIEBREAK_TILE_ID = "tiebreak";
 
 export function buildTiles(view: PadHostView, t: TFn): TileSpec[] {
   const phase = resolvePhase(view);
   const tiles: TileSpec[] = [];
+  // W2a (spec §5.5, UI-2 option B): while a tie-break is owed it is the ONLY thing to record — no Draw (the game is
+  // already drawn), no tappable half (`buildHalf`). Draw itself stays in every stage kind while live (ruling D-P1:
+  // the drawn game is how a bracket reaches its tie-break).
+  if (tiebreakPending(view)) {
+    if (withinBand(TIEBREAK_TYPE, view.band)) {
+      tiles.push({
+        id: TIEBREAK_TILE_ID,
+        label: "pad.boardgame.action.tiebreak",
+        kind: "standard",
+        span: 4,
+        phases: ["live"],
+        action: { sheet: TIEBREAK_TILE_ID },
+      });
+    }
+    return tiles;
+  }
   if (phase === "pre" && withinBand(PAIRING_TYPE, view.band)) {
     tiles.push({
       id: PAIRING_TILE_ID,
@@ -461,8 +517,88 @@ function pairingSheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
+/** D6 — the optional mini-match score, written from the WINNER's side (the engine validates any `CHESS_SCORE`). Ids
+ *  are the score itself; "none" sends no score. */
+const SCORES = ["none", "2–0", "1½–½"] as const;
+const SCORE_LABEL: Record<(typeof SCORES)[number], MessageKey> = {
+  none: "pad.boardgame.tiebreak.score.none",
+  "2–0": "pad.boardgame.tiebreak.score.clean",
+  "1½–½": "pad.boardgame.tiebreak.score.narrow",
+};
+
+/** The side a winner step answered — the step the RUNG shows, never a stale answer left by a different rung. */
+function winnerSideOf(answers: Readonly<Record<string, string>>): Side {
+  const answer = answers.rung === "armageddon" ? answers["winner-armageddon"] : answers.winner;
+  if (answer === "home" || answer === "away") return answer;
+  // The chassis completes a sheet only once every shown step is answered, so this is unreachable from the pad —
+  // and defaulting would record the wrong player as advancing.
+  throw new Error(`boardgame tie-break: no winner answered for rung "${String(answers.rung)}"`);
+}
+
+/**
+ * W2a — the three-step tie-break (spec §5.5; UI-2 option B; BG-KO-1; BG-KO-2 per ruling 82; D6). Step 1 the rung,
+ * whose hint sends lots to the organiser (lots is `core.settle {method: "lot"}`, ruling 73 — never a rung here); step 2
+ * who won, exactly the two entrants (no "drawn" choice: on armageddon the hint says a draw means Black advances, and
+ * the scorer taps who that is — colours are W2c's, ruling 82); step 3 the optional score, rapid and blitz only.
+ *
+ * Two winner steps, each gated on the rung, keep the hint off rapid and blitz without a dynamic step. Option labels
+ * are keys; a winner option also carries the player's name (`labelText`) when the lineup seats one.
+ */
+function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
+  const state = asState(view.state);
+  const winnerOptions = SIDES.map((side) => {
+    const names = onFieldPlayers(view.squads, side)
+      .map((member) => view.personNames[member.personId])
+      .filter((name): name is string => typeof name === "string" && name.length > 0);
+    return { id: side, label: SIDE_LABEL[side], ...(names.length > 0 ? { labelText: names.join(" & ") } : {}) };
+  });
+  void t;
+  return {
+    event: TIEBREAK_TYPE,
+    steps: [
+      {
+        id: "rung",
+        kind: "choice",
+        title: "pad.boardgame.tiebreak.rung.title",
+        hintKey: "pad.boardgame.tiebreak.lotsHint",
+        options: TIEBREAK_RUNGS.map((rung) => ({ id: rung, label: vocabKey("rung", rung) ?? rung })),
+      },
+      {
+        id: "winner",
+        kind: "choice",
+        title: "pad.boardgame.tiebreak.winner.title",
+        when: (a) => a.rung !== "armageddon",
+        options: winnerOptions,
+      },
+      {
+        id: "winner-armageddon",
+        kind: "choice",
+        title: "pad.boardgame.tiebreak.winner.title",
+        hintKey: "pad.boardgame.tiebreak.armageddonHint",
+        when: (a) => a.rung === "armageddon",
+        options: winnerOptions,
+      },
+      {
+        id: "score",
+        kind: "choice",
+        title: "pad.boardgame.tiebreak.score.title",
+        when: (a) => a.rung !== "armageddon",
+        options: SCORES.map((score) => ({ id: score, label: SCORE_LABEL[score] })),
+      },
+    ],
+    buildPayload: (a) => {
+      const score = a.rung !== "armageddon" ? a.score : undefined;
+      return {
+        rung: a.rung,
+        winner: entrantOf(state, winnerSideOf(a)),
+        ...(score !== undefined && score !== "none" ? { score } : {}),
+      };
+    },
+  };
+}
+
 export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
-  return { [PAIRING_TILE_ID]: pairingSheet(view) };
+  return { [PAIRING_TILE_ID]: pairingSheet(view), [TIEBREAK_TILE_ID]: tiebreakSheet(view, t) };
 }
 
 // ---------------------------------------------------------------------------

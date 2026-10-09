@@ -126,6 +126,8 @@ function viewFor(s: Situation): PadHostView {
     squads: chassisSquads(),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 

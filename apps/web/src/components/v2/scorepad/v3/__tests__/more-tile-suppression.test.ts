@@ -155,6 +155,8 @@ function cricketView(band: 0 | 1 | 2 | 3, state: Record<string, unknown>): PadHo
     squads: cricketSquads(),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 
@@ -210,6 +212,8 @@ function footballView(band: 0 | 1 | 2 | 3): PadHostView {
     squads: footballChassisSquads(),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 

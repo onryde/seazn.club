@@ -722,6 +722,9 @@ export function DeviceScorePad({
               auth={padAuth}
               identity={scorePadV2.identity}
               entitlements={scorePadV2.entitlements}
+              stageKind={scorePadV2.stageKind}
+              // A device link is never an organiser: settle, forfeit and abandon are refused to it (X-ST-2, D-O1).
+              canOrganise={false}
               onEvents={handlePadEvents}
               onTerminalRefusal={enterCarriedForward}
             />

@@ -163,6 +163,7 @@ describe("fixture-console: the pad's actual mount site (owner ruling 17)", () =>
           resolvedConfig: CRICKET_CFG,
           initialEvents: envelopes,
           entitlements: {},
+          stageKind: null,
           identity: { recordedBy: "user-1", deviceLinkId: null },
         }}
       />,
@@ -192,6 +193,7 @@ describe("fixture-console: the pad's actual mount site (owner ruling 17)", () =>
           resolvedConfig: FOOTBALL_CFG,
           initialEvents: envelopes,
           entitlements: {},
+          stageKind: null,
           identity: { recordedBy: "user-1", deviceLinkId: null },
         }}
       />,
@@ -226,6 +228,7 @@ describe("device-score-pad: the SAME predicate at the device-link mount site (ow
           resolvedConfig: CRICKET_CFG,
           initialEvents: envelopes,
           entitlements: {},
+          stageKind: null,
           identity: { recordedBy: null, deviceLinkId: "link-1" },
         }}
       />,
@@ -258,6 +261,7 @@ describe("device-score-pad: the SAME predicate at the device-link mount site (ow
           resolvedConfig: FOOTBALL_CFG,
           initialEvents: envelopes,
           entitlements: {},
+          stageKind: null,
           identity: { recordedBy: null, deviceLinkId: "link-1" },
         }}
       />,

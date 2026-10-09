@@ -1,0 +1,533 @@
+[
+  {
+    "id": "generic-kind",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/generic.tsx",
+    "find": "  return cfg.allowDraws === true && !forbidsLevelResult(stageKind);",
+    "replace": "  return cfg.allowDraws === true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/bracket-no-draw.test.ts"
+        ],
+        "name": "the Draw tile is absent in every bracket kind and present everywhere else"
+      }
+    ]
+  },
+  {
+    "id": "generic-context-reader",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/generic.tsx",
+    "find": "allowsDraws(cfg, view.stageKind) ? \"pad.generic.context.draws\"",
+    "replace": "allowsDraws(cfg, null) ? \"pad.generic.context.draws\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/bracket-no-draw.test.ts"
+        ],
+        "name": "generic context line says"
+      }
+    ]
+  },
+  {
+    "id": "generic-strip-reader",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/generic.tsx",
+    "find": "return [allowsDraws(cfgOf(view), view.stageKind) ? level",
+    "replace": "return [allowsDraws(cfgOf(view), null) ? level",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/bracket-no-draw.test.ts"
+        ],
+        "name": "generic strip: a level tally is ACCENTED in a bracket"
+      }
+    ]
+  },
+  {
+    "id": "generic-settle-reader",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/generic.tsx",
+    "find": "|| allowsDraws(cfgOf(view), view.stageKind);",
+    "replace": "|| allowsDraws(cfgOf(view), null);",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/bracket-no-draw.test.ts"
+        ],
+        "name": "generic score mode: a LEVEL tally offers"
+      }
+    ]
+  },
+  {
+    "id": "generic-draw-reader",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/generic.tsx",
+    "find": "} else if (allowsDraws(cfgOf(view), view.stageKind)) {",
+    "replace": "} else if (allowsDraws(cfgOf(view), null)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/bracket-no-draw.test.ts"
+        ],
+        "name": "the Draw tile is absent in every bracket kind and present everywhere else"
+      }
+    ]
+  },
+  {
+    "id": "bg-tile-gate",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "  if (tiebreakPending(view)) {\n    if (withinBand(TIEBREAK_TYPE, view.band)) {",
+    "replace": "  if (false) {\n    if (withinBand(TIEBREAK_TYPE, view.band)) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "in phase tiebreak: only the tie-break tile"
+      }
+    ]
+  },
+  {
+    "id": "bg-tiebreak-early-return",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "    }\n    return tiles;\n  }\n  if (phase === \"pre\"",
+    "replace": "    }\n  }\n  if (phase === \"pre\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "in phase tiebreak: only the tie-break tile"
+      }
+    ]
+  },
+  {
+    "id": "bg-halves-tappable",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "=== \"live\" && !tiebreakPending(view) && withinBand(RESULT_TYPE",
+    "replace": "=== \"live\" && withinBand(RESULT_TYPE",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "in phase tiebreak: only the tie-break tile"
+      }
+    ]
+  },
+  {
+    "id": "bg-settle-phase",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "  if (phase === \"tiebreak\") return tiebreakPending(view) ? \"live\" : \"post\";\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "after an organiser's settle in phase tiebreak"
+      }
+    ]
+  },
+  {
+    "id": "bg-settlement-read",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "    if (event.type !== \"core.settle\") continue;",
+    "replace": "    continue;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "after an organiser's settle in phase tiebreak"
+      }
+    ]
+  },
+  {
+    "id": "bg-void-resolve",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "  for (const event of resolveVoids(view.events)) {",
+    "replace": "  for (const event of view.events) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "after an organiser's settle in phase tiebreak"
+      }
+    ]
+  },
+  {
+    "id": "bg-settle-winner-guard",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "    if (winnerSide === null) throw new Error(",
+    "replace": "    if (false) throw new Error(",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "a ledger whose settle names neither side is refused loudly"
+      }
+    ]
+  },
+  {
+    "id": "hint-everywhere",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "        hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n        when: (a) => a.rung === \"armageddon\",",
+    "replace": "        hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n        when: () => true,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "BG-KO-2 \\(ruling 82\\): every rung shows ONE winner step"
+      }
+    ]
+  },
+  {
+    "id": "hint-dropped",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "        hintKey: \"pad.boardgame.tiebreak.armageddonHint\",\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "BG-KO-2 \\(ruling 82\\): every rung shows ONE winner step"
+      }
+    ]
+  },
+  {
+    "id": "lots-hint-dropped",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "        hintKey: \"pad.boardgame.tiebreak.lotsHint\",\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "step 1 offers exactly the engine's rungs"
+      }
+    ]
+  },
+  {
+    "id": "armageddon-winner-ignored",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "answers.rung === \"armageddon\" ? answers[\"winner-armageddon\"] : answers.winner",
+    "replace": "answers.winner ?? answers[\"winner-armageddon\"]",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "answers left by a rung the scorer backed out of are never sent"
+      }
+    ]
+  },
+  {
+    "id": "winner-default",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "  if (answer === \"home\" || answer === \"away\") return answer;",
+    "replace": "  return answer === \"away\" ? \"away\" : \"home\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "with no winner answered for the chosen rung the sheet refuses"
+      }
+    ]
+  },
+  {
+    "id": "winner-side-flip",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "winner: entrantOf(state, winnerSideOf(a)),",
+    "replace": "winner: entrantOf(state, winnerSideOf(a) === \"home\" ? \"away\" : \"home\"),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "the seam: every payload the sheet can build folds through the REAL engine"
+      }
+    ]
+  },
+  {
+    "id": "score-armageddon",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "        title: \"pad.boardgame.tiebreak.score.title\",\n        when: (a) => a.rung !== \"armageddon\",",
+    "replace": "        title: \"pad.boardgame.tiebreak.score.title\",\n        when: () => true,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "the score step shows for rapid and blitz only"
+      }
+    ]
+  },
+  {
+    "id": "score-stale",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "      const score = a.rung !== \"armageddon\" ? a.score : undefined;",
+    "replace": "      const score = a.score;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "answers left by a rung the scorer backed out of are never sent"
+      }
+    ]
+  },
+  {
+    "id": "score-none",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "score !== undefined && score !== \"none\" ? { score }",
+    "replace": "score !== undefined ? { score }",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "the score step shows for rapid and blitz only"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "the seam: every payload the sheet can build folds through the REAL engine"
+      }
+    ]
+  },
+  {
+    "id": "winner-names",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "    return { id: side, label: SIDE_LABEL[side], ...(names.length > 0 ? { labelText: names.join(\" & \") } : {}) };",
+    "replace": "    return { id: side, label: SIDE_LABEL[side] };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "the winner options name the players the lineup puts on the board"
+      }
+    ]
+  },
+  {
+    "id": "chassis-labeltext",
+    "file": "apps/web/src/components/v2/scorepad/v3/guided-sheet.tsx",
+    "find": "{opt.labelText ?? t(opt.label)}",
+    "replace": "{t(opt.label)}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/guided-sheet.test.ts"
+        ],
+        "name": "W2a: an option's labelText"
+      }
+    ]
+  },
+  {
+    "id": "dock-filter",
+    "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+    "find": "  if (spec === null || view.canOrganise) return spec;",
+    "replace": "  return spec;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "chess: a scorer's decisive dock has no forfeit"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "every sport: no dock a non-organiser can open"
+      }
+    ]
+  },
+  {
+    "id": "dock-filter-organiser",
+    "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+    "find": "  if (spec === null || view.canOrganise) return spec;",
+    "replace": "  if (spec === null) return spec;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "chess: a scorer's decisive dock has no forfeit"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "every sport: no dock a non-organiser can open"
+      }
+    ]
+  },
+  {
+    "id": "dock-render-wiring",
+    "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+    "find": "  return dockFor(skin, held.eventType, view, held.payload",
+    "replace": "  return skin.dock(held.eventType, view, held.payload",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "the dock the host RENDERS is the filtered one"
+      }
+    ]
+  },
+  {
+    "id": "host-view-stagekind",
+    "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+    "find": "      stageKind: props.stageKind,\n",
+    "replace": "      stageKind: null,\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "the host builds its view from its props"
+      }
+    ]
+  },
+  {
+    "id": "registry-stagekind",
+    "file": "apps/web/src/components/v2/scorepad/registry.tsx",
+    "find": "      stageKind={props.stageKind}\n",
+    "replace": "      stageKind={null}\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/registry.test.tsx"
+        ],
+        "name": "a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin"
+      }
+    ]
+  },
+  {
+    "id": "registry-canorganise",
+    "file": "apps/web/src/components/v2/scorepad/registry.tsx",
+    "find": "      canOrganise={props.canOrganise}\n",
+    "replace": "      canOrganise={true}\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/registry.test.tsx"
+        ],
+        "name": "a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin"
+      }
+    ]
+  },
+  {
+    "id": "bootstrap-stagekind",
+    "file": "apps/web/src/server/usecases/fidelity.ts",
+    "find": "      stageKind: params.stageKind,\n",
+    "replace": "      stageKind: null,\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/fidelity.test.ts"
+        ],
+        "name": "W2a Task 12: carries the fixture's stage kind"
+      }
+    ]
+  },
+  {
+    "id": "device-not-organiser",
+    "file": "apps/web/src/components/v2/device-score-pad.tsx",
+    "find": "              canOrganise={false}\n",
+    "replace": "              canOrganise={true}\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/device-score-pad-view-only.test.tsx"
+        ],
+        "name": "passes the bootstrap's stageKind through and canOrganise false"
+      }
+    ]
+  },
+  {
+    "id": "device-stagekind",
+    "file": "apps/web/src/components/v2/device-score-pad.tsx",
+    "find": "              stageKind={scorePadV2.stageKind}\n",
+    "replace": "              stageKind={null}\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/device-score-pad-view-only.test.tsx"
+        ],
+        "name": "passes the bootstrap's stageKind through and canOrganise false"
+      }
+    ]
+  },
+  {
+    "id": "console-pad-props",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "                  canOrganise={canOrganise}\n",
+    "replace": "                  canOrganise={true}\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-undo-pad-events.test.tsx"
+        ],
+        "name": "passes stageKind and canOrganise through to"
+      }
+    ]
+  },
+  {
+    "id": "console-pad-stagekind",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "                  stageKind={stageKind}\n                  canOrganise",
+    "replace": "                  stageKind={null}\n                  canOrganise",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-undo-pad-events.test.tsx"
+        ],
+        "name": "passes stageKind and canOrganise through to"
+      }
+    ]
+  }
+]

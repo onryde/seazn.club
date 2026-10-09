@@ -129,6 +129,8 @@ function baseView(cfg: unknown, state: unknown): PadHostView {
     squads: squads(),
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 

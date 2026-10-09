@@ -146,6 +146,7 @@ function consoleTree(over: ConsoleOver = {}) {
         resolvedConfig: CFG,
         initialEvents: [],
         entitlements: {},
+        stageKind: null,
         identity: { recordedBy: "user-1", deviceLinkId: null },
       }}
       viewerPlan="community"

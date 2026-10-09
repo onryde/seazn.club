@@ -48,6 +48,8 @@ export async function resolveScorePadBootstrap(params: {
   hasFeatureFn: (featureKey: string) => Promise<boolean>;
   initialEvents: readonly EventEnvelope[];
   identity: OwnIdentity;
+  /** W2a Task 12 — `loadFixturePadCfg`'s stage kind, carried to the pad unchanged. */
+  stageKind: string | null;
 }): Promise<ScorePadBootstrap | null> {
   try {
     const resolvedConfig: unknown = params.sportModule.configSchema.parse(params.rawConfig);
@@ -60,6 +62,7 @@ export async function resolveScorePadBootstrap(params: {
       initialEvents: params.initialEvents,
       entitlements: { [SWAP_OFF_STEP_ENFORCEMENT_KEY]: swapOffStepEnforcement },
       identity: params.identity,
+      stageKind: params.stageKind,
     };
   } catch {
     return null;

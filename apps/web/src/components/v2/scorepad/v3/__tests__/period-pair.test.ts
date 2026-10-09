@@ -104,6 +104,8 @@ function viewFor(sport: Sport, cfg: unknown, state: PeriodStateLike, band = 3): 
     squads,
     events: [],
     contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
   };
 }
 
