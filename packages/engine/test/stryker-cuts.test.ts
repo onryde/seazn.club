@@ -749,11 +749,17 @@ describe("pnpm mutation:recut, the helper that proposes the cuts for a target le
   it("--open: a declaration too big to cut around is opened, the anchors are `Host.member` paths, and the printed sizes are the instrumenter's counts of the resolved ranges, with the mutants the cuts drop reported (T20-PRE)", async () => {
     const file = "src/sports/period/kernel.ts";
     const text = read(file);
-    // makePeriodModule alone is 938 mutants: no cut between top-level statements can split it
+    // No cut between top-level statements can split makePeriodModule, so the unopened plan's largest part holds at least its
+    // mutants. Its size is the INSTRUMENTER's count of the declaration's own lines, measured here: it was a typed 938 until W2a's
+    // kernel change made it 925, and a typed count of a file other waves edit goes stale with no product change behind it.
+    const decl = topLevelStatements(text).find((s) => s.names.includes("makePeriodModule"));
+    expect(decl, "makePeriodModule is a top-level statement of the period kernel").toBeDefined();
+    const declMutants = (await mutantsOfText(file, text, [[decl!.startLine, decl!.endLine]])).length;
+    expect(declMutants, "the instrumenter finds mutants in makePeriodModule").toBeGreaterThan(0);
     const closed = recut([file, "3"]);
     expect(closed.status, closed.stderr).toBe(0);
     const closedMax = Number(/the largest (\d+) mutants/.exec(closed.stdout)![1]);
-    expect(closedMax, "unopened, the biggest statement bounds the largest part").toBeGreaterThanOrEqual(938);
+    expect(closedMax, "unopened, the biggest statement bounds the largest part").toBeGreaterThanOrEqual(declMutants);
 
     const r = recut([file, "3", "--open", "makePeriodModule"]);
     expect(r.status, r.stderr).toBe(0);
