@@ -306,6 +306,29 @@ export async function addParticipant(
   return { participantId: data.id, authToken: data.token };
 }
 
+/** A fresh authToken for a participant that already exists — what a
+ *  returning player gets, so they keep ONE participant and peer discovery
+ *  stays on one `user_id`. Tokens are deliberately never stored (a token at
+ *  rest is a token to leak). Measured 2026-10-09 (rtk-token-regen.log):
+ *  the regenerated token is a different JWT, and the earlier one keeps
+ *  working — a tab already joined with it is not disconnected. */
+export async function refreshParticipantToken(
+  a: { meetingId: string; participantId: string },
+  deps: RealtimeKitDeps = {},
+): Promise<ParticipantToken> {
+  const cfg = requireConfig();
+  const data = (await cf(
+    cfg,
+    `/meetings/${encodeURIComponent(a.meetingId)}/participants/${encodeURIComponent(a.participantId)}/token`,
+    { method: "POST" },
+    deps,
+  )) as { token?: unknown };
+  if (typeof data.token !== "string" || data.token === "") {
+    throw new RealtimeKitError(502, "unavailable", "RealtimeKit token refresh returned no token");
+  }
+  return { participantId: a.participantId, authToken: data.token };
+}
+
 /** The largest page GET /sessions/{id}/participants serves (OpenAPI: default
  *  25, maximum 200). Every reload adds a row for the same participant, so the
  *  default page is the one most likely to run out. */

@@ -9,34 +9,60 @@ import "server-only";
 // round-open.ts, the one reader of the stamp), not `fixtures.scheduled_at`.
 // "The window has not started" is its OWN refusal (`round_not_open`), not
 // `window_closed`: the room says different things about the two.
+import type postgres from "postgres";
 import { roomPhase } from "@/server/external-play/window";
 import { roundOpenFor } from "@/server/external-play/round-open";
 import { sql } from "@/lib/db";
+import { captureError } from "@/lib/sentry";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import {
+  RealtimeKitError,
   addParticipant,
   ensureMeeting,
   hasLiveVideoPublisher,
+  refreshParticipantToken,
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
 import { loadOnlinePlayFixture, loadSides, type SidePlayer } from "./guard";
 
+/** Every reason a seat can be refused. The two camera refusals carry the
+ *  caller's OWN participant token (controller ruling Q1, 2026-10-09): under
+ *  `required` a player becomes live only by joining the meeting, so the token
+ *  to join with must reach them BEFORE they are seated — a refusal that
+ *  carried none would leave no way to ever be seated. Every other refusal
+ *  carries nothing. */
+export const SEAT_REFUSAL_REASONS = [
+  "camera_required",
+  "camera_lost",
+  "window_closed",
+  "not_a_player",
+  "round_not_open",
+  "fixture_not_playable",
+  "video_unavailable",
+] as const;
+
 export type SeatResult =
   | { seated: true; participant: ParticipantToken | null }
+  | { seated: false; reason: "camera_required" | "camera_lost"; participant: ParticipantToken }
   | {
       seated: false;
-      reason: "window_closed" | "not_a_player" | "round_not_open" | "fixture_not_playable";
+      reason: "window_closed" | "not_a_player" | "round_not_open" | "fixture_not_playable" | "video_unavailable";
     };
+
+type Video = {
+  ensureMeeting: typeof ensureMeeting;
+  addParticipant: typeof addParticipant;
+  hasLiveVideoPublisher: typeof hasLiveVideoPublisher;
+  refreshParticipantToken: typeof refreshParticipantToken;
+};
 
 /** Test seam only — T9 and the room pass no deps. */
 export type PreflightDeps = {
   now?: Date;
-  video?: {
-    ensureMeeting: typeof ensureMeeting;
-    addParticipant: typeof addParticipant;
-    hasLiveVideoPublisher: typeof hasLiveVideoPublisher;
-  };
+  video?: Video;
 };
+
+const REAL_VIDEO: Video = { ensureMeeting, addParticipant, hasLiveVideoPublisher, refreshParticipantToken };
 
 /** Controller ruling Q2 (2026-10-09): a board is playable only while it is
  *  `scheduled` or `in_play`. A withdrawal leaves it `abandoned` (league
@@ -81,6 +107,133 @@ export async function seatPlayer(
     // No meeting is created. Zero video spend (spec §5.1).
     return { seated: true, participant: null };
   }
-  void deps.video;
-  throw new Error("unimplemented: optional/required land in the next commit");
+
+  const video = deps.video ?? REAL_VIDEO;
+  if (policy === "optional") {
+    // Shown if the player grants camera; NEVER blocks a seat — not even when
+    // RealtimeKit is down. The publisher is deliberately not asked: a question
+    // whose answer is ignored is how a later refactor turns `optional` into
+    // `required`.
+    try {
+      const meeting = await video.ensureMeeting(a.fixtureId);
+      return { seated: true, participant: await issuePlayerToken(a, meeting.meetingId, video) };
+    } catch (err) {
+      if (!(err instanceof RealtimeKitError)) throw err;
+      reportOutage(err, f.orgId, a.fixtureId, policy);
+      return { seated: true, participant: null };
+    }
+  }
+
+  try {
+    return await verifyRequiredSeat(a, now, video);
+  } catch (err) {
+    // An outage (or an answer the adapter cannot read — T7 THROWS on those)
+    // is the vendor's failure, never the player's camera: it is its own
+    // reason, so neither the player nor the organiser is told "camera off",
+    // and the organiser's D11 override is the way through. Anything that is
+    // not a RealtimeKit failure (VIDEO_MEETING_ENDED, a database error)
+    // propagates unchanged.
+    if (!(err instanceof RealtimeKitError)) throw err;
+    reportOutage(err, f.orgId, a.fixtureId, policy);
+    return { seated: false, reason: "video_unavailable" };
+  }
+}
+
+/** `required`: seated only when the meeting reports this participant joined to
+ *  a live session and not left (T7 hasLiveVideoPublisher; camera-on itself is
+ *  the preset's job). Re-asked on EVERY claim, which is what makes seatPlayer
+ *  the freshness check T9 runs immediately before creating a game. */
+async function verifyRequiredSeat(
+  a: { fixtureId: string; personId: string },
+  now: Date,
+  video: Video,
+): Promise<SeatResult> {
+  const meeting = await video.ensureMeeting(a.fixtureId);
+  const participant = await issuePlayerToken(a, meeting.meetingId, video);
+  const [prior] = await sql<{ last_publisher_seen_at: Date | null }[]>`
+    select last_publisher_seen_at from fixture_video_participants
+     where fixture_id = ${a.fixtureId} and participant_id = ${participant.participantId}`;
+  const live = await video.hasLiveVideoPublisher({
+    meetingId: meeting.meetingId,
+    participantId: participant.participantId,
+  });
+  if (live) {
+    await sql`
+      update fixture_video_participants set last_publisher_seen_at = ${now}
+       where fixture_id = ${a.fixtureId} and participant_id = ${participant.participantId}`;
+    return { seated: true, participant };
+  }
+  // `last_publisher_seen_at` is EVIDENCE — when this participant was last
+  // verified live — and never a pass: nothing seats on it (every claim above
+  // re-asks the meeting) and nothing clears it. Clearing it on a loss (the
+  // brief's design) made a repeat claim with the camera still off answer
+  // camera_required, telling a player who HAD passed that they never had.
+  const hadPassed = prior?.last_publisher_seen_at != null;
+  return { seated: false, reason: hadPassed ? "camera_lost" : "camera_required", participant };
+}
+
+/** THE one place a player's RealtimeKit token is issued — so the
+ *  reuse-versus-regenerate policy lives here and nowhere else.
+ *
+ *  ONE participant per player per fixture: the first claim mints it (its
+ *  token comes with it); every later claim — a reload, a second tab, T9's
+ *  freshness check — REGENERATES a token for that same participant, so peer
+ *  discovery stays on one `user_id`. Measured 2026-10-09
+ *  (rtk-token-regen.log): a regenerated token is a different JWT and does not
+ *  invalidate the earlier one, so a second tab does not knock out the first.
+ *  Tokens are never stored: a token at rest is a token to leak.
+ *
+ *  (fixture_id, person_id) is deliberately NOT unique (V432: a second camera
+ *  angle is config, not a migration), so two first claims racing (two tabs)
+ *  are serialised on the meeting row instead: mint OUTSIDE any transaction
+ *  (an open transaction across an HTTP call holds the lock for the round
+ *  trip), then, under a short `for update` on the meeting row, store ours
+ *  only if nobody stored one first. The loser's minted participant is never
+ *  stored and never handed out; the loser gets a token for the winner's. */
+async function issuePlayerToken(
+  a: { fixtureId: string; personId: string },
+  meetingId: string,
+  video: Video,
+): Promise<ParticipantToken> {
+  const stored = await storedPlayerParticipant(sql, a);
+  if (stored) return video.refreshParticipantToken({ meetingId, participantId: stored });
+
+  const minted = await video.addParticipant({ meetingId, subject: a.personId, preset: "player" });
+  const kept = await sql.begin(async (tx) => {
+    await tx`select fixture_id from fixture_video_meetings where fixture_id = ${a.fixtureId} for update`;
+    const winner = await storedPlayerParticipant(tx, a);
+    if (winner) return winner;
+    await tx`
+      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
+      values (${a.fixtureId}, ${a.personId}, 'player', ${minted.participantId})`;
+    return minted.participantId;
+  });
+  if (kept === minted.participantId) return minted;
+  return video.refreshParticipantToken({ meetingId, participantId: kept });
+}
+
+// The privileged client or one of its transactions (the round-open.ts shape).
+type AnySql = postgres.TransactionSql | postgres.Sql;
+
+async function storedPlayerParticipant(
+  db: AnySql,
+  a: { fixtureId: string; personId: string },
+): Promise<string | null> {
+  const [row] = await db<{ participant_id: string }[]>`
+    select participant_id from fixture_video_participants
+     where fixture_id = ${a.fixtureId} and person_id = ${a.personId} and preset = 'player'
+     order by created_at, id
+     limit 1`;
+  return row?.participant_id ?? null;
+}
+
+/** A RealtimeKit failure the seat absorbs (as video_unavailable, or as no
+ *  tile under `optional`) is still reported — never swallowed silently. The
+ *  adapter's messages never carry a token or a response body (T7). */
+function reportOutage(err: RealtimeKitError, orgId: string, fixtureId: string, policy: string): void {
+  captureError(err, {
+    orgId,
+    route: "external-play/preflight",
+    extra: { fixtureId, policy, status: err.status, code: err.code },
+  });
 }
