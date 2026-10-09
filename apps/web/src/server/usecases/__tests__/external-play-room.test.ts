@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { appendEvent } from "@/server/engine-db";
-import { windowFor } from "@/server/external-play/window";
+import { roomPhase, windowFor } from "@/server/external-play/window";
 import type { ExternalPlayAdapter } from "@/server/external-play/types";
 import { mintMatchRoomToken } from "../match-room-token";
 import { stampFixtureCheckIn } from "../me";
@@ -35,6 +35,10 @@ import { seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_ex
 // the real check-in stamps above so both independently land "open".
 const T = new Date(Date.now() + 5 * 60_000);
 const now = new Date();
+// D12 (T9): the room's window hangs off the organiser's OPEN stamp, not the
+// timetable. Every pre-existing case below opens its round AT T, so the
+// window each was written against (T-10..T+20) is unchanged; the D12 cases
+// at the bottom are the ones where the two anchors differ.
 
 // `fixture_external_play.challenge_id` has a GLOBAL unique index (V405) —
 // not scoped per fixture, and this test DB is not reset between vitest
@@ -83,10 +87,13 @@ async function snapshotRows(fixtureId: string): Promise<Snapshot> {
   return { bridge, availability };
 }
 
+// Top level, not inside the first describe: the D12 block below runs after
+// it, and an end() scoped to the first block would close the pool under it.
+afterAll(async () => {
+  await sql.end();
+});
+
 describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
-  afterAll(async () => {
-    await sql.end();
-  });
 
   // -------------------------------------------------------------------
   // Identity resolution (spec §12.1) — every failure collapses to the same
@@ -98,6 +105,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     const f = await loadOnlinePlayFixture(s.fixtureId);
@@ -111,6 +119,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     const stranger = await makeUser("stranger");
@@ -124,12 +133,14 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     const other = await seedOnlineChessFixture({
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     // Isolate the fixtureId comparison specifically: the personId and
@@ -151,6 +162,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     // Minted for the CORRECT fixture/person, but the scheduledAt on the link
@@ -168,12 +180,14 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     const other = await seedOnlineChessFixture({
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     // Correct fixtureId and correct (matching) scheduledAt for s, but the
@@ -190,6 +204,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     // mintMatchRoomToken pins exp = scheduledAt + 24h; a scheduledAt far in
@@ -215,6 +230,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     // A bridge minted for an OLDER scheduled_at (stale — effectiveBridge
@@ -240,6 +256,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     const early = new Date(T.getTime() - 11 * 60_000);
@@ -255,6 +272,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     const token = await tokenFor(s, s.home.personId, T);
@@ -269,6 +287,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     const d = deps();
@@ -285,6 +304,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     const adapter = fakeAdapter();
@@ -312,6 +332,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     const token = await tokenFor(s, s.away.personId, T);
@@ -330,6 +351,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: false,
     });
     await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
@@ -348,6 +370,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
@@ -384,6 +407,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
@@ -413,6 +437,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
@@ -432,6 +457,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       onlinePlay: "lichess",
       divisionStarted: true,
       scheduledAt: T,
+      roundOpenedAt: T,
       linked: true,
     });
     await appendEvent(s.orgId, s.fixtureId, 0, {
@@ -466,6 +492,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
         onlinePlay: "lichess",
         divisionStarted: true,
         scheduledAt: T,
+      roundOpenedAt: T,
         linked: true,
       });
       await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
@@ -502,6 +529,7 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
         onlinePlay: "lichess",
         divisionStarted: true,
         scheduledAt: T,
+      roundOpenedAt: T,
         linked: true,
       });
       await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
@@ -534,4 +562,139 @@ describe.skipIf(!process.env.DATABASE_URL)("match room usecase", () => {
       expect(row?.mint_claimed_at?.getTime()).toBe(takeoverAt.getTime()); // the new claimant's stamp survives
     },
   );
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("D12 — the room anchors on the open stamp", () => {
+  it("a paired-but-unopened round reads phase 'before', whatever the timetable says", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: new Date("2026-10-01T12:10:00.000Z"),
+      linked: true,
+    });
+    // Five minutes AFTER the scheduled time: schedule-anchored, this is
+    // "open"; stamp-anchored, the round has not started.
+    const view = await readMatchRoom(
+      { kind: "session", userId: s.home.userId },
+      s.fixtureId,
+      new Date("2026-10-01T12:15:00.000Z"),
+    );
+    expect(view.phase).toBe("before");
+    expect(view.canMint, "nothing to mint for a round nobody opened").toBe(false);
+    // The scheduled time is what the player is SHOWN until the open.
+    const scheduled = windowFor(new Date("2026-10-01T12:10:00.000Z"));
+    expect(view.opensAt).toBe(scheduled.opensAt.toISOString());
+    expect(view.deadline).toBe(scheduled.deadline.toISOString());
+  });
+
+  it("an opened round reads 'open' from the stamp, and its deadline is stamp + 20m", async () => {
+    const opened = new Date("2026-10-01T12:00:00.000Z");
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: new Date("2026-10-01T12:10:00.000Z"),
+      linked: true,
+      roundOpenedAt: opened,
+    });
+    const view = await readMatchRoom(
+      { kind: "session", userId: s.home.userId },
+      s.fixtureId,
+      new Date("2026-10-01T12:05:00.000Z"),
+    );
+    expect(view.phase).toBe("open");
+    // Derived from the window constants, never typed in, so moving
+    // DEADLINE_AFTER_MS moves this test with it.
+    expect(view.deadline).toBe(windowFor(opened).deadline.toISOString());
+    expect(view.opensAt).toBe(windowFor(opened).opensAt.toISOString());
+    expect(windowFor(opened).deadline.getTime(), "premise: the two anchors differ").not.toBe(
+      windowFor(new Date("2026-10-01T12:10:00.000Z")).deadline.getTime(),
+    );
+  });
+
+  it("check-in is refused on an unopened round", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: new Date("2026-10-01T12:10:00.000Z"),
+      linked: true,
+    });
+    await expect(
+      checkInToMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, {
+        now: new Date("2026-10-01T12:15:00.000Z"),
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "CHECK_IN_CLOSED" });
+    const [row] = await sql`select checked_in_at from fixture_availability where fixture_id = ${s.fixtureId}`;
+    expect(row, "nothing stamped").toBeUndefined();
+  });
+
+  it("an unopened round counts no check-in, even one inside the timetable's window", async () => {
+    // Mutant Rg (2026-10-09): an unopened round falling back to the timetable
+    // for check-ins survived every other case here.
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+    });
+    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
+    const [stamp] = await sql<{ checked_in_at: Date }[]>`
+      select checked_in_at from fixture_availability where fixture_id = ${s.fixtureId}`;
+    expect(roomPhase(stamp!.checked_in_at, T), "premise: inside the timetable's window").toBe("open");
+    const view = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, new Date());
+    expect(view.phase).toBe("before");
+    expect(view.you.checkedIn).toBe(false);
+  });
+
+  it("a check-in inside the TIMETABLE's window but outside the OPEN stamp's does not count", async () => {
+    // stampFixtureCheckIn stamps the DB's real now(): the schedule (T, five
+    // minutes ahead) puts that stamp inside its window, while a round opened
+    // two hours ago closed its window long before it.
+    const openedLongAgo = new Date(Date.now() - 2 * 60 * 60_000);
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+      roundOpenedAt: openedLongAgo,
+    });
+    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
+    const [stamp] = await sql<{ checked_in_at: Date }[]>`
+      select checked_in_at from fixture_availability where fixture_id = ${s.fixtureId}`;
+    expect(roomPhase(stamp!.checked_in_at, T), "premise: inside the timetable's window").toBe("open");
+    expect(roomPhase(stamp!.checked_in_at, openedLongAgo), "premise: outside the open stamp's").toBe("closed");
+    const view = await readMatchRoom({ kind: "session", userId: s.home.userId }, s.fixtureId, new Date());
+    expect(view.you.checkedIn).toBe(false);
+  });
+
+  it("the mint's expires_at is the OPEN stamp's deadline, and an unopened round mints nothing", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+    });
+    await stampFixtureCheckIn(s.home.personId, s.fixtureId, s.orgId);
+    await stampFixtureCheckIn(s.away.personId, s.fixtureId, s.orgId);
+    const f = await loadOnlinePlayFixture(s.fixtureId);
+    if (!f) throw new Error("seed did not pass the guard");
+    const unopened = deps();
+    expect(await mintIfReady(f, unopened)).toBe("not_ready");
+    expect(unopened.adapter?.createOpenChallenge).not.toHaveBeenCalled();
+
+    // Opened two minutes before T: both check-ins (real now) sit inside its
+    // window, and its deadline differs from the timetable's.
+    const opened = new Date(T.getTime() - 2 * 60_000);
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+      values (${s.stageId}, ${s.orgId}, 1, ${opened}, ${s.ownerUserId})`;
+    const d = deps();
+    expect(await mintIfReady(f, d)).toBe("minted");
+    expect(d.adapter?.createOpenChallenge).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresAt: windowFor(opened).deadline }),
+    );
+    const [row] = await sql<{ expires_at: Date }[]>`
+      select expires_at from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    expect(row?.expires_at.toISOString()).toBe(windowFor(opened).deadline.toISOString());
+    expect(windowFor(opened).deadline.getTime(), "premise: the anchors differ").not.toBe(windowFor(T).deadline.getTime());
+  });
 });
