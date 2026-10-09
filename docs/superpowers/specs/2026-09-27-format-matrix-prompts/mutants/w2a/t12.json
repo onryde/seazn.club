@@ -324,15 +324,15 @@
   {
     "id": "winner-names",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "    return { id: side, label: SIDE_LABEL[side], ...(names.length > 0 ? { labelText: names.join(\" & \") } : {}) };",
-    "replace": "    return { id: side, label: SIDE_LABEL[side] };",
+    "find": "    const labelText = entrant !== undefined && entrant.length > 0 ? entrant : names.length > 0 ? names.join(\" & \") : undefined;",
+    "replace": "    const labelText = entrant !== undefined && entrant.length > 0 ? entrant : undefined;",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
         ],
-        "name": "the winner options name the players the lineup puts on the board"
+        "name": "with no entrant name the winner options fall back to the players"
       }
     ]
   },
@@ -527,6 +527,66 @@
           "src/components/v2/__tests__/fixture-console-undo-pad-events.test.tsx"
         ],
         "name": "passes stageKind and canOrganise through to"
+      }
+    ]
+  },
+  {
+    "id": "r1-i2-tiebreak-options-name-entrants",
+    "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
+    "find": "    const labelText = entrant !== undefined && entrant.length > 0 ? entrant : names.length > 0 ? names.join(\" & \") : undefined;",
+    "replace": "    const labelText = names.length > 0 ? names.join(\" & \") : undefined;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts"
+        ],
+        "name": "with NO pairing card the winner and armageddon options read the ENTRANTS"
+      }
+    ]
+  },
+  {
+    "id": "r1-i2-scorepad-passes-entrant-names",
+    "file": "apps/web/src/components/v2/scorepad/registry.tsx",
+    "find": "      entrantNames={entrantNames}\n",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/registry.test.tsx"
+        ],
+        "name": "a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin"
+      }
+    ]
+  },
+  {
+    "id": "r1-i2-entrant-names-keyed-by-side",
+    "file": "apps/web/src/components/v2/scorepad/registry.tsx",
+    "find": "  return { home: home.name, away: away.name };",
+    "replace": "  return { home: away.name, away: home.name };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/scorepad/__tests__/registry.test.tsx"
+        ],
+        "name": "a sportKey resolvePad reports as v3 renders PadHostV3 with the resolved skin"
+      }
+    ]
+  },
+  {
+    "id": "r1-ribbon-wraps-two-lines",
+    "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+    "find": "          <span className=\"min-w-0 flex-1 line-clamp-2 break-words text-sm text-slate-700\">{ribbon.text}</span>",
+    "replace": "          <span className=\"min-w-0 flex-1 truncate text-sm text-slate-700\">{ribbon.text}</span>",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/device-pad-history-and-undo.test.tsx"
+        ],
+        "name": "the ribbon's sentence wraps to two lines on a phone"
       }
     ]
   }

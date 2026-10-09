@@ -241,8 +241,8 @@
   {
     "id": "d-c4-event-band-dropped",
     "file": "apps/web/src/components/v2/scorepad/v3/skins/boardgame.tsx",
-    "find": "  \"boardgame.tiebreak\": 0, // W2a BG-KO-1",
-    "replace": "  // \"boardgame.tiebreak\": 0, // W2a BG-KO-1",
+    "find": "  [TIEBREAK_TYPE]: 0, // W2a BG-KO-1 — the module's own band (ruling D-C4)",
+    "replace": "  // [TIEBREAK_TYPE]: 0, // W2a BG-KO-1 — the module's own band (ruling D-C4)",
     "killers": [
       {
         "cwd": "apps/web",

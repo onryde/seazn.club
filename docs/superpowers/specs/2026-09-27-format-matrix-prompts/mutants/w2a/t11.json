@@ -91,8 +91,8 @@
   {
     "id": "console-organiser-gate",
     "file": "apps/web/src/components/v2/fixture-console.tsx",
-    "find": "const offerOrganiserActions = !decided && canOrganise;",
-    "replace": "const offerOrganiserActions = !decided;",
+    "find": "const offerOrganiserActions = !decided && !held && canOrganise;",
+    "replace": "const offerOrganiserActions = !decided && !held;",
     "killers": [
       {
         "cwd": "apps/web",
@@ -136,7 +136,7 @@
   {
     "id": "row-decide",
     "file": "apps/web/src/lib/fixture-row-action.ts",
-    "find": "if (status === \"needs_decision\") return canEdit ? { kind: \"decide\" } : { kind: \"view\" };",
+    "find": "if (status === \"needs_decision\" || awaitsSettle) return canEdit ? { kind: \"decide\" } : { kind: \"view\" };",
     "replace": "",
     "killers": [
       {
@@ -180,7 +180,7 @@
   {
     "id": "row-held-chip",
     "file": "apps/web/src/components/v2/desk/run-sheet-row.tsx",
-    "find": "{fixture.status === \"needs_decision\" && (",
+    "find": "{(fixture.status === \"needs_decision\" || awaitsSettle) && (",
     "replace": "{false && (",
     "killers": [
       {
@@ -189,6 +189,141 @@
           "src/components/v2/desk/__tests__/run-sheet-row.test.tsx"
         ],
         "name": "shows the held chip and the decide action to an editor"
+      }
+    ]
+  },
+  {
+    "id": "r1-i1-held-hides-organiser-actions",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "  const offerOrganiserActions = !decided && !held && canOrganise;",
+    "replace": "  const offerOrganiserActions = !decided && canOrganise;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "I1: a chess knockout in its tie-break is HELD"
+      }
+    ]
+  },
+  {
+    "id": "r1-m6-console-status-badge-normal-case",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "          <span className={`badge normal-case ${STATUS_STYLE[live.status] ?? \"\"}`}>",
+    "replace": "          <span className={`badge ${STATUS_STYLE[live.status] ?? \"\"}`}>",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "an official scorer on a held fixture sees no block and no Settle"
+      }
+    ]
+  },
+  {
+    "id": "r1-m7-held-note-scorer-only",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "      {scoring && home && away && !canOrganise && held && (",
+    "replace": "      {scoring && home && away && held && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "M7: the official scorer on a held fixture is told WHY"
+      }
+    ]
+  },
+  {
+    "id": "r1-m7-held-note-held-only",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "      {scoring && home && away && !canOrganise && held && (",
+    "replace": "      {scoring && home && away && !canOrganise && (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "M7: the official scorer on a held fixture is told WHY"
+      }
+    ]
+  },
+  {
+    "id": "r1-dh3-held-cause-abandon-first",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "  if (hasActiveAbandon(f.events)) return \"abandoned\";",
+    "replace": "",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "each held shape names its own cause"
+      }
+    ]
+  },
+  {
+    "id": "r1-dh3-held-cause-tiebreak",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "  return f.outcome == null ? \"tiebreak\" : \"level\";",
+    "replace": "  return \"level\";",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "each held shape names its own cause"
+      }
+    ]
+  },
+  {
+    "id": "r1-dh3-block-body-by-cause",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "          {msg(BODY_KEY[props.cause])}",
+    "replace": "          {msg(\"score.needsDecision.body\")}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "the block says the cause's own sentence"
+      }
+    ]
+  },
+  {
+    "id": "r1-dh3-console-passes-cause",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "          cause={heldCause({ outcome: live.outcome, events })}",
+    "replace": "          cause=\"level\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "I1: a chess knockout in its tie-break is HELD"
+      }
+    ]
+  },
+  {
+    "id": "r1-m12-settle-names-wrap",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "                <span className=\"min-w-0 break-words\">{e.name}</span>",
+    "replace": "                <span className=\"min-w-0 truncate\">{e.name}</span>",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/needs-decision.test.tsx"
+        ],
+        "name": "each winner button carries its whole name, wrapping"
       }
     ]
   }

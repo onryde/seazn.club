@@ -29,6 +29,16 @@ async function post(r: APIRequestContext, id: string, type: string, payload: unk
   return res;
 }
 
+/** The en ui dictionary: console copy under test is read from it, never typed. */
+const UI_EN = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+const ui = (key: string) => {
+  expect(UI_EN[key], `ui.json has ${key}`).toBeTruthy();
+  return UI_EN[key]!;
+};
+const ABANDON = () => ui("score.abandon");
+
 /** Only for the owner's per-screen verdict capture (R24): element crops into the SDD screenshots dir. Unset in CI. */
 const SHOTS = process.env.W2A_SHOTS_DIR;
 async function crop(target: Locator | Page, name: string, width: number) {
@@ -140,6 +150,12 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await expect(page.getByTestId("needs-decision")).toBeVisible();
     await expect(page.getByTestId("settle-open")).toBeVisible();
     await expect(page.getByTestId("score-finalize")).toHaveCount(0); // finding 27
+    // D-H3: the block's sentence is the LEVEL-result one; I1: a held fixture is the organiser's to settle, so Forfeit and
+    // Abandon go with Finalize (their positive pair is the in-play test below).
+    await expect(page.getByTestId("needs-decision").locator("[data-cause]")).toHaveAttribute("data-cause", "level");
+    await expect(page.getByTestId("needs-decision").locator("[data-cause]")).toHaveText(ui("score.needsDecision.body"));
+    await expect(page.getByTestId("score-forfeit")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: ABANDON(), exact: true })).toHaveCount(0);
     // Finding 25: the division's run sheet carries the hold and offers Settle, which lands on this console.
     const no = path.split("/f/")[1]!;
     await page.goto(`${path.split("/f/")[0]}?tab=fixtures`);
@@ -155,10 +171,31 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await post(request, sf.id, "core.start");
     await post(request, sf.id, "core.abandon", { reason: "floodlights" }); // a level abandon decides nobody (finding 19)
     expect((await read(request, sf.id)).status).toBe("abandoned");
-    await page.goto(await fixturePath(request, sf.id));
+    // M10 (fix round 1): the run sheet carries the hold for a recorded abandon too — stored `abandoned`, held all the
+    // same — and its Settle row action is the way in.
+    const path = await fixturePath(request, sf.id);
+    const no = path.split("/f/")[1]!;
+    await page.goto(`${path.split("/f/")[0]}?tab=fixtures`);
+    const row = page.locator(`li[data-fixture-no="${no}"]`);
+    await expect(row.getByTestId("run-sheet-held-chip")).toHaveText("Needs a decision");
+    await expect(row.locator("[data-row-action]")).toHaveAttribute("data-row-action", "decide");
+    let rowWidths = 0;
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(row.getByTestId("run-sheet-held-chip"), `${w}: the hold is on the row`).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      await crop(row, "run-sheet-held-abandon", w);
+      rowWidths++;
+    }
+    expect(rowWidths).toBe(3);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await row.locator('[data-row-action="decide"]').click();
+    await page.waitForURL((u) => u.pathname === path);
     const block = page.getByTestId("needs-decision");
     await expect(block).toBeVisible();
     await expect(page.getByTestId("score-finalize")).toHaveCount(0); // finding 27
+    await expect(block.locator("[data-cause]"), "D-H3: the abandoned sentence").toHaveAttribute("data-cause", "abandoned");
+    await expect(block.locator("[data-cause]")).toHaveText(ui("score.needsDecision.body.abandoned"));
     await page.getByTestId("settle-open").click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
@@ -238,7 +275,9 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
       await expect(p.getByTestId("needs-decision")).toHaveCount(0);
       await expect(p.getByTestId("settle-open")).toHaveCount(0);
       await expect(p.getByTestId("score-forfeit")).toHaveCount(0);
-      await expect(p.getByRole("button", { name: "Abandon…" })).toHaveCount(0);
+      await expect(p.getByRole("button", { name: ABANDON(), exact: true })).toHaveCount(0);
+      // M7 (fix round 1): one line tells them WHY nothing is offered.
+      await expect(p.getByTestId("held-note")).toHaveText(ui("score.needsDecision.waiting"));
       for (const w of [1280, 768, 320]) {
         await p.setViewportSize({ width: w, height: 900 });
         await expectNoHorizontalScroll(p);
@@ -249,11 +288,42 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     }
   });
 
-  test("the block and the dialog at 1280, 768 and 320: no horizontal scroll, long names truncate", async ({ page, request }, testInfo) => {
+  test("M9 (fix round 1): on an IN-PLAY fixture the organiser is offered Forfeit and Abandon; an official scorer is offered neither", async ({ browser, page, request }) => {
+    // The held negatives above pass for an official on ANY fixture unless this is true: Forfeit and Abandon are the
+    // organiser's whatever the status. The organiser on the same in-play fixture is the positive pair.
+    const { sf } = await knockout(request, "generic", "score");
+    await post(request, sf.id, "core.start");
+    expect((await read(request, sf.id)).status).toBe("in_play");
+    const path = await fixturePath(request, sf.id);
+    await page.goto(path);
+    await expect(page.getByTestId("score-forfeit")).toBeVisible();
+    await expect(page.getByRole("button", { name: ABANDON(), exact: true })).toBeVisible();
+    await expect(page.getByTestId("needs-decision"), "in play: nothing is held").toHaveCount(0);
+    const official = await officialScorerPage(browser, sf.id);
+    try {
+      const p = official.page;
+      await p.goto(path);
+      await dismissCookieBanner(p);
+      await expect(p.getByRole("link", { name: /My matches/ }), "a scorer here, not a bare viewer").toBeVisible();
+      await expect(p.getByText("Void last entry")).toBeVisible();
+      await expect(p.getByTestId("score-forfeit")).toHaveCount(0);
+      await expect(p.getByRole("button", { name: ABANDON(), exact: true })).toHaveCount(0);
+      await expect(p.getByTestId("held-note"), "in play: no held line").toHaveCount(0);
+    } finally {
+      await official.close();
+    }
+  });
+
+  test("the block and the dialog at 1280, 768 and 320: no horizontal scroll, long names wrap whole (M12)", async ({ page, request }, testInfo) => {
     // A realistic 43-character entrant name (AGENTS.md: the truncate defect showed only with one).
     const LONG = ["W2a Maximiliana Konstantinopoulou-Grunewald", "W2a Bartholomew Featherstonehaugh-Wolfeschl", "W2a Cy", "W2a Di"];
     expect(LONG.slice(0, 2).map((n) => n.length)).toEqual([43, 43]);
-    const { sf } = await knockout(request, "generic", "score", LONG);
+    const ko = await knockout(request, "generic", "score", LONG);
+    const { sf } = ko;
+    expect(
+      [sf.home_entrant_id!, sf.away_entrant_id!].some((id) => ko.nameOf.get(id)!.length === 43),
+      "the fixture under test carries a 43-character name",
+    ).toBe(true);
     await post(request, sf.id, "core.start");
     await post(request, sf.id, "core.abandon", { reason: "rain" });
     await page.goto(await fixturePath(request, sf.id));
@@ -272,6 +342,11 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
         expect(box, `${w} ${id}`).not.toBeNull();
         expect(box!.x + box!.width, `${w}: the winner button stays inside the viewport`).toBeLessThanOrEqual(w);
         expect(box!.height, `${w}: a 44px tap target`).toBeGreaterThanOrEqual(44);
+        // M12 (fix round 1): the WHOLE name — the one thing being chosen between — never an ellipsis.
+        const name = page.getByTestId(`settle-winner-${id}`).locator("span");
+        await expect(name).toHaveText(ko.nameOf.get(id)!);
+        const cut = await name.evaluate((s) => s.scrollWidth > s.clientWidth + 1 || getComputedStyle(s).textOverflow === "ellipsis");
+        expect(cut, `${w} ${id}: the name is not cut`).toBe(false);
       }
       await expectNoHorizontalScroll(page);
       await crop(page.getByRole("dialog"), "console-settle-dialog", w);
@@ -314,10 +389,17 @@ async function drawnChessKnockout(r: APIRequestContext) {
 const RESULT_DRAWN = { type: "boardgame.result", payload: { winner: null, method: "agreement" } } as const;
 
 test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
-  test("BG-KO-1 + BG-KO-2 (ruling 82): the chess tie-break — lots is the organiser's, the Armageddon hint shows on Armageddon only, exactly two winners, and the tapped winner advances", async ({ page, request }) => {
-    const { sf } = await drawnChessKnockout(request);
+  test("BG-KO-1 + BG-KO-2 (ruling 82): the chess tie-break — lots is the organiser's, the Armageddon hint shows on Armageddon only, exactly two winners named as the entrants, and the tapped winner advances", async ({ page, request }) => {
+    const ko = await drawnChessKnockout(request);
+    const { sf } = ko;
     await page.goto(await fixturePath(request, sf.id));
     await expect(tile(page, "tiebreak")).toBeVisible();
+    // D-H3: the block says the tie-break is pending; I1: held, so no Forfeit and no Abandon (the engine would take an
+    // abandon here — tiebreak.test.ts — but a held fixture is the organiser's to settle).
+    await expect(page.getByTestId("needs-decision").locator("[data-cause]")).toHaveAttribute("data-cause", "tiebreak");
+    await expect(page.getByTestId("needs-decision").locator("[data-cause]")).toHaveText(ui("score.needsDecision.body.tiebreak"));
+    await expect(page.getByTestId("score-forfeit")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: ABANDON(), exact: true })).toHaveCount(0);
     await expect(tile(page, "draw"), "the game is already drawn: no second Draw").toHaveCount(0);
     await expect(tappableHalves(page), "no half records a result while the tie-break is owed").toHaveCount(0);
     await tile(page, "tiebreak").click();
@@ -334,6 +416,10 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     await option(page, "armageddon").click();
     await expect(hint).toBeVisible(); // the positive pair of the two negatives above
     await expect(pad(page).locator("[data-choice-option-id]"), "exactly the two entrants; no 'drawn' choice").toHaveCount(2);
+    // I2 (fix round 1, spec §5.5 "two entrants, always"): no pairing card was recorded, so the options read the
+    // ENTRANTS' names — never "Home"/"Away" — and their ids stay home/away.
+    await expect(option(page, "home")).toHaveText(ko.nameOf.get(sf.home_entrant_id!)!);
+    await expect(option(page, "away")).toHaveText(ko.nameOf.get(sf.away_entrant_id!)!);
     await option(page, "away").click();
     await expect.poll(async () => (await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.away_entrant_id, method: "tiebreak_armageddon" });
     await expect.poll(() => seatedInFinal(sf.id)).toContain(sf.away_entrant_id);
@@ -366,16 +452,24 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
     expect(events.map((e) => e.type)).toEqual(["core.start", "boardgame.result"]); // nothing more
   });
 
-  test("addendum 1 (D-C5): once the organiser settles a chess tie-break by lot, the pad offers nothing — no tie-break, no result", async ({ page, request }) => {
+  test("addendum 1 (D-C5): once the organiser settles a chess tie-break by lot, the pad offers nothing — the same page held a mounted pad with the tie-break before, and holds no pad after", async ({ page, request }) => {
     const { sf } = await drawnChessKnockout(request);
+    await page.goto(await fixturePath(request, sf.id));
+    // Teeth (fix round 1, M8): the SAME page, before the settle, holds a mounted pad offering the tie-break — so every
+    // absence below is the settle's doing, never a pad that was not there to begin with.
+    await expect(pad(page)).toBeAttached();
+    await expect(tile(page, "tiebreak")).toBeVisible();
     await post(request, sf.id, "core.settle", { winner: sf.home_entrant_id, method: "lot" });
     expect((await read(request, sf.id)).outcome).toMatchObject({ kind: "win", winner: sf.home_entrant_id, method: "settled_lot" });
-    await page.goto(await fixturePath(request, sf.id));
-    // The positive pair is the BG-KO-1 test above (same fixture shape, tile visible before the settle).
+    await page.reload();
     await expect(page.getByText("Void last entry")).toBeVisible(); // the console rendered and is scoring-capable
+    await expect(page.getByTestId("needs-decision"), "settled: no longer held").toHaveCount(0);
+    // Decided chess declares no post-match panel, so the console unmounts the pad (`shouldMountPad`): nothing at all is
+    // offered — no tie-break, no Draw, no result half.
+    await expect(pad(page)).toHaveCount(0);
     await expect(tile(page, "tiebreak")).toHaveCount(0);
-    await expect(tile(page, "draw")).toHaveCount(0);
-    await expect(tappableHalves(page)).toHaveCount(0);
+    await expect(page.locator('[data-tile-id="draw"]')).toHaveCount(0);
+    await expect(page.locator('button[data-role="v3-scorebug-half"]')).toHaveCount(0);
   });
 
   test("D-P1: chess keeps its Draw in every kind while live — a knockout game and a league game both show it", async ({ page, request }) => {
@@ -413,6 +507,44 @@ test.describe("W2a — the pad finishes a bracket (Task 12)", () => {
       } else {
         await expect(tile(page, "settle")).toBeVisible();
         await expect(pad(page).getByText("Draws allowed")).toBeVisible();
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  test("M11 (fix round 1): the device link (/score/[token]) on a generic bracket offers no level finish either; the same tally's link in a league does", async ({ browser, request }) => {
+    // The device route mounts its own pad (DeviceScorePad), not the console's — a second consumer of the bracket rule.
+    let checked = 0;
+    for (const kind of ["knockout", "league"] as const) {
+      const { sf } = await staged(request, "generic", "score", kind, ["W2a Ana", "W2a Ben", "W2a Cy", "W2a Di"]);
+      await post(request, sf.id, "core.start");
+      await post(request, sf.id, "generic.score", { by: sf.home_entrant_id, points: 1 });
+      await post(request, sf.id, "generic.score", { by: sf.away_entrant_id, points: 1 });
+      const minted = await apiJson<{ id: string; secret: string }>(request, `/api/v1/fixtures/${sf.id}/device-links`, "POST", { label: `W2a ${kind}` });
+      expect(minted.status, `mint: ${JSON.stringify(minted.error)}`).toBe(201);
+      // A signed-out browser: the token is the credential (device-links.spec.ts), never the organiser's cookie.
+      const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+      try {
+        const p = await ctx.newPage();
+        await p.goto(`/score/${minted.data!.secret}`);
+        await dismissCookieBanner(p);
+        await expect(p.locator("[data-tile-id]").first(), `${kind}: the device pad rendered`).toBeVisible({ timeout: 20_000 });
+        const settle = p.locator('[data-tile-id="settle"]');
+        if (kind === "knockout") {
+          await expect(settle, "a level tally cannot finish a bracket match on the device either").toHaveCount(0);
+          await expect(p.getByText("No draws")).toBeVisible();
+          for (const w of [1280, 768, 320]) {
+            await p.setViewportSize({ width: w, height: 900 });
+            await expectNoHorizontalScroll(p);
+            await crop(p, "device-pad-generic-bracket", w);
+          }
+        } else {
+          await expect(settle).toBeVisible();
+          await expect(p.getByText("Draws allowed")).toBeVisible();
+        }
+      } finally {
+        await ctx.close();
       }
       checked++;
     }
@@ -617,6 +749,8 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
     await expect(page.getByTestId("mc-status-line")).toHaveText(
       say("matchCentre.result.tiebreak_rapid.scored", { winner, score: "1½–½" }),
     );
+    // M1 (fix round 1): the score is one unbreakable run — at 320 it read "(1½–" over "½)".
+    await expect(page.getByTestId("mc-status-line").locator("span.whitespace-nowrap")).toHaveText("1½–½");
     const [a, b] = [await page.getByTestId("mc-score-0").textContent(), await page.getByTestId("mc-score-1").textContent()];
     expect(a, "the drawn game's level score is kept").toBe(b);
     expect(a?.trim()).not.toBe("");
@@ -631,7 +765,7 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
     expect(widths).toBe(3);
   });
 
-  test("addendum 8: the official's own lane keeps a held fixture as a duty, says it is held, and its Score link opens the console", async ({ browser, request }) => {
+  test("addendum 8: the official's own lane keeps a held fixture as a duty, says it is held, and its View match link (D-H3) opens the console", async ({ browser, request }) => {
     const UI = JSON.parse(
       readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
     ) as Record<string, string>;
@@ -644,8 +778,10 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
       const card = p.getByTestId("me-official-card").filter({ has: p.locator('[data-held="true"]') });
       await expect(card, "the held fixture is on the lane, marked held").toHaveCount(1);
       await expect(card.locator('[data-held="true"]')).toHaveText(UI["score.status.needs_decision"]!);
-      const link = card.getByRole("link", { name: UI["me.off.score"]! });
+      // D-H3: there is nothing to SCORE on a held fixture — the link says View match (positive pair: the unit's in-play row).
+      const link = card.getByRole("link", { name: new RegExp(`^${UI["me.off.view"]!}`) });
       await expect(link, "a held fixture is still the scorer's to open").toBeVisible();
+      await expect(card.getByRole("link", { name: new RegExp(`^${UI["me.off.score"]!}`) })).toHaveCount(0);
       for (const w of [1280, 768, 320]) {
         await p.setViewportSize({ width: w, height: 900 });
         await expectNoHorizontalScroll(p);
@@ -688,6 +824,16 @@ test.describe("W2a — the public match page and bracket (Task 13)", () => {
       widths++;
     }
     expect(widths).toBe(3);
+    // M3 (fix round 1): the DIVISION page agrees. It renders no phase pill (its phase gates only the start-locks tip and
+    // the run sheet's default filter — finding, fix round 1), so what it shows of the hold is the run sheet's row: the
+    // held chip and the Settle action on the abandoned final, never a plain abandoned row.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const path = await fixturePath(request, ko.sf.id);
+    await page.goto(`${path.split("/f/")[0]}?tab=fixtures`);
+    const row = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
+    await expect(row.getByTestId("run-sheet-held-chip")).toHaveText("Needs a decision");
+    await expect(row.locator("[data-row-action]")).toHaveAttribute("data-row-action", "decide");
+    await expect(page.locator('[data-pill="finished"]'), "nothing on the division page reads Finished").toHaveCount(0);
   });
 
   test("the public screens at 1280, 768 and 320: held match, settled match, held bracket — no horizontal scroll", async ({ page, request }) => {
