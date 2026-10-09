@@ -310,7 +310,11 @@ function walkedOverSides(fixture: BracketFixture): EntrantId[] {
     if (fixture.winner !== undefined || fixture.loser !== undefined) {
       throw new Error(`bracket fixture ${fixture.id}: a double walkover (walkedOver "both") names a winner or a loser`);
     }
-    return [fixture.home, fixture.away].filter((id): id is EntrantId => id !== undefined);
+    // Both sides were absent, so both were seated: a "both" row with an empty seat is a wiring bug too.
+    if (fixture.home === undefined || fixture.away === undefined) {
+      throw new Error(`bracket fixture ${fixture.id}: a double walkover (walkedOver "both") is missing a side`);
+    }
+    return [fixture.home, fixture.away];
   }
   if (fixture.loser === undefined) {
     throw new Error(`bracket fixture ${fixture.id}: a forfeit (walkedOver "loser") names no loser`);

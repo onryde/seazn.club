@@ -313,10 +313,10 @@ const DEFAULT_WALKOVER_PHASES: readonly ForfeitPhase[] = ["pre"];
 
 /** W2b (plan D3 R2, R4, R5) — the forfeit reasons a phase admits, in FORFEIT_REASONS order: a walkover only in the
  *  module's walkover phases (R2), a retirement or disqualification only once play started (R4), a withdrawal in any
- *  phase (R5). "over" admits none here — the module's own done/final guard and guarantee 4 answer for it (R0). The
- *  one list the guard judges by AND the refusal names, so the copy can never offer a reason the guard refuses. */
-function forfeitReasonsAllowed(phase: ForfeitPhase, walkoverPhases: readonly ForfeitPhase[]): ForfeitReason[] {
-  if (phase === "over") return [];
+ *  phase (R5). Never asked of "over" (the type says so): the module's own done/final guard and guarantee 4 answer for
+ *  it (R0). The one list the guard judges by AND the refusal names, so the copy can never offer a reason the guard
+ *  refuses. */
+function forfeitReasonsAllowed(phase: Exclude<ForfeitPhase, "over">, walkoverPhases: readonly ForfeitPhase[]): ForfeitReason[] {
   return FORFEIT_REASONS.filter((reason) =>
     reason === "walkover" ? walkoverPhases.includes(phase) : reason === "withdrew" ? true : phase !== "pre",
   );

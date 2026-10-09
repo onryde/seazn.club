@@ -297,8 +297,15 @@ describe("X-DE-1: in double elimination a forfeit loser is out, never drops (spe
       fx("lb-r1-1", 4, "E6", "E3", "E6", { bracket: "LB" }),
       fx("lb-r1-1", 4, "E6", "E3", "E6", { bracket: "LB", status: "walkover", walkedOver: "loser" }),
     ];
-    for (const row of stale) expect(bracketRanks(stage, around(forfeit, row)), JSON.stringify(row)).toEqual(OUT_IN_WB_R1);
-    expect(stale).toHaveLength(2);
+    let checked = 0;
+    for (const row of stale) {
+      // Either order of the rows: the elimination round is the EARLIEST walkover, not the first one listed.
+      for (const fixtures of [around(forfeit, row), around(forfeit, row).reverse()]) {
+        expect(bracketRanks(stage, fixtures), JSON.stringify(row)).toEqual(OUT_IN_WB_R1);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
   });
 
   it("X-DE-1 positive pair: the same WB round-1 fixture as a played win drops E3, who goes out in LB round 4", () => {
@@ -329,9 +336,24 @@ describe("X-DW-2: a double walkover in a bracket puts both sides out in its roun
     expect(bracketRanks(stage, field(dw))).toEqual(["E8", "E2", "E3", "E4", "E1", "E5", "E6", "E7"]);
   });
 
+  it("empty case: an entrant neither beaten nor walked over (its line voided) ranks last, below every elimination round", () => {
+    const voided = fx("sf-1", 1, "E2", "E3", undefined, { status: "void" });
+    // E2 and E3 lost nothing settled: below round-0 losers E1, E5, E6, E7; seed order between them.
+    expect(bracketRanks(stage, field(voided))).toEqual(["E8", "E4", "E1", "E5", "E6", "E7", "E2", "E3"]);
+  });
+
   it("X-DW-2: a double walkover row that names a winner or a loser, or a forfeit row that names no loser, is refused", () => {
-    const named = fx("sf-1", 1, "E2", "E3", "E2", { status: "walkover", walkedOver: "both" });
-    expect(() => bracketRanks(stage, field(named))).toThrow(/double walkover .*names a winner or a loser/);
+    const named = [
+      fx("sf-1", 1, "E2", "E3", "E2", { status: "walkover", walkedOver: "both" }),
+      fx("sf-1", 1, "E2", "E3", "E2", { status: "walkover", walkedOver: "both", loser: undefined }),
+      fx("sf-1", 1, "E2", "E3", undefined, { status: "walkover", walkedOver: "both", loser: "E3" }),
+    ];
+    for (const row of named) expect(() => bracketRanks(stage, field(row)), JSON.stringify(row)).toThrow(/double walkover .*names a winner or a loser/);
+    const oneSided = [
+      fx("sf-1", 1, undefined, "E3", undefined, { status: "walkover", walkedOver: "both" }),
+      fx("sf-1", 1, "E2", undefined, undefined, { status: "walkover", walkedOver: "both" }),
+    ];
+    for (const row of oneSided) expect(() => bracketRanks(stage, field(row)), JSON.stringify(row)).toThrow(/double walkover .*is missing a side/);
     const noLoser = fx("sf-1", 1, "E2", undefined, "E2", { status: "walkover", walkedOver: "loser" });
     expect(() => bracketRanks(stage, field(noLoser))).toThrow(/forfeit .*names no loser/);
   });

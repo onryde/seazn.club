@@ -47,8 +47,8 @@
   {
     "id": "ranks-dw-one-out",
     "file": "packages/engine/src/competition/stage.ts",
-    "find": "return [fixture.home, fixture.away].filter(",
-    "replace": "return [fixture.home].filter(",
+    "find": "return [fixture.home, fixture.away];",
+    "replace": "return [fixture.home];",
     "killers": [
       {
         "cwd": "packages/engine",
