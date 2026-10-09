@@ -231,6 +231,24 @@ describe.skipIf(!HAS_DB)("the clock gate judges a change, not a re-send", () => 
     ).toEqual({ status: 409, code: "FORMAT_LOCKED" });
   });
 
+  it("a LOCKED division turning online play ON over a pre-gate clock is refused, and nothing is written", async () => {
+    // The format lock's SECOND door (re-review N-1): withoutDivisionMetaKeys
+    // strips onlinePlay as well as entrants, so a division with fixtures may
+    // still switch online play on. An over-the-board division mid-season on
+    // 15+0 must not reach Lichess that way. A gate keyed on `!locked` would
+    // let it through; the change predicate's onlinePlay arm must not.
+    const { auth, divisionId } = await lockedPreGateDivision({ base: 900, increment: 0 });
+    // PRE-GATE LEGACY DATA, continued: the same division saved over the board.
+    await sql`update divisions set config = config - 'onlinePlay' where id = ${divisionId}`;
+    const before = (await getDivision(auth, divisionId)).config as Record<string, unknown>;
+    expect(before.onlinePlay, "premise: online play is off (absent)").toBeUndefined();
+    expect(
+      await refusal(patchDivision(auth, divisionId, { config: { ...before, onlinePlay: "lichess" } })),
+    ).toEqual({ status: 400, code: "INVALID_TIME_CONTROL" });
+    const after = (await getDivision(auth, divisionId)).config as Record<string, unknown>;
+    expect(after.onlinePlay, "nothing was written").toBeUndefined();
+  });
+
   it("an unlocked online division changing ONLY its clock to an unplayable one is still refused", async () => {
     // Online play is already on and stays on, so only the clock arm of the
     // "did it change" predicate can fire here.
