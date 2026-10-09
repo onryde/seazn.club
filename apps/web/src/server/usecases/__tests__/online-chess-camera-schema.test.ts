@@ -1,10 +1,14 @@
-// V432 camera policy: a column on competitions and stages, never a config key
-// (divisions.config / stages.config are sport-module-validated snapshots that
-// strip foreign keys — V209's own note). Competition is NOT NULL with 'off' for
-// all existing data (design §5.1); stage is nullable = inherit.
+// V432 camera policy: a column on competitions, divisions and stages, never a
+// config key (divisions.config / stages.config are sport-module-validated
+// snapshots that strip foreign keys — V209's own note). Competition is NOT NULL
+// with 'off' for all existing data (design §5.1); division and stage are
+// nullable = inherit (T6 ruling Q1=D: "set per division/stage, defaulting from
+// the competition").
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import type postgres from "postgres";
 import { sql } from "@/lib/db";
+import { CAMERA_POLICIES } from "@/lib/camera-policy";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 
 const CHECK_VIOLATION = "23514";
@@ -100,6 +104,62 @@ describe.skipIf(!HAS_DB)("camera policy columns (V432)", () => {
       code: NOT_NULL_VIOLATION,
       constraint: undefined,
       column: "camera_policy",
+    });
+  });
+
+  // T6 (ruling Q1=D): the division level. Every probe runs in a transaction
+  // that is ALWAYS rolled back, so the cases share one seeded parent and
+  // leave no rows behind for the next case to trip over.
+  describe("divisions.camera_policy", () => {
+    const ROLLBACK = new Error("rollback sentinel");
+    async function rolledBack<T>(body: (tx: postgres.TransactionSql) => Promise<T>): Promise<T> {
+      let out: T | undefined;
+      await sql
+        .begin(async (tx) => {
+          out = await body(tx);
+          throw ROLLBACK;
+        })
+        .catch((err: unknown) => {
+          if (err !== ROLLBACK) throw err;
+        });
+      return out as T;
+    }
+
+    it("empty case: a division inherits by default — its own policy is null", async () => {
+      const [row] = await sql<{ camera_policy: string | null }[]>`
+        select camera_policy from divisions where id = ${divisionId}`;
+      expect(row!.camera_policy).toBeNull();
+    });
+
+    it("accepts every declared policy, and null, and reports how many it checked", async () => {
+      let checked = 0;
+      for (const p of [...CAMERA_POLICIES, null]) {
+        const got = await rolledBack(async (tx) => {
+          await tx`update divisions set camera_policy = ${p} where id = ${divisionId}`;
+          const [row] = await tx<{ camera_policy: string | null }[]>`
+            select camera_policy from divisions where id = ${divisionId}`;
+          return row!.camera_policy;
+        });
+        expect(got, `policy ${p}`).toBe(p);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: 3 policies + null").toBe(4);
+    });
+
+    it("refuses a policy outside the vocabulary, by SQLSTATE and constraint name", async () => {
+      const outcome = await rolledBack((tx) =>
+        attempt(tx`update divisions set camera_policy = 'mandatory' where id = ${divisionId}`),
+      );
+      expect(outcome).toEqual({
+        accepted: false,
+        code: CHECK_VIOLATION,
+        constraint: "divisions_camera_policy_check",
+        column: undefined,
+      });
+      // …and the refused value never landed.
+      const [row] = await sql<{ camera_policy: string | null }[]>`
+        select camera_policy from divisions where id = ${divisionId}`;
+      expect(row!.camera_policy).toBeNull();
     });
   });
 
