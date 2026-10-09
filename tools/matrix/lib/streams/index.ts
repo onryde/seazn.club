@@ -131,7 +131,7 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   const o = req.outcome;
   if (o.kind === "forfeit") return forfeitPosting("scheduled", { by: idOf(req, o.by), reason: o.reason }, o.at === "before_start" ? [] : partialPlay(req));
   if (o.kind === "double_walkover") return [DOUBLE_WALKOVER];
-  if (o.kind === "abandon") return o.atScore === true ? abandonedAtScore(req, gen) : [START, ABANDON];
+  if (o.kind === "abandon") return o.afterPartial === true ? [...partialPlay(req), ABANDON] : o.atScore === true ? abandonedAtScore(req, gen) : [START, ABANDON];
   if (o.kind === "level") return levelStream(req, gen);
   if (o.kind === "settle") {
     const base = o.after === "level" ? levelStream({ ...req, outcome: { kind: "level" } }, gen) : abandonedAtScore({ ...req, outcome: { kind: "abandon", atScore: true } }, gen);

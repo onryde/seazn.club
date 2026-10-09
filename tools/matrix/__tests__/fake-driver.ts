@@ -508,6 +508,16 @@ export class FakeLeagueDriver implements OrganiserDriver {
     return settle(() => {
       this.log("standings");
       const pts = new Map(this.tableEntrants().map((id) => [id, 0]));
+      // W2b (X-WO-1): the rest of the row as engine StandingsRow carries it — played/won/drawn/lost and the metrics,
+      // summed from the same standingsDelta the points come from. The points (and so the ranks) are unchanged.
+      type Detail = { played: number; won: number; drawn: number; lost: number; metrics: Record<string, number> };
+      const detail = new Map<string, Detail>(this.tableEntrants().map((id) => [id, { played: 0, won: 0, drawn: 0, lost: 0, metrics: {} }]));
+      const add = (d: { entrantId: string; played: number; won: number; drawn: number; lost: number; metrics: Record<string, number> }) => {
+        const row = detail.get(d.entrantId);
+        if (row === undefined) return;
+        row.played += d.played; row.won += d.won; row.drawn += d.drawn; row.lost += d.lost;
+        for (const [k, v] of Object.entries(d.metrics)) row.metrics[k] = (row.metrics[k] ?? 0) + v;
+      };
       const m = sportModule(this.sport);
       const kind = this.stage!.kind as StageKind;
       const cfg = stageCfg(this.sport, this.cfg, kind); // W2a: the cfg the stage's fixtures were folded under
@@ -522,13 +532,16 @@ export class FakeLeagueDriver implements OrganiserDriver {
           const pair = m.standingsDelta(o, cfg, ctx, state);
           const won = pair.find((d) => d.entrantId === o.winner)!;
           pts.set(o.winner, pts.get(o.winner)! + won.points);
+          add(won);
           continue;
         }
         const d = declaredPoints(m, cfg, ctx, f.home_entrant_id, f.away_entrant_id, f.events)!;
         pts.set(f.home_entrant_id, pts.get(f.home_entrant_id)! + d.home);
         pts.set(f.away_entrant_id, pts.get(f.away_entrant_id)! + d.away);
+        const folded = foldStream(m, cfg, f.home_entrant_id, f.away_entrant_id, f.events);
+        if (folded.outcome !== null) for (const x of m.standingsDelta(folded.outcome, cfg, ctx, folded.state)) add(x);
       }
-      const rows = [...pts].sort((a, b) => b[1] - a[1]).map(([entrantId, points], i) => ({ entrantId, rank: i + 1, points }));
+      const rows = [...pts].sort((a, b) => b[1] - a[1]).map(([entrantId, points], i) => ({ entrantId, rank: i + 1, points, ...detail.get(entrantId)! }));
       return { stage_id: stageId, pool_id: poolId, rows };
     });
   }

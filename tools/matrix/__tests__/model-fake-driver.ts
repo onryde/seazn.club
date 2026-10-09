@@ -42,7 +42,8 @@
 // withdrawal policy branch on the stage kind. Not modelled: the implicit-bye
 // inference for a round a late entrant missed (only a pairing ORDER changes),
 // the rank_adjacent cascade rank, and chess colours.
-import { EngineError, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
+import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
+import { EngineError, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { stageCfg } from "../lib/sport-cfg.ts";
@@ -293,7 +294,8 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     const p = (ev.payload ?? {}) as { by?: unknown; reason?: unknown };
     if (p.reason === "withdrew") throw new RefusedCall("POST", path, 422, "INVALID_EVENT", "a withdrawal is recorded by withdrawing the entrant, not by a forfeit");
     const kind = this.stage?.kind ?? null;
-    if (p.by === "both" && kind !== null && forbidsLevelResult(kind) && !this.feeds.has(f.id)) {
+    // W2b D19: the feeding bracket kinds only — a ladder (forbidsLevelResult, but no feed edges) takes one anywhere.
+    if (p.by === "both" && kind !== null && BRACKET_STAGE_KINDS.has(kind) && !this.feeds.has(f.id)) {
       throw new RefusedCall("POST", path, engineHttpStatus("DOUBLE_WALKOVER_NO_NEXT_MATCH"), "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a double walkover needs a next match — reschedule, record a walkover if one side turned up, or settle");
     }
   }

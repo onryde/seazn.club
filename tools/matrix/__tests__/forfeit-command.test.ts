@@ -202,6 +202,18 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
     expect(row(d, fin).status).toBe("scheduled");
   });
 
+  it("a LADDER fixture has no feed edge and is still never refused DOUBLE_WALKOVER_NO_NEXT_MATCH: the refusal is the feeding bracket kinds' alone (X-DW-3, D19)", async () => {
+    const { m, d, sf1 } = await bracket("generic");
+    d.stage!.kind = "ladder";
+    const lm: ModelState = { ...m, stageKind: "ladder" };
+    d.feeds.clear(); // a ladder wires no winner_to: every fixture reads as one with no next match
+    const before = lm.forfeits.length;
+    await forfeit(lm, d, 0, "both", "walkover");
+    expect(lm.forfeits.length, "the forfeit was asked and answered").toBe(before + 1);
+    expect(lastForfeit(lm)!.code).not.toBe("DOUBLE_WALKOVER_NO_NEXT_MATCH");
+    expect(row(d, sf1).id).toBe(sf1);
+  });
+
   it("a refusal with ANY OTHER code than the table's is a defect (model-forfeit-refused-by-name)", async () => {
     class WrongCode extends ModelFakeDriver {
       override async postStream(id: string, events: readonly StreamEvent[], prefix = "") {

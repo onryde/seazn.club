@@ -1,0 +1,561 @@
+// The W2b forfeit-credit scenarios (Task 2 Step 4; spec §5.6; Appendix A): LIFECYCLE's loop with forfeits, double
+// walkovers, abandons and withdrawals forced onto the root stage through the round hooks (D12: stage 1 only), each
+// judged by counted checks whose expectation is the rule row's. OPT-IN: planned only by `--set w1-driving --scenario
+// <key>` (w1-driving-set.ts), on the cells w2b-cells.ts derives — never by a committed plan.
+//
+//   WO-PRE    a walkover before START on the first fixture of every round              X-RS-1, X-WO-1, BG-WO-2
+//   RT-PART   a retirement or disqualification after partial play, every round        X-RT-1, *-RT-*
+//   DW-ALL    a double walkover, and the refusal where the fixture has no next match  X-DW-1..4
+//   AB-AWARD  an abandon with a result: leading / level (award policy), cricket's
+//             minimum overs passed / not reached                                     X-AB-1, X-AB-2, CK-AB-1/2
+//   WD-CASC   a knockout's withdrawal cascade: TBD seat, held / tie-break pending,
+//             not started, and a line whose two seats both die                        X-WD-1..4, BG-WO-2/3
+//
+// A credited score the product shows in its table (X-WO-1) is judged against the walkover-credit oracle
+// (reference-walkover.ts); a case the oracle does not cover is counted as not judged, by name.
+import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
+import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
+import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
+import { RefusedCall, type FixtureRow, type StageRef, type StandingsRowWire, type WithdrawOut } from "../driver/types.ts";
+import { fieldSizeFor } from "../field-size.ts";
+import { foldStream } from "../fold.ts";
+import type { ObservedFixture, ObservedOutcome, ObservedRun } from "../observed.ts";
+import { CreditNotCovered, walkoverCredit, type CreditCase } from "../reference-walkover.ts";
+import type { CheckResult } from "../results.ts";
+import { sportModule, stageCfg } from "../sport-cfg.ts";
+import { generateStream, levelReachable, partialPlay } from "../streams/index.ts";
+import { GeneratorUnsupported, OutcomeUnreachable, type ForfeitReason, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
+import { AWARD_POLICY, DLS_ON, abandonOverride, w2bApplies } from "../w2b-cells.ts";
+import { advanceSeededAsDeclared } from "./advance.ts";
+import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
+import { Recorder, decideFixture, ensureLineups, playDivision, recordPosted, setUpDivision, snapshot, type DivisionSetup, type RoundHooks } from "./common.ts";
+import {
+  NO_PLACEMENT, deadSeats, doubleWalkoverAdvancesNobody, doubleWalkoverRecorded, doubleWalkoverRefusedAtTheEnd, feedGraph, forfeitRecorded, hasNoNextMatch, isolatedTable, ladderUnmoved, partialPlayStands, pickDoubleWalkover,
+  WITHDREW, type ExpectedDelta, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
+} from "./w2b-checks.ts";
+import { W2B_SCENARIO_KEYS, type Scenario, type ScenarioContext, type ScenarioOutput, type W2bScenarioKey } from "./types.ts";
+
+/** The keys lane P1 reports into w2b-local-selection.json `newScenarios`. */
+export const W2B_SCENARIOS: readonly string[] = W2B_SCENARIO_KEYS;
+
+/** A forfeit-credit scenario planned on a cell it is not for: refused by name before any driver call, so a misplanned
+ *  run cannot read as a vacuous red. */
+export class W2bMisplanned extends Error {
+  constructor(key: string, row: string, sport: string, why: string) {
+    super(`scenario: ${key} was planned on ${row}|${sport} — ${why}`);
+    this.name = "W2bMisplanned";
+  }
+}
+
+const seated = (f: FixtureRow): boolean => f.home_entrant_id !== null && f.away_entrant_id !== null;
+const byNo = (batch: readonly FixtureRow[]): FixtureRow[] => [...batch].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0));
+/** The first seated, unstarted fixture of the batch, in the order decideRound decides them. */
+const firstScheduled = (batch: readonly FixtureRow[]): FixtureRow | undefined => byNo(batch).find((f) => seated(f) && f.status === "scheduled");
+const stageRows = async (ctx: ScenarioContext, setup: DivisionSetup, stage: StageRef = setup.stage): Promise<FixtureRow[]> =>
+  (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === stage.id);
+const fieldBySeed = (setup: DivisionSetup): string[] => [...setup.entrants].sort((a, b) => setup.seedOf(a.id) - setup.seedOf(b.id)).map((e) => e.id);
+const ladderOrder = async (ctx: ScenarioContext, setup: DivisionSetup): Promise<string[] | null> => {
+  const order = (await ctx.driver.listStages(setup.division.id)).find((s) => s.id === setup.stage.id)?.config.ladder_order;
+  return Array.isArray(order) ? (order as string[]) : null;
+};
+
+/** Posts `outcome` on `f` through decideFixture. A forfeit recorded before START (a walkover, a double walkover) is
+ *  one event, so a refusal writes nothing and is RECORDED (the fixture is then played as the policy asks); any other
+ *  refusal propagates, naming its code (a refused retirement leaves its partial play behind). */
+async function drive(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow, outcome: RequestedOutcome): Promise<ForfeitDrive> {
+  const base = { fixtureId: f.id, home: f.home_entrant_id!, away: f.away_entrant_id!, asked: outcome };
+  const bare = outcome.kind === "double_walkover" || (outcome.kind === "forfeit" && outcome.at === "before_start");
+  try {
+    await decideFixture(ctx, rec, setup, f, outcome);
+  } catch (e) {
+    if (!bare || !(e instanceof RefusedCall)) throw e;
+    return { ...base, refusal: { status: e.status, code: e.code } };
+  }
+  return { ...base, refusal: null };
+}
+
+async function probe(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow): Promise<RefusalProbe> {
+  const before = await ctx.driver.fixtureState(f.id);
+  const d = await drive(ctx, rec, setup, f, { kind: "double_walkover" });
+  const after = await ctx.driver.fixtureState(f.id);
+  return { fixtureId: f.id, refusal: d.refusal, before: { status: before.status, seq: before.last_seq }, after: { status: after.status, seq: after.last_seq } };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The table read (X-WO-1, X-DW-4, X-AB-1). Judged only where the root's standings rows are the division's entrants:
+// a table kind, less americano (its table is per player of the pairs it mints).
+
+export const tableJudged = (kind: string): boolean => !forbidsLevelResult(kind) && kind !== "americano";
+
+async function tableRows(ctx: ScenarioContext, stage: StageRef, fixtures: readonly ObservedFixture[]): Promise<Map<string, StandingsRowWire>> {
+  const out = new Map<string, StandingsRowWire>();
+  for (const pool of [...new Set(fixtures.map((f) => f.poolId))]) for (const r of (await ctx.driver.standings(stage.id, pool)).rows) out.set(r.entrantId, r);
+  return out;
+}
+
+/** The sport's own contribution of a fixture the harness posted: standingsDelta over the folded stream, under the cfg
+ *  and stage context the product folds it in. Null where the harness holds no stream or it folds no outcome. */
+function localDelta(ctx: ScenarioContext, rec: Recorder, stage: StageRef): (f: ObservedFixture) => readonly [LocalDelta, LocalDelta] | null {
+  const m = sportModule(ctx.spec.sport);
+  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind);
+  return (f) => {
+    const events = rec.streams.get(f.id);
+    if (events === undefined || f.home === null || f.away === null) return null;
+    const folded = foldStream(m, cfg, f.home, f.away, events);
+    if (folded.outcome === null) return null;
+    const sctx = { kind: stage.kind as StageKind, ...(f.poolId ? { poolId: f.poolId } : {}), ...(f.roundNo ? { roundNo: f.roundNo } : {}) };
+    const [h, a] = m.standingsDelta(folded.outcome, cfg, sctx, folded.state);
+    return [h, a];
+  };
+}
+
+const creditCase = (ctx: ScenarioContext, stage: StageRef, reason: CreditCase["reason"]): CreditCase =>
+  ({ sport: ctx.spec.sport, cfg: stageCfg(ctx.spec.sport, ctx.cfg, stage.kind as StageKind) as Record<string, unknown>, reason });
+
+/** WO-PRE's table: each walked-over match credits the Appendix A walkover to the side it went to (and its loser),
+ *  a win and a loss. */
+async function walkoverCreditCheck(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, drives: readonly ForfeitDrive[], observed: ObservedRun): Promise<CheckResult> {
+  const id = "w2b-walkover-credit";
+  if (!tableJudged(setup.stage.kind)) return assertion(id, [], `the root stage is a ${setup.stage.kind}, not a table: a walkover's credit is the table's (X-WO-1)`);
+  let credit;
+  try {
+    credit = walkoverCredit(creditCase(ctx, setup.stage, "walkover"));
+  } catch (e) {
+    if (!(e instanceof CreditNotCovered)) throw e;
+    return assertion(id, [], e.message);
+  }
+  const judged = new Map<string, (e: string) => ExpectedDelta>();
+  for (const d of drives) {
+    if (d.refusal !== null || d.asked.kind !== "forfeit") continue;
+    const loser = d.asked.by === "home" ? d.home : d.away;
+    judged.set(d.fixtureId, (e) => (e === loser ? { scalars: { played: 1, won: 0, lost: 1 }, metrics: credit.loser } : { scalars: { played: 1, won: 1, lost: 0 }, metrics: credit.winner }));
+  }
+  const fixtures = observed.stages[0].fixtures;
+  return isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });
+}
+
+/** RT-PART's table: the retirement credit (*-RT-1), asked of the oracle; until the walkover-credit family answers a
+ *  retirement the check abstains with the oracle's own reason. */
+function retirementCreditCheck(ctx: ScenarioContext, setup: DivisionSetup): CheckResult {
+  const id = "w2b-retirement-credit";
+  if (!tableJudged(setup.stage.kind)) return assertion(id, [], `the root stage is a ${setup.stage.kind}, not a table: a retirement's credit is the table's (X-WO-1)`);
+  try {
+    walkoverCredit(creditCase(ctx, setup.stage, "retired"));
+  } catch (e) {
+    if (!(e instanceof CreditNotCovered)) throw e;
+    return assertion(id, [], e.message);
+  }
+  // The oracle answering a retirement is the walkover-credit family's arrival: its played-score inputs are this
+  // check's to wire then. Until then the line above has already abstained.
+  return assertion(id, [{ ok: false, note: "the oracle now answers a retirement: wire its played score into this check" }]);
+}
+
+/** X-DW-4: a double walkover in a table is P+1, L+1, 0 points for both, nothing credited. */
+async function doubleWalkoverTableCheck(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, d: ForfeitDrive | null, observed: ObservedRun): Promise<CheckResult> {
+  const id = "w2b-double-walkover-table";
+  if (!tableJudged(setup.stage.kind)) return assertion(id, [], `the root stage is a ${setup.stage.kind}, not a table (X-DW-4 is a table's rule)`);
+  if (d === null || d.refusal !== null) return assertion(id, [{ ok: false, note: d === null ? "no double walkover was posted" : `${d.fixtureId}: refused ${d.refusal!.status} ${d.refusal!.code ?? "(no code)"}` }]);
+  let zero: Record<string, number>;
+  try {
+    const c = walkoverCredit(creditCase(ctx, setup.stage, "double_walkover"));
+    zero = { ...c.winner, ...c.loser };
+  } catch (e) {
+    if (!(e instanceof CreditNotCovered)) throw e;
+    return assertion(id, [], e.message);
+  }
+  const judged = new Map<string, (e: string) => ExpectedDelta>([[d.fixtureId, () => ({ scalars: { played: 1, won: 0, drawn: 0, lost: 1, points: 0 }, metrics: zero })]]);
+  const fixtures = observed.stages[0].fixtures;
+  return isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// AB-AWARD: the abandons and what their rule says they are.
+
+type AbandonKind = "leading" | "level" | "past_min_overs" | "before_min_overs";
+interface AbandonDrive { readonly fixtureId: string; readonly home: string; readonly away: string; readonly kind: AbandonKind; readonly events: readonly StreamEvent[] }
+
+/** The two abandons a sport's rule gives a result to, in the order the scenario posts them (round 1, round 2). */
+export function abandonPlan(sport: string): readonly { readonly kind: AbandonKind; readonly request: RequestedOutcome }[] | null {
+  const rule = abandonOverride(sport);
+  if (rule === AWARD_POLICY) return [{ kind: "leading", request: { kind: "abandon", atScore: true } }, { kind: "level", request: { kind: "abandon", afterPartial: true } }];
+  if (rule === DLS_ON) return [{ kind: "past_min_overs", request: { kind: "abandon", afterPartial: true } }, { kind: "before_min_overs", request: { kind: "abandon", atScore: true } }];
+  return null;
+}
+
+/** Who leads at the abandon, from the goals the harness POSTED (`<sport>.goal {by}` before core.abandon): the rule's
+ *  input, read from what was sent, never from the product. */
+export function goalLead(events: readonly StreamEvent[], home: string, away: string): Side | "level" {
+  const goals = events.filter((e) => e.type.endsWith(".goal")).map((e) => (e.payload as { by?: unknown }).by);
+  const h = goals.filter((g) => g === home).length;
+  const a = goals.filter((g) => g === away).length;
+  return h === a ? "level" : h > a ? "home" : "away";
+}
+
+/** X-AB-2 (FB/HK/IH-AB-1, D8; CK-AB-1/2): an abandon with a result is decided, and the result is the rule's. */
+export function abandonWithResult(drives: readonly AbandonDrive[], fixtures: readonly ObservedFixture[]): CheckResult {
+  return assertion("w2b-abandon-with-result", drives.map((d): Item => {
+    const f = fixtures.find((x) => x.id === d.fixtureId);
+    if (f === undefined) return { ok: false, note: `${d.fixtureId}: not in the stage's fixtures after the run` };
+    const o = f.outcome;
+    const got = `${d.fixtureId} (${d.kind}): ${f.status} ${o === null ? "no outcome" : JSON.stringify(o)}`;
+    switch (d.kind) {
+      case "leading": {
+        const lead = goalLead(d.events, d.home, d.away);
+        const leader = lead === "home" ? d.home : lead === "away" ? d.away : null;
+        return { ok: leader !== null && f.status === "decided" && o?.kind === "win" && o.winner === leader && o.method === "abandoned", note: `${got}, wanted decided win{${leader ?? "(no leader posted)"}, method abandoned}` };
+      }
+      case "level":
+        return { ok: goalLead(d.events, d.home, d.away) === "level" && f.status === "decided" && o?.kind === "draw", note: `${got}, wanted decided draw (a level abandon in a table)` };
+      // CK-AB-1: the result the DLS method gives (a win by DLS, or a tie at par), whoever it names — the par is the
+      // engine's DLS table, not this check's.
+      case "past_min_overs":
+        return { ok: f.status === "decided" && ((o?.kind === "win" && o.method === "dls") || o?.kind === "tie"), note: `${got}, wanted decided win{method dls} or tie (past the minimum overs)` };
+      case "before_min_overs":
+        return { ok: f.status === "decided" && o?.kind === "no_result", note: `${got}, wanted decided no_result (CK-AB-2)` };
+    }
+  }));
+}
+
+interface PointsCfg { readonly win?: unknown; readonly draw?: unknown; readonly loss?: unknown; readonly tie?: unknown; readonly noResult?: unknown }
+
+/** X-AB-1: the table counts an abandon the rule gives a result, as that result — points from the cfg's own table. */
+async function abandonTableCheck(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, drives: readonly AbandonDrive[], observed: ObservedRun): Promise<CheckResult> {
+  const id = "w2b-abandon-in-table";
+  const pts = ((stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind) as { points?: PointsCfg }).points ?? {});
+  const p = (k: keyof PointsCfg): number => {
+    const v = pts[k];
+    if (typeof v !== "number") throw new Error(`scenario: AB-AWARD on ${ctx.spec.sport} — the cfg's points table has no numeric '${k}'`);
+    return v;
+  };
+  const fixtures = observed.stages[0].fixtures;
+  const judged = new Map<string, (e: string) => ExpectedDelta>();
+  for (const d of drives) {
+    const f = fixtures.find((x) => x.id === d.fixtureId);
+    const won = (winner: string | null) => (e: string): ExpectedDelta => (e === winner ? { scalars: { won: 1, lost: 0, points: p("win") }, metrics: {} } : { scalars: { won: 0, lost: 1, points: p("loss") }, metrics: {} });
+    switch (d.kind) {
+      case "leading": { const lead = goalLead(d.events, d.home, d.away); judged.set(d.fixtureId, won(lead === "home" ? d.home : lead === "away" ? d.away : null)); break; }
+      case "level": judged.set(d.fixtureId, () => ({ scalars: { won: 0, drawn: 1, lost: 0, points: p("draw") }, metrics: {} })); break;
+      // CK-AB-1: as the result stands — the product's own winner (the method's), its points from the cfg.
+      case "past_min_overs":
+        if (f?.outcome?.kind === "win") judged.set(d.fixtureId, won(f.outcome.winner));
+        else if (f?.outcome?.kind === "tie") judged.set(d.fixtureId, () => ({ scalars: { points: p("tie") }, metrics: {} }));
+        break;
+      // CK-AB-2: 1 point each (the cfg's noResult) and an entry in the no-result column.
+      case "before_min_overs": judged.set(d.fixtureId, () => ({ scalars: { won: 0, lost: 0, points: p("noResult") }, metrics: { no_results: 1 } })); break;
+    }
+  }
+  return isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// WD-CASC: the knockout choreography.
+
+interface WithdrawStep { readonly entrantId: string; readonly label: string; readonly answer: WithdrawOut }
+interface Line { readonly qf: readonly [FixtureRow, FixtureRow]; readonly sf: string }
+/** QF1's semi-final line and the other one, from the feed graph (never fixture numbers), and the final. */
+export function knockoutLines(g: FeedGraph, r1: readonly FixtureRow[]): { a: Line; b: Line; final: string } {
+  const sorted = byNo(r1);
+  const sfOf = (f: FixtureRow): string => {
+    const e = f.ext_key == null ? undefined : g.winnerTo.get(f.ext_key);
+    if (e === undefined) throw new W2bMisplanned("WD-CASC", "knockout", "-", `round-1 fixture ${f.id} feeds no semi-final`);
+    return e.target;
+  };
+  if (sorted.length !== 4) throw new W2bMisplanned("WD-CASC", "knockout", "-", `the choreography is a knockout of 8 (four quarter-finals), this round 1 has ${sorted.length}`);
+  const sfA = sfOf(sorted[0]);
+  const a = sorted.filter((f) => sfOf(f) === sfA);
+  const b = sorted.filter((f) => sfOf(f) !== sfA);
+  const final = g.winnerTo.get(sfA)?.target;
+  if (a.length !== 2 || b.length !== 2 || final === undefined || g.winnerTo.get(sfOf(b[0]))?.target !== final) throw new W2bMisplanned("WD-CASC", "knockout", "-", "the bracket is not two semi-final lines into one final");
+  return { a: { qf: [a[0], a[1]], sf: sfA }, b: { qf: [b[0], b[1]], sf: sfOf(b[0]) }, final };
+}
+
+/** What QF2 is when its side withdraws: held level (X-WD-1), a chess tie-break pending (BG-WO-3), or else play under
+ *  way (D3 R5: a withdrawal walks over in any phase but over). The first the sport's generator builds. */
+export function heldStream(sport: string, cfg: unknown, home: string, away: string): { readonly label: "held" | "tie-break pending" | "in play"; readonly events: StreamEvent[] } {
+  const req = { sportKey: sport, cfg, stageKind: "knockout" as StageKind, home, away };
+  if (levelReachable(sport, cfg, "knockout")) return { label: "held", events: generateStream({ ...req, outcome: { kind: "level" } }) };
+  try {
+    const tb = generateStream({ ...req, outcome: { kind: "tiebreak", rung: TIEBREAK_RUNGS[0], winner: "home" } });
+    if (tb.at(-1)?.type !== "boardgame.tiebreak") throw new Error(`scenario: WD-CASC — ${sport}'s tie-break stream ends ${tb.at(-1)?.type ?? "empty"}, not its boardgame.tiebreak`);
+    return { label: "tie-break pending", events: tb.slice(0, -1) };
+  } catch (e) {
+    if (!(e instanceof OutcomeUnreachable || e instanceof GeneratorUnsupported)) throw e;
+    return { label: "in play", events: partialPlay({ ...req, outcome: { kind: "abandon" } }) };
+  }
+}
+
+interface WdRecord {
+  readonly steps: WithdrawStep[];
+  /** fixture → who withdrew from it, who remained, and what it was when they did. */
+  readonly walked: { fixtureId: string; withdrawn: string; remaining: string; label: string }[];
+  w1: string | null; a2: string | null; a3: string | null;
+  lines: { a: Line; b: Line; final: string } | null;
+  dw: ForfeitDrive | null;
+}
+
+export function withdrawalsWalkOver(r: WdRecord, fixtures: readonly ObservedFixture[]): CheckResult {
+  const items: Item[] = r.walked.map((w): Item => {
+    const f = fixtures.find((x) => x.id === w.fixtureId);
+    const o = f?.outcome ?? null;
+    const a = o !== null && o.kind === "award" ? o : null;
+    return { ok: f?.status === "forfeited" && a !== null && a.winner === w.remaining && a.loser === w.withdrawn && a.reason === WITHDREW, note: `${w.fixtureId} (${w.label}): ${f?.status ?? "(missing)"} ${o === null ? "no outcome" : JSON.stringify(o)}, wanted forfeited award to ${w.remaining}, loser ${w.withdrawn}, reason ${WITHDREW}` };
+  });
+  for (const s of r.steps) items.push({ ok: s.answer.policy === "walkover" && s.answer.voided === 0, note: `withdrawal of ${s.entrantId} (${s.label}) answered policy ${s.answer.policy}, voided ${s.answer.voided}` });
+  return assertion("w2b-withdrawal-walks-over", r.walked.length === 0 ? [{ ok: false, note: "no withdrawal was recorded" }] : items);
+}
+
+const byExt = (fixtures: readonly ObservedFixture[], key: string): ObservedFixture | undefined => fixtures.find((f) => f.extKey === key);
+
+/** X-WD-3: the semi-final whose seat went dead while its other seat was TBD walks the arriving opponent over, and the
+ *  withdrawn entrants are seated nowhere after the fixture they left. */
+export function tbdSeatWalksOver(r: WdRecord, fixtures: readonly ObservedFixture[]): CheckResult {
+  if (r.lines === null || r.w1 === null || r.a2 === null) return assertion("w2b-withdrawal-tbd-seat", [{ ok: false, note: "the choreography never reached its first withdrawal" }]);
+  const sf = byExt(fixtures, r.lines.a.sf);
+  const o = sf?.outcome ?? null;
+  const a = o !== null && o.kind === "award" ? o : null;
+  const items: Item[] = [{ ok: sf?.status === "forfeited" && a !== null && a.winner === r.a2, note: `${r.lines.a.sf}: ${sf?.status ?? "(missing)"} ${o === null ? "no outcome" : JSON.stringify(o)}, wanted the arriving ${r.a2} walked over` }];
+  const lines = r.lines;
+  for (const [who, left] of [[r.w1, lines.a.qf[0].id], [r.a3, lines.b.qf[0].id]] as const) {
+    if (who === null) continue;
+    const again = fixtures.filter((f) => f.id !== left && (f.home === who || f.away === who));
+    items.push({ ok: again.length === 0, note: `${who} withdrew after ${left} and is seated again in ${again.map((f) => f.id).join(", ")}` });
+  }
+  items.push({ ok: !fixtures.some((f) => f.status === "abandoned" || f.status === "cancelled"), note: `the cascade voided ${fixtures.filter((f) => f.status === "abandoned" || f.status === "cancelled").map((f) => f.id).join(", ")} (X-WD-2/3: it never voids)` });
+  return assertion("w2b-withdrawal-tbd-seat", items);
+}
+
+/** X-WD-4 (with X-DW-2): a fixture both of whose seats are dead — one by a withdrawal while the other was TBD, the
+ *  other fed by a double walkover — is a double walkover, and the final it fed walks the other line's winner over to
+ *  the title. */
+export function bothSeatsDead(r: WdRecord, fixtures: readonly ObservedFixture[], finalRanks: readonly string[] | null): CheckResult {
+  if (r.lines === null || r.a2 === null) return assertion("w2b-withdrawal-both-seats-dead", [{ ok: false, note: "the choreography never reached the second line" }]);
+  const sf = byExt(fixtures, r.lines.b.sf);
+  const fin = byExt(fixtures, r.lines.final);
+  const fo = fin?.outcome ?? null;
+  const fa = fo !== null && fo.kind === "award" ? fo : null;
+  return assertion("w2b-withdrawal-both-seats-dead", [
+    { ok: r.dw !== null && r.dw.refusal === null, note: r.dw === null ? "the quarter-final double walkover was never posted" : `${r.dw.fixtureId}: the double walkover was refused ${r.dw.refusal?.status ?? ""} ${r.dw.refusal?.code ?? ""}` },
+    { ok: sf?.status === "forfeited" && sf.outcome?.kind === "double_walkover", note: `${r.lines.b.sf}: ${sf?.status ?? "(missing)"} ${sf?.outcome == null ? "no outcome" : JSON.stringify(sf.outcome)}, wanted forfeited double_walkover` },
+    { ok: fin?.status === "forfeited" && fa !== null && fa.winner === r.a2, note: `${r.lines.final}: ${fin?.status ?? "(missing)"} ${fo === null ? "no outcome" : JSON.stringify(fo)}, wanted ${r.a2} walked over` },
+    { ok: finalRanks?.[0] === r.a2, note: `finalRanks[0] is ${finalRanks?.[0] ?? "(none)"}, wanted ${r.a2}` },
+  ]);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+
+function guard(key: W2bScenarioKey, ctx: ScenarioContext): void {
+  const { row, sport } = ctx.spec;
+  if (!w2bApplies(key, row, sport)) throw new W2bMisplanned(key, row, sport, "not one of the scenario's cells (w2b-cells.ts)");
+  const want = key === "AB-AWARD" ? abandonOverride(sport) : null;
+  if (want !== null && Object.entries(want).some(([k, v]) => JSON.stringify(ctx.spec.overrides?.[k]) !== JSON.stringify(v))) {
+    throw new W2bMisplanned(key, row, sport, `the case carries no ${JSON.stringify(want)} override, so the sport's abandon takes no result by its rule`);
+  }
+}
+
+async function finish(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, plays: Awaited<ReturnType<typeof playDivision>>, own: (observed: ObservedRun) => Promise<CheckResult[]>, opts: { resultsAsPosted?: false } = {}): Promise<ScenarioOutput> {
+  const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
+  const pub = await ctx.driver.publicStandings({ orgSlug: ctx.orgSlug, competitionSlug: setup.competition.slug, divisionSlug: setup.division.slug });
+  return {
+    observed,
+    events: rec.events,
+    notes: rec.notes,
+    assertions: [
+      builtAsPosted(setup.built, observed),
+      foldParity(rec),
+      ...(opts.resultsAsPosted === false ? [] : [resultsAsPosted(rec, observed)]),
+      publicStandingsMatch(observed, pub),
+      stageCompleted(observed),
+      loopBounded(rec, observed),
+      advanceSeededAsDeclared(plays, observed, rec.withdrawn),
+      lineupsPut(rec, setup),
+      ...(await own(observed)),
+    ],
+  };
+}
+
+const ENTRANTS = 8;
+
+function scenario(key: W2bScenarioKey, run: (ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup) => Promise<ScenarioOutput>): Scenario {
+  return {
+    key,
+    entrantCount: ENTRANTS,
+    canaryCheck: null,
+    async run(ctx) {
+      guard(key, ctx);
+      const rec = new Recorder();
+      const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, key, ctx.spec.template));
+      return run(ctx, rec, setup);
+    },
+  };
+}
+
+const woPre = scenario("WO-PRE", async (ctx, rec, setup) => {
+  const drives: ForfeitDrive[] = [];
+  const hooks: RoundHooks = {
+    beforeRound: async (_round, batch) => {
+      const f = firstScheduled(batch);
+      if (f === undefined) return;
+      // The absent side alternates, so both the home and the away award are recorded.
+      const by: Side = drives.length % 2 === 0 ? "away" : "home";
+      drives.push(await drive(ctx, rec, setup, f, { kind: "forfeit", by, reason: "walkover", at: "before_start" }));
+    },
+  };
+  const plays = await playDivision(ctx, rec, setup, hooks);
+  return finish(ctx, rec, setup, plays, async (observed) => [
+    forfeitRecorded("w2b-walkover-recorded", drives, observed.stages[0].fixtures),
+    await walkoverCreditCheck(ctx, rec, setup, drives, observed),
+  ]);
+});
+
+const RT_REASONS: readonly ForfeitReason[] = ["retired", "disqualified"];
+
+const rtPart = scenario("RT-PART", async (ctx, rec, setup) => {
+  const drives: ForfeitDrive[] = [];
+  const hooks: RoundHooks = {
+    beforeRound: async (_round, batch) => {
+      const f = firstScheduled(batch);
+      if (f === undefined) return;
+      const n = drives.length;
+      const by: Side = n % 2 === 0 ? "home" : "away";
+      // X-RT-1: an in-match disqualification takes the retirement's credit, so the two reasons alternate.
+      const d = await drive(ctx, rec, setup, f, { kind: "forfeit", by, reason: RT_REASONS[n % RT_REASONS.length], at: "after_start" });
+      const tip = (await ctx.driver.fixtureState(f.id)).last_seq;
+      drives.push({ ...d, seq: tip, posted: rec.streams.get(f.id)?.length ?? 0 });
+    },
+  };
+  const plays = await playDivision(ctx, rec, setup, hooks);
+  return finish(ctx, rec, setup, plays, (observed) => Promise.resolve([
+    forfeitRecorded("w2b-retirement-recorded", drives, observed.stages[0].fixtures),
+    partialPlayStands(drives),
+    retirementCreditCheck(ctx, setup),
+  ]));
+});
+
+const dwAll = scenario("DW-ALL", async (ctx, rec, setup) => {
+  const kind = setup.stage.kind;
+  // X-DW-3: the bracket kinds whose generators wire feed edges refuse a double walkover with no next match; a table
+  // kind and a ladder take one anywhere (the plan's D19).
+  const refusesAtTheEnd = BRACKET_STAGE_KINDS.has(kind);
+  let graph: FeedGraph | null = null;
+  let dw: ForfeitDrive | null = null;
+  let attempted = false;
+  let noPlacement = false;
+  let dead: ReadonlyMap<string, number> | null = null;
+  const probes: RefusalProbe[] = [];
+  let ladderBefore: string[] | null = null;
+  let ladderAfter: string[] | null = null;
+  const hooks: RoundHooks = {
+    beforeRound: async (_round, batch) => {
+      if (refusesAtTheEnd && graph === null) graph = feedGraph(kind, setup.stage.config, fieldBySeed(setup), await stageRows(ctx, setup));
+      const g = graph;
+      if (g !== null) {
+        for (const f of byNo(batch)) if (seated(f) && f.status === "scheduled" && f.ext_key != null && hasNoNextMatch(g, f.ext_key)) probes.push(await probe(ctx, rec, setup, f));
+      }
+      // The accepted double walkover goes in the FIRST round (step) the loop reaches, or nowhere.
+      if (attempted) return;
+      attempted = true;
+      const open = byNo(batch).filter((f) => seated(f) && f.status === "scheduled");
+      const target = g === null ? open[0] : pickDoubleWalkover(g, open);
+      if (target === undefined) { noPlacement = g !== null; if (g === null) rec.notes.push("DW-ALL: the first round had no seated, unstarted fixture"); return; }
+      if (kind === "ladder") ladderBefore = await ladderOrder(ctx, setup);
+      dw = await drive(ctx, rec, setup, target, { kind: "double_walkover" });
+      if (kind === "ladder") ladderAfter = await ladderOrder(ctx, setup);
+      if (g !== null && target.ext_key != null) dead = deadSeats(g, target.ext_key);
+    },
+  };
+  const plays = await playDivision(ctx, rec, setup, hooks);
+  const d = dw as ForfeitDrive | null;
+  return finish(ctx, rec, setup, plays, async (observed) => {
+    const fixtures = observed.stages[0].fixtures;
+    const advances = noPlacement ? assertion("w2b-double-walkover-advances-nobody", [], NO_PLACEMENT)
+      : kind === "ladder" ? ladderUnmoved(ladderBefore, ladderAfter)
+      : refusesAtTheEnd ? doubleWalkoverAdvancesNobody(d, fixtures, dead)
+      : assertion("w2b-double-walkover-advances-nobody", [], `a ${kind} table: nobody advances from any match there; its entry is w2b-double-walkover-table's (X-DW-4)`);
+    return [
+      noPlacement ? assertion("w2b-double-walkover-recorded", [], NO_PLACEMENT) : doubleWalkoverRecorded(d === null ? [] : [d], fixtures),
+      advances,
+      doubleWalkoverRefusedAtTheEnd(probes, refusesAtTheEnd ? null : `a ${kind} has no fixture a double walkover is refused at: the refusal is the feeding bracket kinds' alone (X-DW-3), a table and a ladder take one anywhere`),
+      await doubleWalkoverTableCheck(ctx, rec, setup, d, observed),
+    ];
+  });
+});
+
+const abAward = scenario("AB-AWARD", async (ctx, rec, setup) => {
+  const plan = abandonPlan(ctx.spec.sport);
+  if (plan === null) throw new W2bMisplanned("AB-AWARD", ctx.spec.row, ctx.spec.sport, "the sport's rule gives no abandon a result");
+  const drives: AbandonDrive[] = [];
+  const hooks: RoundHooks = {
+    beforeRound: async (_round, batch) => {
+      const step = plan[drives.length];
+      const f = firstScheduled(batch);
+      if (step === undefined || f === undefined) return;
+      await decideFixture(ctx, rec, setup, f, step.request);
+      drives.push({ fixtureId: f.id, home: f.home_entrant_id!, away: f.away_entrant_id!, kind: step.kind, events: rec.streams.get(f.id) ?? [] });
+    },
+  };
+  const plays = await playDivision(ctx, rec, setup, hooks);
+  return finish(ctx, rec, setup, plays, async (observed) => [
+    abandonWithResult(drives, observed.stages[0].fixtures),
+    await abandonTableCheck(ctx, rec, setup, drives, observed),
+  ]);
+});
+
+const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
+  const r: WdRecord = { steps: [], walked: [], w1: null, a2: null, a3: null, lines: null, dw: null };
+  const cfg = stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind);
+  const withdraw = async (entrantId: string, label: string) => {
+    const answer = await ctx.driver.withdraw(entrantId);
+    rec.facts.add("withdrawn");
+    rec.withdrawn.add(entrantId);
+    r.steps.push({ entrantId, label, answer });
+  };
+  let done = false;
+  const hooks: RoundHooks = {
+    beforeRound: async (_round, batch) => {
+      if (done) return;
+      done = true;
+      const lines = knockoutLines(feedGraph(setup.stage.kind, setup.stage.config, fieldBySeed(setup), await stageRows(ctx, setup)), batch);
+      r.lines = lines;
+      const [qf1, qf2] = lines.a.qf;
+      const [qf3, qf4] = lines.b.qf;
+      // X-WD-3: QF1 is played; its winner withdraws while the semi-final's other seat is TBD.
+      const higher: Side = setup.seedOf(qf1.home_entrant_id!) <= setup.seedOf(qf1.away_entrant_id!) ? "home" : "away";
+      await decideFixture(ctx, rec, setup, qf1, { kind: "win", winner: higher });
+      r.w1 = higher === "home" ? qf1.home_entrant_id! : qf1.away_entrant_id!;
+      await withdraw(r.w1, "semi-final opponent TBD");
+      // X-WD-1 / BG-WO-3 / D3 R5: QF2 is held (or a chess tie-break pending, or under way) when its home side withdraws.
+      const held = heldStream(ctx.spec.sport, cfg, qf2.home_entrant_id!, qf2.away_entrant_id!);
+      await ensureLineups(ctx, rec, setup, qf2);
+      const posted = await ctx.driver.postStream(qf2.id, held.events, `${ctx.tag}:${qf2.id}`);
+      recordPosted(rec, qf2.id, [], held.events, posted);
+      rec.events += held.events.length;
+      r.a2 = qf2.away_entrant_id!;
+      await withdraw(qf2.home_entrant_id!, held.label);
+      r.walked.push({ fixtureId: qf2.id, withdrawn: qf2.home_entrant_id!, remaining: r.a2, label: held.label });
+      // BG-WO-2 and the bracket row: QF3 not started when its home side withdraws.
+      await withdraw(qf3.home_entrant_id!, "not started");
+      r.walked.push({ fixtureId: qf3.id, withdrawn: qf3.home_entrant_id!, remaining: qf3.away_entrant_id!, label: "not started" });
+      // X-WD-4: QF3's walkover winner withdraws from the other semi-final while its seat there is TBD, and QF4 is a
+      // double walkover — so both of that semi-final's seats are dead.
+      r.a3 = qf3.away_entrant_id!;
+      await withdraw(r.a3, "semi-final opponent TBD");
+      r.dw = await drive(ctx, rec, setup, qf4, { kind: "double_walkover" });
+    },
+  };
+  const plays = await playDivision(ctx, rec, setup, hooks);
+  // The cascades wrote several fixtures no single recorded withdrawal explains: this scenario's own checks judge each.
+  return finish(ctx, rec, setup, plays, (observed) => {
+    const fixtures = observed.stages[0].fixtures;
+    return Promise.resolve([withdrawalsWalkOver(r, fixtures), tbdSeatWalksOver(r, fixtures), bothSeatsDead(r, fixtures, observed.stages[0].complete?.finalRanks ?? null)]);
+  }, { resultsAsPosted: false });
+});
+
+export const w2bScenarios: Readonly<Record<W2bScenarioKey, Scenario>> = Object.freeze({
+  "WO-PRE": woPre,
+  "RT-PART": rtPart,
+  "DW-ALL": dwAll,
+  "AB-AWARD": abAward,
+  "WD-CASC": wdCasc,
+});
+
+export type { ObservedOutcome };

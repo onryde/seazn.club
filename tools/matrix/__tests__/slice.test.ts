@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
-import { W2A_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import {
   CANARY_CHECK, SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, UnknownFilter, checkCanary, checkCellFilter, checkSliceFilter, isSliceCell, planCanaryCase, planSliceCases,
 } from "../lib/slice.ts";
+
+const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS];
 
 const v = (s: string) => (s === "generic" ? "score" : "bwf");
 
@@ -70,9 +72,9 @@ describe("planSliceCases", () => {
     // Every registered scenario but DENIED (⛔, Task 9: gated rows under a deny
     // only), PADPROOF (W1c Task 7: --set pad-proof under --driver browser only) and
     // VOIDPROOF (W1d Task 14: --set void-proof only).
-    // …and the W2a bracket-finish scenarios (opt-in: only --set w1-driving --scenario <key> plans them).
-    expect([...SCENARIO_KEYS].sort()).toEqual(Object.keys(SCENARIOS).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF" && !(W2A_SCENARIO_KEYS as readonly string[]).includes(k)).sort());
-    for (const k of ["DENIED", "PADPROOF", "VOIDPROOF", ...W2A_SCENARIO_KEYS]) {
+    // …and the W2a bracket-finish and W2b forfeit-credit scenarios (opt-in: only --set w1-driving --scenario <key> plans them).
+    expect([...SCENARIO_KEYS].sort()).toEqual(Object.keys(SCENARIOS).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF" && !OPT_IN.includes(k)).sort());
+    for (const k of ["DENIED", "PADPROOF", "VOIDPROOF", ...OPT_IN]) {
       expect(Object.keys(SCENARIOS)).toContain(k);
       expect(SCENARIO_KEYS as readonly string[]).not.toContain(k);
     }
@@ -85,7 +87,7 @@ describe("planSliceCases", () => {
 
 describe("CANARY_CHECK and planCanaryCase", () => {
   it("CANARY_CHECK is a view of the registry, never a second table", () => {
-    expect(CANARY_CHECK).toEqual(Object.fromEntries(Object.entries(SCENARIOS).filter(([k]) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF" && !(W2A_SCENARIO_KEYS as readonly string[]).includes(k)).map(([k, s]) => [k, s.canaryCheck])));
+    expect(CANARY_CHECK).toEqual(Object.fromEntries(Object.entries(SCENARIOS).filter(([k]) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF" && !OPT_IN.includes(k)).map(([k, s]) => [k, s.canaryCheck])));
     expect(CANARY_CHECK.LIFECYCLE).toBeNull();
   });
   it("a canary case is league|generic under generic's builder variant, with an id no slice case can hold", () => {

@@ -28,8 +28,10 @@ export type RequestedOutcome =
   /** W2b (X-DW-1): neither side turned up — core.forfeit {by: "both", reason: "walkover"}, before START. */
   | { readonly kind: "double_walkover" }
   /** `atScore`: W2a (spec §5.6.1) — abandoned with something on the board, not at 0–0: the sport's own win
-   *  stream cut one event before it decides. Absent = the old `[START, core.abandon]`, byte for byte. */
-  | { readonly kind: "abandon"; readonly atScore?: true }
+   *  stream cut one event before it decides. Absent = the old `[START, core.abandon]`, byte for byte. `afterPartial`:
+   *  W2b (X-AB-1) — START, the sport's partial play (a goal each; a cricket first innings and five overs of the chase),
+   *  then the abandon: a level real score in the goal sports, past cricket's minimum overs. */
+  | { readonly kind: "abandon"; readonly atScore?: true; readonly afterPartial?: true }
   /** Level scores that stand as a tie (cricket decideTie, ruling 44). A sport
    *  generator builds it only through `tied`; one that declares none cannot
    *  reach it (OutcomeUnreachable). */
@@ -65,7 +67,7 @@ export function outcomeLabel(o: RequestedOutcome): string {
     // phase is named in the label.
     case "forfeit": return `forfeit-${o.by}-${o.reason}${o.at === NATURAL_FORFEIT_AT[o.reason] ? "" : `-${o.at.replace("_", "-")}`}`;
     case "double_walkover": return "double-walkover";
-    case "abandon": return o.atScore === true ? "abandon-at-score" : "abandon";
+    case "abandon": return o.afterPartial === true ? "abandon-after-partial" : o.atScore === true ? "abandon-at-score" : "abandon";
     case "tie": return "tie";
     case "level": return "level";
     case "settle": return `settle-${o.then}-${o.method}-after-${o.after}`;
