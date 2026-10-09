@@ -689,7 +689,9 @@ async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
       // and the reconcile below proves it owed; a session still open refuses the Go live.
       const [still] = await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${m.open.sid}`;
       if (ACTIVE.includes(still!.state)) {
-        expect(["active_session", "phone_not_paired"], "#2: Go live over an open session is refused").toContain(refusal);
+        // active_session outranks BOTH W5 answers (F-A5: admit's order, and the early W5 probe is admit itself), so the open
+        // session is the only answer here — never phone_not_paired, never phone_not_responding.
+        expect(refusal, "#2: Go live over an open session is refused").toBe("active_session");
         t.count("oneOpen");
         t.outcome("goLive:refused-open");
         return;

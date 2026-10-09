@@ -1127,7 +1127,7 @@ function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headro
     case "storage_exhausted": throw new HttpError(503, "recording storage is exhausted; no new stream can start", "storage_exhausted", { headroomMinutes: headroom });
     case "active_session": throw new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: refusal.activeSessionId ?? null });
     // W5 / T10 (capture QR v2 §6.7.1): nothing to stream from — the organiser pairs a phone before anything is weighed.
-    case "phone_not_paired": throw new HttpError(409, "no phone is paired and answering on this match's stream code", "phone_not_paired");
+    case "phone_not_paired": throw new HttpError(409, "no phone is paired on this match's stream code", "phone_not_paired");
     // Owner ruling 2026-10-09 (Option 1): a phone IS paired but has gone silent (§6.9) — woken, not rescanned.
     case "phone_not_responding": throw new HttpError(409, "the phone paired on this match's stream code is not responding", "phone_not_responding");
   }

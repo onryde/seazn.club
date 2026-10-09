@@ -5614,7 +5614,7 @@
   "stream.restart.used": "Reinicios gratis usados ({used} de {limit})",
   "stream.restart.usedCredit": "Reinicios gratis usados ({used} de {limit}): este usa 1 crédito",
   "stream.error.phone_not_paired": "No hay ningún teléfono emparejado. Escanea el código con Seazn Capture y luego emite en directo.",
-  "stream.error.phone_not_responding": "El teléfono de la cámara no responde. Abre Seazn Capture en el teléfono, mantenlo desbloqueado y luego emite en directo.",
+  "stream.error.phone_not_responding": "El teléfono que graba no responde. Abre Seazn Capture en el teléfono, mantenlo desbloqueado y luego emite en directo.",
   "qr.tapToEnlarge": "Toca para ampliar",
   "qr.enlarge": "Ampliar código QR",
   "qr.enlarged.name": "Código QR ampliado",

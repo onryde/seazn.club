@@ -90,6 +90,10 @@ describe.skipIf(!HAS_DB)("the organiser's Go live — no phone vs a phone that s
     const r = await captureRig({ credits: 1 });
     expect(await pairingsOf(r), "PREMISE: nothing ever claimed this code").toEqual([]);
     expect(await refusal(r)).toEqual([409, "phone_not_paired"]);
+    // The message names only what this code means since the split — no CURRENT pairing — and no longer claims "answering",
+    // which is phone_not_responding's half (the route's OpenAPI summary says the same).
+    const message = await goLive(r).then(() => null, (e: unknown) => (e instanceof HttpError ? e.message : String(e)));
+    expect(message).toBe("no phone is paired on this match's stream code");
     expect(await sessionsOf(r), "a refused Go live writes no row").toEqual([]);
     const A = phoneId("a");
     await scan(r, A);

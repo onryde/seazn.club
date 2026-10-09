@@ -207,7 +207,7 @@ describe("captureRoute — anything unmapped is the contract's 503 unavailable (
     const errors = vi.spyOn(log, "error").mockImplementation(() => undefined);
     try {
       const unmapped: unknown[] = [
-        new HttpError(409, "no phone is paired and answering", "phone_not_paired"),
+        new HttpError(409, "no phone is paired on this match's stream code", "phone_not_paired"),
         // Owner ruling 2026-10-09: the console's second W5 answer is the console's too — never on the phone's wire.
         new HttpError(409, "the phone paired on this match's stream code is not responding", "phone_not_responding"),
         new HttpError(404, "fixture not found"),
