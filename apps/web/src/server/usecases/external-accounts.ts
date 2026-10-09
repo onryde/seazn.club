@@ -1,6 +1,6 @@
 import "server-only";
 // Linked external board accounts (Lichess first). IDENTITY ONLY — no OAuth
-// token is ever stored here (V405 dropped the token columns; the OAuth
+// token is ever stored here (V432 dropped the token columns; the OAuth
 // callback reads /api/account and revokes the token before this is called).
 // Touched only via privileged `sql` (FORCE RLS with no app_user policy).
 import { sql, withTenant } from "@/lib/db";

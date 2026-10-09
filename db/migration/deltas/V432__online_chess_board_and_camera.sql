@@ -120,3 +120,109 @@ alter table competitions
 alter table stages
   add column camera_policy text null
     check (camera_policy in ('off', 'optional', 'required'));
+
+-- =============================================================================
+-- Video (design §5.2, D6) — one RealtimeKit meeting per fixture, created when
+-- the FIRST player arrives in the window (preflight needs something to join),
+-- torn down at the result or at T+20. N participants per fixture on purpose:
+-- one camera is enough for ship 1, a second angle is then config, not a
+-- migration — so (fixture_id, person_id) is deliberately NOT unique.
+-- Sealed like V410's tables: ENABLE + FORCE RLS, no app_user policy; these
+-- rows are reached only through the app's privileged client, and the organiser
+-- sees a projection, never a row.
+-- =============================================================================
+create table fixture_video_meetings (
+  fixture_id uuid primary key references fixtures(id) on delete cascade,
+  org_id     uuid not null references organizations(id) on delete cascade,
+  provider   text not null default 'realtimekit' check (provider in ('realtimekit')),
+  meeting_id text not null unique,
+  created_at timestamptz not null default now(),
+  ended_at   timestamptz null
+);
+create index fixture_video_meetings_org_idx on fixture_video_meetings (org_id);
+
+create table fixture_video_participants (
+  id                     uuid primary key default gen_random_uuid(),
+  -- To the MEETING, not the fixture: a participant with no meeting is a
+  -- preflight that ran against nothing.
+  fixture_id             uuid not null
+                           references fixture_video_meetings(fixture_id) on delete cascade,
+  person_id              uuid null references persons(id) on delete set null,
+  preset                 text not null check (preset in ('player', 'arbiter')),
+  participant_id         text not null,
+  -- §5.2: a player is seated only when the MEETING reports a live video
+  -- publisher for them. The POC's client-sent cameraOk boolean is on the
+  -- do-not-copy list (§10); this is the server-verified stamp.
+  last_publisher_seen_at timestamptz null,
+  created_at             timestamptz not null default now(),
+  unique (fixture_id, participant_id)
+);
+create index fixture_video_participants_person_idx
+  on fixture_video_participants (fixture_id, person_id);
+
+-- =============================================================================
+-- Flags (design §5.5 / D10, §3.6). A camera that goes dark and out-of-band
+-- play are LOGGED, never automatic sanctions — the organiser decides. The
+-- board never freezes, so a flag is a record with two timestamps and an actor,
+-- not a state the engine reads.
+-- =============================================================================
+create table fixture_play_flags (
+  id          uuid primary key default gen_random_uuid(),
+  fixture_id  uuid not null references fixtures(id) on delete cascade,
+  org_id      uuid not null references organizations(id) on delete cascade,
+  kind        text not null check (kind in ('camera_lost', 'out_of_band_play')),
+  person_id   uuid null references persons(id) on delete set null,
+  opened_at   timestamptz not null default now(),
+  closed_at   timestamptz null,
+  resolved_by uuid null references users(id) on delete set null,
+  note        text null,
+  -- Resolution is all-or-nothing in BOTH directions: a closed flag nobody
+  -- resolved, and a resolver on a flag still open, are each a bug.
+  constraint fixture_play_flags_resolution_check
+    check ((closed_at is null) = (resolved_by is null))
+);
+create index fixture_play_flags_open_idx
+  on fixture_play_flags (fixture_id) where closed_at is null;
+
+-- =============================================================================
+-- Audit (design D9, D11). Two things an org can do that must leave a trace:
+-- downgrade the camera policy after a window has opened, and override a
+-- RealtimeKit outage under `required`. Both carry WHO; `on delete restrict`
+-- because an audit row whose actor vanished is not an audit row.
+-- =============================================================================
+create table online_chess_audit (
+  id            uuid primary key default gen_random_uuid(),
+  org_id        uuid not null references organizations(id) on delete cascade,
+  fixture_id    uuid null references fixtures(id) on delete cascade,
+  stage_id      uuid null references stages(id) on delete cascade,
+  kind          text not null check (kind in ('policy_downgrade', 'video_override')),
+  actor_user_id uuid not null references users(id) on delete restrict,
+  from_policy   text null check (from_policy in ('off', 'optional', 'required')),
+  to_policy     text null check (to_policy   in ('off', 'optional', 'required')),
+  note          text not null,
+  created_at    timestamptz not null default now(),
+  -- `else false`, not a bare CASE: a CASE with no ELSE yields NULL for an
+  -- unknown kind and a NULL CHECK PASSES, which would leave this guard
+  -- covered for by the kind CHECK instead of standing on its own.
+  constraint online_chess_audit_shape_check check (
+    case kind
+      when 'policy_downgrade' then
+        stage_id is not null and fixture_id is null
+        and from_policy is not null and to_policy is not null
+      when 'video_override' then
+        fixture_id is not null and stage_id is null
+        and from_policy is null and to_policy is null
+      else false
+    end
+  )
+);
+create index online_chess_audit_org_idx on online_chess_audit (org_id, created_at desc);
+
+alter table fixture_video_meetings     enable row level security;
+alter table fixture_video_meetings     force  row level security;
+alter table fixture_video_participants enable row level security;
+alter table fixture_video_participants force  row level security;
+alter table fixture_play_flags         enable row level security;
+alter table fixture_play_flags         force  row level security;
+alter table online_chess_audit         enable row level security;
+alter table online_chess_audit         force  row level security;
