@@ -304,6 +304,11 @@ the reader-count pin (`outcome-readers.test.ts`) does not grow.
   chips (`public-site/live-score.tsx:90-95`), the division result line (`v2/stages-panel.tsx:1996`); the match-centre
   sentence replaces "won by forfeit" (`server/public-site/match-centre.ts:742`); qualification view reads the hook
   (`qualification-view.ts:98-107`).
+- **Held chess double forfeits on public pages.** Until W2b, W2a holds a bracket chess double forfeit as `no_result`
+  and the public site reads "Level — winner to be decided" although nobody played (W2a whole-branch review). W2b's
+  fold and migration (§5.4) turn every such fixture into a `double_walkover`, which renders with UI-2's double-walkover
+  tag and sentence; a test asserts no fixture whose active result is a chess double forfeit renders the "Level"
+  copy after the migration.
 - **Copy.** Every new string in all 4 dictionaries, then `gen-keys`; abbreviations per locale; no English fallback.
 
 ### 5.6 Harness (`tools/matrix/`) and reference model (`packages/reference/`)
