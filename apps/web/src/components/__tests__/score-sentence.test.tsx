@@ -40,19 +40,34 @@ describe("ScoreSentence keeps a score on one line (fix round 1, M1)", () => {
     expect(checked).toBe(3);
   });
 
-  it("every chess score the engine accepts (its own boardgame.tiebreak schema) is glued whole — the local pattern restates the engine's", () => {
+  it("both directions: the local pattern glues a string whole EXACTLY when the engine's own boardgame.tiebreak schema (its CHESS_SCORE) accepts it — every string over the score alphabet, up to 5 characters", () => {
+    // The oracle is the engine's declaration (`score: z.string().regex(CHESS_SCORE)`, boardgame.ts), never this file's
+    // pattern. Enumerating the alphabet catches a drift either way: a score the engine accepts that the page would let
+    // break, and a string the engine refuses that the page would glue as if it were a score.
     const tiebreak = (boardgame.eventSchemas as Record<string, { safeParse(v: unknown): { success: boolean } }>)["boardgame.tiebreak"]!;
-    const samples = ["1½–½", "½–1½", "2–0", "0–2", "1½–1½", "10½–9½", "½–½"];
-    let checked = 0;
-    for (const s of samples) {
-      expect(tiebreak.safeParse({ rung: "rapid", winner: "H", score: s }).success, `${s} is a chess score the engine accepts`).toBe(true);
-      expect(scoreSentenceParts(`won (${s})`), s).toEqual([
-        { text: "won (", score: false },
-        { text: s, score: true },
-        { text: ")", score: false },
-      ]);
-      checked++;
+    const ALPHABET = ["0", "1", "2", "½", "–", "-", ".", " "];
+    let strings = [""];
+    const all: string[] = [];
+    for (let len = 1; len <= 5; len++) {
+      strings = strings.flatMap((p) => ALPHABET.map((c) => p + c));
+      all.push(...strings);
     }
-    expect(checked).toBe(samples.length);
+    let accepted = 0;
+    let refused = 0;
+    const disagree: string[] = [];
+    for (const s of all) {
+      const engine = tiebreak.safeParse({ rung: "rapid", winner: "H", score: s }).success;
+      const parts = scoreSentenceParts(s);
+      const glued = parts.length === 1 && parts[0]!.score && parts[0]!.text === s;
+      if (engine) accepted++;
+      else refused++;
+      if (engine !== glued) disagree.push(`${JSON.stringify(s)} engine=${engine} glued=${glued}`);
+    }
+    expect(disagree).toEqual([]);
+    // Anti-vacuity, both directions reached: real scores among them ("1½–½", "10–0") and many refusals.
+    expect(all.length).toBe(ALPHABET.length + ALPHABET.length ** 2 + ALPHABET.length ** 3 + ALPHABET.length ** 4 + ALPHABET.length ** 5);
+    expect(all).toContain("1½–½");
+    expect(accepted).toBeGreaterThan(0);
+    expect(refused).toBeGreaterThan(0);
   });
 });

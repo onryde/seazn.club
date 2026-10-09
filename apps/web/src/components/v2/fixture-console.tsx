@@ -69,7 +69,7 @@ import { ActivityPanel, type ActivityDetailResolver, type ActivityEvent } from "
 import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
-import { NeedsDecisionBlock, finalizeVisible, heldCause, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
+import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
 import { ScoreSentence } from "@/components/score-sentence";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -1277,6 +1277,13 @@ export function FixtureConsole({
           )}
         </section>
       )}
+      {/* Fix round 1 (M7): an official scorer on a held fixture gets no block (the settle is organiser-only) — but one
+          line saying what happens next, rather than a status word and silence. Fix round 2: the line follows the cause
+          (N2 — a chess tie-break is the scorer's to record, so it never says "wait for the organiser"), and it sits
+          straight under the Scoring card, above the ledger and lineups, so it is in view at 768 and 1280 (m5). */}
+      {scoring && home && away && !canOrganise && held && (
+        <HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} />
+      )}
 
       {/* Spec 2026-09-30 §2 + Review Focus 4: the Scoring section renders only while this fixture can be scored with both
           sides known. A finalized, cancelled, read-only (frozen) or TBD-sided fixture can still have a stream on air, and
@@ -1476,13 +1483,6 @@ export function FixtureConsole({
           busy={busy || padSyncing}
           settle={settle}
         />
-      )}
-      {/* Fix round 1 (M7): an official scorer on a held fixture gets no block (the settle is organiser-only) — but one
-          line saying why the match is held, rather than a status word and silence. */}
-      {scoring && home && away && !canOrganise && held && (
-        <p data-testid="held-note" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          {msg("score.needsDecision.waiting")}
-        </p>
       )}
 
       {/* W2a: rendered only when it holds a control — a scorer on an in-play match, or anyone on a held one, would

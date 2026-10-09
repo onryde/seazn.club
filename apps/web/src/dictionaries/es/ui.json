@@ -2543,6 +2543,7 @@
   "score.needsDecision.body.abandoned": "El partido se suspendió antes de que nadie ganara. Elige quién avanza.",
   "score.needsDecision.body.tiebreak": "La partida terminó en tablas y su desempate aún no está registrado. Registra el desempate cuando se juegue o elige quién avanza.",
   "score.needsDecision.waiting": "Este partido queda en espera hasta que el organizador decida quién avanza.",
+  "score.needsDecision.waiting.tiebreak": "La partida terminó en tablas y su desempate aún no está registrado. Registra el desempate en el marcador cuando se juegue.",
   "score.needsDecision.settle": "Resolver el partido",
   "score.needsDecision.dialogTitle": "Resolver el partido",
   "score.needsDecision.whoAdvances": "¿Quién avanza?",

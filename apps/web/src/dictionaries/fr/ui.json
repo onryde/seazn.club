@@ -2588,6 +2588,7 @@
   "score.needsDecision.body.abandoned": "Le match a été arrêté avant qu'il y ait un vainqueur. Choisissez qui se qualifie.",
   "score.needsDecision.body.tiebreak": "La partie est nulle et son départage n'est pas encore saisi. Saisissez le départage une fois joué, ou choisissez qui se qualifie.",
   "score.needsDecision.waiting": "Ce match est en attente jusqu'à ce que l'organisateur décide qui se qualifie.",
+  "score.needsDecision.waiting.tiebreak": "La partie est nulle et son départage n'est pas encore saisi. Saisissez le départage sur le pupitre une fois joué.",
   "score.needsDecision.settle": "Trancher le match",
   "score.needsDecision.dialogTitle": "Trancher le match",
   "score.needsDecision.whoAdvances": "Qui se qualifie ?",

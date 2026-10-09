@@ -326,5 +326,35 @@
         "name": "each winner button carries its whole name, wrapping"
       }
     ]
+  },
+  {
+    "id": "r2-n2-tiebreak-note-key",
+    "file": "apps/web/src/components/v2/needs-decision.tsx",
+    "find": "  tiebreak: \"score.needsDecision.waiting.tiebreak\",",
+    "replace": "  tiebreak: \"score.needsDecision.waiting\",",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "N2 \\(fix round 2\\): an official on a chess TIE-BREAK"
+      }
+    ]
+  },
+  {
+    "id": "r2-n2-console-passes-note-cause",
+    "file": "apps/web/src/components/v2/fixture-console.tsx",
+    "find": "        <HeldNote msg={msg} cause={heldCause({ outcome: live.outcome, events })} />",
+    "replace": "        <HeldNote msg={msg} cause=\"level\" />",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/fixture-console-authority-band.test.tsx"
+        ],
+        "name": "N2 \\(fix round 2\\): an official on a chess TIE-BREAK"
+      }
+    ]
   }
 ]

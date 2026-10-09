@@ -16,9 +16,11 @@ import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
  *  only of the raw one, so the pair covers either caller. */
 const PLAYED_STATUSES = new Set(["decided", "finalized", "needs_decision"]);
 
-/** W2a — the held status (a bracket game that ended level, or an abandon that decided nobody). It HAS been played —
- *  only the verdict waits — so it takes the played wording. The document folds it into "other" (`statusOf`), where
- *  abandoned/cancelled also land, so `fixtureSubheadingLine` reads it off the payload's raw status instead. */
+/** W2a — the held status: a bracket game whose RESULT came out level (`fixtureStatusFromFold`, append-event.ts). It
+ *  HAS been played — only the verdict waits — so it takes the played wording. An abandon that decided nobody is NOT
+ *  this status (it stays `abandoned`, fix round 2 m1), and neither is a chess game whose tie-break is owed (`in_play`).
+ *  The document folds it into "other" (`statusOf`), where abandoned/cancelled also land, so `fixtureSubheadingLine`
+ *  reads it off the payload's raw status instead. */
 const HELD_STATUS = "needs_decision";
 
 /**

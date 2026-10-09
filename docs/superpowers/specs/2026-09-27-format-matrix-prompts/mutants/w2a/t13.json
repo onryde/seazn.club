@@ -928,5 +928,35 @@
         "name": "a held abandon's names are NOT struck through"
       }
     ]
+  },
+  {
+    "id": "r2-m3-local-drops-half-alone",
+    "file": "apps/web/src/components/score-sentence.tsx",
+    "find": "const SCORE = /((?:\\d+½?|½)–(?:\\d+½?|½))/;",
+    "replace": "const SCORE = /((?:\\d+½?)–(?:\\d+½?|½))/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/__tests__/score-sentence.test.tsx"
+        ],
+        "name": "both directions: the local pattern glues a string whole EXACTLY"
+      }
+    ]
+  },
+  {
+    "id": "r2-m3-local-glues-hyphen",
+    "file": "apps/web/src/components/score-sentence.tsx",
+    "find": "const SCORE = /((?:\\d+½?|½)–(?:\\d+½?|½))/;",
+    "replace": "const SCORE = /((?:\\d+½?|½)[–-](?:\\d+½?|½))/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/__tests__/score-sentence.test.tsx"
+        ],
+        "name": "both directions: the local pattern glues a string whole EXACTLY"
+      }
+    ]
   }
 ]

@@ -925,9 +925,33 @@ describe("no HTTP-capable bypass is reachable from the tap driver's files (I4)",
   }
 
   it("the one product module the driver value-imports imports nothing itself (so no transport can ride in with it)", () => {
+    // Every way a module can pull another in: an import of any shape, and a re-export of any shape (fix round 2, m4:
+    // `export * as ns from "x"` slipped the first version of this pattern). `[^;]*?` spans a multi-line `export {…}`.
+    const PULLS_IN = /^\s*(?:import\b|export\b[^;]*?\bfrom\s*["'])/gm;
+    const shapes = [
+      'import x from "a";',
+      'import "a";',
+      'import { a } from "a";',
+      'import * as ns from "a";',
+      'export * from "a";',
+      'export * as ns from "a";',
+      'export { a } from "a";',
+      'export {\n  a,\n  b,\n} from "a";',
+      'export type { T } from "a";',
+    ];
+    let caught = 0;
+    for (const shape of shapes) {
+      expect(shape.match(PULLS_IN) ?? [], shape).toHaveLength(1);
+      caught++;
+    }
+    expect(caught).toBe(shapes.length);
+    // The positive pair: a plain export is not a pull.
+    for (const local of ["export const A = [\"x\"] as const;", "export function f(): boolean {\n  return true;\n}"]) {
+      expect(local.match(PULLS_IN), local).toBeNull();
+    }
     const src = stripComments(readFileSync(new URL("../../../../apps/web/src/lib/organiser-only-events.ts", import.meta.url), "utf8"));
     expect(src).toContain("export function isOrganiserOnlyEvent");
-    expect(src.match(/^\s*(import|export\s+\*\s+from|export\s+\{[^}]*\}\s+from)\b/gm) ?? []).toEqual([]);
+    expect(src.match(PULLS_IN) ?? []).toEqual([]);
     expect(src).not.toMatch(/\brequire\s*\(|\bimport\s*\(/);
   });
 
