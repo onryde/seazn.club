@@ -27,12 +27,18 @@ export interface CreditCase {
   reason: CreditReason;
   /** Present once play started: each side's score per unit (period, set, game), the last unit possibly unfinished. */
   played?: { home: number[]; away: number[] };
-  /** ADDITIVE (not in the plan's frozen interface): the side at fault — absent means "away". Ignored by a double
-   *  walkover, where both sides are. It is what "worse for the offender" (FB-RT-1) and "the retiring side keeps what
-   *  it won" (VB-RT-1) read `played` against. */
+  /** ADDITIVE (not in the plan's frozen interface): the side at fault. It is what "worse for the offender" (FB-RT-1)
+   *  and "the retiring side keeps what it won" (VB-RT-1) read `played` against, so it is REQUIRED with a scoresheet:
+   *  absent there, the case is refused `offender-unknown` — never read as "away". A double walkover ignores it (both
+   *  sides are at fault), and so does a case with no scoresheet (the credit is the same whichever side defaulted). */
   by?: Side;
   /** ADDITIVE: the declared cfg name the case was built from (a module variant name, "(schema default)", or a named
-   *  extra) — the consumer's handle for `configSchema.parse({ ...module.variants[variant], ...cfg })`. Never read. */
+   *  extra) — the consumer's handle on the engine's own cfg. A consumer folding a case through the engine parses the
+   *  engine's DECLARED cfg of that name UNMODIFIED (`declaredCfgs(module)`, i.e. `configSchema.parse(variants[name])`,
+   *  or `configSchema.parse({})` for the schema default) and passes that parsed cfg to `walkoverCredit` — `cfg` here is
+   *  the rulebook's claim about the declared value (its test checks it against the engine's declaration, every known
+   *  difference named), never an override. A named extra is not declared: it is a stage-match-rules cfg, built as its
+   *  `source` says. Never read. */
   variant?: string;
   /** ADDITIVE: a readable name for the case. Never read. */
   label?: string;
@@ -58,6 +64,7 @@ export const CREDIT_REFUSALS = {
   "played-malformed": "the scoresheet so far is not two equal-length lists of whole, non-negative unit scores the sport can reach",
   "unit-unfinished": "only the last unit of the scoresheet so far may be unfinished",
   "already-decided": "the scoresheet so far already decides the match, so nobody retired from it",
+  "offender-unknown": "a scoresheet is read from the side at fault (FB-RT-1 \"worse for the offender\", VB-RT-1 \"the retiring side keeps what it won\"), so a forfeit with one names that side (`by`)",
 } as const;
 export type CreditRefusal = keyof typeof CREDIT_REFUSALS;
 
@@ -296,7 +303,10 @@ export function walkoverCredit(c: CreditCase): CreditAnswer {
   // X-RS-1: walkover before play started (chess also after the session starts); retired / disqualified after.
   if ((c.reason === "walkover" || c.reason === "double_walkover") && started && !chess) throw new CreditRefused("played-before-start", `${c.sport} ${c.reason} with a scoresheet`);
   if ((c.reason === "retired" || c.reason === "disqualified") && !started) throw new CreditRefused("not-started", `${c.sport} ${c.reason} with no scoresheet`);
-  const p = started ? readPlayed(c.sport, c.played, c.by ?? "away") : null;
+  // The scoresheet is read from the side at fault's view, so a forfeit with one names that side — never a silent
+  // default. A double walkover's sides are both at fault: its sheet (chess only) is read for its shape alone.
+  if (started && c.reason !== "double_walkover" && c.by === undefined) throw new CreditRefused("offender-unknown", `${c.sport} ${c.reason} with a scoresheet names no side at fault`);
+  const p = started ? readPlayed(c.sport, c.played, c.by ?? "home") : null; // "home": a double walkover's side is never read
 
   if (c.reason === "double_walkover") {
     // X-DW-1 / X-DW-4: both lose, P+1 L+1, 0 points each, no score credited, excluded from every ratio.

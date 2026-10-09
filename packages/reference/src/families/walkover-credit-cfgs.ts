@@ -9,12 +9,17 @@
 //     "(schema default)" where the schema has one), plus named extras a W2b rule needs. Each holds ONLY the keys the
 //     sport's Appendix A credit row reads (X-WO-1: "derived from the stage's own cfg (best-of, target score, overs)"),
 //     with the values the RULEBOOKS give (rulebook-W2-sets-cricket.md, rulebook-W2-goals-boards.md, Appendix A) —
-//     never read from an engine module. A consumer folding a case through the engine builds the full cfg as
-//     `configSchema.parse({ ...module.variants[name] ?? {}, ...cfg })`.
+//     never read from an engine module. A consumer folding a case through the engine passes the engine's DECLARED cfg
+//     of that name, parsed and UNMODIFIED (`declaredCfgs(module)`), to `walkoverCredit` — the value written here is
+//     the rulebook's claim about it, checked against the engine's declaration in walkover-credit.test.ts (every known
+//     difference named there), never an override. A named extra is not declared: its `source` names the stage match
+//     rules it stands for.
 //   * `played` — named positions at which a side stops after the match started (a retirement, a disqualification, a
 //     withdrawal after start). `home`/`away` are the scoresheet's per-unit scores (goals per period, points per set or
-//     game, the last unit possibly unfinished); `by` is the side that stops, "away" when absent. Every expected value
-//     these positions produce is written out by hand in walkover-credit.test.ts from the rule rows.
+//     game, the last unit possibly unfinished); `by` is the side that stops, "away" when absent HERE — the
+//     enumeration writes it on every case it builds, and the family refuses a scoresheet with no side
+//     (`offender-unknown`). Every expected value these positions produce is written out by hand in
+//     walkover-credit.test.ts from the rule rows.
 
 export interface CreditCfgEntry {
   readonly name: string;

@@ -2,7 +2,9 @@
 // from an Appendix A row (spec 2026-10-08-format-matrix-w2b-design.md), the W2 rulebooks or the orchestrator's
 // pre-flight rulings PF-6 / PF-7 — never from engine source and never from the family (R8; TEST-STRATEGY rule 3). The
 // engine is touched only for its DECLARED domain at test time: the registry's keys, each sport's declared cfg NAMES,
-// its configSchema (does a key written here exist?) and its declared metric KEYS — never a value to expect.
+// its configSchema (does a key written here exist?) and its declared metric KEYS — never a value to expect. One test
+// reads the engine's declared cfg VALUES, in the other direction: it checks the rulebook's claim (the data) AGAINST the
+// engine's declaration, with every known difference named — it never takes an expected credit from the engine.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -234,7 +236,7 @@ describe("walkover-credit: tennis, cricket, chess, carrom, generic", () => {
   it("BG-WO-1: a chess forfeit is 1-0 and credits no colour; BG-WO-2: recordable before the game starts — and after the session starts (FIDE 6.7.1)", () => {
     const w = single({ wins: 1, white: 0, black: 0 }, { wins: 0, white: 0, black: 0 }, false);
     for (const name of [DEFAULT, "classical", "rapid", "blitz"]) expect(wo("boardgame", name), name).toEqual(w);
-    expect(walkoverCredit({ sport: "boardgame", cfg: {}, reason: "walkover", played: { home: [], away: [] } })).toEqual(w);
+    expect(walkoverCredit({ sport: "boardgame", cfg: {}, reason: "walkover", played: { home: [], away: [] }, by: "away" })).toEqual(w);
   });
   it("CA-WO-1: the games needed to win, each 25-0 — and a 29-point club game's own target (X-WO-1)", () => {
     for (const [name, w] of [[DEFAULT, sets(2, 0, 50, 0)], ["icf", sets(2, 0, 50, 0)], ["club-29", sets(2, 0, 58, 0)]] as const) {
@@ -268,7 +270,7 @@ describe("walkover-credit: the cross-sport rows (X-RT-1, X-WD-1 / PF-7, X-RS-1)"
     expect(new Set(played.map((c) => c.sport)).size).toBe(11);
   });
 
-  it("X-WD-1 + PF-7: a withdrawal after play started takes the retirement credit (the played score stands); before start, the walkover credit — never a match in players' stats", () => {
+  it("X-WD-1 + PF-7: a withdrawal after play started takes the sport's retirement credit; before start, the walkover credit — never a match in players' stats", () => {
     let after = 0;
     for (const c of played) {
       expect(walkoverCredit({ ...c, reason: "withdrew" }), c.label).toEqual({ ...walkoverCredit(c), statsMatch: false });
@@ -293,7 +295,7 @@ describe("walkover-credit: the cross-sport rows (X-RT-1, X-WD-1 / PF-7, X-RS-1)"
     const sports = forEachSport(({ key }) => {
       const cfg = cfgOf(key, WALKOVER_CREDIT_DATA[key]?.cfgs[0]?.name ?? "");
       for (const reason of ["walkover", "double_walkover"] as const) {
-        const r = refusalOf({ sport: key, cfg, reason, played: { home: [], away: [] } });
+        const r = refusalOf({ sport: key, cfg, reason, played: { home: [], away: [] }, by: "away" });
         expect(r, `${key} ${reason}`).toBe(key === "boardgame" ? "answered" : "played-before-start");
         if (r !== "answered") refused++;
       }
@@ -355,14 +357,15 @@ describe("walkover-credit never guesses: every refusal is named and reached", ()
     "cfg-invalid": { sport: "football", cfg: {}, reason: "walkover" },
     "played-before-start": { sport: "football", cfg: fb, reason: "walkover", played: { home: [1], away: [0] } },
     "not-started": { sport: "volleyball", cfg: vb, reason: "retired" },
-    "played-malformed": { sport: "football", cfg: fb, reason: "retired", played: { home: [1, 0], away: [0] } },
-    "unit-unfinished": { sport: "volleyball", cfg: vb, reason: "retired", played: { home: [20, 25], away: [15, 10] } },
-    "already-decided": { sport: "volleyball", cfg: vb, reason: "retired", played: { home: [25, 25, 25], away: [10, 10, 10] } },
+    "played-malformed": { sport: "football", cfg: fb, reason: "retired", played: { home: [1, 0], away: [0] }, by: "away" },
+    "unit-unfinished": { sport: "volleyball", cfg: vb, reason: "retired", played: { home: [20, 25], away: [15, 10] }, by: "away" },
+    "already-decided": { sport: "volleyball", cfg: vb, reason: "retired", played: { home: [25, 25, 25], away: [10, 10, 10] }, by: "away" },
+    "offender-unknown": { sport: "football", cfg: fb, reason: "retired", played: { home: [0], away: [5] } },
   };
 
   it("one case per refusal reaches it and names itself", () => {
     const reasons = Object.keys(CREDIT_REFUSALS) as CreditRefusal[];
-    expect(reasons.length).toBe(8);
+    expect(reasons.length).toBe(9);
     expect(Object.keys(CASES).sort()).toEqual([...reasons].sort());
     let reached = 0;
     for (const r of reasons) {
@@ -373,7 +376,26 @@ describe("walkover-credit never guesses: every refusal is named and reached", ()
       expect((thrown as Error).message, r).toContain(CREDIT_REFUSALS[r]);
       reached++;
     }
-    expect(reached).toBe(8);
+    expect(reached).toBe(9);
+  });
+
+  it("offender-unknown: a scoresheet with no side at fault is refused, never read as the away side's — every reason that reads one, and the side changes the answer", () => {
+    const sheet = { home: [0], away: [5] };
+    let n = 0;
+    for (const reason of ["retired", "disqualified", "withdrew"] as const) {
+      expect(refusalOf({ sport: "football", cfg: fb, reason, played: sheet }), reason).toBe("offender-unknown");
+      n++;
+    }
+    expect(refusalOf({ sport: "boardgame", cfg: {}, reason: "walkover", played: { home: [], away: [] } }), "chess walkover after the start").toBe("offender-unknown");
+    n++;
+    expect(n).toBe(4);
+    // the witness that the side matters: home at fault 0-5 down is upheld 5-0; away at fault, it leads, so 3-0
+    expect(walkoverCredit({ sport: "football", cfg: fb, reason: "retired", played: sheet, by: "home" }).winner).toEqual(goals(5, 0));
+    expect(walkoverCredit({ sport: "football", cfg: fb, reason: "retired", played: sheet, by: "away" }).winner).toEqual(goals(3, 0));
+    // no scoresheet, or a double walkover, needs no side
+    expect(refusalOf({ sport: "football", cfg: fb, reason: "withdrew" })).toBe("answered");
+    expect(refusalOf({ sport: "football", cfg: fb, reason: "double_walkover" })).toBe("answered");
+    expect(refusalOf({ sport: "boardgame", cfg: {}, reason: "double_walkover", played: { home: [], away: [] } }), "chess double forfeit after the start").toBe("answered");
   });
 
   it("cfg-invalid: each value a credit row reads is checked — goals, best-of (odd), targets, cap, quota, game target, result mode", () => {
@@ -400,13 +422,13 @@ describe("walkover-credit never guesses: every refusal is named and reached", ()
   it("played-malformed: unequal lengths, a negative or fractional score, a set past its end, more sets than the best-of, a score in a win/loss generic match", () => {
     const tt = cfgOf("tabletennis", "bo5");
     const bad: CreditCase[] = [
-      { sport: "football", cfg: fb, reason: "retired", played: { home: [-1], away: [0] } },
-      { sport: "football", cfg: fb, reason: "retired", played: { home: [1.5], away: [0] } },
-      { sport: "tabletennis", cfg: tt, reason: "retired", played: { home: [14], away: [5] } }, // 11-5 ends it; 14-5 ran past
-      { sport: "tabletennis", cfg: tt, reason: "retired", played: { home: [11, 11, 11, 11, 11, 1], away: [0, 0, 0, 0, 0, 0] } },
-      { sport: "badminton", cfg: cfgOf("badminton", "bwf"), reason: "retired", played: { home: [31], away: [29] } }, // past the cap
-      { sport: "carrom", cfg: cfgOf("carrom", "icf"), reason: "retired", played: { home: [25], away: [25] } },
-      { sport: "generic", cfg: cfgOf("generic", "win_loss"), reason: "retired", played: { home: [1], away: [0] } },
+      { sport: "football", cfg: fb, reason: "retired", played: { home: [-1], away: [0] }, by: "away" },
+      { sport: "football", cfg: fb, reason: "retired", played: { home: [1.5], away: [0] }, by: "away" },
+      { sport: "tabletennis", cfg: tt, reason: "retired", played: { home: [14], away: [5] }, by: "away" }, // 11-5 ends it; 14-5 ran past
+      { sport: "tabletennis", cfg: tt, reason: "retired", played: { home: [11, 11, 11, 11, 11, 1], away: [0, 0, 0, 0, 0, 0] }, by: "away" },
+      { sport: "badminton", cfg: cfgOf("badminton", "bwf"), reason: "retired", played: { home: [31], away: [29] }, by: "away" }, // past the cap
+      { sport: "carrom", cfg: cfgOf("carrom", "icf"), reason: "retired", played: { home: [25], away: [25] }, by: "away" },
+      { sport: "generic", cfg: cfgOf("generic", "win_loss"), reason: "retired", played: { home: [1], away: [0] }, by: "away" },
     ];
     let n = 0;
     for (const c of bad) { expect(refusalOf(c), JSON.stringify(c.played)).toBe("played-malformed"); n++; }
@@ -415,18 +437,36 @@ describe("walkover-credit never guesses: every refusal is named and reached", ()
 
   it("unit-unfinished and already-decided: only the last unit may be unfinished; a scoresheet that already decides the match is refused (sets and carrom), its positive pair answered", () => {
     const ic = cfgOf("carrom", "icf");
-    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [10, 25], away: [5, 0] } })).toBe("unit-unfinished");
-    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [25, 25], away: [0, 0] } })).toBe("already-decided");
-    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [25, 0, 5], away: [0, 25, 25] } })).toBe("already-decided"); // the side at fault won it
-    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [0, 0, 5], away: [25, 25, 0] } })).toBe("already-decided"); // a game after the match was won
-    expect(refusalOf({ sport: "volleyball", cfg: vb, reason: "retired", played: { home: [10, 10, 10, 5], away: [25, 25, 25, 0] } })).toBe("already-decided");
+    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [10, 25], away: [5, 0] }, by: "away" })).toBe("unit-unfinished");
+    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [25, 25], away: [0, 0] }, by: "away" })).toBe("already-decided");
+    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [25, 0, 5], away: [0, 25, 25] }, by: "away" })).toBe("already-decided"); // the side at fault won it
+    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [0, 0, 5], away: [25, 25, 0] }, by: "away" })).toBe("already-decided"); // a game after the match was won
+    expect(refusalOf({ sport: "volleyball", cfg: vb, reason: "retired", played: { home: [10, 10, 10, 5], away: [25, 25, 25, 0] }, by: "away" })).toBe("already-decided");
     // the positive pairs: one set (game) short of the majority, retiring between units, is answered
-    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [25], away: [0] } })).toBe("answered");
-    expect(refusalOf({ sport: "volleyball", cfg: vb, reason: "retired", played: { home: [25, 25], away: [10, 10] } })).toBe("answered");
+    expect(refusalOf({ sport: "carrom", cfg: ic, reason: "retired", played: { home: [25], away: [0] }, by: "away" })).toBe("answered");
+    expect(refusalOf({ sport: "volleyball", cfg: vb, reason: "retired", played: { home: [25, 25], away: [10, 10] }, by: "away" })).toBe("answered");
   });
 });
 
 // ── The engine's declared domain: names and keys only, never a value to expect ──────────────────────────────────────
+
+/** Where the rulebook's value (the data) and the engine's declared value differ today, each with its reason. A
+ *  difference not listed here fails; a listed one that is no longer a difference fails too. */
+const EXPECTED_DIFFERENCES: Readonly<Record<string, string>> = {
+  "hockey · (schema default) · awardScore": "HK-WO-1: engine default moves 3→5 in loop D; remove at cross-check",
+  "hockey · fih-outdoor · awardScore": "HK-WO-1: engine default moves 3→5 in loop D; remove at cross-check",
+  "hockey · fih-shootout · awardScore": "HK-WO-1: engine default moves 3→5 in loop D; remove at cross-check",
+  "hockey · youth · awardScore": "HK-WO-1: engine default moves 3→5 in loop D; remove at cross-check",
+};
+
+/** The data writes only the keys a credit row reads, so an object value is compared on the keys it names. */
+function sameDeclared(engine: unknown, data: unknown): boolean {
+  if (data !== null && typeof data === "object") {
+    if (engine === null || typeof engine !== "object") return false;
+    return Object.entries(data).every(([k, v]) => sameDeclared((engine as Record<string, unknown>)[k], v));
+  }
+  return Object.is(engine, data);
+}
 
 describe("walkover-credit's vocabulary is the product's (the registry, each sport's declared cfg names, configSchema keys, metric keys)", () => {
   it("the family's sports are exactly the registry's, in the registry's (wave) order", () => {
@@ -450,7 +490,7 @@ describe("walkover-credit's vocabulary is the product's (the registry, each spor
     expect(checked).toBe(41); // 44 entries less 3 named extras (hockey frozen at 3, volleyball best of 3, badminton 3x15)
   });
 
-  it("each cfg key the data writes is the sport's own: parsed by its configSchema over the declared variant, every key survives with the value written", () => {
+  it("each cfg key the data writes exists in the sport's configSchema (and the schema accepts the value written)", () => {
     let keys = 0;
     let entries = 0;
     const sports = forEachSport(({ key, module }) => {
@@ -472,6 +512,46 @@ describe("walkover-credit's vocabulary is the product's (the registry, each spor
     expect(sports).toBe(11);
     expect(entries).toBe(44);
     expect(keys).toBeGreaterThan(entries); // chess entries write no key; the rest write at least one
+  });
+
+  it("X-WO-1: each value the data writes for a DECLARED cfg is the engine's declared value — every declared name, every key, the known differences named", () => {
+    let names = 0;
+    let keys = 0;
+    const diffs: string[] = [];
+    const sports = forEachSport(({ key, module }) => {
+      const data = new Map((WALKOVER_CREDIT_DATA[key]?.cfgs ?? []).map((e) => [e.name, e.cfg]));
+      for (const { name, cfg } of declaredCfgs(module as never)) {
+        const want = data.get(name);
+        if (want === undefined) throw new Error(`test: ${key} declares "${name}", which the data has no entry for`); // the test above owns this
+        const parsed = cfg as Record<string, unknown>;
+        for (const [k, v] of Object.entries(want)) {
+          if (!sameDeclared(parsed[k], v)) diffs.push(`${key} · ${name} · ${k}`);
+          keys++;
+        }
+        names++;
+      }
+    });
+    expect(sports).toBe(11);
+    expect(names).toBe(41); // zero compared would be a vacuous green
+    expect(keys).toBeGreaterThan(names - 2); // every declared entry but chess's two writes a key
+    // A listed difference that is no longer a difference fails too: the list is cleared, never left stale.
+    expect([...diffs].sort(), `the data and the engine's declaration differ at: ${diffs.join("; ")}`).toEqual(Object.keys(EXPECTED_DIFFERENCES).sort());
+  });
+
+  it("the consumer recipe: walkoverCredit on the engine's declared cfg, parsed and unmodified, answers as the data's cfg does — every declared name; a named difference answers differently", () => {
+    let same = 0;
+    let differ = 0;
+    forEachSport(({ key, module }) => {
+      for (const { name, cfg } of declaredCfgs(module as never)) {
+        const fromEngine = walkoverCredit({ sport: key, cfg: { ...(cfg as Record<string, unknown>) }, reason: "walkover" });
+        const fromData = wo(key, name);
+        const listed = Object.keys(EXPECTED_DIFFERENCES).some((d) => d.startsWith(`${key} · ${name} · `));
+        if (listed) { expect(fromEngine, `${key} ${name}`).not.toEqual(fromData); differ++; }
+        else { expect(fromEngine, `${key} ${name}`).toEqual(fromData); same++; }
+      }
+    });
+    expect(same + differ).toBe(41);
+    expect(differ).toBe(Object.keys(EXPECTED_DIFFERENCES).length);
   });
 
   it("every metric key an answer names is one the sport declares (winner, loser and excluded) — every enumerated case", () => {
