@@ -668,7 +668,11 @@ export async function completeStageIfReady(
       // anyone still in the field — an unbeaten field entrant who won no final means the deciding game decided
       // nobody, and the loop G review measured exactly that: an abandoned final ranked its two finalists 3rd and
       // 4th behind the semi-final losers. A recorded abandon now holds the stage open (bracketEngineStatus), so
-      // this is reachable only through a bug: refuse, never snapshot a champion last.
+      // that path no longer reaches here. One PRODUCT path still does (loop G re-review, probe P2; ruling D-G3,
+      // deferred to W2b): a stepladder qualifier who departs before the draw has her FINAL voided by the generator
+      // with no event (F14), fillSlot then seats the climber into that void row, and the field entrants are
+      // unbeaten — refused at generation and after every rung until the organiser forfeits the departed seed in
+      // the final (dead-feeder-cascade.test.ts pins it). Refuse, never snapshot a champion last.
       const lost = new Set<string>();
       const finalWinners = new Set<string>();
       for (const bf of bracketFixtures) {

@@ -829,8 +829,9 @@ async function quarterFinals(stageId: string): Promise<{ qa: Row; qb: Row; elsew
   return { qa: pair[0]!, qb: pair[1]!, elsewhere, semiId };
 }
 
-/** The ladder: no generated fixture, no feed edge. A challenge is created on demand and feeds nobody. */
-async function ladderAbandonedChallenge(): Promise<{
+/** The ladder: no generated fixture, no feed edge. A challenge is created on demand and feeds nobody. Its scorer
+ *  abandons it unless `abandon: false` (the withdrawal characterisation abandons it through the withdrawal instead). */
+async function ladderAbandonedChallenge(opts: { abandon?: boolean } = {}): Promise<{
   stageId: string;
   challengeId: string;
   auth: AuthCtx;
@@ -868,7 +869,7 @@ async function ladderAbandonedChallenge(): Promise<{
     challenger_id: entrants[1]!.id,
     opponent_id: entrants[0]!.id,
   });
-  await scorerAbandon(auth, fixture_id);
+  if (opts.abandon !== false) await scorerAbandon(auth, fixture_id);
   return { stageId: stage!.id, challengeId: fixture_id, auth, bySeed: entrants.map((e) => e.id) };
 }
 
@@ -1388,8 +1389,9 @@ describe.skipIf(!HAS_DB)("D-G1: a recorded abandon that decided nobody holds sta
 
   it("D-G1 guard: the unbeaten default never ranks a FIELD entrant — a final settled with nobody winning while both finalists are in the field is refused CONFIG_INVALID, never snapshotted with its finalists last", async () => {
     // single-sport: badminton, the probe's rig. The row is FORCED — the generator's event-less void given two seated
-    // finalists. No product path writes it after D-G1 (a recorded abandon holds the stage open; the generator voids
-    // only empty lines and departed ones), so this guard is reachable only through a bug, and this is how a test gets there.
+    // FIELD finalists, the shape the reviewer's abandoned final produced before D-G1. The guard's product path (a
+    // stepladder seed departed before the draw, D-G3) is pinned by its own characterisation below; this case isolates
+    // the guard on the plainest bracket, with its departed positive pair.
     const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "knockout", entrants: 4 });
     const [sf1, sf2] = s.fixtureIds;
     await walkoverForHome(s.auth, sf1!);
@@ -1412,5 +1414,151 @@ describe.skipIf(!HAS_DB)("D-G1: a recorded abandon that decided nobody holds sta
     expect(new Set(c.ranks!.slice(2)), "the departed finalists are last").toEqual(
       new Set([final.home_entrant_id, final.away_entrant_id]),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2a Task 10, fix round 2 (loop G re-review; ruling D-G3 — both corners are
+// acceptable in W2a and deferred to W2b, spec §2.3). Characterisations pin
+// TODAY's behaviour so W2b changes it on purpose; the table-stage case pins
+// the exclusion D-G1 depends on.
+// ---------------------------------------------------------------------------
+
+/** A 4-entrant generic stepladder whose qualifiers arrive the way on_complete progression delivers them: a published
+ *  `config.qualified` draw (the reviewer's probe P2 rig, reused). */
+async function qualifiedStepladder() {
+  const { auth } = await seedOrg("pro");
+  const comp = await createCompetition(auth, {
+    ends_on: "2030-12-31",
+    name: "D-G3 " + randomUUID().slice(0, 6),
+    visibility: "private",
+    branding: {},
+  });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open-" + randomUUID().slice(0, 6),
+    sport_key: "generic",
+    variant_key: "score",
+    config: GENERIC_CONFIG,
+  });
+  const entrants = await createEntrants(
+    auth,
+    division.id,
+    Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [] })),
+  );
+  const [stage] = await createStages(auth, division.id, [{ seq: 1, kind: "stepladder" as never, name: "Finals", config: {} }]);
+  const qualified = entrants.map((e) => e.id);
+  await sql`update stages set config = ${sql.json({ qualified } as never)} where id = ${stage!.id}`;
+  return { auth, divisionId: division.id, stageId: stage!.id, bySeed: qualified };
+}
+
+async function completionOrRefusal(auth: AuthCtx, stageId: string) {
+  try {
+    const r = await completeStage(auth, stageId);
+    const done = r.events.find((e) => e.type === "stage_completed");
+    return { completed: r.completed, ranks: done?.type === "stage_completed" ? done.finalRanks : null };
+  } catch (e) {
+    return { refused: (e as { code?: string }).code ?? String(e) };
+  }
+}
+
+describe.skipIf(!HAS_DB)("characterisation (ruling D-G3, deferred to W2b) and the table-stage exclusion (W2a T10 fix round 2)", () => {
+  it("characterisation (D-G3, W2b): a stepladder whose seed 1 departed BEFORE the draw has its final voided by the generator, the climber seated into the void, and completion refused CONFIG_INVALID at generation and after the rungs; forfeiting the departed seed in the final completes it [climber, departed, E3, E4]", async () => {
+    // single-sport: generic, the reviewer's probe P2 rig (measured). The D-G1 guard's one product path today.
+    const r = await qualifiedStepladder();
+    const [e1, e2, e3, e4] = r.bySeed;
+    await withdrawEntrantCascade(r.auth, e1!); // before the draw: a plain status flip
+    await generateStageFixtures(r.auth, r.stageId);
+    await sql`update divisions set status = 'active' where id = ${r.divisionId}`;
+    await sql`update stages set status = 'active' where id = ${r.stageId}`;
+    const gen = await rowsOf(r.stageId);
+    const final = gen.find((x) => x.winner_to_fixture === null)!;
+    const [finalEvents] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${final.id}`;
+    expect([final.status, final.outcome, final.home_entrant_id, finalEvents!.n], "premise: F14 voided the departed seed's final, no event").toEqual([
+      "abandoned",
+      null,
+      e1,
+      0,
+    ]);
+    expect(await completionOrRefusal(r.auth, r.stageId), "refused at generation").toEqual({ refused: "CONFIG_INVALID" });
+
+    // The rungs, each for HOME by the away side's forfeit: E3 beats E4, then E2 beats E3 and climbs into the final.
+    let rungs = 0;
+    for (let i = 0; i < 4; i++) {
+      const rung = (await rowsOf(r.stageId)).find(
+        (x) => x.status === "scheduled" && x.home_entrant_id && x.away_entrant_id && x.winner_to_fixture !== null,
+      );
+      if (!rung) break;
+      await walkoverForHome(r.auth, rung.id);
+      rungs++;
+    }
+    expect(rungs, "both rungs played").toBe(2);
+    const seated = await fixtureRow(final.id);
+    expect([seated.status, seated.home_entrant_id, seated.away_entrant_id], "fillSlot seats the climber into the void row").toEqual([
+      "abandoned",
+      e1,
+      e2,
+    ]);
+    expect(await completionOrRefusal(r.auth, r.stageId), "refused after the rungs").toEqual({ refused: "CONFIG_INVALID" });
+    await expect(post(r.auth, final.id, "core.settle", { winner: e2, method: SETTLE_BY_ORGANISER }), "no abandon was recorded: nothing to settle").rejects.toMatchObject({
+      code: "SETTLE_NOT_APPLICABLE",
+    });
+
+    // The escape: the organiser forfeits the departed seed in the final.
+    await post(r.auth, final.id, "core.start");
+    await post(r.auth, final.id, "core.forfeit", { by: e1, reason: "withdrawn" });
+    expect((await fixtureRow(final.id)).status).toBe("forfeited");
+    expect(await completionOrRefusal(r.auth, r.stageId), "champion the climber, runner-up the departed seed, then by rung lost").toEqual({
+      completed: true,
+      ranks: [e2, e1, e3, e4],
+    });
+  });
+
+  it("characterisation (D-G3, W2b): a ladder holder's withdrawal abandons her pending challenge (recorded) and holds ladder completion; a settle for the remaining challenger is accepted, swaps him up, and the ladder completes", async () => {
+    // single-sport: chess, the ladder rig's sport (outcome-null abandon).
+    const l = await ladderAbandonedChallenge({ abandon: false });
+    const [holder, challenger, l3, l4] = l.bySeed;
+    const w = await withdrawEntrantCascade(l.auth, holder!);
+    expect(w.voided, "the open-format branch abandons her pending challenge").toBe(1);
+    const ch = await fixtureRow(l.challengeId);
+    expect([ch.status, ch.outcome], "premise: a recorded abandon, outcome null").toEqual(["abandoned", null]);
+    for (const call of ["first", "second"]) {
+      expect(await completionOrRefusal(l.auth, l.stageId), `${call} call: held`).toEqual({ completed: false, ranks: null });
+    }
+    await expect(post(l.auth, l.challengeId, "core.settle", { winner: holder, method: SETTLE_BY_ORGANISER })).rejects.toMatchObject({
+      code: "SETTLE_NOT_APPLICABLE",
+    });
+    await post(l.auth, l.challengeId, "core.settle", { winner: challenger, method: SETTLE_BY_ORGANISER });
+    // Jul3/08 §6: the challenger taking the game takes the position — the departed holder drops one place.
+    expect(await completionOrRefusal(l.auth, l.stageId)).toEqual({ completed: true, ranks: [challenger, holder, l3, l4] });
+  });
+
+  it("table stages keep the void: a league with a scorer's abandon AND an expunge withdrawal's abandons (all recorded, outcome null) still completes — a league has no settle to wait for", async () => {
+    // single-sport: badminton — its abandon folds to outcome null, exactly the shape bracketEngineStatus would hold
+    // open; the league must not. The exclusion D-G1 rests on (competition.ts, the tableFixtures map).
+    const s = await seedBracket({ sport: "badminton", variant: declaredVariant("badminton", "bwf"), stageKind: "league", entrants: 4 });
+    const bySeed = (await sql<{ id: string }[]>`select id from entrants where division_id = ${s.divisionId} order by seed`).map((r) => r.id);
+    const leaver = bySeed[3]!;
+    const rows = await rowsOf(s.stageId);
+    const rained = rows.find((r) => r.home_entrant_id && r.away_entrant_id && r.home_entrant_id !== leaver && r.away_entrant_id !== leaver)!;
+    await scorerAbandon(s.auth, rained.id);
+    const w = await withdrawEntrantCascade(s.auth, leaver);
+    expect([w.policy, w.voided], "premise: an expunge withdrawal, before the leaver played, abandons her three").toEqual(["expunge", 3]);
+    const recorded = await sql<{ id: string; status: string; outcome: unknown }[]>`
+      select f.id, f.status, f.outcome from fixtures f
+      where f.stage_id = ${s.stageId} and exists (
+        select 1 from score_events a where a.fixture_id = f.id and a.type = 'core.abandon'
+          and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id))`;
+    expect(recorded.length, "four recorded abandons: the scorer's and the withdrawal's three").toBe(4);
+    expect(recorded.every((r) => r.status === "abandoned" && r.outcome === null), "every one the held-in-a-bracket shape").toBe(true);
+    await expect(post(s.auth, rained.id, "core.settle", { winner: rained.home_entrant_id, method: SETTLE_BY_ORGANISER }), "no settle outside a bracket").rejects.toMatchObject({
+      code: "SETTLE_NOT_APPLICABLE",
+    });
+    const played = await playOutExcept(s.auth, s.stageId, walkoverForHome, new Set());
+    expect(played, "the two remaining matches").toBe(2);
+    const c = await completionOrRefusal(s.auth, s.stageId);
+    expect(c.completed, "the league completes: its abandoned matches are void").toBe(true);
+    const [st] = await sql<{ status: string }[]>`select status from stages where id = ${s.stageId}`;
+    expect(st!.status).toBe("complete");
   });
 });

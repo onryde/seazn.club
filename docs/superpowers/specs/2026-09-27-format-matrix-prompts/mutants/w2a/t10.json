@@ -150,6 +150,13 @@
           "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
         ],
         "name": "D-G1: a ladder whose only challenge its scorer abandoned"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "characterisation \\(D-G3, W2b\\): a ladder holder's withdrawal"
       }
     ]
   },
@@ -195,6 +202,13 @@
           "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
         ],
         "name": "D-G1 guard: the unbeaten default never ranks a FIELD entrant"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "characterisation \\(D-G3, W2b\\): a stepladder whose seed 1 departed BEFORE the draw"
       }
     ]
   },
@@ -255,6 +269,21 @@
           "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
         ],
         "name": "D-G1: a scorer-abandoned FINAL holds the knockout open"
+      }
+    ]
+  },
+  {
+    "id": "table-status-bracket",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "      status: toEngineStatus(f.status),\n      ...(f.pool_id ? { poolId: f.pool_id } : {}),",
+    "replace": "      status: bracketEngineStatus(f),\n      ...(f.pool_id ? { poolId: f.pool_id } : {}),",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/usecases/__tests__/dead-feeder-cascade.test.ts"
+        ],
+        "name": "table stages keep the void: a league with a scorer's abandon AND an expunge withdrawal"
       }
     ]
   }
