@@ -46,9 +46,9 @@ const violation = async (p: Promise<unknown>): Promise<ModelViolation> => {
 };
 
 describe("Settle in the model (spec §5.6.2; finding 24)", () => {
-  it("empty case first: the default command set is unchanged, so committed seeds replay byte-identical; Settle is the one opt-in", () => {
+  it("empty case first: the default command set is unchanged, so committed seeds replay byte-identical; Settle is opt-in on its own flag (W2b adds Forfeit beside it, D10)", () => {
     expect([...COMMAND_KINDS]).not.toContain("Settle");
-    expect([...OPT_IN_KINDS]).toEqual(["Settle"]);
+    expect([...OPT_IN_KINDS]).toEqual(["Settle", "Forfeit"]);
     expect(modelCommands({ fences: true }).length).toBe(COMMAND_KINDS.length);
     expect(modelCommands({ fences: true, settle: false }).length).toBe(COMMAND_KINDS.length);
     expect(modelCommands({ fences: true, settle: true }).length).toBe(COMMAND_KINDS.length + 1);
@@ -304,7 +304,8 @@ describe("rule 10 — any sequence with Settle keeps the three bracket invariant
   // The commands that can move a started bracket. Start is spent, Generate and Rebuild would re-seat the fake's
   // round robin under a knockout label, and AddEntrant is refused by the roster lock.
   const MOVES = ["Withdraw", "Score", "Walkover", "Void", "Correct", "Complete", "Settle"] as const;
-  const ALL = [...COMMAND_KINDS, ...OPT_IN_KINDS];
+  // The arbitraries modelCommands({ settle: true }) builds, in its order: the default ten, then Settle (Forfeit is off).
+  const ALL = [...COMMAND_KINDS, "Settle"] as const;
 
   /** The sweep's seed: MATRIX_FC_SEED replays a CI red locally (americano-loop.test.ts:334 reads the same variable);
    *  the default pins the committed run, so a green here is a green on every machine. */

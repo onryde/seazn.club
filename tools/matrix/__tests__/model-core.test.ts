@@ -1324,12 +1324,13 @@ describe("I-2: every ledger that goes unknown is counted, and a cell with no inf
 });
 
 describe("model walkover uses the organiser's forfeit composition", () => {
-  it("a scheduled fixture's walkover posts START then core.forfeit (as HttpDriver.forfeit does)", async () => {
+  it("W2b: a scheduled fixture's walkover posts the bare core.forfeit, no START before it (as HttpDriver.forfeit does — D3 R2, finding 10)", async () => {
     // single-sport: the composition is core events only.
     const { m, d } = await fresh();
     await play(m, d, [["Start", 0], ["Walkover", 0, 0]]);
     const f = [...m.fixtures.values()].find((x) => (x.ledger ?? []).some((e) => e.type === "core.forfeit"));
-    expect(f?.ledger?.map((e) => e.type)).toEqual([START.type, "core.forfeit"]);
+    expect(f?.ledger?.map((e) => e.type)).toEqual(["core.forfeit"]);
+    expect(d.fixtures.find((x) => x.id === f?.id)?.status).toBe("forfeited");
   });
 });
 

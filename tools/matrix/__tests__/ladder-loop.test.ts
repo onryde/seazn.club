@@ -327,7 +327,7 @@ describe("FakeLadderDriver's swap (usecases/scoring.ts:774-786)", () => {
     };
     // Award to the challenger: s2 (home is the challenger, s3) does not turn up.
     const walkover = await issue();
-    await decideFixture(ctx, rec, setup, walkover, { kind: "forfeit", by: "away", reason: "walkover" });
+    await decideFixture(ctx, rec, setup, walkover, { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" });
     expect([d.decidedChallenges().at(-1)!.kind, d.decidedChallenges().at(-1)!.winner]).toEqual(["award", s3]);
     expect(d.ladderOrder()).toEqual([s1, s2, s3]);
     // A settled loss for the challenger (a ladder is a bracket kind, X-DR-1: no draw exists here; the hard path is a settle).
@@ -502,7 +502,7 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     const decidedW = { kind: "win", winner: "w" } as const satisfies ObservedOutcome;         // f2, identical before and after
     const before: FixtureSnap[] = [fx("f1", "scheduled", null, "w", "x"), fx("f2", "decided", decidedW, "w", "y")].map(snap);
     const abandonedAfter: ObservedFixture[] = [fx("f1", "abandoned", null, "w", "x"), fx("f2", "decided", decidedW, "w", "y")];
-    const forfeitedAfter: ObservedFixture[] = [fx("f1", "forfeited", { kind: "award", winner: "x" }, "w", "x"), fx("f2", "decided", decidedW, "w", "y")];
+    const forfeitedAfter: ObservedFixture[] = [fx("f1", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }, "w", "x"), fx("f2", "decided", decidedW, "w", "y")];
     const failing = (items: { ok: boolean; note: string }[]) => items.filter((i) => !i.ok).map((i) => i.note);
     // m-9: the open kinds are every engine stage kind (StageKind.options) outside the product's pinned union — derived, so a
     // new open kind is judged here the day the engine declares it. Each list asserted non-empty, and together they cover the engine.

@@ -10,7 +10,8 @@
 import { newSession, raw as benchRaw, type RawResult, type Session } from "../../../bench/lib/http.ts";
 import { fetchFixtureLedger, type LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
-import { START, type StreamEvent } from "../streams/types.ts";
+import { forfeitPosting } from "../streams/index.ts";
+import type { ForfeitReason, StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
   DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, idempotencyKey, inSquadOrder, requireVoidTarget, retryKey,
@@ -260,13 +261,11 @@ export class HttpDriver implements OrganiserDriver {
     return out;
   }
 
-  async forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]> {
+  async forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play: readonly StreamEvent[] = []): Promise<PostedEvent[]> {
     const state = await this.fixtureState(fixtureId);
-    const forfeitEv: StreamEvent = { type: "core.forfeit", payload: { by: byEntrantId, reason } };
-    // Identical to generateStream's forfeit composition on a scheduled fixture
-    // (streams/index.ts), so the declared points the scenario folds locally are
-    // for exactly the events posted here.
-    return this.postStream(fixtureId, state.status === "scheduled" ? [START, forfeitEv] : [forfeitEv], idempotencyPrefix);
+    // generateStream's own forfeit composition (streams/index.ts forfeitPosting), so the declared points the scenario
+    // folds locally are for exactly the events posted here: a walkover bare, before START (W2b D3, finding 10).
+    return this.postStream(fixtureId, forfeitPosting(state.status, { by, reason }, play), idempotencyPrefix);
   }
 
   /** Finalizes a decided fixture through the product's own route

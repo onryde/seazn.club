@@ -46,7 +46,7 @@ describe("bracketCaseOf — the harness's drive, in the rulebook's terms", () =>
     expect(of({ kind: "settle", then: "away", method: "organiser", after: "abandon" })).toMatchObject({ play: { kind: "none" }, actions: [{ kind: "abandon" }, { kind: "settle", winner: "away", method: "organiser", by: "organiser" }] });
     expect(of({ kind: "tiebreak", rung: "blitz", winner: "home" }, { sport: "boardgame" })).toMatchObject({ play: { kind: "level" }, actions: [{ kind: "tiebreak", rung: "blitz", winner: "home" }] });
     expect(of({ kind: "abandon" })).toMatchObject({ play: { kind: "none" }, actions: [{ kind: "abandon" }] });
-    expect(of({ kind: "forfeit", by: "home", reason: "walkover" })).toEqual({ notJudged: expect.stringMatching(/walkover is not one of the oracle's actions/) });
+    expect(of({ kind: "forfeit", by: "home", reason: "walkover", at: "before_start" })).toEqual({ notJudged: expect.stringMatching(/walkover is not one of the oracle's actions/) });
     // The stage kind and the sport go through as the drive's own.
     expect(of({ kind: "win", winner: "home" }, { stageKind: "double_elim", sport: "carrom" })).toMatchObject({ stageKind: "double_elim", sport: "carrom" });
   });
@@ -104,7 +104,7 @@ describe("judgeDrive — the product agrees with the oracle on every way a brack
   });
 
   it("not judged, named: a walkover, a driver that answered no status, and the oracle's own RuledOut; a stage kind with no family is the LOUD NoReferenceFamily", () => {
-    expect(judgeDrive(drive({ asked: { kind: "forfeit", by: "home", reason: "walkover" }, status: "forfeited", outcome: win("b") }))).toEqual({ judged: false, why: expect.stringMatching(/forfeit/) });
+    expect(judgeDrive(drive({ asked: { kind: "forfeit", by: "home", reason: "walkover", at: "before_start" }, status: "forfeited", outcome: win("b") }))).toEqual({ judged: false, why: expect.stringMatching(/forfeit/) });
     expect(judgeDrive(drive({ asked: { kind: "win", winner: "home" }, status: null }))).toEqual({ judged: false, why: expect.stringMatching(/no status/) });
     // CA-KO-1: a carrom bracket match never ends level; BG-KO-1: only chess records a tie-break.
     expect(judgeDrive(drive({ asked: { kind: "level" }, sport: "carrom", status: "needs_decision", outcome: { kind: "draw" } }))).toEqual({ judged: false, why: expect.stringMatching(/rules it out \(carrom-level\)/) });
@@ -211,7 +211,7 @@ describe("level kinds — each one reaches the oracle as ITSELF (X-BR-1: draw, t
     expect([...kindOf].filter(([, k]) => k === "tie").map(([sport]) => sport)).toEqual(["cricket"]);
     expect(levelKindOf("football", {}, "h", "a", { kind: "draw" }, [])).toBe("draw");
     expect(levelKindOf("football", {}, "h", "a", { kind: "tie" }, [])).toBe("tie");
-    for (const asked of [{ kind: "win", winner: "home" }, { kind: "abandon" }, { kind: "settle", then: "home", method: "lot", after: "abandon" }, { kind: "forfeit", by: "home", reason: "walkover" }] as const) {
+    for (const asked of [{ kind: "win", winner: "home" }, { kind: "abandon" }, { kind: "settle", then: "home", method: "lot", after: "abandon" }, { kind: "forfeit", by: "home", reason: "walkover", at: "before_start" }] as const) {
       expect(levelKindOf("football", {}, "h", "a", asked, []), asked.kind).toBeNull();
     }
   });
@@ -369,13 +369,13 @@ describe("life-reference-bracket-finish — the counted assertion", () => {
   it("empty case first: no bracket stage abstains BY NAME; a bracket stage with nothing judged FAILS (R25), even with drives that were all not judged", () => {
     expect(referenceBracketFinish(new Recorder(), run("league"))).toMatchObject({ id: "life-reference-bracket-finish", verdict: "abstain", checked: 0 });
     expect(referenceBracketFinish(new Recorder(), run("knockout"))).toMatchObject({ verdict: "fail", checked: 0 });
-    const walkover = drive({ asked: { kind: "forfeit", by: "home", reason: "walkover" }, status: "forfeited", outcome: win("b") });
+    const walkover = drive({ asked: { kind: "forfeit", by: "home", reason: "walkover", at: "before_start" }, status: "forfeited", outcome: win("b") });
     expect(referenceBracketFinish(recWith(walkover), run("knockout"))).toMatchObject({ verdict: "fail", checked: 0 });
   });
 
   it("agreement passes with the judged count; the not-judged drives are counted and named in the reason; one disagreement fails with its note", () => {
     expect(referenceBracketFinish(recWith(good, { ...good, fixtureId: "f2" }), run("knockout"))).toMatchObject({ verdict: "pass", checked: 2 });
-    const walkover = drive({ asked: { kind: "forfeit", by: "home", reason: "walkover" }, status: "forfeited", outcome: win("b") });
+    const walkover = drive({ asked: { kind: "forfeit", by: "home", reason: "walkover", at: "before_start" }, status: "forfeited", outcome: win("b") });
     const mixed = referenceBracketFinish(recWith(good, walkover), run("knockout"));
     expect(mixed).toMatchObject({ verdict: "pass", checked: 1 });
     expect(mixed.reason).toMatch(/1 drive\(s\) not judged \(forfeit: a walkover/);

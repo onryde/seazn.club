@@ -907,11 +907,11 @@ describe("the console, the run sheet and the public page", () => {
 
   it("a forfeit is the bench's own console route for the side `by` names; a fixture with an empty side, or a `by` on neither side, is refused", () => {
     const fx = { id: "fx-1", home_entrant_id: "e-home", away_entrant_id: "e-away" };
-    const steps = forfeitSteps(fx, "e-away", "retired hurt");
+    const steps = forfeitSteps(fx, "e-away", "retired");
     expect(steps).toEqual([
       { kind: "testid", testid: FORFEIT_TESTID },
       { kind: "testid", testid: `${FORFEIT_SIDE_TESTID_PREFIX}away` },
-      { kind: "text", testid: PROMPT_REASON_TESTID, value: "retired hurt" },
+      { kind: "text", testid: PROMPT_REASON_TESTID, value: "retired" },
       { kind: "testid", testid: PROMPT_SUBMIT_TESTID },
     ]);
     expect(forfeitSteps(fx, "e-home", "walkover")[1]).toEqual({ kind: "testid", testid: `${FORFEIT_SIDE_TESTID_PREFIX}home` });

@@ -2,6 +2,9 @@
 // (core/forfeit-reason.test.ts pins forfeit for all 11 modules), so they are
 // composed here; a sport generator builds a win or a draw (decided) and, where
 // its engine can end level, a tie (tied).
+// W2b (finding 10, D3): a walkover goes in BEFORE core.start — the phase guard refuses one after it — and a
+// retirement or disqualification AFTER core.start and some play (the sport's `partial`). forfeitPosting is the one
+// composition the stream builder and every driver share, so the two cannot drift.
 import { forbidsLevelResult, isLevelOutcome, type MatchOutcome } from "@seazn/engine/core";
 import { foldStream } from "../fold.ts";
 import { drawsAllowed, sportModule } from "../sport-cfg.ts";
@@ -20,6 +23,7 @@ import {
   idOf,
   outcomeLabel,
   type DecidedRequest,
+  type ForfeitReason,
   type SportStreamGenerator,
   type StreamEvent,
   type StreamRequest,
@@ -45,6 +49,34 @@ export const STREAM_GENERATORS = register(
 );
 
 const ABANDON: StreamEvent = Object.freeze({ type: "core.abandon", payload: { reason: "matrix: abandoned" } });
+
+/** W2b (X-DW-1): neither side turned up. The ONE double-walkover event, every sport (chess's double forfeit included,
+ *  BG-DW-1): recorded before START. */
+export const DOUBLE_WALKOVER: StreamEvent = Object.freeze({ type: "core.forfeit", payload: Object.freeze({ by: "both", reason: "walkover" }) });
+
+/** W2b (X-RT-1): `[START, ...partial]` for this request — some play, nothing decided — checked by folding it. A
+ *  partial stream that DECIDES the match is the generator's defect, refused by name rather than posted. */
+export function partialPlay(req: StreamRequest): StreamEvent[] {
+  const gen = STREAM_GENERATORS[req.sportKey];
+  if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, outcomeLabel(req.outcome), "no generator registered");
+  const play = [START, ...gen.partial(req)];
+  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, play).outcome;
+  if (folded !== null) throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), `the sport's partial play folds to '${folded.kind}' — it must leave the match undecided`);
+  return play;
+}
+
+/** The events a forfeit is posted as, given the fixture's status now — the ONE composition generateStream, the drivers
+ *  and decideFixture share (W2b D3, finding 10). On a fixture already under way the forfeit goes in bare. On a
+ *  SCHEDULED one, `play` goes in before it: START and the sport's partial play for a retirement or a disqualification
+ *  (partialPlay — the phase guard refuses one before play, D3 R4), and nothing for a walkover or a double walkover,
+ *  which are recorded before START (the guard refuses a walkover after it, R2). `by` is an entrant id, or "both". */
+export function forfeitPosting(status: string, forfeit: { readonly by: string; readonly reason: ForfeitReason }, play: readonly StreamEvent[]): StreamEvent[] {
+  const ev: StreamEvent = { type: "core.forfeit", payload: { by: forfeit.by, reason: forfeit.reason } };
+  if (status !== "scheduled") return [ev];
+  const first = play.at(0);
+  if (first !== undefined && first.type !== START.type) throw new Error(`streams: the play before a forfeit starts with ${START.type}, not ${first.type}`);
+  return [...play, ev];
+}
 
 /** W2a: where the sport's own win stream DECIDES — the index of the first event after which the real engine
  *  reports an outcome. Found by folding prefixes (never assumed to be the last event), so an abandon cut here
@@ -97,9 +129,8 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   const gen = STREAM_GENERATORS[req.sportKey];
   if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, label, "no generator registered");
   const o = req.outcome;
-  if (o.kind === "forfeit") {
-    return [START, { type: "core.forfeit", payload: { by: idOf(req, o.by), reason: o.reason } }];
-  }
+  if (o.kind === "forfeit") return forfeitPosting("scheduled", { by: idOf(req, o.by), reason: o.reason }, o.at === "before_start" ? [] : partialPlay(req));
+  if (o.kind === "double_walkover") return [DOUBLE_WALKOVER];
   if (o.kind === "abandon") return o.atScore === true ? abandonedAtScore(req, gen) : [START, ABANDON];
   if (o.kind === "level") return levelStream(req, gen);
   if (o.kind === "settle") {
@@ -155,6 +186,9 @@ export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null)
   if (o.kind === "draw") return outcome.kind === "draw" ? "match" : "mismatch";
   if (o.kind === "tie") return outcome.kind === "tie" ? "match" : "mismatch";
   if (o.kind === "win") return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) ? "match" : "mismatch";
+  // `as string` until loop D's MatchOutcome (D2: the double_walkover arm) reaches this lane.
+  if (o.kind === "double_walkover") return (outcome.kind as string) === "double_walkover" ? "match" : "mismatch";
+  // W2b (D2): a forfeit folds to an AWARD to the other side, carrying the reason asked (X-RS-1).
   const beneficiary = idOf(req, o.by === "home" ? "away" : "home");
-  return (outcome.kind === "award" || outcome.kind === "win") && outcome.winner === beneficiary ? "match" : "mismatch";
+  return outcome.kind === "award" && outcome.winner === beneficiary && (outcome as { reason?: unknown }).reason === o.reason ? "match" : "mismatch";
 }

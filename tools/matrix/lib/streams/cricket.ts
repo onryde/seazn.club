@@ -110,4 +110,15 @@ export const cricketGenerator: SportStreamGenerator = {
     const w = Math.min(5, allOut);
     return [START, { type: SUMMARY, payload: { runs: 150, wickets: w, legalBalls: B } }, { type: SUMMARY, payload: { runs: 150, wickets: w, legalBalls: B } }];
   },
+  // W2b (CK-WO-1, X-RT-1): HOME's innings closed, AWAY's chase under way — partial, a wicket and a ball in hand, short
+  // of the target — so both sides have scored and nothing is decided.
+  partial(req) {
+    const cfg = req.cfg as CricketCfg;
+    const allOut = allOutOf(req);
+    const balls = cfg.ballsPerInnings ?? TEST_BALLS;
+    return [
+      { type: SUMMARY, payload: { runs: 120, wickets: Math.min(4, allOut), legalBalls: balls } },
+      { type: SUMMARY, payload: { runs: 40, wickets: Math.min(1, allOut - 1), legalBalls: Math.min(30, balls - 1), partial: true } },
+    ];
+  },
 };

@@ -57,7 +57,7 @@ function outcomesFor(sport: string, cfg: unknown): RequestedOutcome[] {
   return [
     { kind: "win", winner: "home" }, { kind: "win", winner: "away" },
     ...(drawsAllowed(sport, cfg, "league") ? [{ kind: "draw" } as const] : []),
-    { kind: "forfeit", by: "away", reason: "walkover" },
+    { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" },
     { kind: "abandon" },
   ];
 }

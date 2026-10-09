@@ -22,7 +22,8 @@ import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { liveEvents } from "../lib/scenarios/common.ts";
 import { entrantKindsFor, resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { DEPARTED_STATUSES } from "../lib/observed.ts";
-import type { StreamEvent } from "../lib/streams/types.ts";
+import { forfeitPosting } from "../lib/streams/index.ts";
+import type { ForfeitReason, StreamEvent } from "../lib/streams/types.ts";
 import {
   DriverMisuse, LineupUnchecked, RefusedCall, VOID_EVENT, idempotencyKey, inSquadOrder, voidTargetOf,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
@@ -402,12 +403,10 @@ export class FakeLeagueDriver implements OrganiserDriver {
       return { scheduledAt: f.scheduled_at };
     });
   }
-  async forfeit(id: string, by: string, reason: "walkover" | "retired hurt", prefix = ""): Promise<PostedEvent[]> {
+  async forfeit(id: string, by: string, reason: ForfeitReason, prefix = "", play: readonly StreamEvent[] = []): Promise<PostedEvent[]> {
     this.log("forfeit");
-    const s = this.#f(id).status;
-    const ev: StreamEvent = { type: "core.forfeit", payload: { by, reason } };
-    // http-driver.ts forfeit: START only on a scheduled fixture.
-    return this.postStream(id, s === "scheduled" ? [{ type: "core.start", payload: {} }, ev] : [ev], prefix);
+    // http-driver.ts forfeit: the shared composition (W2b: a walkover bare, before START).
+    return this.postStream(id, forfeitPosting(this.#f(id).status, { by, reason }, play), prefix);
   }
   /** withdrawal.ts:130-200 + stage.ts withdrawTableEntrant: played < 50% of
    *  (played + pending) expunges, otherwise pending games walk over; finalized
@@ -635,7 +634,7 @@ export class FakeSwissDriver extends FakeLeagueDriver {
       this.byeShells.add(byeShell.id);
     }
     boards.forEach(([h, a], i) => Object.assign(kept[i], { home_entrant_id: h, away_entrant_id: a }));
-    if (want.bye) Object.assign(byeShell!, { home_entrant_id: byes[0], status: "forfeited", outcome: { kind: "award", winner: byes[0] } });
+    if (want.bye) Object.assign(byeShell!, { home_entrant_id: byes[0], status: "forfeited", outcome: { kind: "award", winner: byes[0], loser: null, reason: "bye" } });
     this.paired = r;
     return boards.length + byes.length;
   }
@@ -739,7 +738,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     for (const g of bracket.fixtures) {
       const tags = { ext_key: g.id, is_final: g.isFinal === true };
       const row = g.award !== undefined
-        ? this.seat(g.round + 1, g.award, null, { ...tags, status: "forfeited", outcome: { kind: "award", winner: g.award } })
+        ? this.seat(g.round + 1, g.award, null, { ...tags, status: "forfeited", outcome: { kind: "award", winner: g.award, loser: null, reason: "bye" } })
         : this.seat(g.round + 1, g.home ?? null, g.away ?? null, tags);
       this.extIds.set(g.id, row.id);
     }
@@ -767,7 +766,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       const bySeed = (s: number) => this.entrants.find((e) => e.seed === s)?.id ?? null;
       let round = order.flatMap((_, i) => (i % 2 === 0 ? [[bySeed(order[i]), bySeed(order[i + 1])] as const] : []))
         .map(([h, a]) => (h !== null && a !== null ? this.seat(1, h, a)
-          : this.seat(1, h ?? a, null, { status: "forfeited", outcome: { kind: "award", winner: (h ?? a)! } })));
+          : this.seat(1, h ?? a, null, { status: "forfeited", outcome: { kind: "award", winner: (h ?? a)!, loser: null, reason: "bye" } })));
       for (let r = 2; round.length > 1; r++) {
         const next = Array.from({ length: round.length / 2 }, () => this.seat(r, null, null));
         round.forEach((f, i) => this.feeds.set(f.id, { to: next[i >> 1].id, slot: i % 2 === 0 ? "home_entrant_id" : "away_entrant_id" }));

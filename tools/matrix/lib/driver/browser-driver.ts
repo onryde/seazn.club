@@ -185,7 +185,9 @@ const ORGANISER_ACTION: Readonly<Record<string, "settle" | "abandon" | "forfeit"
   "core.abandon": "abandon",
   "core.forfeit": "forfeit",
 });
-const FORFEIT_REASONS: readonly ForfeitReason[] = ["walkover", "retired hurt"];
+/** The reasons the console's Forfeit authors: D1's list less `withdrew`, which the console never offers and the server
+ *  refuses from every writer but the withdrawal cascade (PF-2). */
+const FORFEIT_REASONS: readonly ForfeitReason[] = ["walkover", "retired", "disqualified"];
 
 type OrganiserAct =
   | { readonly action: "settle"; readonly winner: string; readonly method: SettleMethodId; readonly note: string | undefined }
@@ -963,11 +965,14 @@ export class BrowserDriver implements OrganiserDriver {
     return result.stored.map((r) => ({ seq: r.seq, event_id: r.id, status: state.status, outcome: state.outcome, stored: { type: r.type, payload: r.payload } }));
   }
 
-  async forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]> {
-    if (!this.#wants("forfeit")) {
+  async forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play: readonly StreamEvent[] = []): Promise<PostedEvent[]> {
+    // A double walkover has no console control until W2b Task 11's forfeit dialog (the console's Forfeit names one of
+    // the two entrants): it goes over HTTP, recorded as such.
+    if (!this.#wants("forfeit") || by === "both") {
       this.#ledger.record("forfeit", "http");
-      return this.#write(() => this.#http.forfeit(fixtureId, byEntrantId, reason, idempotencyPrefix));
+      return this.#write(() => this.#http.forfeit(fixtureId, by, reason, idempotencyPrefix, play));
     }
+    const byEntrantId = by;
     const { where, row, no } = await this.#findFixture(fixtureId);
     this.#ledger.record("forfeit", "browser");
     await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));

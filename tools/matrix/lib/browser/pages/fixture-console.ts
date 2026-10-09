@@ -54,7 +54,9 @@ export class ForfeitNeedsBothSides extends Error {
 }
 
 export type ForfeitFixture = Pick<FixtureRow, "id" | "home_entrant_id" | "away_entrant_id">;
-export type ForfeitReason = "walkover" | "retired hurt";
+/** D1's reasons (streams/types.ts); the console's prompt takes the reason as text until W2b Task 11's dialog. */
+export type { ForfeitReason } from "../../streams/types.ts";
+import type { ForfeitReason } from "../../streams/types.ts";
 
 /** The console taps that forfeit `fixture` for `by`: the bench's own
  *  organiserStepsFor (it reads only the two entrants; the config is opaque to

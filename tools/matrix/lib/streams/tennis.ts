@@ -33,4 +33,11 @@ export const tennisGenerator: SportStreamGenerator = {
     }
     return events;
   },
+  // W2b (TN-RT-1): a point to each side — tennis.point {by}.
+  partial(req) {
+    return [
+      { type: "tennis.point", payload: { by: req.home } },
+      { type: "tennis.point", payload: { by: req.away } },
+    ];
+  },
 };

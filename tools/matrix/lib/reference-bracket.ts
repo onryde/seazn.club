@@ -83,6 +83,7 @@ export function levelKindOf(sport: string, cfg: unknown, home: string, away: str
   switch (asked.kind) {
     case "win":
     case "forfeit":
+    case "double_walkover":
     case "abandon":
       return null;
     case "draw":
@@ -134,6 +135,8 @@ export function bracketCaseOf(d: BracketDrive): BracketCase | { readonly notJudg
       return { ...base, play: { kind: "none" }, actions: [{ kind: "abandon" }] };
     case "forfeit":
       return { notJudged: "forfeit: a walkover is not one of the oracle's actions" };
+    case "double_walkover":
+      return { notJudged: "double_walkover: not one of the oracle's actions (the walkover-credit reference family judges it)" };
   }
 }
 
@@ -206,7 +209,7 @@ export function judgeDrive(d: BracketDrive): Judgement {
   } else {
     const side = sideOf(d, won.winner);
     if (side !== expect.advances.winner) bad.push(`advance: oracle says ${expect.advances.winner} advances, product advanced ${side ?? `a stranger (${won.winner})`}`);
-    const method = oracleMethod(won.method);
+    const method = oracleMethod(won.kind === "win" ? won.method : undefined);
     if (method !== expect.advances.method) bad.push(`method: oracle ${expect.advances.method}, product ${method}`);
   }
   // The loser line (X-ST-1: a win seats the winner AND the loser where the bracket has a line; X-BR-2: a held match

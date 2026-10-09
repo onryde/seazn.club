@@ -162,7 +162,7 @@ describe("fold", () => {
       declaredPoints(m, cfg, { kind: "league" }, H, A, generateStream({ ...req("score", outcome), cfg }));
     expect(at({ kind: "win", winner: "away" })).toMatchObject({ home: pts.l, away: pts.w });
     expect(at({ kind: "draw" })).toMatchObject({ home: pts.d, away: pts.d });
-    expect(at({ kind: "forfeit", by: "away", reason: "walkover" })).toMatchObject({ home: pts.w, away: pts.l });
+    expect(at({ kind: "forfeit", by: "away", reason: "walkover", at: "before_start" })).toMatchObject({ home: pts.w, away: pts.l });
   });
 });
 
@@ -195,9 +195,14 @@ describe("generic streams + matchesRequest", () => {
     const r = req("score", { kind: "win", winner: "home" });
     expect(matchesRequest(r, { kind: "win", winner: A, loser: H })).toBe("mismatch");
     expect(matchesRequest(r, null)).toBe("mismatch");
-    const f = req("score", { kind: "forfeit", by: "away", reason: "walkover" });
-    expect(matchesRequest(f, { kind: "award", winner: H })).toBe("match");
-    expect(matchesRequest(f, { kind: "award", winner: A })).toBe("mismatch");
+    const f = req("score", { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" });
+    // W2b (D2): an award to the side that did NOT forfeit, carrying the reason asked; the wrong reason is a mismatch.
+    const award = (winner: string, reason: string) => ({ kind: "award" as const, winner, loser: winner === H ? A : H, reason });
+    expect(matchesRequest(f, award(H, "walkover"))).toBe("match");
+    expect(matchesRequest(f, award(A, "walkover"))).toBe("mismatch");
+    expect(matchesRequest(f, award(H, "retired"))).toBe("mismatch");
+    expect(matchesRequest(req("score", { kind: "double_walkover" }), { kind: "double_walkover" } as never)).toBe("match");
+    expect(matchesRequest(req("score", { kind: "double_walkover" }), award(H, "walkover"))).toBe("mismatch");
     expect(matchesRequest(req("score", { kind: "draw" }), { kind: "tie" })).toBe("mismatch");
   });
 
@@ -207,10 +212,10 @@ describe("generic streams + matchesRequest", () => {
 
   it("the registry refuses a sport key claimed twice, and inherits no prototype keys", () => {
     expect(Object.keys(register(genericGenerator))).toEqual(["generic"]);
-    expect(() => register(genericGenerator, { sportKeys: ["generic"], decided: () => [] })).toThrow(/duplicate generator for sport 'generic'/);
+    expect(() => register(genericGenerator, { sportKeys: ["generic"], decided: () => [], partial: () => [] })).toThrow(/duplicate generator for sport 'generic'/);
     // A forfeit is composed before any generator runs, so a prototype-inherited
     // "generator" would have returned a stream here.
-    expect(() => generateStream({ ...req("score", { kind: "forfeit", by: "away", reason: "walkover" }), sportKey: "constructor" }))
+    expect(() => generateStream({ ...req("score", { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" }), sportKey: "constructor" }))
       .toThrow(GeneratorUnsupported);
   });
 });

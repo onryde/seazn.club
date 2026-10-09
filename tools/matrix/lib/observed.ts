@@ -7,9 +7,12 @@ import type { Verdict } from "./results.ts";
 
 export type { CheckResult, Verdict } from "./results.ts";
 
+/** W2b (D2): an award carries who lost (null for a bye) and WHY — the forfeit reason, or "bye" — and no method; a
+ *  double walkover is its own outcome, with no winner (X-DW-1). */
 export type ObservedOutcome =
-  | { kind: "win" | "award"; winner: string; method?: string }
-  | { kind: "draw" | "tie" | "no_result" };
+  | { kind: "win"; winner: string; method?: string }
+  | { kind: "award"; winner: string; loser: string | null; reason: string }
+  | { kind: "draw" | "tie" | "no_result" | "double_walkover" };
 
 export interface ObservedDeclared { home: number; away: number; forOutcome: ObservedOutcome }
 
@@ -160,16 +163,24 @@ export function twoSided(f: ObservedFixture): boolean {
   return f.home !== null && f.away !== null;
 }
 
+/** The product's outcome as the harness reads it; null for no outcome or a shape it does not know. An award's reason
+ *  is the W2b field; a row written before W2b carried it as `method` (MatchOutcome's old award doc), so that is read
+ *  when `reason` is absent, and a row with neither (a legacy bye) reads "" — never a guessed reason. */
 export function toObservedOutcome(raw: unknown): ObservedOutcome | null {
   if (raw === null || typeof raw !== "object") return null;
-  const o = raw as { kind?: unknown; winner?: unknown; method?: unknown };
-  if ((o.kind === "win" || o.kind === "award") && typeof o.winner === "string") {
+  const o = raw as { kind?: unknown; winner?: unknown; loser?: unknown; method?: unknown; reason?: unknown };
+  if (o.kind === "win" && typeof o.winner === "string") {
     return typeof o.method === "string" ? { kind: o.kind, winner: o.winner, method: o.method } : { kind: o.kind, winner: o.winner };
   }
-  if (o.kind === "draw" || o.kind === "tie" || o.kind === "no_result") return { kind: o.kind };
+  if (o.kind === "award" && typeof o.winner === "string") {
+    const reason = typeof o.reason === "string" ? o.reason : typeof o.method === "string" ? o.method : "";
+    return { kind: "award", winner: o.winner, loser: typeof o.loser === "string" ? o.loser : null, reason };
+  }
+  if (o.kind === "draw" || o.kind === "tie" || o.kind === "no_result" || o.kind === "double_walkover") return { kind: o.kind };
   return null;
 }
 
+/** Who the outcome advances: a win's or an award's winner; nobody for a level result or a double walkover. */
 export function winnerOf(o: ObservedOutcome | null): string | null {
   return o !== null && (o.kind === "win" || o.kind === "award") ? o.winner : null;
 }

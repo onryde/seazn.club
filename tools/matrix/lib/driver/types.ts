@@ -9,7 +9,7 @@
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
 import { mapStrings, redact } from "../redact.ts";
-import type { StreamEvent } from "../streams/types.ts";
+import type { ForfeitReason, StreamEvent } from "../streams/types.ts";
 
 export type EntrantKind = "individual" | "pair" | "team";
 /** One roster member as the harness writes it (D2): a synthetic person
@@ -210,7 +210,10 @@ export interface OrganiserDriver {
   listFixtures(divisionId: string): Promise<FixtureRow[]>;
   fixtureState(fixtureId: string): Promise<FixtureStateOut>;
   postStream(fixtureId: string, events: readonly StreamEvent[], idempotencyPrefix: string): Promise<PostedEvent[]>;
-  forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]>;
+  /** W2b: `by` is the entrant that forfeits, or "both" (a double walkover, X-DW-1). On a SCHEDULED fixture `play` goes
+   *  in first (streams/index.ts forfeitPosting): START and the sport's partial play for a retirement, nothing for a
+   *  walkover, which is recorded before START (D3, finding 10). On a fixture under way the forfeit goes in bare. */
+  forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play?: readonly StreamEvent[]): Promise<PostedEvent[]>;
   withdraw(entrantId: string): Promise<WithdrawOut>;
   completeStage(stageId: string): Promise<CompleteOut>;
   /** Confirms a draft seed proposal (POST /stages/:id/seed-proposal/confirm,

@@ -20,4 +20,11 @@ export const periodGenerator: SportStreamGenerator = {
     const goals: StreamEvent[] = req.outcome.kind === "draw" ? [] : [{ type: `${req.sportKey}.goal`, payload: { by: idOf(req, req.outcome.winner) } }];
     return [START, ...goals, ...advances];
   },
+  // W2b (HK-RT-1, IH-RT-1): a goal each, no period advanced — `${key}.goal {by}`.
+  partial(req) {
+    return [
+      { type: `${req.sportKey}.goal`, payload: { by: req.home } },
+      { type: `${req.sportKey}.goal`, payload: { by: req.away } },
+    ];
+  },
 };

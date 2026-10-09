@@ -157,7 +157,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect(bad({ echo: rows.slice(0, 1) })).toMatchObject({ verdict: "fail", evidence: ["add answered 1 entrant(s), 2 posted"] });
     expect(bad({ entrants: [...rows, { ...rows[1]!, id: "c" }] })).toMatchObject({ verdict: "fail", evidence: ["3 entrant(s) stored, 2 posted", "posted seed 2 (Matrix Player 2) stored 2 time(s)", "c (seed 2) is seated in no fixture of the stage"] });
     expect(bad({ entrants: [rows[0]!, { ...rows[1]!, display_name: "Someone Else" }] })).toMatchObject({ verdict: "fail", evidence: ["posted seed 2 (Matrix Player 2) stored 0 time(s)"] });
-    expect(bad({}, run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "a" } })]))).toMatchObject({ verdict: "fail", evidence: ["b (seed 2) is seated in no fixture of the stage"] });
+    expect(bad({}, run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "a", loser: null, reason: "bye" } })]))).toMatchObject({ verdict: "fail", evidence: ["b (seed 2) is seated in no fixture of the stage"] });
     // W1-driving Task 8: a stored `pair` entrant is set aside ONLY on an
     // americano body (the product mints them there) — on any other body it is
     // an entrant nobody posted.
@@ -187,9 +187,9 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect(resultsAsPosted(new Recorder(), run([], [fx({})])))
       .toMatchObject({ verdict: "fail", checked: 1, evidence: ['f1: stored decided {"kind":"win","winner":"a"} — the harness never posted it, and no bye or recorded withdrawal explains it'] });
     expect(resultsAsPosted(new Recorder(), run([], [fx({ away: null, status: "decided", outcome: win("a") })]))).toMatchObject({ verdict: "fail", checked: 1 });
-    expect(resultsAsPosted(new Recorder(), run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "b" } })]))).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(resultsAsPosted(new Recorder(), run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "b", loser: null, reason: "bye" } })]))).toMatchObject({ verdict: "fail", checked: 1 });
     // A bye (a forfeited award to the seated side) is accounted for.
-    expect(resultsAsPosted(new Recorder(), run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "a" } })]))).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(resultsAsPosted(new Recorder(), run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "a", loser: null, reason: "bye" } })]))).toMatchObject({ verdict: "pass", checked: 1 });
     // The harness cannot fold what it does not hold whole: foreign events, finished before it posted, a null local fold.
     for (const over of [{ foreign: 2 }, { finishedBefore: "decided" }, {}] as Partial<ParityObs>[]) {
       const r = new Recorder();
@@ -201,7 +201,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
   it("resultsAsPosted: only the RECORDED withdrawal's cascade explains a result the harness did not post", () => {
     const withW = (fixtures: ObservedFixture[], policy: "walkover" | "expunge", before: { id: string; status: string }[], entrantId = "b"): ObservedRun =>
       ({ ...run([], fixtures), withdrawal: { entrantId, afterRound: 1, policy, walkovers: 0, voided: 0, skippedFinalized: 0, before: before.map((b) => ({ ...b, outcome: null })) } });
-    const wo = fx({ id: "wo", status: "forfeited", outcome: { kind: "award", winner: "a" } });
+    const wo = fx({ id: "wo", status: "forfeited", outcome: { kind: "award", winner: "a", loser: null, reason: "walkover" } });
     expect(resultsAsPosted(new Recorder(), withW([wo], "walkover", [{ id: "wo", status: "scheduled" }]))).toMatchObject({ verdict: "pass", checked: 1 });
     // Its twins fail: the fixture was already decided before the withdrawal, another entrant withdrew, no snapshot, or no withdrawal at all.
     expect(resultsAsPosted(new Recorder(), withW([wo], "walkover", [{ id: "wo", status: "decided" }]))).toMatchObject({ verdict: "fail" });
@@ -1286,7 +1286,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     const f = driver.rows()[0]!;
     await driver.postStream(f.id, [START], "foreign"); // not recorded: a foreign write
     // A forfeit on a live fixture posts only core.forfeit (decideFixture), so the engine takes it.
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover" });
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" });
     expect(putsOn(driver, f.id)).toEqual([]);
     expect(rec.lineupsPut).toBe(0);
     expect(rec.notes).toContain(`lineups: ${f.id} was in_play when the harness came to it — the product locks a lineup once a fixture is past scheduled; no lineup PUT`);
@@ -1586,7 +1586,7 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
     const { driver, ctx, rec, setup, f } = await onBadminton();
     await driver.postStream(f.id, [START], "t");
     rec.streams.set(f.id, [START]);
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired hurt" });
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired", at: "after_start" });
     const held = driver.fixtures.find((x) => x.id === f.id)!.events;
     expect(held.map((e) => e.type)).toEqual(["core.start", "core.forfeit"]);
     expect(rec.streams.get(f.id)).toEqual(held);
@@ -1598,7 +1598,7 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
   it("m-4: decideFixture records whether the fold is what it asked for, per requested outcome (an abandon is recorded, not asserted)", async () => {
     const cases = [
       [{ kind: "win", winner: "home" }, "match"], [{ kind: "win", winner: "away" }, "match"],
-      [{ kind: "forfeit", by: "home", reason: "walkover" }, "match"], [{ kind: "abandon" }, "unasserted"],
+      [{ kind: "forfeit", by: "home", reason: "walkover", at: "before_start" }, "match"], [{ kind: "abandon" }, "unasserted"],
     ] as const;
     for (const [outcome, want] of cases) {
       const { ctx, rec, setup, f } = await onBadminton();
@@ -1611,7 +1611,7 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
     const prefix = `${ctx.tag}:${f.id}`; // decideFixture's own prefix
     await driver.postStream(f.id, [START], prefix);
     rec.streams.set(f.id, [START]);
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired hurt" });
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired", at: "after_start" });
     expect(driver.fixtures.find((x) => x.id === f.id)!.events.map((e) => e.type)).toEqual(["core.start", "core.forfeit"]);
     expect([...driver.keys.get(f.id)!.keys()]).toEqual([`${prefix}:s0`, `${prefix}:s1`]);
     expect(foldParity(rec)).toMatchObject({ verdict: "pass", checked: 1 });
@@ -1637,7 +1637,7 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
   it("events on the fixture the harness never posted make parity unjudgeable, not a silent pass", async () => {
     const { driver, ctx, rec, setup, f } = await onBadminton();
     await driver.postStream(f.id, [START], "t"); // not recorded: a foreign write
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover" });
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" });
     expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 1 });
     expect(rec.declared.has(f.id)).toBe(false);
   });
@@ -1648,11 +1648,11 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
   // withdrawal's cascade could have.
   it("a fixture already finished by a write the harness never made is a failing parity item, not a silent return", async () => {
     const { driver, ctx, rec, setup, f } = await onBadminton();
-    await driver.forfeit(f.id, f.away_entrant_id!, "walkover", "x"); // not recorded: a foreign write
+    await driver.forfeit(f.id, f.away_entrant_id!, "walkover", "x"); // not recorded: a foreign write (W2b: the bare forfeit, one event)
     const before = driver.calls.length;
     await decideFixture(ctx, rec, setup, f, { kind: "win", winner: "home" });
     expect(driver.calls.slice(before)).toEqual(["fixtureState"]); // still posts nothing over it
-    expect(rec.parity).toEqual([{ fixtureId: f.id, local: null, product: { kind: "award", winner: f.home_entrant_id, method: "walkover" }, foreign: 2, finishedBefore: "forfeited", request: null }]);
+    expect(rec.parity).toEqual([{ fixtureId: f.id, local: null, product: { kind: "award", winner: f.home_entrant_id, loser: null, reason: "walkover" }, foreign: 1, finishedBefore: "forfeited", request: null }]);
     expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 1, evidence: [`${f.id}: already forfeited before the harness posted — a result it never wrote, and no recorded withdrawal explains it`] });
     expect(rec.declared.has(f.id)).toBe(false);
   });
@@ -1686,9 +1686,9 @@ describe("snapshot — byes are declared, pools stay separate (Task 5 carries)",
     const cfg = resolveSportCfg("generic", "score", { points: { w: 5, d: 2, l: 1 } }) as { points: { w: number } };
     expect(cfg.points.w).toBe(5); // the override applied, and differs from the default 3
     const bye = (home: string | null, away: string | null): ObservedFixture =>
-      ({ id: "b", stageId: "s1", poolId: null, roundNo: 2, home, away, status: "forfeited", outcome: { kind: "award", winner: "a", method: "bye" }, declared: null });
-    expect(byeDeclared("generic", cfg, "swiss", bye("a", null))).toEqual({ home: cfg.points.w, away: 0, forOutcome: { kind: "award", winner: "a", method: "bye" } });
-    expect(byeDeclared("generic", cfg, "swiss", bye(null, "a"))).toEqual({ home: 0, away: cfg.points.w, forOutcome: { kind: "award", winner: "a", method: "bye" } });
+      ({ id: "b", stageId: "s1", poolId: null, roundNo: 2, home, away, status: "forfeited", outcome: { kind: "award", winner: "a", loser: null, reason: "bye" }, declared: null });
+    expect(byeDeclared("generic", cfg, "swiss", bye("a", null))).toEqual({ home: cfg.points.w, away: 0, forOutcome: { kind: "award", winner: "a", loser: null, reason: "bye" } });
+    expect(byeDeclared("generic", cfg, "swiss", bye(null, "a"))).toEqual({ home: 0, away: cfg.points.w, forOutcome: { kind: "award", winner: "a", loser: null, reason: "bye" } });
     expect(byeDeclared("generic", cfg, "swiss", bye("a", "c"))).toBeNull();
     expect(byeDeclared("generic", cfg, "swiss", { ...bye("a", null), outcome: { kind: "draw" } })).toBeNull();
     expect(byeDeclared("generic", cfg, "swiss", { ...bye("a", null), outcome: null })).toBeNull();
@@ -1793,7 +1793,7 @@ describe("the swiss branch of playStage on the swiss fake", () => {
     expect(driver.fixtures.map((f) => f.id)).toEqual(ids);
     const r1 = driver.fixtures.filter((f) => f.round_no === 1);
     expect(r1.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)).toHaveLength(3);
-    expect(r1.filter((f) => f.away_entrant_id === null)).toEqual([expect.objectContaining({ status: "forfeited", outcome: { kind: "award", winner: r1.find((f) => f.away_entrant_id === null)!.home_entrant_id } })]);
+    expect(r1.filter((f) => f.away_entrant_id === null)).toEqual([expect.objectContaining({ status: "forfeited", outcome: { kind: "award", winner: r1.find((f) => f.away_entrant_id === null)!.home_entrant_id, loser: null, reason: "bye" } })]);
     expect(driver.fixtures.filter((f) => (f.round_no ?? 0) > 1).every((f) => f.home_entrant_id === null)).toBe(true);
     // The next round is refused while this one has an undecided board (stages.ts swissGen gate),
     // with the status the product maps STAGE_NOT_READY to (Task 8 m-7: it is 422, not 409).
@@ -1838,7 +1838,7 @@ describe("m-1: brackets on the knockout fake (M1's progression, F1's first round
     expect(rounds.size).toBe(3); // later rounds hold 2 and 1 boards: inspecting them would red
     expect(r.checks.find((c) => c.id === "f1-round-size")).toMatchObject({ verdict: "pass", checked: 1 });
     const bye = r.out.observed.stages[0]!.fixtures.filter((f) => f.roundNo === 1 && f.away === null);
-    expect(bye).toEqual([expect.objectContaining({ home: r.driver.entrants[0]!.id, status: "forfeited", outcome: { kind: "award", winner: r.driver.entrants[0]!.id } })]);
+    expect(bye).toEqual([expect.objectContaining({ home: r.driver.entrants[0]!.id, status: "forfeited", outcome: { kind: "award", winner: r.driver.entrants[0]!.id, loser: null, reason: "bye" } })]);
     const canary = await runOn(new FakeKnockoutDriver(), "F1", { row: "knockout", canary: true });
     expect(failed(canary.checks)).toEqual(["f1-round-size"]);
   });
@@ -1988,7 +1988,7 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     // The last item is the voided count (m-3): two fixtures abandoned by the cascade.
     expect(ok(cascadeItems("expunge", "w", before, good, 0, 2, "league"))).toEqual([true, true, true, true, true]);
     expect(ok(cascadeItems("expunge", "w", before, good, 0, 3, "league"))).toEqual([true, true, true, true, false]);
-    const bad = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x" }), after("c", "abandoned", null), after("d", "abandoned", null)];
+    const bad = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("c", "abandoned", null), after("d", "abandoned", null)];
     expect(ok(cascadeItems("expunge", "w", before, bad, 0, 0, "league"))).toEqual([false, false, false, false, true]);
   });
 
@@ -2005,14 +2005,14 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
       { id: "b", status: "scheduled", outcome: null },
       { id: "t", status: "scheduled", outcome: null },
     ];
-    const good = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x" }), after("t", "abandoned", null, "w", null)];
+    const good = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("t", "abandoned", null, "w", null)];
     // …then the walkover count, then the voided count (the TBD seat).
     expect(ok(cascadeItems("walkover", "w", before, good, 1, 1, "league"))).toEqual([true, true, true, true, true]);
     expect(ok(cascadeItems("walkover", "w", before, good, 2, 1, "league"))).toEqual([true, true, true, false, true]);
     expect(ok(cascadeItems("walkover", "w", before, good, 1, 0, "league"))).toEqual([true, true, true, true, false]);
-    const toW = [good[0]!, after("b", "forfeited", { kind: "award", winner: "w" }), good[2]!];
+    const toW = [good[0]!, after("b", "forfeited", { kind: "award", winner: "w", loser: null, reason: "walkover" }), good[2]!];
     expect(ok(cascadeItems("walkover", "w", before, toW, 0, 1, "league"))).toEqual([true, false, true, true, true]);
-    const toThirdParty = [good[0]!, after("b", "forfeited", { kind: "award", winner: "z" }), good[2]!];
+    const toThirdParty = [good[0]!, after("b", "forfeited", { kind: "award", winner: "z", loser: null, reason: "walkover" }), good[2]!];
     expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0, 1, "league"))).toEqual([true, false, true, true, true]);
     expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1, 1, "league"))).toEqual([true, true, false, true, false]);
   });
@@ -2151,7 +2151,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
       const rowOf = (ext: string) => rows.find((r) => r.id === driver.extIds.get(ext))!;
       const q1 = rowOf("pp-q1");
       const elim = rowOf("pp-elim");
-      const walkover = () => decideFixture(ctx, rec, setup, q1, { kind: "forfeit", by: "away", reason: "walkover" });
+      const walkover = () => decideFixture(ctx, rec, setup, q1, { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" });
       const playElim = () => decideFixture(ctx, rec, setup, elim, { kind: "win", winner: "home" });
       if (elimFirst) { await playElim(); await walkover(); } else { await walkover(); await playElim(); }
       const fx = (ext: string) => driver.fixtures.find((f) => f.id === driver.extIds.get(ext))!;

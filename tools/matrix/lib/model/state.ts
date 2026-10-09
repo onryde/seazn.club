@@ -33,8 +33,8 @@ export const COMMAND_KINDS = ["Start", "AddEntrant", "Withdraw", "Score", "Walko
 export type CommandKind = (typeof COMMAND_KINDS)[number];
 /** W2a (finding 24): commands a model run asks for BY NAME, never part of the default set — so the default arbitrary
  *  array, every committed seed and every cell's counts replay byte for byte. `modelCommands({ settle: true })`
- *  appends them. */
-export const OPT_IN_KINDS = ["Settle"] as const;
+ *  appends Settle, and W2b's `modelCommands({ forfeit: true })` appends Forfeit (D10), each on its own flag. */
+export const OPT_IN_KINDS = ["Settle", "Forfeit"] as const;
 export type OptInKind = (typeof OPT_IN_KINDS)[number];
 export type AnyCommandKind = CommandKind | OptInKind;
 
@@ -102,6 +102,8 @@ export interface ModelState {
   counts: Record<CommandKind, CommandCounts> & Partial<Record<OptInKind, CommandCounts>>;
   /** W2a: every core.settle the model's Settle command posted, accepted or refused, in order (status 200 when accepted). */
   settles: { status: number; code: string | null }[];
+  /** W2b: every core.forfeit the model's Forfeit command posted, accepted or refused, in order (status 200 when accepted). */
+  forfeits: { status: number; code: string | null }[];
   /** Items each step check judged, summed over steps (R25: a cell owes > 0). */
   stepChecks: Map<string, number>;
   /** Fixtures whose product outcome matched the engine's fold of the known ledger, summed over steps. */
@@ -158,6 +160,15 @@ export const BRACKET_LEVEL_CHECK = "model-bracket-never-decided-level";
 export const HELD_SEATS_CHECK = "model-held-seats-nobody";
 /** W2a (X-ST-1): a settled match seats its winner in a later round, when the bracket has one. */
 export const SETTLE_SEATS_CHECK = "model-settle-seats-winner";
+/** W2b (D3, D4, PF-2, X-DW-3): a forfeit the model expects refused is refused with the rule's code, nothing else. */
+export const FORFEIT_REFUSAL_CHECK = "model-forfeit-refused-by-name";
+/** W2b (X-DW-1, X-DW-2): nobody advances from a double walkover — none of its entrants is seated in a later-round
+ *  fixture of a feeding bracket. */
+export const DW_ADVANCES_NOBODY_CHECK = "model-double-walkover-advances-nobody";
+/** W2b (D7, D2): one result per active forfeit — a fixture whose known ledger holds a live core.forfeit holds exactly
+ *  one, and the product shows it `forfeited` with an award or a double walkover; and a fixture the product shows with
+ *  an award or a double walkover off a known, non-empty ledger holds one. */
+export const FORFEIT_ONE_RESULT_CHECK = "model-one-result-per-active-forfeit";
 /** T45-R1 (assertions.ts lineupsPut, "life-lineups-put"), on the shared
  *  items (lineup-plan.ts lineupItems): every side of every team fixture the
  *  model posted to had its lineup PUT, one item per side, re-judged after
@@ -396,7 +407,7 @@ export async function newModelState(input: { driver: OrganiserDriver; row: RowKe
     sport: input.sport, variant: input.variant, cfg, kind, stageKind: stage.kind, stageConfig: stage.config,
     divisionId: division.id, stageId: stage.id, tag: input.tag,
     entrants: added.map((e) => e.id), withdrawn: new Set(), started: false, completed: false, lateEntry: false, posts: 0,
-    fixtures: new Map(), generates: [], settles: [],
+    fixtures: new Map(), generates: [], settles: [], forfeits: [],
     counts: Object.fromEntries(COMMAND_KINDS.map((k) => [k, zero()])) as ModelState["counts"],
     stepChecks: new Map(), foldParity: 0, fenced: new Map(), history: [], steps: [], unknowns: [], findings: new Map(),
     rosters, lineupSides: new Map(), teamPosts: new Map(), lineupsPut: 0,
@@ -519,7 +530,7 @@ function bracketChecks(m: ModelState, mine: readonly FixtureRow[]): { id: string
       const seated = fedCandidates(m, f);
       if (seated.length > 0) held.fails.push(`fixture ${r.id} is held (${r.status}) yet ${seated.map((g) => g.id).join(", ")} seat${seated.length === 1 ? "s" : ""} one of its entrants in a later round (X-BR-2)`);
     }
-    if (feeds && r.status === "decided" && o !== null && (o.kind === "win" || o.kind === "award") && o.method?.startsWith("settled_") === true && r.round_no !== null) {
+    if (feeds && r.status === "decided" && o !== null && o.kind === "win" && o.method?.startsWith("settled_") === true && r.round_no !== null) {
       const later = mine.filter((g) => g.round_no !== null && g.round_no > r.round_no!);
       if (later.length === 0) continue; // the last round: nobody to seat
       settled.checked++;
@@ -527,6 +538,38 @@ function bracketChecks(m: ModelState, mine: readonly FixtureRow[]): { id: string
     }
   }
   return [level, held, settled];
+}
+
+/** W2b: the two forfeit rules a step can judge from what the product shows, each counting the items it judged (zero
+ *  where the cell met no forfeit — the step totals, R25):
+ *   - X-DW-1/X-DW-2: a double walkover seats nobody — none of its entrants sits in a LATER-round fixture of a feeding
+ *     bracket (fedCandidates, the model's own structural seat read; on a table there is nothing to advance to, so it
+ *     judges brackets only);
+ *   - one result per active forfeit, over the fixtures whose whole ledger the model knows: a live core.forfeit is ONE
+ *     (a second one accepted is a defect) and the row is `forfeited` with an award or a double walkover (D7 rule 4,
+ *     D2); and an award or double-walkover row off a known, non-empty ledger has its live forfeit. */
+function forfeitChecks(m: ModelState, mine: readonly FixtureRow[]): { id: string; checked: number; fails: string[] }[] {
+  const dw = { id: DW_ADVANCES_NOBODY_CHECK, checked: 0, fails: [] as string[] };
+  const one = { id: FORFEIT_ONE_RESULT_CHECK, checked: 0, fails: [] as string[] };
+  const feeds = NEXT_MATCH_LOCK.kinds.includes(m.stageKind);
+  for (const r of mine) {
+    const o = toObservedOutcome(r.outcome);
+    const f = m.fixtures.get(r.id);
+    if (feeds && o?.kind === "double_walkover" && f !== undefined) {
+      dw.checked++;
+      const seated = fedCandidates(m, f);
+      if (seated.length > 0) dw.fails.push(`fixture ${r.id} is a double walkover yet ${seated.map((g) => g.id).join(", ")} seat${seated.length === 1 ? "s" : ""} one of its entrants in a later round (X-DW-1)`);
+    }
+    if (f === undefined || f.ledger === null || f.ledger.length === 0) continue;
+    const live = liveEntries(f.ledger).filter((e) => e.type === "core.forfeit").length;
+    const forfeitShape = o !== null && (o.kind === "award" || o.kind === "double_walkover");
+    if (live === 0 && !forfeitShape) continue;
+    one.checked++;
+    if (live > 1) one.fails.push(`fixture ${r.id} holds ${live} live forfeits — a second forfeit was accepted over the first`);
+    else if (live === 1 && (r.status !== "forfeited" || !forfeitShape)) one.fails.push(`fixture ${r.id} holds a live forfeit, yet the product shows it ${r.status} with ${o === null ? "no outcome" : `a ${o.kind}`} (D7: forfeited, an award or a double walkover)`);
+    else if (live === 0) one.fails.push(`fixture ${r.id} shows ${o!.kind} off a ledger with no live forfeit — a result with nothing behind it`);
+  }
+  return [dw, one];
 }
 
 /** assertions.ts lineupsPut's items (lineup-plan.ts lineupItems) over the
@@ -593,5 +636,11 @@ export async function checkStep(m: ModelState, d: OrganiserDriver): Promise<void
     if (st.last_seq !== f.ledger.length) { markUnknown(m, f, "tip-moved", `product last_seq ${st.last_seq}, model ledger ${f.ledger.length}`); continue; }
     const engine = want.refused === null ? JSON.stringify(want.out) : `a refusal (${want.refused})`;
     throw new ModelViolation("model-fold-parity", [`fixture ${r.id}: product ${JSON.stringify(got)}, engine fold of the ledger ${engine} (${f.ledger.length} events)`]);
+  }
+  // W2b's two forfeit invariants run AFTER fold parity: they read the ledger as the forfeits it holds, so a ledger the
+  // engine refuses (or one the tip re-read just marked unknown) is fold parity's to name, never theirs.
+  for (const c of forfeitChecks(m, mine)) {
+    add(m, c.id, c.checked);
+    if (c.fails.length > 0) throw new ModelViolation(c.id, c.fails.slice(0, 12));
   }
 }

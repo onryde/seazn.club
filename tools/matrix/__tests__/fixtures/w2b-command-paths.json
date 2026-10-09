@@ -1,0 +1,196 @@
+{
+  "_captured": "c7a7557ac (feat/format-matrix-w2b), before W2b Task 2 touched the model; never regenerated (D10: committed fast-check cases replay unchanged)",
+  "regressions": {
+    "MB-001": [
+      "Generate(0,0)",
+      "AddEntrant(0,0)",
+      "Generate(0,0)"
+    ],
+    "MB-002": [
+      "AddEntrant(0,0)",
+      "Start(0,0)",
+      "Withdraw(0,0)"
+    ],
+    "MB-003": [
+      "Start(0,0)",
+      "Score(0,1)",
+      "Withdraw(55,0)"
+    ],
+    "MB-004": [
+      "Start(0,0)",
+      "Withdraw(29,0)",
+      "Generate(0,0)"
+    ],
+    "MB-005": [
+      "Generate(0,0)",
+      "AddEntrant(0,0)",
+      "Generate(0,0)"
+    ],
+    "MB-007": [
+      "Generate(0,0)",
+      "AddEntrant(0,0)",
+      "Generate(0,0)"
+    ],
+    "MB-008": [
+      "Start(0,0)",
+      "Withdraw(0,0)"
+    ],
+    "MB-009": [
+      "AddEntrant(0,0)",
+      "Start(0,0)",
+      "Withdraw(0,0)"
+    ],
+    "MB-010": [
+      "Start(0,0)",
+      "Withdraw(45,0)",
+      "Generate(0,0)"
+    ]
+  },
+  "draws": {
+    "seed": 20261009,
+    "numRuns": 2,
+    "maxCommands": 30,
+    "sets": {
+      "fences": [
+        [
+          "Walkover(0,0)",
+          "Start(14,1)",
+          "Generate(51,1)",
+          "AddEntrant(13,0)",
+          "Rebuild(12,1)",
+          "Correct(2,1)"
+        ],
+        [
+          "Rebuild(42,0)",
+          "Void(35,0)",
+          "AddEntrant(39,1)",
+          "Withdraw(32,1)",
+          "Walkover(55,1)",
+          "Walkover(24,1)",
+          "Correct(63,0)",
+          "AddEntrant(5,0)",
+          "Correct(18,0)",
+          "Score(36,1)",
+          "Start(32,0)",
+          "Void(63,0)",
+          "AddEntrant(49,1)",
+          "Generate(16,0)",
+          "Generate(41,1)",
+          "Withdraw(12,0)",
+          "Complete(6,1)",
+          "Start(52,1)",
+          "Correct(5,1)",
+          "Score(20,0)",
+          "Complete(31,0)",
+          "AddEntrant(12,1)",
+          "Walkover(63,1)"
+        ]
+      ],
+      "no-fences": [
+        [
+          "Walkover(0,0)",
+          "Start(14,1)",
+          "Generate(51,1)",
+          "AddEntrant(13,0)",
+          "Rebuild(12,1)",
+          "Correct(2,1)"
+        ],
+        [
+          "Rebuild(42,0)",
+          "Void(35,0)",
+          "AddEntrant(39,1)",
+          "Withdraw(32,1)",
+          "Walkover(55,1)",
+          "Walkover(24,1)",
+          "Correct(63,0)",
+          "AddEntrant(5,0)",
+          "Correct(18,0)",
+          "Score(36,1)",
+          "Start(32,0)",
+          "Void(63,0)",
+          "AddEntrant(49,1)",
+          "Generate(16,0)",
+          "Generate(41,1)",
+          "Withdraw(12,0)",
+          "Complete(6,1)",
+          "Start(52,1)",
+          "Correct(5,1)",
+          "Score(20,0)",
+          "Complete(31,0)",
+          "AddEntrant(12,1)",
+          "Walkover(63,1)"
+        ]
+      ],
+      "swiss-bias": [
+        [
+          "Start(0,0)",
+          "Start(14,1)",
+          "Generate(51,1)",
+          "Start(13,0)",
+          "Start(12,1)",
+          "Score(2,1)"
+        ],
+        [
+          "Rebuild(42,0)",
+          "Start(35,0)",
+          "AddEntrant(39,1)",
+          "Rebuild(32,1)",
+          "Start(55,1)",
+          "Generate(24,1)",
+          "Generate(63,0)",
+          "Void(5,0)",
+          "Start(18,0)",
+          "Generate(36,1)",
+          "Withdraw(32,0)",
+          "Score(63,0)",
+          "Generate(49,1)",
+          "AddEntrant(16,0)",
+          "Complete(41,1)",
+          "Start(12,0)",
+          "Score(6,1)",
+          "Correct(52,1)",
+          "Score(5,1)",
+          "Start(20,0)",
+          "AddEntrant(31,0)",
+          "Score(12,1)",
+          "Rebuild(63,1)"
+        ]
+      ],
+      "settle": [
+        [
+          "Walkover(0,0)",
+          "Rebuild(14,1)",
+          "AddEntrant(51,1)",
+          "Complete(13,0)",
+          "Withdraw(12,1)",
+          "Generate(2,1)"
+        ],
+        [
+          "Complete(42,0)",
+          "Complete(35,0)",
+          "Rebuild(39,1)",
+          "Complete(32,1)",
+          "Generate(55,1)",
+          "Complete(24,1)",
+          "Correct(63,0)",
+          "Complete(5,0)",
+          "Score(18,0)",
+          "Walkover(36,1)",
+          "AddEntrant(32,0)",
+          "Correct(63,0)",
+          "Walkover(49,1)",
+          "AddEntrant(16,0)",
+          "AddEntrant(41,1)",
+          "Start(12,0)",
+          "Generate(6,1)",
+          "Withdraw(52,1)",
+          "Score(5,1)",
+          "Correct(20,0)",
+          "Settle(31,2)",
+          "Void(12,1)",
+          "Generate(63,1)"
+        ]
+      ]
+    }
+  }
+}

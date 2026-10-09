@@ -60,4 +60,11 @@ export const carromGenerator: SportStreamGenerator = {
     const boardsPerGame = Math.min(cfg.maxBoards, Math.ceil(cfg.gameTo / (COIN_MAX * cfg.pointsPerCoin)));
     return [START, ...Array.from({ length: gamesToWin(cfg) * boardsPerGame }, () => board(req, winner, COIN_MAX))];
   },
+  // W2b (CA-RT-1): a board to each side at the level game's coin count, which no board ends a game at — where the
+  // game has room for two boards before it runs out (maxBoards > 2); otherwise one board to home.
+  partial(req) {
+    const cfg = req.cfg as CarromCfg;
+    const coins = Math.max(1, levelCoins(cfg));
+    return cfg.maxBoards > 2 ? [board(req, "home", coins), board(req, "away", coins)] : [board(req, "home", coins)];
+  },
 };

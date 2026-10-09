@@ -42,7 +42,7 @@
 // withdrawal policy branch on the stage kind. Not modelled: the implicit-bye
 // inference for a round a late entrant missed (only a pairing ORDER changes),
 // the rank_adjacent cascade rank, and chess colours.
-import { EngineError, type StageKind } from "@seazn/engine/core";
+import { EngineError, forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { stageCfg } from "../lib/sport-cfg.ts";
@@ -242,6 +242,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     // (#cascadePost), never read off the prefix (review m-5): an organiser
     // post may carry none. Read here, synchronously, before any await.
     const label = this.#cascading > 0 ? " by-product" : "";
+    const organiser = this.#cascading === 0;
     return Promise.resolve().then(() => {
       this.calls.push("postStream");
       this.trace.push(`postStream ${id}${label}`);
@@ -254,6 +255,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       const out: PostedEvent[] = [];
       for (const ev of events) {
         if (LOCKED.has(f.status)) throw new RefusedCall("POST", path, 422, "ALREADY_DECIDED", `fixture ${id} is ${f.status}`);
+        if (ev.type === "core.forfeit" && organiser) this.#serverForfeitRules(f, ev, path);
         const eid = `ev${++this.#eventNo}`;
         const target = ev.type === "core.void" ? (ev.payload as { event_id?: unknown } | null)?.event_id : undefined;
         const entry: LedgerEntry = { id: eid, seq: ledger.length + 1, type: ev.type, payload: ev.payload, ...(typeof target === "string" ? { voids: target } : {}) };
@@ -282,6 +284,18 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       }
       return out;
     });
+  }
+  /** W2b's two server rules on an organiser's core.forfeit, before the fold (the cascade's own writes are exempt):
+   *  PF-2 — `withdrew` is the withdrawal cascade's alone, refused from every other writer INVALID_EVENT (422); X-DW-3 —
+   *  a double walkover on a bracket fixture with no next match (no feed edge out: a final, a third-place match) is
+   *  refused DOUBLE_WALKOVER_NO_NEXT_MATCH, the fixture left open. */
+  #serverForfeitRules(f: FakeFixture, ev: StreamEvent, path: string): void {
+    const p = (ev.payload ?? {}) as { by?: unknown; reason?: unknown };
+    if (p.reason === "withdrew") throw new RefusedCall("POST", path, 422, "INVALID_EVENT", "a withdrawal is recorded by withdrawing the entrant, not by a forfeit");
+    const kind = this.stage?.kind ?? null;
+    if (p.by === "both" && kind !== null && forbidsLevelResult(kind) && !this.feeds.has(f.id)) {
+      throw new RefusedCall("POST", path, engineHttpStatus("DOUBLE_WALKOVER_NO_NEXT_MATCH"), "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a double walkover needs a next match — reschedule, record a walkover if one side turned up, or settle");
+    }
   }
   /** A test hook for a bracket feed edge (stages.ts generate's second pass:
    *  a target's homeFrom/awayFrom becomes the source's winner_to_fixture/slot). */
@@ -504,7 +518,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     if (round.bye !== undefined) {
       const byeShell = shells.find((f) => this.byeShells.has(f.id));
       if (byeShell === undefined) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", engineHttpStatus("CONFIG_INVALID"), "CONFIG_INVALID", "swiss bye shell missing for pairing");
-      Object.assign(byeShell, { home_entrant_id: round.bye, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: round.bye } });
+      Object.assign(byeShell, { home_entrant_id: round.bye, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: round.bye, loser: null, reason: "bye" } });
     }
     return { created: 0, existing: this.fixtures.length, fixtures: this.rows() };
   }

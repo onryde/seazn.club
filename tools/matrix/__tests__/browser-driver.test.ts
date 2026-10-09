@@ -2187,9 +2187,9 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: SETUP + 3 }); // score, abandon, settle
   });
 
-  it("both reasons the console's Forfeit authors route to it", async () => {
+  it("every reason the console's Forfeit authors routes to it — walkover, retired, disqualified (D1; never withdrew, PF-2)", async () => {
     let checked = 0;
-    for (const reason of ["walkover", "retired hurt"] as const) {
+    for (const reason of ["walkover", "retired", "disqualified"] as const) {
       const ev: StreamEvent = { type: "core.forfeit", payload: { by: "e2", reason } };
       const seen: unknown[] = [];
       const { driver } = make({ http: orgHttp([asRow(3, ev)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async (...a) => { seen.push(a[3]); return [answer(3, "forfeited")]; } } });
@@ -2199,7 +2199,16 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
       expect(posted.map((x) => x.stored), reason).toEqual([ev]);
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(3);
+  });
+
+  it("PF-2: a withdrew forfeit is no console route — the cascade's reason alone, so the browser names it and posts nothing", async () => {
+    const ev: StreamEvent = { type: "core.forfeit", payload: { by: "e2", reason: "withdrew" } };
+    const seen: unknown[] = [];
+    const { driver } = make({ http: orgHttp([asRow(3, ev)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async (...a) => { seen.push(a[3]); return [answer(3, "forfeited")]; } } });
+    await built(driver, spec("knockout"));
+    await expect(driver.postStream("f1", [ev], "p")).rejects.toThrow(/reason is not one the console's Forfeit authors/);
+    expect(seen).toEqual([]);
   });
 
   it("a forfeit on a still-scheduled match answers core.start first: that row is stored too, and only the forfeit's row is compared", async () => {

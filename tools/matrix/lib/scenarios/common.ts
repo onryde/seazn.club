@@ -18,8 +18,8 @@ import {
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
 import { drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
-import { generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
-import { START, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
+import { forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
+import { outcomeLabel, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
 import { levelKindOf, loserSeatOf, type BracketDrive } from "../reference-bracket.ts";
 import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
@@ -550,12 +550,19 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     if (resumed.voidedType !== null && generated[resumed.live]?.type !== resumed.voidedType) throw new ResumeMismatch(f.id, `the event it voided was ${resumed.voidedType}, the stream's next is ${generated[resumed.live]?.type ?? "nothing"}`);
   }
   const fresh = resumed === undefined ? generated : generated.slice(resumed.live);
-  // What the driver actually sends: a forfeit on a fixture already under way
-  // is the bare core.forfeit (http-driver.ts forfeit), so START only when the
-  // fixture is still scheduled.
-  const now = asked.kind === "forfeit" && state.status !== "scheduled" ? fresh.filter((e) => e.type !== START.type) : fresh;
-  const posted = asked.kind === "forfeit"
-    ? await ctx.driver.forfeit(f.id, asked.by === "home" ? home : away, asked.reason, `${ctx.tag}:${f.id}`)
+  // W2b (D3, finding 10): a forfeit goes through the driver's forfeit, which composes it as streams/index.ts
+  // forfeitPosting does for the fixture's status NOW — the generated play first on a scheduled fixture (none for a
+  // walkover or a double walkover; START and the sport's partial play for a retirement), the bare forfeit on one under
+  // way. `now` is that same composition, so the local fold, the request match and the declared points are for exactly
+  // the events posted.
+  const forfeit = asked.kind === "forfeit" ? { by: asked.by === "home" ? home : away, reason: asked.reason } : asked.kind === "double_walkover" ? { by: "both", reason: "walkover" as const } : null;
+  // The generated forfeit stream is its play, then the forfeit: anything else is a generator defect, refused by name
+  // rather than split at the wrong event.
+  if (forfeit !== null && fresh.at(-1)?.type !== "core.forfeit") throw new Error(`scenario: ${f.id} — the ${outcomeLabel(asked)} stream ends with ${fresh.at(-1)?.type ?? "nothing"}, not its core.forfeit`);
+  const play = fresh.slice(0, -1);
+  const now = forfeit === null ? fresh : forfeitPosting(state.status, forfeit, play);
+  const posted = forfeit !== null
+    ? await ctx.driver.forfeit(f.id, forfeit.by, forfeit.reason, `${ctx.tag}:${f.id}`, play)
     : await ctx.driver.postStream(f.id, now, `${ctx.tag}:${f.id}`);
   // W1c Task 7: the pad path answers each event with the ledger row the
   // product actually stored. Fold those rows, so a browser run is judged on
@@ -884,7 +891,9 @@ export function byeDeclared(sport: string, cfg: unknown, stageKind: string, f: O
   if (!seatedHome && f.away !== winner) return null;
   const m = sportModule(sport);
   const state: unknown = m.init(cfg, lineupsFor(seatedHome ? winner : BYE_PHANTOM, seatedHome ? BYE_PHANTOM : winner));
-  const award = { kind: "award", winner, ...(f.outcome.method !== undefined ? { method: f.outcome.method } : {}) } as MatchOutcome;
+  // The product's own award as the harness read it (D2: winner, loser, reason — "bye" for a bye; a pre-W2b row's
+  // reason may read "" and is passed on as it was stored).
+  const award = { kind: "award", winner, loser: f.outcome.loser, ...(f.outcome.reason !== "" ? { reason: f.outcome.reason } : {}) } as unknown as MatchOutcome;
   const pair = m.standingsDelta(award, cfg, stageCtx(stageKind, { pool_id: f.poolId, round_no: f.roundNo }), state);
   const won = pair.find((d) => d.entrantId === winner);
   if (won === undefined) return null;

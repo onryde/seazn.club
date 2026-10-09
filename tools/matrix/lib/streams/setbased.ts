@@ -40,4 +40,11 @@ export const setbasedGenerator: SportStreamGenerator = {
     }
     return events;
   },
+  // W2b (VB-RT-1, TT-RT-1, BD-RT-1): a rally to each side — `${key}.rally {wonBy}`, the kernel's own point event.
+  partial(req) {
+    return [
+      { type: `${req.sportKey}.rally`, payload: { wonBy: req.home } },
+      { type: `${req.sportKey}.rally`, payload: { wonBy: req.away } },
+    ];
+  },
 };
