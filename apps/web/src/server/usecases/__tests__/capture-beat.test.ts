@@ -536,6 +536,86 @@ describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", (
     for (const e of ignored) expect(e.payload).toMatchObject({ held: true });
   });
 
+  /** A14 / T4 (§6.5) on a LIVE X, each conjunct of deadForTakeover met from config.ts's own window: A went live on X, then
+   *  DEAD_PHONE_TAKEOVER_SECONDS passed with (1) no beat from A, (2) the input disconnected, so the fresh read the claim
+   *  takes is not connected, and (3) no connected sample inside the window (the go-live's are exactly a window old) — the
+   *  scene the T4 test above builds. One sport on purpose: a stop reads no sport (the header's cricket case owns that). */
+  async function deadOnLiveX() {
+    const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+    const [A, B] = [phoneId("a"), phoneId("b")];
+    await claimNew(r, A);
+    const X = await r.start(A);
+    await goLive(r, A, X);
+    r.ingest.setState(await inputOf(X), "disconnected");
+    r.tick(DEAD_PHONE_TAKEOVER_SECONDS * SEC);
+    return { r, A, B, X };
+  }
+  /** B's `new` claim on the dead scene: the T4 row — the SAME live X, B's pairing on it, phone_takeover {dead: true}. */
+  async function takeOverByT4(r: CaptureRig, A: string, B: string, X: string): Promise<PRow> {
+    expect(await claimNew(r, B), "PREMISE: B takes over the live X").toMatchObject({ state: "live", sid: X });
+    const b = await pairingOf(r, B);
+    expect((await eventsOf(X, "phone_takeover"))[0], "PREMISE: the T4 row (dead), not T2").toMatchObject({ payload: { dead: true, pairingId: b.id } });
+    expect(await pairingOf(r, A), "PREMISE: A's pairing ended, replaced by B's").toMatchObject({ end_cause: "replaced", replaced_by: b.id });
+    expect(await session(X), "PREMISE: X live, held by B").toMatchObject({ state: "live", pairing_id: b.id });
+    return b;
+  }
+
+  it("T24a after an A14/T4 takeover: A, dead past the window, loses the live X to B (same sid); A's late `stopped: X` is IGNORED — `replaced`, X still live and B's, event stop_ignored {held: true}, and A writes no pairing row and no history; a second late stop is ignored the same way", async () => {
+    const { r, A, B, X } = await deadOnLiveX();
+    const b = await takeOverByT4(r, A, B, X);
+    const rowsBefore = await pairings(r);
+    const aId = (await pairingOf(r, A)).id;
+    const historyBefore = await historyOf(aId);
+    expect(historyBefore.length, "PREMISE: the history read sees A's earlier beats").toBeGreaterThan(0);
+    let late = 0;
+    for (const n of [1, 2]) {
+      r.tick(SEC);
+      expect((await beat(r, A, { stopped: X })).state, `late stop ${n}: T7, the caller is not current`).toBe("replaced");
+      expect(await session(X), `late stop ${n}`).toMatchObject({ state: "live", end_reason: null, pairing_id: b.id });
+      const ignored = await eventsOf(X, "stop_ignored");
+      expect(ignored, `late stop ${n}: one stop_ignored per late stop`).toHaveLength(n);
+      for (const e of ignored) expect(e).toMatchObject({ source: "phone", payload: { held: true } });
+      expect(await pairings(r), `late stop ${n}: no pairing row written or changed`).toEqual(rowsBefore);
+      expect(await historyOf(aId), `late stop ${n}: no history for A`).toEqual(historyBefore);
+      late++;
+    }
+    expect(late).toBe(2);
+    expect(current(await pairings(r)).map((p) => p.phone), "B is still the current phone").toEqual([B]);
+    expect(await eventsOf(X, "stop"), "nothing stopped X").toHaveLength(0);
+  });
+
+  it("…its POSITIVE pair: the same late `stopped: X` with NO B — A, dead past the window but still the current phone, closes X (T23): `over X stopped`, X operator_stopped, nothing ignored", async () => {
+    const { r, A, X } = await deadOnLiveX();
+    expect(current(await pairings(r)).map((p) => p.phone), "PREMISE: nobody took over — A is still current").toEqual([A]);
+    r.tick(SEC);
+    expect(await beat(r, A, { stopped: X })).toMatchObject({ state: "over", sid: X, endReason: "stopped" });
+    const s = await session(X);
+    expect(isOver(s.state), s.state).toBe(true);
+    expect(s.end_reason).toBe("operator_stopped");
+    expect(await eventsOf(X, "stop_ignored")).toHaveLength(0);
+  });
+
+  it("…and A's late stop riding a `new` claim while B is ALIVE (beating, the input connected) is `taken` (T3, G0-g) — X still live and B's, stop_ignored {held: true}, claim_refused T3, no row and no history for A", async () => {
+    const { r, A, B, X } = await deadOnLiveX();
+    const b = await takeOverByT4(r, A, B, X);
+    r.ingest.setState(await inputOf(X), "connected");
+    r.tick(5 * SEC);
+    expect(await beat(r, B, { sid: X, state: "publishing", transport: "srt" }), "PREMISE: B is alive on X").toMatchObject({ state: "live", sid: X });
+    const rowsBefore = await pairings(r);
+    const aId = (await pairingOf(r, A)).id;
+    const historyBefore = await historyOf(aId);
+    expect(historyBefore.length, "PREMISE: the history read sees A's earlier beats").toBeGreaterThan(0);
+    r.tick(SEC);
+    expect((await claimNew(r, A, { stopped: X })).state, "G0-g: a refused claim answers taken").toBe("taken");
+    expect(await session(X)).toMatchObject({ state: "live", end_reason: null, pairing_id: b.id });
+    const ignored = await eventsOf(X, "stop_ignored");
+    expect(ignored).toHaveLength(1);
+    expect(ignored[0]).toMatchObject({ source: "phone", payload: { held: true } });
+    expect((await eventsOf(X, "claim_refused")).map((e) => e.payload)).toEqual([{ claimRow: "T3" }]);
+    expect(await pairings(r), "a refused claim writes no row and changes none").toEqual(rowsBefore);
+    expect(await historyOf(aId), "no history for A").toEqual(historyBefore);
+  });
+
   it("T24a's POSITIVE branch, built directly: no current pairing holds X (its phone's pairing has ended and nobody replaced it) — the late stop APPLIES, though the caller is not current (`replaced`)", async () => {
     const r = await captureRig({ connectAfterMs: NEVER });
     const A = phoneId("a");
