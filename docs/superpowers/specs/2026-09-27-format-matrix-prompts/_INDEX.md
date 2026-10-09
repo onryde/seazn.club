@@ -1144,6 +1144,11 @@ Elsewhere the text is the controller's record.
      Q7: any non-zero pre-ship count stops the ship and goes to the owner with the rows. Execution: subagent-driven,
      loops as the plan's table.
 
+103. **W2b plan — early pre-ship counts not taken** (2026-10-09, orchestrator record, not an owner ruling). Task 0
+     Step 4's staging/prod reads could not run: the Supabase MCP failed to connect. The owner's 2026-10-08 statement
+     "we don't have any forfeit old data" stands in until Task 17, where the same four queries on both projects are a
+     hard ship gate (ruling 102 Q7: any non-zero stops the ship).
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
