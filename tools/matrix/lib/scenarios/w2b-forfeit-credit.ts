@@ -19,7 +19,7 @@ import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { RefusedCall, type FixtureRow, type StageRef, type StandingsRowWire, type WithdrawOut } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
 import { foldStream } from "../fold.ts";
-import type { ObservedFixture, ObservedOutcome, ObservedRun } from "../observed.ts";
+import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import { CreditNotCovered, walkoverCredit, type CreditCase } from "../reference-walkover.ts";
 import type { CheckResult } from "../results.ts";
 import { sportModule, stageCfg } from "../sport-cfg.ts";
@@ -254,6 +254,25 @@ async function abandonTableCheck(ctx: ScenarioContext, rec: Recorder, setup: Div
  *  a TBD opponent walks over, so a refusal there is the defect, recorded and judged — never a crash of the case). */
 interface WithdrawStep { readonly entrantId: string; readonly label: string; readonly answer: WithdrawOut | null; readonly refusal?: { readonly status: number; readonly code: string | null } }
 interface Line { readonly qf: readonly [FixtureRow, FixtureRow]; readonly sf: string }
+
+/** WD-CASC stops here, by the rule's name: a fixture the choreography withdrew a side from is still open. */
+export class W2bCascadeLeftOpen extends Error {
+  constructor(why: string) {
+    super(`scenario: WD-CASC — ${why}`);
+    this.name = "W2bCascadeLeftOpen";
+  }
+}
+/** Whether the case can play on past a fixture the choreography withdrew a side from. Terminal: yes. Open after an
+ *  ACCEPTED withdrawal: no — the product did not walk it over (X-WD-1, BG-WO-3), and the harness never decides a withdrawn
+ *  side's match. Open after a REFUSED one: yes when the fixture never started (the side is still in; the loop plays it and
+ *  the refusal is judged), no when the choreography already posted to it (a held match cannot be replayed from the start). */
+export function cascadeLeftOpen(fixtureId: string, label: string, status: string, withdrawal: "accepted" | "refused", posted: boolean): string | null {
+  if (isTerminal(status)) return null;
+  if (withdrawal === "refused" && !posted) return null;
+  return withdrawal === "accepted"
+    ? `${fixtureId} (${label}) is ${status} after its side withdrew: the product did not walk it over (X-WD-1), and the harness never decides a withdrawn side's match`
+    : `${fixtureId} (${label}) is ${status} after its withdrawal was refused: the choreography already posted to it, so the stage cannot drain`;
+}
 /** QF1's semi-final line and the other one, from the feed graph (never fixture numbers), and the final. */
 export function knockoutLines(g: FeedGraph, r1: readonly FixtureRow[]): { a: Line; b: Line; final: string } {
   const sorted = byNo(r1);
@@ -524,6 +543,11 @@ const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
     rec.withdrawn.add(entrantId);
     r.steps.push({ entrantId, label, answer });
   };
+  // The truth-run's find: left open, the fixture comes back to the round loop, which would post a fresh stream to it.
+  const stopIfLeftOpen = async (fixtureId: string, label: string, entrantId: string, posted: boolean) => {
+    const why = cascadeLeftOpen(fixtureId, label, (await ctx.driver.fixtureState(fixtureId)).status, rec.withdrawn.has(entrantId) ? "accepted" : "refused", posted);
+    if (why !== null) throw new W2bCascadeLeftOpen(why);
+  };
   let done = false;
   const hooks: RoundHooks = {
     beforeRound: async (_round, batch) => {
@@ -547,9 +571,11 @@ const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
       r.a2 = qf2.away_entrant_id!;
       await withdraw(qf2.home_entrant_id!, held.label);
       r.walked.push({ fixtureId: qf2.id, withdrawn: qf2.home_entrant_id!, remaining: r.a2, label: held.label });
+      await stopIfLeftOpen(qf2.id, held.label, qf2.home_entrant_id!, true);
       // BG-WO-2 and the bracket row: QF3 not started when its home side withdraws.
       await withdraw(qf3.home_entrant_id!, "not started");
       r.walked.push({ fixtureId: qf3.id, withdrawn: qf3.home_entrant_id!, remaining: qf3.away_entrant_id!, label: "not started" });
+      await stopIfLeftOpen(qf3.id, "not started", qf3.home_entrant_id!, false);
       // X-WD-4: QF3's walkover winner withdraws from the other semi-final while its seat there is TBD, and QF4 is a
       // double walkover — so both of that semi-final's seats are dead.
       r.a3 = qf3.away_entrant_id!;

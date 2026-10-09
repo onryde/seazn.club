@@ -19,7 +19,7 @@ import {
   hasNoNextMatch, isolatedTable, ladderUnmoved, partialPlayStands, pickDoubleWalkover, wireGraph, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
 } from "../lib/scenarios/w2b-checks.ts";
 import {
-  W2B_SCENARIOS, W2bMisplanned, abandonPlan, abandonWithResult, bothSeatsDead, goalLead, heldStream, knockoutLines, tableJudged, tbdSeatWalksOver, withdrawalsWalkOver,
+  W2B_SCENARIOS, W2bCascadeLeftOpen, W2bMisplanned, abandonPlan, cascadeLeftOpen, abandonWithResult, bothSeatsDead, goalLead, heldStream, knockoutLines, tableJudged, tbdSeatWalksOver, withdrawalsWalkOver,
 } from "../lib/scenarios/w2b-forfeit-credit.ts";
 import { SCENARIO_KEYS, planSliceCases } from "../lib/slice.ts";
 import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
@@ -530,6 +530,25 @@ describe("WD-CASC's checks (X-WD-1..4)", () => {
     expect(bothSeatsDead(r, swap(lines.final, ext(lines.final, a2, null, "scheduled", null)), [a2]).verdict, "final left open").toBe("fail");
     expect(bothSeatsDead(r, good, [w1]).verdict, "wrong champion").toBe("fail");
     expect(bothSeatsDead({ ...r, dw: { ...r.dw, refusal: { status: 409, code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" } } }, good, [a2]).verdict, "the DW refused").toBe("fail");
+  });
+  it("a withdrawn side's fixture left open stops the case by the rule's name; a terminal one plays on", () => {
+    // The truth-run's find (pre-D): football's held QF2 stayed needs_decision after its home side withdrew, and the round
+    // loop then posted core.start to it (422 ALREADY_DECIDED) — an error that named the harness, not the gap.
+    const rows: [string, "accepted" | "refused", boolean, string | null][] = [
+      ["forfeited", "accepted", true, null],
+      ["forfeited", "refused", true, null],
+      ["needs_decision", "accepted", true, "q2 (held) is needs_decision after its side withdrew: the product did not walk it over (X-WD-1)"],
+      ["scheduled", "accepted", false, "q2 (held) is scheduled after its side withdrew"],
+      ["needs_decision", "refused", true, "q2 (held) is needs_decision after its withdrawal was refused: the choreography already posted to it"],
+      ["scheduled", "refused", false, null],
+    ];
+    for (const [status, withdrawal, posted, want] of rows) {
+      const got = cascadeLeftOpen("q2", "held", status, withdrawal, posted);
+      if (want === null) expect(got, `${status} ${withdrawal} posted=${posted}`).toBeNull();
+      else expect(got, `${status} ${withdrawal} posted=${posted}`).toContain(want);
+    }
+    expect(rows.length).toBe(6);
+    expect(new W2bCascadeLeftOpen("x").message).toBe("scenario: WD-CASC — x");
   });
   it("a choreography that never began fails each check by name (never a vacuous pass)", () => {
     const empty = { steps: [], walked: [], w1: null, a2: null, a3: null, lines: null, dw: null };
