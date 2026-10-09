@@ -208,6 +208,8 @@ The re-pin's changed claims C-1…C-10 (`.superpowers/w2b-brainstorm/repin-main-
 
 ## Owner open questions (asked in chat before the task that needs each; class 17)
 
+**ANSWERED 2026-10-09 — ruling 102: all seven as recommended; execution subagent-driven.**
+
 | # | Question | Recommendation | Blocks |
 |---|---|---|---|
 | Q1 | Golden corpora: migrate recorded forfeit payloads by rule, then rebaseline? (finding 1) | Yes: a scripted event migration in its own commit, then an isolated `REBASELINE_GOLDEN=1` commit | Task 5 (loop D cannot close) |

@@ -1133,6 +1133,17 @@ Elsewhere the text is the controller's record.
      withdrawal path in its truth run completes. `docs/superpowers/specs/2026-10-08-format-matrix-w2b-design.md` §3,
      §5.
 
+102. **W2b plan approved, Q1–Q7 as recommended** (2026-10-09, owner "approve"). Plan
+     `docs/superpowers/plans/2026-10-09-format-matrix-w2b.md`. Q1: golden forfeit payloads migrated by a committed
+     rule (forfeit before `core.start` → `walkover`, after → `retired`, never `both`), then an isolated
+     `REBASELINE_GOLDEN=1` commit. Q2: W2b edits the two bench pack builders' payloads; the bench's two `award.method`
+     readers move to `reason` via the bench programme before W2b merges, or in the W2b PR with the bench owner's
+     written OK. Q3: an award-policy abandon folds to `win{method: "abandoned"}`. Q4: no model override; agent
+     frontmatter defaults. Q5: retired/DQ admitted in a chess tie-break; football SHOOTOUT and cricket super_over read
+     as play. Q6: Stryker `group=all` is post-merge, not a merge gate; the probe and every hand mutant gate the merge.
+     Q7: any non-zero pre-ship count stops the ship and goes to the owner with the rows. Execution: subagent-driven,
+     loops as the plan's table.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
