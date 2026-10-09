@@ -13,6 +13,7 @@ import {
   hasLiveVideoPublisher,
   listPeerIds,
   realtimeKitConfigured,
+  refreshParticipantToken,
 } from "../realtimekit";
 
 const ENV_KEYS = [
@@ -425,6 +426,60 @@ describe("addParticipant", () => {
     await expect(
       addParticipant({ meetingId: "mtg-1", subject: "s", preset: "player" }, { fetch: stub.fetch }),
     ).rejects.toMatchObject({ name: "RealtimeKitError", status: 502 });
+  });
+});
+
+describe("refreshParticipantToken", () => {
+  // A returning player keeps ONE participant (so peer discovery stays on one
+  // user_id) and gets a regenerated token for it. Measured 2026-10-09
+  // (rtk-token-regen.log): the regenerated token is a different JWT and the
+  // earlier one keeps working.
+  it("POSTs to the participant's token endpoint and returns the same participant with the new token", async () => {
+    configure();
+    const stub = stubFetch([{ status: 200, body: { success: true, data: { token: "jwt-regenerated-2" } } }]);
+    const out = await refreshParticipantToken({ meetingId: "mtg/1", participantId: "p 1" }, { fetch: stub.fetch });
+    expect(out).toEqual({ participantId: "p 1", authToken: "jwt-regenerated-2" });
+    expect(stub.calls.length).toBe(1);
+    expect(stub.calls[0]?.method).toBe("POST");
+    expect(stub.calls[0]?.url, "both ids are path-encoded").toBe(
+      "https://api.cloudflare.com/client/v4/accounts/acct-1/realtime/kit/app-1/meetings/mtg%2F1/participants/p%201/token",
+    );
+    expect(stub.calls[0]?.headers.get("authorization")).toBe("Bearer cf-token-do-not-leak-0123456789");
+  });
+
+  it("a response with no token (or an empty one) is a 502, never a participant with an empty token", async () => {
+    configure();
+    let checked = 0;
+    for (const data of [{}, { token: "" }, { token: 42 }]) {
+      const stub = stubFetch([{ status: 200, body: { success: true, data } }]);
+      await expect(
+        refreshParticipantToken({ meetingId: "mtg-1", participantId: "p-1" }, { fetch: stub.fetch }),
+        JSON.stringify(data),
+      ).rejects.toMatchObject({ name: "RealtimeKitError", status: 502, code: "unavailable" });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: three tokenless shapes").toBe(3);
+  });
+
+  it("RealtimeKit's own 404 (participant gone) is not_found; an outage is unavailable", async () => {
+    configure();
+    const gone = stubFetch([{ status: 404, body: { success: false, error: { code: 404, message: "no such participant" } } }]);
+    await expect(
+      refreshParticipantToken({ meetingId: "mtg-1", participantId: "p-1" }, { fetch: gone.fetch }),
+    ).rejects.toMatchObject({ name: "RealtimeKitError", status: 404, code: "not_found" });
+    const down = stubFetch([{ status: 503, body: { success: false } }]);
+    await expect(
+      refreshParticipantToken({ meetingId: "mtg-1", participantId: "p-1" }, { fetch: down.fetch }),
+    ).rejects.toMatchObject({ name: "RealtimeKitError", status: 503, code: "unavailable" });
+  });
+
+  it("an unconfigured process refuses before any call", async () => {
+    configure({ REALTIMEKIT_API_TOKEN: "" });
+    const stub = stubFetch([]);
+    await expect(
+      refreshParticipantToken({ meetingId: "mtg-1", participantId: "p-1" }, { fetch: stub.fetch }),
+    ).rejects.toMatchObject({ name: "RealtimeKitError", code: "unconfigured" });
+    expect(stub.calls.length).toBe(0);
   });
 });
 

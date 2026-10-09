@@ -8,13 +8,27 @@
 // prove only the double (AGENTS.md, "the inert seam").
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Sentry is the one place a swallowed (optional-policy) outage becomes visible;
+// mocked so the tests can see it was reported.
+vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 import { sql } from "@/lib/db";
 import {
+  RealtimeKitError,
   addParticipant,
   ensureMeeting,
   hasLiveVideoPublisher,
+  refreshParticipantToken,
 } from "@/server/external-play/video/realtimekit";
-import { isPlayableFixtureStatus, seatPlayer, type PreflightDeps } from "../external-play/preflight";
+import { captureError } from "@/lib/sentry";
+import { patchDivision } from "../divisions";
+import {
+  SEAT_REFUSAL_REASONS,
+  isPlayableFixtureStatus,
+  seatPlayer,
+  type PreflightDeps,
+  type SeatResult,
+} from "../external-play/preflight";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOnlineChessFixture } from "./_external-play-seed";
@@ -61,9 +75,18 @@ function fakeRealtimeKit() {
   const adapter: string[] = [];
   const participants = new Map<string, FakeParticipant>();
   const tokens = new Map<string, string>(); // token → participant id
+  // meeting_id is UNIQUE across the (reused) test DB: every fake instance
+  // gets its own prefix on top of the file's RUN suffix.
+  const FAKE = `${RUN}-${randomUUID().slice(0, 6)}`;
   let seq = 0;
   let fail: FailRule = () => null;
-  let mintBarrier: Promise<void> | null = null;
+  // Two-tab race: hold every add-participant answer until N have arrived.
+  let holdMintsFor = 0;
+  let mintsArrived = 0;
+  let releaseMints: () => void = () => undefined;
+  const mintsReleased = new Promise<void>((r) => {
+    releaseMints = r;
+  });
 
   const doFetch = async (url: string | URL, init?: RequestInit): Promise<Response> => {
     const method = init?.method ?? "GET";
@@ -75,16 +98,20 @@ function fakeRealtimeKit() {
     let m: RegExpMatchArray | null;
     if (method === "POST" && path === "/meetings") {
       seq += 1;
-      return json(201, { success: true, data: { id: `mtg-${RUN}-${seq}` } });
+      return json(201, { success: true, data: { id: `mtg-${FAKE}-${seq}` } });
     }
     if (method === "PATCH" && (m = path.match(/^\/meetings\/([^/]+)$/))) {
       return json(200, { success: true, data: { id: m[1], status: "INACTIVE" } });
     }
     if (method === "POST" && (m = path.match(/^\/meetings\/([^/]+)\/participants$/))) {
-      if (mintBarrier) await mintBarrier;
+      mintsArrived += 1;
+      if (holdMintsFor > 0) {
+        if (mintsArrived >= holdMintsFor) releaseMints();
+        await mintsReleased;
+      }
       const body = JSON.parse(String(init?.body)) as { custom_participant_id: string };
       seq += 1;
-      const id = `p-${RUN}-${seq}`;
+      const id = `p-${FAKE}-${seq}`;
       const token = `jwt-add-${id}`;
       participants.set(id, { meetingId: m[1]!, subject: body.custom_participant_id, peers: 0, everJoined: false });
       tokens.set(token, id);
@@ -134,6 +161,10 @@ function fakeRealtimeKit() {
       adapter.push("hasLiveVideoPublisher");
       return hasLiveVideoPublisher(a, { fetch });
     },
+    refreshParticipantToken: (a) => {
+      adapter.push("refreshParticipantToken");
+      return refreshParticipantToken(a, { fetch });
+    },
   };
 
   return {
@@ -158,8 +189,17 @@ function fakeRealtimeKit() {
     failWhen(rule: FailRule): void {
       fail = rule;
     },
-    holdMintsUntil(barrier: Promise<void>): void {
-      mintBarrier = barrier;
+    /** Every add-participant request waits until `n` have arrived, so
+     *  concurrent first claims all mint before any of them stores. */
+    holdMintsUntilArrived(n: number): void {
+      holdMintsFor = n;
+    },
+    /** The token a result carries, joined in a NEW tab. */
+    join(result: SeatResult): string {
+      const token = "participant" in result && result.participant ? result.participant.authToken : null;
+      if (!token) throw new Error(`fake RealtimeKit: nothing to join with in ${JSON.stringify(result)}`);
+      this.joinWith(token);
+      return token;
     },
   };
 }
@@ -419,5 +459,479 @@ describe.skipIf(!process.env.DATABASE_URL)("seatPlayer on a fixture that can no 
     expect(
       await seatPlayer({ fixtureId: s.fixtureId, personId: s.home.personId }, { now: NOW, video: rtk.video }),
     ).toEqual({ seated: true, participant: null });
+  });
+});
+
+// ─── Policy branches ───────────────────────────────────────────────────────
+
+type ParticipantRow = {
+  person_id: string | null;
+  participant_id: string;
+  preset: string;
+  last_publisher_seen_at: Date | null;
+};
+async function participantRows(fixtureId: string): Promise<ParticipantRow[]> {
+  return sql<ParticipantRow[]>`
+    select person_id, participant_id, preset, last_publisher_seen_at
+      from fixture_video_participants where fixture_id = ${fixtureId}
+     order by created_at, id`;
+}
+type Seeded = Awaited<ReturnType<typeof seed>>;
+function claim(
+  s: Seeded,
+  side: "home" | "away",
+  rtk: ReturnType<typeof fakeRealtimeKit>,
+  now: Date = NOW,
+): Promise<SeatResult> {
+  return seatPlayer({ fixtureId: s.fixtureId, personId: s[side].personId }, { now, video: rtk.video });
+}
+const count = (xs: string[], x: string) => xs.filter((c) => c === x).length;
+/** The production default adapter with NO RealtimeKit credentials at all:
+ *  any call it makes throws `unconfigured` before a request is sent. */
+function unconfigureRealtimeKit(): void {
+  for (const k of Object.keys(RTK_ENV)) vi.stubEnv(k, "");
+}
+/** The token a camera refusal or a seat carries must be the CALLER's own
+ *  participant — the one stored for (fixture, caller) — never the opponent's. */
+async function expectOwnToken(s: Seeded, side: "home" | "away", got: SeatResult): Promise<string> {
+  const p = "participant" in got ? got.participant : null;
+  expect(p, `${side} carries a token`).not.toBeNull();
+  const rows = await participantRows(s.fixtureId);
+  const mine = rows.filter((r) => r.person_id === s[side].personId);
+  expect(mine.length, `exactly one participant for the ${side} player`).toBe(1);
+  expect(p?.participantId, "the token is for the caller's own participant").toBe(mine[0]?.participant_id);
+  expect(p?.authToken.length).toBeGreaterThan(0);
+  return p!.participantId;
+}
+
+describe.skipIf(!process.env.DATABASE_URL)("seatPlayer under each camera policy", () => {
+  it("empty case — policy off: seated with NO tile, and no meeting is ever created", async () => {
+    const s = await seed(); // nothing set anywhere ⇒ the competition floor 'off'
+    const rtk = fakeRealtimeKit();
+    expect(await claim(s, "home", rtk)).toEqual({ seated: true, participant: null });
+    expect(rtk.adapter, "zero video spend on an off division (spec §5.1)").toEqual([]);
+    expect(rtk.http).toEqual([]);
+    expect(await meetingRows(s.fixtureId)).toBe(0);
+  });
+
+  it("policy off seats through the PRODUCTION adapter with RealtimeKit entirely unconfigured — proof nothing is called", async () => {
+    unconfigureRealtimeKit();
+    const s = await seed();
+    expect(await seatPlayer({ fixtureId: s.fixtureId, personId: s.home.personId }, { now: NOW })).toEqual({
+      seated: true,
+      participant: null,
+    });
+  });
+
+  it("policy optional: the caller gets their own tile, and the publisher is never even asked", async () => {
+    const s = await seed({ cameraPolicy: "optional" });
+    const rtk = fakeRealtimeKit();
+    const got = await claim(s, "home", rtk);
+    expect(got.seated).toBe(true);
+    await expectOwnToken(s, "home", got);
+    expect(count(rtk.adapter, "hasLiveVideoPublisher"), "optional must not ASK — asking invites a future refusal").toBe(0);
+    expect(count(rtk.adapter, "addParticipant:player")).toBe(1);
+    expect((await participantRows(s.fixtureId))[0]?.preset).toBe("player");
+  });
+
+  it("policy optional + a RealtimeKit outage: still seated (no tile), and the outage is REPORTED, not swallowed", async () => {
+    const s = await seed({ cameraPolicy: "optional" });
+    const rtk = fakeRealtimeKit();
+    rtk.failWhen((m, path) => (m === "POST" && path === "/meetings" ? json(503, { success: false }) : null));
+    vi.mocked(captureError).mockClear();
+    expect(await claim(s, "home", rtk)).toEqual({ seated: true, participant: null });
+    expect(vi.mocked(captureError)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(captureError).mock.calls[0]?.[0]).toBeInstanceOf(RealtimeKitError);
+  });
+
+  it("policy optional with the production adapter unconfigured: seated, no tile", async () => {
+    unconfigureRealtimeKit();
+    const s = await seed({ cameraPolicy: "optional" });
+    expect(await seatPlayer({ fixtureId: s.fixtureId, personId: s.home.personId }, { now: NOW })).toEqual({
+      seated: true,
+      participant: null,
+    });
+  });
+
+  it("policy required, first claim: camera_required WITH the caller's own token to join, and no stamp", async () => {
+    // Nobody has joined, so RealtimeKit answers its well-formed "no active
+    // session" 404 — the NORMAL pre-join state, read as not-live, never as an
+    // outage (T7 isActiveSessionAbsent).
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    const got = await claim(s, "home", rtk);
+    expect(got.seated).toBe(false);
+    expect(!got.seated && got.reason).toBe("camera_required");
+    await expectOwnToken(s, "home", got);
+    expect(count(rtk.adapter, "hasLiveVideoPublisher"), "the meeting is asked, every time").toBe(1);
+    expect((await participantRows(s.fixtureId))[0]?.last_publisher_seen_at).toBeNull();
+  });
+
+  it("policy required: the refusal's token joins the meeting, and the NEXT claim seats — the preflight loop closes", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    const first = await claim(s, "home", rtk);
+    const pid = await expectOwnToken(s, "home", first);
+    rtk.join(first); // the browser joins with exactly what the server handed out
+    const before = [...rtk.adapter];
+    const second = await claim(s, "home", rtk);
+    expect(second.seated).toBe(true);
+    expect(second.seated && second.participant?.participantId, "the same participant").toBe(pid);
+    const during = rtk.adapter.slice(before.length);
+    expect(count(during, "addParticipant:player"), "a returning player is never re-minted").toBe(0);
+    expect(count(during, "refreshParticipantToken"), "a returning player gets a regenerated token").toBe(1);
+    expect(count(during, "hasLiveVideoPublisher")).toBe(1);
+    const [row] = await participantRows(s.fixtureId);
+    expect(row?.last_publisher_seen_at?.toISOString(), "the verification is stamped at the claim time").toBe(
+      NOW.toISOString(),
+    );
+  });
+
+  it("the stage's policy is what gates, not the division's", async () => {
+    const s = await seed({ cameraPolicy: "required", stageCameraPolicy: "off" });
+    const rtk = fakeRealtimeKit();
+    expect(await claim(s, "home", rtk)).toEqual({ seated: true, participant: null });
+    expect(rtk.http).toEqual([]);
+  });
+
+  it("the competition floor gates when nothing nearer is set", async () => {
+    const s = await seed({ competitionCameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    const got = await claim(s, "home", rtk);
+    expect(!got.seated && got.reason).toBe("camera_required");
+  });
+
+  it("both players: one meeting, two participants, and each token is its OWN player's", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    const h = await claim(s, "home", rtk);
+    const w = await claim(s, "away", rtk);
+    const hp = await expectOwnToken(s, "home", h);
+    const wp = await expectOwnToken(s, "away", w);
+    expect(hp, "two DISTINCT participants").not.toBe(wp);
+    expect(await meetingRows(s.fixtureId), "one meeting for the board, not one per player").toBe(1);
+    // The opponent seating does not disturb the first player.
+    rtk.join(h);
+    expect((await claim(s, "home", rtk)).seated).toBe(true);
+    const w2 = await claim(s, "away", rtk);
+    expect(!w2.seated && w2.reason, "home's live tile is not away's").toBe("camera_required");
+  });
+
+  it("sweeps all three policies against both join states and reports the count", async () => {
+    // Expected values from spec §5.1 (off: no tile; optional: tile, never
+    // blocks; required: seated only when joined-and-live).
+    const cases: { policy: "off" | "optional" | "required"; joined: boolean; seated: boolean; tile: boolean }[] = [
+      { policy: "off", joined: false, seated: true, tile: false },
+      { policy: "off", joined: true, seated: true, tile: false },
+      { policy: "optional", joined: false, seated: true, tile: true },
+      { policy: "optional", joined: true, seated: true, tile: true },
+      { policy: "required", joined: false, seated: false, tile: true },
+      { policy: "required", joined: true, seated: true, tile: true },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const s = await seed({ cameraPolicy: c.policy });
+      const rtk = fakeRealtimeKit();
+      const first = await claim(s, "home", rtk);
+      // "joined" is only possible with a token the server issued — off issues none.
+      if (c.joined && "participant" in first && first.participant) rtk.join(first);
+      const got = await claim(s, "home", rtk);
+      expect(got.seated, `${c.policy}/${c.joined}`).toBe(c.seated);
+      const tile = "participant" in got && got.participant !== null;
+      expect(tile, `${c.policy}/${c.joined} tile`).toBe(c.tile);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: 3 policies × 2 join states").toBe(6);
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("a RealtimeKit outage is video_unavailable — never camera-off, never a seat", () => {
+  const down = json(503, { success: false, errors: [{ code: 10000, message: "upstream" }] });
+  const html200 = new Response("<html>gateway</html>", { status: 200, headers: { "content-type": "text/html" } });
+
+  it("first-claim failure points under required, swept and counted", async () => {
+    const points: { name: string; rule: FailRule }[] = [
+      { name: "create meeting 503", rule: (m, p) => (m === "POST" && p === "/meetings" ? down.clone() : null) },
+      { name: "create meeting network", rule: (m, p) => (m === "POST" && p === "/meetings" ? "network" : null) },
+      { name: "add participant 503", rule: (m, p) => (m === "POST" && p.endsWith("/participants") ? down.clone() : null) },
+      { name: "active session 503", rule: (m, p) => (m === "GET" && p.endsWith("/active-session") ? down.clone() : null) },
+      { name: "active session HTML 200", rule: (m, p) => (m === "GET" && p.endsWith("/active-session") ? html200.clone() : null) },
+    ];
+    let checked = 0;
+    for (const pt of points) {
+      const s = await seed({ cameraPolicy: "required" });
+      const rtk = fakeRealtimeKit();
+      rtk.failWhen(pt.rule);
+      vi.mocked(captureError).mockClear();
+      const got = await claim(s, "home", rtk);
+      expect(got, pt.name).toEqual({ seated: false, reason: "video_unavailable" });
+      expect(rtk.http.length, `${pt.name}: premise — RealtimeKit WAS reached`).toBeGreaterThan(0);
+      expect(vi.mocked(captureError), `${pt.name}: the outage is reported`).toHaveBeenCalledTimes(1);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: five first-claim failure points").toBe(5);
+  });
+
+  it("a player who HAD passed, then an outage: video_unavailable, never camera_lost — swept and counted", async () => {
+    const points: { name: string; rule: FailRule }[] = [
+      { name: "token refresh 503", rule: (m, p) => (m === "POST" && p.endsWith("/token") ? down.clone() : null) },
+      { name: "active session 503", rule: (m, p) => (m === "GET" && p.endsWith("/active-session") ? down.clone() : null) },
+      {
+        name: "active session lowercase 'live'",
+        rule: (m, p) =>
+          m === "GET" && p.endsWith("/active-session")
+            ? json(200, { success: true, data: { id: "sess-x", status: "live" } })
+            : null,
+      },
+      { name: "session participants network", rule: (m, p) => (m === "GET" && p.startsWith("/sessions/") ? "network" : null) },
+    ];
+    let checked = 0;
+    for (const pt of points) {
+      const s = await seed({ cameraPolicy: "required" });
+      const rtk = fakeRealtimeKit();
+      rtk.join(await claim(s, "home", rtk));
+      expect((await claim(s, "home", rtk)).seated, `${pt.name}: premise — the camera passed`).toBe(true);
+      rtk.failWhen(pt.rule);
+      const got = await claim(s, "home", rtk, new Date(NOW.getTime() + 30_000));
+      expect(got, pt.name).toEqual({ seated: false, reason: "video_unavailable" });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four returning-player failure points").toBe(4);
+  });
+
+  it("the production adapter, unconfigured, under required ⇒ video_unavailable", async () => {
+    unconfigureRealtimeKit();
+    const s = await seed({ cameraPolicy: "required" });
+    expect(await seatPlayer({ fixtureId: s.fixtureId, personId: s.home.personId }, { now: NOW })).toEqual({
+      seated: false,
+      reason: "video_unavailable",
+    });
+  });
+
+  it("VIDEO_MEETING_ENDED (409) propagates unchanged, under required and optional (controller ruling Q3)", async () => {
+    let checked = 0;
+    for (const policy of ["required", "optional"] as const) {
+      const s = await seed({ cameraPolicy: policy });
+      await sql`
+        insert into fixture_video_meetings (fixture_id, org_id, meeting_id, ended_at)
+        values (${s.fixtureId}, ${s.orgId}, ${`mtg-ended-${randomUUID()}`}, now())`;
+      const rtk = fakeRealtimeKit();
+      await expect(claim(s, "home", rtk), policy).rejects.toMatchObject({ status: 409, code: "VIDEO_MEETING_ENDED" });
+      expect(rtk.http, `${policy}: refused before any request`).toEqual([]);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("sequences", () => {
+  it("a SECOND claim by a seated player: same participant, regenerated token, one row, re-verified", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    rtk.join(await claim(s, "home", rtk));
+    const a = await claim(s, "home", rtk);
+    const mark = rtk.adapter.length;
+    const b = await claim(s, "home", rtk);
+    expect(a.seated && b.seated).toBe(true);
+    expect(b.seated && b.participant?.participantId).toBe(a.seated && a.participant?.participantId);
+    expect(count(rtk.adapter.slice(mark), "addParticipant:player"), "a reload must not mint a second participant").toBe(0);
+    expect(count(rtk.adapter.slice(mark), "hasLiveVideoPublisher"), "but it MUST re-verify").toBe(1);
+    expect((await participantRows(s.fixtureId)).length).toBe(1);
+  });
+
+  it("a SECOND TAB racing the first claim: one participant is stored, both tabs get tokens for it, neither knocks the other out", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    rtk.holdMintsUntilArrived(2); // both claims mint before either stores
+    // Stage the race deterministically: while this SHARE lock is held, plain
+    // selects pass but every insert into the table waits. Released only once
+    // TWO backends are waiting on a lock — so without the meeting-row lock
+    // both claims have already looked, found nothing, and queued an insert.
+    let releaseTable: () => void = () => undefined;
+    const tableReleased = new Promise<void>((r) => {
+      releaseTable = r;
+    });
+    let tableLocked: () => void = () => undefined;
+    const locked = new Promise<void>((r) => {
+      tableLocked = r;
+    });
+    const blocker = sql.begin(async (tx) => {
+      await tx`lock table fixture_video_participants in share mode`;
+      tableLocked();
+      await tableReleased;
+    });
+    await locked;
+    const racing = Promise.all([claim(s, "home", rtk), claim(s, "home", rtk)]);
+    let waiting = 0;
+    try {
+      for (let i = 0; i < 200 && waiting < 2; i += 1) {
+        await new Promise((r) => setTimeout(r, 25));
+        const [w] = await sql<{ n: number }[]>`
+          select count(*)::int as n from pg_stat_activity
+           where datname = current_database() and wait_event_type = 'Lock'
+             and query ilike '%fixture_video_%'`;
+        waiting = w?.n ?? 0;
+      }
+    } finally {
+      releaseTable();
+      await blocker;
+    }
+    expect(waiting, "premise: both claims were held at the same point").toBeGreaterThanOrEqual(2);
+    const [t1, t2] = await racing;
+    expect(count(rtk.adapter, "addParticipant:player"), "premise: the race really happened").toBe(2);
+    const rows = await participantRows(s.fixtureId);
+    expect(rows.length, "the meeting-row lock lets exactly one participant be stored").toBe(1);
+    const stored = rows[0]!.participant_id;
+    for (const t of [t1, t2]) {
+      expect(!t.seated && t.reason).toBe("camera_required");
+      expect("participant" in t && t.participant?.participantId, "both tabs hold the STORED participant").toBe(stored);
+    }
+    // Both tabs join; one closes; the other keeps the seat (measured: a
+    // regenerated token does not invalidate the earlier one).
+    rtk.join(t1);
+    rtk.join(t2);
+    expect((await claim(s, "home", rtk)).seated).toBe(true);
+    rtk.leave(stored);
+    expect((await claim(s, "home", rtk)).seated, "the other tab is still live").toBe(true);
+  });
+
+  it("seating after the player LEFT the meeting: camera_lost with a token to rejoin, stable on repeat, and rejoining re-seats", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    rtk.join(await claim(s, "home", rtk));
+    const seated = await claim(s, "home", rtk);
+    expect(seated.seated, "premise: the camera really did pass first").toBe(true);
+    const pid = seated.seated ? seated.participant!.participantId : "";
+    rtk.leave(pid);
+
+    const lost = await claim(s, "home", rtk, new Date(NOW.getTime() + 30_000));
+    expect(!lost.seated && lost.reason, "had it and lost it").toBe("camera_lost");
+    await expectOwnToken(s, "home", lost);
+    // Asked again with the world unchanged, the answer is the same story —
+    // the player did not become someone who "never had it".
+    const again = await claim(s, "home", rtk, new Date(NOW.getTime() + 45_000));
+    expect(!again.seated && again.reason, "a repeat claim tells the same story").toBe("camera_lost");
+
+    rtk.join(again); // rejoin with the newest token the server issued
+    const back = await claim(s, "home", rtk, new Date(NOW.getTime() + 60_000));
+    expect(back.seated).toBe(true);
+    expect(back.seated && back.participant?.participantId, "the same participant").toBe(pid);
+  });
+
+  it("a player is never handed an ARBITER participant, even when one exists for the same person", async () => {
+    // The player preset denies the video toggle; an arbiter's need not. An
+    // organiser who also plays (and once joined this board as arbiter) must
+    // still be minted a PLAYER participant for their seat.
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    const { meetingId } = await rtk.video.ensureMeeting(s.fixtureId);
+    const arbiterId = `p-arbiter-${randomUUID().slice(0, 8)}`;
+    await sql`
+      insert into fixture_video_participants (fixture_id, person_id, preset, participant_id)
+      values (${s.fixtureId}, ${s.home.personId}, 'arbiter', ${arbiterId})`;
+    const got = await claim(s, "home", rtk);
+    expect(!got.seated && got.reason, "premise: refused on the camera, not on video").toBe("camera_required");
+    const token = "participant" in got ? got.participant : null;
+    expect(token?.participantId).not.toBe(arbiterId);
+    const [player] = await sql<{ participant_id: string }[]>`
+      select participant_id from fixture_video_participants
+       where fixture_id = ${s.fixtureId} and person_id = ${s.home.personId} and preset = 'player'`;
+    expect(token?.participantId, "the token is the player-preset participant").toBe(player?.participant_id);
+    expect(rtk.participants.get(token!.participantId)?.meetingId).toBe(meetingId);
+  });
+
+  it("after a WITHDRAWAL, a previously seated player can no longer take the seat", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    rtk.join(await claim(s, "home", rtk));
+    expect((await claim(s, "home", rtk)).seated, "premise: seated").toBe(true);
+    await withdrawEntrantCascade(await mintOrgOwnerAuth(s.orgId), s.away.entrantId);
+    const mark = rtk.http.length;
+    expect(await claim(s, "home", rtk)).toEqual({ seated: false, reason: "fixture_not_playable" });
+    expect(rtk.http.slice(mark), "no video call for an unplayable board").toEqual([]);
+  });
+
+  it("a policy DOWNGRADE mid-round through the real writer (patchDivision) relaxes the gate; a re-tightening is refused", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const owner = await mintOrgOwnerAuth(s.orgId);
+    const rtk = fakeRealtimeKit();
+    const r1 = await claim(s, "home", rtk);
+    expect(!r1.seated && r1.reason).toBe("camera_required");
+    await patchDivision(owner, s.divisionId, { camera_policy: "optional" });
+    const r2 = await claim(s, "home", rtk);
+    expect(r2.seated, "optional never blocks").toBe(true);
+    expect(r2.seated && r2.participant?.participantId, "the same participant, reused").toBe(
+      !r1.seated && "participant" in r1 ? r1.participant.participantId : "",
+    );
+    await patchDivision(owner, s.divisionId, { camera_policy: "off" });
+    expect(await claim(s, "home", rtk)).toEqual({ seated: true, participant: null });
+    // T6's downgrade-only guard: the round is open, so tightening is refused
+    // and the seat keeps answering under 'off'.
+    await expect(patchDivision(owner, s.divisionId, { camera_policy: "required" })).rejects.toMatchObject({
+      status: 409,
+      code: "POLICY_LOCKED",
+    });
+    expect(await claim(s, "home", rtk)).toEqual({ seated: true, participant: null });
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (controller ruling Q1)", () => {
+  it("every refusal reason, swept: only the two camera refusals carry the caller's own token", async () => {
+    // From the RULING, not the code: a token only once every other check has
+    // passed, and only for the caller's own participant.
+    const TOKEN_BEARING = new Set(["camera_required", "camera_lost"]);
+    const TOKENLESS = new Set(["window_closed", "not_a_player", "round_not_open", "fixture_not_playable", "video_unavailable"]);
+    expect(
+      [...SEAT_REFUSAL_REASONS].sort(),
+      "the code's reason list is exactly the ruling's — a new reason needs a row here",
+    ).toEqual([...TOKEN_BEARING, ...TOKENLESS].sort());
+
+    const seen = new Map<string, SeatResult>();
+    const req = () => seed({ cameraPolicy: "required" });
+    {
+      const s = await req();
+      seen.set("not_a_player", await seatPlayer({ fixtureId: s.fixtureId, personId: randomUUID() }, { now: NOW, video: fakeRealtimeKit().video }));
+    }
+    {
+      const s = await seed({ cameraPolicy: "required", roundOpenedAt: undefined });
+      seen.set("round_not_open", await claim(s, "home", fakeRealtimeKit()));
+    }
+    {
+      const s = await req();
+      seen.set("window_closed", await claim(s, "home", fakeRealtimeKit(), new Date(OPENED.getTime() + 21 * 60_000)));
+    }
+    {
+      const s = await req();
+      await sql`update fixtures set status = 'decided' where id = ${s.fixtureId}`;
+      seen.set("fixture_not_playable", await claim(s, "home", fakeRealtimeKit()));
+    }
+    {
+      const s = await req();
+      const rtk = fakeRealtimeKit();
+      rtk.failWhen((m, p) => (m === "GET" && p.endsWith("/active-session") ? json(503, { success: false }) : null));
+      seen.set("video_unavailable", await claim(s, "home", rtk));
+    }
+    const camS = await req();
+    {
+      seen.set("camera_required", await claim(camS, "home", fakeRealtimeKit()));
+    }
+    const lostS = await req();
+    {
+      const rtk = fakeRealtimeKit();
+      rtk.join(await claim(lostS, "home", rtk));
+      const ok = await claim(lostS, "home", rtk);
+      rtk.leave(ok.seated ? ok.participant!.participantId : "");
+      seen.set("camera_lost", await claim(lostS, "home", rtk));
+    }
+
+    let checked = 0;
+    for (const [reason, got] of seen) {
+      expect(!got.seated && got.reason, `premise: the ${reason} case produced ${reason}`).toBe(reason);
+      expect("participant" in got, `${reason}: token present?`).toBe(TOKEN_BEARING.has(reason));
+      checked += 1;
+    }
+    await expectOwnToken(camS, "home", seen.get("camera_required")!);
+    await expectOwnToken(lostS, "home", seen.get("camera_lost")!);
+    expect(checked, "anti-vacuity: every refusal reason produced once").toBe(SEAT_REFUSAL_REASONS.length);
   });
 });
