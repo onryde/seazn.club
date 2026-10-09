@@ -27,7 +27,7 @@ import { generateStream, levelReachable, partialPlay } from "../streams/index.ts
 import { GeneratorUnsupported, OutcomeUnreachable, type ForfeitReason, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
 import { AWARD_POLICY, DLS_ON, abandonOverride, w2bApplies } from "../w2b-cells.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
-import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
+import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, decideFixture, ensureLineups, playDivision, recordPosted, setUpDivision, snapshot, type DivisionSetup, type RoundHooks } from "./common.ts";
 import {
   NO_PLACEMENT, deadSeats, doubleWalkoverAdvancesNobody, doubleWalkoverRecorded, doubleWalkoverRefusedAtTheEnd, feedGraph, forfeitRecorded, hasNoNextMatch, isolatedTable, ladderUnmoved, partialPlayStands, pickDoubleWalkover,
@@ -393,6 +393,9 @@ async function finish(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
       loopBounded(rec, observed),
       advanceSeededAsDeclared(plays, observed, rec.withdrawn),
       lineupsPut(rec, setup),
+      // I-3: every bracket drive — the scenario's forfeits and double walkovers among them — against the bracket-finish
+      // oracle; where the root is a bracket kind (the hooks drive the root, D12) those forfeits are owed.
+      referenceBracketFinish(rec, observed, { forfeitsOwed: forbidsLevelResult(setup.stage.kind) }),
       ...(await own(observed)),
     ],
   };

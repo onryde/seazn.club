@@ -20,7 +20,7 @@ import {
 import { drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
 import { forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { outcomeLabel, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
-import { levelKindOf, loserSeatOf, type BracketDrive } from "../reference-bracket.ts";
+import { forfeitPlayOf, levelKindOf, loserSeatOf, nextLineOf, type BracketDrive } from "../reference-bracket.ts";
 import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
@@ -592,6 +592,10 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
       levelAs: levelKindOf(ctx.spec.sport, cfg, home, away, asked, generated),
       status: posted.at(-1)?.status ?? null, outcome: productOutcome,
       loser: row === undefined ? { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } : loserSeatOf(stage.kind, stage.config, row, rows),
+      // W2b (I-3): the next-match line (X-DW-3) and the play the forfeit was recorded on, from what the product holds.
+      next: row === undefined ? { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } : nextLineOf(stage.kind, stage.config, row, rows),
+      // A driver that answered nothing leaves no status, and judgeDrive judges no such drive: no play to read.
+      forfeitPlay: forfeit === null || posted.length === 0 ? null : forfeitPlayOf(ctx.spec.sport, cfg, home, away, liveEvents(whole)),
     });
   }
   const foreign = state.last_seq - prior.length;
