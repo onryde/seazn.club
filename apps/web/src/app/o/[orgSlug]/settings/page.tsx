@@ -27,7 +27,7 @@ import { listPosts, type OrgPost } from "@/server/usecases/org-posts";
 import { NewsTab } from "@/components/news/news-tab";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
-import { getLinkedAccount } from "@/server/usecases/external-accounts";
+import { getLichessLink } from "@/server/usecases/external-accounts";
 import { lichessConfigured } from "@/lib/oauth";
 import {
   DisplayNameForm,
@@ -223,7 +223,7 @@ export default async function SettingsPage({
   let lichessUsername: string | null = null;
   const lichessOk = lichessConfigured();
   if (tab === "account") {
-    const linked = await getLinkedAccount(user.id, "lichess");
+    const linked = await getLichessLink(user.id);
     lichessUsername = linked?.username ?? null;
     for (const org of orgs) {
       if (org.role === "owner") {

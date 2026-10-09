@@ -59,10 +59,8 @@ export async function GET(req: Request) {
     code_challenge: pkceChallenge(verifier),
     code_challenge_method: "S256",
   });
-  // Reading /api/account (the only thing this token is ever used for) needs
-  // no scope — see lib/oauth.ts. Omit the param entirely rather than send an
-  // empty one.
-  if (LICHESS_OAUTH_SCOPES) params.set("scope", LICHESS_OAUTH_SCOPES);
+  // §3.1: the grant is what lets our server submit this player's moves.
+  params.set("scope", LICHESS_OAUTH_SCOPES);
 
   return NextResponse.redirect(`${LICHESS_AUTH_URL}?${params.toString()}`);
 }

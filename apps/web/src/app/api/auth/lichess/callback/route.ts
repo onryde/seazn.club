@@ -12,7 +12,7 @@ import {
 import { requireUser, safeNextPath } from "@/lib/auth";
 import { redirectLocal } from "@/lib/http";
 import { HttpError } from "@/lib/errors";
-import { upsertLichessLink } from "@/server/usecases/external-accounts";
+import { PLAY_SCOPES, upsertLichessLink } from "@/server/usecases/external-accounts";
 import { LICHESS_TIMEOUT_MS } from "@/server/external-play/window";
 
 /** Where a linked / failed flow lands: the validated `next` it started from,
@@ -29,8 +29,9 @@ function fail(next: string | null, reason: string) {
 }
 
 /** Exchange the Lichess OAuth code (PKCE, no client secret), read the
- *  account's identity, revoke the token immediately, and store id + username
- *  only — never the token itself. */
+ *  account's identity, and KEEP the token sealed at rest (design §3.1 — our
+ *  server submits this player's moves). The token is revoked here only when
+ *  the link does NOT happen: an unusable grant must not be left live. */
 export async function GET(req: Request) {
   if (!lichessConfigured()) return fail(null, "not_configured");
 
@@ -59,9 +60,9 @@ export async function GET(req: Request) {
     return fail(next, "oauth_state");
   }
 
-  // Set as soon as the token exchange succeeds, so the `finally` below can
-  // revoke it on EVERY exit path from here on — including the account read
-  // failing — not only the happy path.
+  // Revoked on every exit path that does NOT end in a stored link. Set true
+  // only after upsertLichessLink has returned.
+  let linked = false;
   let accessToken: string | undefined;
   try {
     let tokenJson: { access_token?: string };
@@ -106,11 +107,19 @@ export async function GET(req: Request) {
       await upsertLichessLink(user.id, {
         externalUserId: account.id,
         username: account.username,
+        // The grant we ASKED for: Lichess does not return the granted list on
+        // this endpoint, which is why assertLichessConsentForPlay checks
+        // `board:play` membership rather than trusting a stored list blindly —
+        // a narrowed grant surfaces as a 401 at the first submission and T12
+        // routes it to the organiser queue.
+        scopes: [...PLAY_SCOPES],
+        token: accessToken,
       });
+      linked = true;
     } catch (err) {
-      // V405's second unique constraint: this Lichess account is already
+      // V432's second unique constraint: this Lichess account is already
       // linked to a DIFFERENT Seazn user — never steal the link. The token
-      // is still revoked below either way.
+      // is still revoked below, because this exit stored nothing.
       if (err instanceof HttpError && err.code === "LICHESS_ALREADY_LINKED") {
         return fail(next, "already_linked");
       }
@@ -119,10 +128,10 @@ export async function GET(req: Request) {
 
     return redirectLocal(landing(next, "lichess=linked"));
   } finally {
-    // Identity only, never the token (design §5, §6). Best-effort: a revoke
-    // that fails leaves an orphaned grant on Lichess's side, not a security
-    // hole on ours, since nothing here ever persists the token to reuse it.
-    if (accessToken) {
+    // A grant we did not store is a grant nobody will ever use — revoke it.
+    // Best-effort: a failed revoke leaves an orphan on Lichess's side, not a
+    // hole on ours.
+    if (accessToken && !linked) {
       await fetch(LICHESS_TOKEN_URL, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${accessToken}` },

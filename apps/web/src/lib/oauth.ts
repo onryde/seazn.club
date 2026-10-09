@@ -58,11 +58,17 @@ export interface GoogleProfile {
 export const LICHESS_AUTH_URL = "https://lichess.org/oauth";
 export const LICHESS_TOKEN_URL = "https://lichess.org/api/token";
 export const LICHESS_ACCOUNT_URL = "https://lichess.org/api/account";
-/** Empty: the link flow only reads `/api/account` (no scope required) and
- *  revokes the token immediately after — it is never used again, so there is
- *  nothing to ask permission for. Challenge creation (challenge:write) is a
- *  separate, server-held credential, not this per-user grant. */
-export const LICHESS_OAUTH_SCOPES = "";
+/** Design §3.1 (2026-10-09): our server submits both players' moves with their
+ *  own tokens, so the grant must carry `board:play` (submit a move, resign,
+ *  offer a draw, abort) and `challenge:write` (White's token challenges
+ *  Black). This REVERSES the identity-only flow this constant was empty for.
+ *
+ *  The literal lives HERE, and `server/usecases/external-accounts.ts` derives
+ *  its `PLAY_SCOPES` from it — one source of truth, and this is the safe side
+ *  of the boundary: external-accounts.ts already imports this module for
+ *  `LICHESS_TOKEN_URL`, so importing PLAY_SCOPES back would close a cycle
+ *  whose top-level `.join(" ")` runs before that module is initialised. */
+export const LICHESS_OAUTH_SCOPES = "board:play challenge:write";
 
 /** True iff a Lichess client id is configured. PKCE public clients have no
  *  secret (design §4.5) — `LICHESS_CLIENT_SECRET` is not read here or anywhere

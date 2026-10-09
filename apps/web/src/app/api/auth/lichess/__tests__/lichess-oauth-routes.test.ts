@@ -1,8 +1,10 @@
 // Lichess account linking: OAuth authorization-code + PKCE (S256), public
 // client (no client_secret ever leaves lib/oauth.ts's config check). The
-// callback reads /api/account, revokes the token in a `finally` (so a revoke
-// happens even when the account read itself fails), stores identity only —
-// never the token — and returns the caller to a re-validated `next`.
+// callback reads /api/account, KEEPS the token (chess design §3.1 — our
+// server submits this player's moves with it) and returns the caller to a
+// re-validated `next`. The revoke now fires only on the paths that do NOT
+// end in a stored link: an unusable grant must not be left live, and a
+// usable one must not be thrown away.
 //
 // next/headers is mocked with a real Map-backed jar (not the repo's usual
 // no-op `{ get: () => undefined, set: () => {}, delete: () => {} }` stub —
@@ -38,9 +40,17 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 });
 
 const upsertLichessLink = vi.hoisted(() => vi.fn());
-vi.mock("@/server/usecases/external-accounts", () => ({ upsertLichessLink }));
+// Only `upsertLichessLink` is faked (the real one needs a database). The
+// module's `PLAY_SCOPES` is reproduced the way the real module derives it —
+// from lib/oauth — rather than typed here, so the callback's `scopes` payload
+// cannot pass against a list this test invented.
+vi.mock("@/server/usecases/external-accounts", async () => {
+  const { LICHESS_OAUTH_SCOPES } = await import("@/lib/oauth");
+  return { upsertLichessLink, PLAY_SCOPES: LICHESS_OAUTH_SCOPES.split(" ") };
+});
 
 import { HttpError } from "@/lib/errors";
+import { LICHESS_OAUTH_SCOPES } from "@/lib/oauth";
 import { pkceChallenge } from "@/server/external-play/pkce";
 import { GET } from "../route";
 import { GET as CALLBACK } from "../callback/route";
@@ -76,10 +86,18 @@ describe("GET /api/auth/lichess — start", () => {
     expect(cookieJar.get(NEXT_COOKIE)).toBe("/shared/o/c/d/fixtures/f1/play");
   });
 
-  it("omits scope — the token is only ever used to read /api/account", async () => {
+  it("asks for exactly board:play and challenge:write — the grant that submits moves", async () => {
     const res = await GET(new Request("http://localhost/api/auth/lichess"));
     const loc = new URL(res.headers.get("location")!);
-    expect(loc.searchParams.has("scope")).toBe(false);
+    // Anti-vacuity first: an EMPTY constant (the state this task reverses)
+    // would make the equality below pass against a missing grant.
+    expect(LICHESS_OAUTH_SCOPES.split(" ")).toContain("board:play");
+    // Then derived from the declaration, never retyped: a change to the scope
+    // list moves this assertion with it. The list itself is pinned against
+    // design §3.1 by external-accounts.test.ts ("PLAY_SCOPES is what the
+    // design asks for"), which is also why this file reads the constant from
+    // lib/oauth — it mocks the usecase module wholesale.
+    expect(loc.searchParams.get("scope")).toBe(LICHESS_OAUTH_SCOPES);
   });
 
   it("refuses a protocol-relative next", async () => {
@@ -89,7 +107,7 @@ describe("GET /api/auth/lichess — start", () => {
 });
 
 describe("GET /api/auth/lichess/callback", () => {
-  it("sends code_verifier (no secret), reads account, revokes, stores identity only, returns to next", async () => {
+  it("sends code_verifier (no secret), reads account, KEEPS the token, returns to next", async () => {
     cookieJar.set(STATE_COOKIE, "st");
     cookieJar.set(VERIFIER_COOKIE, "ver");
     cookieJar.set(NEXT_COOKIE, "/shared/o/c/d/fixtures/f1/play");
@@ -110,8 +128,20 @@ describe("GET /api/auth/lichess/callback", () => {
     const tokenBody = new URLSearchParams(String(calls[0][1].body));
     expect(tokenBody.get("code_verifier")).toBe("ver");
     expect(tokenBody.has("client_secret")).toBe(false);
-    expect(calls.some(([u, i]) => u.endsWith("/api/token") && i.method === "DELETE")).toBe(true);
-    expect(upsertLichessLink).toHaveBeenCalledWith("u1", { externalUserId: "alice", username: "Alice" });
+    // §3.1: a link that SUCCEEDED keeps its grant — the revoke-on-every-exit
+    // `finally` this task replaces would have sent one here.
+    expect(calls.some(([u, i]) => u.endsWith("/api/token") && i.method === "DELETE")).toBe(false);
+    // The positive pair: the token reached the usecase. Asserting only "no
+    // DELETE" would pass if the callback had stopped calling Lichess at all.
+    expect(upsertLichessLink).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({
+        externalUserId: "alice",
+        username: "Alice",
+        scopes: LICHESS_OAUTH_SCOPES.split(" "),
+        token: "tok",
+      }),
+    );
     expect(path(res.headers.get("location")!).pathname).toBe("/shared/o/c/d/fixtures/f1/play");
     // The verifier/state/next cookies are single-use.
     expect(cookieJar.has(STATE_COOKIE)).toBe(false);

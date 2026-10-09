@@ -53,6 +53,9 @@ const DEVICE_LINK_OWNER = "server/usecases/device-links.ts";
  *  LICHESS_TOKEN_KEK. SQL over it lives in exactly one file — the positive
  *  "and it does" claim is added with that file (T2). */
 const LICHESS_COLUMNS = ["access_token_enc"];
+/** Chess design §3.1: the sealed Lichess token. SQL over it lives in exactly
+ *  one file. Named, so a second usecase reaching for the column reds. */
+const LICHESS_OWNER = "server/usecases/external-accounts.ts";
 
 describe("*_enc columns never leave their owners", () => {
   it("every declared *_enc column is owned — a new one cannot walk past this test", () => {
@@ -85,6 +88,15 @@ describe("*_enc columns never leave their owners", () => {
       .filter((f) => !f.split("/").includes("__tests__"))
       .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
     expect(naming).toEqual([DEVICE_LINK_OWNER]);
+  });
+
+  it("outside __tests__, only external-accounts.ts names access_token_enc — and it does", () => {
+    const pattern = new RegExp(`\\b(${LICHESS_COLUMNS.join("|")})\\b`);
+    const naming = walk(SRC)
+      .map((f) => relative(SRC, f))
+      .filter((f) => !f.split("/").includes("__tests__"))
+      .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
+    expect(naming).toEqual([LICHESS_OWNER]);
   });
 });
 

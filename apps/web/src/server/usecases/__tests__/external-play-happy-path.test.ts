@@ -15,7 +15,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, getStandings } from "../stages";
 import { startDivision } from "../schedule";
-import { upsertLichessLink } from "../external-accounts";
+import { PLAY_SCOPES, upsertLichessLink } from "../external-accounts";
 import { applyProviderGameUpdate, markExternalPlayReady, prepareExternalPlayWindow } from "../external-play";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -66,7 +66,8 @@ async function seedLinkedPlayer(orgId: string, name: string, lichessId: string) 
   await upsertLichessLink(userId, {
     externalUserId: lichessId,
     username: lichessId,
-    accessToken: `tok-${lichessId}`,
+    scopes: [...PLAY_SCOPES],
+    token: `tok-${lichessId}`,
   });
   return { userId, personId, lichessId };
 }
