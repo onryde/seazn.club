@@ -42,14 +42,16 @@
 // withdrawal policy branch on the stage kind. Not modelled: the implicit-bye
 // inference for a round a late entrant missed (only a pairing ORDER changes),
 // the rank_adjacent cascade rank, and chess colours.
-import { EngineError } from "@seazn/engine/core";
+import { EngineError, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
+import { stageCfg } from "../lib/sport-cfg.ts";
 import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
 import { nextMatchStartedText, rosterLockText, withdrawalReason } from "./product-text.ts";
+import { fixtureStatusFromFold } from "./w2a-status.ts";
 
 export interface ModelFakeOpts {
   /** #879: after an entrant is added while the stage has fixtures, the next Generate seats every pair again. */
@@ -101,20 +103,14 @@ const NOT_VOIDED = new Set(["core.start", "core.void", "core.note", "core.award"
 /** withdrawal.ts REASON. */
 const REASON = withdrawalReason();
 
-/** append-event.ts fixtureStatusFromFold, over the ACTIVE (void-resolved) events. */
-function statusFromFold(outcome: unknown, live: readonly LedgerEntry[]): string {
-  const has = (type: string) => live.some((e) => e.type === type);
-  if (has("core.abandon")) return "abandoned";
-  if (outcome !== null) return has("core.forfeit") ? "forfeited" : "decided";
-  return has("core.start") ? "in_play" : "scheduled";
-}
-
 const pairKey = (a: string, b: string) => (a < b ? `${a}~${b}` : `${b}~${a}`);
 
 /** stages.ts DECIDED: a swiss board the next round's gate counts as finished. */
 const SWISS_DECIDED = new Set(["decided", "finalized", "forfeited"]);
-/** fixture-results-sql.ts fixtureHasResultSql's status clause: what a rebuild refuses over (with evidence, or abandoned with an outcome). */
-const RESULT_STATUSES = new Set(["in_play", "decided", "finalized"]);
+/** fixture-results-sql.ts fixtureHasResultSql's status clause: what a rebuild refuses over (with evidence, or abandoned with an outcome).
+ *  A HELD bracket match (needs_decision, X-BR-2) is a played match: it carries its level result's events, and loop F's Task 7 adds it
+ *  to the product's list. Held to the product's text by w2a-fakes.test.ts. */
+export const RESULT_STATUSES: ReadonlySet<string> = new Set(["in_play", "decided", "finalized", "needs_decision"]);
 const isAward = (outcome: unknown): boolean => (outcome as { kind?: unknown } | null)?.kind === "award";
 /** swiss-shell.ts isSwissBoardSeated: an award row, or both seats filled. */
 const swissSeated = (f: FakeFixture): boolean => isAward(f.outcome) || (f.home_entrant_id !== null && f.away_entrant_id !== null);
@@ -262,8 +258,10 @@ export class ModelFakeDriver extends FakeLeagueDriver {
         const target = ev.type === "core.void" ? (ev.payload as { event_id?: unknown } | null)?.event_id : undefined;
         const entry: LedgerEntry = { id: eid, seq: ledger.length + 1, type: ev.type, payload: ev.payload, ...(typeof target === "string" ? { voids: target } : {}) };
         let outcome: unknown;
+        const kind = this.stage?.kind ?? null;
         try {
-          outcome = foldLedger(this.sport, this.cfg, f.home_entrant_id, f.away_entrant_id, [...ledger, entry]);
+          // W2a: the product folds a fixture under its STAGE's cfg (resolveFixtureCfg: a bracket's overlay on top of the division's).
+          outcome = foldLedger(this.sport, kind === null ? this.cfg : stageCfg(this.sport, this.cfg, kind as StageKind), f.home_entrant_id, f.away_entrant_id, [...ledger, entry]);
         } catch (e) {
           // As FakeLeagueDriver: only an EngineError is a product refusal.
           if (!EngineError.is(e)) throw e;
@@ -276,7 +274,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
         ledger.push(entry);
         f.events = [...f.events, ev];
         f.outcome = this.opts.lieOutcome === true && outcome !== null ? { ...(outcome as object), winner: "nobody" } : outcome;
-        f.status = statusFromFold(outcome, liveEntries(ledger));
+        f.status = fixtureStatusFromFold(outcome, liveEntries(ledger), kind);
         if (refused !== null) throw refused;
         for (const step of plan) step();
         this.#fill(f);

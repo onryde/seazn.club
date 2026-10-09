@@ -118,7 +118,10 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
   it("packages/reference: every bare import in src is a declared dependency", () => {
     const ref = JSON.parse(read("packages/reference/package.json")) as Manifest;
     const declared = new Set([...Object.keys(ref.dependencies ?? {}), ...Object.keys(ref.devDependencies ?? {})]);
-    const files = readdirSync(resolve(REPO, "packages/reference/src")).filter((f) => f.endsWith(".ts"));
+    // Recursive: W2a's family lives in src/families/, which a flat scan of src/ never read (ruling T15-R3).
+    const files = (readdirSync(resolve(REPO, "packages/reference/src"), { recursive: true }) as string[]).filter((f) => f.endsWith(".ts"));
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((f) => f.includes("/")).length, "no file under a src/ subdirectory was scanned (src/families/ holds the W2a family)").toBeGreaterThan(0);
     let bare = 0;
     for (const f of files) for (const m of read(`packages/reference/src/${f}`).matchAll(/from\s+"([^".][^"]*)"/g)) {
       bare++;

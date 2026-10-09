@@ -25,6 +25,21 @@ describe("MixedLedger", () => {
     expect(c).toMatchObject({ id: "mixed-driver-coverage", verdict: "fail", checked: 0 });
   });
 
+  it("paths(): nothing before the first call, then each invoked type's browser and http counts, and a type never invoked stays absent", () => {
+    const l = new MixedLedger();
+    expect(l.paths()).toEqual({});
+    l.record("settle", "browser");
+    l.record("settle", "http");
+    l.record("settle", "http");
+    l.record("abandon", "http");
+    expect(l.paths()).toEqual({ settle: { browser: 1, http: 2 }, abandon: { browser: 0, http: 1 } });
+    expect(Object.hasOwn(l.paths(), "forfeit")).toBe(false);
+    const before = l.paths();
+    l.record("settle", "browser");
+    expect(before.settle, "a reading is a snapshot, not a view").toEqual({ browser: 1, http: 2 });
+    expect(Object.isFrozen(before)).toBe(true);
+  });
+
   it("policy first: the first call of a type goes to the browser, every later one to http; policy all: score always browser", () => {
     const l = new MixedLedger();
     expect(l.wantsBrowser("start", "first")).toBe(true);
@@ -60,7 +75,7 @@ describe("MixedLedger", () => {
       checked++;
     }
     expect(checked).toBe(ACTION_TYPES.length);
-    expect(checked).toBe(12);
+    expect(checked).toBe(14); // the plan's twelve plus W2a's settle and abandon (a literal: the sweep cannot shrink silently)
     expect(createPath).toBe(KEEPS_TURN_UNTIL_CREATED.length);
   });
 
@@ -210,8 +225,8 @@ describe("MixedLedger", () => {
     expect(() => l.record("generate", "carrier-pigeon" as "http")).toThrow(/browser or http/);
   });
 
-  it("ACTION_TYPES is the plan's list, in its order", () => {
-    expect([...ACTION_TYPES]).toEqual(["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "voidLast", "forfeit", "withdraw", "completeStage", "standingsView", "publicView"]);
+  it("ACTION_TYPES is the plan's list, in its order - W2a (Task 14 Step 8) adds the organiser's other two organiser-only acts, settle and abandon, beside forfeit (X-ST-2)", () => {
+    expect([...ACTION_TYPES]).toEqual(["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "voidLast", "forfeit", "settle", "abandon", "withdraw", "completeStage", "standingsView", "publicView"]);
   });
 });
 

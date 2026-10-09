@@ -14,9 +14,11 @@
 //    have missed assign_scorer (match day) and set_time (unscheduled).
 //  - The console (fixture-console.tsx) shows score-start-match (:1029) until
 //    the match starts, then the pad (`score-pad`) and — for an organiser —
-//    Forfeit (:1294) or, once decided, Finalize (:1274).
+//    Forfeit (:1294) or, once decided, Finalize (:1274); a HELD match (W2a: a bracket match that ended level or was
+//    abandoned) mounts the Needs a decision block instead of any of them.
 import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID } from "../../../../bench/lib/drivers/scorer.ts";
 import { DATA, TESTID } from "../selectors.ts";
+import { NEEDS_DECISION } from "./needs-decision.ts";
 import { UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
 
@@ -117,8 +119,12 @@ export function judgeTodayDefault(a: { phase: string; seen: DefaultFilterSeen | 
   return { verdict: "pass", checked: 1, note: `phase ${a.phase}: the sheet opened on '${a.seen.filter}'${want === TODAY_FILTER ? `, drawing exactly the ${a.datedToday.length} fixture(s) dated today` : ""}` };
 }
 
+/** The controls a console mounts for an organiser, one set per state it can be in: Start (scheduled), the pad and
+ *  Forfeit (in play), Finalize (decided) and — W2a, found live — the Needs a decision block (HELD: a bracket match that
+ *  ended level or was abandoned mounts none of the other four). */
+export const CONSOLE_MOUNTED_TESTIDS: readonly string[] = Object.freeze([START_MATCH_TESTID, TESTID.scorePad.id, FORFEIT_TESTID, FINALIZE_TESTID, NEEDS_DECISION.block]);
 /** Any control the console mounts for an organiser, whatever the match's state. */
-const CONSOLE_MOUNTED = [START_MATCH_TESTID, TESTID.scorePad.id, FORFEIT_TESTID, FINALIZE_TESTID].map((id) => `[data-testid="${id}"]`).join(", ");
+const CONSOLE_MOUNTED = CONSOLE_MOUNTED_TESTIDS.map((id) => `[data-testid="${id}"]`).join(", ");
 
 /** From the division's fixtures tab to fixture `fixtureNo`'s console, through
  *  its run-sheet row. */

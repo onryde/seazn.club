@@ -1,7 +1,7 @@
 name: Matrix truth run
 
 # W1d (owner rulings 60-68, 2026-10-04). The format x sport matrix, sharded:
-# L1 (231 cells @1280), L2 (1,731 pair-runs), L3 (937 cases), each shard on its
+# L1 (231 cells @1280), L2 (1,729 pair-runs), L3 (937 cases), each shard on its
 # own fresh Postgres with sync:sports. Triggers:
 #  - schedule: weekly, Sat 02:17 UTC — GATED by vars.MATRIX_WEEKLY_ENABLED (D2):
 #    while the variable is not 'true' a firing is a visible run of skipped jobs.
@@ -474,7 +474,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         # ruling 65 (2026-10-04): "no ░" applies to driven cases only. A planned ░
-        # (L2's 1,505 unscripted pair-runs) is not a fault, so `allow` is the ruled
+        # (L2's 1,503 unscripted pair-runs) is not a fault, so `allow` is the ruled
         # behaviour; a ░ on a DRIVEN case is still a fault under it (judge.test.ts).
         #
         # Every failure below sets status=1 and the loop goes on, so one layer's

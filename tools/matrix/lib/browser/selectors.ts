@@ -156,6 +156,10 @@ export const NAME = names({
   // value (fixture-console.tsx renders msg("score.voidLast") inside the button, which also carries a title naming
   // the entry it would void, score.voidLastTitle).
   voidLast: dictionary("score.voidLast", `${V2}/fixture-console.tsx`),
+  // W2a Task 14 Step 8: the console's Abandon has no testid either (fixture-console.tsx renders msg("score.abandon") inside
+  // a bare `btn btn-danger` button, W2a loop H left it so); its accessible name is the dictionary's value, and the reason
+  // prompt it opens is the one forfeit already uses (score-prompt-reason / score-prompt-submit).
+  abandon: dictionary("score.abandon", `${V2}/fixture-console.tsx`),
 });
 
 export const DATA = data({

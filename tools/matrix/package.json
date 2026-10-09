@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@seazn/engine": "workspace:*",
+    "@seazn/reference": "workspace:*",
     "fast-check": "^3",
     "playwright": "^1.61.1",
     "postgres": "^3.4.9",

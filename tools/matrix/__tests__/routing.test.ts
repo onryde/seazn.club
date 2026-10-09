@@ -71,6 +71,34 @@ describe("routeTo", () => {
 // its openness is the Q-A guard's job (scenario-catalogue.test.ts: open
 // exactly while a route names it). The sweep reads every row, so its counts
 // stay above zero when any one row is rewritten.
+/** "ruling 71", "rulings 72–79", "rulings 3, 5 and 9". EVERY item - the first as much as a later one - is a whole number not
+ *  followed by "-<digit>": "(ruling 71, 2026-10-08)" cites ruling 71 and a date, and "ruling 2026-10-08" cites nothing. */
+const CITED_RULINGS = /\brulings? (\d+(?:–\d+)?(?![\d]|-\d)(?:(?:,| and|, and) \d+(?:–\d+)?(?![\d]|-\d))*)/gi;
+const citedIn = (text: string): number[] =>
+  [...text.matchAll(CITED_RULINGS)].flatMap(([, list]) => [...list!.matchAll(/(\d+)(?:–(\d+))?/g)].flatMap(([, lo, hi]) => Array.from({ length: Number(hi ?? lo) - Number(lo) + 1 }, (_, i) => Number(lo) + i)));
+
+describe("the cited-ruling reader", () => {
+  it("reads lists and ranges, and leaves an ISO date after a comma alone", () => {
+    expect(citedIn("rulings 72–79 signed")).toEqual([72, 73, 74, 75, 76, 77, 78, 79]);
+    expect(citedIn("rulings 3, 5 and 9")).toEqual([3, 5, 9]);
+    expect(citedIn("Split into W2a–W2e (ruling 71, 2026-10-08).")).toEqual([71]);
+    expect(citedIn("no citation here")).toEqual([]);
+  });
+  it("a date is never read as a ruling, in the first position or after a list: a number followed by '-<digit>' is not a citation", () => {
+    // The phrasing that read as ruling 2026 (loop G reworded the index text to dodge it), and the same date in the other places a
+    // date can follow "ruling": after a range, after "and", first of all.
+    expect(citedIn("(ruling 71, 2026-10-08)")).toEqual([71]);
+    expect(citedIn("rulings 72–79, 2026-10-08")).toEqual([72, 73, 74, 75, 76, 77, 78, 79]);
+    expect(citedIn("ruling 71 and 2026-10-08")).toEqual([71]);
+    expect(citedIn("signed under ruling 2026-10-08")).toEqual([]);
+    // ... and a date that opens a sentence does not swallow the real citation after it (the positive pair: the 71 IS read).
+    expect(citedIn("ruling 2026-10-08 and ruling 71")).toEqual([71]);
+    expect(citedIn("ruling 71")).toEqual([71]);
+    // A whole number inside a longer one is not a citation either (backtracking must not read "202" out of "2026").
+    expect(citedIn("ruling 2026")).toEqual([2026]);
+  });
+});
+
 describe("the Status rows' links and cited rulings (any row, open or closed)", () => {
   const PROMPTS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts";
   /** Each Status body row's cells after the wave and the scope: its state. */
@@ -114,7 +142,7 @@ describe("the Status rows' links and cited rulings (any row, open or closed)", (
     expect(numbered.size, "owner rulings read").toBeGreaterThan(0);
     let checked = 0;
     for (const { wave, state } of states()) {
-      for (const [, list] of state.matchAll(/\brulings? (\d+(?:–\d+)?(?:(?:,| and|, and) \d+(?:–\d+)?)*)/gi)) {
+      for (const [, list] of state.matchAll(CITED_RULINGS)) {
         for (const [, lo, hi] of list!.matchAll(/(\d+)(?:–(\d+))?/g)) {
           for (let n = Number(lo); n <= Number(hi ?? lo); n++) {
             expect(numbered.has(n), `${wave} cites ruling ${n}`).toBe(true);

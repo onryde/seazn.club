@@ -39,7 +39,7 @@ import { generateAmericano, generatePagePlayoff, generateRoundRobin, generateSin
 import type { StagePostBody } from "../lib/catalogue.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
-import { sportModule } from "../lib/sport-cfg.ts";
+import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
   DriverMisuse, RefusedCall, inSquadOrder,
@@ -308,6 +308,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     const pts = new Map(this.#members(stage, poolId).map((e) => [e, 0]));
     const m = sportModule(this.sport);
     const kind = stage.kind as StageKind;
+    const cfg = stageCfg(this.sport, this.cfg, kind); // W2a: the cfg the stage's fixtures were folded under
     for (const f of this.fixtures.filter((x) => x.stage_id === stage.id && x.pool_id === poolId)) {
       if (f.outcome === null) continue;
       const ctx = { kind, ...(f.pool_id ? { poolId: f.pool_id } : {}), ...(f.round_no ? { roundNo: f.round_no } : {}) };
@@ -315,12 +316,12 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
         const o = f.outcome as MatchOutcome;
         if (o.kind !== "award" || !pts.has(o.winner)) continue;
         const home = f.home_entrant_id === o.winner;
-        const state: unknown = m.init(this.cfg, lineupsFor(home ? o.winner : BYE_PHANTOM, home ? BYE_PHANTOM : o.winner));
-        const won = m.standingsDelta(o, this.cfg, ctx, state).find((d) => d.entrantId === o.winner)!;
+        const state: unknown = m.init(cfg, lineupsFor(home ? o.winner : BYE_PHANTOM, home ? BYE_PHANTOM : o.winner));
+        const won = m.standingsDelta(o, cfg, ctx, state).find((d) => d.entrantId === o.winner)!;
         pts.set(o.winner, pts.get(o.winner)! + won.points);
         continue;
       }
-      const d = declaredPoints(m, this.cfg, ctx, f.home_entrant_id, f.away_entrant_id, f.events);
+      const d = declaredPoints(m, cfg, ctx, f.home_entrant_id, f.away_entrant_id, f.events);
       if (d === null) continue;
       if (pts.has(f.home_entrant_id)) pts.set(f.home_entrant_id, pts.get(f.home_entrant_id)! + d.home);
       if (pts.has(f.away_entrant_id)) pts.set(f.away_entrant_id, pts.get(f.away_entrant_id)! + d.away);
@@ -347,9 +348,11 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     const out = await super.postStream(id, events, prefix);
     const f = this.fixtures.find((x) => x.id === id)!;
-    if (f.outcome !== null) this.#feed(f);
+    if (f.outcome !== null) this.#feed(f); // a held level result has no winner, so it seats nobody (X-BR-1)
     return out;
   }
+  /** Each stage has its own kind: the status rule and the stage cfg overlay follow the fixture's stage (W2a). */
+  protected override stageKindOf(f: FakeFixture): string | null { return this.stages.find((s) => s.id === f.stage_id)?.kind ?? null; }
   /** scoring.ts → fillSlot: a decided line's winner (and a page playoff's
    *  pp-q1 loser) fills the line it feeds. */
   #feed(f: FakeFixture): void {

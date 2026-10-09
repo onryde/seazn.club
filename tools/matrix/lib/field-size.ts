@@ -11,7 +11,7 @@
 // D11 (W1-driving Task 13): a case on a catalog template seeds the template's
 // own entrantCount, read from its JSON (lib/templates.ts) — never a typed 16.
 import { stagesForRow, type RowKey } from "./catalogue.ts";
-import type { ScenarioKey } from "./scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, type ScenarioKey } from "./scenarios/types.ts";
 import { templateField, templateRow } from "./templates.ts";
 
 export const PAGE_PLAYOFF_FIELD = 4;
@@ -38,6 +38,8 @@ export class NoFieldSize extends Error {
 export function fieldSizeFor(row: RowKey, scenario: ScenarioKey, template?: string): number {
   if (template !== undefined) return templateFieldSize(row, scenario, template);
   const fixed = isLonePagePlayoff(stagesForRow(row)) ? PAGE_PLAYOFF_FIELD : null;
+  // W2a: the bracket-finish scenarios seed the format's field like LIFECYCLE does (they play the same loop).
+  if ((W2A_SCENARIO_KEYS as readonly string[]).includes(scenario)) return fixed ?? DEFAULT_FIELD;
   switch (scenario) {
     case "LIFECYCLE": case "M1": case "R4": return fixed ?? DEFAULT_FIELD;
     case "F1":

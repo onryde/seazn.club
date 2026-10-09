@@ -12,7 +12,7 @@ import {
   SPORT_RULES, buildRuleOverride, showsOnePointsField, visibleRuleFields, type RuleField,
 } from "../../../apps/web/src/lib/match-rules.ts";
 import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
-import { CfgInvalid, UnknownSport, UnknownVariant, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
+import { CfgInvalid, UnknownSport, UnknownVariant, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type StreamRequest } from "../lib/streams/types.ts";
@@ -468,13 +468,27 @@ describe("scorability (the generatability sweep)", () => {
     expect(judged).toBe(SPORT_KEYS.length);
     expect(asked.length, "scorable asked for no stream at all").toBeGreaterThan(0);
     expect([...new Set(asked)], "the premise: only wins are ever requested").toEqual(["win"]);
-    // The registry throws it at its two level-result guards only (ruling 44 added the tie's): each
-    // throw site sits under an `o.kind === "draw"` or `o.kind === "tie"` test, never under a win.
-    const lines = src("tools/matrix/lib/streams/index.ts").split("\n");
-    const sites = lines.flatMap((l, i) => (/throw new OutcomeUnreachable\(/.test(l) ? [i] : []));
-    expect(sites.length).toBe(2);
-    const guards = sites.map((i) => lines.slice(Math.max(0, i - 2), i + 1).join(" ").match(/o\.kind === "(draw|tie)"/)?.[1] ?? null);
-    expect(guards.sort()).toEqual(["draw", "tie"]);
+    // The premise, by BEHAVIOUR (W2a grew the registry's guards from two to eight - settle, tie-break, level, the draw
+    // gate - each under a non-win outcome, so a count of throw sites no longer says anything): a WIN never reaches a
+    // registry guard under the cfg the product folds the stage under, across every sport, variant and both kinds of stage.
+    let wins = 0;
+    for (const s of SPORT_KEYS) for (const v of variantKeys(s)) for (const stageKind of ["league", "knockout"] as const) {
+      const cfg = stageCfg(s, resolveSportCfg(s, v), stageKind);
+      for (const winner of ["home", "away"] as const) {
+        try {
+          generateStream({ sportKey: s, cfg, stageKind, home: "h", away: "a", outcome: { kind: "win", winner } });
+        } catch (e) {
+          expect(e instanceof OutcomeUnreachable, `${s}/${v}/${stageKind}/${winner}: ${String(e)}`).toBe(false);
+        }
+        wins++;
+      }
+    }
+    expect(wins, "no win was swept").toBe(SPORT_KEYS.reduce((n, s) => n + variantKeys(s).length * 4, 0));
+    // ...and the harness fault the rethrow exists for: carrom's bracket win asked under a BARE cfg (no overlay) IS refused
+    // as unreachable, which is why scorable() must pass the overlaid cfg.
+    const bare = resolveSportCfg("carrom", offlineBuilderDefault("carrom"), { tieBoard: "draw" }); // the overlay is what sets 'extra'
+    expect((bare as { tieBoard: string }).tieBoard).toBe("draw");
+    expect(() => generateStream({ sportKey: "carrom", cfg: bare, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "win", winner: "home" } })).toThrow(OutcomeUnreachable);
   });
   it("final batch FB-13: a stubbed OutcomeUnreachable on a win is rethrown, while the declared GeneratorUnsupported gap stays a reason", () => {
     // single-sport: the fault is the harness's; generic's default preset is the plainest carrier.

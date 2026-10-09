@@ -14,7 +14,7 @@ import { FILLER, type FillerName } from "../fillers.ts";
 import type { CheckResult } from "../results.ts";
 import { WAVE_ID, type Route } from "../routing.ts";
 
-export const ACTION_TYPES = ["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "voidLast", "forfeit", "withdraw", "completeStage", "standingsView", "publicView"] as const;
+export const ACTION_TYPES = ["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "voidLast", "forfeit", "settle", "abandon", "withdraw", "completeStage", "standingsView", "publicView"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 export type Via = "browser" | "http";
 export type PadPolicy = "first" | "all";
@@ -70,6 +70,12 @@ export class MixedLedger {
       this.#tally.set(a, t);
     }
     return t;
+  }
+
+  /** How many invocations of each type took each path so far - only the types invoked (M-4: the http count of an
+   *  organiser event is otherwise visible nowhere, so dropping its record would pass every check). */
+  paths(): Readonly<Partial<Record<ActionType, Readonly<{ browser: number; http: number }>>>> {
+    return Object.freeze(Object.fromEntries([...this.#tally].map(([a, t]) => [a, Object.freeze({ browser: t.browser, http: t.http })])));
   }
 
   /** The path one invocation of `a` took. */

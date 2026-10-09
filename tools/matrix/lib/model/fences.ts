@@ -15,7 +15,7 @@
 //
 // Imports only types from state.ts, which strip-types erases: no cycle at load.
 import { PENDING_STATUSES } from "../observed.ts";
-import type { CommandKind, ModelState } from "./state.ts";
+import type { AnyCommandKind, CommandKind, ModelState } from "./state.ts";
 
 /** `subject` is the entrant the command would act on (Withdraw's), else null.
  *  `issue` is the GitHub issue, or null when none is filed — the committed
@@ -109,7 +109,7 @@ export function triggersOf(commands: readonly string[]): RosterTrigger[] {
 /** The fence that withholds `kind` in this state, or null. `enabled: false`
  *  (--no-fences) lifts every fence. `subject`: the entrant the command would
  *  act on, when it picks one (Withdraw). */
-export function fenceBlocking(m: ModelState, kind: CommandKind, enabled: boolean, subject: string | null = null): Fence | null {
+export function fenceBlocking(m: ModelState, kind: AnyCommandKind, enabled: boolean, subject: string | null = null): Fence | null {
   if (!enabled) return null;
   return FENCES.find((f) => f.blocks === kind && f.applies(m, subject)) ?? null;
 }

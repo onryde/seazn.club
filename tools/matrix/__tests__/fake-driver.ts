@@ -12,14 +12,15 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
+import { EngineError, forbidsLevelResult, type MatchOutcome, type StageKind } from "@seazn/engine/core";
 import { generateDoubleElim, generatePagePlayoff, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
-import { entrantKindsFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
+import { liveEvents } from "../lib/scenarios/common.ts";
+import { entrantKindsFor, resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { DEPARTED_STATUSES } from "../lib/observed.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
@@ -29,6 +30,7 @@ import {
   type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { wireCodeFor } from "./product-text.ts";
+import { fixtureStatusFromFold } from "./w2a-status.ts";
 
 export interface FakeFixture extends FixtureRow { events: StreamEvent[] }
 
@@ -337,8 +339,10 @@ export class FakeLeagueDriver implements OrganiserDriver {
   #append(f: FakeFixture, ev: StreamEvent): void {
     const next = [...f.events, ev];
     let folded: ReturnType<typeof foldStream>;
+    const kind = this.stageKindOf(f);
     try {
-      folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
+      // W2a: the product folds a bracket fixture under the stage's overlay (resolveFixtureCfg), and the status follows D3.
+      folded = foldStream(sportModule(this.sport), kind === null ? this.cfg : stageCfg(this.sport, this.cfg, kind as StageKind), f.home_entrant_id!, f.away_entrant_id!, next);
     } catch (e) {
       // The product turns ONLY an EngineError into a status (http.ts:157-158);
       // anything else is a 500 INTERNAL there (http.ts:244-247). Here that is a
@@ -346,10 +350,17 @@ export class FakeLeagueDriver implements OrganiserDriver {
       if (!EngineError.is(e)) throw e;
       throw new RefusedCall("POST", `/api/v1/fixtures/${f.id}/events`, engineHttpStatus(e.code), e.code, e.message);
     }
+    // W2a (GN-KO-1, spec §5.4 item 3): a WRITE guard of the product (append-event.ts), not a fold refusal — a generic
+    // draw in a bracket kind is refused and nothing is written. Every other level result is accepted and held.
+    if (this.sport === "generic" && kind !== null && forbidsLevelResult(kind) && folded.outcome?.kind === "draw") {
+      throw new RefusedCall("POST", `/api/v1/fixtures/${f.id}/events`, 409, "LEVEL_RESULT_IN_BRACKET", "A knockout match can't end level — enter the winner.");
+    }
     f.events = next;
     f.outcome = folded.outcome;
-    f.status = folded.outcome === null ? "in_play" : f.events.some((e) => e.type === "core.forfeit") ? "forfeited" : "decided";
+    f.status = fixtureStatusFromFold(folded.outcome, liveEvents(next), kind);
   }
+  /** The kind of the stage a fixture belongs to: this fake plays one stage (a subclass with several overrides it). */
+  protected stageKindOf(_f: FakeFixture): string | null { return this.stage?.kind ?? null; }
   /** W1d Task 14: the fixture's ledger as the product serves it — a row per event, seq from 1, the id the seq as a
    *  string (the id space the harness's own void names, fold.ts envelopes), exclusive of `sinceSeq`. */
   ledger(id: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
@@ -500,6 +511,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
       const pts = new Map(this.tableEntrants().map((id) => [id, 0]));
       const m = sportModule(this.sport);
       const kind = this.stage!.kind as StageKind;
+      const cfg = stageCfg(this.sport, this.cfg, kind); // W2a: the cfg the stage's fixtures were folded under
       for (const f of this.fixtures) {
         if (f.outcome === null) continue;
         const ctx = { kind, ...(f.round_no ? { roundNo: f.round_no } : {}) };
@@ -507,13 +519,13 @@ export class FakeLeagueDriver implements OrganiserDriver {
           const o = f.outcome as MatchOutcome;
           if (o.kind !== "award") continue;
           const home = f.home_entrant_id === o.winner;
-          const state: unknown = m.init(this.cfg, lineupsFor(home ? o.winner : BYE_PHANTOM, home ? BYE_PHANTOM : o.winner));
-          const pair = m.standingsDelta(o, this.cfg, ctx, state);
+          const state: unknown = m.init(cfg, lineupsFor(home ? o.winner : BYE_PHANTOM, home ? BYE_PHANTOM : o.winner));
+          const pair = m.standingsDelta(o, cfg, ctx, state);
           const won = pair.find((d) => d.entrantId === o.winner)!;
           pts.set(o.winner, pts.get(o.winner)! + won.points);
           continue;
         }
-        const d = declaredPoints(m, this.cfg, ctx, f.home_entrant_id, f.away_entrant_id, f.events)!;
+        const d = declaredPoints(m, cfg, ctx, f.home_entrant_id, f.away_entrant_id, f.events)!;
         pts.set(f.home_entrant_id, pts.get(f.home_entrant_id)! + d.home);
         pts.set(f.away_entrant_id, pts.get(f.away_entrant_id)! + d.away);
       }
@@ -798,7 +810,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     const out = await super.postStream(id, events, prefix);
     const f = this.fixtures.find((x) => x.id === id)!;
-    if (f.outcome !== null) this.feed(f);
+    if (f.outcome !== null) this.feed(f); // a held level result has no winner, so it seats nobody (X-BR-1)
     return out;
   }
   override completeStage(): Promise<CompleteOut> {

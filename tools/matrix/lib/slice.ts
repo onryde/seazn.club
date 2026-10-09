@@ -11,7 +11,7 @@
 // slice's own semantics, which the layered plans still use.
 import { ROW_KEYS, SPORT_KEYS, type RowKey, type TemplateRowKey } from "./catalogue.ts";
 import { SCENARIOS } from "./scenarios/index.ts";
-import type { CaseSpec, ScenarioKey } from "./scenarios/types.ts";
+import type { CaseSpec, ScenarioKey, W2aScenarioKey } from "./scenarios/types.ts";
 
 export const SLICE_ROWS = ["league", "knockout", "swiss"] as const satisfies readonly TemplateRowKey[];
 export const SLICE_SPORTS = ["generic", "badminton"] as const;
@@ -20,7 +20,7 @@ export const SLICE_SPORTS = ["generic", "badminton"] as const;
  *  only in --set pad-proof under --driver browser, and VOIDPROOF (W1d Task 14),
  *  which runs only in --set void-proof — typed out so the slice plan cannot
  *  grow any of them by accident. */
-export type SliceScenarioKey = Exclude<ScenarioKey, "DENIED" | "PADPROOF" | "VOIDPROOF">;
+export type SliceScenarioKey = Exclude<ScenarioKey, "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey>;
 export const SCENARIO_KEYS: readonly SliceScenarioKey[] = ["LIFECYCLE", "M1", "R4", "F1"];
 
 /** Each scenario's canary check, read from the registry: a view of Task 8's

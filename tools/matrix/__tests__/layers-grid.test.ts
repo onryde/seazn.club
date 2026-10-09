@@ -1,6 +1,6 @@
 // W1d Task 3 (owner ruling 64, item 2): the FULL grid planners — `--layer L1
 // --scope grid` is one LIFECYCLE case per catalogue cell at 1280 (231), and
-// `--layer L2 --scope grid` is every run of the committed l2-pairs.json (1,731).
+// `--layer L2 --scope grid` is every run of the committed l2-pairs.json (1,729).
 // Every expected value comes from somewhere other than planL1Grid / planL2: the
 // catalogue's row and sport constants, the product's own catalog JSON (read as
 // text through fake-driver.ts's rawCatalogTemplate, never through
@@ -179,8 +179,9 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     for (const c of d) expect(c.spec!.scenario, layerCaseId(c)).toBe(HARNESS_SCENARIO[c.run!.scenario]);
     for (const c of noPath) expect(c.noPath!.wave, layerCaseId(c)).toBe(owningWave(c.run!));
     for (const c of notRun) expect(c.notRun, layerCaseId(c)).toContain(`atom ${c.run!.scenario}`);
-    // Ruling 65's figures: only the driven runs can go red; the rest are planned, never driven.
-    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, all: cases.length }).toEqual({ driven: 62, noPath: 164, notRun: 1505, all: 1731 });
+    // Ruling 65's figures: only the driven runs can go red; the rest are planned, never driven. W2a (X-DR-1, loop D) moved the
+    // pairwise cover: 1731 -> 1729 cases, driven and no_path unchanged (the catalogue was regenerated, a reviewed change, R11).
+    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, all: cases.length }).toEqual({ driven: 62, noPath: 164, notRun: 1503, all: 1729 });
     console.log(`L2 grid: ${d.length} driven, ${noPath.length} no_path, ${notRun.length} not_run of ${cases.length}`);
   });
 
@@ -249,7 +250,7 @@ describe("committed-plans.ts reads the scope: --scope grid is the grid, a bare -
     expect(slice.planned.size).toBe(0);
   });
 
-  it("--layer L2 --scope grid is the 1,731 runs; --layer L2 is still the slice's cells only", () => {
+  it("--layer L2 --scope grid is the 1,729 runs; --layer L2 is still the slice's cells only", () => {
     const grid = livePlan("--layer L2 --scope grid");
     expect(grid.driven.size + grid.planned.size).toBe(RAW.length);
     expect(grid.driven.size).toBe(RAW.filter(hasScript).length);

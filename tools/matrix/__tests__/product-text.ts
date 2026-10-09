@@ -1,7 +1,7 @@
 // Product rules the model's fake and its pins READ from the product's source
 // instead of typing them (Task 13 fix round 1, ruling C-1): a product change
 // moves the fake with it, and turns the model's pin red.
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +112,47 @@ export function withdrawalPendingText(): string[] {
   const out = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
   if (out.length === 0) throw new Error("product-text: table-withdrawal.ts WITHDRAWAL_PENDING_STATUSES names no status");
   return out;
+}
+
+/** usecases/fixture-results-sql.ts fixtureHasResultSql's status clause, pure: the statuses a rebuild (and history) treat as
+ *  PLAYED. Refused by name when the clause is not in the expected shape or names no status. */
+export function fixtureResultStatusesFrom(text: string): string[] {
+  const m = /\$\{f\}\.status in \(([^)]*)\)\s*or \(\$\{f\}\.status = 'abandoned'/.exec(text);
+  if (m === null) throw new Error("product-text: fixture-results-sql.ts fixtureHasResultSql has no status clause in the expected shape");
+  const out = [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+  if (out.length === 0) throw new Error("product-text: fixture-results-sql.ts fixtureHasResultSql's status clause names no status");
+  return out;
+}
+
+/** fixtureResultStatusesFrom over the repo's own file. */
+export function fixtureResultStatusesText(): string[] {
+  return fixtureResultStatusesFrom(read("apps/web/src/server/usecases/fixture-results-sql.ts"));
+}
+
+/** The fixture-status enum of api-v1's fixture schema, pure. Two shapes, both the product's: the status list declared once
+ *  (`FIXTURE_STATUSES` in lib/fixture-status.ts, loop F Task 7) with the schema reading it by name, or - before that - the
+ *  list inline in the schema's `status: z.enum([...])` beside "forfeited". Refused by name when a declaration exists but
+ *  the schema does not read it, or when no shape is found. */
+export function fixtureStatusesFrom(schemas: string, declaration: string | null): string[] {
+  if (declaration !== null) {
+    if (!/\n {2}status: z\.enum\(FIXTURE_STATUSES\),/.test(schemas)) throw new Error("product-text: lib/fixture-status.ts declares FIXTURE_STATUSES but api-v1 schemas.ts does not read it as the fixture status enum");
+    const d = /export const FIXTURE_STATUSES = \[([^\]]*)\] as const;/.exec(declaration);
+    if (d === null) throw new Error("product-text: lib/fixture-status.ts FIXTURE_STATUSES not found in the expected shape");
+    const names = [...d[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+    if (names.length === 0 || names.length !== d[1].split(",").filter((x) => x.trim() !== "").length) throw new Error("product-text: lib/fixture-status.ts FIXTURE_STATUSES has an entry this reader cannot read");
+    return names;
+  }
+  const enums = [...schemas.matchAll(/status: z\.enum\(\[([^\]]*"forfeited"[^\]]*)\]\)/g)];
+  if (enums.length !== 1) throw new Error(`product-text: api-v1 schemas.ts has ${enums.length} inline fixture status enums (exactly 1 expected)`);
+  const names = [...enums[0][1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+  if (names.length !== enums[0][1].split(",").length) throw new Error("product-text: api-v1 schemas.ts fixture status enum has an entry this reader cannot read");
+  return names;
+}
+
+/** fixtureStatusesFrom over the repo's own files. */
+export function fixtureStatusesText(): string[] {
+  const decl = resolve(REPO, "apps/web/src/lib/fixture-status.ts");
+  return fixtureStatusesFrom(read("apps/web/src/server/api-v1/schemas.ts"), existsSync(decl) ? readFileSync(decl, "utf8") : null);
 }
 
 export interface NextMatchText {

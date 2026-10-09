@@ -7,7 +7,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { boardgame } from "@seazn/engine/sports/boardgame";
+import { SETTLE_METHODS } from "@seazn/engine/core";
+import { TIEBREAK_RUNGS, boardgame } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { football } from "@seazn/engine/sports/football";
@@ -18,11 +19,12 @@ import { tennis } from "@seazn/engine/sports/tennis";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/drivers/adapters/generic.ts";
 import { START_MATCH_TESTID, selectorForTapStep, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
+import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../apps/web/src/lib/organiser-only-events.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { PAD_OWNER, PAD_SPORTS, PAD_UNOWNED, noPadReason } from "../lib/pad-sports.ts";
 import { foldStream } from "../lib/fold.ts";
-import { BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
+import { ARMAGEDDON, BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, BOARDGAME_TIEBREAK, BOARDGAME_TIEBREAK_TILE, TIEBREAK_SCORE_NONE, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
 import { CARROM_BOARD, CARROM_BOARD_TILE, CARROM_COIN_MAX, carromPad } from "../lib/pads/carrom.ts";
 import { CRICKET_OVER_TILE, CRICKET_SUMMARY, cricketPad, makeCricketPad, overSplit } from "../lib/pads/cricket.ts";
 import { BADMINTON_SET_SCORE_TILE, BADMINTON_SUMMARY, badmintonPad } from "../lib/pads/badminton.ts";
@@ -38,10 +40,10 @@ import type { MatrixPadAdapter } from "../lib/pads/types.ts";
 import { VOLLEYBALL_SET_SCORE_TILE, VOLLEYBALL_SUMMARY, volleyballPad } from "../lib/pads/volleyball.ts";
 import { compareRow } from "../lib/pads/replay.ts";
 import { replayOnModel, type RowIn } from "./pad-model.ts";
-import { drawsAllowed, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
+import { drawsAllowed, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { declaredAllOut } from "../lib/streams/cricket.ts";
 import { generateStream, matchesRequest } from "../lib/streams/index.ts";
-import { GeneratorUnsupported, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
+import { GeneratorUnsupported, OutcomeUnreachable, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -50,40 +52,62 @@ const HOME = "e-home";
 const AWAY = "e-away";
 
 /** The outcomes a case can request of one cfg: both wins, a draw where the
- *  engine allows one in a league (drawsAllowed), and a walkover. */
+ *  engine allows one in a league (drawsAllowed), a walkover, and (W2a) an abandon. */
 function outcomesFor(sport: string, cfg: unknown): RequestedOutcome[] {
   return [
     { kind: "win", winner: "home" }, { kind: "win", winner: "away" },
     ...(drawsAllowed(sport, cfg, "league") ? [{ kind: "draw" } as const] : []),
     { kind: "forfeit", by: "away", reason: "walkover" },
+    { kind: "abandon" },
   ];
 }
+/** W2a: what only the ORGANISER does — a walkover (core.forfeit), an abandon (core.abandon) and a settle
+ *  (core.settle, X-ST-2). The pad adapter refuses to emit their events; the console page objects do. Their requests
+ *  are marked here once, by request kind, and their events by event type. */
+const ORGANISER_ONLY_OUTCOMES: ReadonlySet<string> = new Set(["forfeit", "abandon", "settle"]);
+const ORGANISER_ONLY_EVENTS: ReadonlySet<string> = new Set(["core.forfeit", "core.abandon", "core.settle"]);
+/** The requests a scorer's pad can author. */
+const padOutcomes = (os: readonly RequestedOutcome[]): RequestedOutcome[] => os.filter((o) => !ORGANISER_ONLY_OUTCOMES.has(o.kind));
 const req = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "league", home: HOME, away: AWAY, outcome });
+const bracketReq = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "knockout", home: HOME, away: AWAY, outcome });
 
-/** Every request over every system variant of `sport`. The builder default
- *  (offlineBuilderDefault, pinned to division-builder.tsx by catalogue.test.ts)
- *  comes first, and it is what PADPROOF plays. Since W1d item 16 cricket's two
- *  innings a side (the `test` preset) are inside the pad's route like any other. */
+/** W2a (finding 16): what a BRACKET match can be asked — a win, a level result (where the sport reaches one), an
+ *  abandon alone and at a score, every settle method after a level result and after an abandon, and every
+ *  tie-break rung. Under the stage's cfg overlay (stageCfg), as the product folds a bracket fixture. */
+function bracketOutcomesFor(): RequestedOutcome[] {
+  return [
+    { kind: "win", winner: "home" }, { kind: "level" }, { kind: "abandon" }, { kind: "abandon", atScore: true },
+    ...SETTLE_METHODS.flatMap((method) => (["level", "abandon"] as const).map((after) => ({ kind: "settle", then: "home", method, after }) as const)),
+    ...TIEBREAK_RUNGS.map((rung) => ({ kind: "tiebreak", rung, winner: "away" }) as const),
+  ];
+}
+
+/** Every request over every system variant of `sport` in a LEAGUE, then (W2a) the bracket requests on the builder
+ *  default under the knockout overlay. The builder default (offlineBuilderDefault, pinned to division-builder.tsx by
+ *  catalogue.test.ts) comes first, and it is what PADPROOF plays. Since W1d item 16 cricket's two innings a side (the
+ *  `test` preset) are inside the pad's route like any other. */
 function requestsFor(sport: string): StreamRequest[] {
   const def = offlineBuilderDefault(sport);
   const variants = [def, ...variantKeys(sport).filter((v) => v !== def)];
-  return variants.flatMap((v) => {
+  const league = variants.flatMap((v) => {
     const cfg = resolveSportCfg(sport, v);
     return outcomesFor(sport, cfg).map((o) => req(sport, cfg, o));
   });
+  const cfg = stageCfg(sport, resolveSportCfg(sport, def), "knockout");
+  return [...league, ...bracketOutcomesFor().map((o) => bracketReq(sport, cfg, o))];
 }
 /** The events a request generates, or [] where the generator declares the case unsupported. */
 function streamOf(r: StreamRequest): StreamEvent[] {
   try {
     return generateStream(r);
   } catch (e) {
-    if (e instanceof GeneratorUnsupported) return [];
+    if (e instanceof GeneratorUnsupported || e instanceof OutcomeUnreachable) return []; // declared out of reach: nothing to route
     throw e;
   }
 }
 const ctxOf = (r: StreamRequest): TapAdapterContext => ({ cfg: r.cfg, entrants: { home: r.home, away: r.away } });
-/** core.forfeit is the organiser's (bench organiserStepsFor), never a pad tap. */
-const scorerEvents = (evs: readonly StreamEvent[]) => evs.filter((e) => e.type !== "core.forfeit");
+/** core.forfeit and core.abandon are the organiser's (bench organiserStepsFor), core.settle too (X-ST-2): never a pad tap. */
+const scorerEvents = (evs: readonly StreamEvent[]) => evs.filter((e) => !ORGANISER_ONLY_EVENTS.has(e.type));
 
 const ADAPTERS = Object.entries(PAD_ADAPTERS).map(([k, a]) => [k, a!] as const);
 
@@ -168,7 +192,7 @@ describe.each(ADAPTERS)("%s adapter", (sport, a) => {
       for (const e of evs) seen.add(e.type);
     }
     expect(streams).toBeGreaterThan(0);
-    expect([...a.emits].sort()).toEqual([...seen].filter((t) => t !== "core.forfeit").sort());
+    expect([...a.emits].sort()).toEqual([...seen].filter((t) => !ORGANISER_ONLY_EVENTS.has(t)).sort());
   });
 
   it("every generated scorer event is routed to ≥1 tap — or its type is declared noControl, and refused by name — and every fallback cites its file:line", () => {
@@ -199,6 +223,20 @@ describe.each(ADAPTERS)("%s adapter", (sport, a) => {
       expect(a.emits, f.eventType).toContain(f.eventType);
       expect(f.why, f.eventType).toMatch(/\.tsx?:\d+/);
     }
+  });
+
+  it("W2a: core.abandon and core.settle are the organiser's — the adapter emits neither and refuses both by name, and this sport's streams really carry both (so the refusal covers real events)", () => {
+    const seen = { "core.abandon": 0, "core.settle": 0 };
+    for (const r of requestsFor(sport)) {
+      for (const e of streamOf(r)) {
+        if (e.type !== "core.abandon" && e.type !== "core.settle") continue;
+        expect(a.emits, `${sport} ${e.type}`).not.toContain(e.type);
+        expect(() => a.stepsFor(e, ctxOf(r)), `${sport} ${e.type}`).toThrow();
+        seen[e.type]++;
+      }
+    }
+    expect(seen["core.abandon"], `${sport}: no abandon was generated`).toBeGreaterThan(0);
+    expect(seen["core.settle"], `${sport}: no settle was generated`).toBeGreaterThan(0);
   });
 
   it("core.start is the pad's Start match button", () => {
@@ -572,7 +610,7 @@ describe("football", () => {
     let fallbackRows = 0;
     let cases = 0;
     const cfg = resolveSportCfg("football", offlineBuilderDefault("football"));
-    for (const outcome of outcomesFor("football", cfg).filter((o) => o.kind !== "forfeit")) {
+    for (const outcome of padOutcomes(outcomesFor("football", cfg))) {
       const r = req("football", cfg, outcome);
       const evs = generateStream(r);
       const { res, ledger } = await replayOnModel(footballPad, evs, ctxOf(r), footballModel(ctxOf(r)));
@@ -700,7 +738,7 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
     expect(advance, "advance is declared a fallback").toBeDefined();
     let cases = 0;
     let advances = 0;
-    for (const outcome of outcomesFor(sport, cfg).filter((o) => o.kind !== "forfeit")) {
+    for (const outcome of padOutcomes(outcomesFor(sport, cfg))) {
       const r = req(sport, cfg, outcome);
       const evs = generateStream(r);
       const { res, ledger } = await replayOnModel(pad, evs, ctxOf(r), periodModel(sport, ctxOf(r)));
@@ -1112,6 +1150,13 @@ describe("cricket", () => {
 function boardgameModel(ctx: TapAdapterContext) {
   return (taps: readonly string[]): RowIn[] => {
     if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
+    // W2a (loop H's plan, NOT yet seen in a browser — Step 8 proves it against the real pad): the tie-break tile opens
+    // a sheet of choices, rung then winner (then the score, which "none" skips), and its last choice writes the row.
+    if (taps[0] === TILE(BOARDGAME_TIEBREAK_TILE)) {
+      const [rung, side, score] = taps.slice(1).map((t) => CHOICE_ID.exec(t)?.[1]);
+      const complete = rung !== undefined && (side === "home" || side === "away") && (rung === ARMAGEDDON ? score === undefined : score === TIEBREAK_SCORE_NONE);
+      return complete ? [{ type: BOARDGAME_TIEBREAK, payload: { rung, winner: ctx.entrants[side] } }] : [];
+    }
     let held: Record<string, unknown> | null = null;
     for (const t of taps) {
       if (t === HALF_SEL("home")) held = { winner: ctx.entrants.home };
@@ -1139,7 +1184,7 @@ describe("boardgame", () => {
     const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
     let draws = 0;
     let wins = 0;
-    for (const outcome of outcomesFor("boardgame", cfg).filter((o) => o.kind !== "forfeit")) {
+    for (const outcome of padOutcomes(outcomesFor("boardgame", cfg))) {
       const r = req("boardgame", cfg, outcome);
       for (const e of generateStream(r).filter((x) => x.type === BOARDGAME_RESULT)) {
         const p = e.payload as { winner: string | null; method: string };
@@ -1161,7 +1206,7 @@ describe("boardgame", () => {
   it("replayed on the fake ledger: every result row equal, and the stored rows fold to the requested outcome", async () => {
     const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
     let cases = 0;
-    for (const outcome of outcomesFor("boardgame", cfg).filter((o) => o.kind !== "forfeit")) {
+    for (const outcome of padOutcomes(outcomesFor("boardgame", cfg))) {
       const r = req("boardgame", cfg, outcome);
       const { res, ledger } = await replayOnModel(boardgamePad, generateStream(r), ctxOf(r), boardgameModel(ctxOf(r)));
       expect(res.findings, JSON.stringify(outcome)).toEqual([]);
@@ -1215,6 +1260,121 @@ describe("boardgame", () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  it("W2a tie-break (BG-KO-1, ruling 82): the tile, the rung, the winner, and for rapid and blitz the score skipped — armageddon has no score step; every rung the engine declares, both winners", () => {
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    let driven = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      for (const winner of ["home", "away"] as const) {
+        const r = bracketReq("boardgame", cfg, { kind: "tiebreak", rung, winner });
+        const tb = generateStream(r).filter((e) => e.type === BOARDGAME_TIEBREAK);
+        expect(tb, `${rung}/${winner}`).toHaveLength(1);
+        expect(boardgamePad.stepsFor(tb[0]!, ctxOf(r)), `${rung}/${winner}`).toEqual([
+          { kind: "tile", tileId: BOARDGAME_TIEBREAK_TILE }, { kind: "choice", optionId: rung }, { kind: "choice", optionId: winner },
+          ...(rung === ARMAGEDDON ? [] : [{ kind: "choice", optionId: TIEBREAK_SCORE_NONE }]),
+        ]);
+        driven++;
+      }
+    }
+    expect(driven).toBe(TIEBREAK_RUNGS.length * 2);
+    expect(TIEBREAK_RUNGS).toContain(ARMAGEDDON); // the one rung with no score step is one the engine declares
+    expect(boardgamePad.emits).toContain(BOARDGAME_TIEBREAK);
+  });
+
+  it("W2a tie-break: a payload that is not {rung of the engine's, winner an entrant of the fixture} is refused by name — a score key, lots, a stranger, no winner", () => {
+    const r = bracketReq("boardgame", stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout"), { kind: "tiebreak", rung: "rapid", winner: "home" });
+    const bad: unknown[] = [null, { rung: "rapid" }, { winner: HOME }, { rung: "lots", winner: HOME }, { rung: "rapid", winner: "stranger" }, { rung: "rapid", winner: HOME, score: "2–0" }, { rung: 1, winner: HOME },
+      // an extra key that sorts AFTER "winner" leaves the first two sorted keys right, so only the key count refuses it
+      { rung: "rapid", winner: HOME, zz: 1 }];
+    for (const payload of bad) {
+      expect(() => boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(`is not {rung: one of ${TIEBREAK_RUNGS.join(", ")}, winner: an entrant of the fixture}`);
+    }
+    expect(bad).toHaveLength(8);
+    // the positive pair: each rung of the engine's, either winner, is accepted
+    for (const rung of TIEBREAK_RUNGS) expect(boardgamePad.stepsFor({ type: BOARDGAME_TIEBREAK, payload: { rung, winner: AWAY } }, ctxOf(r)).length, rung).toBeGreaterThan(0);
+  });
+
+  it("W2a tie-break, replayed on the fake ledger: the drawn game and the tie-break row are equal to the generated ones for every rung and winner, and the stored rows fold (under the bracket's cfg) to the requested win by that rung", async () => {
+    const cfg = stageCfg("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), "knockout");
+    let cases = 0;
+    for (const rung of TIEBREAK_RUNGS) {
+      for (const winner of ["home", "away"] as const) {
+        const r = bracketReq("boardgame", cfg, { kind: "tiebreak", rung, winner });
+        const { res, ledger } = await replayOnModel(boardgamePad, generateStream(r), ctxOf(r), boardgameModel(ctxOf(r)));
+        expect(res.findings, `${rung}/${winner}`).toEqual([]);
+        expect(res.rows.map((x) => x.verdict), `${rung}/${winner}`).toEqual(["equal", "equal", "equal"]); // start, the drawn game, the tie-break
+        const folded = foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome;
+        expect(matchesRequest(r, folded), `${rung}/${winner}`).toBe("match");
+        expect(folded, `${rung}/${winner}`).toMatchObject({ kind: "win", winner: winner === "home" ? HOME : AWAY, method: `tiebreak_${rung}` });
+        cases++;
+      }
+    }
+    expect(cases).toBe(TIEBREAK_RUNGS.length * 2);
+  });
+
+  it("route case (a value outside the generator's): a resignation — the winner's half, then the `method:resign` chip — is equal on the ledger and folds to that win; the skin offers `resign`", async () => {
+    const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
+    const r = req("boardgame", cfg, { kind: "win", winner: "home" });
+    const evs = generateStream(r).map((e) => (e.type === BOARDGAME_RESULT ? { ...e, payload: { ...(e.payload as object), method: "resign" } } : e));
+    expect(evs.filter((e) => e.type === BOARDGAME_RESULT)).toHaveLength(1);
+    expect(boardgamePad.stepsFor(evs.find((e) => e.type === BOARDGAME_RESULT)!, ctxOf(r))).toEqual([{ kind: "half", side: "home" }, { kind: "chip", chipId: methodChipId("resign") }]);
+    const { res, ledger } = await replayOnModel(boardgamePad, evs, ctxOf(r), boardgameModel(ctxOf(r)));
+    expect(res.findings).toEqual([]);
+    expect(res.rows.map((x) => x.verdict)).toEqual(["equal", "equal"]);
+    expect(foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome).toMatchObject({ kind: "win", winner: HOME, method: "resign" });
+    expect(listOf("DECISIVE_METHODS")).toContain("resign");
+    // and the method really is outside what the generator emits (the reason this row exists)
+    const emitted = new Set(requestsFor("boardgame").flatMap((q) => streamOf(q)).filter((e) => e.type === BOARDGAME_RESULT).map((e) => (e.payload as { method: string }).method));
+    expect([...emitted].sort()).toEqual(["agreement", "checkmate"]);
+  });
+
+  it("route cases (the PRODUCT's own organiser-only values, D-O1/D-P3): every declared forfeit value is tapped on the pad — the winner's half or the draw tile, then its `method:<value>` chip — equal on the ledger, organiser-only by the product's predicate, folded by the engine, and offered by the skin's own dock list", async () => {
+    const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
+    const arm = ORGANISER_ONLY_SPORT_EVENTS[BOARDGAME_RESULT];
+    expect(arm, "the product declares no organiser-only boardgame.result values").toBeDefined();
+    expect(arm!.field).toBe("method");
+    const outcomes = padOutcomes(outcomesFor("boardgame", cfg));
+    const decisive = listOf("DECISIVE_METHODS");
+    const drawn = listOf("DRAWN_METHODS");
+    // Each value is offered by exactly one of the skin's docks: that dock decides which tile holds the result (a decisive
+    // half, or the draw tile), and the engine decides what the stored row folds to.
+    const FOLDS: Readonly<Record<string, Record<string, unknown>>> = { forfeit: { kind: "win", winner: HOME, method: "forfeit" }, double_forfeit: { kind: "no_result" } };
+    let checked = 0;
+    for (const value of arm!.values) {
+      expect(Object.hasOwn(FOLDS, value), `${value}: no expected fold in this test (a value the product gains owes one)`).toBe(true);
+      const inDecisive = decisive.includes(value);
+      const inDrawn = drawn.includes(value);
+      expect(inDecisive !== inDrawn, `${value} must be offered by exactly one dock (decisive ${inDecisive}, drawn ${inDrawn})`).toBe(true);
+      const base = outcomes.find((o) => o.kind === (inDecisive ? "win" : "draw"));
+      expect(base, `${value}: the generator builds no ${inDecisive ? "win" : "draw"} to start from`).toBeDefined();
+      const r = req("boardgame", cfg, base!);
+      const evs = generateStream(r).map((e) => (e.type === BOARDGAME_RESULT ? { ...e, payload: { ...(e.payload as object), method: value } } : e));
+      const result = evs.find((e) => e.type === BOARDGAME_RESULT)!;
+      expect(isOrganiserOnlyEvent(result.type, result.payload), `${value} is organiser-only (the premise of the route)`).toBe(true);
+      const side = (result.payload as { winner: string | null }).winner === null ? null : (result.payload as { winner: string }).winner === HOME ? "home" : "away";
+      expect(boardgamePad.stepsFor(result, ctxOf(r)), value).toEqual([side === null ? { kind: "tile", tileId: BOARDGAME_DRAW_TILE } : { kind: "half", side }, { kind: "chip", chipId: methodChipId(value) }]);
+      const { res, ledger } = await replayOnModel(boardgamePad, evs, ctxOf(r), boardgameModel(ctxOf(r)));
+      expect(res.findings, value).toEqual([]);
+      expect(res.rows.map((x) => x.verdict), value).toEqual(["equal", "equal"]);
+      const row = ledger.find((x) => x.type === BOARDGAME_RESULT)!;
+      expect(row.payload, value).toEqual(result.payload);
+      expect(isOrganiserOnlyEvent(row.type, row.payload), `${value}: the STORED row is organiser-only too`).toBe(true);
+      expect(foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome, value).toMatchObject(FOLDS[value]!);
+      checked++;
+    }
+    expect(checked).toBe(arm!.values.length);
+    expect(checked).toBeGreaterThan(1);
+  });
+
+  it("pins (loop H adds the tie-break tile; red until it lands): the tile id and the score step's `none` option are boardgame.tsx's own, and the event is the engine's", () => {
+    const tile = /export const TIEBREAK_TILE_ID = "([^"]+)";/.exec(skin);
+    expect(tile, "boardgame.tsx has no TIEBREAK_TILE_ID — loop H adds the tie-break tile").not.toBeNull();
+    expect(BOARDGAME_TIEBREAK_TILE).toBe(tile![1]);
+    const scores = /const SCORES = \["([^"]+)"/.exec(skin);
+    expect(scores, "boardgame.tsx has no SCORES list for the tie-break sheet").not.toBeNull();
+    expect(TIEBREAK_SCORE_NONE).toBe(scores![1]);
+    expect(Object.keys(boardgame.eventSchemas ?? {})).toContain(BOARDGAME_TIEBREAK);
   });
 });
 
@@ -1292,6 +1452,32 @@ describe("carrom", () => {
       cases++;
     }
     expect({ cases, boards }).toEqual({ cases: 2, boards: 16 }); // club-29: 2 games × 4 boards each, Step 0 saw board 8 decide
+  });
+
+  it("route case (a value outside the generator's old one): a BRACKET game's boards carry 7 coins, not 9 — the number step takes the generated value, the rows are equal, and the stored rows fold under the overlay (tieBoard 'extra') to the requested win", async () => {
+    const cfg = stageCfg("carrom", resolveSportCfg("carrom", offlineBuilderDefault("carrom")), "knockout");
+    const c = cfg as { gameTo: number; maxBoards: number; pointsPerCoin: number; tieBoard: string };
+    expect(c.tieBoard).toBe("extra"); // the overlay is on
+    // The rulebook arithmetic, not the generator's: a level game plays maxBoards boards, a side wins ceil(maxBoards/2) of
+    // them, and no board may end the game early — the largest coin count keeping those boards under the game point.
+    const wins = Math.ceil(c.maxBoards / 2);
+    let coins = 0;
+    while ((coins + 1) * wins * c.pointsPerCoin < c.gameTo && coins < CARROM_COIN_MAX) coins++;
+    expect(coins).toBe(7); // club-29
+    expect(coins).toBeLessThan(CARROM_COIN_MAX);
+    const r = bracketReq("carrom", cfg, { kind: "win", winner: "home" });
+    const evs = generateStream(r);
+    const boards = evs.filter((e) => e.type === CARROM_BOARD);
+    const seven = boards.filter((e) => (e.payload as { opponentCoinsLeft: number }).opponentCoinsLeft === coins);
+    expect(seven.length, "no board carries the level game's coins").toBeGreaterThan(0);
+    for (const e of seven) {
+      expect(carromPad.stepsFor(e, ctxOf(r)).filter((st) => st.kind === "number"), JSON.stringify(e.payload)).toEqual([{ kind: "number", value: coins }]);
+    }
+    const { res, ledger } = await replayOnModel(carromPad, evs, ctxOf(r), carromModel(ctxOf(r)));
+    expect(res.findings).toEqual([]);
+    expect(res.rows.every((x) => x.verdict === "equal")).toBe(true);
+    expect(res.rows.length).toBe(evs.length);
+    expect(matchesRequest(r, foldStream(carrom, cfg, HOME, AWAY, asEvents(ledger)).outcome)).toBe("match");
   });
 
   it("pins: the board tile under live, its sheet, the side option ids, and a payload that never carries queenTo", () => {

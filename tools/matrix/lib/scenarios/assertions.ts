@@ -1,9 +1,11 @@
 // Scenario assertions. Every one goes through `assertion`, so R25 holds for
 // them exactly as it does for the invariants: zero items checked is a FAIL,
 // and only a stated reason may abstain.
+import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import type { PublicStandingsOut, StageRef } from "../driver/types.ts";
 import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun, type ObservedStage } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
+import { judgeDrive } from "../reference-bracket.ts";
 import { resolveSportCfg } from "../sport-cfg.ts";
 import type { BuiltReadback, DivisionSetup, Recorder } from "./common.ts";
 import { lineupItems } from "./lineup-plan.ts";
@@ -207,6 +209,60 @@ export function drawPathExercised(rec: Recorder, observed: ObservedRun, drawOk: 
   if (!drawOk) return assertion("life-draw-path-exercised", [], "supportsDraws is false for this stage");
   const draws = observed.stages.flatMap((s) => s.fixtures).filter((f) => f.outcome?.kind === "draw");
   return assertion("life-draw-path-exercised", [{ ok: rec.drawsPosted > 0 && draws.length === rec.drawsPosted, note: `posted ${rec.drawsPosted} draws, product shows ${draws.length}` }]);
+}
+
+/** W2a (finding 16): a run that played a BRACKET stage must have exercised a decider — a chess tie-break or an
+ *  organiser settle (a level result held and closed, or an abandon at a real score closed) — or it proved only the
+ *  straight-win path that never stalled. The count is what the harness POSTED (Recorder), cross-checked against what
+ *  the product shows: every settled fixture reads back with a `settled_*` win, every tie-break with a `tiebreak_*`
+ *  win. Zero deciders in a run with a bracket stage is a FAILURE, never an abstention (R25); a run with no bracket
+ *  stage abstains by name — the rule says nothing about it.
+ *
+ *  Phase 3 fix round 1 (M-6): every scenario that plays a division through bracketPolicy carries it (LIFECYCLE, F1, M1,
+ *  R4), on a bracket row and on the bracket stage of a league_ko row alike - Step 8's rule is "every bracket-row run
+ *  where bracketPolicy posts settles". A decider the RECORDED withdrawal struck after it was posted (R4: an expunge
+ *  abandons the unlocked fixtures of the departed entrant, the settled one among them) is explained by the cascade the
+ *  way life-results-as-posted explains it (cascadeWrote), and counted, never silently dropped. BRACKET_EXTRA_BOARD is
+ *  the one scenario that stays out: its extra board is the pad's and it posts no settle. */
+export function bracketDeciderExercised(rec: Recorder, observed: ObservedRun): CheckResult {
+  const brackets = observed.stages.filter((s) => forbidsLevelResult(s.kind as StageKind));
+  if (brackets.length === 0) return assertion("life-bracket-decider-exercised", [], "no bracket stage in this run: a level result cannot stall it");
+  const fixtures = brackets.flatMap((s) => s.fixtures);
+  const settled = fixtures.filter((f) => f.outcome?.kind === "win" && f.outcome.method?.startsWith("settled_") === true).length;
+  const tiebroken = fixtures.filter((f) => f.outcome?.kind === "win" && f.outcome.method?.startsWith("tiebreak_") === true).length;
+  // Posted deciders the recorded withdrawal then struck (cascadeWrote reads the snapshot taken before the call).
+  const struck = (kind: "settle" | "tiebreak"): number =>
+    rec.bracketDrives.filter((d) => d.asked.kind === kind && fixtures.some((f) => f.id === d.fixtureId && cascadeWrote(f, observed.withdrawal))).length;
+  const struckSettles = struck("settle");
+  const struckTiebreaks = struck("tiebreak");
+  const note = (n: number, what: string) => (n === 0 ? "" : `; ${n} more ${what} struck by the recorded ${observed.withdrawal!.policy} after it was posted`);
+  return assertion("life-bracket-decider-exercised", [
+    { ok: rec.settlesPosted + rec.tiebreaksPosted > 0, note: `${brackets.length} bracket stage(s) and no decider posted (0 settles, 0 tie-breaks)` },
+    { ok: settled + struckSettles === rec.settlesPosted, note: `posted ${rec.settlesPosted} settle(s), the product shows ${settled} settled win(s)${note(struckSettles, "settle(s)")}` },
+    { ok: tiebroken + struckTiebreaks === rec.tiebreaksPosted, note: `posted ${rec.tiebreaksPosted} tie-break(s), the product shows ${tiebroken} tie-break win(s)${note(struckTiebreaks, "tie-break(s)")}` },
+  ]);
+}
+
+/** W2a (ruling T15-R3): every bracket match the harness drove is judged against the reference family `bracket-finish`
+ *  (reference-bracket.ts): the oracle is given the actions driven, and its status, advancing winner and method must be
+ *  the product's. One item per judged drive. A drive the oracle does not cover (a walkover, or the oracle's own
+ *  OutOfScope / RuledOut) is NOT judged: counted and named in the verdict's reason, never silent. A run with a bracket
+ *  stage that judged nothing fails (R25); a run with no bracket stage abstains by name. */
+export function referenceBracketFinish(rec: Recorder, observed: ObservedRun): CheckResult {
+  const brackets = observed.stages.filter((s) => forbidsLevelResult(s.kind as StageKind));
+  if (brackets.length === 0) return assertion("life-reference-bracket-finish", [], "no bracket stage in this run: the bracket-finish oracle says nothing about it");
+  const judgements = rec.bracketDrives.map(judgeDrive);
+  const items: Item[] = judgements.flatMap((j) => (j.judged ? [{ ok: j.ok, note: j.note }] : []));
+  const skipped = judgements.flatMap((j) => (j.judged ? [] : [j.why]));
+  // A judged drive whose loser line could not be read is judged on everything else: counted and named too.
+  const loserSkipped = judgements.flatMap((j) => (j.judged && j.loserNotJudged !== null ? [j.loserNotJudged] : []));
+  const verdict = assertion("life-reference-bracket-finish", items);
+  if (verdict.verdict !== "pass" || (skipped.length === 0 && loserSkipped.length === 0)) return verdict;
+  const parts = [
+    ...(skipped.length === 0 ? [] : [`${skipped.length} drive(s) not judged (${[...new Set(skipped)].join("; ")})`]),
+    ...(loserSkipped.length === 0 ? [] : [`loser seat not judged on ${loserSkipped.length} drive(s) (${[...new Set(loserSkipped)].join("; ")})`]),
+  ];
+  return { ...verdict, reason: `${verdict.reason}; ${parts.join("; ")}` };
 }
 
 /** The format lock's answer: usecases/divisions.ts `formatLocked()` throws
