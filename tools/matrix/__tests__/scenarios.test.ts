@@ -746,13 +746,14 @@ describe("final review I-1 on the fakes: a result the harness did not post, or o
   /** A mixin's base must construct with `...args: any[]` (TS2545): FakeLeagueDriver takes an orgId, FakeKnockoutDriver options. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   type Ctor<T> = new (...args: any[]) => T;
-  /** The product decides a seated fixture by itself when the division starts: no withdrawal, no bye. */
+  /** The product decides a seated fixture by itself when the division starts: no withdrawal, no bye. W2b D3 R2: a
+   *  walkover is recordable only before play, so the foreign write is the bare forfeit (no core.start). */
   function autoDecides<T extends Ctor<FakeLeagueDriver>>(Base: T) {
     return class extends Base {
       override async start() {
         const out = await super.start();
         const f = this.fixtures.find((x) => x.home_entrant_id !== null && x.away_entrant_id !== null)!;
-        await this.postStream(f.id, [START, { type: "core.forfeit", payload: { by: f.away_entrant_id, reason: "walkover" } }], "server");
+        await this.postStream(f.id, [{ type: "core.forfeit", payload: { by: f.away_entrant_id, reason: "walkover" } }], "server");
         return out;
       }
     };
@@ -1287,8 +1288,9 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     const setup = await setUpDivision(ctx, rec, 4);
     const f = driver.rows()[0]!;
     await driver.postStream(f.id, [START], "foreign"); // not recorded: a foreign write
-    // A forfeit on a live fixture posts only core.forfeit (decideFixture), so the engine takes it.
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" });
+    // A forfeit on a live fixture posts only core.forfeit (decideFixture), so the engine takes it. W2b D3: in play that
+    // is a retirement (R2 refuses a walkover after core.start).
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired", at: "after_start" });
     expect(putsOn(driver, f.id)).toEqual([]);
     expect(rec.lineupsPut).toBe(0);
     expect(rec.notes).toContain(`lineups: ${f.id} was in_play when the harness came to it — the product locks a lineup once a fixture is past scheduled; no lineup PUT`);
@@ -1639,7 +1641,8 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
   it("events on the fixture the harness never posted make parity unjudgeable, not a silent pass", async () => {
     const { driver, ctx, rec, setup, f } = await onBadminton();
     await driver.postStream(f.id, [START], "t"); // not recorded: a foreign write
-    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" });
+    // W2b D3: the fixture is in play, so the forfeit is a retirement (R2 refuses a walkover after core.start).
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "retired", at: "after_start" });
     expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 1 });
     expect(rec.declared.has(f.id)).toBe(false);
   });
@@ -1654,7 +1657,8 @@ describe("decideFixture — the local fold is the fixture's WHOLE stream (Task 6
     const before = driver.calls.length;
     await decideFixture(ctx, rec, setup, f, { kind: "win", winner: "home" });
     expect(driver.calls.slice(before)).toEqual(["fixtureState"]); // still posts nothing over it
-    expect(rec.parity).toEqual([{ fixtureId: f.id, local: null, product: { kind: "award", winner: f.home_entrant_id, loser: null, reason: "walkover" }, foreign: 1, finishedBefore: "forfeited", request: null }]);
+    // D2: the award names the side that forfeited as its loser.
+    expect(rec.parity).toEqual([{ fixtureId: f.id, local: null, product: { kind: "award", winner: f.home_entrant_id, loser: f.away_entrant_id, reason: "walkover" }, foreign: 1, finishedBefore: "forfeited", request: null }]);
     expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 1, evidence: [`${f.id}: already forfeited before the harness posted — a result it never wrote, and no recorded withdrawal explains it`] });
     expect(rec.declared.has(f.id)).toBe(false);
   });

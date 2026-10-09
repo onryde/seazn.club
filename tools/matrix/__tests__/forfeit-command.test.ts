@@ -202,6 +202,26 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
     expect(row(d, fin).status).toBe("scheduled");
   });
 
+  it("a double walkover on a DECIDED final meets two rules — guarantee 4 (ALREADY_DECIDED) and the server's X-DW-3 — so either code is the product's; on a decided semi only ALREADY_DECIDED applies", async () => {
+    // The rule-10 sweep's counterexample once the cascade's reason is the engine's: [Settle, Walkover, Score,
+    // Withdraw(3,0), Forfeit(13,2)] — the server rule answered first and the model held only ALREADY_DECIDED.
+    const { m, d, fin, sf1 } = await bracket("generic");
+    await forfeit(m, d, 0, "home", "walkover"); // sf1
+    await forfeit(m, d, 1, "home", "walkover"); // sf2
+    await forfeit(m, d, 2, "home", "walkover"); // the final, decided
+    expect(row(d, fin).status).toBe("forfeited");
+    await forfeit(m, d, 2, "both", "walkover");
+    expect(lastForfeit(m)).toMatchObject({ code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" });
+    expect(row(d, fin)).toMatchObject({ status: "forfeited", outcome: { kind: "award", reason: "walkover" } });
+    // `both` with any other reason is no double walkover (X-DW-1): the schema's R1 answers, not the server rule.
+    await forfeit(m, d, 2, "both", "disqualified");
+    expect(lastForfeit(m)).toMatchObject({ code: "INVALID_EVENT" });
+    // The positive pair: a decided semi feeds the final, so the server rule does not apply and guarantee 4 answers.
+    await forfeit(m, d, 0, "both", "walkover");
+    expect(lastForfeit(m)).toMatchObject({ code: "ALREADY_DECIDED" });
+    expect(liveForfeits(d, sf1).length, "one forfeit stands on the semi").toBe(1);
+  });
+
   it("a LADDER fixture has no feed edge and is still never refused DOUBLE_WALKOVER_NO_NEXT_MATCH: the refusal is the feeding bracket kinds' alone (X-DW-3, D19)", async () => {
     const { m, d, sf1 } = await bracket("generic");
     d.stage!.kind = "ladder";

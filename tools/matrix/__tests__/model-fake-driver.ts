@@ -295,7 +295,8 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     if (p.reason === "withdrew") throw new RefusedCall("POST", path, 422, "INVALID_EVENT", "a withdrawal is recorded by withdrawing the entrant, not by a forfeit");
     const kind = this.stage?.kind ?? null;
     // W2b D19: the feeding bracket kinds only — a ladder (forbidsLevelResult, but no feed edges) takes one anywhere.
-    if (p.by === "both" && kind !== null && BRACKET_STAGE_KINDS.has(kind) && !this.feeds.has(f.id)) {
+    // A double walkover is `both` + walkover (X-DW-1); `both` with another reason is the schema's R1, INVALID_EVENT.
+    if (p.by === "both" && p.reason === "walkover" && kind !== null && BRACKET_STAGE_KINDS.has(kind) && !this.feeds.has(f.id)) {
       throw new RefusedCall("POST", path, engineHttpStatus("DOUBLE_WALKOVER_NO_NEXT_MATCH"), "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a double walkover needs a next match — reschedule, record a walkover if one side turned up, or settle");
     }
   }

@@ -3,13 +3,14 @@
 // some play (D3 R4); a double walkover is core.forfeit {by: "both", reason: "walkover"} in every sport, chess included
 // (M7); and the harness observes `double_walkover` as itself, never as undecided. Expected values are the rule rows'
 // (X-RS-1, X-DW-1) and D1's closed reason list, never read back from the generators.
+import { FORFEIT_REASONS as ENGINE_FORFEIT_REASONS } from "@seazn/engine/core";
 import { describe, expect, it } from "vitest";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { foldStream } from "../lib/fold.ts";
 import { toObservedOutcome } from "../lib/observed.ts";
 import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
-import { ALL_OUTCOMES, OutcomeUnreachable, outcomeLabel, type RequestedOutcome, type StreamRequest } from "../lib/streams/types.ts";
+import { ALL_OUTCOMES, FORFEIT_REASONS, OutcomeUnreachable, outcomeLabel, type RequestedOutcome, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
 /** D1 (plan Decisions): the four reasons, typed here from the decision, never read from the code under test. */
@@ -22,6 +23,13 @@ const req = (sportKey: string, outcome: unknown): StreamRequest =>
   ({ sportKey, cfg: resolveSportCfg(sportKey, offlineBuilderDefault(sportKey)), stageKind: "league", home: "H", away: "A", outcome }) as StreamRequest;
 
 describe("W2b generator breadth (spec §5.6)", () => {
+  it("D1: the harness's restated reason list is the engine's FORFEIT_REASONS, member for member and in order", () => {
+    // The restatement exists so streams/types.ts stays type-only on the engine; this pin is what keeps it honest.
+    expect([...FORFEIT_REASONS]).toEqual([...REASONS]);
+    expect([...ENGINE_FORFEIT_REASONS]).toEqual([...REASONS]);
+    expect(FORFEIT_REASONS.length).toBe(4);
+  });
+
   it("empty case first: a walkover request before start posts no core.start", () => {
     const s = generateStream({ sportKey: "generic", cfg: {}, stageKind: "league", home: "H", away: "A", outcome: { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" } });
     expect(s.map((e) => e.type)).toEqual(["core.forfeit"]);

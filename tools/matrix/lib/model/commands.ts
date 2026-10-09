@@ -518,8 +518,9 @@ export function forfeitVerdict(m: ModelState, f: FixtureModel, by: ForfeitSide, 
   if (f.status === "needs_decision") return "either";
   const phase = forfeitPhaseOf(m, f, ledger);
   if (phase === null) return "either";
-  if (phase === "over") return refuse("ALREADY_DECIDED");
   const lastRound = by === "both" && noNextMatch(m, f);
+  // X-DW-3 is a server rule: on a decided last-round fixture it meets guarantee 4, and either answer is the product's.
+  if (phase === "over") return lastRound ? refuse("ALREADY_DECIDED", "DOUBLE_WALKOVER_NO_NEXT_MATCH") : refuse("ALREADY_DECIDED");
   const walkoverPhases = (sportModule(m.sport) as unknown as { walkoverPhases?: readonly string[] }).walkoverPhases ?? ["pre"];
   if (reason === "walkover") {
     if ((by === "both" && phase === "tiebreak") || !walkoverPhases.includes(phase)) return lastRound ? refuse("FORFEIT_REASON_WRONG_PHASE", "DOUBLE_WALKOVER_NO_NEXT_MATCH") : refuse("FORFEIT_REASON_WRONG_PHASE");

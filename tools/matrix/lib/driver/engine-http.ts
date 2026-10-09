@@ -34,6 +34,11 @@ export const ENGINE_HTTP_STATUS: Readonly<Record<EngineErrorCode, number>> = Obj
   TIEBREAK_NOT_APPLICABLE: 409,
   LEVEL_RESULT_IN_BRACKET: 409,
   LEVEL_RESULT_SEATED: 500,
+  // W2b (spec §7) — walkover, retirement and double-walkover credit: each a 409 the organiser acts on.
+  FORFEIT_REASON_WRONG_PHASE: 409,
+  ABANDONED_SETTLE_OR_VOID: 409,
+  DOUBLE_WALKOVER_NO_NEXT_MATCH: 409,
+  STAGE_SEAT_DEPARTED: 409,
 });
 
 /** The `?? 422` of http.ts:158 — what the product answers an EngineError whose

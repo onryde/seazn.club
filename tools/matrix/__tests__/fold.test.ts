@@ -4,7 +4,7 @@ import {
   CfgInvalid, UnknownSport, UnknownVariant, drawsAllowed, entrantKindFor, resolveSportCfg, sportModule, variantKeys,
 } from "../lib/sport-cfg.ts";
 import { FOLD_OPTIONS, declaredPoints, envelopes, foldStream, lineupsFor } from "../lib/fold.ts";
-import { ALL_OUTCOMES, GeneratorUnsupported, OutcomeUnreachable, START, outcomeLabel, type StreamRequest } from "../lib/streams/types.ts";
+import { ALL_OUTCOMES, GeneratorUnsupported, OutcomeUnreachable, START, outcomeLabel, type ForfeitReason, type StreamRequest } from "../lib/streams/types.ts";
 import { genericGenerator } from "../lib/streams/generic.ts";
 import { generateStream, matchesRequest, register } from "../lib/streams/index.ts";
 
@@ -197,7 +197,7 @@ describe("generic streams + matchesRequest", () => {
     expect(matchesRequest(r, null)).toBe("mismatch");
     const f = req("score", { kind: "forfeit", by: "away", reason: "walkover", at: "before_start" });
     // W2b (D2): an award to the side that did NOT forfeit, carrying the reason asked; the wrong reason is a mismatch.
-    const award = (winner: string, reason: string) => ({ kind: "award" as const, winner, loser: winner === H ? A : H, reason });
+    const award = (winner: string, reason: ForfeitReason) => ({ kind: "award" as const, winner, loser: winner === H ? A : H, reason });
     expect(matchesRequest(f, award(H, "walkover"))).toBe("match");
     expect(matchesRequest(f, award(A, "walkover"))).toBe("mismatch");
     expect(matchesRequest(f, award(H, "retired"))).toBe("mismatch");

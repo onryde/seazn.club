@@ -8,8 +8,8 @@ export type SettleMethod = (typeof SETTLE_METHODS)[number];
 /** W2a: a chess bracket game's tie-break rungs (BG-KO-1). Lots is the organiser's settle, not a rung. */
 export type TiebreakRung = (typeof TIEBREAK_RUNGS)[number];
 
-/** W2b (D1): the closed list a core.forfeit records (X-RS-1), restated until loop D's `FORFEIT_REASONS`
- *  (@seazn/engine/core) reaches this lane — then this becomes that re-export, pinned by w2b-generators.test.ts.
+/** W2b (D1): the closed list a core.forfeit records (X-RS-1), restated from the engine's `FORFEIT_REASONS`
+ *  (@seazn/engine/core) so this file stays type-only on the engine; w2b-generators.test.ts pins the two equal.
  *  `withdrew` is the withdrawal cascade's alone (PF-2: the server refuses it from every other writer). */
 export const FORFEIT_REASONS = Object.freeze(["walkover", "retired", "disqualified", "withdrew"] as const);
 export type ForfeitReason = (typeof FORFEIT_REASONS)[number];

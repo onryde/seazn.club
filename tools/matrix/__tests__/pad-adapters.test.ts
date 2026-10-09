@@ -1339,7 +1339,8 @@ describe("boardgame", () => {
     const drawn = listOf("DRAWN_METHODS");
     // Each value is offered by exactly one of the skin's docks: that dock decides which tile holds the result (a decisive
     // half, or the draw tile), and the engine decides what the stored row folds to.
-    const FOLDS: Readonly<Record<string, Record<string, unknown>>> = { forfeit: { kind: "win", winner: HOME, method: "forfeit" }, double_forfeit: { kind: "no_result" } };
+    // W2b (spec §5.2 table, boardgame row): a legacy `double_forfeit` now folds to `double_walkover`, not `no_result`.
+    const FOLDS: Readonly<Record<string, Record<string, unknown>>> = { forfeit: { kind: "win", winner: HOME, method: "forfeit" }, double_forfeit: { kind: "double_walkover" } };
     let checked = 0;
     for (const value of arm!.values) {
       expect(Object.hasOwn(FOLDS, value), `${value}: no expected fold in this test (a value the product gains owes one)`).toBe(true);
