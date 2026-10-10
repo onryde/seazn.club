@@ -47,7 +47,7 @@ import {
   type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { X_WD_2_KINDS, isTerminal } from "../lib/observed.ts";
-import { FakeLeagueDriver, bracketWithdrawalActs, type FakeFixture } from "./fake-driver.ts";
+import { FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy, type FakeFixture } from "./fake-driver.ts";
 import { departedStatusesText, entrantMembersPkeyText, ladderText, wireCodeFor } from "./product-text.ts";
 
 /** The self-pair's 500 message, read once from V213 (product-text). */
@@ -580,9 +580,11 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
         policy = expunge ? "expunge" : policy === "expunge" ? "expunge" : "walkover";
         for (const f of expunge ? [...played, ...pending] : pending) plan.push({ f, walkover: !expunge, stage });
       } else if (BRACKET_WALKOVER.has(stage.kind)) {
-        if (policy === "none") policy = "walkover";
         // loop F (C-2): a bracket withdrawal also walks a held line over — needs_decision, or an active abandon.
-        for (const f of mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)))) plan.push({ f, walkover: true, stage });
+        const acts = mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));
+        // Ruling 53: the bracket branch's policy, as the product's text reads it — a table stage's answer before it stands.
+        policy = bracketWithdrawalPolicy(policy, mine.length, acts.length);
+        for (const f of acts) plan.push({ f, walkover: true, stage });
       } else {
         const pending = mine.filter((x) => PENDING.has(x.status));
         for (const f of pending) plan.push({ f, walkover: false, stage });
@@ -829,8 +831,10 @@ export class FakeLadderDriver extends FakeLeagueDriver {
     this.#released = true;
     let walkovers = 0;
     let held = 0;
+    const inStage = this.fixtures.filter((x) => x.home_entrant_id === entrantId || x.away_entrant_id === entrantId);
     // loop F (C-2): a ladder takes the bracket path, so a held challenge — needs_decision, an active abandon — walks over.
-    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && bracketWithdrawalActs(x.status, this.abandonActive(x)))) {
+    const acts = inStage.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));
+    for (const f of acts) {
       if (f.id !== this.#held && this.heldForWithdrawal(f)) held++;
       if (f.id === this.#held) {
         // The withheld challenge's result never reached the product (its events are the fake's bookkeeping only): the
@@ -843,7 +847,8 @@ export class FakeLadderDriver extends FakeLeagueDriver {
     }
     e.status = "withdrawn";
     this.#withdrawals.push({ entrantId, afterStep: this.#issued.length, rawOrder: [...(this.#raw ?? [])] });
-    return { entrant_id: entrantId, status: "withdrawn", policy: walkovers > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+    // Ruling 53: the bracket branch's policy, as the product's text reads it (a ladder takes that branch).
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", inStage.length, acts.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
   }
   override completeStage(): Promise<CompleteOut> {
     return settle(() => {

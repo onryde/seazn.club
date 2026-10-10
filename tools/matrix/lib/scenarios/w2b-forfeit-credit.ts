@@ -446,6 +446,8 @@ export function bothSeatsDead(r: WdRecord, fixtures: readonly ObservedFixture[],
     { ok: r.dw !== null && r.dw.refusal === null, note: r.dw === null ? "the quarter-final double walkover was never posted" : `${r.dw.fixtureId}: the double walkover was refused ${r.dw.refusal?.status ?? ""} ${r.dw.refusal?.code ?? ""}` },
     { ok: sf?.status === "abandoned" && sf.outcome == null && sfSeats.length === 0, note: `${r.lines.b.sf}: ${sf?.status ?? "(missing)"} ${text(sf?.outcome)}, seats ${sfSeats.join(" v ") || "nobody"} — wanted abandoned with no outcome, seats nobody (a departed seat beside a recorded double walkover is a void)` },
   ];
+  // The vacant half pins no finalRanks: the product ranks a first-round loser 1st while its banner names nobody — a W4
+  // defect (VACANT_TITLE_ROUTE) a pin would freeze (class 4). finalVacant keeps the void and the no-champion items.
   if (r.half === "crowned") {
     items.push(
       { ok: fin?.status === "forfeited" && fa !== null && fa.winner === r.a2 && fa.loser === null && fa.reason === "bye", note: `${r.lines.final}: ${fin?.status ?? "(missing)"} ${text(fin?.outcome)} — wanted forfeited bye award to ${r.a2} (the seat SF2's void feeds is dead, X-DW-2)` },

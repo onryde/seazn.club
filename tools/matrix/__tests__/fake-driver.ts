@@ -30,7 +30,7 @@ import {
   type AmericanoViewOut, type ChallengeOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
-import { bracketWithdrawalText, wireCodeFor, withdrawalReason } from "./product-text.ts";
+import { bracketWithdrawalPolicyText, bracketWithdrawalText, wireCodeFor, withdrawalReason } from "./product-text.ts";
 import { fixtureStatusFromFold } from "./w2a-status.ts";
 
 export interface FakeFixture extends FixtureRow { events: StreamEvent[] }
@@ -86,6 +86,17 @@ export function activeAbandonIds(events: readonly StreamEvent[]): string[] {
  *  "scheduled")? `abandonActive`: its ledger holds an abandon nothing voided. */
 export function bracketWithdrawalActs(status: string, abandonActive: boolean): boolean {
   return BRACKET_WITHDRAW_PENDING.has(status) || (IF_ABANDON_ACTIVE.has(status) && abandonActive);
+}
+/** withdrawal.ts's bracket-branch policy line, read from its text (owner ruling 53, loop F; product-text.ts). */
+const BRACKET_POLICY = bracketWithdrawalPolicyText();
+/** The policy a withdrawal answers after a BRACKET-path stage (WITHDRAWAL_WALKOVER_KINDS: knockout, double_elim,
+ *  stepladder, page_playoff, ladder): a `prior` policy an earlier stage set stands; a `none` moves to `walkover` only as
+ *  the product's rule says — under ruling 53 when the planner acted on a line (`acted`: the entrant's fixtures
+ *  bracketWithdrawalActs reads as pending), so an entrant with nothing pending answers `none`. `inStage`: the entrant's
+ *  fixtures in the stage, what the rule read before ruling 53. */
+export function bracketWithdrawalPolicy(prior: WithdrawOut["policy"], inStage: number, acted: number): WithdrawOut["policy"] {
+  if (prior !== "none") return prior;
+  return (BRACKET_POLICY === "acted" ? acted : inStage) > 0 ? "walkover" : "none";
 }
 // stages.ts:979 — what the swiss gate counts as a finished board.
 const DECIDED = new Set(["decided", "finalized", "forfeited"]);
@@ -933,7 +944,8 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     const mine = this.fixtures.filter((x) => x.home_entrant_id === entrantId || x.away_entrant_id === entrantId);
     let walkovers = 0;
     let held = 0;
-    for (const f of mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)))) {
+    const acts = mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));
+    for (const f of acts) {
       const slot: Slot = f.home_entrant_id === entrantId ? "home_entrant_id" : "away_entrant_id";
       const opponent = slot === "home_entrant_id" ? f.away_entrant_id : f.home_entrant_id;
       if (opponent === null) {
@@ -955,14 +967,20 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       walkovers++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy: mine.length > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", mine.length, acts.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
   }
   /** W2b X-WD-2 / X-WD-3 (ruling 90): a page playoff withdrawal walks its pending fixtures over to the opponent, as
    *  knockout does, and never voids one; a seat whose opponent is still TBD is emptied and goes dead — counted a
    *  walkover, as loop F's departSeat is — so the opponent who arrives there is walked over (fill → awardThrough). */
   override async withdraw(entrantId: string): Promise<WithdrawOut> {
     if (this.singleElim) return this.#withdrawBracket(entrantId);
-    if (!this.pagePlayoff) return super.withdraw(entrantId);
+    const inStage = this.fixtures.filter((x) => x.home_entrant_id === entrantId || x.away_entrant_id === entrantId);
+    if (!this.pagePlayoff) {
+      // A stepladder, a double elimination, a third-place or plain knockout keeps the league's cascade here; its policy
+      // is still the bracket branch's (ruling 53), counted on the rows as they stood before the cascade.
+      const acted = inStage.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x))).length;
+      return { ...(await super.withdraw(entrantId)), policy: bracketWithdrawalPolicy("none", inStage.length, acted) };
+    }
     this.log("withdraw");
     let walkovers = 0;
     let pending = 0;
@@ -984,7 +1002,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       walkovers++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy: pending > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", inStage.length, pending), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
   }
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     const f = this.fixtures.find((x) => x.id === id)!;

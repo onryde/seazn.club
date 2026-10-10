@@ -8,10 +8,12 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
+import type { StageKind } from "@seazn/engine/core";
 import { CREDIT_SPORTS, walkoverCredit } from "@seazn/reference";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import { RefusedCall, type FixtureRow, type StandingsRowWire, type WithdrawOut } from "../lib/driver/types.ts";
+import { fieldSizeFor } from "../lib/field-size.ts";
 import { foldStream } from "../lib/fold.ts";
 import type { ObservedFixture, ObservedOutcome } from "../lib/observed.ts";
 import { Recorder, setUpDivision } from "../lib/scenarios/common.ts";
@@ -34,9 +36,9 @@ import { GeneratorUnsupported, OutcomeUnreachable, type StreamEvent } from "../l
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
 import { AWARD_POLICY, DLS_ON, bracketRootRow, minOversRule, knockoutRootRow, rootKindRows, tableRootRow, thirdPlaceRows, w2bApplies, w2bCells } from "../lib/w2b-cells.ts";
-import { FakeKnockoutDriver, FakeLeagueDriver } from "./fake-driver.ts";
+import { FakeKnockoutDriver, FakeLeagueDriver, bracketWithdrawalActs, bracketWithdrawalPolicy } from "./fake-driver.ts";
 import { FakeLadderDriver, FakeMultiStageDriver } from "./fake-formats-driver.ts";
-import { bracketWithdrawalFrom, bracketWithdrawalText } from "./product-text.ts";
+import { bracketWithdrawalFrom, bracketWithdrawalPolicyFrom, bracketWithdrawalPolicyText, bracketWithdrawalText } from "./product-text.ts";
 
 const variantFor = offlineBuilderDefault;
 const rootKind = (row: RowKey): string => stagesForRow(row)[0]!.kind;
@@ -638,6 +640,11 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
     expect(withdrawalsWalkOver(vr, vacant)).toMatchObject({ verdict: "pass", checked: 7 });
     expect(tbdSeatWalksOver(vr, vacant)).toMatchObject({ verdict: "pass", checked: 5 });
     expect(bothSeatsDead(vr, vacant, null), "the final is finalVacant's, so finalRanks are not read").toMatchObject({ verdict: "pass", checked: 2 });
+    // W4's defect: under a vacant title the product ranks a first-round loser 1st. No rank order moves the vacant half's
+    // verdict — a pin would freeze the defect (class 4); the crowned half's rank-1 item is the only one read.
+    const rankOrders = [["a first-round loser", vr.a2!], [vr.a2!], []];
+    for (const ranks of rankOrders) expect(bothSeatsDead(vr, vacant, ranks), JSON.stringify(ranks)).toMatchObject({ verdict: "pass", checked: 2 });
+    expect(rankOrders.length).toBe(3);
     expect(finalVacant(vr, vacant)).toMatchObject({ verdict: "pass", checked: 2 });
     // The crowned half's rows are not the vacant half's: its bye-crowned final reds both items, and its void would red
     // the crowned half's voids item (above), never this one's.
@@ -1050,6 +1057,10 @@ describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinn
   });
 });
 
+/** The multi-stage fake's two bracket rows after a group (catalogue.ts): a knockout, and a page playoff (X-WD-2 puts
+ *  it on the bracket path, withdrawal.ts WITHDRAWAL_WALKOVER_KINDS). */
+const MS_ROWS: readonly (readonly [RowKey, string])[] = [["groups_ko", "knockout"], ["group_playoffs", "page_playoff"]];
+
 // ---------------------------------------------------------------------------------------------------------------
 // Post-F re-checks 2–5: loop F's bracket withdrawal (withdrawal.ts) and seat resolver (stages.ts resolveBracketSeats),
 // read from the product where a fake mirrors them, and the single-elimination fake played through each state the
@@ -1201,9 +1212,6 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
     expect(f().events.map((e) => e.type).slice(-2), "the cascade's writes").toEqual(["core.void", "core.forfeit"]);
   });
 
-  /** The multi-stage fake's two bracket rows after a group (catalogue.ts): a knockout, and a page playoff (X-WD-2 puts
-   *  it on the bracket path, withdrawal.ts WITHDRAWAL_WALKOVER_KINDS). */
-  const MS_ROWS: readonly (readonly [RowKey, string])[] = [["groups_ko", "knockout"], ["group_playoffs", "page_playoff"]];
   it("the multi-stage fake, groups then a knockout or a page playoff: a withdrawal whose next opponent is TBD empties her seat and counts a walkover, never a void; the arrival walks over by bye (C-5)", async () => {
     // single-sport: the seat rule reads seats and statuses, never the sport.
     let checked = 0;
@@ -1235,7 +1243,7 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
       await SCENARIOS.LIFECYCLE.run({ driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("generic", variant), tag: "t", denied: [] });
       expect(d.stages.map((s) => s.kind), `${row}: premise`).toContain(later);
       expect(left, `${row}: premise — a ${later} winner went on to a TBD seat`).not.toBeNull();
-      expect(answer, row).toMatchObject({ walkovers: 1, voided: 0, walked_over_held: 0 });
+      expect(answer, row).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0, walked_over_held: 0 });
       const next = d.fixtures.find((x) => x.id === left!.fixture)!;
       expect(next[left!.side], `${row}: her seat is emptied`).not.toBe(left!.who);
       const arrival = next[left!.side === "home_entrant_id" ? "away_entrant_id" : "home_entrant_id"];
@@ -1279,6 +1287,133 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
       expect(d.stages.find((s) => s.id === f.stage_id)?.kind, `${row}: premise`).toBe(later);
       expect(answer, row).toMatchObject({ walkovers: 1, voided: 0, walked_over_held: 1 });
       expect([f.status, f.outcome], `${row}: walked over to the remaining side`).toEqual(["forfeited", { kind: "award", winner: held!.away, loser: held!.home, reason: WITHDREW }]);
+      checked++;
+    }
+    expect(checked).toBe(MS_ROWS.length);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Owner ruling 53 (loop F, withdrawal.ts's bracket branch): a bracket, ladder or page_playoff withdrawal that leaves
+// nothing pending answers policy `none`; one pending line answers `walkover`. Every fake reads the product's policy line
+// (product-text.ts) rather than typing it. Expected values are the ruling's, never the fake's.
+describe("ruling 53: a bracket-path withdrawal with nothing pending answers policy none, one pending line walkover — the product's line, and every fake", () => {
+  const WITHDRAWAL_TS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps/web/src/server/usecases/withdrawal.ts");
+  const RULED = 'if (out.policy === "none" && result.updates.length > 0) out.policy = "walkover";';
+  const BEFORE_RULING = 'if (out.policy === "none") out.policy = "walkover";';
+  it("the product's bracket branch moves a none policy only when its planner acted (ruling 53); the line before the ruling reads in-stage; a changed shape is refused by name", () => {
+    expect(bracketWithdrawalPolicyText()).toBe("acted");
+    const text = readFileSync(WITHDRAWAL_TS, "utf8");
+    expect(text.split(RULED).length - 1, "premise: the ruled line, once").toBe(1);
+    expect(bracketWithdrawalPolicyFrom(text.replace(RULED, BEFORE_RULING))).toBe("in-stage");
+    const refusals: [string, string, RegExp][] = [
+      ["no bracket branch", text.replace("} else if (WITHDRAWAL_WALKOVER_KINDS.has(stage.kind)) {", "} else if (BRACKETS.has(stage.kind)) {"), /no WITHDRAWAL_WALKOVER_KINDS branch/],
+      ["neither shape", text.replace(RULED, 'out.policy = "walkover";'), /in no shape this reader knows/],
+      ["both shapes", text.replace(RULED, `${RULED}\n        ${BEFORE_RULING}`), /in both shapes/],
+    ];
+    for (const [name, t, why] of refusals) expect(() => bracketWithdrawalPolicyFrom(t), name).toThrow(why);
+    expect(refusals.length).toBe(3);
+  });
+
+  it("bracketWithdrawalPolicy: a policy an earlier stage set stands; a none moves to walkover only when the planner acted on a line", () => {
+    // [prior, the entrant's fixtures in the stage, the ones the planner acts on, the answer]: ruling 53's rows, and the
+    // product's stage loop (a table stage before the bracket answers first).
+    const rows: [WithdrawOut["policy"], number, number, WithdrawOut["policy"]][] = [
+      ["none", 2, 0, "none"], ["none", 0, 0, "none"], ["none", 2, 1, "walkover"],
+      ["walkover", 1, 0, "walkover"], ["expunge", 1, 0, "expunge"], ["expunge", 1, 1, "expunge"],
+    ];
+    for (const [prior, inStage, acted, want] of rows) expect(bracketWithdrawalPolicy(prior, inStage, acted), `${prior} ${inStage} ${acted}`).toBe(want);
+    expect(rows.length).toBe(6);
+  });
+
+  /** The knockout fake in one of its bracket modes, set up and started on `row`'s field. */
+  async function bracketFake(make: () => FakeKnockoutDriver, row: RowKey) {
+    const d = make();
+    const sport = "generic";
+    const variant = variantFor(sport);
+    const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|LIFECYCLE`, row, sport, variant, scenario: "LIFECYCLE", canary: false };
+    const ctx = { driver: d, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] };
+    await setUpDivision(ctx, new Recorder(), fieldSizeFor(row, "LIFECYCLE"));
+    const kind = d.bracketKind as StageKind;
+    return { d, cfg: stageCfg(sport, ctx.cfg, kind), kind };
+  }
+  const mineOf = (d: FakeLeagueDriver, id: string) => d.fixtures.filter((f) => f.home_entrant_id === id || f.away_entrant_id === id);
+  const acting = (d: FakeLeagueDriver, id: string) => mineOf(d, id).filter((f) => bracketWithdrawalActs(f.status, d.abandonActive(f))).length;
+  const MODES: readonly (readonly [string, () => FakeKnockoutDriver, RowKey])[] = [
+    ["single elimination (loop F's cascade)", () => new FakeKnockoutDriver({ singleElim: true }), "knockout"],
+    ["a plain knockout (the league's cascade)", () => new FakeKnockoutDriver(), "knockout"],
+    ["a stepladder", () => new FakeKnockoutDriver({ stepladder: true }), "stepladder_only"],
+    ["a page playoff", () => new FakeKnockoutDriver({ pagePlayoff: true }), "page_playoff_only"],
+  ];
+  it("the knockout fake, every bracket mode: a round-one loser who feeds nowhere answers none (walkovers 0); a side of an open line answers walkover (walkovers 1)", async () => {
+    // single-sport: the policy reads statuses and seats, never the sport.
+    let checked = 0;
+    for (const [mode, make, row] of MODES) {
+      const { d, cfg, kind } = await bracketFake(make, row);
+      const open = d.fixtures.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null && bracketWithdrawalActs(f.status, false));
+      const out = open.find((f) => !d.loserFeeds.has(f.id));
+      expect(out, `${mode}: premise — a seated line whose loser feeds nowhere`).toBeDefined();
+      await d.postStream(out!.id, generateStream({ sportKey: "generic", cfg, stageKind: kind, home: out!.home_entrant_id!, away: out!.away_entrant_id!, outcome: { kind: "win", winner: "home" } }));
+      const loser = out!.away_entrant_id!;
+      expect([mineOf(d, loser).length, acting(d, loser)], `${mode}: premise — the loser holds a fixture, nothing pending`).toEqual([1, 0]);
+      expect(await d.withdraw(loser), `${mode}: nothing pending`).toMatchObject({ policy: "none", walkovers: 0, voided: 0 });
+      const next = d.fixtures.find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null && f.home_entrant_id !== loser && f.away_entrant_id !== loser && bracketWithdrawalActs(f.status, false));
+      expect(next, `${mode}: premise — another seated open line`).toBeDefined();
+      const side = next!.home_entrant_id!;
+      expect(acting(d, side), `${mode}: premise — one line pending`).toBe(1);
+      expect(await d.withdraw(side), `${mode}: one pending`).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0 });
+      checked++;
+    }
+    expect(checked).toBe(MODES.length);
+  });
+
+  it("the ladder fake (a ladder takes the bracket branch): a side whose challenge is decided answers none; a side of a pending challenge answers walkover", async () => {
+    // single-sport: the policy reads statuses and seats, never the sport.
+    const d = new FakeLadderDriver();
+    const spec: CaseSpec = { caseId: "ladder|generic|x|R4", row: "ladder", sport: "generic", variant: variantFor("generic"), scenario: "R4", canary: false };
+    const ctx = { driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("generic", variantFor("generic")), tag: "t", denied: [] };
+    const setup = await setUpDivision(ctx, new Recorder(), 4);
+    const cfg = stageCfg("generic", ctx.cfg, "ladder");
+    const [s1, s2, s3, s4] = [setup.idOfSeed(1), setup.idOfSeed(2), setup.idOfSeed(3), setup.idOfSeed(4)];
+    const { fixture_id: first } = await d.challenge(setup.stage.id, s2, s1);
+    await d.postStream(first, generateStream({ sportKey: "generic", cfg, stageKind: "ladder", home: s2, away: s1, outcome: { kind: "win", winner: "away" } }));
+    expect([mineOf(d, s2).length, acting(d, s2)], "premise: s2 holds a decided challenge, nothing pending").toEqual([1, 0]);
+    expect(await d.withdraw(s2), "nothing pending").toMatchObject({ policy: "none", walkovers: 0, voided: 0 });
+    await d.challenge(setup.stage.id, s4, s3);
+    expect(acting(d, s4), "premise: one challenge pending").toBe(1);
+    expect(await d.withdraw(s4), "one pending").toMatchObject({ policy: "walkover", walkovers: 1, voided: 0 });
+  });
+
+  it("the multi-stage fake (formats), groups then a knockout or a page playoff: a bracket loser with nothing pending answers the GROUP stage's walkover — the bracket branch moves only a none, and a table stage always names a policy", async () => {
+    // single-sport: the policy reads statuses and seats, never the sport. Every bracket entrant played its group, so the
+    // table branch (stage.ts withdrawTableEntrant: played ≥ half walks over) answers first; ruling 53's none needs a
+    // withdrawal with no table fixture, which a group-first format never has (bracketWithdrawalPolicy's own rows above).
+    let checked = 0;
+    for (const [row, later] of MS_ROWS) {
+      let answer: WithdrawOut | null = null;
+      let premise: [number, number] | null = null;
+      class WithdrawsALoser extends FakeMultiStageDriver {
+        override async postStream(id: string, events: readonly StreamEvent[], prefix = "") {
+          const out = await super.postStream(id, events, prefix);
+          const f = this.fixtures.find((x) => x.id === id)!;
+          const kind = this.stages.find((s) => s.id === f.stage_id)?.kind;
+          const o = f.outcome as { winner?: unknown; loser?: unknown } | null;
+          if (answer === null && kind === later && typeof o?.loser === "string" && !this.loserFeeds.has(id)) {
+            const inStage = this.fixtures.filter((x) => x.stage_id === f.stage_id && (x.home_entrant_id === o.loser || x.away_entrant_id === o.loser));
+            premise = [inStage.length, inStage.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x))).length];
+            answer = await this.withdraw(o.loser);
+          }
+          return out;
+        }
+      }
+      const d = new WithdrawsALoser();
+      const variant = variantFor("generic");
+      const spec: CaseSpec = { caseId: `${row}|generic|${variant}|LIFECYCLE`, row, sport: "generic", variant, scenario: "LIFECYCLE", canary: false };
+      await SCENARIOS.LIFECYCLE.run({ driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("generic", variant), tag: "t", denied: [] }).catch((e: unknown) => {
+        if (!(e instanceof RefusedCall)) throw e;
+      });
+      expect(premise, `${row}: premise — a ${later} loser who feeds nowhere withdrew, holding a ${later} fixture and nothing pending`).toEqual([1, 0]);
+      expect(answer, row).toMatchObject({ policy: "walkover", walkovers: 0, voided: 0 });
       checked++;
     }
     expect(checked).toBe(MS_ROWS.length);

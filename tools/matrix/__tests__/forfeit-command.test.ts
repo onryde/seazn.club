@@ -20,6 +20,7 @@ import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { generateStream, partialPlay } from "../lib/streams/index.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
+import { bracketWithdrawalActs } from "./fake-driver.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
 import { nextMatchStartedText } from "./product-text.ts";
 
@@ -424,6 +425,20 @@ describe("rule 10 — the required sequences, every step checked", () => {
   const knockoutCfg = (sport: string) => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
   const stream = (sport: string, home: string, away: string, outcome: Parameters<typeof generateStream>[0]["outcome"]) =>
     generateStream({ sportKey: sport, cfg: knockoutCfg(sport), stageKind: "knockout", home, away, outcome });
+  it("ruling 53 on the model (withdrawal.ts's bracket branch, read from the product): a semi-final loser with nothing pending answers policy none; a side of an open semi-final answers walkover", async () => {
+    // single-sport: the policy reads statuses and seats, never the sport.
+    const b = await bracket("generic");
+    const sf1 = row(b.d, b.sf1);
+    const [w, l] = [sf1.home_entrant_id!, sf1.away_entrant_id!];
+    await b.d.postStream(b.sf1, stream("generic", w, l, { kind: "win", winner: "home" }));
+    const mine = (id: string) => b.d.fixtures.filter((f) => f.home_entrant_id === id || f.away_entrant_id === id);
+    const acting = (id: string) => mine(id).filter((f) => bracketWithdrawalActs(f.status, b.d.abandonActive(f))).length;
+    expect([mine(l).length, acting(l)], "premise: the loser holds her semi-final, nothing pending").toEqual([1, 0]);
+    expect(await b.d.withdraw(l), "nothing pending").toMatchObject({ policy: "none", walkovers: 0, voided: 0 });
+    const side = row(b.d, b.sf2).home_entrant_id!;
+    expect(acting(side), "premise: one line pending").toBe(1);
+    expect(await b.d.withdraw(side), "one pending").toMatchObject({ policy: "walkover", walkovers: 1, voided: 0 });
+  });
   it("X-WD-3 on the model (loop F departSeat): a withdrawal whose next opponent is TBD empties her seat and counts one walkover; the arrival walks over by bye (C-5)", async () => {
     // single-sport: the seat rule reads seats and statuses, never the sport.
     const b = await bracket("generic");
