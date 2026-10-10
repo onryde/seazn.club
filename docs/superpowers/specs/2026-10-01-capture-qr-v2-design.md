@@ -653,15 +653,18 @@ console's links store, its hash and its sealed envelope.
 | `warmingDeadline` | `warming_at + WARMING_TIMEOUT_MINUTES`, as epoch seconds (§5.3). |
 | `stage` (W28) | ONE read per descriptor, recomputed on every read: the fixture's stage's fixtures (the board's round-code columns, through `fixtures_stage_idx`), the stage's kind and the key of the fixture's pool. `code` is the scheduler board's chip for the fixture — `boardRoundCodes` over those rows, else `R{round_no}` exactly as the board's card falls back — rendered with the label's dictionary (the org's `default_locale`, W25), so an `es` org reads `CF` for a quarter-final. `role` is `roundRoleFor` over the same rows, serialised verbatim (`kind`, plus `n` or `entrants` where the variant has one). Build decision (2026-10-06, for review): a bracket stage the board itself refuses to code — rows from before V368 with no `is_final` — gets the plain round ordinal (`plain_round`, n = the round's rank + 1), never the role `roundRoleFor` would guess from column defaults, so the role always agrees with the chip. `pool` is `pools.key` for `fixtures.pool_id` (never `pools.name`, which is English); `pools.key` has no CHECK, so a key outside `^[A-Z]$` is omitted and logged. A code outside 1–8 characters cannot be produced: the whole `stage` is omitted and logged. `fixtures.stage_id` is NOT NULL, so every fixture has a stage. `label` (2026-10-07): `poolLabel` over the org locale's `public` dictionary (`getDictionary(locale, "public")` — `msgFor` reads only `ui`) + " · " + `code` for a pooled match, else `code`; over 40 characters it is omitted and logged, the rest of `stage` kept. **Amended 2026-10-08 (owner ruling 2026-10-08, Option A; the finals' long names are A1, a recommendation applied when the owner said "raise PR"; W28):** `label` is the division's name, then the pool's word for a pooled match, then the round, joined with " · " (`Open · Round 2`, `Open · QF`, `Open · Final`, `Girls U14 · Group A · Round 2`), in the org's `default_locale`. The round is `bracket.round.plain` ("Round {n}", "Ronda {n}") for a plain round — every uncoded round, n being the number its `R{n}` chip shows; the long name for `final`, `third_place` and `grand_final` (`bracket.round.final` / `.thirdPlace` / `.grandFinal`: "Final", "Third place", "Grand final"); the chip (`code`) for every other role. Over 40 characters the pool's word is dropped first, then the division; a round still over 40 omits the label, the rest of `stage` kept. Each drop is logged with the fixture, the length and the part dropped. `code`, `role` and `pool` are unchanged, and so is the contract's shape (1–40, optional). The division's name is `divisions.name`, read in the same one statement; a blank name leaves the division out. |
 
-**Ingest URL rewrite.** **Removed 2026-10-10 (owner ruling):** the `STREAM_INGEST_HOST` rewrite was removed on 2026-10-10 (owner ruling). The first bullet below is history. Both urls are served as Cloudflare stored them, and the foreign-host rule now holds in every environment: under a live driver, a hostname other than exactly `live.cloudflare.com` on the RTMPS url, or on the SRT url while SRT is offered, answers `503` (`ingest_host_unexpected`). The fake driver is held to its own `fake.ingest.invalid` (local and CI). Before the removal, the check ran only while the variable was set, so it never ran under W26.
+**Ingest URL rewrite.** **Removed 2026-10-10 (owner ruling):** the `STREAM_INGEST_HOST` rewrite was removed on 2026-10-10 (owner ruling). The bullets marked *(history)* below describe the code before that date. Both urls are served byte-for-byte as Cloudflare stored them, and the foreign-host rule now holds in every environment: under a live driver, a hostname other than exactly `live.cloudflare.com` on the RTMPS url, or on the SRT url while SRT is offered, answers `503` (`ingest_host_unexpected`). The fake driver is held to its own `fake.ingest.invalid` (local and CI). Before the removal, the check ran only while the variable was set, so it never ran under W26.
 
-- **RTMPS only.** An exact `live.cloudflare.com` hostname on the RTMPS url is rewritten to `STREAM_INGEST_HOST`. The
+- *(history)* **RTMPS only.** An exact `live.cloudflare.com` hostname on the RTMPS url is rewritten to `STREAM_INGEST_HOST`. The
   scheme, port and path are kept. **Dormant under W26 (2026-10-05):** `STREAM_INGEST_HOST` is unset in every
   environment, and setting it would break every phone (capture trusts only `live.cloudflare.com`).
 - **SRT is never rewritten** (W21). Its url must have exactly the host `live.cloudflare.com`.
-- **Any other hostname, on either url, answers `503`** (`ingest_host_unexpected`) and is logged as an error. Capture
-  refuses a `cred` that is not on an allowed host, so serving it would only fail the start on the phone.
-- With `STREAM_INGEST_HOST` unset (every environment under W26), Cloudflare's values are served.
+- **Any other hostname answers `503`** (`ingest_host_unexpected`) and is logged as an error: on the RTMPS url always,
+  and on the SRT url only while SRT is offered (`STREAM_SRT_ENABLED` on; off, `cred.srt` is `null` and its url is not
+  judged). Exact hostname only, never a suffix. Under the fake driver (local and CI) the host is the fake's own
+  `fake.ingest.invalid`. Capture refuses a `cred` that is not on an allowed host, so serving it would only fail the
+  start on the phone. *(Corrected 2026-10-10: until the removal this ran only while `STREAM_INGEST_HOST` was set.)*
+- *(history)* With `STREAM_INGEST_HOST` unset (every environment under W26), Cloudflare's values are served.
 - **SRT from launch on Cloudflare's host; `srt: null` is A18's safety net only.**
   - `STREAM_SRT_ENABLED` **defaults ON** (W21): unset means on, in code. Setting it to `false` is the safety net: the
     descriptor then carries `cred.srt: null` and `preferred: "rtmps"`, and the phone publishes RTMPS only, with no
@@ -1485,6 +1488,9 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
   (provisioning at 179 s still gets the full 10 min).
 - Ingest URL rewrite: RTMPS on an exact host, a foreign host, unset, and the scheme, port and path preserved; SRT
   never rewritten (it stays `live.cloudflare.com` with `STREAM_INGEST_HOST` set), and a foreign SRT host → 503.
+  **Removed 2026-10-10 (owner ruling):** the rewrite and its tests are gone (§6.4). They are replaced by a regression
+  guard showing a set `STREAM_INGEST_HOST` has no effect, the foreign-host rule on both legs (lookalike hosts
+  included), and byte-for-byte serving (`relay/__tests__/ingest-cred.test.ts`, `usecases/__tests__/capture-get.test.ts`).
 
 #### 11.1.2 Use-case (DB-backed vitest)
 

@@ -523,6 +523,13 @@ describe.skipIf(!HAS_DB)("getCode — refusals and the deployment's settings", (
       ["rtmps://fake.ingest.invalid:443/live/", "srt://fake.ingest.invalid:778"],   // the fake's host is foreign to a live driver
       ["rtmps://evil.example:443/live/", CF_SRT],
       [CF_RTMPS, "srt://evil.example:778"],
+      // Lookalikes, each on both legs: parent-domain, sibling (`endsWith(host)` admits it), child (`endsWith("." + host)`).
+      ["rtmps://live.cloudflare.com.evil.example:443/live/", CF_SRT],
+      [CF_RTMPS, "srt://live.cloudflare.com.evil.example:778"],
+      ["rtmps://evil-live.cloudflare.com:443/live/", CF_SRT],
+      [CF_RTMPS, "srt://evil-live.cloudflare.com:778"],
+      ["rtmps://x.live.cloudflare.com:443/live/", CF_SRT],
+      [CF_RTMPS, "srt://x.live.cloudflare.com:778"],
     ] as const) {
       await sql`update fixture_stream_inputs set ingest_rtmps_url = ${rtmps}, ingest_srt_url = ${srt} where session_id = ${sid}`;
       const err = await refusal(get(r, mine));
@@ -531,7 +538,7 @@ describe.skipIf(!HAS_DB)("getCode — refusals and the deployment's settings", (
       expect((err as Error).message, `${rtmps} + ${srt}`).toMatch(/ingest_host_unexpected/);
       refused++;
     }
-    expect(refused, "anti-vacuity").toBe(3);
+    expect(refused, "anti-vacuity").toBe(9);
     expect((await sessionRow(sid)).credentials_served_count, "a refused cred is never counted as served").toBe(servedBefore);
     await storeCloudflare(sid);
     expect(await get(r, mine), "the positive pair").toMatchObject({ cred: { rtmps: { url: CF_RTMPS }, srt: { url: CF_SRT } } });

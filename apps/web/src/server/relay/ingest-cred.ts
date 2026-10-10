@@ -2,9 +2,9 @@
 // from the stored provider values. Pure: no I/O, no clock, no env; the caller opens the stored values (`readFirstInput`)
 // inside its own request and passes the deployment's settings in.
 //
-//  - Both legs are served as the provider issued them (W26: Cloudflare's own `live.cloudflare.com`, in every
-//    environment): SRT verbatim, RTMPS through its parsed `URL`, which keeps `:443` and `/live/` exactly as stored
-//    (`rtmps:` is not a special scheme). There is no custom ingest host: W15's rewrite to one was retired by W26
+//  - Both legs are served byte-for-byte as the provider issued them (W26: Cloudflare's own `live.cloudflare.com`, in
+//    every environment). Each url is parsed ONLY for the host check, never re-serialised: `URL` would collapse a dot
+//    segment or percent-encode a space. There is no custom ingest host: W15's rewrite to one was retired by W26
 //    (2026-10-05) and removed with its setting on 2026-10-10 (owner ruling) — capture trusts only Cloudflare's host, so
 //    a rewrite would break every phone.
 //  - A url on any host but the one this deployment's driver issues (`ingestHostOf`: Cloudflare's under a live driver,
@@ -46,7 +46,7 @@ export function ingestCred(
     : null;
   return {
     ok: true,
-    cred: { srt: srtCred, rtmps: { url: rtmps.toString(), streamKey: raw.rtmps.streamKey } },
+    cred: { srt: srtCred, rtmps: { url: raw.rtmps.url, streamKey: raw.rtmps.streamKey } },
     // §6.4: QR_PREFERRED_DEFAULT while SRT is offered; "rtmps" otherwise — `preferred` never names a null shape (A18).
     preferred: srtCred ? QR_PREFERRED_DEFAULT : "rtmps",
   };

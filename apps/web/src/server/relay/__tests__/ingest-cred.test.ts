@@ -60,18 +60,47 @@ describe("ingestCred (§6.4, W21, W26)", () => {
     expect(ingestCred(CF, { ...LIVE, srtEnabled: false })).toMatchObject({ ok: true, cred: { srt: null, rtmps: { url: CF_RTMPS } } });
   });
 
-  it("a foreign host is refused on its own leg — rtmps alone, srt alone, a suffix trick; Cloudflare's own passes (the positive pair)", () => {
+  it("a foreign host is refused on its own leg — rtmps alone, srt alone, parent/sibling/child-domain tricks on both legs; Cloudflare's own passes (the positive pair)", () => {
     const rtmpsForeign = { ...CF, rtmps: { ...CF.rtmps, url: "rtmps://evil.example:443/live/" } };
     expect(ingestCred(rtmpsForeign, LIVE)).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
     const srtForeign = { ...CF, srt: { ...CF.srt, url: "srt://evil.example:778" } };
     expect(ingestCred(srtForeign, LIVE)).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "srt" });
-    // A suffix trick is not the host: `live.cloudflare.com.evil.example` is a different hostname.
-    const suffix = { ...CF, rtmps: { ...CF.rtmps, url: "rtmps://live.cloudflare.com.evil.example:443/live/" } };
-    expect(ingestCred(suffix, LIVE)).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
+    // Lookalikes are not the host — exact hostname only, on BOTH legs (SRT on): a parent-domain trick
+    // (`live.cloudflare.com.evil.example`, a prefix match would admit it), a sibling (`evil-live.cloudflare.com`, admitted
+    // by `endsWith(host)`) and a child (`x.live.cloudflare.com`, admitted by `endsWith("." + host)`).
+    let tricks = 0;
+    for (const host of ["live.cloudflare.com.evil.example", "evil-live.cloudflare.com", "x.live.cloudflare.com"]) {
+      expect(ingestCred({ ...CF, rtmps: { ...CF.rtmps, url: `rtmps://${host}:443/live/` } }, LIVE), `rtmps ${host}`)
+        .toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
+      expect(ingestCred({ ...CF, srt: { ...CF.srt, url: `srt://${host}:778` } }, LIVE), `srt ${host}`)
+        .toEqual({ ok: false, reason: "ingest_host_unexpected", which: "srt" });
+      tricks++;
+    }
+    expect(tricks, "anti-vacuity").toBe(3);
     // W15's retired custom host is foreign too: a stored url on it is never served (capture trusts only Cloudflare's).
     const custom = { ...CF, rtmps: { ...CF.rtmps, url: "rtmps://live.seazn.club:443/live/" } };
     expect(ingestCred(custom, LIVE)).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
     expect(ingestCred(CF, LIVE)).toMatchObject({ ok: true });
+  });
+
+  it("both legs are served BYTE-FOR-BYTE as stored — never re-serialised through URL, which would normalise a path", () => {
+    // Each stored value is one `URL` rewrites (a dot segment collapses, a space is percent-encoded), so a served value
+    // re-serialised through `URL` differs from the stored one and this test sees it.
+    let checked = 0;
+    for (const [rtmps, srt] of [
+      ["rtmps://live.cloudflare.com:443/live/../live/", "srt://live.cloudflare.com:778/../x"],
+      ["rtmps://live.cloudflare.com:443/live/a b", "srt://live.cloudflare.com:778/a b"],
+    ]) {
+      expect(new URL(rtmps).toString(), `premise: URL re-encodes ${rtmps}`).not.toBe(rtmps);
+      expect(new URL(srt).toString(), `premise: URL re-encodes ${srt}`).not.toBe(srt);
+      const r = ingestCred({ srt: { ...CF.srt, url: srt }, rtmps: { ...CF.rtmps, url: rtmps } }, LIVE);
+      expect(r, rtmps).toMatchObject({ ok: true });
+      if (!r.ok) continue;
+      expect(r.cred.rtmps.url, rtmps).toBe(rtmps);
+      expect(r.cred.srt?.url, srt).toBe(srt);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
   });
 
   it("SRT off (A18): a foreign SRT host is not judged — it is not served (srt: null) — but a foreign RTMPS host still is", () => {
