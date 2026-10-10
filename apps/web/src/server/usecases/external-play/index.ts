@@ -5,3 +5,4 @@ export * from "./queue";
 export * from "./invite";
 export * from "./open-round";
 export * from "./play";
+export * from "./result";
