@@ -552,6 +552,30 @@ describe("no status — stated first, each with its positive pair", () => {
     // …carried points included: E folded at 3 is a known rival too.
     expect(view({ ...s, rows: withE(3), fixtures: [...s.fixtures, ...expunged], statuses: { E: "withdrawn" } })).not.toBeNull();
   });
+  it("I-2 (W2b D5): a DEPARTED member whose every line is an active EXPUNGE is owed no snapshot row — the table shows; back in the field, or one line not expunged, it still hides", () => {
+    // Loop-F review I-2. W2b's expunge abandons with NO outcome (PF-4), so the snapshot never folds the leaver — and
+    // nothing of hers is still to come. Before the fix F2 read her as unknown and the pool's qualification vanished.
+    const s = open4();
+    const eOpen = [open(1, "E", "B"), open(4, "A", "E")];
+    const expunged = eOpen.map((f) => ({ ...f, status: "abandoned", outcome: null, expunged: true }));
+    let checked = 0;
+    for (const status of ["withdrawn", "disqualified"]) {
+      const shown = must(view({ ...s, fixtures: [...s.fixtures, ...expunged], statuses: { E: status } }));
+      expect(shown.rows.E, status).toBeUndefined();
+      expect(Object.keys(shown.rows).sort(), status).toEqual(["A", "B", "C", "D"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // An unreadable status, or a member back IN the field (her lines expunged, yet she plays on): unknown — hidden.
+    const rest = { ...input({ ...s, fixtures: [...s.fixtures, ...expunged] }).entrantStatuses };
+    delete rest.E;
+    expect(view({ ...s, fixtures: [...s.fixtures, ...expunged] }, { entrantStatuses: rest })).toBeNull();
+    expect(view({ ...s, fixtures: [...s.fixtures, ...expunged], statuses: { E: "confirmed" } })).toBeNull();
+    // One line NOT expunged (a plain recorded abandon, or still scheduled): her points can still move — hidden.
+    const plain = [expunged[0]!, { ...expunged[1]!, expunged: false }];
+    expect(view({ ...s, fixtures: [...s.fixtures, ...plain], statuses: { E: "withdrawn" } })).toBeNull();
+    expect(view({ ...s, fixtures: [...s.fixtures, expunged[0]!, eOpen[1]!], statuses: { E: "withdrawn" } })).toBeNull();
+  });
   it("snapshot lag: a row that has played FEWER matches than its settled fixtures → no status; equal or more shows", () => {
     const s = open4();
     const lag = s.rows.map((r) => (r.entrantId === "C" ? { ...r, played: 1 } : r));

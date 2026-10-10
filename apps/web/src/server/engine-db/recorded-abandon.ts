@@ -19,12 +19,18 @@ type Tx = postgres.TransactionSql;
  *
  * As SQL: `on` names the `fixtures` row in the enclosing query (an alias, or the table itself). Gated on the status
  * first, so the ledger probe runs only for abandoned rows, not for every row of every pass.
+ *
+ * `{ expunge: true }` (W2b D5, owner ruling 105 / loop-F M-10): only an active abandon that carries `expunge: true` —
+ * a withdrawal's expunge (`withdrawal.ts` `expungeAbandon`), which took the match out of the table altogether, so
+ * nothing is owed on it. The same probe, one more clause: never a second copy of the ledger rule.
  */
-export function hasActiveAbandonSql(tx: Tx, on = "f") {
+/** `postgres.Sql` (a transaction is one too): the public loaders read it on the pool, outside a transaction. */
+export function hasActiveAbandonSql(tx: postgres.Sql | Tx, on = "f", opts: { expunge?: true } = {}) {
   const f = tx(on);
+  const expunged = opts.expunge === true ? tx`and a.payload ->> 'expunge' = 'true'` : tx``;
   return tx`(${f}.status = 'abandoned' and exists (
     select 1 from score_events a
-    where a.fixture_id = ${f}.id and a.type = 'core.abandon'
+    where a.fixture_id = ${f}.id and a.type = 'core.abandon' ${expunged}
       and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)))`;
 }
 

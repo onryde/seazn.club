@@ -8,14 +8,13 @@ import { resolve } from "node:path";
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
 import { BRACKET_KINDS } from "@seazn/engine/core";
-import { boardgame } from "@seazn/engine/sports/boardgame";
-import { defaultLineupPair } from "@seazn/engine/testkit";
 import { connectionOptions, sql } from "@/lib/db";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
-import { buildMatchCentre, type MatchCentreInput } from "@/server/public-site/match-centre";
-import type { PublicFixture } from "@/server/public-site/data";
-import type { SideT } from "@/server/public-site/match-centre-schema";
-import { resolveBracketSeats } from "@/server/usecases/stages";
+import {
+  W2B_RECLASSIFY_NOTICE,
+  reclassifiedStagesOf,
+  resolveReclassifiedStagesIn,
+} from "@/server/migration/w2b-double-walkover-resolve";
 import { scoreEvent } from "@/server/usecases/scoring";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -42,8 +41,9 @@ const quoted = (s: string) => new Set([...s.matchAll(/'([a-z_]+)'/g)].map((m) =>
 type Tx = postgres.TransactionSql;
 const ROLLBACK = new Error("rollback");
 
-/** `body` on its own one-connection client inside a transaction that is always rolled back; the notices it raised. */
-async function rolledBack<T>(body: (tx: Tx) => Promise<T>): Promise<{ value: T; notices: string[] }> {
+/** `body` on its own one-connection client inside a transaction that is always rolled back; the notices it raised
+ *  (also handed to `body`, so it can act on the delta's notice inside the same transaction). */
+async function rolledBack<T>(body: (tx: Tx, notices: readonly string[]) => Promise<T>): Promise<{ value: T; notices: string[] }> {
   const url = process.env.DATABASE_URL!;
   const notices: string[] = [];
   const client = postgres(url, {
@@ -56,7 +56,7 @@ async function rolledBack<T>(body: (tx: Tx) => Promise<T>): Promise<{ value: T; 
   try {
     await expect(
       client.begin(async (tx) => {
-        value = await body(tx);
+        value = await body(tx, notices);
         throw ROLLBACK;
       }),
     ).rejects.toBe(ROLLBACK);
@@ -66,13 +66,19 @@ async function rolledBack<T>(body: (tx: Tx) => Promise<T>): Promise<{ value: T; 
   return { value: value as T, notices };
 }
 
-/** The block's one notice, parsed. */
-function counts(notices: string[]): { examined: number; changed: number } {
-  const mine = notices.filter((n) => n.startsWith("W2b double walkover reclassify"));
+/** The block's one notice. */
+function noticeOf(notices: readonly string[]): string {
+  const mine = notices.filter((n) => n.startsWith(W2B_RECLASSIFY_NOTICE));
   expect(mine, "exactly one W2b notice").toHaveLength(1);
-  const m = /examined=(\d+) changed=(\d+)/.exec(mine[0]!);
-  expect(m, mine[0]).not.toBeNull();
-  return { examined: Number(m![1]), changed: Number(m![2]) };
+  return mine[0]!;
+}
+/** The block's one notice, parsed: its two counts and the stages it names (`reclassifiedStagesOf`, the one-off's own
+ *  reader). */
+function counts(notices: readonly string[]): { examined: number; changed: number; stages: string[] } {
+  const notice = noticeOf(notices);
+  const m = /examined=(\d+) changed=(\d+) /.exec(notice);
+  expect(m, notice).not.toBeNull();
+  return { examined: Number(m![1]), changed: Number(m![2]), stages: reclassifiedStagesOf(notice) };
 }
 
 const chess = { sport: "boardgame", variant: declaredVariant("boardgame", "classical") };
@@ -132,6 +138,9 @@ describe.skipIf(!HAS_DB)("W2b migration — BG-DW-1 re-classification (plan D12)
     expect(b.examined - a.examined, "the seeded row is examined — exactly one more than without it").toBe(1);
     expect(b.changed - a.changed).toBe(1);
     expect([a.examined, a.changed, b.examined >= 1]).toEqual([a.changed, a.examined, true]);
+    // The notice names the stage of every row it moved (I-4): ours only when ours moved.
+    expect([a.stages.includes(s.stageId), b.stages.includes(s.stageId)], "the stage list: idle, then seeded").toEqual([false, true]);
+    expect(b.stages.length - a.stages.length).toBe(1);
   });
 
   it("BG-DW-1 migration: an unsettled held chess double forfeit becomes forfeited double_walkover; a settled one is untouched; a voided double forfeit is untouched; a non-bracket row is untouched", async () => {
@@ -183,7 +192,11 @@ describe.skipIf(!HAS_DB)("W2b migration — BG-DW-1 re-classification (plan D12)
     expect(c.changed).toBeGreaterThanOrEqual(2);
   });
 
-  it("D12: after the migration the fed seat resolves lazily — the opponent walks over with no organiser step", async () => {
+  it("D12 / I-4: the notice names the re-classified row's stage, and the one-off resolve of the stages it names walks the other semi's winner over the final with no organiser step", async () => {
+    // The sibling semi was decided BEFORE the migration, so no later score in this stage will run the cascade: without
+    // the one-off the final would wait on its dead seat for good. The resolve runs in the same rolled-back transaction
+    // as the block (the block acts on the whole shared DB), over the stages the notice names — never a stage id the
+    // test supplies.
     const s = await seedBracket({ ...chess, stageKind: "knockout", entrants: 4 });
     const rows = await sql<{ id: string; home: string; winner_to_fixture: string; winner_to_slot: number }[]>`
       select id, home_entrant_id as home, winner_to_fixture, winner_to_slot from fixtures
@@ -192,15 +205,18 @@ describe.skipIf(!HAS_DB)("W2b migration — BG-DW-1 re-classification (plan D12)
     const [sf1, sf2] = rows;
     await scoreEvent(s.auth, sf2!.id, { expected_seq: 0, type: "core.start", payload: {} });
     await scoreEvent(s.auth, sf2!.id, { expected_seq: 1, type: "boardgame.result", payload: { winner: sf2!.home, method: "resign" } });
-    const { value } = await rolledBack(async (tx) => {
+    const { value } = await rolledBack(async (tx, notices) => {
       await ledger(tx, sf1!.id, [{ type: "core.start", payload: {} }, { type: "boardgame.result", payload: DF }]);
       await held(tx, sf1!.id);
       await tx.unsafe(BLOCK!);
+      const named = reclassifiedStagesOf(noticeOf(notices));
       const before = await rowOf(tx, sf1!.winner_to_fixture);
-      await resolveBracketSeats(tx as never, s.stageId);
-      return { before, after: await rowOf(tx, sf1!.winner_to_fixture) };
+      const resolved = await resolveReclassifiedStagesIn(tx as never, named);
+      return { named, before, resolved, after: await rowOf(tx, sf1!.winner_to_fixture) };
     });
-    expect(value.before.status, "the block itself seats nothing (seats resolve lazily, D12)").toBe("scheduled");
+    expect(value.named, "the notice names our stage").toContain(s.stageId);
+    expect(value.before.status, "the block itself seats nobody").toBe("scheduled");
+    expect(value.resolved.find((r) => r.stageId === s.stageId)?.touched, "the one-off changed the final").toContain(sf1!.winner_to_fixture);
     expect(value.after).toEqual({
       status: "forfeited",
       outcome: { kind: "award", winner: sf2!.home, loser: null, reason: "bye" },
@@ -208,23 +224,12 @@ describe.skipIf(!HAS_DB)("W2b migration — BG-DW-1 re-classification (plan D12)
     });
   });
 
-  it("spec §5.5: no fixture whose active result is a chess double forfeit renders the Level copy after the migration", async () => {
-    // The headline the public match centre builds for the row before and after the block. Before: the held status
-    // line ("Level — winner to be decided"). After: never that — and Task 13's double-walkover sentence (this last
-    // line is red until Task 13 adds the key; carried there by name).
-    const s = await seedBracket({ ...chess, stageKind: "knockout", entrants: 2 });
-    const id = s.fixtureIds[0]!;
-    const { value } = await rolledBack(async (tx) => {
-      await ledger(tx, id, [{ type: "core.start", payload: {} }, { type: "boardgame.result", payload: DF }]);
-      await held(tx, id);
-      const before = await rowOf(tx, id);
-      await tx.unsafe(BLOCK!);
-      return { before, after: await rowOf(tx, id) };
-    });
-    const headline = (r: { status: string; outcome: unknown }) => statusLineOf(r.status, r.outcome as PublicFixture["outcome"]);
-    expect(headline(value.before), "the positive pair: the held row reads Level").toBe("matchCentre.status.needs_decision");
-    expect(headline(value.after)).not.toBe("matchCentre.status.needs_decision");
-    expect(headline(value.after), "Task 13: the double-walkover sentence").toMatch(/double_walkover/);
+  it("reclassifiedStagesOf: an empty list reads as none; a notice that is not the delta's, or carries no list, throws", () => {
+    expect(reclassifiedStagesOf(`${W2B_RECLASSIFY_NOTICE}: examined=0 changed=0 stages=`)).toEqual([]);
+    const ids = ["0b5e2c1a-0000-4000-8000-000000000001", "0b5e2c1a-0000-4000-8000-000000000002"];
+    expect(reclassifiedStagesOf(`${W2B_RECLASSIFY_NOTICE}: examined=2 changed=2 stages=${ids.join(",")}`)).toEqual(ids);
+    expect(() => reclassifiedStagesOf("V432 needs_decision backfill: moved=0")).toThrow(/not the W2b reclassify notice/);
+    expect(() => reclassifiedStagesOf(`${W2B_RECLASSIFY_NOTICE}: examined=0 changed=0`)).toThrow(/no stage list/);
   });
 });
 
@@ -275,24 +280,3 @@ describe.skipIf(!HAS_DB)("W2b migration — division_has_results (X-BL-1, D13)",
     expect(fn!.def).toMatch(/not in \('no_result', 'double_walkover'\)/);
   });
 });
-
-// ── the match centre's headline, for the spec §5.5 row ──────────────────────────────────────────────────────────
-const lineups = defaultLineupPair(boardgame.positions);
-const SIDES: [SideT, SideT] = [
-  { entrantId: lineups.home.entrantId, name: "Anand Viswanathan", short: "ANA", colour: null, badgeUrl: null },
-  { entrantId: lineups.away.entrantId, name: "Bela Nakamura", short: "BEL", colour: null, badgeUrl: null },
-];
-function statusLineOf(status: string, outcome: PublicFixture["outcome"]): string | undefined {
-  const input: MatchCentreInput = {
-    fixture: {
-      id: "fx1", division_id: "d1", stage_id: "s1", pool_id: null, round_no: 1, seq_in_round: 1,
-      home_entrant_id: lineups.home.entrantId, away_entrant_id: lineups.away.entrantId, home_slot_label: null, away_slot_label: null,
-      scheduled_at: "2026-10-09T09:00:00.000Z", venue: null, court_label: null, venue_name: null, court_name: null,
-      status, outcome, summary: null, last_seq: null,
-    } as PublicFixture,
-    sportKey: "boardgame", cfg: boardgame.configSchema.parse({}), events: [], lineups: { home: [], away: [] }, sides: SIDES,
-    venueTz: "UTC", locale: "en", now: new Date("2026-10-09T12:00:00.000Z"),
-    hrefs: { division: "/d", competition: "/c", calendar: null }, stage: null, moduleVersion: null, formatLabel: null,
-  };
-  return buildMatchCentre(input).header.statusLine?.key;
-}

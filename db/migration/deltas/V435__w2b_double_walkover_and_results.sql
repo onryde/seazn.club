@@ -4,8 +4,10 @@
 -- 1) Re-classify every UNSETTLED held bracket fixture whose ACTIVE result is the legacy chess double forfeit
 --    (`boardgame.result{method:"double_forfeit"}`, retired by D15): it is now a double walkover (BG-DW-1), never
 --    held. "Active" is the latest boardgame.result no core.void targets — a voided double forfeit followed by an
---    agreed draw is a real held level result and stays held. Settled rows keep their settle (plan D6). Seats resolve
---    lazily on the next resolveBracketSeats (plan D12): this block seats nobody. The update names `status`, so
+--    agreed draw is a real held level result and stays held. Settled rows keep their settle (plan D6). This block
+--    seats nobody: the cascade is TypeScript, so the notice names every stage it touched (`stages=<id,…>`) and the
+--    one-off apps/web/src/server/migration/w2b-double-walkover-resolve.ts resolves exactly those (plan D12, loop-F
+--    ruling I-4; production's count is expected to be 0, ruling 104). The update names `status`, so
 --    fixtures_track_finished fires; needs_decision and forfeited are both in its finished set (V432), so the moved
 --    rows KEEP their finished_at.
 -- 2) division_has_results counts only results with a verdict (W2b-R13): no_result and double_walkover never charge
@@ -17,9 +19,10 @@ do $$
 declare
   examined integer;
   changed integer;
+  stage_list text;
 begin
   create temporary table w2b_dw on commit drop as
-    select f.id from fixtures f join stages s on s.id = f.stage_id
+    select f.id, f.stage_id from fixtures f join stages s on s.id = f.stage_id
      where s.kind in ('knockout','double_elim','stepladder','page_playoff','ladder')
        and f.status = 'needs_decision'
        and exists (select 1 from score_events r
@@ -31,10 +34,11 @@ begin
        and not exists (select 1 from score_events st
                         where st.fixture_id = f.id and st.type = 'core.settle'
                           and not exists (select 1 from score_events v3 where v3.voids_event_id = st.id));
-  select count(*) into examined from w2b_dw;
+  select count(*), coalesce(string_agg(distinct stage_id::text, ',' order by stage_id::text), '')
+    into examined, stage_list from w2b_dw;
   update fixtures set status = 'forfeited', outcome = '{"kind":"double_walkover"}'::jsonb where id in (select id from w2b_dw);
   get diagnostics changed = row_count;
-  raise notice 'W2b double walkover reclassify: examined=% changed=%', examined, changed;
+  raise notice 'W2b double walkover reclassify: examined=% changed=% stages=%', examined, changed, stage_list;
 end $$;
 
 create or replace function division_has_results(p_division_id uuid)

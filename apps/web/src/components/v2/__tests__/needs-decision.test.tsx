@@ -273,4 +273,21 @@ describe("the settle dialog never offers a withdrawn entrant (D-R9)", () => {
     expect(offered(dialog({ id: "h", name: "Home" }, { id: "a", name: "Away" }))).toEqual(["h", "a"]);
     expect(offered(dialog({ id: "h", name: "Home", withdrawn: false }, { id: "a", name: "Away", withdrawn: false }))).toEqual(["h", "a"]);
   });
+
+  // Loop-F review M-8: both sides withdrawn (a legacy row, PF-8a) left the dialog with an empty "Who advances?" — it
+  // now says why there is no choice, and Confirm stays blocked (no winner can be chosen).
+  it("M-8: both sides withdrawn — no choice is offered and the dialog says why; with one side left it says nothing", () => {
+    const noChoice = (html: string) => /data-testid="settle-no-choice"[^>]*>([^<]*)</.exec(html)?.[1] ?? null;
+    const both = dialog({ id: "h", name: "Home", withdrawn: true }, { id: "a", name: "Away", withdrawn: true });
+    expect(offered(both)).toEqual([]);
+    expect(noChoice(both)).toBe((en as Record<string, string>)["score.needsDecision.noChoice"]);
+    expect(/data-testid="settle-confirm"[^>]*disabled=""/.test(both), "Confirm is blocked").toBe(true);
+    let checked = 0;
+    for (const gone of [null, "h", "a"] as const) {
+      const html = dialog({ id: "h", name: "Home", withdrawn: gone === "h" }, { id: "a", name: "Away", withdrawn: gone === "a" });
+      expect(noChoice(html), `${gone ?? "nobody"} withdrawn`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
 });

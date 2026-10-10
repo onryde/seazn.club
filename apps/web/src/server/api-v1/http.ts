@@ -10,6 +10,7 @@ import * as Sentry from "@sentry/nextjs";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { isLevelResultReason } from "@/lib/level-result-reason";
 import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
+import { forfeitPhaseRefusalOf } from "@/lib/forfeit-phase-refusal";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { log } from "@/server/logger";
@@ -255,6 +256,12 @@ async function v1Inner<T>(
         if (d?.reason === "seat_departed" && typeof d.entrant === "string") {
           extra = { reason: "seat_departed", entrant: d.entrant, match: d.match ?? null };
         }
+      }
+      // W2b loop-F M-4 (plan D3): FORFEIT_REASON_WRONG_PHASE names the phase it judged and the reasons it admits —
+      // only a shape this codebase reads (lib/forfeit-phase-refusal.ts); anything else keeps the code's own copy.
+      if (err.code === "FORFEIT_REASON_WRONG_PHASE") {
+        const named = forfeitPhaseRefusalOf(err.data);
+        if (named) extra = { phase: named.phase, allowed: named.allowed, both: named.both };
       }
       return errorResponse(requestId, status, err.code, err.message, extra);
     }

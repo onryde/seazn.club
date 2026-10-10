@@ -6,6 +6,7 @@ import "server-only";
 // ISR-cached themselves, and staying cache-free keeps this testable with
 // plain Postgres. The outcome enum keeps failure modes explicit.
 import { sql } from "@/lib/db";
+import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { hasFeature } from "@/lib/entitlements";
 import { resolveSponsors, type ResolvedSponsor } from "@/server/usecases/sponsors";
 import { maskPublicEntrantNames, withCourtVenueNames } from "@/server/public-site/data";
@@ -123,10 +124,13 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
              -- and on the ORDER BY ending on the stage seq and the id, which
              -- fixes the order of rows tied on (round_no, seq_in_round).
              -- (No backticks in here: this is inside a tagged template.)
-             e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot
+             -- W2b loop-F I-2: whether a withdrawal EXPUNGED the match (D5), on the same fenced probe — the
+             -- standings widget's qualification line reads it, as getPublicDivision's does.
+             e.ext_key, e.winner_to_fixture, e.winner_to_slot, e.loser_to_fixture, e.loser_to_slot, e.expunged
       from public_fixtures_v v
       left join lateral (
-        select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot
+        select x.ext_key, x.winner_to_fixture, x.winner_to_slot, x.loser_to_fixture, x.loser_to_slot,
+               ${hasActiveAbandonSql(sql, "x", { expunge: true })} as expunged
         from fixtures x where x.id = v.id
         offset 0
       ) e on true

@@ -13,6 +13,8 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { getStandings } from "@/server/usecases/stages";
 import { getFixtureState } from "@/server/usecases/fixtures";
 import { scoreEvent } from "@/server/usecases/scoring";
+import { importEvents } from "@/server/usecases/event-import";
+import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { fixtureStatusFromFold } from "../append-event";
 import { foldFixture, foldFrom } from "../fold";
 import { declaredVariant, insertLegacyEvents, seedBracket } from "./helpers/seed-bracket";
@@ -244,6 +246,32 @@ describe.skipIf(!HAS_DB)("W2b append guards and the status rule, through scoreEv
     await post(s.auth, g, "core.start");
     const ab = await scoreEvent(s.auth, g, { expected_seq: await tip(g), type: "core.abandon", payload: { reason: "withdrew", expunge: true } }, { writer: "withdrawal_cascade" });
     expect([ab.status, ab.outcome]).toEqual(["abandoned", null]);
+  });
+
+  it("PF-2 / M-6: the event importer (appendEventInTx, no writer) is refused the cascade's withdrew forfeit and writes nothing; an ordinary walkover imports", async () => {
+    // single-sport: generic — the importer's own rig (usecases/__tests__/_rig.ts); the guard reads the payload, never
+    // the sport. The importer is the one writer besides scoreEvent (event-import.ts appendEventInTx, no writer arg).
+    const { auth } = await seedOrg();
+    const refused = await startedDivisionWithFixture(auth);
+    const [f] = await sql<{ away: string }[]>`select away_entrant_id as away from fixtures where id = ${refused.fixtureId}`;
+    const report = await importEvents(auth, refused.divisionId, {
+      import_id: "imp-pf2-withdrew",
+      streams: [{ fixture: { id: refused.fixtureId }, events: [{ type: "core.forfeit", payload: { by: f!.away, reason: "withdrew" } }] }],
+    });
+    expect(report.results, "the dry run admits it (the engine knows no writer); the writer refuses it").toEqual([
+      { fixture: refused.fixtureId, status: "rejected", eventsAppended: 0, error: { code: "import.fold_rejected", engineCode: "INVALID_EVENT" } },
+    ]);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${refused.fixtureId}`;
+    expect(n, "nothing written").toBe(0);
+    // The positive pair: the same stream with an ordinary reason imports — so the refusal above is the reason gate,
+    // not the shape of the stream.
+    const ok = await startedDivisionWithFixture(auth);
+    const [g] = await sql<{ away: string }[]>`select away_entrant_id as away from fixtures where id = ${ok.fixtureId}`;
+    const accepted = await importEvents(auth, ok.divisionId, {
+      import_id: "imp-pf2-walkover",
+      streams: [{ fixture: { id: ok.fixtureId }, events: [{ type: "core.forfeit", payload: { by: g!.away, reason: "walkover" } }] }],
+    });
+    expect(accepted.results.map((r) => [r.status, r.eventsAppended])).toEqual([["imported", 1]]);
   });
 
   it("PF-1: a withdrew forfeit over a league draw is refused even from the cascade (ALREADY_DECIDED withdrew_over_result); over a held knockout fixture it is admitted", async () => {

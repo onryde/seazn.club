@@ -12,6 +12,9 @@ import { assertWithinLimit, getLimit, requireFeature } from "@/lib/entitlements"
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
+// Cycle (entrants.ts imports this file): read only inside function bodies, never at module evaluation.
+import { DEPARTED_STATUSES } from "./entrants";
+import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
@@ -293,6 +296,10 @@ export interface FixtureRow {
   winner_to_slot?: number | null;
   loser_to_fixture?: string | null;
   loser_to_slot?: number | null;
+  /** W2b D5 / loop-F I-2: a withdrawal EXPUNGED this match — `abandoned` with an active `core.abandon{expunge: true}`
+   *  (`hasActiveAbandonSql`'s expunge probe). Read by `listDivisionFixtures` only, for the console's qualification
+   *  line (`buildQualificationView` F2); the v1 list route strips it, like the feed edges above. */
+  expunged?: boolean;
 }
 
 export async function listStages(auth: AuthCtx, divisionId: string): Promise<StageRow[]> {
@@ -3626,6 +3633,20 @@ export async function fillSlot(
   return row?.id ?? null;
 }
 
+/** Loop-F I-1: the seat a DEPARTED winner would have filled is stamped dead instead (`BYE_SLOT_LABEL`, as her
+ *  withdrawal stamps it, X-WD-3/D17), so the cascade walks the line's other side over it — a departed entrant is never
+ *  re-seated by a decision taken after she left (a void re-opened her line, and she won it again). Only an EMPTY seat
+ *  of an undecided line; the id it stamped, or null. */
+export async function stampDepartedSeat(tx: Tx, fixtureId: string, slot: number): Promise<string | null> {
+  const bye = tx.json(BYE_SLOT_LABEL as never);
+  const [row] = slot === 1
+    ? await tx<{ id: string }[]>`update fixtures set home_slot_label = ${bye}
+             where id = ${fixtureId} and home_entrant_id is null and status = 'scheduled' and outcome is null returning id`
+    : await tx<{ id: string }[]>`update fixtures set away_slot_label = ${bye}
+             where id = ${fixtureId} and away_entrant_id is null and status = 'scheduled' and outcome is null returning id`;
+  return row?.id ?? null;
+}
+
 /** Decide every bye line in `stageId` whose real side is now occupied, and
  *  return the fixture ids this call actually changed.
  *
@@ -3860,7 +3881,8 @@ async function advanceSettledByes(tx: Tx, settled: string[]): Promise<string[]> 
  *   (`walkoverDepartedQualifiers`), applied after the draw.
  * - `"double_walkover"`: both entrants of the line have withdrawn. `forfeited` + `{kind: "double_walkover"}`, both
  *   seats kept (the run sheet names who did not play), and nobody advances (X-DW-2). The caller writes it only on a
- *   line that feeds a next match (D19).
+ *   line that feeds a next match (D19), and only on a line with NO live score event (review M-1): a departure double
+ *   walkover is the no-event write, so recorded play is never overwritten by it.
  *
  * Each update is guarded on the row the cascade judged — under the fixture's own append lock — so a write that finds
  * nothing means that row moved under it.
@@ -3892,6 +3914,10 @@ export async function writeDepartedSeat(
           where id = ${fixtureId} and status in ('scheduled', 'in_play', 'needs_decision', 'abandoned')
             and home_entrant_id is not null and away_entrant_id is not null
             and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})
+            and not exists (select 1 from score_events e
+                            where e.fixture_id = fixtures.id and e.type <> 'core.void'
+                              and not exists (select 1 from score_events v
+                                              where v.fixture_id = e.fixture_id and v.voids_event_id = e.id))
           returning id, stage_id`;
   if (!row) {
     throw new Error(`writeDepartedSeat: fixture ${fixtureId} is no longer the undecided line entrant ${entrantId} was judged on (${mode})`);
@@ -3980,7 +4006,8 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
              loser_to_fixture, loser_to_slot,
              ${hasActiveAbandonSql(tx, "fixtures")} as has_active_abandon,
              exists (select 1 from entrants e
-                     where e.id::text = fixtures.outcome ->> 'loser' and e.status = 'withdrawn') as loser_withdrawn,
+                     where e.id::text = fixtures.outcome ->> 'loser' and e.status in ${tx([...DEPARTED_STATUSES])})
+               as loser_withdrawn,
              (fixtures.outcome ->> 'kind' = 'double_walkover'
               and not exists (select 1 from score_events ev
                               where ev.fixture_id = fixtures.id and ev.type <> 'core.void'
@@ -4021,7 +4048,8 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
           // W2b X-WD-4: both sides of this line have departed — a double walkover, written as a bye is (no event),
           // which seats nobody and is a dead feeder for the next pass (X-DW-2). A FINAL feeds nothing, and a double
           // walkover needs a next match (D19, X-DW-3): it stays open for W4's vacant title, and nothing is written.
-          if (f.winner_to_fixture === null && f.loser_to_fixture === null) continue;
+          // (A grand final with a bracket reset feeds only its own rematch, so it is a final too — loop-F I-5.)
+          if (!feedsNextMatch(f)) continue;
           const [walked] = await tx<{ id: string }[]>`
             update fixtures set status = 'forfeited', outcome = ${tx.json({ kind: "double_walkover" } as never)}
             where id = ${f.id} and stage_id = ${stageId}

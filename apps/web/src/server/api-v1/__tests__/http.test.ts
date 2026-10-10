@@ -1,7 +1,11 @@
 // v1 kernel: envelope, EngineError→HTTP map, cursor pagination (doc 08 §1/§4).
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { EngineError, EngineErrorCode } from "@seazn/engine/core";
+import { EngineError, EngineErrorCode, FORFEIT_REASONS, foldMatch } from "@seazn/engine/core";
+import { defaultLineupPair, makeEnvelope, sportCases } from "@seazn/engine/testkit";
+import uiEn from "@/dictionaries/en/ui.json";
+import { interpolate } from "@/lib/i18n-runtime";
+import { scoringErrorText } from "@/lib/scoring-vocab";
 import { LEVEL_RESULT_REASON } from "@/lib/level-result-reason";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { getRequestContext } from "@/server/request-context";
@@ -415,5 +419,79 @@ describe("cursor pagination", () => {
     expect(result.nextCursor).not.toBeNull();
     expect(decodeCursor(result.nextCursor as string).id).toBe("id-2");
     expect(page(rows, 3).nextCursor).toBeNull();
+  });
+});
+
+// W2b loop-F review M-4 (plan D3): FORFEIT_REASON_WRONG_PHASE names the phase it judged and the reasons that phase
+// admits. Driven through the REAL engine fold for every sport (the refusal's data is the engine's, never typed here),
+// then the real v1 envelope, then the copy. The expected list is the rulebook's (spec X-RS-1): a walkover only in the
+// module's declared walkover phases (default "pre", R2), a retirement or disqualification only once play started (R4),
+// a withdrawal in any phase (R5) — in FORFEIT_REASONS order.
+describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons to the wire and the copy", () => {
+  const rulebookAllowed = (phase: string, walkoverPhases: readonly string[]) =>
+    FORFEIT_REASONS.filter((r) => (r === "walkover" ? walkoverPhases.includes(phase) : r === "withdrew" ? true : phase !== "pre"));
+  const enM = (k: string, v?: Record<string, string | number>) => interpolate((uiEn as Record<string, string>)[k]!, v);
+
+  it("every sport, before the start and once play started: the refusal's phase and reasons reach the wire and the sentence", async () => {
+    let refused = 0;
+    let nothingToRefuse = 0;
+    for (const { key, module: mod } of sportCases()) {
+      const cfg = mod.configSchema.parse(mod.variants[Object.keys(mod.variants)[0]!] ?? {});
+      const lineups = defaultLineupPair(mod.positions);
+      const walkoverPhases = mod.walkoverPhases ?? ["pre"];
+      for (const prefix of [[], [{ type: "core.start", payload: {} }]] as const) {
+        const head = prefix.map((e, i) => makeEnvelope(i + 1, e));
+        const phase = mod.forfeitPhase(foldMatch(mod as never, cfg, lineups, head) as never);
+        const allowed = rulebookAllowed(phase, walkoverPhases);
+        const reason = FORFEIT_REASONS.find((r) => !allowed.includes(r));
+        if (reason === undefined) {
+          nothingToRefuse++;
+          continue;
+        }
+        const label = `${key} ${phase} ${reason}`;
+        let caught: unknown = null;
+        try {
+          foldMatch(mod as never, cfg, lineups, [...head, makeEnvelope(head.length + 1, { type: "core.forfeit", payload: { by: "e-home", reason } })]);
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught, label).toBeInstanceOf(EngineError);
+        expect((caught as EngineError).code, label).toBe("FORFEIT_REASON_WRONG_PHASE");
+        const res = await v1(async () => {
+          throw caught;
+        });
+        expect(res.status, label).toBe(409);
+        const error = (await body(res)).error as Record<string, unknown>;
+        expect(error, label).toEqual({ code: "FORFEIT_REASON_WRONG_PHASE", message: (caught as EngineError).message, phase, allowed, both: false });
+        const words = allowed.map((r) => enM(`forfeit.reason.${r}`)).join(", ");
+        expect(scoringErrorText(error.code as string, error.message as string, enM as never, "score.failed", error), label).toBe(
+          enM("engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named", { phase: enM(`forfeit.phase.${phase}`), allowed: words }),
+        );
+        refused++;
+      }
+    }
+    // Every sport refuses a retirement before the start (R4), so at least one refusal per sport.
+    expect(refused, `refused (nothing to refuse in ${nothingToRefuse} sport×phase cases)`).toBeGreaterThanOrEqual(sportCases().length);
+  });
+
+  it("the empty case: an unreadable shape forwards code + message only, and the copy is the code's own", async () => {
+    let checked = 0;
+    for (const data of [
+      undefined,
+      { phase: "pre" },
+      { phase: "over", allowed: ["withdrew"], both: false },
+      { phase: "pre", allowed: [], both: false },
+      { phase: "pre", allowed: ["made_up"], both: false },
+      { phase: "pre", allowed: ["withdrew"] },
+    ]) {
+      const res = await v1(async () => {
+        throw new EngineError("FORFEIT_REASON_WRONG_PHASE", "m", data);
+      });
+      const error = (await body(res)).error as Record<string, unknown>;
+      expect(error, JSON.stringify(data)).toEqual({ code: "FORFEIT_REASON_WRONG_PHASE", message: "m" });
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "m", enM as never, "score.failed", error)).toBe(enM("engineError.FORFEIT_REASON_WRONG_PHASE"));
+      checked++;
+    }
+    expect(checked).toBe(6);
   });
 });

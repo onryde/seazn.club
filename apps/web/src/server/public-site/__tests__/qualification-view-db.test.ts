@@ -32,6 +32,8 @@ import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { getPublicDivision } from "../data";
+import { embedDivisionData } from "@/server/embed-data";
+import { listDivisionFixtures } from "@/server/usecases/fixtures";
 import {
   buildQualificationView,
   divisionAwardAddsToLedger,
@@ -355,6 +357,19 @@ describe.skipIf(!HAS_DB)("buildQualificationView on real reads (getPublicDivisio
     expect(leaverFx.map((f) => f.status)).toEqual(["abandoned", "abandoned", "abandoned"]);
     const outcomes = await sql<{ outcome: unknown }[]>`select outcome from fixtures where id in ${sql(leaverFx.map((f) => f.id))}`;
     expect(outcomes.map((f) => f.outcome), "D5: an expunge records no outcome").toEqual([null, null, null]);
+    // Loop-F I-2: both public reads carry the expunge — getPublicDivision (the division page and the hub) and the
+    // embed's own read — true on exactly her three lines, false on every other fixture of the division.
+    const hers = new Set(leaverFx.map((f) => f.id));
+    const flagged = (fx: readonly { id: string; expunged?: boolean }[]) => fx.filter((f) => f.expunged === true).map((f) => f.id).sort();
+    const page = (await getPublicDivision(...a.r.slugs))!;
+    expect(page.fixtures.length, "the page read has the division's fixtures").toBeGreaterThan(hers.size);
+    expect(flagged(page.fixtures), "page read").toEqual([...hers].sort());
+    expect(page.fixtures.every((f) => typeof f.expunged === "boolean"), "page read: every row says").toBe(true);
+    const embed = await embedDivisionData(a.r.divisionId);
+    if (!embed.ok) throw new Error(`rig: the embed is not served (${embed.reason})`);
+    expect(flagged(embed.data.fixtures), "embed read").toEqual([...hers].sort());
+    // …and the console's (the organiser's standings tab builds the same view from listDivisionFixtures).
+    expect(flagged(await listDivisionFixtures(a.r.auth, a.r.divisionId)), "console read").toEqual([...hers].sort());
     expect(cascaded.rows.map((x) => x.entrantId).sort()).toEqual(a.others);
     expect(cascaded.view).not.toBeNull();
     expect(cascaded.view!.rows[a.leaver]).toBeUndefined();

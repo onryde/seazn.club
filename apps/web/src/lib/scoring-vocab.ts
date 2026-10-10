@@ -29,7 +29,8 @@
 // from `builtinModules` and reds if `SPORT_KEY` ever carries more, fewer, or
 // different keys than the engine ships.
 import type { MessageKey } from "@/lib/messages";
-import type { EngineErrorCode, SettleMethod, SquadProvenance, SquadRole } from "@seazn/engine/core";
+import type { EngineErrorCode, ForfeitReason, SettleMethod, SquadProvenance, SquadRole } from "@seazn/engine/core";
+import { forfeitPhaseRefusalOf, type RefusalPhase } from "@/lib/forfeit-phase-refusal";
 import type { TIEBREAK_RUNGS as ENGINE_TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { swatchName } from "@/lib/brand-palette";
 import { interpolate } from "@/lib/i18n-runtime";
@@ -1326,6 +1327,22 @@ export const ENGINE_ERROR_REASON_KEY: Partial<Record<EngineErrorCode, Readonly<R
  *  which only `scoringErrorText` fills — a reason-keyed reader with no params would print the placeholders. */
 const SEAT_DEPARTED_KEY: MessageKey = "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed";
 
+/** W2b loop-F M-4: FORFEIT_REASON_WRONG_PHASE's named sentences and their words. Exhaustive Records, so a phase or a
+ *  reason the engine adds is a tsc red here, never a raw key on screen. */
+export const FORFEIT_PHASE_KEY: Record<RefusalPhase, MessageKey> = {
+  pre: "forfeit.phase.pre",
+  play: "forfeit.phase.play",
+  tiebreak: "forfeit.phase.tiebreak",
+};
+export const FORFEIT_REASON_KEY: Record<ForfeitReason, MessageKey> = {
+  walkover: "forfeit.reason.walkover",
+  retired: "forfeit.reason.retired",
+  disqualified: "forfeit.reason.disqualified",
+  withdrew: "forfeit.reason.withdrew",
+};
+const FORFEIT_WRONG_PHASE_NAMED_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named";
+const FORFEIT_WRONG_PHASE_BOTH_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak";
+
 /** Localized copy for an engine refusal; null when the code isn't an engine one. */
 export const engineErrorLabel = (code: string, m: MsgFn, reason?: unknown): string | null => {
   if (!(code in ENGINE_ERROR_KEY)) return null;
@@ -1616,6 +1633,17 @@ export function scoringErrorText(
       return m(SEAT_DEPARTED_KEY, { entrant: extra.entrant, match: nextMatchLabel(ref, m) });
     }
     return m(ENGINE_ERROR_KEY.STAGE_SEAT_DEPARTED);
+  }
+  // W2b loop-F M-4 (plan D3): the phase the guard judged and the reasons it admits there, in the engine's order. A
+  // double walkover in a tie-break is its own sentence (R3: the game was played). Unreadable → the code's own copy.
+  if (code === "FORFEIT_REASON_WRONG_PHASE") {
+    const named = forfeitPhaseRefusalOf(extra);
+    if (named) {
+      const allowed = named.allowed.map((r) => m(FORFEIT_REASON_KEY[r])).join(", ");
+      return named.both && named.phase === "tiebreak"
+        ? m(FORFEIT_WRONG_PHASE_BOTH_KEY, { allowed })
+        : m(FORFEIT_WRONG_PHASE_NAMED_KEY, { phase: m(FORFEIT_PHASE_KEY[named.phase]), allowed });
+    }
   }
   const engine = code ? engineErrorLabel(code, m, extra?.reason) : null;
   if (engine !== null) return engine;

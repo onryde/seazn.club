@@ -33,6 +33,7 @@ import {
   type BracketFixture,
   type FixtureUpdate,
 } from "@seazn/engine/competition";
+import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { resolveModule } from "@/server/engine-db/registry";
@@ -43,7 +44,7 @@ import {
 } from "@/lib/table-withdrawal";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
-import { getEntrant, listEntrants, patchEntrant } from "./entrants";
+import { DEPARTED_STATUSES, getEntrant, listEntrants, patchEntrant } from "./entrants";
 import { getDivision } from "./divisions";
 import { BRACKET_WALKOVER_KINDS, listStages, writeDepartedSeat } from "./stages";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
@@ -93,6 +94,13 @@ const CASCADE = { writer: "withdrawal_cascade" } as const;
 async function deciderOwed(auth: AuthCtx, sportModule: AnySportModule, fixtureId: string): Promise<boolean> {
   const { state } = await getFixtureState(auth, fixtureId);
   return deciderPending(sportModule as never, { state: state as never, settlement: null });
+}
+
+/** Does the ledger hold any live event — one that is neither a void nor voided (`writeDepartedSeat`'s own guard)? */
+async function hasLivePlay(auth: AuthCtx, fixtureId: string): Promise<boolean> {
+  const events = await listEvents(auth, fixtureId, 0);
+  const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
+  return events.some((e) => e.type !== "core.void" && !voided.has(e.id));
 }
 
 /** The ACTIVE abandons in a ledger: a `core.abandon` no `core.void` targets (voids are not voidable). */
@@ -302,7 +310,10 @@ export async function withdrawEntrantCascade(
           entrantId,
           bracketFixtures,
         );
-        if (out.policy === "none") out.policy = "walkover";
+        // Owner ruling 53 (loop-F R53): the policy is what the withdrawal actually leaves — an entrant with fixtures in
+        // the stage but nothing pending (an eliminated knockout entrant; a ladder entrant whose challenges are decided)
+        // walks nothing over, so the policy stays `none`, as the open-format branch below reads it.
+        if (out.policy === "none" && result.updates.length > 0) out.policy = "walkover";
         for (const u of result.updates) {
           const f = byId.get(u.fixtureId);
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f, bracket: { kind: stage.kind, held: held.has(f.id) } });
@@ -316,9 +327,10 @@ export async function withdrawEntrantCascade(
       }
     }
 
-    // X-WD-4: who has already left — an opponent on this list gets no walkover (it would seat a withdrawn entrant).
+    // X-WD-4: who has already left (`DEPARTED_STATUSES`: withdrawn or disqualified) — an opponent on this list gets no
+    // walkover (it would seat a departed entrant).
     const gone = new Set(
-      (await listEntrants(auth, division.id)).filter((e) => e.status === "withdrawn").map((e) => e.id),
+      (await listEntrants(auth, division.id)).filter((e) => DEPARTED_STATUSES.has(e.status)).map((e) => e.id),
     );
     for (const step of plan) {
       const u = step.update;
@@ -334,8 +346,11 @@ export async function withdrawEntrantCascade(
           // X-WD-4: both sides of the line have now withdrawn — a double walkover, no event (as a bye is written),
           // which seats nobody (X-DW-2) — unless the line feeds nothing: a final has no next match (D19, X-DW-3), so
           // it stays open for W4's vacant title, and nothing is written. A ladder challenge is exempt (D19).
-          const feeds = step.fixture.winner_to_fixture !== null || step.fixture.loser_to_fixture !== null || step.bracket.kind === "ladder";
-          if (feeds) {
+          // Review M-1: and only over a line nobody has recorded play on. The other side left by a bare status write
+          // (no cascade), so play may have gone on; that ledger is the organiser's to void or settle, never overwritten.
+          // A double-elimination grand final with a bracket reset feeds only its own rematch: a final too (I-5).
+          const feeds = feedsNextMatch(step.fixture) || step.bracket.kind === "ladder";
+          if (feeds && !(await hasLivePlay(auth, u.fixtureId))) {
             await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
             out.walkovers++;
           }

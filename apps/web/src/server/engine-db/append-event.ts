@@ -22,6 +22,7 @@ import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { releaseFedSeats } from "./fed-seats";
+import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
@@ -207,7 +208,8 @@ const needsNextMatchForDoubleWalkover = (stageKind: string | null): boolean =>
  *   ALREADY_DECIDED, `withdrew_over_result`.
  * - D19: `core.forfeit{by:"both"}` in a bracket kind on a fixture that feeds no seat (no `winner_to_fixture`, no
  *   `loser_to_fixture` — the feed graph, never a round name) — DOUBLE_WALKOVER_NO_NEXT_MATCH. A final, a stepladder's
- *   last rung, a page playoff final, a third-place match.
+ *   last rung, a page playoff final, a third-place match — and (loop-F I-5) a double-elimination grand final with a
+ *   bracket reset, whose two edges both feed its own rematch (`feedsNextMatch`).
  */
 function assertW2bWriteGuards(
   fixture: Pick<FixtureRow, "id" | "status" | "outcome" | "winner_to_fixture" | "loser_to_fixture">,
@@ -243,8 +245,7 @@ function assertW2bWriteGuards(
     candidate.type === "core.forfeit" &&
     payload.by === "both" &&
     needsNextMatchForDoubleWalkover(stageKind) &&
-    fixture.winner_to_fixture === null &&
-    fixture.loser_to_fixture === null
+    !feedsNextMatch(fixture)
   ) {
     throw new EngineError("DOUBLE_WALKOVER_NO_NEXT_MATCH", "a match with no next match can't be a double walkover", {
       fixtureId: fixture.id,

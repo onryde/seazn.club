@@ -15,6 +15,7 @@ import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { finalizeFixture, scoreEvent } from "../scoring";
 import { createStages, generateStageFixtures } from "../stages";
+import { withdrawEntrantCascade } from "../withdrawal";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -46,7 +47,8 @@ async function play(auth: AuthCtx, id: string) {
   expect(out.status, "rig: a played match is decided").toBe("decided");
 }
 
-async function rig() {
+async function rig(sportKey: string = SPORT, variantKey: string = VARIANT) {
+  const mod = builtinModules.find((m) => m.key === sportKey)!;
   const suffix = randomUUID().slice(0, 8);
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug) values (${"AA " + suffix}, ${"aa-" + suffix}) returning id`;
@@ -57,11 +59,11 @@ async function rig() {
   const division = await createDivision(auth, comp.id, {
     name: "Open",
     slug: "open-" + suffix,
-    sport_key: SPORT,
-    variant_key: VARIANT,
-    config: cricket.variants[VARIANT] as Record<string, unknown>,
+    sport_key: sportKey,
+    variant_key: variantKey,
+    config: mod.variants[variantKey] as Record<string, unknown>,
   });
-  const kind = cricket.entrantModel?.defaultKind ?? "individual";
+  const kind = mod.entrantModel?.defaultKind ?? "individual";
   await createEntrants(
     auth,
     division.id,
@@ -81,7 +83,14 @@ async function rig() {
   const { fixtures } = await generateStageFixtures(auth, group!.id);
   await startDivision(auth, division.id);
   expect(fixtures.length, "rig: a four-entrant group has six fixtures").toBe(6);
-  return { auth, divisionId: division.id, groupId: group!.id, koId: ko!.id, fixtures: fixtures.map((f) => f.id) };
+  return {
+    auth,
+    divisionId: division.id,
+    groupId: group!.id,
+    koId: ko!.id,
+    fixtures: fixtures.map((f) => f.id),
+    sides: fixtures.map((f) => [f.home_entrant_id, f.away_entrant_id] as const),
+  };
 }
 
 /** Every fixture but the last is played and FINALIZED as the organiser goes; the last is `last`. */
@@ -133,6 +142,20 @@ describe.skipIf(!HAS_DB)("D18 / X-AB-2: auto-advance fires when every group fixt
     expect(await advanced(r)).toEqual({ koFixtures: 1, koSeated: 1, autoAdvanced: 1, group: ["finalized", "forfeited"] });
   }, 120_000);
 
+  it("the same with one fixture CANCELLED (D18's fourth finished status) → seeded", async () => {
+    // No product write sets `cancelled` today (dead-feeder-cascade.test.ts's own note: every production reference
+    // READS it), so the rig writes the status the way a staff fix would. Cancelled FIRST, so the last write is a finalize
+    // that runs the auto-advance check with the cancelled fixture already in the count.
+    const r = await rig();
+    const [gone, ...rest] = r.fixtures;
+    await sql`update fixtures set status = 'cancelled' where id = ${gone!}`;
+    for (const id of rest) {
+      await play(r.auth, id);
+      await finalizeFixture(r.auth, id, await tip(id));
+    }
+    expect(await advanced(r)).toEqual({ koFixtures: 1, koSeated: 1, autoAdvanced: 1, group: ["cancelled", "finalized"] });
+  }, 120_000);
+
   it("the negative pair: one fixture in_play → not seeded", async () => {
     const r = await rig();
     // The in-play fixture is started first; the rest finish (and finalize) after it, so the LAST write is a finalize
@@ -144,5 +167,51 @@ describe.skipIf(!HAS_DB)("D18 / X-AB-2: auto-advance fires when every group fixt
       await finalizeFixture(r.auth, id, await tip(id));
     }
     expect(await advanced(r)).toEqual({ koFixtures: 0, koSeated: 0, autoAdvanced: 0, group: ["finalized", "in_play"] });
+  }, 120_000);
+});
+
+// Owner ruling 105 (2026-10-10, loop-F M-10): a withdrawal's EXPUNGE leaves its group fixtures `abandoned` with an
+// active `core.abandon{expunge: true}` (D5). Nothing is owed on them — the matches left the table — so they count as
+// closed; a plain recorded abandon still holds the stage (W2a). single-sport: badminton — its abandon folds to no
+// outcome, so a plain abandon STAYS `abandoned` (cricket's would decide a no-result, CK-AB-2, and could not be the
+// negative pair).
+describe.skipIf(!HAS_DB)("M-10: an expunged group fixture is closed for auto-advance; a plain abandon is not", () => {
+  const BADMINTON = "badminton";
+  const BWF = "bwf";
+  async function playBadminton(auth: AuthCtx, id: string) {
+    await post(auth, id, "core.start");
+    for (let g = 0; g < 2; g++) await post(auth, id, "badminton.game.summary", { home: 21, away: 10 });
+    const [r] = await sql<{ status: string }[]>`select status from fixtures where id = ${id}`;
+    expect(r!.status, "rig: a played match is decided").toBe("decided");
+  }
+  /** The fixtures of the group that do NOT involve `entrant`. */
+  const without = (r: Awaited<ReturnType<typeof rig>>, entrant: string) =>
+    r.fixtures.filter((_, i) => !r.sides[i]!.includes(entrant));
+
+  it("an under-50% withdrawal expunges her group fixtures; once the rest decide, the stage auto-advances", async () => {
+    const r = await rig(BADMINTON, BWF);
+    const leaver = r.sides[0]![0]!;
+    const out = await withdrawEntrantCascade(r.auth, leaver);
+    expect([out.policy, out.voided], "rig: nothing played, so every one of her three fixtures is expunged").toEqual(["expunge", 3]);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures f
+       where f.stage_id = ${r.groupId} and f.status = 'abandoned'
+         and exists (select 1 from score_events a where a.fixture_id = f.id and a.type = 'core.abandon' and a.payload ->> 'expunge' = 'true')`;
+    expect(n, "rig: three abandoned fixtures, each with its expunge abandon").toBe(3);
+    const rest = without(r, leaver);
+    expect(rest, "the three fixtures among the others").toHaveLength(3);
+    for (const id of rest) await playBadminton(r.auth, id);
+    expect(await advanced(r)).toEqual({ koFixtures: 1, koSeated: 1, autoAdvanced: 1, group: ["abandoned", "decided"] });
+  }, 120_000);
+
+  it("the negative pair: a plain (organiser) abandon in the same group still holds the stage", async () => {
+    const r = await rig(BADMINTON, BWF);
+    const [held, ...rest] = r.fixtures;
+    await post(r.auth, held!, "core.start");
+    await post(r.auth, held!, "core.abandon", { reason: "rain" });
+    const [h] = await sql<{ status: string }[]>`select status from fixtures where id = ${held!}`;
+    expect(h!.status, "rig: a plain abandon stays abandoned in badminton").toBe("abandoned");
+    for (const id of rest) await playBadminton(r.auth, id);
+    expect(await advanced(r)).toEqual({ koFixtures: 0, koSeated: 0, autoAdvanced: 0, group: ["abandoned", "decided"] });
   }, 120_000);
 });

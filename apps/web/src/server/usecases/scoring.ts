@@ -35,7 +35,9 @@ import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { subjectToScorerCapabilityGates } from "./scorers";
 import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
-import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats } from "./stages";
+import { DEPARTED_STATUSES } from "./entrants";
+import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats, stampDepartedSeat } from "./stages";
 import { detectSuspensions, notifyServedSuspensions, type ServedFlip } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
 import {
@@ -774,16 +776,26 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     // One reading of who advances, shared with the un-fill (fed-seats.ts), so
     // the two can never disagree about which name a decision put where.
     const { winner, loser } = advancingSides(fixture.outcome);
+    // Loop-F I-1: a DEPARTED winner (a void re-opened her line after she left, and she won it again) is never seated;
+    // her seat is stamped dead as her withdrawal stamped it, and the cascade below walks her opponent over it.
+    const winnerDeparted =
+      winner !== undefined &&
+      (await tx<{ id: string }[]>`select id from entrants where id = ${winner} and status in ${tx([...DEPARTED_STATUSES])}`)
+        .length > 0;
     if (winner && fixture.winner_to_fixture && fixture.winner_to_slot) {
-      const filled = await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
+      const filled = winnerDeparted
+        ? await stampDepartedSeat(tx, fixture.winner_to_fixture, fixture.winner_to_slot)
+        : await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
       if (filled !== null) advanced.push(filled);
     }
-    // W2b X-WD-5: a withdrawn entrant is never seated on a loser edge. A settle on a LEGACY held line (plan PF-8a — W2a
-    // left a withdrawn entrant's held line held) names her as its loser; her seat stays empty instead, and the cascade
-    // below reads it dead (`loserFeederIsDead`) and walks her opponent over it.
+    // W2b X-WD-5: a departed entrant (`DEPARTED_STATUSES`: withdrawn or disqualified) is never seated on a loser
+    // edge. A settle on a LEGACY held line (plan PF-8a — W2a left a withdrawn entrant's held line held) names her as its
+    // loser; her seat stays empty instead, and the cascade below reads it dead (`loserFeederIsDead`) and walks her
+    // opponent over it.
     const loserWithdrawn =
       loser !== undefined &&
-      (await tx<{ id: string }[]>`select id from entrants where id = ${loser} and status = 'withdrawn'`).length > 0;
+      (await tx<{ id: string }[]>`select id from entrants where id = ${loser} and status in ${tx([...DEPARTED_STATUSES])}`)
+        .length > 0;
     if (loser && !loserWithdrawn && fixture.loser_to_fixture && fixture.loser_to_slot) {
       const filled = await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
       if (filled !== null) advanced.push(filled);
@@ -878,9 +890,12 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
     if (stage?.status === "complete") return false;
     // W2b D18 (spec §13 premise 9): the FINISHED statuses — a result (decided, forfeited), a locked result
     // (finalized: an organiser who finalizes as they go must still advance) and a cancelled fixture. Everything else
-    // (scheduled, in_play, needs_decision, abandoned) is still owed something.
+    // (scheduled, in_play, needs_decision, abandoned) is still owed something — except (owner ruling 105, loop-F M-10)
+    // an abandoned fixture whose active abandon is a withdrawal's EXPUNGE (D5): the match left the table, nothing is
+    // owed on it. A plain recorded abandon still holds (W2a: it is not a dead feeder, and it awaits the organiser).
     const [{ open }] = await tx<{ open: number }[]>`
-      select count(*) filter (where status not in ('decided', 'forfeited', 'finalized', 'cancelled'))::int as open
+      select count(*) filter (where status not in ('decided', 'forfeited', 'finalized', 'cancelled')
+                                and not ${hasActiveAbandonSql(tx, "fixtures", { expunge: true })})::int as open
       from fixtures where stage_id = ${stageId}`;
     return open === 0;
   });

@@ -161,6 +161,8 @@ export function SettleDialog(props: BlockProps & { onClose: () => void; onRefuse
   });
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  // D-R9: only the sides still in the competition are a choice.
+  const choices = [props.home, props.away].filter((e) => e.withdrawn !== true);
 
   // Focus ONCE on mount (preflight C23: re-focusing on every render stole the caret from the note field), and give it
   // back to whatever opened the dialog when it closes. Escape and Tab are bound once and read live values via refs.
@@ -224,8 +226,14 @@ export function SettleDialog(props: BlockProps & { onClose: () => void; onRefuse
         </h2>
         <fieldset className="mt-4 min-w-0">
           <legend className="text-sm font-medium text-slate-700">{msg("score.needsDecision.whoAdvances")}</legend>
+          {/* Loop-F M-8 (legacy rows only, PF-8a): both sides withdrawn leaves no choice — say so, never an empty grid. */}
+          {choices.length === 0 && (
+            <p data-testid="settle-no-choice" className="mt-2 text-sm text-slate-600">
+              {msg("score.needsDecision.noChoice")}
+            </p>
+          )}
           <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
-            {[props.home, props.away].filter((e) => e.withdrawn !== true).map((e) => (
+            {choices.map((e) => (
               <button
                 key={e.id}
                 type="button"

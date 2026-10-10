@@ -32,6 +32,8 @@ export async function GET(req: Request, { params }: Ctx) {
         winner_to_slot: _wts,
         loser_to_fixture: _ltf,
         loser_to_slot: _lts,
+        // W2b loop-F I-2: the console's qualification read, not part of the published `Fixture` contract.
+        expunged: _expunged,
         ...fixture
       }) => fixture,
     );

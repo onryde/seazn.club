@@ -80,6 +80,8 @@ export interface QualFixture {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   outcome: unknown;
+  /** W2b D5: a withdrawal expunged this match (`PublicFixture.expunged`). Absent reads as not expunged. */
+  expunged?: boolean;
 }
 
 /** The division's per-match bounds from its PINNED module and live cfg. Future
@@ -321,9 +323,20 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // carried points fold in the moment any of its fixtures gets a result — so
   // a frozen guess could turn a Through false. Pools fail closed until every
   // member has a result (owner-accepted, fix round 2).
+  //
+  // Except (W2b loop-F I-2) a DEPARTED member whose every line in this table is an active EXPUNGE (D5): the
+  // withdrawal took each of her matches out of the table with no outcome, so the snapshot never folds her and
+  // nothing of hers is still to come — her points are not unknown, she has none here. (A status-only leaver keeps
+  // scheduled lines and still fails closed; an unreadable status fails closed.)
   const byId = new Map(i.rows.map((r) => [r.entrantId, r]));
+  const expungedLeaver = (id: string): boolean => {
+    const status = i.entrantStatuses[id];
+    if (status === undefined || inTheField({ status })) return false;
+    const mine = tableFx.filter((f) => seats(f, id));
+    return mine.length > 0 && mine.every((f) => f.expunged === true);
+  };
   for (const f of tableFx) {
-    for (const id of [f.home_entrant_id, f.away_entrant_id]) if (id !== null && !byId.has(id)) return null;
+    for (const id of [f.home_entrant_id, f.away_entrant_id]) if (id !== null && !byId.has(id) && !expungedLeaver(id)) return null;
   }
   // Snapshot lag: standings recompute after the scoring write commits, so a
   // row can trail its own fixtures. A row that has played fewer matches than
