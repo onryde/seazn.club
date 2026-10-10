@@ -169,6 +169,12 @@ export const DW_ADVANCES_NOBODY_CHECK = "model-double-walkover-advances-nobody";
  *  one, and the product shows it `forfeited` with an award or a double walkover; and a fixture the product shows with
  *  an award or a double walkover off a known, non-empty ledger holds one. */
 export const FORFEIT_ONE_RESULT_CHECK = "model-one-result-per-active-forfeit";
+/** W2b (X-WO-1, D7; review I-4): on a TABLE stage (league, group, swiss — the kinds whose standings rows are the
+ *  division's entrants), the table counts one result per active forfeit: each active entrant seated in a fixture whose
+ *  known ledger holds a live core.forfeit has a standings row whose `played` is the number of its fixtures the product
+ *  shows with a result — a voided forfeit, or a second one refused, never counted again. Read only on a step where such
+ *  a fixture exists, so a cell with no forfeit costs no standings read. */
+export const FORFEIT_TABLE_CHECK = "model-table-counts-one-result-per-forfeit";
 /** T45-R1 (assertions.ts lineupsPut, "life-lineups-put"), on the shared
  *  items (lineup-plan.ts lineupItems): every side of every team fixture the
  *  model posted to had its lineup PUT, one item per side, re-judged after
@@ -572,6 +578,31 @@ function forfeitChecks(m: ModelState, mine: readonly FixtureRow[]): { id: string
   return [dw, one];
 }
 
+/** The table kinds whose standings rows are the division's entrants (americano's are its pairs' players). */
+const forfeitTableKind = (kind: string): boolean => !forbidsLevelResult(kind) && kind !== "americano";
+
+/** FORFEIT_TABLE_CHECK's items: one per active entrant of a fixture with a live forfeit (zero when there is none). */
+async function forfeitTableCheck(m: ModelState, d: OrganiserDriver, mine: readonly FixtureRow[]): Promise<{ checked: number; fails: string[] }> {
+  if (!forfeitTableKind(m.stageKind)) return { checked: 0, fails: [] };
+  const judged = new Set<string>();
+  for (const r of mine) {
+    const f = m.fixtures.get(r.id);
+    if (f === undefined || f.ledger === null || !liveEntries(f.ledger).some((e) => e.type === "core.forfeit")) continue;
+    for (const e of [r.home_entrant_id, r.away_entrant_id]) if (e !== null && !m.withdrawn.has(e)) judged.add(e);
+  }
+  if (judged.size === 0) return { checked: 0, fails: [] };
+  const rows = new Map<string, { played?: number }>();
+  for (const pool of new Set(mine.map((r) => r.pool_id))) for (const row of (await d.standings(m.stageId, pool)).rows) rows.set(row.entrantId, row);
+  const fails: string[] = [];
+  for (const e of judged) {
+    const results = mine.filter((r) => (r.home_entrant_id === e || r.away_entrant_id === e) && toObservedOutcome(r.outcome) !== null).length;
+    const row = rows.get(e);
+    if (row === undefined) fails.push(`entrant ${e} has a live forfeit but no row in the table`);
+    else if (row.played !== results) fails.push(`entrant ${e}: the table counts played ${row.played ?? "(none)"}, the product shows ${results} result(s) — one per active forfeit (X-WO-1, D7)`);
+  }
+  return { checked: judged.size, fails };
+}
+
 /** assertions.ts lineupsPut's items (lineup-plan.ts lineupItems) over the
  *  model's posts: one per side posted to, ok iff that side's lineup was PUT. */
 function lineupsCheck(m: ModelState): { checked: number; fails: string[] } {
@@ -643,4 +674,7 @@ export async function checkStep(m: ModelState, d: OrganiserDriver): Promise<void
     add(m, c.id, c.checked);
     if (c.fails.length > 0) throw new ModelViolation(c.id, c.fails.slice(0, 12));
   }
+  const table = await forfeitTableCheck(m, d, mine);
+  add(m, FORFEIT_TABLE_CHECK, table.checked);
+  if (table.fails.length > 0) throw new ModelViolation(FORFEIT_TABLE_CHECK, table.fails.slice(0, 12));
 }

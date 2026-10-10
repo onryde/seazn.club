@@ -13,9 +13,10 @@ import type { RowKey } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { COMMAND_KINDS, ModelViolation, OPT_IN_KINDS, SWISS_BIAS, checkStep, commandOf, modelCommands, newModelState, type ModelState } from "../lib/model/commands.ts";
 import { biasFor } from "../lib/model/run-cell.ts";
-import { DW_ADVANCES_NOBODY_CHECK, FORFEIT_ONE_RESULT_CHECK, FORFEIT_REFUSAL_CHECK } from "../lib/model/state.ts";
+import { DW_ADVANCES_NOBODY_CHECK, FORFEIT_ONE_RESULT_CHECK, FORFEIT_REFUSAL_CHECK, FORFEIT_TABLE_CHECK } from "../lib/model/state.ts";
 import { loadRegressions, replayFences } from "../lib/scenario-catalogue.ts";
 import { resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
+import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -52,7 +53,16 @@ async function bracket(sport: string, make: () => ModelFakeDriver = () => new Mo
   await commandOf("Start", 0, 0, false).run(m, d);
   return { m, d, sf1: sf1.id, sf2: sf2.id, fin: fin.id };
 }
+/** A league of four, started — the table shape (review I-4): the model's own league, nothing flipped. */
+async function league(sport: string, make: () => ModelFakeDriver = () => new ModelFakeDriver({})) {
+  const d = make();
+  const m = await newModelState({ driver: d, row: "league", sport, variant: offlineBuilderDefault(sport), entrants: 4, tag: "t" });
+  await commandOf("Start", 0, 0, false).run(m, d);
+  return { m, d };
+}
 const row = (d: ModelFakeDriver, id: string) => d.fixtures.find((f) => f.id === id)!;
+/** The three W2b forfeit invariants' judged items so far (each step adds what it judged). */
+const forfeitJudged = (m: ModelState) => [DW_ADVANCES_NOBODY_CHECK, FORFEIT_ONE_RESULT_CHECK, FORFEIT_TABLE_CHECK].reduce((s, id) => s + (m.stepChecks.get(id) ?? 0), 0);
 const run = async (m: ModelState, d: ModelFakeDriver, kind: Parameters<typeof commandOf>[0], k: number, w: number) => {
   const c = commandOf(kind, k, w, false);
   expect(c.check(m), `${kind}(${k},${w}) should be runnable`).toBe(true);
@@ -112,7 +122,7 @@ describe("Forfeit in the model — opt-in (D10)", () => {
 });
 
 describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () => {
-  it("on an untouched semi (phase pre): a walkover either side or both is accepted; retired/disqualified are refused FORFEIT_REASON_WRONG_PHASE (R4); both with another reason, and any withdrew, are refused INVALID_EVENT (R1, PF-2) — all twelve draws, each on a fresh bracket", async () => {
+  it("on an untouched semi (phase pre): a walkover either side or both is accepted; retired/disqualified are refused FORFEIT_REASON_WRONG_PHASE (R4); both with another reason, and any withdrew, are refused INVALID_EVENT (R1, PF-2) — all twelve draws, each on a fresh bracket, every sport", async () => {
     const TABLE: readonly [(typeof SIDES)[number], (typeof REASONS)[number], string | null][] = [
       ["home", "walkover", null], ["away", "walkover", null], ["both", "walkover", null],
       ["home", "retired", "FORFEIT_REASON_WRONG_PHASE"], ["away", "retired", "FORFEIT_REASON_WRONG_PHASE"], ["both", "retired", "INVALID_EVENT"],
@@ -120,11 +130,11 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
       ["home", "withdrew", "INVALID_EVENT"], ["away", "withdrew", "INVALID_EVENT"], ["both", "withdrew", "INVALID_EVENT"],
     ];
     let checked = 0;
-    for (const [side, reason, code] of TABLE) {
-      const { m, d, sf1, fin } = await bracket("generic");
+    for (const sport of SPORT_KEYS) for (const [side, reason, code] of TABLE) {
+      const { m, d, sf1, fin } = await bracket(sport);
       await forfeit(m, d, 0, side, reason);
       const f = row(d, sf1);
-      const label = `${side}/${reason}`;
+      const label = `${sport} ${side}/${reason}`;
       if (code === null) {
         expect(lastForfeit(m), label).toEqual({ status: 200, code: null });
         expect(f.status, label).toBe("forfeited");
@@ -147,7 +157,7 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
       }
       checked++;
     }
-    expect(checked).toBe(SIDES.length * REASONS.length);
+    expect(checked).toBe(SPORT_KEYS.length * SIDES.length * REASONS.length);
   });
 
   it("in play (phase play): a retirement or disqualification is accepted with the played score kept; a walkover is refused FORFEIT_REASON_WRONG_PHASE (R2) — except where the sport declares walkovers in play (chess, FIDE 6.7.1)", async () => {
@@ -289,21 +299,25 @@ describe("the two W2b model invariants red on a faulty product, each on its own"
 });
 
 describe("rule 10 — the required sequences, every step checked", () => {
-  /** Each named sequence the brief requires, run step by step through the model (each step's checkStep holds both W2b
+  /** Each named sequence the brief requires, run step by step through the model (each step's checkStep holds the W2b
    *  invariants), ending with what makes the shape the shape. A state no command reaches is seeded through the driver
-   *  and the model is handed the product's own ledger (the two cases say so). */
-  const SEQUENCES: readonly { name: string; sport: string; play: (b: Awaited<ReturnType<typeof bracket>>) => Promise<void> }[] = [
+   *  and the model is handed the product's own ledger (the cases say so). `play` answers the items it judged itself
+   *  (an assertion on the product's row the step invariants cannot make), so every sequence reports its own count. */
+  type Seq = { name: string; sport: string; play: (b: Awaited<ReturnType<typeof bracket>>) => Promise<number> };
+  const SEQUENCES: readonly Seq[] = [
     { name: "forfeit after abandon", sport: "generic", play: async ({ m, d }) => {
       await run(m, d, "Settle", 0, 2);
       await run(m, d, "Void", 0, 0);
       await forfeit(m, d, 0, "home", "walkover");
       expect(lastForfeit(m)).toMatchObject({ code: "ABANDONED_SETTLE_OR_VOID" });
+      return 1;
     } },
     { name: "void then forfeit", sport: "generic", play: async ({ m, d, sf1 }) => {
       await run(m, d, "Score", 0, 1);
       await run(m, d, "Void", 0, 0);
       await forfeit(m, d, 0, "away", "retired");
       expect(row(d, sf1).status).toBe("forfeited");
+      return 1;
     } },
     { name: "double walkover then void", sport: "generic", play: async ({ m, d, sf1 }) => {
       await forfeit(m, d, 0, "both", "walkover");
@@ -311,22 +325,50 @@ describe("rule 10 — the required sequences, every step checked", () => {
       expect(row(d, sf1).status).toBe("scheduled");
       await forfeit(m, d, 0, "home", "walkover");
       expect(row(d, sf1).status).toBe("forfeited");
+      return 2;
     } },
     { name: "a second forfeit", sport: "football", play: async ({ m, d, sf1 }) => {
       await forfeit(m, d, 0, "away", "walkover");
       await forfeit(m, d, 0, "both", "walkover");
       expect(lastForfeit(m)).toMatchObject({ code: "ALREADY_DECIDED" });
       expect(liveForfeits(d, sf1).length).toBe(1);
+      return 2;
     } },
+  ];
+
+  it("each required forfeit sequence runs with the invariants checked after every step, and EACH reports the items it judged (zero judged is a failure, per sequence)", async () => {
+    const counts: Record<string, number> = {};
+    let dw = 0;
+    let one = 0;
+    for (const s of SEQUENCES) {
+      const b = await bracket(s.sport);
+      const own = await s.play(b);
+      counts[s.name] = own + forfeitJudged(b.m);
+      dw += b.m.stepChecks.get(DW_ADVANCES_NOBODY_CHECK) ?? 0;
+      one += b.m.stepChecks.get(FORFEIT_ONE_RESULT_CHECK) ?? 0;
+    }
+    expect(Object.keys(counts)).toEqual(SEQUENCES.map((s) => s.name));
+    for (const [name, n] of Object.entries(counts)) expect(n, `${name}: judged nothing`).toBeGreaterThan(0);
+    expect(dw, "no double walkover was ever judged").toBeGreaterThan(0);
+    expect(one, "no active forfeit was ever judged").toBeGreaterThan(0);
+  });
+
+  /** Review I-3: a withdrawal on a BRACKET walks every pending fixture of the withdrawn side over to its opponent
+   *  (withdrawal.ts BRACKET_WALKOVER_KINDS → withdrawBracketEntrant, X-WD-1; BG-WO-3 in a pending tie-break) — never the
+   *  league's expunge. The award's reason is D1's `withdrew` (typed from the decision). Red until loop F lands it:
+   *  withdrawal.ts's REASON is still "entrant withdrew", which the engine's closed reason list refuses (INVALID_EVENT). */
+  const WITHDRAWALS: readonly Seq[] = [
     { name: "withdraw before start", sport: "generic", play: async ({ m, d, sf1 }) => {
       expect(row(d, sf1).status).toBe("scheduled");
       await run(m, d, "Withdraw", 0, 0);   // e1, sf1's home side
+      return 0;
     } },
     { name: "withdraw after start", sport: "football", play: async ({ m, d, sf1 }) => {
       await run(m, d, "Score", 0, 0);
       await run(m, d, "Void", 0, 0);
       expect(row(d, sf1).status).toBe("in_play");
       await run(m, d, "Withdraw", 0, 0);
+      return 0;
     } },
     { name: "both sides withdrawing in turn", sport: "generic", play: async ({ m, d, sf1 }) => {
       const away = row(d, sf1).away_entrant_id!;
@@ -335,6 +377,7 @@ describe("rule 10 — the required sequences, every step checked", () => {
       await d.withdraw(away);              // … so the second, the other side of sf1, goes through the driver
       m.withdrawn.add(away);
       await checkStep(m, d);
+      return 0;
     } },
     { name: "a tie-break withdrawal", sport: "boardgame", play: async ({ m, d, sf1 }) => {
       // No command draws a drawn chess bracket game (boardgame's levelRefusal): the classical draw is posted through
@@ -347,23 +390,80 @@ describe("rule 10 — the required sequences, every step checked", () => {
       await checkStep(m, d);
       expect(row(d, sf1).outcome, "a tie-break is pending").toBeNull();
       await run(m, d, "Withdraw", 0, 0);
+      return 0;
     } },
   ];
 
-  it("each required sequence runs with both invariants checked after every step (zero judged is a failure)", async () => {
-    let ran = 0;
-    let dw = 0;
-    let one = 0;
-    for (const s of SEQUENCES) {
+  it("X-WD-1 / BG-WO-3 on a bracket (review I-3): each withdrawal sequence leaves the withdrawn side's semi a FORFEITED award to its opponent, reason withdrew — never expunged — each sequence judged (red until loop F lands withdrawal.ts's reason)", async () => {
+    const judged: Record<string, number> = {};
+    for (const s of WITHDRAWALS) {
       const b = await bracket(s.sport);
-      await s.play(b);
-      dw += b.m.stepChecks.get(DW_ADVANCES_NOBODY_CHECK) ?? 0;
-      one += b.m.stepChecks.get(FORFEIT_ONE_RESULT_CHECK) ?? 0;
-      ran++;
+      const sf = row(b.d, b.sf1);
+      const [home, away] = [sf.home_entrant_id!, sf.away_entrant_id!];
+      const own = await s.play(b);
+      // The first withdrawal is always sf1's home side (Withdraw(0,0) → e1): the award goes to the away side.
+      expect(row(b.d, b.sf1), s.name).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: away, loser: home, reason: REASONS[3] } });
+      judged[s.name] = own + 1 + forfeitJudged(b.m);
     }
-    expect(ran).toBe(8);
-    expect(dw, "no double walkover was ever judged").toBeGreaterThan(0);
-    expect(one, "no active forfeit was ever judged").toBeGreaterThan(0);
+    expect(Object.keys(judged)).toEqual(WITHDRAWALS.map((s) => s.name));
+    for (const [name, n] of Object.entries(judged)) expect(n, `${name}: judged nothing`).toBeGreaterThan(0);
+  });
+
+  /** Review I-4: the same rule on a TABLE — the league's standings read after every step (FORFEIT_TABLE_CHECK). */
+  it("on a league: void-then-forfeit and a second forfeit each leave the table counting ONE result per active forfeit, read from the standings after every step; each sequence judged", async () => {
+    const SEQS: readonly { name: string; sport: string; play: (b: Awaited<ReturnType<typeof league>>) => Promise<void> }[] = [
+      { name: "void then forfeit", sport: "generic", play: async ({ m, d }) => {
+        await run(m, d, "Score", 0, 1);
+        await run(m, d, "Void", 0, 0);
+        await forfeit(m, d, 0, "away", "retired");
+      } },
+      { name: "a forfeit voided, then forfeited again", sport: "football", play: async ({ m, d }) => {
+        await forfeit(m, d, 0, "home", "walkover");
+        await run(m, d, "Void", 0, 0);
+        await forfeit(m, d, 0, "away", "walkover");
+      } },
+      { name: "a second forfeit", sport: "generic", play: async ({ m, d }) => {
+        await forfeit(m, d, 0, "away", "walkover");
+        await forfeit(m, d, 0, "both", "walkover");
+        expect(lastForfeit(m)).toMatchObject({ code: "ALREADY_DECIDED" });
+      } },
+    ];
+    const judged: Record<string, number> = {};
+    for (const s of SEQS) {
+      const b = await league(s.sport);
+      await s.play(b);
+      const f = [...b.d.fixtures].find((x) => liveForfeits(b.d, x.id).length > 0);
+      expect(f, `${s.name}: a forfeit stands`).toBeDefined();
+      expect(liveForfeits(b.d, f!.id).length, s.name).toBe(1);
+      // The table itself, read here too: each side of the forfeited fixture has played exactly its one result.
+      const rows = (await b.d.standings(b.m.stageId, null)).rows;
+      for (const e of [f!.home_entrant_id!, f!.away_entrant_id!]) expect(rows.find((r) => r.entrantId === e)?.played, `${s.name}: ${e}`).toBe(1);
+      judged[s.name] = b.m.stepChecks.get(FORFEIT_TABLE_CHECK) ?? 0;
+    }
+    expect(Object.keys(judged)).toEqual(SEQS.map((s) => s.name));
+    for (const [name, n] of Object.entries(judged)) expect(n, `${name}: the table was never judged`).toBeGreaterThan(0);
+  });
+
+  it("a table that counts a voided forfeit again reds model-table-counts-one-result-per-forfeit by name (the league sequences above are its positive pair)", async () => {
+    class CountsVoidedForfeits extends ModelFakeDriver {
+      override async standings(stageId: string, poolId: string | null) {
+        const out = await super.standings(stageId, poolId);
+        // The stale aggregate: every forfeit the ledger EVER held is one more match played.
+        const extra = new Map<string, number>();
+        for (const f of this.fixtures) {
+          const all = (this.ledgers.get(f.id) ?? []).filter((e) => e.type === "core.forfeit").length;
+          const live = liveForfeits(this, f.id).length;
+          for (const e of [f.home_entrant_id, f.away_entrant_id]) if (e !== null && all > live) extra.set(e, (extra.get(e) ?? 0) + all - live);
+        }
+        return { ...out, rows: out.rows.map((r) => ({ ...r, played: (r.played ?? 0) + (extra.get(r.entrantId) ?? 0) })) };
+      }
+    }
+    const { m, d } = await league("generic", () => new CountsVoidedForfeits({}));
+    await forfeit(m, d, 0, "home", "walkover");
+    await run(m, d, "Void", 0, 0);
+    const e = await forfeit(m, d, 0, "away", "walkover").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ModelViolation);
+    expect((e as ModelViolation).check).toBe(FORFEIT_TABLE_CHECK);
   });
 });
 
@@ -399,7 +499,10 @@ describe("rule 10 — fast-check: any sequence over Walkover, Forfeit, Void, Wit
     return totals;
   }
 
-  it("over the three bracket shapes: invariants hold, Forfeit is accepted (a double walkover among them) and refused by each of the table's codes, and the sweep replays from its seed", async () => {
+  // Three sports, not the registry (cost: 100 runs of up to 30 commands each): one per forfeit phase table — generic
+  // (walkovers in pre only), football (a team sport, its lineups) and chess (walkovers in play and tie-break, D3).
+  // The per-state table above sweeps the registry.
+  it("over one knockout shape and three sports: invariants hold, Forfeit is accepted (a double walkover among them) and refused by each of the table's codes, and the sweep replays from its seed", async () => {
     const totals = await sweep(SEED);
     expect(totals.runs).toBe(SPORTS.length * RUNS);
     expect(totals.steps).toBeGreaterThan(0);

@@ -504,6 +504,9 @@ export class FakeLeagueDriver implements OrganiserDriver {
   /** Who the table folds over: the division's entrants. An americano stage
    *  folds over its SIDES instead (FakeAmericanoDriver). */
   tableEntrants(): string[] { return this.entrants.map((e) => e.id); }
+  /** The events the table folds for a fixture: the ones it holds (ModelFakeDriver: its ledger's LIVE entries, voids
+   *  resolved — its fixtures' `events` keep every core.void, whose target id the fold cannot read). */
+  tableEvents(f: FakeFixture): readonly StreamEvent[] { return f.events; }
   standings(stageId: string, poolId: string | null): Promise<StandingsOut> {
     return settle(() => {
       this.log("standings");
@@ -535,10 +538,11 @@ export class FakeLeagueDriver implements OrganiserDriver {
           add(won);
           continue;
         }
-        const d = declaredPoints(m, cfg, ctx, f.home_entrant_id, f.away_entrant_id, f.events)!;
+        const events = this.tableEvents(f);
+        const d = declaredPoints(m, cfg, ctx, f.home_entrant_id, f.away_entrant_id, events)!;
         pts.set(f.home_entrant_id, pts.get(f.home_entrant_id)! + d.home);
         pts.set(f.away_entrant_id, pts.get(f.away_entrant_id)! + d.away);
-        const folded = foldStream(m, cfg, f.home_entrant_id, f.away_entrant_id, f.events);
+        const folded = foldStream(m, cfg, f.home_entrant_id, f.away_entrant_id, events);
         if (folded.outcome !== null) for (const x of m.standingsDelta(folded.outcome, cfg, ctx, folded.state)) add(x);
       }
       const rows = [...pts].sort((a, b) => b[1] - a[1]).map(([entrantId, points], i) => ({ entrantId, rank: i + 1, points, ...detail.get(entrantId)! }));
