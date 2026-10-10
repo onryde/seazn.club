@@ -8,6 +8,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
+import { isPlayableFixtureStatus } from "./preflight";
 
 export type NeedsOrganiserExternalPlayRow = {
   fixtureId: string;
@@ -34,7 +35,13 @@ export function readNeedsReason(raw: unknown): NeedsReason {
 /** The division's online-play fixtures waiting for an organiser decision,
  *  earliest first. Tenancy is the tenant transaction: fixture_external_play
  *  is FORCE RLS on org_id, so another organisation's division id reads
- *  nothing. */
+ *  nothing.
+ *
+ *  "Waiting" is the FIXTURE's state as much as the bridge's: a fixture
+ *  settled through another path — a result or a void entered in the console,
+ *  a withdrawal's walkover or abandon — has had its decision, whatever its
+ *  bridge row still says (T6 follow-up review Minor 8). The one authority for
+ *  "still to be played" is T8's `isPlayableFixtureStatus`. */
 export async function listNeedsOrganiserExternalPlay(
   auth: AuthCtx,
   divisionId: string,
@@ -47,11 +54,12 @@ export async function listNeedsOrganiserExternalPlay(
         home_name: string | null;
         away_name: string | null;
         scheduled_at: Date | null;
+        fixture_status: string;
         needs_reason: unknown;
         last_error: string | null;
       }[]
     >`
-      select f.id as fixture_id, f.fixture_no,
+      select f.id as fixture_id, f.fixture_no, f.status as fixture_status,
              eh.display_name as home_name, ea.display_name as away_name,
              f.scheduled_at, ep.needs_reason, ep.last_error
         from fixture_external_play ep
@@ -61,7 +69,7 @@ export async function listNeedsOrganiserExternalPlay(
        where f.division_id = ${divisionId}
          and ep.status = 'needs_organiser'
        order by f.scheduled_at nulls last, f.fixture_no nulls last`;
-    return rows.map((r) => ({
+    return rows.filter((r) => isPlayableFixtureStatus(r.fixture_status)).map((r) => ({
       fixtureId: r.fixture_id,
       fixtureNo: r.fixture_no,
       homeName: r.home_name ?? "",

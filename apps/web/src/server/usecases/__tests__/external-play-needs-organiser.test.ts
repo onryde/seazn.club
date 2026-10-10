@@ -9,9 +9,11 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { NEEDS_REASONS } from "@/server/external-play/types";
-import { listNeedsOrganiserExternalPlay, readNeedsReason } from "@/server/usecases/external-play";
+import { listNeedsOrganiserExternalPlay, mintOrgOwnerAuth, readNeedsReason } from "@/server/usecases/external-play";
 import { createDivision } from "../divisions";
+import { scoreEvent } from "../scoring";
 import { createStages } from "../stages";
+import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -133,6 +135,81 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
       b.fixtureId,
     ]);
     expect(await listNeedsOrganiserExternalPlay(a.auth, b.divisionId)).toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay — a fixture settled through ANOTHER path leaves the queue", () => {
+  // T6 follow-up review Minor 8 / T12 addendum 3: the queue lists fixtures
+  // WAITING for an organiser decision. One already decided, voided or
+  // withdrawn has had its decision, whatever its bridge row still says.
+  const listed = async (s: Awaited<ReturnType<typeof seeded>>) =>
+    (await listNeedsOrganiserExternalPlay(s.auth, s.divisionId)).map((r) => r.fixtureId);
+
+  it("the positive pair: a held fixture still to be played is listed", async () => {
+    const s = await seeded();
+    await bridge(s.fixtureId, s.orgId, "needs_organiser", "tiebreak_owed", null);
+    expect(await listed(s)).toEqual([s.fixtureId]);
+  });
+
+  it("WITHDRAWN: a player withdrew (league expunge abandons the board) ⇒ not listed", async () => {
+    const s = await seeded();
+    await bridge(s.fixtureId, s.orgId, "needs_organiser", "token_revoked", null);
+    expect(await listed(s), "premise: listed before").toEqual([s.fixtureId]);
+    await withdrawEntrantCascade(await mintOrgOwnerAuth(s.orgId), s.away.entrantId);
+    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${s.fixtureId}`;
+    expect(fx!.status, "premise: the withdrawal settled the board").toBe("abandoned");
+    expect(await listed(s)).toEqual([]);
+  });
+
+  it("VOIDED: the organiser voided the match in the console (core.abandon) ⇒ not listed", async () => {
+    const s = await seeded();
+    await bridge(s.fixtureId, s.orgId, "needs_organiser", "aborted", null);
+    await scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.abandon", payload: { reason: "void" } });
+    expect(await listed(s)).toEqual([]);
+  });
+
+  it("DECIDED by hand, and a WALKOVER: the organiser entered the outcome ⇒ not listed — counted", async () => {
+    let checked = 0;
+    for (const decide of [
+      { type: "boardgame.result", payload: (away: string) => ({ winner: away, method: "adjudication" }) },
+      { type: "core.forfeit", payload: (away: string) => ({ by: away, reason: "walkover" }) },
+    ]) {
+      const s = await seeded();
+      await bridge(s.fixtureId, s.orgId, "needs_organiser", "double_walkover_blocked", null);
+      await scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+      await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: decide.type, payload: decide.payload(s.away.entrantId) });
+      expect(await listed(s), decide.type).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("every fixture status the CHECK admits: listed exactly while nobody has decided the fixture — counted", async () => {
+    // The authority on the set is the database. Each status is SQL-set
+    // (standing for the writer that produces it) on one held fixture.
+    const [def] = await sql<{ d: string }[]>`
+      select pg_get_constraintdef(c.oid) as d from pg_constraint c
+       where c.conrelid = 'fixtures'::regclass and c.conname = 'fixtures_status_check'`;
+    const statuses = [...(def?.d ?? "").matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]!);
+    expect(statuses.length, "premise: the CHECK was found and parsed").toBeGreaterThan(0);
+    // The rulebook: still to be played (no result yet) ⇒ waiting; any
+    // outcome, a void, a withdrawal or a cancellation ⇒ decided. A status
+    // the CHECK gains later fails here until someone places it.
+    const OPEN = new Set(["scheduled", "in_play"]);
+    const SETTLED = new Set(["decided", "finalized", "abandoned", "forfeited", "cancelled"]);
+    const s = await seeded();
+    await bridge(s.fixtureId, s.orgId, "needs_organiser", "provider_error", null);
+    let listedCount = 0;
+    let hiddenCount = 0;
+    for (const status of statuses) {
+      expect(OPEN.has(status) || SETTLED.has(status), `rulebook places ${status}`).toBe(true);
+      await sql`update fixtures set status = ${status} where id = ${s.fixtureId}`;
+      expect(await listed(s), status).toEqual(OPEN.has(status) ? [s.fixtureId] : []);
+      if (OPEN.has(status)) listedCount++;
+      else hiddenCount++;
+    }
+    expect(listedCount, "anti-vacuity: open statuses checked").toBe(OPEN.size);
+    expect(hiddenCount, "anti-vacuity: settled statuses checked").toBe(SETTLED.size);
   });
 });
 
