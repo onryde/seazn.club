@@ -25,7 +25,11 @@ const ALLOWED_BENCH = new Set([
 // (isOrganiserOnlyEvent); the browser driver routes those through the console by that predicate, never a second list.
 // The module imports nothing (pinned below), so plain node loads it with no alias.
 const ORGANISER_ONLY_EVENTS = "apps/web/src/lib/organiser-only-events.ts";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts", ORGANISER_ONLY_EVENTS]);
+// W2b (loop F review I-5): bracket-next-match.ts is the PRODUCT's one reading of "does this bracket line feed a next
+// match" (feedsNextMatch), shared by its every double-walkover writer; w2b-checks.ts's hasNoNextMatch reads it rather
+// than keep a second rule. Import-free (pinned below), so plain node loads it with no alias.
+const BRACKET_NEXT_MATCH = "apps/web/src/lib/bracket-next-match.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts", ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -120,6 +124,14 @@ describe("tools/matrix import boundary", () => {
     expect(importsOf(file), `${ORGANISER_ONLY_EVENTS} must stay import-free`).toEqual([]);
     const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === ORGANISER_ONLY_EVENTS)).map((m) => relative(MATRIX, m));
     expect(naming).toEqual(["lib/driver/browser-driver.ts"]);
+  });
+
+  it("the product's next-match predicate is a file plain node can load: it exists and imports nothing, and only the W2b checks name it", () => {
+    const file = join(REPO, BRACKET_NEXT_MATCH);
+    expect(existsSync(file), BRACKET_NEXT_MATCH).toBe(true);
+    expect(importsOf(file), `${BRACKET_NEXT_MATCH} must stay import-free`).toEqual([]);
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === BRACKET_NEXT_MATCH)).map((m) => relative(MATRIX, m));
+    expect(naming).toEqual(["lib/scenarios/w2b-checks.ts"]);
   });
 
   it("the test-module check sees every import shape it is held to, and no shipped module reaches __tests__ (anti-vacuity: the scan reads every module)", () => {

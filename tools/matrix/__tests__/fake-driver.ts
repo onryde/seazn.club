@@ -87,11 +87,11 @@ export function activeAbandonIds(events: readonly StreamEvent[]): string[] {
 export function bracketWithdrawalActs(status: string, abandonActive: boolean): boolean {
   return BRACKET_WITHDRAW_PENDING.has(status) || (IF_ABANDON_ACTIVE.has(status) && abandonActive);
 }
-/** withdrawal.ts's bracket-branch policy line, read from its text (owner ruling 53, loop F; product-text.ts). */
+/** withdrawal.ts's bracket-branch policy line, read from its text (owner rulings 53 + 106, loop F; product-text.ts). */
 const BRACKET_POLICY = bracketWithdrawalPolicyText();
 /** The policy a withdrawal answers after a BRACKET-path stage (WITHDRAWAL_WALKOVER_KINDS: knockout, double_elim,
  *  stepladder, page_playoff, ladder): a `prior` policy an earlier stage set stands; a `none` moves to `walkover` only as
- *  the product's rule says — under ruling 53 when the planner acted on a line (`acted`: the entrant's fixtures
+ *  the product's rule says — under rulings 53 + 106 when the planner acted on a line (`acted`: the entrant's fixtures
  *  bracketWithdrawalActs reads as pending), so an entrant with nothing pending answers `none`. `inStage`: the entrant's
  *  fixtures in the stage, what the rule read before ruling 53. */
 export function bracketWithdrawalPolicy(prior: WithdrawOut["policy"], inStage: number, acted: number): WithdrawOut["policy"] {
@@ -977,7 +977,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     const inStage = this.fixtures.filter((x) => x.home_entrant_id === entrantId || x.away_entrant_id === entrantId);
     if (!this.pagePlayoff) {
       // A stepladder, a double elimination, a third-place or plain knockout keeps the league's cascade here; its policy
-      // is still the bracket branch's (ruling 53), counted on the rows as they stood before the cascade.
+      // is still the bracket branch's (rulings 53 + 106), counted on the rows as they stood before the cascade.
       const acted = inStage.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x))).length;
       return { ...(await super.withdraw(entrantId)), policy: bracketWithdrawalPolicy("none", inStage.length, acted) };
     }

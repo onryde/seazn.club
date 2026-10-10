@@ -2155,7 +2155,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
     // …and a walkover reported there is the misjudge the derivation catches.
     const wrong = await runOn(new OutAnswersWalkover({ pagePlayoff: true }), "R4", ppR4);
-    expect(wrong.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy walkover, expected none (0 pending at withdrawal; the bracket branch's rule, ruling 53)"] });
+    expect(wrong.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy walkover, expected none (0 pending at withdrawal; the bracket branch's rule, rulings 53 + 106)"] });
   });
   it("m-2, the positive pair: seed 3 through to pp-q2 holds one pending fixture, so walkover is expected — the product's walkover passes and a none fails, naming the pending count", async () => {
     const r = await runOn(new FakeKnockoutDriver({ pagePlayoff: true }), "R4", ppR4);
@@ -2164,11 +2164,12 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(w.policy).toBe("walkover");
     expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
     const none = await runOn(new ThroughAnswersNone({ pagePlayoff: true }), "R4", ppR4);
-    expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; the bracket branch's rule, ruling 53)"] });
+    expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; the bracket branch's rule, rulings 53 + 106)"] });
   });
-  // Owner ruling 53 (loop F, withdrawal.ts's bracket branch): a knockout withdrawal with nothing pending answers none,
-  // so R4 derives a bracket kind's policy from what seed 3 had pending, as it does a page playoff's or a ladder's — the
-  // fixed "not none" passed a walkover with nothing pending and redded the product's none.
+  // Owner rulings 53 + 106 (loop F, withdrawal.ts's bracket branch; 106 extends 53 to every bracket kind): a knockout
+  // withdrawal with nothing pending answers none, so R4 derives a bracket kind's policy from what seed 3 had pending,
+  // as it does a page playoff's or a ladder's — the fixed "not none" passed a walkover with nothing pending and redded
+  // the product's none.
   /** An 8-seat knockout with seed 3 laid where seed 7 stands: it meets seed 2 in round 1 and is out with nothing pending. */
   class KoSeedThreeOut extends FakeKnockoutDriver {
     override startEngineBracket() {
@@ -2180,7 +2181,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
   }
   class KoOutAnswersWalkover extends KoSeedThreeOut { override async withdraw(id: string) { return { ...(await super.withdraw(id)), policy: "walkover" as const }; } }
   const koR4 = { row: "knockout", variant: "win_loss" } as const;
-  it("ruling 53 on a knockout, the empty case first: seed 3 out in round 1 holds nothing pending, so none is owed — the fake's none passes r4-policy-reported, and a walkover reds", async () => {
+  it("rulings 53 + 106 on a knockout, the empty case first: seed 3 out in round 1 holds nothing pending, so none is owed — the fake's none passes r4-policy-reported, and a walkover reds", async () => {
     const r = await runOn(new KoSeedThreeOut({ singleElim: true }), "R4", koR4);
     const w = r.out.observed.withdrawal!;
     expect(w.before.length, "seed 3 played round 1").toBeGreaterThan(0);
@@ -2188,19 +2189,20 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(w.policy).toBe("none");
     expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
     const wrong = await runOn(new KoOutAnswersWalkover({ singleElim: true }), "R4", koR4);
-    expect(wrong.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy walkover, expected none (0 pending at withdrawal; the bracket branch's rule, ruling 53)"] });
+    expect(wrong.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy walkover, expected none (0 pending at withdrawal; the bracket branch's rule, rulings 53 + 106)"] });
   });
-  it("ruling 53 on a knockout, the positive pair: seed 3 through to its semi-final holds one pending line, so walkover is owed — the fake's walkover passes and a none reds", async () => {
+  it("rulings 53 + 106 on a knockout, the positive pair: seed 3 through to its semi-final holds one pending line, so walkover is owed — the fake's walkover passes and a none reds", async () => {
     const r = await runOn(new FakeKnockoutDriver({ singleElim: true }), "R4", koR4);
     const w = r.out.observed.withdrawal!;
     expect(pending(w)).toBe(1);
     expect(w.policy).toBe("walkover");
     expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
     const none = await runOn(new ThroughAnswersNone({ singleElim: true }), "R4", koR4);
-    expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; the bracket branch's rule, ruling 53)"] });
+    expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; the bracket branch's rule, rulings 53 + 106)"] });
   });
-  it("policyFamilyFor: a table kind answers by the table branch; every other kind's policy is derived from what was pending (ruling 53)", () => {
-    // Typed from ruling 53 (a bracket, ladder or page_playoff withdrawal with nothing pending answers none) and ruling
+  it("policyFamilyFor: a table kind answers by the table branch; every other kind's policy is derived from what was pending (rulings 53 + 106)", () => {
+    // Typed from rulings 53 + 106 (a withdrawal on any bracket kind, a ladder or a page_playoff with nothing pending
+    // answers none; 106 extends 53 to every bracket kind) and ruling
     // 51/T15-R6 (americano's derived rule); the table kinds are the ones withdrawTableEntrant answers for.
     const rows: [string, "table" | "pending"][] = [
       ["league", "table"], ["group", "table"], ["swiss", "table"],

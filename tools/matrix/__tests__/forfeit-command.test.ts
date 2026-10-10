@@ -425,7 +425,7 @@ describe("rule 10 — the required sequences, every step checked", () => {
   const knockoutCfg = (sport: string) => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
   const stream = (sport: string, home: string, away: string, outcome: Parameters<typeof generateStream>[0]["outcome"]) =>
     generateStream({ sportKey: sport, cfg: knockoutCfg(sport), stageKind: "knockout", home, away, outcome });
-  it("ruling 53 on the model (withdrawal.ts's bracket branch, read from the product): a semi-final loser with nothing pending answers policy none; a side of an open semi-final answers walkover", async () => {
+  it("rulings 53 + 106 on the model (withdrawal.ts's bracket branch, read from the product): a semi-final loser with nothing pending answers policy none; a side of an open semi-final answers walkover", async () => {
     // single-sport: the policy reads statuses and seats, never the sport.
     const b = await bracket("generic");
     const sf1 = row(b.d, b.sf1);

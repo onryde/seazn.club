@@ -309,19 +309,42 @@ const SHAPES: readonly { name: string; kind: string; field: readonly string[]; c
   { name: "double elimination of 4", kind: "double_elim", field: F8.slice(0, 4) },
   { name: "double elimination of 4, bracket reset", kind: "double_elim", field: F8.slice(0, 4), config: { bracketReset: true } },
   { name: "double elimination of 8", kind: "double_elim", field: F8 },
+  { name: "double elimination of 2", kind: "double_elim", field: F8.slice(0, 2) },
+  { name: "double elimination of 2, bracket reset", kind: "double_elim", field: F8.slice(0, 2), config: { bracketReset: true } },
 ];
 
 describe("feedGraph: the engine's wiring, trusted only on the stage the product stored", () => {
-  it("the fixtures with no next match are the final and the third-place match, or the reset where a grand final can be replayed (X-DW-3, D19) — per shape", () => {
+  it("the fixtures with no next match are every final (a grand final with a reset too), the third-place match, and a match whose two sides meet again in one fixture (X-DW-3, D19, loop F I-5) — per shape", () => {
+    // D19 plus loop F's review I-5 (apps/web bracket-next-match.ts): a final feeds nothing, and a match whose winner AND
+    // loser both go to one fixture feeds only its own rematch — a grand final with a bracket reset, or a two-entrant
+    // double elimination's one winners' match — so it is a final too. Read off the engine's own declarations: its
+    // isFinal and thirdPlace flags (both grand finals of a reset are isFinal), and the fixture fed from both sides of one.
     let checked = 0;
     for (const s of SHAPES) {
       const { gen, graph } = bracket(s.kind, s.field, s.config);
-      const reset = gen.fixtures.some((g) => g.conditional === true);
-      const want = gen.fixtures.filter((g) => (reset ? g.conditional === true : g.isFinal === true) || g.thirdPlace === true).map((g) => g.id);
+      const rematch = (id: string) => gen.fixtures.some((g) => g.homeFrom?.fixtureId === id && g.awayFrom?.fixtureId === id);
+      const want = gen.fixtures.filter((g) => g.isFinal === true || g.thirdPlace === true || rematch(g.id)).map((g) => g.id);
+      expect(want.length, `${s.name}: an end exists`).toBeGreaterThan(0);
       expect(graph.keys.filter((k) => hasNoNextMatch(graph, k)), s.name).toEqual(want);
       checked++;
     }
     expect(checked).toBe(SHAPES.length);
+  });
+
+  it("loop F I-5: a double-elimination grand final WITH a bracket reset has no next match (its winner and loser both feed the reset); without one, it has no edge at all; the winners' final feeding two fixtures is a next match", () => {
+    // single-sport: the feed graph reads the engine's wiring, never the sport.
+    const reset = bracket("double_elim", F8.slice(0, 4), { bracketReset: true });
+    const gf = reset.gen.fixtures.find((g) => g.isFinal === true && g.conditional !== true)!;
+    const replay = reset.gen.fixtures.find((g) => g.conditional === true)!;
+    expect([reset.graph.winnerTo.get(gf.id)?.target, reset.graph.loserTo.get(gf.id)?.target], "premise: both of gf's lines go to the reset").toEqual([replay.id, replay.id]);
+    expect([hasNoNextMatch(reset.graph, gf.id), hasNoNextMatch(reset.graph, replay.id)]).toEqual([true, true]);
+    const plain = bracket("double_elim", F8.slice(0, 4));
+    const gf2 = plain.gen.fixtures.find((g) => g.isFinal === true)!;
+    expect([plain.graph.winnerTo.has(gf2.id), plain.graph.loserTo.has(gf2.id), hasNoNextMatch(plain.graph, gf2.id)], "no reset: no edge, no next match").toEqual([false, false, true]);
+    const wbFinal = reset.gen.fixtures.find((g) => g.id === gf.homeFrom?.fixtureId)!;
+    expect(reset.graph.winnerTo.get(wbFinal.id)?.target, "premise: the winners' final feeds the grand final").toBe(gf.id);
+    expect(reset.graph.loserTo.get(wbFinal.id)?.target, "…and its loser the losers' bracket").not.toBe(gf.id);
+    expect(hasNoNextMatch(reset.graph, wbFinal.id), "two different fixtures: a next match").toBe(false);
   });
 
   it("refuses a stage whose stored keys are not the engine's, and a size the engine cannot lay out, by name", () => {
@@ -372,6 +395,8 @@ describe("deadSeats (X-DW-2): a double walkover kills both seats it feeds; one d
       "double elimination of 4": (gen) => gen.fixtures.find((g) => g.home === "e1")!.id,
       "double elimination of 4, bracket reset": (gen) => gen.fixtures.find((g) => g.home === "e1")!.id,
       "double elimination of 8": (gen) => gen.fixtures.find((g) => g.home === "e1")!.id,
+      "double elimination of 2": () => undefined, // its one seated match is a final (I-5): nothing has a next match
+      "double elimination of 2, bracket reset": () => undefined,
     };
     let checked = 0;
     for (const s of SHAPES) {
@@ -1294,14 +1319,15 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// Owner ruling 53 (loop F, withdrawal.ts's bracket branch): a bracket, ladder or page_playoff withdrawal that leaves
-// nothing pending answers policy `none`; one pending line answers `walkover`. Every fake reads the product's policy line
-// (product-text.ts) rather than typing it. Expected values are the ruling's, never the fake's.
-describe("ruling 53: a bracket-path withdrawal with nothing pending answers policy none, one pending line walkover — the product's line, and every fake", () => {
+// Owner rulings 53 + 106 (loop F, withdrawal.ts's bracket branch; 106 extends 53 to every bracket kind): a withdrawal
+// on any bracket kind, a ladder or a page_playoff that leaves nothing pending answers policy `none`; one pending line
+// answers `walkover`. Every fake reads the product's policy line (product-text.ts) rather than typing it. Expected values
+// are the rulings', never the fake's.
+describe("rulings 53 + 106: a bracket-path withdrawal with nothing pending answers policy none, one pending line walkover — the product's line, and every fake", () => {
   const WITHDRAWAL_TS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps/web/src/server/usecases/withdrawal.ts");
   const RULED = 'if (out.policy === "none" && result.updates.length > 0) out.policy = "walkover";';
   const BEFORE_RULING = 'if (out.policy === "none") out.policy = "walkover";';
-  it("the product's bracket branch moves a none policy only when its planner acted (ruling 53); the line before the ruling reads in-stage; a changed shape is refused by name", () => {
+  it("the product's bracket branch moves a none policy only when its planner acted (rulings 53 + 106); the line before the ruling reads in-stage; a changed shape is refused by name", () => {
     expect(bracketWithdrawalPolicyText()).toBe("acted");
     const text = readFileSync(WITHDRAWAL_TS, "utf8");
     expect(text.split(RULED).length - 1, "premise: the ruled line, once").toBe(1);
@@ -1316,7 +1342,7 @@ describe("ruling 53: a bracket-path withdrawal with nothing pending answers poli
   });
 
   it("bracketWithdrawalPolicy: a policy an earlier stage set stands; a none moves to walkover only when the planner acted on a line", () => {
-    // [prior, the entrant's fixtures in the stage, the ones the planner acts on, the answer]: ruling 53's rows, and the
+    // [prior, the entrant's fixtures in the stage, the ones the planner acts on, the answer]: rulings 53 + 106's rows, and the
     // product's stage loop (a table stage before the bracket answers first).
     const rows: [WithdrawOut["policy"], number, number, WithdrawOut["policy"]][] = [
       ["none", 2, 0, "none"], ["none", 0, 0, "none"], ["none", 2, 1, "walkover"],
@@ -1386,7 +1412,7 @@ describe("ruling 53: a bracket-path withdrawal with nothing pending answers poli
 
   it("the multi-stage fake (formats), groups then a knockout or a page playoff: a bracket loser with nothing pending answers the GROUP stage's walkover — the bracket branch moves only a none, and a table stage always names a policy", async () => {
     // single-sport: the policy reads statuses and seats, never the sport. Every bracket entrant played its group, so the
-    // table branch (stage.ts withdrawTableEntrant: played ≥ half walks over) answers first; ruling 53's none needs a
+    // table branch (stage.ts withdrawTableEntrant: played ≥ half walks over) answers first; rulings 53 + 106's none needs a
     // withdrawal with no table fixture, which a group-first format never has (bracketWithdrawalPolicy's own rows above).
     let checked = 0;
     for (const [row, later] of MS_ROWS) {

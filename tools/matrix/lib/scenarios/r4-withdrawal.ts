@@ -96,9 +96,9 @@ const HELD = "needs_decision";
 const onBracketPath = (kind: string): boolean => BRACKET_KINDS.includes(kind as BracketKind) || X_WD_2_KINDS.includes(kind);
 /** Which POLICY rule a kind's withdrawal answers by. "table": the product's table branch (the forfeit family less the
  *  bracket kinds: withdrawTableEntrant names a policy for every entrant with fixtures in the stage, never "none").
- *  "pending": every other kind's policy is DERIVED from what the entrant had pending — the bracket path (owner ruling
- *  53, loop F: a bracket, ladder or page_playoff withdrawal with nothing pending answers "none"), and americano's
- *  open-format rule (T15-R6). */
+ *  "pending": every other kind's policy is DERIVED from what the entrant had pending — the bracket path (owner rulings
+ *  53 + 106, loop F: a withdrawal on any bracket kind, a ladder or a page_playoff with nothing pending answers "none";
+ *  106 extends 53 to every bracket kind), and americano's open-format rule (T15-R6). */
 export const policyFamilyFor = (kind: string): "table" | "pending" => (FORFEIT_MODEL_KINDS.includes(kind) && !onBracketPath(kind) ? "table" : "pending");
 
 /** What each policy implies for the withdrawn entrant's fixtures
@@ -157,7 +157,7 @@ export const R4_TRIGGER: Readonly<Record<R4Family, (round: number, batch: readon
   ladder: (_round, batch, seed3) => batch.some((f) => f.home_entrant_id === seed3 || f.away_entrant_id === seed3),
 });
 
-/** Owner ruling 53 (loop F): the policy a bracket-path withdrawal owes — "walkover" only when the entrant had something
+/** Owner rulings 53 + 106 (loop F): the policy a bracket-path withdrawal owes — "walkover" only when the entrant had something
  *  pending, else "none". Pending is PENDING_STATUSES and a HELD line (C-2: a needs_decision line walks over too); an
  *  abandoned line walks over only while its abandon is active, which a snapshot does not show, so it abstains by name.
  *  A kind off the bracket path is refused: a table kind answers by its own branch, americano by
@@ -387,9 +387,9 @@ export const r4Withdrawal: Scenario = {
     // Canary: ALSO judge the cascade against the OPPOSITE policy (m-1).
     const opposite = w.policy === "walkover" ? "expunge" : "walkover";
     const later = observed.stages[0].fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && f.home !== null && f.away !== null);
-    // Owner ruling 53 (loop F): on every kind off the table branch the policy is DERIVED from what was pending; the
-    // canary also judges the other one. The bracket path (the bracket kinds, page playoff, ladder) by its own rule —
-    // final review m-2 moved page_playoff off the fixed "not none", and ruling 53 the bracket kinds. The table kinds
+    // Owner rulings 53 + 106 (loop F): on every kind off the table branch the policy is DERIVED from what was pending;
+    // the canary also judges the other one. The bracket path (the bracket kinds, page playoff, ladder) by its own rule —
+    // final review m-2 moved page_playoff off the fixed "not none", and ruling 106 the bracket kinds. The table kinds
     // keep it: withdrawTableEntrant never answers "none" for an entrant with fixtures in the stage.
     // T15-R6: on americano the open-format rule over what the withdrawn PLAYER had pending, or an abstain by name.
     const derived: AmericanoPolicyExpectation | null = policyFamilyFor(kind) === "table" ? null : kind === "americano"
@@ -403,7 +403,7 @@ export const r4Withdrawal: Scenario = {
           [{ ok: w.policy === derived.want, note: kind === "americano"
             // W1d item 24: the persons' COUNT, never their ids (a team's roster is its persons, every one of them).
             ? `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending game(s) of the withdrawn entrant (${personsLabel((setup.persons.get(w.entrantId) ?? []).length)}) at withdrawal, through any entrant; withdrawal.ts open-format rule)`
-            : `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending at withdrawal; the bracket branch's rule, ruling 53)` }],
+            : `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending at withdrawal; the bracket branch's rule, rulings 53 + 106)` }],
           [{ ok: w.policy === (derived.want === "none" ? "walkover" : "none"), note: `policy ${w.policy}, expected ${derived.want === "none" ? "walkover" : "none"}` }],
           ctx.spec.canary,
         );

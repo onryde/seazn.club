@@ -582,7 +582,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       } else if (BRACKET_WALKOVER.has(stage.kind)) {
         // loop F (C-2): a bracket withdrawal also walks a held line over — needs_decision, or an active abandon.
         const acts = mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));
-        // Ruling 53: the bracket branch's policy, as the product's text reads it — a table stage's answer before it stands.
+        // Rulings 53 + 106: the bracket branch's policy, as the product's text reads it — a table stage's answer stands.
         policy = bracketWithdrawalPolicy(policy, mine.length, acts.length);
         for (const f of acts) plan.push({ f, walkover: true, stage });
       } else {

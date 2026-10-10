@@ -6,6 +6,7 @@
 // never the product's answer and never the engine's forfeitCredit.
 import { EngineError } from "@seazn/engine/core";
 import { CreditRefused, walkoverCredit, type CreditAnswer, type CreditCase } from "@seazn/reference";
+import { feedsNextMatch } from "../../../../apps/web/src/lib/bracket-next-match.ts";
 import type { FixtureRow, StandingsRowWire } from "../driver/types.ts";
 import { type ObservedFixture, type ObservedOutcome } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
@@ -153,9 +154,12 @@ export function wireGraph(fixtures: readonly { readonly id: string; readonly hom
   return { keys: made, winnerTo, loserTo, order: made };
 }
 
-/** X-DW-3: the fixture has no next match — no winner line and no loser line out of it (D19: the feed graph, never a
- *  round name). */
-export const hasNoNextMatch = (g: FeedGraph, key: string): boolean => !g.winnerTo.has(key) && !g.loserTo.has(key);
+/** X-DW-3: the fixture has no next match (D19: the feed graph, never a round name) — the PRODUCT's own predicate
+ *  (apps/web bracket-next-match.ts, shared by its every double-walkover writer), read over the engine's two edges: no
+ *  winner line and no loser line, or (loop F I-5) both lines into ONE fixture, which only replays the same two
+ *  entrants — a grand final with a bracket reset, a two-entrant double elimination's winners' match. */
+export const hasNoNextMatch = (g: FeedGraph, key: string): boolean =>
+  !feedsNextMatch({ winner_to_fixture: g.winnerTo.get(key)?.target ?? null, loser_to_fixture: g.loserTo.get(key)?.target ?? null });
 
 /** X-DW-2, simulated on the feed graph: a double walkover at `dwKey` kills both seats it feeds; a fixture left with
  *  ONE dead seat is walked over (its winner line carries the live side, its loser line a dead seat); one left with TWO

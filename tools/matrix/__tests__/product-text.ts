@@ -134,7 +134,7 @@ export function bracketWithdrawalText(): { pending: string[]; ifAbandonActive: s
 }
 
 /** When withdrawal.ts's BRACKET branch (WITHDRAWAL_WALKOVER_KINDS: the bracket kinds, page_playoff, ladder) moves a
- *  `none` policy to `walkover`. `"acted"` (owner ruling 53, loop F): only when its planner acted on a line of the
+ *  `none` policy to `walkover`. `"acted"` (owner rulings 53 + 106, loop F): only when its planner acted on a line of the
  *  entrant's (`result.updates` non-empty), so an entrant with nothing pending answers `none`. `"in-stage"` (the text
  *  before ruling 53): whenever the entrant holds a fixture in the stage. */
 export type BracketPolicyRule = "acted" | "in-stage";

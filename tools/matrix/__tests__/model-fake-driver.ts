@@ -167,7 +167,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
    *  abandoned while its abandon is active) walks over to its opponent through the cascade's bare forfeit, an active
    *  abandon voided first, a HELD line counted in `walked_over_held`; one whose opponent is still TBD is never voided —
    *  the entrant's seat is emptied and dead (departSeat "tbd", counted a walkover), and the opponent who arrives is
-   *  walked over (#fill). Nothing is expunged. The answer's policy is the bracket branch's (ruling 53, read from the
+   *  walked over (#fill). Nothing is expunged. The answer's policy is the bracket branch's (rulings 53 + 106, read from the
    *  product's text): "walkover" once the planner acted on a line, "none" with nothing pending. A table kind keeps the league's rule (FakeLeagueDriver.withdraw). An opponent already withdrawn (X-WD-4)
    *  is not modelled: a withdrawn entrant's lines are all walked over by then, so the model never seats one. */
   override async withdraw(entrantId: string): Promise<WithdrawOut> {
