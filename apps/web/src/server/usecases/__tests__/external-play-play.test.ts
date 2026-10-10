@@ -13,6 +13,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Chess } from "chess.js";
+import fc from "fast-check";
 import { sql } from "@/lib/db";
 import type { RoomBroadcast } from "@/lib/realtime";
 import { appendEvent } from "@/server/engine-db";
@@ -126,6 +127,9 @@ async function readyGame(over: { whiteAway?: boolean } = {}): Promise<Game> {
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "boardgame.pairing", payload: { white: s.away.entrantId } });
   }
   const gameId = freshGameId();
+  // Per game, not per case: the property below creates dozens in one case,
+  // and T4's per-IP budget would throttle them.
+  __resetCreationQueue();
   board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: gameId });
   board.acceptChallenge.mockResolvedValue({ ok: true });
   const out = await createGameIfReady(s.fixtureId, { now: NOW, publish: async () => {} });
@@ -1112,5 +1116,401 @@ describe("publishRoomBroadcast", () => {
       () => publishRoomBroadcast("fix-1", BODY),
     );
     expect(calls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The property (spec §8.1 / TEST-STRATEGY rule 10): random interleavings of
+// every action a room can see, against a MODEL of lila — not against T10's
+// own rules. The model is lila source as read (not measured — T17):
+// MovePlayer (turn, game over, a move declines the opponent's offer),
+// Drawer.yes/no + Game.playerCanOfferDraw (ply >= 2, no standing own offer,
+// 20-ply re-offer rule), BotPlayer.resign (an abort before ply 2) and
+// .abort (refused from ply 2). A 5xx is modelled both ways: lila failed
+// before acting, or acted and the answer was lost. `refresh` stands for
+// T11's reconcile adopting Lichess's truth (moves, the standing offer and
+// the offer plies, 'finished' once the game is over) — T11's writer, not
+// T10's; it is how a lagging ledger catches up.
+
+type Who = "white" | "black";
+const other = (c: Who): Who => (c === "white" ? "black" : "white");
+const uciMove = (uci: string) =>
+  uci.length > 4 ? { from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4) } : { from: uci.slice(0, 2), to: uci.slice(2, 4) };
+
+const OK: BoardCall = { ok: true };
+const FIVE_XX: BoardCall = { ok: false, code: "unavailable", raw: "502 Bad Gateway" };
+const M6: BoardCall = { ok: false, code: "not_your_turn_or_over", raw: "Not your turn, or game already over" };
+/** lila's clientError 400s, which T3's classifier answers `unavailable`. */
+const clientError = (raw: string): BoardCall => ({ ok: false, code: "unavailable", raw });
+
+class LilaModel {
+  readonly board = new Chess();
+  readonly moves: string[] = [];
+  over: string | null = null;
+  readonly offering: Record<Who, boolean> = { white: false, black: false };
+  readonly lastOffer: Record<Who, number | null> = { white: null, black: null };
+  failNext: { played: boolean } | null = null;
+  /** A "yes" lila ignored under its 20-ply re-offer rule. */
+  reofferBlocked = 0;
+  /** Set when the last call answered 5xx (whether or not lila acted). */
+  lastWasFiveXX = false;
+  get ply() {
+    return this.moves.length;
+  }
+  offeringSide(): Who | null {
+    return this.offering.white ? "white" : this.offering.black ? "black" : null;
+  }
+  private call(apply: () => BoardCall): BoardCall {
+    const fail = this.failNext;
+    this.failNext = null;
+    this.lastWasFiveXX = fail !== null;
+    if (fail && !fail.played) return FIVE_XX;
+    const answer = apply();
+    return fail ? FIVE_XX : answer;
+  }
+  move(c: Who, uci: string): BoardCall {
+    return this.call(() => {
+      if (this.over !== null || (this.ply % 2 === 0 ? "white" : "black") !== c) return M6;
+      try {
+        this.board.move(uciMove(uci));
+      } catch {
+        return clientError(`illegal move ${uci}`);
+      }
+      this.moves.push(uci);
+      if (this.offering[other(c)]) this.offering[other(c)] = false;
+      if (this.board.isCheckmate()) this.over = "mate";
+      else if (this.board.isStalemate() || this.board.isInsufficientMaterial()) this.over = "draw";
+      return OK;
+    });
+  }
+  draw(c: Who, accept: boolean): BoardCall {
+    return this.call(() => {
+      if (this.over !== null || this.ply < 2) return OK; // !drawable: a silent no-op, still 200
+      if (accept) {
+        if (this.offering[other(c)]) this.over = "draw";
+        else if (!this.offering[c] && !(this.lastOffer[c] !== null && this.lastOffer[c]! >= this.ply - 20)) {
+          this.offering[c] = true;
+          this.lastOffer[c] = this.ply;
+        } else if (!this.offering[c]) this.reofferBlocked++;
+      } else if (this.offering[other(c)]) this.offering[other(c)] = false;
+      return OK;
+    });
+  }
+  resign(): BoardCall {
+    return this.call(() => {
+      if (this.over !== null) return clientError("This game cannot be resigned");
+      this.over = this.ply < 2 ? "aborted" : "resign";
+      return OK;
+    });
+  }
+  abort(): BoardCall {
+    return this.call(() => {
+      if (this.over !== null || this.ply >= 2) return clientError("This game can no longer be aborted");
+      this.over = "aborted";
+      return OK;
+    });
+  }
+}
+
+type Op =
+  | { k: "move"; who: Who | "turn"; pick: number }
+  | { k: "dup" }
+  | { k: "outsider" }
+  | { k: "fail"; played: boolean }
+  | { k: "illegal"; sq: number }
+  | { k: "resign"; who: Who }
+  | { k: "abort"; who: Who }
+  | { k: "draw"; who: Who; accept: boolean }
+  | { k: "refresh" };
+
+const whoArb = fc.constantFrom<Who>("white", "black");
+const opArb: fc.Arbitrary<Op> = fc.oneof(
+  {
+    weight: 12,
+    arbitrary: fc.record({
+      k: fc.constant("move" as const),
+      who: fc.oneof({ weight: 5, arbitrary: fc.constant("turn" as const) }, { weight: 1, arbitrary: whoArb }),
+      pick: fc.nat(80),
+    }),
+  },
+  { weight: 2, arbitrary: fc.constant({ k: "dup" as const }) },
+  { weight: 1, arbitrary: fc.constant({ k: "outsider" as const }) },
+  { weight: 2, arbitrary: fc.record({ k: fc.constant("fail" as const), played: fc.boolean() }) },
+  { weight: 1, arbitrary: fc.record({ k: fc.constant("illegal" as const), sq: fc.nat(63) }) },
+  { weight: 1, arbitrary: fc.record({ k: fc.constant("resign" as const), who: whoArb }) },
+  { weight: 1, arbitrary: fc.record({ k: fc.constant("abort" as const), who: whoArb }) },
+  { weight: 4, arbitrary: fc.record({ k: fc.constant("draw" as const), who: whoArb, accept: fc.boolean() }) },
+  { weight: 2, arbitrary: fc.constant({ k: "refresh" as const }) },
+);
+const T_ = { k: "move", who: "turn", pick: 0 } as const;
+/** Edge prefixes, each ENDING with the claim it exists for, so its path is
+ *  reached whenever the prefix is drawn rather than by tail luck. */
+const PREFIXES: Op[][] = [
+  [],
+  [T_, T_, { k: "draw", who: "white", accept: true }, { k: "draw", who: "black", accept: false }],
+  [T_, T_, { k: "draw", who: "white", accept: true }, T_, T_],
+  [T_, T_, { k: "draw", who: "white", accept: true }, { k: "draw", who: "black", accept: true }, { k: "refresh" }],
+  [{ k: "fail", played: true }, T_, T_, { k: "refresh" }],
+  [{ k: "fail", played: false }, T_, T_],
+  [T_, T_, { k: "resign", who: "white" }, T_, { k: "refresh" }, T_],
+  [{ k: "abort", who: "black" }, { k: "refresh" }, T_],
+  [T_, { k: "dup" }],
+  [T_, T_, { k: "fail", played: true }, { k: "draw", who: "white", accept: true }, { k: "refresh" }],
+  [T_, { k: "illegal", sq: 12 }],
+  [{ k: "outsider" }],
+  // White offers at 2, Black's move clears it, White re-offers at 4: recent.
+  [T_, T_, { k: "draw", who: "white", accept: true }, T_, T_, { k: "draw", who: "white", accept: true }],
+];
+const scenarioArb = fc
+  .tuple(fc.constantFrom(...PREFIXES), fc.array(opArb, { minLength: 0, maxLength: 28, size: "max" }))
+  .map(([prefix, tail]) => [...prefix, ...tail]);
+
+/** An independent UCI replay (the test's, not fenAfter): the position, or
+ *  the index of the first move chess.js rejects. */
+function replayLedger(moves: readonly string[]): { board: Chess; illegalAt: number | null; turnsChecked: number } {
+  const b = new Chess();
+  let turnsChecked = 0;
+  for (let i = 0; i < moves.length; i++) {
+    // Plies alternate colours: the side to move before ply i is i's parity.
+    expect(b.turn(), `ply ${i} is ${i % 2 === 0 ? "White" : "Black"}'s`).toBe(i % 2 === 0 ? "w" : "b");
+    turnsChecked++;
+    try {
+      b.move(uciMove(moves[i]!));
+    } catch {
+      return { board: b, illegalAt: i, turnsChecked };
+    }
+  }
+  return { board: b, illegalAt: null, turnsChecked };
+}
+const toUci = (m: { from: string; to: string; promotion?: string }) => `${m.from}${m.to}${m.promotion ?? ""}`;
+
+describe.runIf(HAS_DB)("act — property: interleavings against a lila model", () => {
+  const NUM_RUNS = 40;
+  const totals: Record<string, number> = {};
+  const bump = (k: string, n = 1) => (totals[k] = (totals[k] ?? 0) + n);
+
+  it("the ledger stays a legal, alternating, duplicate-free PREFIX of Lichess's game; nothing lands after the end; a 5xx is never 'rejected'", { timeout: 600_000 }, async () => {
+    let runs = 0;
+    await fc.assert(
+      fc.asyncProperty(scenarioArb, async (ops) => {
+        runs++;
+        const g = await readyGame();
+        const outsider = await seedPlayer(g.orgId, "Spectator", `o-${randomUUID().slice(0, 8)}`, true);
+        const lila = new LilaModel();
+        // Per run: true from a 5xx until the next refresh — T10 cannot know
+        // what a 5xx did, so its draw state is only compared outside it.
+        let lagged = false;
+        let finishedLedger: string[] | null = null;
+        let lastSubmitted: { who: Who; uci: string } | null = null;
+        let published = 0;
+        let lichessCalls = 0;
+        const whoOf = (token: string): Who => {
+          if (token === tokenOf(g.white)) return "white";
+          if (token === tokenOf(g.black)) return "black";
+          throw new Error("a token that belongs to neither player reached Lichess");
+        };
+        const seen = (gameId: string) => {
+          expect(gameId).toBe(g.gameId);
+          lichessCalls++;
+        };
+        const deps: PlayDeps = {
+          submitMove: async (x) => (seen(x.gameId), lila.move(whoOf(x.token), x.uci)),
+          resignGame: async (x) => (seen(x.gameId), whoOf(x.token), lila.resign()),
+          abortGame: async (x) => (seen(x.gameId), whoOf(x.token), lila.abort()),
+          offerOrAcceptDraw: async (x) => (seen(x.gameId), lila.draw(whoOf(x.token), x.accept)),
+          publish: async () => {
+            published++;
+          },
+        };
+        const run = async (personId: string, action: PlayAction) => {
+          try {
+            return { result: await act({ fixtureId: g.fixtureId, personId, action }, deps) };
+          } catch (err) {
+            const e = err as { status?: number; code?: string };
+            return { thrown: { status: e.status, code: e.code } };
+          }
+        };
+
+        for (const op of ops) {
+          const before = await ledger(g.fixtureId);
+          const terminalBefore = before.status === "finished";
+          const lilaOverBefore = lila.over !== null;
+          published = 0;
+          lichessCalls = 0;
+          lila.lastWasFiveXX = false;
+          let out: { result?: PlayResult; thrown?: { status?: number; code?: string } } | null = null;
+          let submitted: string | null = null;
+          const ourTurn: Who = before.move_count % 2 === 0 ? "white" : "black";
+
+          switch (op.k) {
+            case "move": {
+              const who = op.who === "turn" ? ourTurn : op.who;
+              let uci: string;
+              if (who === ourTurn) {
+                const legal = replayLedger(before.moves_uci).board.moves({ verbose: true });
+                if (legal.length === 0) {
+                  bump("skip:no_legal_move");
+                  continue;
+                }
+                uci = toUci(legal[op.pick % legal.length]!);
+              } else {
+                uci = who === "white" ? "a2a3" : "a7a6";
+              }
+              submitted = uci;
+              lastSubmitted = { who, uci };
+              out = await run(g[who].personId, { kind: "move", uci });
+              break;
+            }
+            case "dup": {
+              if (!lastSubmitted) {
+                bump("skip:dup_before_any_move");
+                continue;
+              }
+              submitted = lastSubmitted.uci;
+              out = await run(g[lastSubmitted.who].personId, { kind: "move", uci: lastSubmitted.uci });
+              break;
+            }
+            case "outsider":
+              out = await run(outsider.personId, { kind: "move", uci: "e2e4" });
+              expect(out.thrown, "a non-player is a 404").toMatchObject(NOT_FOUND);
+              expect(lichessCalls).toBe(0);
+              bump("outsider_404");
+              break;
+            case "fail":
+              lila.failNext = { played: op.played };
+              continue;
+            case "illegal": {
+              const sq = `${"abcdefgh"[op.sq % 8]}${Math.floor(op.sq / 8) + 1}`;
+              submitted = `${sq}${sq}`; // well-formed (assertUci passes) and never legal
+              out = await run(g[ourTurn].personId, { kind: "move", uci: submitted });
+              break;
+            }
+            case "resign":
+            case "abort":
+              out = await run(g[op.who].personId, { kind: op.k });
+              break;
+            case "draw":
+              out = await run(g[op.who].personId, { kind: "draw", accept: op.accept });
+              break;
+            case "refresh": {
+              const over = lila.over !== null;
+              await sql`
+                update fixture_external_play
+                   set moves_uci = ${sql.json(lila.moves)}, move_count = ${lila.ply},
+                       status = ${over ? "finished" : lila.ply > 0 ? "live" : before.status},
+                       finished_at = ${over ? new Date() : null},
+                       started_at = coalesce(started_at, ${lila.ply > 0 ? new Date() : null}),
+                       draw_offer_by = ${lila.offeringSide()},
+                       white_draw_offer_ply = ${lila.lastOffer.white},
+                       black_draw_offer_ply = ${lila.lastOffer.black}
+                 where fixture_id = ${g.fixtureId} and status in ('ready', 'live')`;
+              lagged = false;
+              bump("refresh");
+              if (lila.ply > before.move_count) bump("five_xx_played_adopted");
+              break;
+            }
+          }
+
+          const after = await ledger(g.fixtureId);
+
+          // ---- per-op rules ------------------------------------------------
+          if (out && terminalBefore) {
+            expect(out.thrown, "a finished row accepts nothing").toMatchObject(NOT_FOUND);
+            expect(lichessCalls, "and calls nothing").toBe(0);
+            bump("after_finished_404");
+          }
+          if (out?.thrown && op.k !== "outsider" && !terminalBefore) {
+            throw new Error(`unexpected throw on ${op.k}: ${JSON.stringify(out.thrown)}`);
+          }
+          if (lila.lastWasFiveXX && lichessCalls > 0) {
+            // The only honest answer to a 5xx: reconcile — never "rejected",
+            // never "applied" — and the row is exactly as it was.
+            expect(out?.result, "a 5xx answers reconcile:unavailable").toEqual(reconcile("unavailable"));
+            expect(after).toEqual(before);
+            lagged = true;
+            bump(op.k === "move" || op.k === "dup" ? "five_xx_on_move" : "five_xx_on_other");
+          }
+          const r = out?.result;
+          if (r && r.ok && r.applied && (op.k === "move" || op.k === "dup")) {
+            expect(after.moves_uci, "an applied move appends exactly that move").toEqual([...before.moves_uci, submitted]);
+            bump("move_applied");
+          } else if (op.k !== "refresh") {
+            if (op.k === "move" || op.k === "dup" || op.k === "illegal") {
+              expect(after.moves_uci, "nothing else appends").toEqual(before.moves_uci);
+            }
+          }
+          if (r && r.ok && !r.applied) bump("absorbed");
+          if (r && !r.ok && r.reconcile && r.reason === "not_your_turn_or_over") bump("refused_turn_or_over");
+          if (op.k === "illegal" && r && !r.ok) bump("illegal_refused");
+          if (op.k === "resign" && r?.ok) bump("resign_forwarded");
+          if (op.k === "abort" && r?.ok) bump("abort_forwarded");
+          if (lilaOverBefore && op.k !== "refresh") {
+            expect(after.move_count, "nothing is accepted after the game is over").toBe(before.move_count);
+            bump("after_over_checked");
+          }
+
+          // Broadcasts: one per recorded change, none otherwise.
+          const grew = after.move_count > before.move_count && op.k !== "refresh";
+          const drawChanged = op.k === "draw" && after.draw_offer_by !== before.draw_offer_by;
+          if (op.k !== "refresh") expect(published, "one broadcast per recorded change").toBe((grew ? 1 : 0) + (drawChanged ? 1 : 0));
+          if (drawChanged) bump(after.draw_offer_by === null ? "draw_cleared" : "draw_recorded");
+
+          // ---- invariants ----------------------------------------------------
+          expect(after.move_count).toBe(after.moves_uci.length);
+          const replay = replayLedger(after.moves_uci);
+          expect(replay.illegalAt, "the ledger is a legal game (independent chess.js replay)").toBeNull();
+          bump("plies_checked", replay.turnsChecked);
+          expect(lila.moves.slice(0, after.moves_uci.length), "the ledger is a prefix of Lichess's game")
+            .toEqual(after.moves_uci);
+          expect(new Set(after.moves_uci.map((m, i) => `${i}:${m}`)).size, "no ply twice").toBe(after.moves_uci.length);
+          if (op.k === "refresh") {
+            // Every move Lichess holds — including a 5xx that played — is
+            // adoptable: nothing T10 wrote stands in its way.
+            expect(after.moves_uci, "after reconcile, the ledger IS Lichess's game").toEqual(lila.moves);
+          }
+          if (finishedLedger !== null) {
+            expect(after.moves_uci, "a finished ledger never moves again").toEqual(finishedLedger);
+          }
+          if (after.status === "finished" && finishedLedger === null) finishedLedger = after.moves_uci;
+          if (!lagged && lila.over === null) {
+            // Strict: the standing offer on file IS lila's — never invented,
+            // never missed.
+            expect(after.draw_offer_by, "the standing draw offer matches lila").toBe(lila.offeringSide());
+            bump("draw_state_strict_checks");
+          }
+          bump("ops");
+        }
+        bump("reoffer_blocked", lila.reofferBlocked);
+      }),
+      { numRuns: NUM_RUNS, endOnFailure: true },
+    );
+    expect(runs, "anti-vacuity: the property ran").toBe(NUM_RUNS);
+    console.info(`[T10 property] runs=${runs} ${JSON.stringify(totals)}`);
+    // Anti-vacuity, per path the property is named for.
+    let checked = 0;
+    for (const path of [
+      "move_applied",
+      "absorbed",
+      "refused_turn_or_over",
+      "five_xx_on_move",
+      "five_xx_on_other",
+      "illegal_refused",
+      "outsider_404",
+      "after_finished_404",
+      "after_over_checked",
+      "resign_forwarded",
+      "abort_forwarded",
+      "draw_recorded",
+      "draw_cleared",
+      "refresh",
+      "draw_state_strict_checks",
+      "plies_checked",
+      "five_xx_played_adopted",
+      "reoffer_blocked",
+    ]) {
+      expect(totals[path] ?? 0, `anti-vacuity: ${path}`).toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked).toBe(18);
   });
 });
