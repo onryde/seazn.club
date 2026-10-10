@@ -41,6 +41,8 @@ import { MatchCentreDoc } from "../public-site/match-centre-schema.ts";
 // registration-rules.ts above: this file is shared with the standalone
 // OpenAPI generator script, which has no `@/` alias resolution.
 import { streamUrlSchema } from "../../lib/stream-url.ts";
+// T19 (D12): the Open round vocabulary — one list, shared with the organiser control.
+import { OPEN_ROUND_REFUSALS, OPEN_ROUND_SKIP_REASONS } from "../../lib/open-round.ts";
 // Streaming R1 (Task 9) — the capture QR's ONE schema (design §7.6), re-exported
 // in the relay block below, never re-typed. Relative + explicit `.ts`, same
 // reason as stream-url.ts above; lib/capture-qr.ts imports zod and nothing else.
@@ -2095,6 +2097,21 @@ export const UnpairResult = z.object({
   cleared: z.number().int(),
   round: z.number().int(),
 });
+
+/** POST /stages/{id}/open-round (T19, D12) — the organiser opens one round
+ *  of an online-play stage: stamps it and invites its players. */
+export const OpenRoundInput = z.object({ roundNo: z.number().int().positive() }).strict();
+export type OpenRoundInput = z.infer<typeof OpenRoundInput>;
+
+export const OpenRoundSkip = z.object({ fixtureId: Uuid, reason: z.enum(OPEN_ROUND_SKIP_REASONS) });
+
+/** `invited` counts SEATS whose invite the mail provider accepted (two per
+ *  board), never boards. Every refusal wrote nothing. */
+export const OpenRoundResult = z.union([
+  z.object({ opened: z.literal(true), invited: z.number().int(), skipped: z.array(OpenRoundSkip) }),
+  z.object({ opened: z.literal(false), reason: z.literal("already_open"), skipped: z.array(OpenRoundSkip) }),
+  z.object({ opened: z.literal(false), reason: z.enum(OPEN_ROUND_REFUSALS) }),
+]);
 
 export const CompleteResult = z.object({
   completed: z.boolean(),

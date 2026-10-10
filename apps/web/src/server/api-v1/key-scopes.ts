@@ -357,6 +357,12 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "PATCH /orgs/:id/stream-targets/:targetId",
   "DELETE /orgs/:id/stream-targets/:targetId",
   "POST /registrations/:id/refund",
+  // Online chess (T19, D12): opening a round emails real people and starts a
+  // clock against them, and its stamp names the USER who opened it
+  // (stage_round_opens.opened_by NOT NULL) — a key has no user to name. The
+  // resend is the same invite to the same people.
+  "POST /stages/:id/open-round",
+  "POST /fixtures/:id/external-play/resend",
   // Destructive + money-adjacent (payments-hardening P0-1): deleting a
   // competition cascades registrations/passes; console has no button —
   // keys must not have one either.
