@@ -388,6 +388,19 @@ describe.runIf(HAS_DB)("writeResultFrom — every terminal status (spec §3.6)",
     { status: "aborted", winner: null, wrote: "aborted", event: null, method: null, winnerIsNull: true },
   ] as const;
 
+  it("the rulebook oracle agrees with the spec's own table on every row it names — counted", () => {
+    // The oracle is pinned to the SPEC here, not only to the code: a drift
+    // in both together (a "fix" to code and oracle at once) is caught.
+    let checked = 0;
+    for (const row of SPEC_3_6) {
+      const e = rulebook(row.status, row.winner, false);
+      expect(e.wrote, row.status).toBe(row.wrote);
+      if (e.wrote === "decided" || e.wrote === "draw") expect(e.method, row.status).toBe(row.method);
+      checked++;
+    }
+    expect(checked, "spec rows checked").toBe(SPEC_3_6.length);
+  });
+
   it("maps each terminal status to the event and method the spec names, and reports the count", async () => {
     let checked = 0;
     for (const row of SPEC_3_6) {
