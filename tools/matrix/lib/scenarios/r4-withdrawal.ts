@@ -70,6 +70,9 @@ export const WALKOVER_MODEL: Readonly<Record<"forfeit" | "abandon", WalkoverMode
   forfeit: (b, a, w, tbd) => {
     // The side that is not the withdrawn entrant — the product may clear a dead seat, so w need not still be seated.
     const opponent = [a.home, a.away].find((s) => s !== null && s !== w) ?? null;
+    // Review M-1: a fixture whose opponent WAS seated when the withdrawal answered has someone to forfeit to — seats
+    // cleared after it are the product losing that opponent, never "a TBD that never arrived" (that reading failed open).
+    if (!tbd && opponent === null) return { item: { ok: false, note: `${b.id}: ${a.status} after walkover with its opponent's seat cleared — it was seated when the withdrawal answered, expected forfeited to it` }, forfeited: false, voided: voidedBy(b, a) };
     if (tbd || opponent === null) {
       if (opponent === null) return { item: { ok: PENDING_STATUSES.includes(a.status), note: `${b.id}: ${a.status} after walkover with a TBD opponent that never arrived, expected still pending — the dead seat is never voided (X-WD-3)` }, forfeited: false, voided: voidedBy(b, a) };
       const arrived = a.status === "forfeited" && winnerOf(a.outcome) === opponent;

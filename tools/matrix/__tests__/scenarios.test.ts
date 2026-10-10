@@ -2031,6 +2031,14 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     const toThirdParty = [good[0]!, after("b", "forfeited", { kind: "award", winner: "z", loser: null, reason: "walkover" }), good[2]!];
     expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0, 0, "league", tbd))).toEqual([true, false, true, true, true]);
     expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1, 0, "league", tbd))).toEqual([true, true, false, true, true]);
+    // M-1: b's opponent WAS seated when the withdrawal answered (b is not in tbd); both seats cleared and left pending is
+    // the opponent lost, a red — never read as "a TBD opponent that never arrived" (t's pending pass, above).
+    const cleared = [good[0]!, after("b", "scheduled", null, null, null), good[2]!];
+    const items = cascadeItems("walkover", "w", before, cleared, 0, 0, "league", tbd);
+    expect(ok(items)).toEqual([true, false, true, true, true]);
+    expect(items[1]!.note).toMatch(/b: scheduled after walkover with its opponent's seat cleared/);
+    // …and the same cleared row passes only as the TBD seat it is not: its positive pair, t above.
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, after("b", "scheduled", null, "w", null), good[2]!], 0, 0, "league", tbd))).toEqual([true, false, true, true, true]);
   });
 });
 
