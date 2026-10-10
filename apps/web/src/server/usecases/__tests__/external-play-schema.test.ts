@@ -482,12 +482,27 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", (
 
   it("V435: draw_offer_by takes exactly white or black", async () => {
     let checked = 0;
+    const two = { moves: ["e2e4", "e7e5"], move_count: 2 };
     for (const side of ["white", "black"]) {
-      expect(await tryLedger({ draw_offer_by: side }), side).toMatchObject({ accepted: true });
+      expect(await tryLedger({ ...two, draw_offer_by: side }), side).toMatchObject({ accepted: true });
       checked++;
     }
-    expect(await tryLedger({ draw_offer_by: "home" })).toEqual(refusedBy(DRAW_BY_CHECK));
+    expect(await tryLedger({ ...two, draw_offer_by: "home" })).toEqual(refusedBy(DRAW_BY_CHECK));
     expect(checked, "anti-vacuity: accepted colours").toBe(2);
+  });
+
+  it("V435: no offer STANDS before ply 2, from either side — lila registers none earlier (Game.scala playerCanOfferDraw)", async () => {
+    // The guard play.ts's draw broadcast relies on: every one is at ply >= 2,
+    // where the clock runs (review m2).
+    let checked = 0;
+    for (const side of ["white", "black"]) {
+      for (const [moves, move_count] of [[["e2e4"], 1], [[], 0]] as const) {
+        expect(await tryLedger({ moves: [...moves], move_count, draw_offer_by: side }), `${side} at ${move_count}`)
+          .toEqual(refusedBy(DRAW_BY_CHECK));
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 sides × plies 1 and 0").toBe(4);
   });
 
   it("V435: a zero clock is a clock; a NEGATIVE one is refused, on each of the three columns", async () => {

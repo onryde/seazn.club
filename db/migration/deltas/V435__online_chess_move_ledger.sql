@@ -48,8 +48,11 @@ alter table fixture_external_play
     check (case when jsonb_typeof(moves_uci) = 'array'
                 then move_count = jsonb_array_length(moves_uci)
                 else false end),
+  -- A standing offer is a colour, and stands only from ply 2: lila registers
+  -- none earlier (Game.scala `playerCanOfferDraw`). Spelled with `is null`
+  -- because `null and false` is false, which would refuse every early row.
   add constraint fixture_external_play_draw_offer_by_check
-    check (draw_offer_by in ('white', 'black')),
+    check (draw_offer_by is null or (draw_offer_by in ('white', 'black') and move_count >= 2)),
   -- A clock is a non-negative duration; our arithmetic clamps at zero and
   -- leaves the flag to Lichess.
   add constraint fixture_external_play_clock_check

@@ -460,7 +460,10 @@ function drawBroadcast(f: OnlinePlayFixture, row: DrawRow, now: Date): RoomBroad
   let whiteMs = row.white_ms ?? limitMs;
   let blackMs = row.black_ms ?? limitMs;
   const turn = turnAt(row.move_count);
-  if (row.move_count >= 2 && row.last_move_at !== null) {
+  // Every draw broadcast is at ply >= 2, where scalachess's clock runs: a yes
+  // is recorded only from ply 2 (its WHERE), and a no needs a standing
+  // offer, which V435's draw_offer_by CHECK refuses below ply 2.
+  if (row.last_move_at !== null) {
     const elapsed = Math.max(0, now.getTime() - row.last_move_at.getTime());
     if (turn === "white") whiteMs = Math.max(0, whiteMs - elapsed);
     else blackMs = Math.max(0, blackMs - elapsed);
