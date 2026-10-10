@@ -2542,25 +2542,46 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     });
   });
 
-  // D-P3 (phase 3 review I-1): a sport's forfeit value (ORGANISER_ONLY_SPORT_EVENTS, D-O1) is organiser-only but is NOT
-  // a console control: the organiser's console mounts the pad with canOrganise, the dock then offers the sport's own
-  // forfeit chips (dockFor, skins/boardgame.tsx), and the harness's session IS the organiser. So it rides the pad with
-  // the scorer's events. The driver used to refuse it as `NoOrganiserRoute: no console control writes it`, a reason
-  // that is false. Expected values come from the product's declared list (every type and value, counted).
-  describe("a sport's forfeit value rides the organiser's pad (D-P3)", () => {
+  // D-P3 (phase 3 review I-1), re-pinned by W2b (spec C-4, ruling 101; D15). A sport's forfeit value the product declares
+  // organiser-only (ORGANISER_ONLY_SPORT_EVENTS, D-O1) is not a console control: the organiser's console mounts the pad
+  // with canOrganise, and the harness's session IS the organiser, so it rides the pad with the scorer's events. Since W2b
+  // the product declares NONE: chess's two forfeit methods are retired on write (refused for every writer, the
+  // organiser included), and a chess forfeit is a core.forfeit like every other sport's. A retired value is therefore
+  // not organiser-only at all. It is the scorer's event, it rides the pad, and the server's own refusal answers it,
+  // never a console control. Expected values: the ruled core types (X-ST-2) and the retired set (C-4), not the code
+  // under test. The items are the product's declared values plus the retired ones, so the sweep is never empty.
+  describe("a sport's forfeit value rides the pad, never a console control (D-P3, W2b C-4)", () => {
     const BG = "boardgame";
-    /** The winner each declared value is posted with: a forfeit has a winner, a double forfeit none. A value the product
-     *  gains owes an entry here, by name, rather than being driven with a guessed payload. */
+    /** X-ST-2 / D-O1: the core types an organiser alone may write, core.forfeit among them. */
+    const RULED_CORE = ["core.abandon", "core.forfeit", "core.settle"] as const;
+    /** W2b spec C-4 / D15: the chess forfeit methods, retired on write. */
+    const RETIRED: Readonly<Record<string, { field: string; values: readonly string[] }>> = { "boardgame.result": { field: "method", values: ["forfeit", "double_forfeit"] } };
+    /** The winner each value is posted with: a forfeit has a winner, a double forfeit none. A value the product gains owes
+     *  an entry here, by name, rather than being driven with a guessed payload. */
     const WINNER: Readonly<Record<string, string | null>> = { forfeit: "e1", double_forfeit: null };
-    const declared = Object.entries(ORGANISER_ONLY_SPORT_EVENTS).flatMap(([type, arm]) => arm.values.map((value) => ({ type, field: arm.field, value })));
+    const valuesOf = (table: typeof RETIRED, organiserOnly: boolean) => Object.entries(table).flatMap(([type, arm]) => arm.values.map((value) => ({ type, field: arm.field, value, organiserOnly })));
+    const declared = valuesOf(ORGANISER_ONLY_SPORT_EVENTS, true);
+    const items = [...declared, ...valuesOf(RETIRED, false)];
+    const eventOf = (i: (typeof items)[number]): StreamEvent => ({ type: i.type, payload: { winner: WINNER[i.value], [i.field]: i.value } });
+
+    it("the organiser-only list is the ruled core types plus the product's sport table, and the table holds no value C-4 retired", () => {
+      expect([...ORGANISER_ONLY_EVENT_TYPES].sort(), "the product's core organiser-only types").toEqual([...RULED_CORE]);
+      let checked = 0;
+      for (const i of valuesOf(RETIRED, false)) {
+        expect(ORGANISER_ONLY_SPORT_EVENTS[i.type]?.values ?? [], `${i.type} ${i.field}=${i.value} is retired on write (C-4), not an organiser privilege`).not.toContain(i.value);
+        expect(isOrganiserOnlyEvent(i.type, eventOf(i).payload), `${i.value}: the product's predicate`).toBe(false);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
 
     it("the pad replays the WHOLE stream, no console control is driven, nothing goes over http, and every answered event carries the row the product holds", async () => {
-      expect(declared.length, "the product declares sport forfeit values").toBeGreaterThan(1);
       let checked = 0;
-      for (const { type, field, value } of declared) {
-        expect(Object.hasOwn(WINNER, value), `${type} ${field}=${value} has no winner in this test's table`).toBe(true);
-        const ev: StreamEvent = { type, payload: { winner: WINNER[value], [field]: value } };
-        expect(isOrganiserOnlyEvent(ev.type, ev.payload), `${value} is organiser-only (the premise)`).toBe(true);
+      for (const i of items) {
+        const { type, value } = i;
+        expect(Object.hasOwn(WINNER, value), `${type} ${i.field}=${value} has no winner in this test's table`).toBe(true);
+        const ev = eventOf(i);
+        expect(isOrganiserOnlyEvent(ev.type, ev.payload), `${value}: organiser-only ${i.organiserOnly} (the premise)`).toBe(i.organiserOnly);
         const rows = [asRow(2, START), asRow(3, ev)];
         const r = replayOf(rows);
         const { driver, pageCalls, http } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn });
@@ -2575,35 +2596,42 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
         expect(only(driver, "mixed-driver-coverage"), value).toMatchObject({ verdict: "pass", checked: SETUP + 1 });
         checked++;
       }
-      expect(checked).toBe(declared.length);
+      expect(checked).toBe(items.length);
+      expect(checked).toBeGreaterThanOrEqual(2);
     });
 
     it("a sport with no pad adapter takes the same event over http whole: the organiser's own session writes it, and no console is opened", async () => {
       let checked = 0;
-      for (const { type, field, value } of declared) {
-        const ev: StreamEvent = { type, payload: { winner: WINNER[value], [field]: value } };
+      for (const i of items) {
+        const ev = eventOf(i);
         const { driver, pageCalls } = make({ http: orgHttp([]), spec: spec("knockout", BG), pads: EMPTY_PADS, replay: replayOf([]).fn });
         await built(driver, spec("knockout", BG));
         await driver.postStream("f1", [START, ev], "p");
-        expect(sent.posts, value).toEqual([["core.start", type]]);
-        for (const page of ["openFixtureUi", "settleUi", "abandonUi", "forfeitUi"]) expect(pageCalls, `${value}: ${page}`).not.toContain(page);
+        expect(sent.posts, i.value).toEqual([["core.start", i.type]]);
+        for (const page of ["openFixtureUi", "settleUi", "abandonUi", "forfeitUi"]) expect(pageCalls, `${i.value}: ${page}`).not.toContain(page);
         checked++;
       }
-      expect(checked).toBe(declared.length);
+      expect(checked).toBe(items.length);
+      expect(checked).toBeGreaterThanOrEqual(2);
     });
 
     it("beside a core.settle the sport forfeit stays with the scorer's events (the pad) and only the settle goes to the console", async () => {
-      const { type, field, value } = declared[0]!;
-      const ev: StreamEvent = { type, payload: { winner: WINNER[value], [field]: value } };
-      const rows = [asRow(2, START), asRow(3, ev), asRow(4, SETTLE)];
-      const r = replayOf(rows.slice(0, 2));
-      const { driver, pageCalls } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn, pages: { settleUi: async () => answer(4) } });
-      await built(driver, spec("knockout", BG));
-      const posted = await driver.postStream("f1", [START, ev, SETTLE], "p");
-      expect(r.calls[0]![2]).toEqual([START, ev]);
-      expect(pageCalls).toContain("settleUi");
-      expect(pageCalls).not.toContain("forfeitUi");
-      expect(posted.map((x) => x.stored?.type)).toEqual(["core.start", type, "core.settle"]);
+      let checked = 0;
+      for (const i of items) {
+        const ev = eventOf(i);
+        const rows = [asRow(2, START), asRow(3, ev), asRow(4, SETTLE)];
+        const r = replayOf(rows.slice(0, 2));
+        const { driver, pageCalls } = make({ http: orgHttp(rows), spec: spec("knockout", BG), pads: { boardgame: boardgamePad }, replay: r.fn, pages: { settleUi: async () => answer(4) } });
+        await built(driver, spec("knockout", BG));
+        const posted = await driver.postStream("f1", [START, ev, SETTLE], "p");
+        expect(r.calls[0]![2], i.value).toEqual([START, ev]);
+        expect(pageCalls, i.value).toContain("settleUi");
+        expect(pageCalls, i.value).not.toContain("forfeitUi");
+        expect(posted.map((x) => x.stored?.type), i.value).toEqual(["core.start", i.type, "core.settle"]);
+        checked++;
+      }
+      expect(checked).toBe(items.length);
+      expect(checked).toBeGreaterThanOrEqual(2);
     });
   });
 

@@ -224,11 +224,14 @@ function organiserActOf(event: StreamEvent): OrganiserAct {
   return { action, by: p.by, reason: p.reason as ForfeitReason };
 }
 
-/** D-P3 (phase 3 review I-1): a SPORT's forfeit value (the product's ORGANISER_ONLY_SPORT_EVENTS, D-O1: boardgame.result
- *  method forfeit / double_forfeit) is organiser-only but is not a console control. The organiser's console mounts the
- *  pad with `canOrganise`, whose dock offers the sport's own forfeit chips (pad-host.tsx dockFor, skins/boardgame.tsx),
- *  and this driver's session is the organiser's. So the event rides the pad with the scorer's events (or http, for a
- *  sport with no pad adapter): the real path today, not a refusal. Keyed on the product's own table, no second list. */
+/** D-P3 (phase 3 review I-1): a SPORT's forfeit value that the product declares organiser-only (ORGANISER_ONLY_SPORT_EVENTS,
+ *  D-O1) is not a console control. The organiser's console mounts the pad with `canOrganise`, whose dock offers the
+ *  sport's own chips (pad-host.tsx dockFor), and this driver's session is the organiser's. So the event rides the pad
+ *  with the scorer's events (or http, for a sport with no pad adapter), not a refusal. Since W2b (spec C-4, D15) the table
+ *  is EMPTY: chess's `boardgame.result{method: forfeit | double_forfeit}` is retired on write for every writer, and a
+ *  chess forfeit is a core.forfeit through the console's control. So today this admits nothing, and a retired value is
+ *  the scorer's by isOrganiserOnlyEvent alone, answered by the server's own refusal. Keyed on the product's own table,
+ *  no second list, so a value the product declares again rides the pad and is not refused as having no control. */
 const padAuthored = (event: StreamEvent): boolean => Object.hasOwn(ORGANISER_ONLY_SPORT_EVENTS, event.type);
 
 /** The stream cut at every organiser-only event (isOrganiserOnlyEvent) that a console control writes: the scorer's
