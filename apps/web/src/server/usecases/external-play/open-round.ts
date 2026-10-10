@@ -43,6 +43,7 @@ import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/onlin
 import { roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import { roomPhase } from "@/server/external-play/window";
+import { log } from "@/server/logger";
 import { audit } from "../audit";
 import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
 import {
@@ -233,13 +234,34 @@ export async function openRound(
     };
 
     const takes = boards.filter((b) => bridgeTakesInvites(bridgeOf.get(b.f.fixtureId) ?? null));
-    let invitedSeats = 0;
     const pending: { board: Board; seats: InviteSeat[] }[] = [];
     for (const board of takes) {
       const open = board.seats.filter((s) => !invitedFor(board.f.fixtureId, s.colour));
-      invitedSeats += board.seats.length - open.length;
       if (open.length > 0) pending.push({ board, seats: open });
     }
+    // "Was anyone in this round invited?" — over EVERY bridge row bound to
+    // this open, whatever became of its board: a game, a result, an
+    // organiser's hold, a board no longer played (review I1, ruling
+    // 2026-10-10). Counting only the boards still taking invites let a late
+    // or rescheduled board read "nobody invited" once its neighbours had
+    // moved on, and re-stamp the WHOLE round's window past T+20.
+    //
+    // The binding, not the stamp, is the record: a row is bound by the open
+    // that reaches one of its seats, and stays bound when a reschedule's
+    // reset (T7) clears its stamps to re-mail the new time — so that board is
+    // re-invited INSIDE the round's window, never re-opens it. A failed
+    // send's un-stamp unbinds a row none of whose seats was reached
+    // (releaseSeat). Only a real re-pair (the unpair deletes the game-less
+    // rows and refuses the rest), a rebuild, or a round whose every send
+    // failed reaches "nobody", and only then does the window start again.
+    const anyInvited = existing
+      ? (
+          await tx<{ any: boolean }[]>`
+            select exists (
+              select 1 from fixture_external_play where round_open_id = ${existing.id}
+            ) as any`
+        )[0]!.any
+      : false;
 
     let open: RoundOpenRow;
     let kind: "opened" | "reopened" | "reinvited";
@@ -252,9 +274,9 @@ export async function openRound(
       kind = "opened";
     } else if (pending.length === 0) {
       return { kind: "nothing", skipped: [] };
-    } else if (invitedSeats === 0) {
-      // Nobody this round can still reach was invited (a re-pair deleted the
-      // rows, or every send failed): the window starts now, for everyone.
+    } else if (!anyInvited) {
+      // Nobody this round was invited (a re-pair deleted the rows, or every
+      // send failed): the window starts now, for everyone.
       const [row] = await tx<RoundOpenRow[]>`
         update stage_round_opens set opened_at = ${now}, opened_by = ${a.actorUserId}
          where id = ${existing.id}
@@ -289,39 +311,57 @@ export async function openRound(
   }
 
   // Sent AFTER the commit: a mail cannot be rolled back, so the stamp is
-  // committed first and released on a failed send.
+  // committed first and released on a failed send. Each seat is its own
+  // attempt (review M1): a throw — from the sender, or from the un-stamp —
+  // fails THAT seat, which is reported, and never strands the seats after it
+  // as "invited" with no mail. The audit is written whatever happened.
   let invited = 0;
   const failed = new Set<string>();
-  for (const c of decision.claims) {
-    const ok = await sendFixtureInvite({
-      fixture: c.board.f,
-      seat: c.seat,
-      roundNo: a.roundNo,
-      roundOpenedAt: decision.open.roundOpenedAt,
-      origin: deps.origin,
-    });
-    if (ok) {
-      invited += 1;
-    } else {
-      await releaseSeat(sql, c.board.f.fixtureId, c.seat.colour, now);
-      failed.add(c.board.f.fixtureId);
+  try {
+    for (const c of decision.claims) {
+      const fixtureId = c.board.f.fixtureId;
+      let ok = false;
+      try {
+        ok = await sendFixtureInvite({
+          fixture: c.board.f,
+          seat: c.seat,
+          roundNo: a.roundNo,
+          roundOpenedAt: decision.open.roundOpenedAt,
+          origin: deps.origin,
+        });
+      } catch (err) {
+        log.error({ fixtureId, colour: c.seat.colour, err }, "openRound: invite send threw");
+      }
+      if (ok) {
+        invited += 1;
+        continue;
+      }
+      failed.add(fixtureId);
+      try {
+        await releaseSeat(sql, fixtureId, c.seat.colour, now);
+      } catch (err) {
+        // The seat stays stamped with nothing sent. It is reported below as
+        // send_failed, so the organiser's Resend is the way back.
+        log.error({ fixtureId, colour: c.seat.colour, err }, "openRound: un-stamp after a failed send threw");
+      }
     }
+  } finally {
+    const skipped: OpenRoundSkip[] = [...failed].map((fixtureId) => ({ fixtureId, reason: "send_failed" }));
+    await audit(
+      sql,
+      st.competitionId,
+      st.orgId,
+      AUDIT_TYPE[decision.kind],
+      {
+        stageId: a.stageId,
+        roundNo: a.roundNo,
+        roundOpenedAt: decision.open.roundOpenedAt.toISOString(),
+        invited,
+        skipped,
+      },
+      a.actorUserId,
+    );
   }
   const skipped: OpenRoundSkip[] = [...failed].map((fixtureId) => ({ fixtureId, reason: "send_failed" }));
-
-  await audit(
-    sql,
-    st.competitionId,
-    st.orgId,
-    AUDIT_TYPE[decision.kind],
-    {
-      stageId: a.stageId,
-      roundNo: a.roundNo,
-      roundOpenedAt: decision.open.roundOpenedAt.toISOString(),
-      invited,
-      skipped,
-    },
-    a.actorUserId,
-  );
   return { opened: true, invited, skipped };
 }

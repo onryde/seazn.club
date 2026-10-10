@@ -215,8 +215,11 @@ export async function resetStaleBridge(f: OnlinePlayFixture): Promise<void> {
 
 /** Idempotent — the first caller across every entry point creates the row;
  *  every other one is a no-op. */
-export async function ensureBridgeRow(f: OnlinePlayFixture): Promise<void> {
-  const basis = await bridgeBasis(f);
+export async function ensureBridgeRow(
+  f: OnlinePlayFixture,
+  opts: { basisIfUnopened?: Date } = {},
+): Promise<void> {
+  const basis = await bridgeBasis(f, opts);
   // Minted only while the fixture still seats the entrants `f` was read
   // with, under a SHARE lock on the fixture row. A Swiss seat clear
   // (stages.ts `clearSwissFixtureSeats`) locks the fixture rows FOR UPDATE
@@ -237,13 +240,19 @@ export async function ensureBridgeRow(f: OnlinePlayFixture): Promise<void> {
 }
 
 /** The basis a NEW bridge row is minted with: the board's start time, or —
- *  for a board with none — its round's `opened_at` (ruling 2026-10-10). A
- *  board with neither has no basis yet, and nothing may mint its row: every
- *  writer runs only after the round is opened, so reaching this is a broken
- *  premise, said loudly rather than left to a NOT NULL violation. */
-export async function bridgeBasis(f: OnlinePlayFixture, roundOpenedAt?: Date | null): Promise<Date> {
+ *  for a board with none — its round's `opened_at` (ruling 2026-10-10).
+ *
+ *  A NULL-time board in a round not yet opened has no basis. One writer
+ *  legitimately mints a row then: the D11 video override, which an
+ *  organiser may record before the open exactly as on a timed board (review
+ *  M3). It passes `basisIfUnopened`; `attachToOpen` rebases such a row onto
+ *  `opened_at` when the round opens, and the stale check ignores NULL-time
+ *  boards, so the provisional value decides nothing. Every other writer runs
+ *  only after the open, so reaching here without either is a broken premise,
+ *  said loudly rather than left to a NOT NULL violation. */
+export async function bridgeBasis(f: OnlinePlayFixture, opts: { basisIfUnopened?: Date } = {}): Promise<Date> {
   if (f.scheduledAt !== null) return f.scheduledAt;
-  const opened = roundOpenedAt ?? (await roundOpenFor(sql, f.fixtureId))?.roundOpenedAt ?? null;
+  const opened = (await roundOpenFor(sql, f.fixtureId))?.roundOpenedAt ?? opts.basisIfUnopened ?? null;
   if (opened === null) {
     throw new Error(`bridgeBasis: fixture ${f.fixtureId} has no start time and its round is not open`);
   }

@@ -49,3 +49,13 @@ export const OPEN_ROUND_SKIP_KEYS: Readonly<Record<OpenRoundSkipReason, Dictiona
  *  clear (controller ruling, 2026-10-10). The organiser voids the game first. */
 export const ONLINE_GAME_EXISTS_CODE = "ONLINE_GAME_EXISTS";
 export const ONLINE_GAME_EXISTS_KEY: DictionaryKey = "externalPlay.onlineGameExists";
+
+/** The resend's refusals beyond the board's own (review M6, fix round 1): the
+ *  round's window closed (T+20), or the board is held for the organiser. A
+ *  board a game stands behind answers `ONLINE_GAME_EXISTS_CODE`. */
+export const RESEND_WINDOW_CLOSED_CODE = "WINDOW_CLOSED";
+export const RESEND_BOARD_HELD_CODE = "BOARD_HELD";
+export const RESEND_REFUSAL_KEYS: Readonly<Record<"WINDOW_CLOSED" | "BOARD_HELD", DictionaryKey>> = {
+  WINDOW_CLOSED: "externalPlay.resend.windowClosed",
+  BOARD_HELD: "externalPlay.resend.boardHeld",
+};

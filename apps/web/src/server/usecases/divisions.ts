@@ -3,7 +3,7 @@ import "server-only";
 // variant config and PINS the sport module version (doc 02 §4) so a running
 // division always replays under the rules it started with.
 import type postgres from "postgres";
-import { sql, withTenant } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { assertWithinLimit, getLimit, requireFeature, passLockReason } from "@/lib/entitlements";
 import { EngineError } from "@seazn/engine/core";
@@ -725,15 +725,18 @@ export async function patchDivision(
     await requireFeature(auth.orgId, "news.auto", competitionId);
   }
   // T6 / D9: the camera requirement. Validated before anything is read. The
-  // round-open question is asked HERE, on the privileged pooled client and
-  // BEFORE withTenant opens, for two reasons: stage_round_opens is sealed, so
-  // inside the tenant transaction (role app_user) the read is refused 42501
-  // (round-open.ts); and a pooled read inside a tenant transaction is the pool
-  // self-deadlock above. Under READ COMMITTED an in-transaction read would
-  // not hold off a concurrent "Open round" any better.
+  // round-open question is asked INSIDE the write's own transaction (review
+  // M9, fix round 1), in withTenant's privileged prelude: stage_round_opens is
+  // sealed, so as app_user the read is refused 42501 (round-open.ts), and a
+  // pooled read inside the tenant transaction is the pool self-deadlock
+  // above. The prelude first takes the division lock openRound takes, so an
+  // open and this gate are serialised: an open that commits first is seen
+  // here, and one that starts later waits for this write to commit. Read
+  // before the transaction (as it was), a tightening could commit just after
+  // an open had.
   const cameraPolicyNamed = patch.camera_policy !== undefined;
   const incomingCamera = cameraPolicyNamed ? assertCameraPolicyValue(patch.camera_policy) : null;
-  const roundOpened = cameraPolicyNamed ? await anyRoundOpened(sql, id, new Date()) : false;
+  let roundOpened = false;
   let previousSlug: string | null = null;
   let previousCompetitionId: string | null = null;
   // The public player page masks each opponent's name by their division's
@@ -759,6 +762,10 @@ export async function patchDivision(
   // The stored name a rename replaces: a changed name moves the division in the
   // public competition shell (`expireCompetitionShell`), a re-sent one does not.
   let nameBefore: string | undefined;
+  const cameraGate = async (ptx: Tx) => {
+    await ptx`select pg_advisory_xact_lock(hashtext(${"division:" + id}))`;
+    roundOpened = await anyRoundOpened(ptx, id, new Date());
+  };
   const row = await withTenant(auth.orgId, async (tx) => {
     const effective: Record<string, unknown> = { ...patch };
     if (cameraPolicyNamed) {
@@ -1095,7 +1102,7 @@ export async function patchDivision(
         return update(slug === before!.slug ? effective : { ...effective, slug }, sp);
       },
     );
-  }).catch((err: unknown) => {
+  }, cameraPolicyNamed ? { privilegedPrelude: cameraGate } : {}).catch((err: unknown) => {
     // Race backstop for the AGE BAND — READ COMMITTED means two concurrent
     // PATCHes can each pass the merge-and-validate guard above against a
     // stale read, then both write; whichever commits second still hits

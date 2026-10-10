@@ -5,11 +5,14 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 
 const mail = vi.hoisted(() => ({
   sent: [] as { to: string; fixtureUrl: string }[],
   fail: new Set<string>(),
   throws: new Set<string>(),
+  // The FIRST send to this address waits on `gate` (review M6's staging).
+  holdFirst: null as null | { to: string; gate: Promise<void>; reached: () => void },
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
@@ -17,6 +20,12 @@ vi.mock("@/lib/email", async (importOriginal) => {
     ...actual,
     sendExternalPlayInviteEmail: vi.fn(
       async (to: string, args: Parameters<typeof actual.sendExternalPlayInviteEmail>[1]) => {
+        const hold = mail.holdFirst;
+        if (hold && hold.to === to) {
+          mail.holdFirst = null;
+          hold.reached();
+          await hold.gate;
+        }
         if (mail.throws.has(to)) throw new Error("provider exploded");
         if (mail.fail.has(to)) return false;
         mail.sent.push({ to, fixtureUrl: args.fixtureUrl });
@@ -44,11 +53,13 @@ import { addFixture } from "../../stages";
 import { seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult } from "../../__tests__/_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+const MIN = 60_000;
 
 beforeEach(() => {
   mail.sent.length = 0;
   mail.fail.clear();
   mail.throws.clear();
+  mail.holdFirst = null;
   vi.clearAllMocks();
   __resetCreationQueue();
   board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` });
@@ -101,7 +112,10 @@ describe.skipIf(!HAS_DB)("claimSeat / releaseSeat — the stamp's own guards", (
     await open(r); // stamps the round, attaches the row, both sends fail ⇒ both released
     const id = await openId(r.stageId);
     const f = r.boards[0]!.fixtureId;
-    expect(await rowOf(f)).toMatchObject({ round_open_id: id, white_emailed_at: null, black_emailed_at: null });
+    // A send that reached nobody unbinds the row (fix round 1): the binding is
+    // the round's "someone was invited" record.
+    expect(await rowOf(f)).toMatchObject({ round_open_id: null, white_emailed_at: null, black_emailed_at: null });
+    await sql`update fixture_external_play set round_open_id = ${id} where fixture_id = ${f}`; // stands for attachToOpen
 
     const at = new Date();
     expect(await claimSeat(sql, f, "white", id, at)).toBe(true);
@@ -117,6 +131,7 @@ describe.skipIf(!HAS_DB)("claimSeat / releaseSeat — the stamp's own guards", (
     await open(r);
     const id = await openId(r.stageId);
     const f = r.boards[0]!.fixtureId;
+    await sql`update fixture_external_play set round_open_id = ${id} where fixture_id = ${f}`; // stands for attachToOpen
     expect(await claimSeat(sql, f, "white", randomUUID(), new Date())).toBe(false);
 
     await sql`update fixture_external_play set create_sent_at = now() where fixture_id = ${f}`;
@@ -140,6 +155,10 @@ describe.skipIf(!HAS_DB)("claimSeat / releaseSeat — the stamp's own guards", (
     await releaseSeat(sql, f, "white", stamped);
     expect((await rowOf(f))!.white_emailed_at).toBeNull();
     expect((await rowOf(f))!.black_emailed_at, "the other seat is untouched").not.toBeNull();
+    expect((await rowOf(f))!.round_open_id, "a seat still reached keeps the row bound").not.toBeNull();
+    // ...and un-stamping the last reached seat unbinds the row.
+    await releaseSeat(sql, f, "black", (await rowOf(f))!.black_emailed_at!);
+    expect(await rowOf(f)).toMatchObject({ round_open_id: null, white_emailed_at: null, black_emailed_at: null });
   });
 });
 
@@ -206,9 +225,11 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     expect((await rowOf(b.fixtureId))![homeCol], "a refused send records no invite").toBeNull();
   });
 
-  it("a board whose game was made before any invite: Resend leaves the game row exactly as it was", async () => {
+  it("a board whose game was made before any invite: Resend REFUSES 409 ONLINE_GAME_EXISTS, mails nobody, and leaves the row exactly as it was", async () => {
     // Reached by the real path: a board added to the round after the open,
     // seated and created by its players before the organiser opened again.
+    // The same rule openRound applies: no invite into a board a game stands
+    // behind (review M6).
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, spares: 1 });
     await open(r);
     const { fixture_id } = await addFixture(r.owner, r.stageId, {
@@ -221,9 +242,115 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     const before = (await rowOf(fixture_id))!;
     expect(before.challenge_id, "premise: a game").not.toBeNull();
     expect(before.round_open_id, "premise: never attached to the open").toBeNull();
+    mail.sent.length = 0;
 
-    await resendExternalPlayNotice(r.owner, fixture_id, ORIGIN);
+    expect(await refusal(resendExternalPlayNotice(r.owner, fixture_id, ORIGIN))).toEqual({
+      status: 409,
+      code: "ONLINE_GAME_EXISTS",
+    });
+    expect(mail.sent).toHaveLength(0);
     expect(await rowOf(fixture_id)).toEqual(before);
+  });
+
+  it("a create of unknown outcome (a game MAY exist) ⇒ 409 ONLINE_GAME_EXISTS; a held board without one ⇒ 409 BOARD_HELD", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+    await open(r);
+    const [a, b] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0]];
+    board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "outcome_unknown", raw: "timeout" });
+    await createGameIfReady(a.fixtureId, { publish: async () => undefined });
+    expect((await rowOf(a.fixtureId))!.create_sent_at, "premise: the T9 marker").not.toBeNull();
+    // A hold with no game behind it, forced by SQL (T13's no-show sweep is
+    // not built): the organiser decides that board, not an invite.
+    await sql`update fixture_external_play set status = 'needs_organiser', needs_reason = 'provider_error'
+               where fixture_id = ${b.fixtureId}`;
+    mail.sent.length = 0;
+    expect(await refusal(resendExternalPlayNotice(r.owner, a.fixtureId, ORIGIN))).toEqual({
+      status: 409,
+      code: "ONLINE_GAME_EXISTS",
+    });
+    expect(await refusal(resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN))).toEqual({
+      status: 409,
+      code: "BOARD_HELD",
+    });
+    expect(mail.sent).toHaveLength(0);
+  });
+
+  it("the window rule openRound holds: after T+20 a resend is refused 409 WINDOW_CLOSED and mails nobody", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - MIN);
+    mail.fail.add(b.home.email); // a seat left to invite: the case a resend exists for
+    await open(r, t0);
+    mail.fail.clear();
+    mail.sent.length = 0;
+    const before = await rowOf(b.fixtureId);
+    expect(await refusal(resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN))).toEqual({
+      status: 409,
+      code: "WINDOW_CLOSED",
+    });
+    expect(mail.sent).toHaveLength(0);
+    expect(await rowOf(b.fixtureId)).toEqual(before);
+    // positive pair: one minute inside the deadline it sends.
+    const r2 = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    await open(r2, new Date(Date.now() - DEADLINE_AFTER_MS + MIN));
+    mail.sent.length = 0;
+    expect(await resendExternalPlayNotice(r2.owner, r2.boards[0]!.fixtureId, ORIGIN)).toEqual({ emailed: 2 });
+  });
+
+  it("the per-seat lock: a resend claims an un-invited seat BEFORE it sends, so an open racing it does not mail that seat again", async () => {
+    // Staged, not raced. Home's open-round send failed (un-stamped). The
+    // resend's send to home is held at the provider; while it is held, the
+    // organiser opens the round again. The resend's claim — made under the
+    // division lock, before the send — is what the open sees.
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    mail.fail.add(b.home.email);
+    await open(r);
+    mail.fail.clear();
+    mail.sent.length = 0;
+    let release!: () => void;
+    let reached!: () => void;
+    const atProvider = new Promise<void>((res) => (reached = res));
+    mail.holdFirst = { to: b.home.email, gate: new Promise<void>((res) => (release = res)), reached };
+
+    const resend = resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN);
+    await atProvider;
+    expect(await open(r), "the resend's claim already holds home").toEqual({
+      opened: false,
+      reason: "already_open",
+      skipped: [],
+    });
+    release();
+    expect(await resend).toEqual({ emailed: 2 });
+    expect(mail.sent.filter((m) => m.to === b.home.email), "home mailed exactly once").toHaveLength(1);
+  });
+
+  it("the division lock: a resend waits for a pairing write holding it", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    await open(r);
+    mail.sent.length = 0;
+    const holder = await sql.reserve();
+    try {
+      await holder`begin`;
+      await holder`select pg_advisory_xact_lock(hashtext(${"division:" + r.divisionId}))`;
+      let done = false;
+      const p = resendExternalPlayNotice(r.owner, r.boards[0]!.fixtureId, ORIGIN).finally(() => (done = true));
+      let waited = false;
+      for (let i = 0; i < 100 && !waited && !done; i++) {
+        const [w] = await sql<{ n: number }[]>`
+          select count(*)::int as n from pg_stat_activity
+           where datname = current_database() and wait_event_type = 'Lock' and wait_event = 'advisory'`;
+        waited = w!.n > 0;
+        if (!waited) await new Promise((res) => setTimeout(res, 50));
+      }
+      expect(done, "the resend ran through a held division lock").toBe(false);
+      expect(waited).toBe(true);
+      await holder`commit`;
+      expect(await p).toEqual({ emailed: 2 });
+    } finally {
+      await holder`rollback`.catch(() => undefined);
+      holder.release();
+    }
   });
 
   it("another organisation's caller gets the same 404 as a board that is not online", async () => {

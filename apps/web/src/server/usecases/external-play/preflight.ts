@@ -357,8 +357,16 @@ export async function organiserOverrideVideo(a: {
   if ((await fixtureCameraPolicy(a.fixtureId)) !== "required") {
     throw new HttpError(409, "video is not required for this match", "VIDEO_NOT_REQUIRED");
   }
-  await ensureBridgeRow(f);
+  // Before the open, exactly as on a timed board (review M3): a board with no
+  // start time has no basis yet, so its row is minted on a provisional one
+  // that the open rebases (invite.ts attachToOpen).
+  await ensureBridgeRow(f, { basisIfUnopened: new Date() });
   await sql.begin(async (tx) => {
+    // Lock order: the fixture BEFORE the bridge row — the order every seat
+    // clear and rebuild takes (stages.ts lockBoardsRefusingOnlineGames). The
+    // audit insert below takes KEY SHARE on the fixture; with the bridge row
+    // locked first, a clear holding the fixture would deadlock this.
+    await tx`select id from fixtures where id = ${a.fixtureId} for share`;
     const claimed = await tx<{ fixture_id: string }[]>`
       update fixture_external_play
          set video_override_at = now(), updated_at = now()

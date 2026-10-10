@@ -5887,6 +5887,8 @@
   "externalPlay.openRound.skipped.windowClosed": "Non invité : le délai pour prendre place à cet échiquier est écoulé.",
   "externalPlay.openRound.skipped.sendFailed": "L'e-mail d'invitation n'a pas pu être envoyé. Ouvrez la ronde à nouveau pour réessayer.",
   "externalPlay.onlineGameExists": "Une partie en ligne existe sur un échiquier que cette action viderait. Annulez d'abord la partie, puis réessayez.",
+  "externalPlay.resend.windowClosed": "La fenêtre de cette ronde est fermée : aucune invitation ne peut être envoyée. Rouvrez la ronde pour inviter ses joueurs.",
+  "externalPlay.resend.boardHeld": "Cet échiquier attend une décision de l'organisateur : il ne reçoit pas d'invitation.",
   "externalPlay.needsOrganiser": "Cette partie en ligne doit être confirmée par l'organisateur.",
   "externalPlay.queue.title": "Jeu en ligne — résultat manquant",
   "externalPlay.queue.help": "Ces parties Lichess ne se sont pas terminées proprement. Réglez-les ici.",

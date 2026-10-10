@@ -2055,38 +2055,36 @@ export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: s
  * deliberate Unpair and a player leaving. That is also why the row is UPDATED
  * rather than deleted and re-minted: the fixture id survives with it.
  */
-async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<void> {
+/**
+ * The boards a write is about to clear or delete, locked in the ONE order
+ * every such write takes — the caller's division advisory lock first, then
+ * the fixture rows FOR UPDATE, then their bridge rows FOR UPDATE — and
+ * refused 409 ONLINE_GAME_EXISTS when a game stands behind any of them: a
+ * recorded challenge, or T9's `create_sent_at` marker (a create whose outcome
+ * is unknown: a game MAY exist). Nothing is written before the refusal, and
+ * the caller's transaction rolls back on it. The organiser voids the game
+ * first (T16). Pre-review ruling + review M8, 2026-10-10.
+ *
+ * Why each lock:
+ *   - the fixtures FOR UPDATE: a bridge row T9 mints now (guard.ts
+ *     `ensureBridgeRow`, a seat-conditional insert under a SHARE lock on the
+ *     fixture) waits for this transaction, then finds the seats gone — or
+ *     the fixture deleted — and writes nothing;
+ *   - every bridge row FOR UPDATE, before the check: a claim or marker
+ *     racing this either committed first (and the check below refuses it) or
+ *     waits behind this transaction and then updates nothing.
+ */
+async function lockBoardsRefusingOnlineGames(tx: Tx, ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
-  // Online play (T19, controller rulings Q1 + pre-review 2026-10-10). A
-  // board's bridge row records who was INVITED to it, per seat; those seats
-  // are about to go, so a game-less row goes with them and the re-paired
-  // board is invited afresh when the organiser opens the round again.
-  //
-  // A board a game stands behind — a recorded challenge, or T9's
-  // `create_sent_at` marker (a create whose outcome is unknown: a game MAY
-  // exist) — is never re-paired: the whole clear is REFUSED and, the caller's
-  // transaction rolling back, nothing changes. The organiser voids the game
-  // first (T16). Checked HERE, in the transaction that clears the seats, with
-  // everything it reads locked:
-  //   - the fixture rows FOR UPDATE, first — a bridge row T9 mints now
-  //     (guard.ts `ensureBridgeRow`, a seat-conditional insert under a SHARE
-  //     lock on the fixture) waits for this transaction, then finds the
-  //     seats gone and writes nothing;
-  //   - the delete row-locks the game-less rows it takes, so a claim or
-  //     marker racing it waits, then updates nothing;
-  //   - `for update` on what remains, so a marker or challenge committed
-  //     before this read refuses the clear.
   await tx`select id from fixtures where id in ${tx(ids)} order by id for update`;
   await tx`
-    delete from fixture_external_play
-     where fixture_id in ${tx(ids)}
-       and challenge_id is null and create_sent_at is null`;
+    select fixture_id from fixture_external_play
+     where fixture_id in ${tx(ids)} order by fixture_id for update`;
   const [game] = await tx<{ fixture_id: string }[]>`
     select fixture_id from fixture_external_play
      where fixture_id in ${tx(ids)}
        and (challenge_id is not null or create_sent_at is not null)
-     limit 1
-     for update`;
+     limit 1`;
   if (game) {
     throw new HttpError(
       409,
@@ -2094,6 +2092,20 @@ async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<v
       ONLINE_GAME_EXISTS_CODE,
     );
   }
+}
+
+async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  // Online play (T19, controller rulings Q1 + pre-review 2026-10-10). A
+  // board's bridge row records who was INVITED to it, per seat; those seats
+  // are about to go, so a game-less row goes with them and the re-paired
+  // board is invited afresh when the organiser opens the round again. A board
+  // a game stands behind refuses the whole clear (lockBoardsRefusingOnlineGames).
+  await lockBoardsRefusingOnlineGames(tx, ids);
+  await tx`
+    delete from fixture_external_play
+     where fixture_id in ${tx(ids)}
+       and challenge_id is null and create_sent_at is null`;
   await tx`
     update fixtures set
       home_entrant_id = null,
@@ -3203,6 +3215,14 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       );
     }
 
+    // The delete CASCADEs into fixture_external_play, and no result guard
+    // above can see an online game in progress (online chess appends nothing
+    // until the result). A board a game stands behind refuses the rebuild,
+    // under the same lock order as the Swiss seat clear (review M8).
+    const stageFixtureIds = (
+      await tx<{ id: string }[]>`select id from fixtures where stage_id = ${stageId}`
+    ).map((r) => r.id);
+    await lockBoardsRefusingOnlineGames(tx, stageFixtureIds);
     const deleted = await tx<{ id: string }[]>`
       delete from fixtures where stage_id = ${stageId} returning id`;
     return {
