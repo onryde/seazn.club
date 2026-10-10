@@ -19,7 +19,7 @@ import {
   hasNoNextMatch, isolatedTable, ladderUnmoved, partialPlayStands, pickDoubleWalkover, scoresheetOf, wireGraph, withRefusals, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
 } from "../lib/scenarios/w2b-checks.ts";
 import {
-  W2B_SCENARIOS, W2bCascadeLeftOpen, W2bMisplanned, abandonPlan, cascadeLeftOpen, abandonWithResult, bothSeatsDead, goalLead, heldStream, knockoutLines, tableJudged, tbdSeatWalksOver, withdrawalsWalkOver,
+  W2B_SCENARIOS, W2bCascadeLeftOpen, W2bMisplanned, abandonDelta, abandonPlan, cascadeLeftOpen, abandonWithResult, bothSeatsDead, goalLead, heldStream, knockoutLines, tableJudged, tbdSeatWalksOver, withdrawalsWalkOver,
 } from "../lib/scenarios/w2b-forfeit-credit.ts";
 import { SCENARIO_KEYS, planSliceCases } from "../lib/slice.ts";
 import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
@@ -431,7 +431,8 @@ describe("abandonWithResult and goalLead (X-AB-2, FB/HK/IH-AB-1, CK-AB-1/2)", ()
     expect(goalLead(goals(), "a", "b")).toBe("level");
   });
   it("each kind's rule passes, and each wrong result fails alone", () => {
-    const d = (kind: "leading" | "level" | "past_min_overs" | "before_min_overs", events: StreamEvent[] = []) => ({ fixtureId: "f", home: "a", away: "b", kind, events });
+    const d = (kind: "leading" | "level" | "past_min_overs" | "before_min_overs", events: StreamEvent[] = [], rule: ObservedOutcome | null = null) => ({ fixtureId: "f", home: "a", away: "b", kind, events, rule });
+    const dlsB: ObservedOutcome = { kind: "win", winner: "b", method: "dls" };
     const at = (status: string, outcome: ObservedOutcome | null) => [fx("f", "a", "b", status, outcome)];
     expect(abandonWithResult([d("leading", goals("a"))], at("decided", { kind: "win", winner: "a", method: "abandoned" }))).toMatchObject({ verdict: "pass", checked: 1 });
     expect(abandonWithResult([d("leading", goals("a"))], at("decided", { kind: "win", winner: "b", method: "abandoned" })).verdict).toBe("fail");
@@ -440,13 +441,44 @@ describe("abandonWithResult and goalLead (X-AB-2, FB/HK/IH-AB-1, CK-AB-1/2)", ()
     expect(abandonWithResult([d("leading", goals("a", "b"))], at("decided", { kind: "win", winner: "a", method: "abandoned" })).verdict, "no leader posted").toBe("fail");
     expect(abandonWithResult([d("level", goals("a", "b"))], at("decided", { kind: "draw" }))).toMatchObject({ verdict: "pass" });
     expect(abandonWithResult([d("level", goals("a", "b"))], at("abandoned", null)).verdict).toBe("fail");
-    expect(abandonWithResult([d("past_min_overs")], at("decided", { kind: "win", winner: "b", method: "dls" })).verdict).toBe("pass");
-    expect(abandonWithResult([d("past_min_overs")], at("decided", { kind: "tie" })).verdict).toBe("pass");
-    expect(abandonWithResult([d("past_min_overs")], at("decided", { kind: "win", winner: "b" })).verdict, "a win by no method").toBe("fail");
-    expect(abandonWithResult([d("past_min_overs")], at("decided", { kind: "no_result" })).verdict).toBe("fail");
+    // CK-AB-1 (review M-3): the expected result is the rule's fold of the posted stream, never the product's winner.
+    expect(abandonWithResult([d("past_min_overs", [], dlsB)], at("decided", { kind: "win", winner: "b", method: "dls" })).verdict).toBe("pass");
+    expect(abandonWithResult([d("past_min_overs", [], dlsB)], at("decided", { kind: "win", winner: "a", method: "dls" })).verdict, "the product's other winner").toBe("fail");
+    expect(abandonWithResult([d("past_min_overs", [], dlsB)], at("decided", { kind: "tie" })).verdict, "a tie where the rule gives a win").toBe("fail");
+    expect(abandonWithResult([d("past_min_overs", [], { kind: "tie" })], at("decided", { kind: "tie" })).verdict).toBe("pass");
+    expect(abandonWithResult([d("past_min_overs", [], { kind: "tie" })], at("decided", { kind: "win", winner: "b", method: "dls" })).verdict, "a win where the rule gives a tie").toBe("fail");
+    expect(abandonWithResult([d("past_min_overs", [], dlsB)], at("decided", { kind: "win", winner: "b" })).verdict, "a win by no method").toBe("fail");
+    expect(abandonWithResult([d("past_min_overs", [], dlsB)], at("decided", { kind: "no_result" })).verdict).toBe("fail");
+    // A rule fold that is neither a DLS win nor a tie fails by name, whatever the product says.
+    for (const rule of [null, { kind: "no_result" } as const, { kind: "win", winner: "b" } as const]) {
+      const c = abandonWithResult([d("past_min_overs", [], rule)], at("decided", { kind: "win", winner: "b", method: "dls" }));
+      expect(c, JSON.stringify(rule)).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(c.reason, JSON.stringify(rule)).toMatch(/neither a DLS win nor a tie/);
+    }
     expect(abandonWithResult([d("before_min_overs")], at("decided", { kind: "no_result" })).verdict).toBe("pass");
     expect(abandonWithResult([d("before_min_overs")], at("abandoned", null)).verdict).toBe("fail");
     expect(abandonWithResult([], [])).toMatchObject({ verdict: "fail", checked: 0 });
+  });
+  it("abandonDelta (X-AB-1): each kind's table delta from the cfg's own points and the RULE's winner; a rule result that cannot be read is refused by name, never dropped (review M-3)", () => {
+    // Cricket's league points (hand-written): win 2, loss 0, tie 1, no result 1.
+    const pts: Record<string, number> = { win: 2, loss: 0, draw: 1, tie: 1, noResult: 1 };
+    const p = (k: string) => pts[k]!;
+    const d = (kind: "leading" | "level" | "past_min_overs" | "before_min_overs", events: StreamEvent[] = [], rule: ObservedOutcome | null = null) => ({ fixtureId: "f", home: "a", away: "b", kind, events, rule });
+    const exp = (x: ReturnType<typeof abandonDelta>) => { if (!("expect" in x)) throw new Error(x.refused); return x.expect; };
+    const lead = exp(abandonDelta(d("leading", goals("a")), p));
+    expect([lead("a"), lead("b")]).toEqual([{ scalars: { won: 1, lost: 0, points: 2 }, metrics: {} }, { scalars: { won: 0, lost: 1, points: 0 }, metrics: {} }]);
+    const past = exp(abandonDelta(d("past_min_overs", [], { kind: "win", winner: "b", method: "dls" }), p));
+    expect([past("a"), past("b")], "the RULE's winner b, not a product answer").toEqual([{ scalars: { won: 0, lost: 1, points: 0 }, metrics: {} }, { scalars: { won: 1, lost: 0, points: 2 }, metrics: {} }]);
+    expect(exp(abandonDelta(d("past_min_overs", [], { kind: "tie" }), p))("a")).toEqual({ scalars: { points: 1 }, metrics: {} });
+    expect(exp(abandonDelta(d("before_min_overs"), p))("b")).toEqual({ scalars: { won: 0, lost: 0, points: 1 }, metrics: { no_results: 1 } });
+    expect(exp(abandonDelta(d("level", goals("a", "b")), p))("a")).toEqual({ scalars: { won: 0, drawn: 1, lost: 0, points: 1 }, metrics: {} });
+    let refused = 0;
+    for (const rule of [null, { kind: "no_result" } as const, { kind: "draw" } as const]) {
+      expect(abandonDelta(d("past_min_overs", [], rule), p), JSON.stringify(rule)).toEqual({ refused: expect.stringMatching(/neither a DLS win nor a tie/) });
+      refused++;
+    }
+    expect(abandonDelta(d("leading", goals("a", "b")), p)).toEqual({ refused: expect.stringMatching(/no leader/) });
+    expect(refused).toBe(3);
   });
 });
 

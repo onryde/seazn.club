@@ -21,7 +21,7 @@ import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { RefusedCall, type FixtureRow, type StageRef, type StandingsRowWire, type WithdrawOut } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
 import { foldStream } from "../fold.ts";
-import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
+import { isTerminal, toObservedOutcome, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import type { CreditCase } from "@seazn/reference";
 import type { CheckResult } from "../results.ts";
 import { sportModule, stageCfg } from "../sport-cfg.ts";
@@ -181,7 +181,18 @@ async function doubleWalkoverTableCheck(ctx: ScenarioContext, rec: Recorder, set
 // AB-AWARD: the abandons and what their rule says they are.
 
 type AbandonKind = "leading" | "level" | "past_min_overs" | "before_min_overs";
-interface AbandonDrive { readonly fixtureId: string; readonly home: string; readonly away: string; readonly kind: AbandonKind; readonly events: readonly StreamEvent[] }
+/** One abandon the scenario posted: its fixture, seats, kind and the events posted — and `rule`, the result the sport's
+ *  own rule gives that stream: the real engine's fold of it (CK-AB-1: the DLS par is the engine's table, never the
+ *  product's answer), the expected result past the minimum overs (review M-3). */
+export interface AbandonDrive { readonly fixtureId: string; readonly home: string; readonly away: string; readonly kind: AbandonKind; readonly events: readonly StreamEvent[]; readonly rule: ObservedOutcome | null }
+
+/** Past the minimum overs the rule's result is a DLS win or a tie (CK-AB-1); anything else the fold gives is named. */
+function pastMinOversRule(d: AbandonDrive): { readonly winner: string | null } | { readonly unread: string } {
+  const r = d.rule;
+  if (r?.kind === "win" && r.method === "dls") return { winner: r.winner };
+  if (r?.kind === "tie") return { winner: null };
+  return { unread: `${d.fixtureId} (past_min_overs): the rule's own fold of the posted stream is ${r === null ? "no result" : JSON.stringify(r)} — neither a DLS win nor a tie, so past the minimum overs has nothing to expect (CK-AB-1)` };
+}
 
 /** The two abandons a sport's rule gives a result to, in the order the scenario posts them (round 1, round 2). */
 export function abandonPlan(sport: string): readonly { readonly kind: AbandonKind; readonly request: RequestedOutcome }[] | null {
@@ -215,19 +226,46 @@ export function abandonWithResult(drives: readonly AbandonDrive[], fixtures: rea
       }
       case "level":
         return { ok: goalLead(d.events, d.home, d.away) === "level" && f.status === "decided" && o?.kind === "draw", note: `${got}, wanted decided draw (a level abandon in a table)` };
-      // CK-AB-1: the result the DLS method gives (a win by DLS, or a tie at par), whoever it names — the par is the
-      // engine's DLS table, not this check's.
-      case "past_min_overs":
-        return { ok: f.status === "decided" && ((o?.kind === "win" && o.method === "dls") || o?.kind === "tie"), note: `${got}, wanted decided win{method dls} or tie (past the minimum overs)` };
+      // CK-AB-1: the result the DLS method gives the posted stream (a win by DLS, or a tie at par) — the rule's fold, the
+      // par the engine's DLS table, never the product's winner read back.
+      case "past_min_overs": {
+        const rule = pastMinOversRule(d);
+        if ("unread" in rule) return { ok: false, note: rule.unread };
+        const ok = f.status === "decided" && (rule.winner === null ? o?.kind === "tie" : o?.kind === "win" && o.winner === rule.winner && o.method === "dls");
+        return { ok, note: `${got}, wanted decided ${rule.winner === null ? "tie" : `win{${rule.winner}, method dls}`} (the rule's result past the minimum overs)` };
+      }
       case "before_min_overs":
         return { ok: f.status === "decided" && o?.kind === "no_result", note: `${got}, wanted decided no_result (CK-AB-2)` };
     }
   }));
 }
 
-interface PointsCfg { readonly win?: unknown; readonly draw?: unknown; readonly loss?: unknown; readonly tie?: unknown; readonly noResult?: unknown }
+export interface PointsCfg { readonly win?: unknown; readonly draw?: unknown; readonly loss?: unknown; readonly tie?: unknown; readonly noResult?: unknown }
 
-/** X-AB-1: the table counts an abandon the rule gives a result, as that result — points from the cfg's own table. */
+/** X-AB-1: one abandon's table delta as its RULE has it — points from the cfg's own table (`p`), the winner the rule's
+ *  (goalLead from the goals posted; past the minimum overs, the rule's fold — review M-3: never the product's winner).
+ *  An abandon whose rule result cannot be read is refused by name, for the caller to count as a FAILING item. */
+export function abandonDelta(d: AbandonDrive, p: (k: keyof PointsCfg) => number): { readonly expect: (e: string) => ExpectedDelta } | { readonly refused: string } {
+  const won = (winner: string | null) => (e: string): ExpectedDelta => (e === winner ? { scalars: { won: 1, lost: 0, points: p("win") }, metrics: {} } : { scalars: { won: 0, lost: 1, points: p("loss") }, metrics: {} });
+  switch (d.kind) {
+    case "leading": {
+      const lead = goalLead(d.events, d.home, d.away);
+      if (lead === "level") return { refused: `${d.fixtureId} (leading): the goals posted are level — no leader for the rule to credit` };
+      return { expect: won(lead === "home" ? d.home : d.away) };
+    }
+    case "level": return { expect: () => ({ scalars: { won: 0, drawn: 1, lost: 0, points: p("draw") }, metrics: {} }) };
+    case "past_min_overs": {
+      const rule = pastMinOversRule(d);
+      if ("unread" in rule) return { refused: rule.unread };
+      return { expect: rule.winner === null ? () => ({ scalars: { points: p("tie") }, metrics: {} }) : won(rule.winner) };
+    }
+    // CK-AB-2: 1 point each (the cfg's noResult) and an entry in the no-result column.
+    case "before_min_overs": return { expect: () => ({ scalars: { won: 0, lost: 0, points: p("noResult") }, metrics: { no_results: 1 } }) };
+  }
+}
+
+/** X-AB-1: the table counts an abandon the rule gives a result, as that result — points from the cfg's own table; each
+ *  abandon whose rule result cannot be read is a failing item beside the table's own (withRefusals). */
 async function abandonTableCheck(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, drives: readonly AbandonDrive[], observed: ObservedRun): Promise<CheckResult> {
   const id = "w2b-abandon-in-table";
   const pts = ((stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind) as { points?: PointsCfg }).points ?? {});
@@ -238,22 +276,14 @@ async function abandonTableCheck(ctx: ScenarioContext, rec: Recorder, setup: Div
   };
   const fixtures = observed.stages[0].fixtures;
   const judged = new Map<string, (e: string) => ExpectedDelta>();
+  const refused: string[] = [];
   for (const d of drives) {
-    const f = fixtures.find((x) => x.id === d.fixtureId);
-    const won = (winner: string | null) => (e: string): ExpectedDelta => (e === winner ? { scalars: { won: 1, lost: 0, points: p("win") }, metrics: {} } : { scalars: { won: 0, lost: 1, points: p("loss") }, metrics: {} });
-    switch (d.kind) {
-      case "leading": { const lead = goalLead(d.events, d.home, d.away); judged.set(d.fixtureId, won(lead === "home" ? d.home : lead === "away" ? d.away : null)); break; }
-      case "level": judged.set(d.fixtureId, () => ({ scalars: { won: 0, drawn: 1, lost: 0, points: p("draw") }, metrics: {} })); break;
-      // CK-AB-1: as the result stands — the product's own winner (the method's), its points from the cfg.
-      case "past_min_overs":
-        if (f?.outcome?.kind === "win") judged.set(d.fixtureId, won(f.outcome.winner));
-        else if (f?.outcome?.kind === "tie") judged.set(d.fixtureId, () => ({ scalars: { points: p("tie") }, metrics: {} }));
-        break;
-      // CK-AB-2: 1 point each (the cfg's noResult) and an entry in the no-result column.
-      case "before_min_overs": judged.set(d.fixtureId, () => ({ scalars: { won: 0, lost: 0, points: p("noResult") }, metrics: { no_results: 1 } })); break;
-    }
+    const x = abandonDelta(d, p);
+    if ("refused" in x) refused.push(x.refused);
+    else judged.set(d.fixtureId, x.expect);
   }
-  return isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });
+  const table = judged.size === 0 ? assertion(id, []) : isolatedTable(id, { fixtures, rows: await tableRows(ctx, setup.stage, fixtures), judged, local: localDelta(ctx, rec, setup.stage) });
+  return withRefusals(table, refused);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -527,7 +557,12 @@ const abAward = scenario("AB-AWARD", async (ctx, rec, setup) => {
       const f = firstScheduled(batch);
       if (step === undefined || f === undefined) return;
       await decideFixture(ctx, rec, setup, f, step.request);
-      drives.push({ fixtureId: f.id, home: f.home_entrant_id!, away: f.away_entrant_id!, kind: step.kind, events: rec.streams.get(f.id) ?? [] });
+      const home = f.home_entrant_id!;
+      const away = f.away_entrant_id!;
+      const events = rec.streams.get(f.id) ?? [];
+      // The rule's result for this stream: the real engine's fold of what was posted (review M-3).
+      const rule = toObservedOutcome(foldStream(sportModule(ctx.spec.sport), stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind), home, away, events).outcome);
+      drives.push({ fixtureId: f.id, home, away, kind: step.kind, events, rule });
     },
   };
   const plays = await playDivision(ctx, rec, setup, hooks);
