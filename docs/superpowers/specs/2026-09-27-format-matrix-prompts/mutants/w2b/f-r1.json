@@ -2,8 +2,8 @@
  {
   "id": "r1-i1-stamp-skipped",
   "file": "apps/web/src/server/engine-db/fed-seats.ts",
-  "find": "      if (leaver === undefined || !departed.has(leaver) || !seatIsStamped(t, edge.slot)) continue;",
-  "replace": "      continue;",
+  "find": "      if (!(leaverDeparted && stamped) && !deadLoserEdge) continue;\n",
+  "replace": "      continue;\n",
   "killers": [
    {
     "cwd": "apps/web",
@@ -407,7 +407,7 @@
  {
   "id": "r1-m6-importer-admitted",
   "file": "apps/web/src/server/engine-db/append-event.ts",
-  "find": "  if ((withdrew || expunge) && writer !== \"withdrawal_cascade\") {",
+  "find": "  if ((cascadeOnlyForfeit || expunge) && writer !== \"withdrawal_cascade\") {",
   "replace": "  if (false) {",
   "killers": [
    {

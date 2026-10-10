@@ -129,8 +129,8 @@
  {
   "id": "final-dw-written",
   "file": "apps/web/src/server/usecases/withdrawal.ts",
-  "find": "          if (feeds) {",
-  "replace": "          if (true) {",
+  "find": "          if (feeds && !(await hasLivePlay(auth, u.fixtureId))) {",
+  "replace": "          if (true && !(await hasLivePlay(auth, u.fixtureId))) {",
   "killers": [
    {
     "cwd": "apps/web",
@@ -144,7 +144,7 @@
  {
   "id": "final-dw-written-resolver",
   "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "          if (f.winner_to_fixture === null && f.loser_to_fixture === null) continue;",
+  "find": "          if (!feedsNextMatch(f)) continue;",
   "replace": "          if (false) continue;",
   "killers": [
    {
@@ -159,15 +159,15 @@
  {
   "id": "loser-edge-seats-withdrawn",
   "file": "apps/web/src/server/usecases/scoring.ts",
-  "find": "    if (loser && !loserWithdrawn && fixture.loser_to_fixture && fixture.loser_to_slot) {",
-  "replace": "    if (loser && fixture.loser_to_fixture && fixture.loser_to_slot) {",
+  "find": "      const filled = loserDeparted\n",
+  "replace": "      const filled = false\n",
   "killers": [
    {
     "cwd": "apps/web",
     "files": [
      "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
     ],
-    "name": "X-WD-5: a settle never seats a withdrawn loser"
+    "name": "X-WD-5: a settle never seats a departed loser"
    }
   ]
  },
@@ -182,7 +182,14 @@
     "files": [
      "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
     ],
-    "name": "X-WD-5: a settle never seats a withdrawn loser"
+    "name": "X-WD-5: a settle never seats a departed loser"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2 .X-WD-5, legacy.: a departed loser's dead seat"
    }
   ]
  },

@@ -128,6 +128,13 @@
      "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
     ],
     "name": "tidy-2: page_playoff — q1's walkover taken back"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-3: double elimination of 8"
    }
   ]
  },

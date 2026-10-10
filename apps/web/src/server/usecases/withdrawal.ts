@@ -310,8 +310,8 @@ export async function withdrawEntrantCascade(
           entrantId,
           bracketFixtures,
         );
-        // Ruling 53 (ladder); knockout/DE/stepladder: orchestrator reading pending owner (loop-F R53, Q-R53). The policy
-        // is what the withdrawal actually leaves — an entrant with fixtures in
+        // Rulings 53 + 106 (53: the ladder; 106 extends it to every bracket kind — knockout, DE, stepladder; loop-F
+        // Q-R53). The policy is what the withdrawal actually leaves — an entrant with fixtures in
         // the stage but nothing pending (an eliminated knockout entrant; a ladder entrant whose challenges are decided)
         // walks nothing over, so the policy stays `none`, as the open-format branch below reads it.
         if (out.policy === "none" && result.updates.length > 0) out.policy = "walkover";

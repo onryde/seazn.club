@@ -760,6 +760,69 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect(checked).toBe(SHAPES.length);
   }, 120_000);
 
+  it("tidy-3: double elimination of 8 — a winners' walkover beside a recorded DOUBLE walkover, taken back, revives the losers' second-round void TWO edges away (through the first-round void its dead loser edge made); replayed, its loser walks into a live line, never the abandoned row", async () => {
+    // single-sport: badminton; the un-fill reads the outcome kind and the feed graph, not the sport. The loop-F tidy-3
+    // reviewer's identity-control rig: the first-round losers' void is reached only through m0's DEAD loser edge — its
+    // seat carries no stamp (a void stamps nothing) — so the plan must lock it, and the void it killed beyond it, up front
+    // (fed-seats.ts `reachable`); a revive whose target is not locked is skipped as if it were cross-stage.
+    const s = await seedBracket({ ...badminton, stageKind: "double_elim", entrants: 8 });
+    const rows = await rowsOf(s.stageId);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const first = Math.min(...rows.map((r) => r.round_no));
+    const r1 = rows.filter((r) => r.round_no === first && r.home_entrant_id && r.away_entrant_id);
+    expect(r1.length, "rig: four winners' first-round lines").toBe(4);
+    const m0 = r1.find((x) => r1.some((y) => y.id !== x.id && y.loser_to_fixture === x.loser_to_fixture && y.winner_to_fixture === x.winner_to_fixture));
+    const m1 = r1.find((y) => m0 !== undefined && y.id !== m0.id && y.loser_to_fixture === m0.loser_to_fixture && y.winner_to_fixture === m0.winner_to_fixture);
+    if (!m0 || !m1 || m0.loser_to_fixture === null || m0.winner_to_fixture === null) throw new Error("rig: two winners' first-round lines sharing both their next matches");
+    const lbAId = m0.loser_to_fixture;
+    const wbR2Id = m0.winner_to_fixture;
+    const lbA = byId.get(lbAId)!;
+    const wbR2 = byId.get(wbR2Id)!;
+    if (lbA.winner_to_fixture === null || lbA.winner_to_fixture !== wbR2.loser_to_fixture) {
+      throw new Error("rig: the first-round losers' line and the winners' second round both drop into one losers' second-round line");
+    }
+    const lbBId = lbA.winner_to_fixture;
+    const drawnLbB = slotLabel(byId.get(lbBId)!, lbA.winner_to_slot);
+    expect(drawnLbB, "rig: the generator labelled the seat").not.toBeNull();
+
+    // m0 walks over (an award: its loser edge is dead, X-DE-1); m1 is a recorded double walkover (advances nobody).
+    await post(s.auth, m0.id, "core.forfeit", { by: m0.away_entrant_id, reason: "walkover" });
+    await post(s.auth, m1.id, "core.forfeit", { by: "both", reason: "walkover" });
+    const settled = await Promise.all([lbAId, wbR2Id, lbBId].map(fixtureRow));
+    expect(
+      settled.map((r) => [r.status, r.outcome]),
+      "rig: the losers' first round void (both loser feeds dead), the winners' second round a walkover (an award, its loser edge dead too), so the losers' second round void",
+    ).toEqual([
+      ["abandoned", null],
+      ["forfeited", seatWalkover(m0.home_entrant_id!)],
+      ["abandoned", null],
+    ]);
+
+    // Take back m0's walkover: both voids it made wait again — the second-round one only through the first's revive.
+    await voidLatest(s.auth, m0.id);
+    expect((await fixtureRow(m0.id)).status, "rig: m0 is open again").toBe("scheduled");
+    const back = await Promise.all([lbAId, lbBId].map(fixtureRow));
+    expect(
+      back.map((r) => [r.status, r.outcome, r.home_entrant_id, r.away_entrant_id]),
+      "the losers' first round AND the second-round void two edges away both wait again",
+    ).toEqual([
+      ["scheduled", null, null, null],
+      ["scheduled", null, null, null],
+    ]);
+    expect(slotLabel(back[1]!, lbA.winner_to_slot), "the revived seat is back to its drawn label").toEqual(drawnLbB);
+
+    // Replayed: m0's loser walks over m1's dead side into the losers' second round — a live line, walked over the
+    // winners' second round's dead loser edge (that line walks m0's winner over m1's side again).
+    await playBadminton(s.auth, m0.id, true);
+    expect((await fixtureRow(m0.id)).status, "rig: m0 decided").toBe("decided");
+    const [lbAEnd, lbBEnd] = await Promise.all([lbAId, lbBId].map(fixtureRow));
+    expect([lbAEnd!.status, lbAEnd!.outcome], "the losers' first round walks m0's loser over m1's dead side").toEqual(["forfeited", seatWalkover(m0.away_entrant_id!)]);
+    expect(
+      [lbBEnd!.status, lbBEnd!.outcome, seatOf(lbBEnd!, lbA.winner_to_slot)],
+      "m0's loser is in a LIVE losers' second round (walked over its dead side), never the abandoned row",
+    ).toEqual(["forfeited", seatWalkover(m0.away_entrant_id!), m0.away_entrant_id]);
+  }, 120_000);
+
   it("tidy-2 (X-WD-5, legacy): a departed loser's dead seat that carries NO stamp — a line decided before R-1 stamped it — is released too: the third-place void it helped make waits for that semi again", async () => {
     // single-sport: badminton. Before R-1 a departed loser's seat was dead but unstamped (`loserFeederIsDead` reads
     // her departure); the rig writes that legacy shape by clearing the stamp R-1 now writes, back to the drawn label.

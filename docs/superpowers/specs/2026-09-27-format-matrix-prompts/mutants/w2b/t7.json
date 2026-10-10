@@ -113,7 +113,7 @@
   {
     "id": "pf2-cascade-only-off",
     "file": "apps/web/src/server/engine-db/append-event.ts",
-    "find": "  if ((withdrew || expunge) && writer !== \"withdrawal_cascade\") {",
+    "find": "  if ((cascadeOnlyForfeit || expunge) && writer !== \"withdrawal_cascade\") {",
     "replace": "  if (false) {",
     "killers": [
       {
@@ -158,8 +158,8 @@
   {
     "id": "dead-clause-loser",
     "file": "apps/web/src/server/usecases/stages.ts",
-    "find": "  if (feederIsDead(f)) return true;\n  // W2b X-DE-1",
-    "replace": "  if (f.status === \"cancelled\" || (f.status === \"abandoned\" && f.outcome === null && !f.has_active_abandon)) return true;\n  // W2b X-DE-1",
+    "find": "  if (feederIsDead(f)) return true;\n  // W2b X-WD-5",
+    "replace": "  if (f.status === \"cancelled\" || (f.status === \"abandoned\" && f.outcome === null && !f.has_active_abandon)) return true;\n  // W2b X-WD-5",
     "killers": [
       {
         "cwd": "apps/web",
@@ -173,8 +173,8 @@
   {
     "id": "loser-dead-legacy-off",
     "file": "apps/web/src/server/usecases/stages.ts",
-    "find": "  return f.outcome?.kind === \"award\" || isLegacyForfeitWin(f.outcome);",
-    "replace": "  return f.outcome?.kind === \"award\";",
+    "find": "  return killsLoserEdge(f.outcome);\n",
+    "replace": "  return f.outcome?.kind === \"award\";\n",
     "killers": [
       {
         "cwd": "apps/web",
@@ -359,8 +359,8 @@
   {
     "id": "revive-void-off",
     "file": "apps/web/src/server/engine-db/fed-seats.ts",
-    "find": "    if (isCascadeVoid(t)) {\n      revives.push(",
-    "replace": "    if (false) {\n      revives.push(",
+    "find": "    if (isCascadeVoid(t)) {\n      // The seat the reviving feeder fed",
+    "replace": "    if (false) {\n      // The seat the reviving feeder fed",
     "killers": [
       {
         "cwd": "apps/web",
