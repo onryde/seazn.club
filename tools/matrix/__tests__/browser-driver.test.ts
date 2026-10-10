@@ -100,7 +100,7 @@ function fakePages(over: Partial<BrowserPages> = {}): FakePages {
       stages: builtFrom(input.row),
     }),
     addEntrantsUi: async (_c, _w, es) => es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered", kind: e.kind })),
-    withdrawUi: async (_c, _w, e) => ({ entrant_id: e.id, status: "withdrawn", policy: "none", walkovers: 0, voided: 0, skipped_finalized: 0 }),
+    withdrawUi: async (_c, _w, e) => ({ entrant_id: e.id, status: "withdrawn", policy: "none", walkovers: 0, voided: 0, skipped_finalized: 0, walked_over_held: 0 }),
     startUi: async (_c, w) => ({ division_id: w.divisionId, status: "active", started: true, generated: 0 }),
     generateUi: async () => ({ created: 0, existing: 0, fixtures: [] }),
     completeStageUi: async () => ({ completed: true, events: [] }),

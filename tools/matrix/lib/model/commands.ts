@@ -413,12 +413,13 @@ const abandonsToHold = (w: number): boolean => (w & 2) === 2;
  *    match seats nobody), and then settles it;
  *  - settled: already closed by a live core.settle — a second settle, which the product must refuse by name.
  *  A fixture whose ledger the model lost (every fixture of a withdrawn entrant: the cascade writes events the model
- *  does not) is left out — a settle naming a withdrawn entrant is the product's refusal, ruling C17. */
+ *  does not) is left out — a settle naming a withdrawn entrant is the product's refusal, ruling C17 (since W2b's C-2
+ *  the cascade walks a held match over, so none is left held with a departed side). */
 class Settle extends Cmd {
   readonly kind = "Settle" as const;
   private phase(m: ModelState, f: FixtureModel): "held" | "open" | "settled" | null {
     // A ledger the model lost is not offered: Withdraw nulls it for every fixture of the entrant (the cascade writes
-    // events the model does not), which is also what leaves a held match with a departed side alone (ruling C17).
+    // events the model does not), which also leaves alone any match of a departed side (ruling C17).
     if (f.ledger === null || !seated(f)) return null;
     if (liveEntries(f.ledger).some((e) => e.type === "core.settle")) return "settled";
     if (f.status === "needs_decision" || f.status === "abandoned") return "held";

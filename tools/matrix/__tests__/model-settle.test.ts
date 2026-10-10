@@ -11,6 +11,7 @@ import { resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { BRACKET_LEVEL_CHECK, HELD_SEATS_CHECK, SETTLE_REFUSAL_CHECK, SETTLE_SEATS_CHECK, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
+import { WITHDREW } from "../lib/scenarios/w2b-checks.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
@@ -176,7 +177,7 @@ describe("Settle in the model (spec §5.6.2; finding 24)", () => {
     }
   });
 
-  it("a held match with a WITHDRAWN side is not offered to Settle (C17 is the product's: a settle naming the withdrawn entrant is refused, the remaining one seated — W2b owns the rest): the next candidate is settled and the held one is left alone", async () => {
+  it("a held match with a WITHDRAWN side is walked over by the cascade (W2b C-2, X-WD-1: it used to stay held, C17) and is never offered to Settle: the next candidate is settled and the walked-over one is left alone", async () => {
     // single-sport: the offer rule is the stage's; football holds a level result, and a taken-back settle re-holds it with the model's ledger intact.
     const held = async () => {
       const b = await bracket("football");
@@ -192,17 +193,19 @@ describe("Settle in the model (spec §5.6.2; finding 24)", () => {
     const open = await held();
     await settle(open.m, open.d, 0, 0);
     expect(row(open.d, open.sf1).status).toBe("decided");
-    // The withdrawal of sf1's home side: sf1 stays held (the cascade skips it), is not offered, and sf2 (open) is settled.
+    // The withdrawal of sf1's home side: the held sf1 walks over to its away side (X-WD-1), is not offered, and sf2
+    // (open) is settled.
     const b = await held();
+    const [home, away] = [row(b.d, b.sf1).home_entrant_id!, row(b.d, b.sf1).away_entrant_id!];
     const w = commandOf("Withdraw", 0, 0, false);
     expect(w.check(b.m)).toBe(true);
     await w.run(b.m, b.d);
-    expect(b.m.withdrawn.has(row(b.d, b.sf1).home_entrant_id!)).toBe(true);
-    expect(row(b.d, b.sf1).status, "the withdrawal left the held match held").toBe("needs_decision");
+    expect(b.m.withdrawn.has(home)).toBe(true);
+    expect(row(b.d, b.sf1), "the withdrawal walked the held match over").toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: away, loser: home, reason: WITHDREW } });
     const tip = b.d.ledgers.get(b.sf1)!.length;
     await settle(b.m, b.d, 0, 0);
-    expect(b.d.ledgers.get(b.sf1)!.length, "the held match with a withdrawn side was left alone").toBe(tip);
-    expect(row(b.d, b.sf1).status).toBe("needs_decision");
+    expect(b.d.ledgers.get(b.sf1)!.length, "the walked-over match with a withdrawn side was left alone").toBe(tip);
+    expect(row(b.d, b.sf1).status).toBe("forfeited");
     expect(row(b.d, b.sf2).status).toBe("decided");
   });
 

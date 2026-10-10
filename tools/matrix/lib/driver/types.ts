@@ -87,7 +87,10 @@ export interface SeedConfirmOut { readonly proposalId: string; readonly filled: 
  *  would re-run the progression, so the drivers record it as a completion.
  *  Pinned against the product's text by http-driver.test.ts. */
 export const SEEDING_FAILED_AFTER_COMMIT = "STAGE_COMPLETED_SEEDING_FAILED";
-export interface WithdrawOut { entrant_id: string; status: string; policy: "none" | "walkover" | "expunge"; walkovers: number; voided: number; skipped_finalized: number }
+export interface WithdrawOut { entrant_id: string; status: string; policy: "none" | "walkover" | "expunge"; walkovers: number; voided: number; skipped_finalized: number;
+  /** W2b (loop F, the plan's N1): of `walkovers`, the lines that were HELD when the entrant withdrew — a held level
+   *  result, a tie-break owed, an active abandon — each of which used to wait for the organiser's settle. */
+  walked_over_held: number }
 /** W1-driving T7 (D8): a ladder challenge's answer (route stages/[id]/challenges
  *  → 201 usecases/stages.ts issueChallenge). `ladder_order` is the RAW order
  *  as it stood when the challenge was ISSUED — before its result lands, and

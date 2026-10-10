@@ -17,7 +17,7 @@ import { DW_ADVANCES_NOBODY_CHECK, FORFEIT_ONE_RESULT_CHECK, FORFEIT_REFUSAL_CHE
 import { loadRegressions, replayFences } from "../lib/scenario-catalogue.ts";
 import { resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
-import { generateStream } from "../lib/streams/index.ts";
+import { generateStream, partialPlay } from "../lib/streams/index.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
@@ -417,6 +417,52 @@ describe("rule 10 — the required sequences, every step checked", () => {
     }
     expect(Object.keys(judged)).toEqual(WITHDRAWALS.map((s) => s.name));
     for (const [name, n] of Object.entries(judged)) expect(n, `${name}: judged nothing`).toBeGreaterThan(0);
+  });
+
+  /** Post-F re-checks 2–5 on the model fake: loop F's bracket cascade (withdrawal.ts), driven on the driver itself. */
+  const knockoutCfg = (sport: string) => stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout");
+  const stream = (sport: string, home: string, away: string, outcome: Parameters<typeof generateStream>[0]["outcome"]) =>
+    generateStream({ sportKey: sport, cfg: knockoutCfg(sport), stageKind: "knockout", home, away, outcome });
+  it("X-WD-3 on the model (loop F departSeat): a withdrawal whose next opponent is TBD empties her seat and counts one walkover; the arrival walks over by bye (C-5)", async () => {
+    // single-sport: the seat rule reads seats and statuses, never the sport.
+    const b = await bracket("generic");
+    const sf1 = row(b.d, b.sf1);
+    const w = sf1.home_entrant_id!;
+    await b.d.postStream(b.sf1, stream("generic", w, sf1.away_entrant_id!, { kind: "win", winner: "home" }));
+    expect(row(b.d, b.fin).home_entrant_id, "premise: the winner went on").toBe(w);
+    expect(await b.d.withdraw(w)).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0, walked_over_held: 0 });
+    expect(row(b.d, b.fin).home_entrant_id, "her seat is emptied").toBeNull();
+    const sf2 = row(b.d, b.sf2);
+    await b.d.postStream(b.sf2, stream("generic", sf2.home_entrant_id!, sf2.away_entrant_id!, { kind: "win", winner: "away" }));
+    expect(row(b.d, b.fin)).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: sf2.away_entrant_id, loser: null, reason: "bye" } });
+  });
+
+  it("X-WD-1 on the model: an abandoned line has its abandon voided first, then walks over, counted held; a held level result walks over, counted held; play under way walks over, not held (C-2, the plan's N1)", async () => {
+    const cases: { sport: string; outcome: Parameters<typeof generateStream>[0]["outcome"]; status: string; held: number; writes: string[] }[] = [
+      { sport: "generic", outcome: { kind: "abandon" }, status: "abandoned", held: 1, writes: ["core.void", "core.forfeit"] },
+      { sport: "football", outcome: { kind: "level" }, status: "needs_decision", held: 1, writes: ["core.forfeit"] },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const b = await bracket(c.sport);
+      const sf1 = row(b.d, b.sf1);
+      const [home, away] = [sf1.home_entrant_id!, sf1.away_entrant_id!];
+      await b.d.postStream(b.sf1, stream(c.sport, home, away, c.outcome));
+      expect(row(b.d, b.sf1).status, `${c.sport}: premise`).toBe(c.status);
+      const before = b.d.ledgers.get(b.sf1)!.length;
+      expect(await b.d.withdraw(home), c.sport).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0, walked_over_held: c.held });
+      expect(row(b.d, b.sf1), c.sport).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: away, loser: home, reason: REASONS[3] } });
+      expect(b.d.ledgers.get(b.sf1)!.slice(before).map((e) => e.type), `${c.sport}: the cascade's writes`).toEqual(c.writes);
+      checked++;
+    }
+    // Play under way with nothing owed: walked over, not held.
+    const b = await bracket("generic");
+    const sf1 = row(b.d, b.sf1);
+    await b.d.postStream(b.sf1, partialPlay({ sportKey: "generic", cfg: knockoutCfg("generic"), stageKind: "knockout", home: sf1.home_entrant_id!, away: sf1.away_entrant_id!, outcome: { kind: "abandon" } }));
+    expect(row(b.d, b.sf1).status, "premise").toBe("in_play");
+    expect(await b.d.withdraw(sf1.home_entrant_id!)).toMatchObject({ walkovers: 1, walked_over_held: 0 });
+    checked++;
+    expect(checked).toBe(3);
   });
 
   /** Review I-4: the same rule on a TABLE — the league's standings read after every step (FORFEIT_TABLE_CHECK). */

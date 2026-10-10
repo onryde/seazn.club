@@ -46,8 +46,8 @@ import {
   type AmericanoViewOut, type ChallengeOut, type CompleteOut, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type GenerateOut, type PostedEvent, type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type SeedTie,
   type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
-import { isTerminal } from "../lib/observed.ts";
-import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
+import { X_WD_2_KINDS, isTerminal } from "../lib/observed.ts";
+import { FakeLeagueDriver, bracketWithdrawalActs, type FakeFixture } from "./fake-driver.ts";
 import { departedStatusesText, entrantMembersPkeyText, ladderText, wireCodeFor } from "./product-text.ts";
 
 /** The self-pair's 500 message, read once from V213 (product-text). */
@@ -89,8 +89,9 @@ const POOL_KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const TABLE = new Set(["league", "group"]);
 const LATER = new Set(["knockout", "group", "stepladder", "page_playoff"]);
 const BRACKETS = new Set(["knockout", "stepladder", "page_playoff"]);
-// stages.ts:880 BRACKET_WALKOVER_KINDS, the part of it this fake draws.
-const BRACKET_WALKOVER = new Set(["knockout", "stepladder"]);
+// withdrawal.ts WITHDRAWAL_WALKOVER_KINDS (stages.ts BRACKET_WALKOVER_KINDS and, since W2b X-WD-2, page_playoff), the
+// part of it this fake draws.
+const BRACKET_WALKOVER = new Set(["knockout", "stepladder", ...X_WD_2_KINDS.filter((k) => BRACKETS.has(k))]);
 const PENDING = new Set(["scheduled", "in_play"]);
 const PLAYED = new Set(["decided", "finalized", "forfeited"]);
 const BYE_PHANTOM = "__bye__"; // engine-db/competition.ts:79
@@ -558,7 +559,8 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     let walkovers = 0;
     let voided = 0;
     let skipped = 0;
-    const plan: { f: FakeFixture; walkover: boolean }[] = [];
+    let held = 0;
+    const plan: { f: FakeFixture; walkover: boolean; stage: MultiStage }[] = [];
     for (const stage of this.stages) {
       const mine = this.fixtures.filter((f) => f.stage_id === stage.id && (f.home_entrant_id === entrantId || f.away_entrant_id === entrantId));
       if (mine.length === 0) continue;
@@ -569,25 +571,42 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
         const total = played.length + pending.length;
         const expunge = (total === 0 ? 0 : played.length / total) < 0.5;
         policy = expunge ? "expunge" : policy === "expunge" ? "expunge" : "walkover";
-        for (const f of expunge ? [...played, ...pending] : pending) plan.push({ f, walkover: !expunge });
+        for (const f of expunge ? [...played, ...pending] : pending) plan.push({ f, walkover: !expunge, stage });
       } else if (BRACKET_WALKOVER.has(stage.kind)) {
         if (policy === "none") policy = "walkover";
-        for (const f of mine.filter((x) => PENDING.has(x.status))) plan.push({ f, walkover: true });
+        // loop F (C-2): a bracket withdrawal also walks a held line over — needs_decision, or an active abandon.
+        for (const f of mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)))) plan.push({ f, walkover: true, stage });
       } else {
         const pending = mine.filter((x) => PENDING.has(x.status));
-        for (const f of pending) plan.push({ f, walkover: false });
+        for (const f of pending) plan.push({ f, walkover: false, stage });
         if (policy === "none" && plan.length > 0) policy = "walkover";
       }
     }
-    for (const { f, walkover } of plan) {
+    for (const { f, walkover, stage } of plan) {
       if (f.status === "finalized" || f.status === "cancelled") { skipped++; continue; }
-      const opponent = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+      const side: Side = f.home_entrant_id === entrantId ? "home" : "away";
+      const opponent = side === "home" ? f.away_entrant_id : f.home_entrant_id;
+      if (walkover && BRACKET_WALKOVER.has(stage.kind)) {
+        if (opponent === null) {
+          // loop F X-WD-3 (withdrawal.ts departSeat "tbd"): her seat is emptied and dead, counted a walkover; whoever
+          // arrives walks over it (resolveSeats).
+          Object.assign(f, { [KEY[side]]: null });
+          this.#markVacant(f.id, side);
+          this.#resolveSeats(stage);
+          walkovers++;
+          continue;
+        }
+        if (this.heldForWithdrawal(f)) held++;
+        await this.walkOverForWithdrawal(f, entrantId);
+        walkovers++;
+        continue;
+      }
       if (walkover && opponent !== null) { await this.walkoverFixture(f, entrantId); walkovers++; continue; }
       await this.abandonFixture(f);
       voided++;
     }
     e.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped };
+    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped, walked_over_held: held };
   }
 }
 
@@ -802,18 +821,22 @@ export class FakeLadderDriver extends FakeLeagueDriver {
     // never voids it. A challenge always seats both sides.
     this.#released = true;
     let walkovers = 0;
-    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && PENDING.has(x.status))) {
+    let held = 0;
+    // loop F (C-2): a ladder takes the bracket path, so a held challenge — needs_decision, an active abandon — walks over.
+    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && bracketWithdrawalActs(x.status, this.abandonActive(x)))) {
+      if (f.id !== this.#held && this.heldForWithdrawal(f)) held++;
       if (f.id === this.#held) {
         // The withheld challenge's result never reached the product (its events are the fake's bookkeeping only): the
         // walkover is written as the product leaves it, an award to the opponent, without folding the withheld result.
         const opponent = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
         Object.assign(f, { status: "forfeited", outcome: { kind: "award", winner: opponent, loser: entrantId, reason: "withdrew" } });
-      } else await this.walkoverFixture(f, entrantId);
+      } else if (this.abandonActive(f)) await this.walkOverForWithdrawal(f, entrantId);
+      else await this.walkoverFixture(f, entrantId);
       walkovers++;
     }
     e.status = "withdrawn";
     this.#withdrawals.push({ entrantId, afterStep: this.#issued.length, rawOrder: [...(this.#raw ?? [])] });
-    return { entrant_id: entrantId, status: "withdrawn", policy: walkovers > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0 };
+    return { entrant_id: entrantId, status: "withdrawn", policy: walkovers > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
   }
   override completeStage(): Promise<CompleteOut> {
     return settle(() => {
@@ -1105,7 +1128,7 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
       const gone = this.#withdrawnPersons();
       this.fixtures = this.fixtures.filter((f) => !(PENDING.has(f.status) && [f.home_entrant_id, f.away_entrant_id].some((s) => s !== null && this.#rows(s).some((p) => gone.has(p)))));
     }
-    return { entrant_id: entrantId, status: "withdrawn", policy: voided > 0 ? "walkover" : "none", walkovers: 0, voided, skipped_finalized: 0 };
+    return { entrant_id: entrantId, status: "withdrawn", policy: voided > 0 ? "walkover" : "none", walkovers: 0, voided, skipped_finalized: 0, walked_over_held: 0 };
   }
   /** The table folds over the stage's SIDES (engine-db/competition.ts:360-365). */
   override tableEntrants(): string[] {

@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { EngineError, forbidsLevelResult, type MatchOutcome, type StageKind } from "@seazn/engine/core";
+import { EngineError, deciderPending, forbidsLevelResult, type MatchOutcome, type StageKind } from "@seazn/engine/core";
 import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
@@ -30,7 +30,7 @@ import {
   type AmericanoViewOut, type ChallengeOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
-import { wireCodeFor, withdrawalReason } from "./product-text.ts";
+import { bracketWithdrawalText, wireCodeFor, withdrawalReason } from "./product-text.ts";
 import { fixtureStatusFromFold } from "./w2a-status.ts";
 
 export interface FakeFixture extends FixtureRow { events: StreamEvent[] }
@@ -70,6 +70,23 @@ const BYE_PHANTOM = "__bye__"; // engine-db/competition.ts:79
 // lib/table-withdrawal.ts:16-18.
 const PLAYED = new Set(["decided", "finalized", "forfeited"]);
 const PENDING = new Set(["scheduled", "in_play"]);
+/** withdrawal.ts bracketWithdrawalStatus, read from its text (loop F, C-2): the statuses a BRACKET withdrawal walks over
+ *  whatever the ledger, and the ones it walks over only while an abandon is active (the cascade voids that abandon
+ *  first, D-G2 corner 1). */
+const BRACKET_WITHDRAWAL = bracketWithdrawalText();
+const BRACKET_WITHDRAW_PENDING: ReadonlySet<string> = new Set(BRACKET_WITHDRAWAL.pending);
+const IF_ABANDON_ACTIVE: ReadonlySet<string> = new Set(BRACKET_WITHDRAWAL.ifAbandonActive);
+/** The ACTIVE abandons of a fake ledger (a core.abandon no core.void names), by the id fold.ts and `ledger()` give each
+ *  event: its seq, as a string. */
+export function activeAbandonIds(events: readonly StreamEvent[]): string[] {
+  const voided = new Set(events.filter((e) => e.type === "core.void").map((e) => String((e.payload as { event_id?: unknown } | null)?.event_id)));
+  return events.flatMap((e, i) => (e.type === "core.abandon" && !voided.has(String(i + 1)) ? [String(i + 1)] : []));
+}
+/** Does a BRACKET withdrawal act on a fixture of this status (withdrawal.ts: bracketWithdrawalStatus answers
+ *  "scheduled")? `abandonActive`: its ledger holds an abandon nothing voided. */
+export function bracketWithdrawalActs(status: string, abandonActive: boolean): boolean {
+  return BRACKET_WITHDRAW_PENDING.has(status) || (IF_ABANDON_ACTIVE.has(status) && abandonActive);
+}
 // stages.ts:979 — what the swiss gate counts as a finished board.
 const DECIDED = new Set(["decided", "finalized", "forfeited"]);
 /** The code the product's structural lineup refusals reach the wire with:
@@ -431,7 +448,26 @@ export class FakeLeagueDriver implements OrganiserDriver {
       voided++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped };
+    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped, walked_over_held: 0 };
+  }
+  /** withdrawal.ts `held` (the plan's N1, `walked_over_held`): a line that used to wait for the organiser's settle —
+   *  needs_decision (a held level result), an active abandon, or in play with a decider still owed (the engine's own
+   *  `deciderPending` over the fold, a chess tie-break: R14). */
+  heldForWithdrawal(f: FakeFixture): boolean {
+    if (f.status === "needs_decision" || this.abandonActive(f)) return true;
+    if (f.status !== "in_play" || f.home_entrant_id === null || f.away_entrant_id === null) return false;
+    const kind = this.stageKindOf(f);
+    const m = sportModule(this.sport);
+    const folded = foldStream(m, kind === null ? this.cfg : stageCfg(this.sport, this.cfg, kind as StageKind), f.home_entrant_id, f.away_entrant_id, this.tableEvents(f));
+    return deciderPending(m as never, { state: folded.state as never, settlement: null });
+  }
+  /** The fixture's ledger holds an abandon nothing voided (withdrawal.ts activeAbandons). */
+  abandonActive(f: FakeFixture): boolean { return activeAbandonIds(this.tableEvents(f)).length > 0; }
+  /** withdrawal.ts applyUpdate's bracket walkover: an active abandon is voided first (D4 refuses a forfeit over it), then
+   *  the bare core.forfeit with the cascade's own REASON. */
+  async walkOverForWithdrawal(f: FakeFixture, by: string): Promise<void> {
+    for (const id of activeAbandonIds(f.events)) await this.postStream(f.id, [{ type: "core.void", payload: { event_id: id } }]);
+    await this.postStream(f.id, [{ type: "core.forfeit", payload: { by, reason: WITHDRAWAL_REASON } }]);
   }
   /** The walkover of one pending fixture. This table fake composes it as
    *  HttpDriver.forfeit does (START first on a scheduled fixture);
@@ -723,9 +759,6 @@ export interface FakeKnockoutOptions {
    *  with the plan's bracket withdrawal cascade (Task 8's table, D17) — what WD-CASC drives (W2b review I-6). */
   readonly singleElim?: boolean;
 }
-/** The plan's Task 8 cascade, per pending fixture of the withdrawn entrant: scheduled, under way, or HELD — a held level
- *  result walks over to the remaining side (X-WD-1, R14), where today's withdrawal.ts holds it (C17). */
-const BRACKET_WITHDRAW_PENDING: ReadonlySet<string> = new Set(["scheduled", "in_play", "needs_decision"]);
 /** withdrawal.ts REASON, read from its text: the cascade's walkover carries it (loop F makes it D1's "withdrew"). */
 const WITHDRAWAL_REASON = withdrawalReason();
 type Slot = "home_entrant_id" | "away_entrant_id";
@@ -741,6 +774,10 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   readonly singleElim: boolean;
   /** `<row id>:<slot>`: a slot fed by a bye line's loser, which never fills (doubleElim). */
   readonly deadSlots = new Set<string>();
+  /** singleElim: the dead slots that died THROUGH DEPARTURE (stages.ts seatDeparted) — a seat its withdrawn entrant left
+   *  (the bye stamp, X-WD-3) or one a departure double walkover feeds. Any other dead slot (a recorded double walkover's,
+   *  a void's) is dead but not departed. */
+  readonly departedSlots = new Set<string>();
   /** The engine's fixture id (pp-q1, …) → the fake's row id, in the engine's order. */
   readonly extIds = new Map<string, string>();
   constructor(opts: FakeKnockoutOptions = {}, orgId = "org-fake") {
@@ -820,7 +857,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     // singleElim (X-DW-2): a double walkover advances nobody, so the slot it feeds is dead.
     if (this.singleElim && (f.outcome as { kind?: unknown } | null)?.kind === "double_walkover") {
       const next = this.feeds.get(f.id);
-      if (next !== undefined) this.killSlot(next.to, next.slot);
+      if (next !== undefined) this.killSlot(next.to, next.slot, f.events.length === 0);
       return;
     }
     const w = (f.outcome as { winner?: unknown } | null)?.winner;
@@ -852,19 +889,21 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     if (!this.deadSlots.has(`${id}:${other}`)) return;
     this.awardThrough(target, entrant);
   }
+  /** awardSeededByes: a dead seat's opponent walks over — `forfeited` + `{kind: "award", winner, loser: null, reason:
+   *  "bye"}` and no event (W2b C-5). */
   awardThrough(target: FakeFixture, winner: string): void {
-    Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner } });
+    Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner, loser: null, reason: "bye" } });
     this.feed(target);
   }
-  /** W2b X-WD-2 / X-WD-3 (ruling 90): a page playoff withdrawal walks its pending fixtures over to the opponent, as
-   *  knockout does, and never voids one; a seat whose opponent is still TBD goes dead, so the opponent who arrives
-   *  there is walked over (fill → awardThrough). */
-  /** singleElim: a slot no entrant will reach (D17, X-WD-3, X-DW-2) is marked dead.
-   *  - An entrant waiting opposite it walks over at once (awardThrough), as resolveBracketSeats' bye award does.
-   *  - A fixture with both slots dead is a double walkover, which kills the slot it feeds.
-   *  - A final with both slots dead stays open: it goes to settle (X-WD-4, X-DW-3). */
-  killSlot(id: string, slot: Slot): void {
+  /** singleElim, stages.ts resolveBracketSeats (loop F): a slot no entrant will reach (D17, X-WD-3, X-DW-2) is dead.
+   *  - An entrant waiting opposite it walks over at once (awardThrough, the bye award).
+   *  - Both slots dead THROUGH DEPARTURE (X-WD-4): a double walkover, no event, which kills the slot it feeds by
+   *    departure — or, on a final, nothing is written and it stays open (D19, X-DW-3).
+   *  - Both slots dead otherwise (Review Focus 1: a recorded double walkover's seat, a void's): the line is a void,
+   *    `abandoned` with no outcome, and the slot it feeds is dead but not departed. */
+  killSlot(id: string, slot: Slot, departed: boolean): void {
     this.deadSlots.add(`${id}:${slot}`);
+    if (departed) this.departedSlots.add(`${id}:${slot}`);
     const target = this.fixtures.find((x) => x.id === id)!;
     if (target.status !== "scheduled" || target.outcome !== null) return;
     const other: Slot = slot === "home_entrant_id" ? "away_entrant_id" : "home_entrant_id";
@@ -872,49 +911,80 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     if (waiting !== null) { this.awardThrough(target, waiting); return; }
     if (!this.deadSlots.has(`${id}:${other}`)) return;
     const next = this.feeds.get(id);
-    if (next === undefined) return;
-    Object.assign(target, { status: "forfeited", outcome: { kind: "double_walkover" } });
-    this.killSlot(next.to, next.slot);
+    if (this.departedSlots.has(`${id}:${slot}`) && this.departedSlots.has(`${id}:${other}`)) {
+      if (next === undefined) return;
+      Object.assign(target, { status: "forfeited", outcome: { kind: "double_walkover" } });
+      this.killSlot(next.to, next.slot, true);
+      return;
+    }
+    Object.assign(target, { status: "abandoned", outcome: null });
+    if (next !== undefined) this.killSlot(next.to, next.slot, false);
   }
-  /** singleElim, the plan's Task 8 cascade (D17, X-WD-1, X-WD-3; review I-6), for each pending fixture of the entrant:
-   *  - opponent seated: it walks over, through the cascade's bare core.forfeit {by, reason}, with withdrawal.ts's own
-   *    REASON;
-   *  - opponent TBD: the entrant is un-seated, never voided, and its slot dies (killSlot).
+  /** singleElim, withdrawal.ts withdrawEntrantCascade's bracket path (loop F; D17, X-WD-1, X-WD-3, X-WD-4), for each
+   *  fixture of the entrant the planner acts on (bracketWithdrawalActs):
+   *  - opponent TBD: her seat is emptied and dies by departure (killSlot) — counted a walkover, as F counts it;
+   *  - opponent already withdrawn (X-WD-4): a feeding line is a departure double walkover, no event, both seats kept, and
+   *    the seat it feeds dies by departure; a final is left as it is (D19);
+   *  - otherwise it walks over (walkOverForWithdrawal), and a HELD line counts in `walked_over_held`.
    *  Nothing is expunged. */
   async #withdrawBracket(entrantId: string): Promise<WithdrawOut> {
     this.log("withdraw");
+    const gone = new Set(this.entrants.filter((e) => e.status === "withdrawn").map((e) => e.id));
+    const mine = this.fixtures.filter((x) => x.home_entrant_id === entrantId || x.away_entrant_id === entrantId);
     let walkovers = 0;
-    let pending = 0;
-    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && BRACKET_WITHDRAW_PENDING.has(x.status))) {
-      pending++;
-      const mine: Slot = f.home_entrant_id === entrantId ? "home_entrant_id" : "away_entrant_id";
-      const opponent = mine === "home_entrant_id" ? f.away_entrant_id : f.home_entrant_id;
-      if (opponent !== null) {
-        await this.postStream(f.id, [{ type: "core.forfeit", payload: { by: entrantId, reason: WITHDRAWAL_REASON } }]);
+    let held = 0;
+    for (const f of mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)))) {
+      const slot: Slot = f.home_entrant_id === entrantId ? "home_entrant_id" : "away_entrant_id";
+      const opponent = slot === "home_entrant_id" ? f.away_entrant_id : f.home_entrant_id;
+      if (opponent === null) {
+        Object.assign(f, { [slot]: null });
+        this.killSlot(f.id, slot, true);
         walkovers++;
         continue;
       }
-      Object.assign(f, { [mine]: null });
-      this.killSlot(f.id, mine);
+      if (gone.has(opponent)) {
+        const next = this.feeds.get(f.id);
+        if (next === undefined) continue;
+        Object.assign(f, { status: "forfeited", outcome: { kind: "double_walkover" } });
+        walkovers++;
+        this.killSlot(next.to, next.slot, true);
+        continue;
+      }
+      if (this.heldForWithdrawal(f)) held++;
+      await this.walkOverForWithdrawal(f, entrantId);
+      walkovers++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy: pending > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0 };
+    return { entrant_id: entrantId, status: "withdrawn", policy: mine.length > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
   }
+  /** W2b X-WD-2 / X-WD-3 (ruling 90): a page playoff withdrawal walks its pending fixtures over to the opponent, as
+   *  knockout does, and never voids one; a seat whose opponent is still TBD is emptied and goes dead — counted a
+   *  walkover, as loop F's departSeat is — so the opponent who arrives there is walked over (fill → awardThrough). */
   override async withdraw(entrantId: string): Promise<WithdrawOut> {
     if (this.singleElim) return this.#withdrawBracket(entrantId);
     if (!this.pagePlayoff) return super.withdraw(entrantId);
     this.log("withdraw");
     let walkovers = 0;
     let pending = 0;
-    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && PENDING.has(x.status))) {
+    let held = 0;
+    // loop F: a page playoff takes the bracket path (WITHDRAWAL_WALKOVER_KINDS), so a held line walks over too.
+    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && bracketWithdrawalActs(x.status, this.abandonActive(x)))) {
       pending++;
       const mine: Slot = f.home_entrant_id === entrantId ? "home_entrant_id" : "away_entrant_id";
       const opponent = mine === "home_entrant_id" ? f.away_entrant_id : f.home_entrant_id;
-      if (opponent !== null) { await this.walkoverFixture(f, entrantId); walkovers++; continue; }
+      if (opponent !== null) {
+        if (this.heldForWithdrawal(f)) held++;
+        if (activeAbandonIds(f.events).length > 0) await this.walkOverForWithdrawal(f, entrantId);
+        else await this.walkoverFixture(f, entrantId);
+        walkovers++;
+        continue;
+      }
+      Object.assign(f, { [mine]: null });
       this.deadSlots.add(`${f.id}:${mine}`);
+      walkovers++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy: pending > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0 };
+    return { entrant_id: entrantId, status: "withdrawn", policy: pending > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
   }
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     const f = this.fixtures.find((x) => x.id === id)!;
@@ -935,6 +1005,8 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       let champion: string | null = null;
       for (const f of this.fixtures) {
         const w = (f.outcome as { winner?: unknown } | null)?.winner;
+        // singleElim: a final won by a bye award (its other seat died, X-DW-2) still crowns its winner.
+        if (this.singleElim && typeof w === "string" && !this.feeds.has(f.id)) champion = w;
         if (typeof w !== "string" || f.home_entrant_id === null || f.away_entrant_id === null) continue;
         // A loser that plays on (a page playoff's pp-q1) is not out yet - unless its next seat is dead (a walkover's loser).
         const lo = this.loserFeeds.get(f.id);

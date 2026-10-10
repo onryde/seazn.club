@@ -114,6 +114,25 @@ export function withdrawalPendingText(): string[] {
   return out;
 }
 
+/** withdrawal.ts bracketWithdrawalStatus, pure (W2b, loop F): the fixtures a BRACKET withdrawal walks over. `pending` is
+ *  every status the planner reads as "scheduled" whatever the ledger: the table's WITHDRAWAL_PENDING_STATUSES (which the
+ *  function reads as PENDING), plus each `case` that returns "scheduled". `ifAbandonActive` is each `case` that returns
+ *  "scheduled" only while an abandon is active (the cascade voids that abandon first). Refused by name when the function
+ *  is not in that shape. */
+export function bracketWithdrawalFrom(text: string, tablePending: readonly string[]): { pending: string[]; ifAbandonActive: string[] } {
+  const fn = /\nexport function bracketWithdrawalStatus\(status: string, activeAbandon: boolean\)[^{]*\{([\s\S]*?)\n\}/.exec(text);
+  if (fn === null) throw new Error("product-text: withdrawal.ts bracketWithdrawalStatus not found in the expected shape");
+  const body = fn[1];
+  if (!/\n {2}if \(PENDING\.has\(status\)\) return "scheduled";/.test(body)) throw new Error("product-text: bracketWithdrawalStatus no longer reads PENDING as scheduled");
+  if (tablePending.length === 0) throw new Error("product-text: bracketWithdrawalStatus — the table's pending set is empty");
+  const always = [...body.matchAll(/case "([a-z_]+)":\s*return "scheduled";/g)].map((x) => x[1]);
+  const ifAbandonActive = [...body.matchAll(/case "([a-z_]+)":\s*return activeAbandon \? "scheduled" : "void";/g)].map((x) => x[1]);
+  return { pending: [...tablePending, ...always], ifAbandonActive };
+}
+export function bracketWithdrawalText(): { pending: string[]; ifAbandonActive: string[] } {
+  return bracketWithdrawalFrom(read("apps/web/src/server/usecases/withdrawal.ts"), withdrawalPendingText());
+}
+
 /** usecases/fixture-results-sql.ts fixtureHasResultSql's status clause, pure: the statuses a rebuild (and history) treat as
  *  PLAYED. Refused by name when the clause is not in the expected shape or names no status. */
 export function fixtureResultStatusesFrom(text: string): string[] {

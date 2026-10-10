@@ -48,8 +48,8 @@ const ENTRANTS = 8;
 /** withdrawal.ts applyUpdate: these are reported as skipped, never touched. */
 const LOCKED = new Set(["finalized", "cancelled"]);
 
-/** One pending fixture judged under a walkover: its item, and whether the
- *  cascade forfeited or voided (abandoned) it. */
+/** One pending fixture judged under a walkover: its item, and whether it is one of the cascade's own walkovers
+ *  (`forfeited`: a forfeit, or — loop F — a TBD seat it departed) or it voided (abandoned) it. */
 interface WalkoverJudgement { readonly item: Item; readonly forfeited: boolean; readonly voided: boolean }
 /** `tbd`: the fixture's opponent seat was still empty when the withdrawal answered (W2b X-WD-3). */
 type WalkoverModel = (b: FixtureSnap, a: ObservedFixture, w: string, tbd: boolean) => WalkoverJudgement;
@@ -61,9 +61,10 @@ const voidedBy = (b: FixtureSnap, a: ObservedFixture) => a.status === "abandoned
 /** W1-driving Task 7 (false premise 16), re-keyed by W2b (X-WD-2, X-WD-3): how a walkover treats a pending fixture,
  *  by family.
  *  - forfeit (table and bracket kinds, and — X-WD-2 — page playoff and ladder): forfeited to the OPPONENT. A seat whose
- *    opponent was still TBD is never voided (X-WD-3): the withdrawn seat is dead, and the opponent who ARRIVES there is
- *    walked over — it is not one of the cascade's own walkovers (nothing could be forfeited when it answered); one who
- *    never arrived leaves the fixture pending;
+ *    opponent was still TBD is never voided (X-WD-3): the cascade empties the withdrawn entrant's seat and stamps it
+ *    dead (withdrawal.ts departSeat "tbd"), and counts that departure as one of its walkovers; the opponent who ARRIVES
+ *    there is walked over, and one who never arrived leaves the fixture pending. Her seat still held is the cascade not
+ *    departing her (W2b post-F re-check 4);
  *  - abandon (every other kind — americano: the open-format branch): voided, never forfeited.
  *  A chess fixture not started is a pending one like any other: walked over (BG-WO-2), never refused. */
 export const WALKOVER_MODEL: Readonly<Record<"forfeit" | "abandon", WalkoverModel>> = Object.freeze({
@@ -74,9 +75,10 @@ export const WALKOVER_MODEL: Readonly<Record<"forfeit" | "abandon", WalkoverMode
     // cleared after it are the product losing that opponent, never "a TBD that never arrived" (that reading failed open).
     if (!tbd && opponent === null) return { item: { ok: false, note: `${b.id}: ${a.status} after walkover with its opponent's seat cleared — it was seated when the withdrawal answered, expected forfeited to it` }, forfeited: false, voided: voidedBy(b, a) };
     if (tbd || opponent === null) {
-      if (opponent === null) return { item: { ok: PENDING_STATUSES.includes(a.status), note: `${b.id}: ${a.status} after walkover with a TBD opponent that never arrived, expected still pending — the dead seat is never voided (X-WD-3)` }, forfeited: false, voided: voidedBy(b, a) };
+      if (a.home === w || a.away === w) return { item: { ok: false, note: `${b.id}: ${a.status} after walkover with a TBD opponent and ${w} still seated — the cascade empties her seat (departSeat, X-WD-3)` }, forfeited: false, voided: voidedBy(b, a) };
+      if (opponent === null) return { item: { ok: PENDING_STATUSES.includes(a.status), note: `${b.id}: ${a.status} after walkover with a TBD opponent that never arrived, expected still pending — the dead seat is never voided (X-WD-3)` }, forfeited: true, voided: voidedBy(b, a) };
       const arrived = a.status === "forfeited" && winnerOf(a.outcome) === opponent;
-      return { item: { ok: arrived, note: `${b.id}: ${a.status}/${winnerOf(a.outcome)} after walkover with a TBD opponent, expected the arriving ${opponent} walked over (X-WD-3)` }, forfeited: false, voided: voidedBy(b, a) };
+      return { item: { ok: arrived, note: `${b.id}: ${a.status}/${winnerOf(a.outcome)} after walkover with a TBD opponent, expected the arriving ${opponent} walked over (X-WD-3)` }, forfeited: true, voided: voidedBy(b, a) };
     }
     const ok = a.status === "forfeited" && winnerOf(a.outcome) === opponent;
     return { item: { ok, note: `${b.id}: ${a.status}/${winnerOf(a.outcome)} after walkover, expected forfeited/${opponent}` }, forfeited: ok, voided: false };

@@ -4,6 +4,9 @@
 // *-WO-1 / *-AB-* rows), the engine's own declarations (BRACKET_STAGE_KINDS, the bracket generators' feed edges and
 // isFinal/thirdPlace/conditional flags, the sports' standingsDelta metric keys) and hand-written cfgs — never from the
 // scenarios' text or the oracle's own table.
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { CREDIT_SPORTS, walkoverCredit } from "@seazn/reference";
 import { describe, expect, it } from "vitest";
@@ -11,6 +14,7 @@ import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogu
 import type { FixtureRow, StandingsRowWire, WithdrawOut } from "../lib/driver/types.ts";
 import { foldStream } from "../lib/fold.ts";
 import type { ObservedFixture, ObservedOutcome } from "../lib/observed.ts";
+import { Recorder, setUpDivision } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { BRACKET_OF } from "../lib/scenarios/terminal-finals.ts";
 import { W2B_SCENARIO_KEYS, type CaseSpec } from "../lib/scenarios/types.ts";
@@ -19,7 +23,7 @@ import {
   hasNoNextMatch, isolatedTable, ladderUnmoved, partialPlayStands, pickDoubleWalkover, scoresheetOf, wireGraph, withRefusals, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
 } from "../lib/scenarios/w2b-checks.ts";
 import {
-  FINAL_SETTLE_ROUTE, W2B_SCENARIOS, W2bCascadeLeftOpen, W2bMisplanned, abandonDelta, abandonPlan, cascadeLeftOpen, abandonWithResult, bothSeatsDead, goalLead, heldStream, knockoutLines, tableJudged, tbdSeatWalksOver, withdrawalsWalkOver,
+  W2B_SCENARIOS, W2bCascadeLeftOpen, W2bMisplanned, abandonDelta, abandonPlan, cascadeLeftOpen, abandonWithResult, bothSeatsDead, goalLead, heldStream, knockoutLines, tableJudged, tbdSeatWalksOver, withdrawalsWalkOver,
 } from "../lib/scenarios/w2b-forfeit-credit.ts";
 import { SCENARIO_KEYS, planSliceCases } from "../lib/slice.ts";
 import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
@@ -30,6 +34,7 @@ import { offlineBuilderDefault } from "../lib/variants.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
 import { AWARD_POLICY, DLS_ON, bracketRootRow, minOversRule, knockoutRootRow, rootKindRows, tableRootRow, thirdPlaceRows, w2bApplies, w2bCells } from "../lib/w2b-cells.ts";
 import { FakeKnockoutDriver, FakeLeagueDriver } from "./fake-driver.ts";
+import { bracketWithdrawalFrom, bracketWithdrawalText } from "./product-text.ts";
 
 const variantFor = offlineBuilderDefault;
 const rootKind = (row: RowKey): string => stagesForRow(row)[0]!.kind;
@@ -249,17 +254,22 @@ describe("the double walkover's checks (X-DW-1..4)", () => {
     expect(doubleWalkoverRefusedAtTheEnd([ok], "a league")).toMatchObject({ verdict: "abstain", checked: 0, reason: "a league" });
   });
 
-  it("advances nobody: neither entrant seated again, a one-dead-seat fixture walked over to its live side, a two-dead-seat one a double walkover", () => {
+  it("advances nobody: neither entrant seated again, a one-dead-seat fixture walked over to its live side, a two-dead-seat one a void (loop F: no seat of a recorded double walkover's chain departed)", () => {
     const fixtures = [
       fx("q1", "a", "b", "forfeited", { kind: "double_walkover" }),
-      fx("s1", null, "c", "forfeited", { kind: "award", winner: "c", loser: null, reason: "walkover" }, { extKey: "S1" }),
-      fx("z", null, null, "forfeited", { kind: "double_walkover" }, { extKey: "Z" }),
+      fx("s1", null, "c", "forfeited", { kind: "award", winner: "c", loser: null, reason: "bye" }, { extKey: "S1" }),
+      fx("z", null, null, "abandoned", null, { extKey: "Z" }),
     ];
     const dead = new Map([["S1", 1], ["Z", 2]]);
     expect(doubleWalkoverAdvancesNobody(dw, fixtures, dead)).toMatchObject({ verdict: "pass", checked: 3 });
     expect(doubleWalkoverAdvancesNobody(dw, [...fixtures, fx("lb", "a", null, "scheduled", null)], dead).verdict, "a seated again").toBe("fail");
     expect(doubleWalkoverAdvancesNobody(dw, [fixtures[0]!, { ...fixtures[1]!, status: "scheduled", outcome: null }, fixtures[2]!], dead).verdict, "S1 left open").toBe("fail");
-    expect(doubleWalkoverAdvancesNobody(dw, [fixtures[0]!, fixtures[1]!, { ...fixtures[2]!, outcome: { kind: "award", winner: "x", loser: null, reason: "walkover" } }], dead).verdict, "Z walked over").toBe("fail");
+    expect(doubleWalkoverAdvancesNobody(dw, [fixtures[0]!, fixtures[1]!, { ...fixtures[2]!, status: "forfeited", outcome: { kind: "award", winner: "x", loser: null, reason: "walkover" } }], dead).verdict, "Z walked over").toBe("fail");
+    // The I-6 shape loop F refutes: two dead seats, neither departed, written as a double walkover.
+    const asDw = doubleWalkoverAdvancesNobody(dw, [fixtures[0]!, fixtures[1]!, { ...fixtures[2]!, status: "forfeited", outcome: { kind: "double_walkover" } }], dead);
+    expect(asDw.verdict, "Z a double walkover").toBe("fail");
+    expect(asDw.reason).toMatch(/Z: both seats dead — forfeited \{"kind":"double_walkover"\}, wanted abandoned with no outcome/);
+    expect(doubleWalkoverAdvancesNobody(dw, [fixtures[0]!, fixtures[1]!, { ...fixtures[2]!, status: "scheduled" }], dead).verdict, "Z left open").toBe("fail");
     expect(doubleWalkoverAdvancesNobody(dw, fixtures, new Map([...dead, ["MISSING", 1]])).verdict, "a fed seat not in the stage").toBe("fail");
     expect(doubleWalkoverAdvancesNobody(null, fixtures, dead)).toMatchObject({ verdict: "fail", checked: 1 });
     expect(doubleWalkoverAdvancesNobody({ ...dw, refusal: { status: 422, code: null } }, fixtures, dead).verdict).toBe("fail");
@@ -523,8 +533,8 @@ describe("isolatedTable (X-WO-1, X-DW-4, X-AB-1): a row against the rule's delta
   });
 });
 
-describe("WD-CASC's checks (X-WD-1..4)", () => {
-  const answer = (over: Partial<WithdrawOut> = {}): WithdrawOut => ({ entrant_id: "x", status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_finalized: 0, ...over });
+describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
+  const answer = (over: Partial<WithdrawOut> = {}): WithdrawOut => ({ entrant_id: "x", status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_finalized: 0, walked_over_held: 0, ...over });
   const { rows, graph } = bracket("knockout", F8);
   const lines = knockoutLines(graph, rows.filter((r) => r.round_no === 1));
   const [qf1, qf2] = lines.a.qf;
@@ -532,9 +542,16 @@ describe("WD-CASC's checks (X-WD-1..4)", () => {
   const id = (k: string) => `f-${k}`;
   const ext = (key: string, home: string | null, away: string | null, status: string, outcome: ObservedOutcome | null) => fx(id(key), home, away, status, outcome, { extKey: key });
   const w1 = qf1.home_entrant_id!; const a2 = qf2.away_entrant_id!; const a3 = qf3.away_entrant_id!;
+  // W2b C-5: the bye award a dead seat's arriving opponent gets (awardSeededByes) — no loser, reason bye.
+  const bye = (winner: string): ObservedOutcome => ({ kind: "award", winner, loser: null, reason: "bye" });
   const r = {
-    steps: [{ entrantId: w1, label: "semi-final opponent TBD", answer: answer({ walkovers: 0 }) }, { entrantId: qf2.home_entrant_id!, label: "held", answer: answer() }, { entrantId: a2, label: "final opponent TBD", answer: answer({ walkovers: 0 }) }],
-    walked: [{ fixtureId: qf2.id, withdrawn: qf2.home_entrant_id!, remaining: a2, label: "held" }],
+    steps: [
+      { entrantId: w1, label: "semi-final opponent TBD", answer: answer() },
+      { entrantId: qf2.home_entrant_id!, label: "held", answer: answer({ walked_over_held: 1 }) },
+      { entrantId: qf3.home_entrant_id!, label: "not started", answer: answer() },
+      { entrantId: a3, label: "semi-final opponent TBD", answer: answer() },
+    ],
+    walked: [{ fixtureId: qf2.id, withdrawn: qf2.home_entrant_id!, remaining: a2, label: "held" }, { fixtureId: qf3.id, withdrawn: qf3.home_entrant_id!, remaining: a3, label: "not started" }],
     w1, a2, a3, lines, dw: { fixtureId: qf4.id, home: qf4.home_entrant_id!, away: qf4.away_entrant_id!, asked: { kind: "double_walkover" as const }, refusal: null },
   };
   const good = [
@@ -542,40 +559,71 @@ describe("WD-CASC's checks (X-WD-1..4)", () => {
     ext(qf2.ext_key!, qf2.home_entrant_id, a2, "forfeited", { kind: "award", winner: a2, loser: qf2.home_entrant_id!, reason: WITHDREW }),
     ext(qf3.ext_key!, qf3.home_entrant_id, a3, "forfeited", { kind: "award", winner: a3, loser: qf3.home_entrant_id!, reason: WITHDREW }),
     ext(qf4.ext_key!, qf4.home_entrant_id, qf4.away_entrant_id, "forfeited", { kind: "double_walkover" }),
-    ext(lines.a.sf, null, a2, "forfeited", { kind: "award", winner: a2, loser: null, reason: "walkover" }),
-    ext(lines.b.sf, null, null, "forfeited", { kind: "double_walkover" }),
-    // X-WD-4's final half (review I-6): a2 withdrew from it while its other seat was TBD, and SF2 advanced nobody.
-    ext(lines.final, null, null, "scheduled", null),
+    ext(lines.a.sf, null, a2, "forfeited", bye(a2)),
+    // Review Focus 1: a3's departed seat beside QF4's RECORDED double walkover — nobody withdrew from QF4 — is a void.
+    ext(lines.b.sf, null, null, "abandoned", null),
+    // X-DW-2 (and the 2026-09-21 cascade ruling): the seat the void feeds is dead, so its opponent walks over.
+    ext(lines.final, a2, null, "forfeited", bye(a2)),
   ];
+  const ranks = [a2];
   it("the rule's run passes all three; each reds when its own fixture is wrong", () => {
-    expect(withdrawalsWalkOver(r, good)).toMatchObject({ verdict: "pass", checked: 4 });
+    expect(withdrawalsWalkOver(r, good)).toMatchObject({ verdict: "pass", checked: 6 });
     expect(tbdSeatWalksOver(r, good)).toMatchObject({ verdict: "pass", checked: 4 });
-    expect(bothSeatsDead(r, good, null)).toMatchObject({ verdict: "pass", checked: 5 });
+    expect(bothSeatsDead(r, good, ranks)).toMatchObject({ verdict: "pass", checked: 4 });
     const swap = (key: string, f: ObservedFixture) => good.map((g) => (g.extKey === key ? f : g));
     expect(withdrawalsWalkOver(r, swap(qf2.ext_key!, ext(qf2.ext_key!, qf2.home_entrant_id, a2, "abandoned", null))).verdict).toBe("fail");
     expect(withdrawalsWalkOver({ ...r, steps: [...r.steps, { entrantId: "y", label: "x", answer: answer({ voided: 1 }) }] }, good).verdict, "a voiding answer").toBe("fail");
     const refused = withdrawalsWalkOver({ ...r, steps: [...r.steps, { entrantId: "y", label: "semi-final opponent TBD", answer: null, refusal: { status: 422, code: "WRONG_PHASE" } }] }, good);
-    expect(refused, "a refused withdrawal (X-WD-3)").toMatchObject({ verdict: "fail", checked: 5 });
+    expect(refused, "a refused withdrawal (X-WD-3)").toMatchObject({ verdict: "fail", checked: 7 });
     expect(refused.reason).toMatch(/withdrawal of y \(semi-final opponent TBD\) refused 422 WRONG_PHASE/);
-    expect(tbdSeatWalksOver(r, swap(lines.a.sf, ext(lines.a.sf, w1, a2, "forfeited", { kind: "award", winner: a2, loser: w1, reason: WITHDREW }))).verdict, "W1 still seated").toBe("fail");
-    expect(tbdSeatWalksOver(r, [...good, ext("other", w1, "z", "scheduled", null)]).verdict, "W1 seated later").toBe("fail");
-    expect(tbdSeatWalksOver(r, swap(qf1.ext_key!, ext(qf1.ext_key!, w1, qf1.away_entrant_id, "cancelled", null))).verdict, "a voided fixture").toBe("fail");
-    expect(bothSeatsDead(r, swap(lines.b.sf, ext(lines.b.sf, null, null, "scheduled", null)), null).verdict, "SF2 left open").toBe("fail");
-    // The final half, each way to go wrong: walked over to the withdrawn a2 (the pre-I-6 expectation), voided (today's
-    // both-dead line), still seating a2, decided, and a champion crowned.
-    const finalRows: [string, ObservedFixture, readonly string[] | null, RegExp][] = [
-      ["walked over to a2", ext(lines.final, a2, null, "forfeited", { kind: "award", winner: a2, loser: null, reason: "walkover" }), null, /wanted open with no outcome/],
-      ["voided", ext(lines.final, null, null, "abandoned", null), null, /abandoned no outcome, wanted open/],
-      ["a2 still seated", ext(lines.final, a2, null, "scheduled", null), null, new RegExp(`seats ${a2}, wanted nobody`)],
-      ["a champion crowned", ext(lines.final, null, null, "scheduled", null), [a2], new RegExp(`crowned ${a2}`)],
+    // walked_over_held (the plan's N1): a held line, or a chess tie-break pending, counts once; nothing else does.
+    const heldRows: [string, WithdrawOut, string, RegExp][] = [
+      ["a held line not counted", answer({ walked_over_held: 0 }), "held", /\(held\) answered policy walkover, voided 0, walked_over_held 0; wanted walkover, 0, 1/],
+      ["a tie-break pending not counted", answer({ walked_over_held: 0 }), "tie-break pending", /\(tie-break pending\) answered .*walked_over_held 0; wanted walkover, 0, 1/],
+      ["play under way counted held", answer({ walked_over_held: 1 }), "in play", /\(in play\) answered .*walked_over_held 1; wanted walkover, 0, 0/],
+      ["the field missing (a pre-F answer)", { entrant_id: "x", status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_finalized: 0 } as WithdrawOut, "held", /\(held\) answered .*walked_over_held undefined; wanted walkover, 0, 1/],
     ];
-    for (const [name, row, ranks, why] of finalRows) {
-      const got = bothSeatsDead(r, swap(lines.final, row), ranks);
+    for (const [name, a, label, why] of heldRows) {
+      const got = withdrawalsWalkOver({ ...r, steps: [{ entrantId: "y", label, answer: a }] }, good);
       expect(got.verdict, name).toBe("fail");
       expect(got.evidence.join(" | "), name).toMatch(why);
     }
-    expect(finalRows.length).toBe(4);
-    expect(bothSeatsDead({ ...r, dw: { ...r.dw, refusal: { status: 409, code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" } } }, good, null).verdict, "the DW refused").toBe("fail");
+    expect(heldRows.length).toBe(4);
+    expect(withdrawalsWalkOver({ ...r, steps: [{ entrantId: "y", label: "tie-break pending", answer: answer({ walked_over_held: 1 }) }] }, good).verdict, "a tie-break pending counted once").toBe("pass");
+    expect(tbdSeatWalksOver(r, swap(lines.a.sf, ext(lines.a.sf, w1, a2, "forfeited", { kind: "award", winner: a2, loser: w1, reason: WITHDREW }))).verdict, "W1 still seated").toBe("fail");
+    expect(tbdSeatWalksOver(r, [...good, ext("other", w1, "z", "scheduled", null)]).verdict, "W1 seated later").toBe("fail");
+    expect(tbdSeatWalksOver(r, swap(qf1.ext_key!, ext(qf1.ext_key!, w1, qf1.away_entrant_id, "cancelled", null))).verdict, "a voided fixture").toBe("fail");
+    // C-5: the arrival's award is a bye — no loser, reason bye — and the check reads both.
+    const sf1Rows: [string, ObservedOutcome][] = [
+      ["reason walkover", { kind: "award", winner: a2, loser: null, reason: "walkover" }],
+      ["a loser named", { kind: "award", winner: a2, loser: w1, reason: "bye" }],
+    ];
+    for (const [name, o] of sf1Rows) {
+      const got = tbdSeatWalksOver(r, swap(lines.a.sf, ext(lines.a.sf, null, a2, "forfeited", o)));
+      expect(got.verdict, name).toBe("fail");
+      expect(got.evidence.join(" | "), name).toMatch(/wanted the arriving .* walked over by bye/);
+    }
+    expect(sf1Rows.length).toBe(2);
+    // SF2 and the final, each way to go wrong: SF2 a double walkover (the I-6 expectation F's Review Focus 1 refutes) or
+    // left open; the final left open (the I-6 expectation), walked over by another reason, or no champion crowned.
+    const deadRows: [string, string, ObservedFixture, readonly string[] | null, RegExp][] = [
+      ["SF2 a double walkover", lines.b.sf, ext(lines.b.sf, null, null, "forfeited", { kind: "double_walkover" }), ranks, /forfeited \{"kind":"double_walkover"\}, seats nobody — wanted abandoned with no outcome/],
+      ["SF2 left open", lines.b.sf, ext(lines.b.sf, null, null, "scheduled", null), ranks, /scheduled no outcome, seats nobody — wanted abandoned/],
+      ["SF2 seats someone", lines.b.sf, ext(lines.b.sf, a3, null, "abandoned", null), ranks, new RegExp(`abandoned no outcome, seats ${a3} — wanted`)],
+      ["the final left open", lines.final, ext(lines.final, a2, null, "scheduled", null), null, /scheduled no outcome — wanted forfeited bye award to/],
+      ["the final by another reason", lines.final, ext(lines.final, a2, null, "forfeited", { kind: "award", winner: a2, loser: null, reason: "walkover" }), ranks, /wanted forfeited bye award to/],
+      ["no champion", lines.final, good.at(-1)!, null, /crowned \(none\)/],
+      ["another champion", lines.final, good.at(-1)!, ["z"], /crowned z/],
+    ];
+    for (const [name, key, row, rk, why] of deadRows) {
+      const got = bothSeatsDead(r, swap(key, row), rk);
+      expect(got.verdict, name).toBe("fail");
+      expect(got.evidence.join(" | "), name).toMatch(why);
+    }
+    expect(deadRows.length).toBe(7);
+    expect(bothSeatsDead({ ...r, dw: { ...r.dw, refusal: { status: 409, code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" } } }, good, ranks).verdict, "the DW refused").toBe("fail");
+    // The voids item exempts SF2 alone: a void anywhere else is still the cascade voiding (X-WD-2/3).
+    expect(tbdSeatWalksOver(r, swap(lines.final, ext(lines.final, null, null, "abandoned", null))).verdict, "the final voided").toBe("fail");
   });
   it("a withdrawn side's fixture left open stops the case by the rule's name; a terminal one plays on", () => {
     // The truth-run's find (pre-D): football's held QF2 stayed needs_decision after its home side withdrew, and the round
@@ -600,7 +648,7 @@ describe("WD-CASC's checks (X-WD-1..4)", () => {
     const empty = { steps: [], walked: [], w1: null, a2: null, a3: null, lines: null, dw: null };
     expect(withdrawalsWalkOver(empty, good)).toMatchObject({ verdict: "fail", checked: 1 });
     expect(tbdSeatWalksOver(empty, good)).toMatchObject({ verdict: "fail", checked: 1 });
-    expect(bothSeatsDead(empty, good, null)).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(bothSeatsDead(empty, good, ranks)).toMatchObject({ verdict: "fail", checked: 1 });
   });
 });
 
@@ -890,14 +938,11 @@ describe("each table scenario, run on the league fake", () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// Review I-6: WD-CASC driven end to end. The single-elimination fake mirrors the plan's Task 8 cascade (D17):
-// - a held fixture walks over;
-// - a TBD seat dies, and the entrant who arrives there walks over at once;
-// - a line both of whose seats die is a double walkover, and a final both of whose seats die stays open.
-// Its walkover carries withdrawal.ts's own REASON, so the test is red until loop F lands D1's "withdrew". Today the
-// engine's closed reason list refuses "entrant withdrew", and the held QF2 is left open (W2bCascadeLeftOpen).
-describe("WD-CASC end to end on the single-elimination fake (review I-6)", () => {
-  it("every sport: the three WD-CASC checks pass on counted items, the final left open is excused by FINAL_SETTLE_ROUTE alone, and no check fails (red until loop F)", async () => {
+// Review I-6: WD-CASC driven end to end. WD-CASC through the scenario on the single-elimination fake, which plays loop F's cascade (withdrawal.ts, stages.ts
+// resolveBracketSeats): a TBD seat dies and the arriving opponent walks over by bye; a dead seat beside a RECORDED double
+// walkover is a void (Review Focus 1), and the seat that void feeds walks its opponent over.
+describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinned to loop F's cascade)", () => {
+  it("every sport: the three WD-CASC checks pass on counted items, nothing is left open by rule, and no check fails", async () => {
     const cells = w2bCells("WD-CASC");
     expect(cells.map((c) => c.sport).sort()).toEqual([...SPORT_KEYS].sort());
     const failures: string[] = [];
@@ -913,11 +958,147 @@ describe("WD-CASC end to end on the single-elimination fake (review I-6)", () =>
         judged += c!.checked;
       }
       expect(out.assertions.find((c) => c.id === "life-loop-bounded")?.verdict, sport).toBe("pass");
-      expect(out.notes.filter((n) => n.includes(`(exempt) → ${FINAL_SETTLE_ROUTE.wave}: ${FINAL_SETTLE_ROUTE.why}`)).length, sport).toBe(1);
+      expect(out.notes.filter((n) => n.includes("(exempt)")), sport).toEqual([]);
     }
     expect(failures).toEqual([]);
-    // Per cell: the two walkovers and five withdrawals the choreography makes (QF2, QF3; w1, QF2's home, a2, QF3's home,
-    // a3), SF1's walk plus w1, a3 never re-seated plus nothing voided, and the five both-seats-dead items.
-    expect(judged).toBe(cells.length * (2 + 5 + 4 + 5));
+    // Per cell: the two walkovers and four withdrawals the choreography makes (QF2, QF3; w1, QF2's home, QF3's home, a3),
+    // SF1's bye plus w1 and a3 never re-seated plus no void but SF2's, and the four dead-seat items.
+    expect(judged).toBe(cells.length * (2 + 4 + 4 + 4));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Post-F re-checks 2–5: loop F's bracket withdrawal (withdrawal.ts) and seat resolver (stages.ts resolveBracketSeats),
+// read from the product where a fake mirrors them, and the single-elimination fake played through each state the
+// cascade distinguishes. Expected values come from the plan's rows (C-2's three former holds, C-5's bye, D17, X-WD-1..4,
+// X-DW-2, Review Focus 1, the plan's N1's walked_over_held), never from the fake.
+describe("loop F's bracket cascade, read from the product, and the single-elimination fake playing it (post-F re-checks 2–5)", () => {
+  const WITHDRAWAL_TS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps/web/src/server/usecases/withdrawal.ts");
+  it("the product's bracket withdrawal walks scheduled, in_play and needs_decision lines over, and an abandoned one only while its abandon is active (C-2); a changed shape is refused by name", () => {
+    const got = bracketWithdrawalText();
+    expect([...got.pending].sort()).toEqual(["in_play", "needs_decision", "scheduled"]);
+    expect(got.ifAbandonActive).toEqual(["abandoned"]);
+    const text = readFileSync(WITHDRAWAL_TS, "utf8");
+    const refusals: [string, string, readonly string[], RegExp][] = [
+      ["no function", "", ["scheduled"], /bracketWithdrawalStatus not found/],
+      ["PENDING not read", text.replace('  if (PENDING.has(status)) return "scheduled";', ""), ["scheduled"], /no longer reads PENDING/],
+      ["an empty table set", text, [], /pending set is empty/],
+    ];
+    for (const [name, t, p, why] of refusals) expect(() => bracketWithdrawalFrom(t, p), name).toThrow(why);
+    expect(refusals.length).toBe(3);
+  });
+
+  async function knockout(sport: string, n: number) {
+    const variant = variantFor(sport);
+    const d = new FakeKnockoutDriver({ singleElim: true });
+    const spec: CaseSpec = { caseId: `knockout|${sport}|${variant}|WD-CASC`, row: "knockout", sport, variant, scenario: "WD-CASC", canary: false };
+    const ctx = { driver: d, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] };
+    await setUpDivision(ctx, new Recorder(), n);
+    const cfg = stageCfg(sport, ctx.cfg, "knockout");
+    const row = (id: string) => d.fixtures.find((f) => f.id === id)!;
+    const r1 = d.fixtures.filter((f) => f.round_no === 1);
+    const win = (id: string, winner: "home" | "away" = "home") => {
+      const f = row(id);
+      return d.postStream(id, generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: f.home_entrant_id!, away: f.away_entrant_id!, outcome: { kind: "win", winner } }));
+    };
+    const next = (id: string) => d.feeds.get(id)!;
+    const seatOf = (id: string) => { const n2 = next(id); return row(n2.to)[n2.slot]; };
+    return { d, cfg, row, r1, win, next, seatOf };
+  }
+  const bye = (winner: string) => ({ kind: "award", winner, loser: null, reason: "bye" });
+
+  it("each state the cascade walks over (X-WD-1, R14, D-G2): a held line and a chess tie-break owed count in walked_over_held, an abandoned line has its abandon voided first and counts, play under way does not count", async () => {
+    const cases: { sport: string; build: (cfg: unknown, home: string, away: string) => { label: string; events: StreamEvent[] }; status: string; held: number }[] = [
+      { sport: "football", build: (cfg, h, a) => heldStream("football", cfg, h, a), status: "needs_decision", held: 1 },
+      { sport: "boardgame", build: (cfg, h, a) => heldStream("boardgame", cfg, h, a), status: "in_play", held: 1 },
+      { sport: "generic", build: (cfg, h, a) => ({ label: "abandoned", events: generateStream({ sportKey: "generic", cfg, stageKind: "knockout", home: h, away: a, outcome: { kind: "abandon" } }) }), status: "abandoned", held: 1 },
+      { sport: "generic", build: (cfg, h, a) => heldStream("generic", cfg, h, a), status: "in_play", held: 0 },
+    ];
+    const labels: string[] = [];
+    for (const c of cases) {
+      const { d, cfg, row, r1 } = await knockout(c.sport, 4);
+      const f = r1[0]!;
+      const [home, away] = [f.home_entrant_id!, f.away_entrant_id!];
+      const s = c.build(cfg, home, away);
+      labels.push(s.label);
+      await d.postStream(f.id, s.events);
+      expect(row(f.id).status, `${c.sport} ${s.label}: premise`).toBe(c.status);
+      const before = row(f.id).events.length;
+      const out = await d.withdraw(home);
+      expect(out, `${c.sport} ${s.label}`).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0, walked_over_held: c.held });
+      expect(row(f.id), `${c.sport} ${s.label}`).toMatchObject({ status: "forfeited", outcome: { kind: "award", winner: away, loser: home, reason: WITHDREW } });
+      const written = row(f.id).events.slice(before).map((e) => e.type);
+      expect(written, `${c.sport} ${s.label}: the cascade's writes`).toEqual(c.status === "abandoned" ? ["core.void", "core.forfeit"] : ["core.forfeit"]);
+    }
+    expect(labels).toEqual(["held", "tie-break pending", "abandoned", "in play"]);
+  });
+
+  it("X-WD-3 (D17): a withdrawal whose opponent is TBD empties her seat and counts as a walkover; the opponent who arrives walks over by bye (C-5), and so does the final", async () => {
+    const { d, row, r1, win, next, seatOf } = await knockout("generic", 4);
+    const sf1 = r1[0]!;
+    const sf2 = r1[1]!;
+    await win(sf1.id);
+    const w = sf1.home_entrant_id!;
+    expect(seatOf(sf1.id), "premise: the winner went on").toBe(w);
+    expect(await d.withdraw(w)).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0, walked_over_held: 0 });
+    expect(seatOf(sf1.id), "her seat is empty").toBeNull();
+    await win(sf2.id, "away");
+    expect(row(next(sf1.id).to)).toMatchObject({ status: "forfeited", outcome: bye(sf2.away_entrant_id!) });
+    const done = await d.completeStage();
+    expect(done.completed).toBe(true);
+    expect((done.events[0] as { finalRanks: string[] }).finalRanks[0], "the bye's winner holds the title").toBe(sf2.away_entrant_id);
+  });
+
+  it("Review Focus 1: a dead seat beside a RECORDED double walkover is a void (nobody withdrew from it), and the seat that void feeds walks its opponent over", async () => {
+    const { d, row, r1, win, next } = await knockout("generic", 8);
+    const [qf1, qf2, qf3, qf4] = [r1[0]!, r1[1]!, r1[2]!, r1[3]!];
+    expect(next(qf1.id).to, "rig: QF1 and QF2 feed one semi").toBe(next(qf2.id).to);
+    await win(qf1.id);
+    await d.withdraw(qf1.home_entrant_id!);
+    await d.postStream(qf2.id, [{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }]);
+    const sf1 = row(next(qf1.id).to);
+    expect([sf1.status, sf1.outcome, sf1.home_entrant_id, sf1.away_entrant_id], "a void").toEqual(["abandoned", null, null, null]);
+    expect(sf1.events, "written with no event").toEqual([]);
+    await win(qf3.id);
+    await win(qf4.id);
+    const sf2 = row(next(qf3.id).to);
+    await win(sf2.id);
+    expect(row(next(sf1.id).to)).toMatchObject({ status: "forfeited", outcome: bye(sf2.home_entrant_id!) });
+  });
+
+  it("X-WD-4: both sides of a line withdrawn is a departure double walkover (no event, both seats kept); the seat it feeds dies by departure, and its opponent walks over; a final both of whose sides departed stays open, written nothing", async () => {
+    // single-sport: the cascade's shapes read seats and statuses, never the sport. The first withdrawal is rigged on the
+    // entrant row, as F's own test flips the division back before Start (withdrawal-w2b.test.ts withdrawBeforeStart).
+    const rigGone = (d: FakeKnockoutDriver, id: string) => { d.entrants.find((e) => e.id === id)!.status = "withdrawn"; };
+    let checked = 0;
+    {
+      const { d, row, r1, win, next } = await knockout("generic", 4);
+      const sf1 = r1[0]!;
+    const sf2 = r1[1]!;
+      await win(sf2.id);
+      rigGone(d, sf1.home_entrant_id!);
+      expect(await d.withdraw(sf1.away_entrant_id!)).toMatchObject({ walkovers: 1, voided: 0, walked_over_held: 0 });
+      expect(row(sf1.id)).toMatchObject({ status: "forfeited", outcome: { kind: "double_walkover" }, home_entrant_id: sf1.home_entrant_id, away_entrant_id: sf1.away_entrant_id, events: [] });
+      expect(row(next(sf1.id).to)).toMatchObject({ status: "forfeited", outcome: bye(sf2.home_entrant_id!) });
+      checked++;
+    }
+    {
+      const { d, row, r1, next } = await knockout("generic", 4);
+      for (const sf of r1) { rigGone(d, sf.home_entrant_id!); await d.withdraw(sf.away_entrant_id!); }
+      for (const sf of r1) expect(row(sf.id).outcome, sf.id).toEqual({ kind: "double_walkover" });
+      const fin = row(next(r1[0]!.id).to);
+      expect([fin.status, fin.outcome, fin.home_entrant_id, fin.away_entrant_id, fin.events], "every finalist-to-be departed: open").toEqual(["scheduled", null, null, null, []]);
+      expect((await d.completeStage()).completed, "nobody holds the title").toBe(false);
+      checked++;
+    }
+    {
+      const { d, row, r1 } = await knockout("generic", 2);
+      const fin = r1[0]!;
+      rigGone(d, fin.home_entrant_id!);
+      expect(await d.withdraw(fin.away_entrant_id!)).toMatchObject({ walkovers: 0, voided: 0 });
+      expect(row(fin.id)).toMatchObject({ status: "scheduled", outcome: null, home_entrant_id: fin.home_entrant_id, away_entrant_id: fin.away_entrant_id, events: [] });
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });

@@ -159,7 +159,8 @@ export const hasNoNextMatch = (g: FeedGraph, key: string): boolean => !g.winnerT
 
 /** X-DW-2, simulated on the feed graph: a double walkover at `dwKey` kills both seats it feeds; a fixture left with
  *  ONE dead seat is walked over (its winner line carries the live side, its loser line a dead seat); one left with TWO
- *  is itself a double walkover (both its lines dead). Answers each fixture's dead-seat count — the expectation the
+ *  is a void (loop F, stages.ts resolveBracketSeats: no seat of a recorded double walkover's chain departed), and both
+ *  its lines are dead. Answers each fixture's dead-seat count — the expectation the
  *  run is judged by, from the rule and the engine's wiring alone. */
 export function deadSeats(g: FeedGraph, dwKey: string): ReadonlyMap<string, number> {
   const dead = new Map<string, number>();
@@ -208,7 +209,7 @@ export function doubleWalkoverAdvancesNobody(d: ForfeitDrive | null, fixtures: r
     for (const [key, n] of dead) {
       const f = fixtures.find((x) => x.extKey === key);
       if (f === undefined) { items.push({ ok: false, note: `${key}: a seat the double walkover feeds, not in the stage's fixtures` }); continue; }
-      if (n >= 2) { items.push({ ok: f.status === "forfeited" && f.outcome?.kind === "double_walkover", note: `${key}: both seats dead — ${f.status} ${text(f.outcome)}, wanted forfeited double_walkover` }); continue; }
+      if (n >= 2) { items.push({ ok: f.status === "abandoned" && f.outcome == null, note: `${key}: both seats dead — ${f.status} ${text(f.outcome)}, wanted abandoned with no outcome (a void: neither seat departed)` }); continue; }
       const live = f.home ?? f.away;
       const a = award(f.outcome);
       items.push({ ok: f.status === "forfeited" && a !== null && live !== null && a.winner === live && ![d.home, d.away].includes(live), note: `${key}: one seat dead — ${f.status} ${text(f.outcome)}, seats ${f.home ?? "(dead)"} v ${f.away ?? "(dead)"}, wanted the live seat's walkover` });

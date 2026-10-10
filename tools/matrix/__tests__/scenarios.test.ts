@@ -32,7 +32,6 @@ import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } 
 import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
-import { routeTo } from "../lib/routing.ts";
 import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
 import { runSlice } from "../run.ts";
 import { FakeDeniedDriver, FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture, type FakeKnockoutOptions } from "./fake-driver.ts";
@@ -327,23 +326,6 @@ describe("shared assertions — empty case first, then each way to go red", () =
       rec.exit = exit;
       expect(loopBounded(rec, done)).toMatchObject({ verdict: "fail", checked: 2, evidence: [`play loop exited ${exit}`] });
     }
-  });
-
-  it("loopBounded's openByRule (W2b review I-6): an open fixture a rule leaves open is excused by its ext key or id; every other open fixture still reds", () => {
-    const rec = new Recorder();
-    rec.exit = "drained";
-    const route = routeTo("W4", "a final both of whose seats departed goes to settle");
-    const final = fx({ id: "f9", extKey: "r3-m1", home: null, away: null, status: "scheduled", outcome: null });
-    const other = fx({ id: "f3", status: "scheduled", outcome: null });
-    const rows: [string, ObservedFixture[], ReadonlyMap<string, typeof route>, string][] = [
-      ["by ext key", [fx({}), final], new Map([["r3-m1", route]]), "pass"],
-      ["by id", [fx({}), final], new Map([["f9", route]]), "pass"],
-      ["not named", [fx({}), final], new Map(), "fail"],
-      ["another open fixture", [fx({}), final, other], new Map([["r3-m1", route]]), "fail"],
-    ];
-    for (const [name, fixtures, open, want] of rows) expect(loopBounded(rec, run([], fixtures), open), name).toMatchObject({ verdict: want, checked: 2 });
-    expect(loopBounded(rec, run([], [fx({}), final, other]), new Map([["r3-m1", route]])).evidence).toEqual(["1 fixture(s) left unfinished: f3 scheduled"]);
-    expect(rows.length).toBe(4);
   });
 });
 
@@ -2023,40 +2005,45 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     expect(cascadeItems("expunge", "w", before, after2, 0, 2, "league").at(-1)).toEqual({ ok: false, note: "reported 2 voided, observed 1" });
   });
 
-  it("walkover: a pending game goes to the OPPONENT; a TBD seat goes dead and the ARRIVING opponent is walked over, never voided (W2b X-WD-3); the reported count must match", () => {
+  it("walkover: a pending game goes to the OPPONENT; a TBD seat is emptied, counts as one of the cascade's walkovers, and the ARRIVING opponent is walked over, never voided (W2b X-WD-3, loop F departSeat); the reported count must match", () => {
     const before = [
       { id: "a", status: "decided", outcome: { kind: "win" as const, winner: "w" } },
       { id: "b", status: "scheduled", outcome: null },
       { id: "t", status: "scheduled", outcome: null },
     ];
     const tbd = new Set(["t"]); // t's opponent seat was empty when the withdrawal answered
-    // y arrived at t later; the product walked it over (the dead seat cleared — w no longer seated there).
-    const good = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("t", "forfeited", { kind: "award", winner: "y", loser: null, reason: "walkover" }, null, "y")];
-    // …then the walkover count (the cascade's OWN: t's arrival is not one), then the voided count (none: X-WD-3).
-    expect(ok(cascadeItems("walkover", "w", before, good, 1, 0, "league", tbd))).toEqual([true, true, true, true, true]);
-    expect(ok(cascadeItems("walkover", "w", before, good, 2, 0, "league", tbd))).toEqual([true, true, true, false, true]);
-    expect(ok(cascadeItems("walkover", "w", before, good, 1, 1, "league", tbd))).toEqual([true, true, true, true, false]);
-    // W1's shape — the TBD seat voided — is now the defect X-WD-3 names.
+    // y arrived at t later; the product walked it over by bye (w's seat emptied by the cascade, departSeat "tbd").
+    const good = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("t", "forfeited", { kind: "award", winner: "y", loser: null, reason: "bye" }, null, "y")];
+    // …then the walkover count — the cascade's own: b's forfeit and t's departure (withdrawal.ts counts departSeat's
+    // "tbd" in `walkovers`) — then the voided count (none: X-WD-3).
+    expect(ok(cascadeItems("walkover", "w", before, good, 2, 0, "league", tbd))).toEqual([true, true, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, good, 1, 0, "league", tbd)), "the departure left out of the count").toEqual([true, true, true, false, true]);
+    expect(ok(cascadeItems("walkover", "w", before, good, 2, 1, "league", tbd))).toEqual([true, true, true, true, false]);
+    // W1's shape — the TBD seat voided — is now the defect X-WD-3 names (and, w still seated, no departure to count).
     const voided = [good[0]!, good[1]!, after("t", "abandoned", null, "w", null)];
     expect(ok(cascadeItems("walkover", "w", before, voided, 1, 1, "league", tbd))).toEqual([true, true, false, true, true]);
     // The arrival walked over to the withdrawn side, or never walked over at all: red.
     expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!, after("t", "forfeited", { kind: "award", winner: "w", loser: null, reason: "walkover" }, "w", "y")], 1, 0, "league", tbd))).toEqual([true, true, false, true, true]);
-    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!, after("t", "scheduled", null, "w", "y")], 1, 0, "league", tbd))).toEqual([true, true, false, true, true]);
-    // An opponent that never arrived leaves t pending — the positive pair of the voided red.
-    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!, after("t", "scheduled", null, "w", null)], 1, 0, "league", tbd))).toEqual([true, true, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!, after("t", "scheduled", null, null, "y")], 2, 0, "league", tbd))).toEqual([true, true, false, true, true]);
+    // An opponent that never arrived leaves t pending, w's seat emptied — the positive pair of the voided red…
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!, after("t", "scheduled", null, null, null)], 2, 0, "league", tbd))).toEqual([true, true, true, true, true]);
+    // …and w still holding the seat is the cascade not departing her (re-check 4): red, by name, and not counted.
+    const kept = cascadeItems("walkover", "w", before, [good[0]!, good[1]!, after("t", "scheduled", null, "w", null)], 1, 0, "league", tbd);
+    expect(ok(kept)).toEqual([true, true, false, true, true]);
+    expect(kept[2]!.note).toMatch(/t: scheduled after walkover with a TBD opponent and w still seated/);
     const toW = [good[0]!, after("b", "forfeited", { kind: "award", winner: "w", loser: null, reason: "walkover" }), good[2]!];
-    expect(ok(cascadeItems("walkover", "w", before, toW, 0, 0, "league", tbd))).toEqual([true, false, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, toW, 1, 0, "league", tbd))).toEqual([true, false, true, true, true]);
     const toThirdParty = [good[0]!, after("b", "forfeited", { kind: "award", winner: "z", loser: null, reason: "walkover" }), good[2]!];
-    expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0, 0, "league", tbd))).toEqual([true, false, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 1, 0, "league", tbd))).toEqual([true, false, true, true, true]);
     expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1, 0, "league", tbd))).toEqual([true, true, false, true, true]);
     // M-1: b's opponent WAS seated when the withdrawal answered (b is not in tbd); both seats cleared and left pending is
     // the opponent lost, a red — never read as "a TBD opponent that never arrived" (t's pending pass, above).
     const cleared = [good[0]!, after("b", "scheduled", null, null, null), good[2]!];
-    const items = cascadeItems("walkover", "w", before, cleared, 0, 0, "league", tbd);
+    const items = cascadeItems("walkover", "w", before, cleared, 1, 0, "league", tbd);
     expect(ok(items)).toEqual([true, false, true, true, true]);
     expect(items[1]!.note).toMatch(/b: scheduled after walkover with its opponent's seat cleared/);
     // …and the same cleared row passes only as the TBD seat it is not: its positive pair, t above.
-    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, after("b", "scheduled", null, "w", null), good[2]!], 0, 0, "league", tbd))).toEqual([true, false, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, after("b", "scheduled", null, "w", null), good[2]!], 1, 0, "league", tbd))).toEqual([true, false, true, true, true]);
   });
 });
 
