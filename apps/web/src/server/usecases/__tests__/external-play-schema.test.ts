@@ -181,18 +181,23 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", (
     })).toEqual({ accepted: true, row: { status: "accepted", needs_reason: null } });
   });
 
-  it("fixture_external_play has exactly the design §3 + D12 columns (V432, V434)", async () => {
+  it("fixture_external_play has exactly the design §3 + D12 columns (V432, V434, V435)", async () => {
     // D12 adds round_open_id ONLY: the invite stamps are the pre-existing
     // per-seat white_emailed_at / black_emailed_at — no second invite column.
     // V434 drops url_white / url_black: under D3 there is no per-colour
     // lichess.org link to hand a player. V434 also adds create_sent_at, T9's
-    // durable "a create was sent" marker (fix round 1, I2).
+    // durable "a create was sent" marker (fix round 1, I2). V435 adds T10's
+    // move ledger: the seven columns of the plan's §3.4 contract plus the two
+    // per-side offer plies lila's 20-ply re-offer rule needs.
     expect(await columns("fixture_external_play")).toEqual([
-      "black_emailed_at", "black_lichess_id", "challenge_id", "create_sent_at", "created_at", "expires_at",
-      "finished_at", "fixture_id", "last_error", "last_polled_at",
-      "mint_claimed_at", "needs_reason", "org_id", "provider", "round_open_id",
+      "black_draw_offer_ply", "black_emailed_at", "black_lichess_id", "black_ms",
+      "challenge_id", "clock_increment_s", "create_sent_at", "created_at",
+      "draw_offer_by", "expires_at", "finished_at", "fixture_id", "last_error",
+      "last_move_at", "last_polled_at", "mint_claimed_at", "move_count", "moves_uci",
+      "needs_reason", "org_id", "provider", "round_open_id",
       "scheduled_at_basis", "started_at", "status", "updated_at",
-      "video_override_at", "white_emailed_at", "white_lichess_id", "white_side",
+      "video_override_at", "white_draw_offer_ply", "white_emailed_at", "white_lichess_id",
+      "white_ms", "white_side",
     ]);
   });
 
@@ -391,5 +396,130 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", (
       accepted: true,
       row: { status: "pending", needs_reason: null },
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // V435 — T10's move ledger. One named CHECK per guarded fact; each refusal
+  // below asserts SQLSTATE + constraint name and is paired with an accepted
+  // row that differs from it in the one guarded value.
+  const LEDGER_CHECK = "fixture_external_play_move_ledger_check";
+  const DRAW_BY_CHECK = "fixture_external_play_draw_offer_by_check";
+  const CLOCK_CHECK = "fixture_external_play_clock_check";
+  const OFFER_PLY_CHECK = "fixture_external_play_draw_offer_ply_check";
+
+  type LedgerRow = {
+    moves_uci: unknown;
+    move_count: number;
+    draw_offer_by: string | null;
+    white_ms: number | null;
+    black_ms: number | null;
+  };
+  type LedgerOutcome =
+    | { accepted: true; row: LedgerRow }
+    | { accepted: false; code: string | undefined; constraint: string | undefined };
+
+  /** A pending bridge row on the shared real fixture, carrying the given
+   *  ledger columns (`moves` as jsonb; omitted columns take their defaults),
+   *  read back and rolled back. */
+  async function tryLedger(cols: {
+    moves?: unknown;
+    move_count?: number;
+    draw_offer_by?: string | null;
+    white_ms?: number | null;
+    black_ms?: number | null;
+    clock_increment_s?: number | null;
+    white_draw_offer_ply?: number | null;
+    black_draw_offer_ply?: number | null;
+  }): Promise<LedgerOutcome> {
+    const rollback = new Error("rollback");
+    let row: LedgerRow | undefined;
+    const { moves, ...rest } = cols;
+    const values: Record<string, unknown> = {
+      fixture_id: fixtureId, org_id: orgId, status: "pending", scheduled_at_basis: new Date(), ...rest,
+    };
+    if (moves !== undefined) values.moves_uci = sql.json(moves as never);
+    try {
+      await sql.begin(async (tx) => {
+        await tx`insert into fixture_external_play ${tx(values as never)}`;
+        [row] = await tx<LedgerRow[]>`
+          select moves_uci, move_count, draw_offer_by, white_ms, black_ms
+            from fixture_external_play where fixture_id = ${fixtureId}`;
+        throw rollback;
+      });
+    } catch (err) {
+      if (err === rollback && row) return { accepted: true, row };
+      const e = err as { code?: string; constraint_name?: string };
+      return { accepted: false, code: e.code, constraint: e.constraint_name };
+    }
+    throw new Error("transaction committed — the rollback sentinel never fired");
+  }
+  const refusedBy = (constraint: string) => ({ accepted: false, code: CHECK_VIOLATION, constraint });
+
+  it("V435: a row that says nothing about moves is an EMPTY ledger (every existing row stays valid)", async () => {
+    expect(await tryLedger({})).toEqual({
+      accepted: true,
+      row: { moves_uci: [], move_count: 0, draw_offer_by: null, white_ms: null, black_ms: null },
+    });
+  });
+
+  it("V435: a ledger whose count equals its length is accepted", async () => {
+    expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 2 })).toMatchObject({
+      accepted: true, row: { moves_uci: ["e2e4", "e7e5"], move_count: 2 },
+    });
+  });
+
+  it("V435: a count LONGER than the ledger is refused", async () => {
+    expect(await tryLedger({ moves: ["e2e4"], move_count: 2 })).toEqual(refusedBy(LEDGER_CHECK));
+  });
+
+  it("V435: a count SHORTER than the ledger is refused (the other direction of the equality)", async () => {
+    expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 1 })).toEqual(refusedBy(LEDGER_CHECK));
+  });
+
+  it("V435: a ledger that is not a JSON array is refused by the ledger CHECK, not a 22023", async () => {
+    expect(await tryLedger({ moves: { e2: "e4" }, move_count: 0 })).toEqual(refusedBy(LEDGER_CHECK));
+  });
+
+  it("V435: draw_offer_by takes exactly white or black", async () => {
+    let checked = 0;
+    for (const side of ["white", "black"]) {
+      expect(await tryLedger({ draw_offer_by: side }), side).toMatchObject({ accepted: true });
+      checked++;
+    }
+    expect(await tryLedger({ draw_offer_by: "home" })).toEqual(refusedBy(DRAW_BY_CHECK));
+    expect(checked, "anti-vacuity: accepted colours").toBe(2);
+  });
+
+  it("V435: a zero clock is a clock; a NEGATIVE one is refused, on each of the three columns", async () => {
+    expect(await tryLedger({ white_ms: 0, black_ms: 0, clock_increment_s: 0 })).toMatchObject({ accepted: true });
+    let checked = 0;
+    for (const col of ["white_ms", "black_ms", "clock_increment_s"] as const) {
+      expect(await tryLedger({ [col]: -1 }), col).toEqual(refusedBy(CLOCK_CHECK));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: clock columns").toBe(3);
+  });
+
+  it("V435: an offer ply within [0, move_count] is accepted, on each side", async () => {
+    let checked = 0;
+    for (const col of ["white_draw_offer_ply", "black_draw_offer_ply"] as const) {
+      expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 2, [col]: 2 }), `${col}=2`)
+        .toMatchObject({ accepted: true });
+      expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 2, [col]: 0 }), `${col}=0`)
+        .toMatchObject({ accepted: true });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: offer-ply columns").toBe(2);
+  });
+
+  it("V435: an offer ply BEYOND the ledger, or negative, is refused, on each side", async () => {
+    let checked = 0;
+    for (const col of ["white_draw_offer_ply", "black_draw_offer_ply"] as const) {
+      expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 2, [col]: 3 }), `${col}=3`)
+        .toEqual(refusedBy(OFFER_PLY_CHECK));
+      expect(await tryLedger({ [col]: -1 }), `${col}=-1`).toEqual(refusedBy(OFFER_PLY_CHECK));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: offer-ply columns").toBe(2);
   });
 });
