@@ -982,6 +982,49 @@ describe.runIf(HAS_DB)("act — draw offers, as lila holds them", () => {
     expect(checked).toBe(2);
   });
 
+  it("a row FINISHED by reconcile, or given a NEW game, while the draw call was in flight records nothing", async () => {
+    // SQL-set mid-call, standing for T11 (finished) and T16 (re-create).
+    let checked = 0;
+    for (const [label, change] of [
+      ["finished", (g: Game) => sql`update fixture_external_play set status = 'finished', finished_at = now() where fixture_id = ${g.fixtureId}`],
+      ["re-created", (g: Game) => sql`update fixture_external_play set challenge_id = ${freshGameId()} where fixture_id = ${g.fixtureId}`],
+    ] as const) {
+      for (const [accept, standing] of [
+        [true, null],
+        [false, "white"],
+      ] as const) {
+        const { g, deps: d0 } = await atPly2();
+        if (standing) await by(g, standing, yes, d0);
+        const { sent, deps } = boardStub(async () => {
+          await change(g);
+          return { ok: true };
+        });
+        const caller = standing ? other(standing) : "white";
+        expect(await by(g, caller, { kind: "draw", accept }, deps), `${label} accept=${accept}`).toEqual(APPLIED);
+        expect((await ledger(g.fixtureId)).draw_offer_by, `${label} accept=${accept}`).toBe(standing);
+        expect(sent).toEqual([]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("an offer on a ledger chess.js cannot replay is recorded but NOT broadcast", async () => {
+    const g = await readyGame();
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    try {
+      const { sent, deps } = boardStub();
+      await mv(g, "white", "e2e5", deps); // "accepted" by this Lichess; chess.js disagrees
+      await mv(g, "black", "e7e5", deps);
+      expect(sent, "premise: neither move broadcast").toEqual([]);
+      expect(await by(g, "white", yes, deps)).toEqual(APPLIED);
+      expect((await ledger(g.fixtureId)).draw_offer_by).toBe("white");
+      expect(sent).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it("a draw broadcast's clocks read NOW: the side to move has been spending since the last move", async () => {
     const g = await readyGame();
     const { sent, deps } = boardStub();
