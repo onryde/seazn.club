@@ -1120,13 +1120,13 @@ describe.runIf(HAS_DB)("act — the broadcast", () => {
     });
   });
 
-  it("a move Lichess accepted that chess.js cannot replay is RECORDED (Lichess is the authority) but never broadcast", async () => {
+  it("a move Lichess accepted that chess.js cannot replay is RECORDED (Lichess is the authority) but never broadcast — named `unreplayable`, never the `unavailable` that means it may not have landed", async () => {
     const g = await readyGame();
     const errors = vi.spyOn(log, "error");
     try {
       const { sent, deps } = boardStub();
       // e2e5 is well-formed and illegal; this "Lichess" accepts it anyway.
-      expect(await mv(g, "white", "e2e5", deps)).toEqual(reconcile("unavailable"));
+      expect(await mv(g, "white", "e2e5", deps)).toEqual(reconcile("unreplayable"));
       expect((await ledger(g.fixtureId)).moves_uci).toEqual(["e2e5"]);
       expect(sent).toEqual([]);
       expect(errors).toHaveBeenCalledWith(

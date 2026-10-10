@@ -56,6 +56,10 @@ export type PlayResult =
   /** Lichess refused, or may have acted without saying so (`unavailable` on a
    *  5xx MAY have played the move): never "not played" — reconcile (T11). */
   | { ok: false; reconcile: true; reason: BoardErrorCode }
+  /** The move WAS played and IS recorded, but chess.js cannot replay the
+   *  ledger, so no board was broadcast. Not a refusal and not "may not have
+   *  landed" — T14 must not tell the player either; reconcile redraws it. */
+  | { ok: false; reconcile: true; reason: "unreplayable" }
   /** The caller's grant cannot play (ruling Q3), named as seatPlayer names
    *  it, so T14 can draw the re-link screen. No token was read. */
   | { ok: false; reconcile: false; reason: GrantRefusal };
@@ -363,7 +367,7 @@ async function playMove(
       { fixtureId: f.fixtureId, gameId, replayed: after.replayed, moveCount: row.move_count },
       "lichess: an accepted move does not replay — nothing broadcast, left to reconcile",
     );
-    return { ok: false, reconcile: true, reason: "unavailable" };
+    return { ok: false, reconcile: true, reason: "unreplayable" };
   }
   await ctx.publish(f.fixtureId, {
     fen: after.board.fen(),
