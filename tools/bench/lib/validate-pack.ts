@@ -191,6 +191,7 @@ import {
   entrantsOfDivision,
   fixtureKey,
   PackSchema,
+  packMethodOf,
   roundRobinFixtureCount,
   type Pack,
   type PackClaim,
@@ -2044,7 +2045,7 @@ function firstMatchDivergence(
   // `got = "x" in outcome ? outcome.x : undefined`, the same shape
   // `claimDivergence` uses — NOT `"x" in want && "x" in outcome && ...`. The
   // conjunction reads as a guard and is structurally always true (the two
-  // unions are discriminated on the same five kinds, and Task 1's
+  // unions are discriminated on the same six kinds, and Task 1's
   // `OUTCOME_KINDS_ARE_EXHAUSTIVE` proves the kind sets are equal), so it
   // cannot fail open today — but two shapes answering one question in one file
   // is how a later reader picks the one that can.
@@ -2067,9 +2068,12 @@ function firstMatchDivergence(
     }
   }
   // `method` is asserted only when the pack states one — a pack that does not
-  // care which method decided a fixture must not be forced to guess.
+  // care which method decided a fixture must not be forced to guess. The fold's
+  // side is read through `packMethodOf`: a win's `method`, an award's `reason`
+  // (W2b renamed it, and `"method" in outcome` reads `undefined` off every
+  // award — which tsc cannot see).
   if ("method" in want && want.method !== undefined) {
-    const got = "method" in outcome ? outcome.method : undefined;
+    const got = packMethodOf(outcome);
     if (got !== want.method) {
       return {
         code: "match.outcome_method",
@@ -2371,7 +2375,7 @@ function claimDivergence(fold: FoldedStream, claim: PackClaim): string | null {
       return `outcome kind: claim expects "${claim.kind}", the fold produced "${outcome.kind}"`;
     }
     if (claim.method !== undefined) {
-      const got = "method" in outcome ? outcome.method : undefined;
+      const got = packMethodOf(outcome);
       if (got !== claim.method) {
         return `outcome method: claim expects "${claim.method}", the fold produced ${show(got)}`;
       }

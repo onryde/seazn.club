@@ -385,7 +385,7 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
     provenance: "real",
     events: [
       { type: "core.start" },
-      { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired hurt" } },
+      { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired" } },
     ],
   },
   // B05 T3 — the playoff final. `home`/`away` are declared here exactly as

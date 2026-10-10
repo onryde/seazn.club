@@ -98,7 +98,7 @@ describe("foldRows — the real engine fold over product ledger rows (R64)", () 
   it("rr-r3's pack rows fold to phase done; the same ledger WITH the sign-off folds to final", async () => {
     const { module, cfg } = await dTinyModuleAndCfg();
     const lineups = lineupPairFromSheets("id-alpha", SHEETS.home, "id-bravo", SHEETS.away);
-    const packRows = [row(1, "core.start"), row(2, "core.forfeit", { by: "id-bravo", reason: "retired hurt" })];
+    const packRows = [row(1, "core.start"), row(2, "core.forfeit", { by: "id-bravo", reason: "retired" })];
     expect((foldRows(module, cfg, lineups, "fx-3", packRows) as { phase: string }).phase).toBe("done");
     // Control: the fold does see a sign-off, so dropping it is what the cut is for.
     expect((foldRows(module, cfg, lineups, "fx-3", [...packRows, row(3, "core.finalize")]) as { phase: string }).phase).toBe(
@@ -131,7 +131,7 @@ describe("specialStateThroughPackEvents — reads the ledger and both sheets, ne
               ok: true,
               data: [
                 wire(1, "core.start", {}),
-                wire(2, "core.forfeit", { by: "id-bravo", reason: "retired hurt" }),
+                wire(2, "core.forfeit", { by: "id-bravo", reason: "retired" }),
                 wire(3, "core.finalize", {}),
               ],
             },

@@ -24,7 +24,10 @@ function subject(over: Partial<SpecialSubject> = {}): ReadonlyMap<string, Specia
     [
       KEY,
       {
-        outcome: { kind: "award", winner: "id-alpha" },
+        // The ENGINE's award (W2b): a loser and a typed `reason`, no `method`.
+        // The `subject` is what the live board returned, parsed by
+        // `MatchOutcome`; claims below are the PACK's, which say `method`.
+        outcome: { kind: "award", winner: "id-alpha", loser: "id-bravo", reason: "retired" },
         state: { phase: "done", sets: [{ tiebreak: false }, { tiebreak: true }] },
         standings: new Map([
           ["id-alpha", { won: 1, lost: 0, points: 3 }],
@@ -74,6 +77,53 @@ describe("compareSpecials", () => {
       subject(),
     );
     expect(r.failures[0]).toMatchObject({ claim: "outcome.kind", expected: "win", actual: "award" });
+  });
+
+  it("compares a claim's `method` against the award's engine REASON", () => {
+    // The pack says `method`; W2b's award says `reason` (the subject above is a
+    // retirement). A comparator reading `award.method` sees `undefined` here and
+    // reds a claim that is TRUE — the positive pair comes first for that.
+    const holds = compareSpecials([special([{ on: "outcome", kind: "award", method: "retired" }])], subject());
+    expect(holds.checked).toBe(2);
+    expect(holds.failures).toEqual([]);
+
+    const wrong = compareSpecials([special([{ on: "outcome", method: "walkover" }])], subject());
+    expect(wrong.failures).toEqual([
+      { fixtureExtKey: "rr-r3-c1", claim: "outcome.method", expected: "walkover", actual: "retired" },
+    ]);
+  });
+
+  it("reds a `method` claim on an outcome that carries none — reported as absent", () => {
+    const r = compareSpecials(
+      [special([{ on: "outcome", method: "walkover" }])],
+      subject({ outcome: { kind: "double_walkover" } }),
+    );
+    expect(r.failures).toEqual([
+      { fixtureExtKey: "rr-r3-c1", claim: "outcome.method", expected: "walkover", actual: "(absent)" },
+    ]);
+  });
+
+  it("an award's `loser` is claimable, and the wrong side reds", () => {
+    const holds = compareSpecials([special([{ on: "outcome", loser: "id-bravo" }])], subject());
+    expect(holds.checked).toBe(1);
+    expect(holds.failures).toEqual([]);
+
+    const wrong = compareSpecials([special([{ on: "outcome", loser: "id-alpha" }])], subject());
+    expect(wrong.failures).toEqual([
+      { fixtureExtKey: "rr-r3-c1", claim: "outcome.loser", expected: "id-alpha", actual: "id-bravo" },
+    ]);
+  });
+
+  it("a claim can name the double walkover as the kind", () => {
+    const holds = compareSpecials(
+      [special([{ on: "outcome", kind: "double_walkover" }])],
+      subject({ outcome: { kind: "double_walkover" } }),
+    );
+    expect(holds.checked).toBe(1);
+    expect(holds.failures).toEqual([]);
+
+    const reds = compareSpecials([special([{ on: "outcome", kind: "double_walkover" }])], subject());
+    expect(reds.failures[0]).toMatchObject({ claim: "outcome.kind", expected: "double_walkover", actual: "award" });
   });
 
   it("resolves a DOTTED state path, not just a top-level key", () => {

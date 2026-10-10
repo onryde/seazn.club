@@ -48,6 +48,9 @@
 // `unknown` (see that comparator's own note).
 import { MatchOutcome, ScoreSummary } from "@seazn/engine/core";
 import { raw, type RawResult, type Session } from "./http.ts";
+// What a pack's `method` is compared against on the engine's side (a win's
+// `method`, an award's W2b `reason`) — one reader, shared with stage 0.
+import { packMethodOf } from "./pack-schema.ts";
 // The dotted-path reader stage 0 already uses for the same claims — it
 // indexes ARRAYS as well as objects, which a second copy of it here did
 // not, and one authority per fact is the point.
@@ -1241,11 +1244,27 @@ export interface MatchSideLine {
   readonly line: string;
 }
 
+/** A pack's expected outcome with its refs resolved to entrant ids: the PACK's
+ *  shape, not the engine's `MatchOutcome`.
+ *
+ *  They differ on exactly one arm since W2b. The engine's `award` is
+ *  `{winner, loser: id | null, reason}` with `reason` required; the pack's is
+ *  `{winner, method?}` — it keeps the name `method` (packs are frozen) and
+ *  `method` is OPTIONAL, because a pack that states none asserts none. An
+ *  engine-shaped value cannot say that: `reason` is required, `loser` is null
+ *  only for a bye, and the engine's own refine rejects a made-up
+ *  `loser: null` on anything else. So the expected side stays pack-shaped and
+ *  only the comparison maps `method` to `reason` (`packMethodOf`). Every other
+ *  arm is the engine's own, including `double_walkover`. */
+export type ExpectedOutcome =
+  | Exclude<MatchOutcome, { readonly kind: "award" }>
+  | { readonly kind: "award"; readonly winner: string; readonly method?: string };
+
 export interface ExpectedMatchRow {
   readonly fixtureExtKey: string;
   /** Pack refs ALREADY resolved to entrant ids by the caller — the convention
    *  every comparator in this file follows. */
-  readonly outcome: MatchOutcome;
+  readonly outcome: ExpectedOutcome;
   readonly perSide?: readonly MatchSideLine[];
 }
 
@@ -1289,13 +1308,16 @@ export interface MatchComparison {
  *  it is a run that did not get there, and the two need different fixes. */
 const SETTLED_STATUSES = new Set(["decided", "finalized", "forfeited", "abandoned"]);
 
-function outcomeWinnerOf(o: MatchOutcome): string | undefined {
+function outcomeWinnerOf(o: ExpectedOutcome | MatchOutcome): string | undefined {
   return o.kind === "win" || o.kind === "award" ? o.winner : undefined;
 }
 
-/** The engine declares `loser` on the `win` variant ALONE (`types.ts:115`) —
- *  an award has a winner and no named loser, and a draw/tie/no_result has
- *  neither. Every other kind therefore answers `undefined`, which the
+/** The losing side an EXPECTED outcome asserts. Only the pack's `win` names
+ *  one: the pack's `award` declares no `loser`, and a draw / tie / no_result /
+ *  double_walkover has none. (W2b gave the ENGINE's award a `loser`, so a live
+ *  award does carry one — but a pack cannot yet state it, so there is nothing
+ *  to compare it against here; an outcome CLAIM can assert it, in
+ *  `compareSpecials`.) Every other kind answers `undefined`, which the
  *  comparator reads as "this shape asserts no losing side" rather than as a
  *  value that went missing.
  *
@@ -1308,15 +1330,15 @@ function outcomeWinnerOf(o: MatchOutcome): string | undefined {
  *  no-loser outcome is `undefined` either way. Calling this directly with a
  *  hand-built (zod-bypassing) object that carries a stray `loser` is the
  *  only way to make the kind check observable at all. */
-export function outcomeLoserOf(o: MatchOutcome): string | undefined {
+export function outcomeLoserOf(o: ExpectedOutcome | MatchOutcome): string | undefined {
   return o.kind === "win" ? o.loser : undefined;
 }
 
-/** `method` is declared by BOTH variants that can carry one — `win` and
- *  `award`. The award's arrived when `core.forfeit`'s required `reason`
- *  started being carried verbatim through the fold, which is what lets a pack
- *  assert WHY an award happened rather than only that it did. */
-function outcomeMethodOf(o: MatchOutcome): string | undefined {
+/** The `method` an EXPECTED (pack-shaped) outcome declares — a win's or an
+ *  award's, both under the pack's name. The LIVE side is read through
+ *  `packMethodOf`, which maps the engine's award `reason` onto the same slot:
+ *  this is the pack's `method` being compared against the engine's `reason`. */
+function expectedMethodOf(o: ExpectedOutcome): string | undefined {
   return o.kind === "win" || o.kind === "award" ? o.method : undefined;
 }
 
@@ -1397,13 +1419,14 @@ function firstMismatch(row: ExpectedMatchRow, live: ActualMatchRow | undefined):
   }
 
   // Only where the pack declares one: a pack that states no method is not
-  // asserting one, so any live value satisfies it. Read through a helper that
-  // covers BOTH kinds declaring `method`; while this compared `win` alone, an
-  // award's reason was never checked and a walkover recorded as a
-  // disqualification passed.
-  const expectedMethod = outcomeMethodOf(row.outcome);
+  // asserting one, so any live value satisfies it. Both kinds that carry one
+  // are covered; while this compared `win` alone, an award's reason was never
+  // checked and a walkover recorded as a disqualification passed. The live side
+  // is the engine's `reason` for an award (W2b), its `method` for a win — read
+  // through `packMethodOf`, never `.method`, which an award no longer has.
+  const expectedMethod = expectedMethodOf(row.outcome);
   if (expectedMethod !== undefined) {
-    const actualMethod = outcomeMethodOf(got);
+    const actualMethod = packMethodOf(got);
     if (expectedMethod !== actualMethod) {
       return at("method", expectedMethod, actualMethod ?? "(absent)");
     }
@@ -1573,7 +1596,10 @@ export function compareSpecials(
           const want = claim[field];
           if (want === undefined) continue;
           checked += 1;
-          const actual = got?.[field];
+          // A pack claim's `method` is the engine's award `reason` (W2b), which
+          // a field read off the parsed outcome cannot see. Every other field
+          // is the engine's own name.
+          const actual = field === "method" ? (parsed.success ? packMethodOf(parsed.data) : undefined) : got?.[field];
           if (actual !== want) {
             failures.push({
               fixtureExtKey: s.fixtureExtKey,

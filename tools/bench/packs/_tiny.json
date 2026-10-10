@@ -523,7 +523,7 @@
           "type": "core.forfeit",
           "payload": {
             "by": "@e-bravo",
-            "reason": "retired hurt"
+            "reason": "retired"
           }
         }
       ]

@@ -653,10 +653,35 @@ describe("playMatchByTaps routes by the product's organiser-only predicate (T9, 
         else scorer++;
       }
     }
-    // Both directions reached: a sweep that only ever routed to the console could not see the payload being ignored.
     expect(organiser).toBe(Object.values(PRODUCT_ORGANISER_ONLY_SPORT_EVENTS).reduce((n, a) => n + a.values.length, 0));
-    expect(organiser).toBeGreaterThan(0);
     expect(scorer).toBe(Object.keys(PRODUCT_ORGANISER_ONLY_SPORT_EVENTS).length);
+    // Both directions reached: a sweep that only ever routed to the console could not see the payload being ignored.
+    // A populated table owes at least one console route; an EMPTY one is pinned by the test below, so the sweep can
+    // never be silently vacuous.
+    if (Object.keys(PRODUCT_ORGANISER_ONLY_SPORT_EVENTS).length > 0) expect(organiser).toBeGreaterThan(0);
+  });
+
+  it("the product declares NO organiser-only sport events since W2b (D15), so chess's retired forfeit methods are the scorer's", async () => {
+    // The sweep above runs over whatever the product declares. W2b emptied the table: chess's two forfeit methods
+    // (`boardgame.result{method: forfeit | double_forfeit}`) are RETIRED ON WRITE, and a chess forfeit is a
+    // `core.forfeit` like every other sport's, organiser-only through ORGANISER_ONLY_EVENT_TYPES (the first test
+    // here). Stating the emptiness is what keeps that sweep from being a vacuous pass: a sport that gains an arm reds
+    // THIS line and engages the sweep's `organiser > 0` guard instead of passing in silence.
+    expect(Object.keys(PRODUCT_ORGANISER_ONLY_SPORT_EVENTS)).toEqual([]);
+
+    // The negative control, both retired values: neither is routed to the console, because the driver reads the
+    // product's own predicate and the table is empty. A driver that kept its own copy of the old chess arm would send
+    // them to the organiser page.
+    let checked = 0;
+    for (const method of ["forfeit", "double_forfeit"]) {
+      const events = [START, { type: "boardgame.result", payload: { method } }];
+      const pad = buildFakePad({ events, selectors: [START_SEL, "UNUSED"] });
+      const result = await playMatchByTaps(makeInput({ pad, stream: stream(events), cfg: SCORE_CFG }));
+      expect(joined(result.findings), method).toMatch(/^adapter: cannot map event 1 \(boardgame\.result\)/);
+      expect(pad.organiserLog.filter((l) => l.startsWith("click ")), method).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

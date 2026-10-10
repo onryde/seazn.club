@@ -1624,21 +1624,30 @@ export function resolveExpectedOutcome(
   entrantIdByRef: ReadonlyMap<string, string>,
   unresolved: string[],
 ): ExpectedMatchRow["outcome"] | undefined {
-  if (outcome.kind === "draw" || outcome.kind === "tie" || outcome.kind === "no_result") return outcome;
+  if (
+    outcome.kind === "draw" ||
+    outcome.kind === "tie" ||
+    outcome.kind === "no_result" ||
+    outcome.kind === "double_walkover"
+  ) {
+    return outcome;
+  }
   const winner = entrantIdByRef.get(outcome.winner);
   if (winner === undefined) unresolved.push(outcome.winner);
   if (outcome.kind === "award") {
-    // The PACK's award variant carries no `score` — only the engine's does.
-    //
-    // It DOES carry `method`, and this rebuild used to drop it. The note that
-    // stood here cited `pack-schema.ts` for a rule that had since been
-    // rewritten to say the opposite: the engine's award variant now declares
-    // `method`, fed verbatim from `core.forfeit`'s required `reason`, and the
-    // pack's was opened to match. Dropping it here meant `compareMatches`
-    // compared an award's reason against a value it was never handed — so
+    // The PACK's award carries `winner` and an optional `method` — and this
+    // rebuild must keep naming `method`. It used to drop it: `compareMatches`
+    // then compared an award's reason against a value it was never handed, so
     // suite 11's declared walkover (`se-r0-i19`) asserted nothing on a live
     // run. A field this function does not NAME is a field the oracle cannot
     // check, whatever the schema and the comparator agree between them.
+    //
+    // It is NOT rebuilt into the engine's award shape (W2b: `loser` + a typed
+    // `reason`). The result is the PACK-shaped `ExpectedOutcome`, and
+    // `compareMatches` maps `method` onto the engine's `reason` at comparison
+    // time: an engine-shaped award would need a `reason` even where the pack
+    // states no method, and a `loser: null` that the engine's own refine only
+    // allows for a bye.
     if (winner === undefined) return undefined;
     return { kind: "award", winner, ...(outcome.method === undefined ? {} : { method: outcome.method }) };
   }
