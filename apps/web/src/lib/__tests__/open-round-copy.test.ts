@@ -7,6 +7,7 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { LOCALES } from "@/lib/i18n-constants";
 import {
+  ONLINE_GAME_EXISTS_KEY,
   OPEN_ROUND_ALREADY_OPEN_KEY,
   OPEN_ROUND_INVITED_KEY,
   OPEN_ROUND_REFUSAL_KEYS,
@@ -18,11 +19,12 @@ import {
 const DICTS: Record<(typeof LOCALES)[number], Record<string, string>> = { en, es, fr, nl };
 
 describe("open-round copy", () => {
-  it("every refusal, skip reason, already-open and the invited plural has copy in every locale", () => {
+  it("every refusal, skip reason, already-open, online-game-exists and the invited plural has copy in every locale", () => {
     const keys = [
       ...OPEN_ROUND_REFUSALS.map((r) => OPEN_ROUND_REFUSAL_KEYS[r]),
       ...OPEN_ROUND_SKIP_REASONS.map((r) => OPEN_ROUND_SKIP_KEYS[r]),
       OPEN_ROUND_ALREADY_OPEN_KEY,
+      ONLINE_GAME_EXISTS_KEY,
       `${OPEN_ROUND_INVITED_KEY}.one`,
       `${OPEN_ROUND_INVITED_KEY}.other`,
     ];
@@ -36,7 +38,7 @@ describe("open-round copy", () => {
       // The plural carries its count.
       expect(DICTS[loc][`${OPEN_ROUND_INVITED_KEY}.other`]).toContain("{count}");
     }
-    expect(checked).toBe(LOCALES.length * (OPEN_ROUND_REFUSALS.length + OPEN_ROUND_SKIP_REASONS.length + 3));
+    expect(checked).toBe(LOCALES.length * (OPEN_ROUND_REFUSALS.length + OPEN_ROUND_SKIP_REASONS.length + 4));
     expect(OPEN_ROUND_REFUSALS.length).toBeGreaterThan(0);
   });
 
@@ -46,6 +48,7 @@ describe("open-round copy", () => {
         ...OPEN_ROUND_REFUSALS.map((r) => DICTS[loc][OPEN_ROUND_REFUSAL_KEYS[r]]),
         ...OPEN_ROUND_SKIP_REASONS.map((r) => DICTS[loc][OPEN_ROUND_SKIP_KEYS[r]]),
         DICTS[loc][OPEN_ROUND_ALREADY_OPEN_KEY],
+        DICTS[loc][ONLINE_GAME_EXISTS_KEY],
       ];
       expect(new Set(texts).size, loc).toBe(texts.length);
     }

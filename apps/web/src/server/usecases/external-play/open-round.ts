@@ -9,8 +9,9 @@ import "server-only";
 //   - Refusals come first and write NOTHING: authorisation, an offline
 //     division (422), then `division_not_started`, `clock_not_playable`
 //     (addendum 1 — T6 gates a clock only when it CHANGES, so a pre-gate
-//     stored clock is re-checked here), `no_fixtures`, `not_paired`,
-//     `not_scheduled`.
+//     stored clock is re-checked here), `no_fixtures`, `not_paired`. A board
+//     with no start time is served (ruling 2026-10-10): `not_scheduled` was
+//     deleted, since the guard no longer refuses any such case.
 //   - The invite record is the per-seat stamp (invite.ts). Opening invites
 //     every seat of the round that can still take an invite and has not been
 //     invited for THIS open — idempotent per seat. One invite per player, per
@@ -83,7 +84,6 @@ type RoundFixtureRow = {
   status: string;
   homeEntrantId: string | null;
   awayEntrantId: string | null;
-  scheduledAt: Date | null;
 };
 
 type Board = { f: OnlinePlayFixture; seats: [InviteSeat, InviteSeat] };
@@ -157,8 +157,7 @@ export async function openRound(
   if (!storedClockPlayable(st.config)) return { opened: false, reason: "clock_not_playable" };
 
   const rows = await sql<RoundFixtureRow[]>`
-    select id, status, home_entrant_id as "homeEntrantId", away_entrant_id as "awayEntrantId",
-           scheduled_at as "scheduledAt"
+    select id, status, home_entrant_id as "homeEntrantId", away_entrant_id as "awayEntrantId"
       from fixtures
      where stage_id = ${a.stageId} and round_no = ${a.roundNo}
      order by seq_in_round, id`;
@@ -171,9 +170,8 @@ export async function openRound(
   }
   // The empty case: no row at all, or only byes and settled boards.
   if (live.length === 0) return { opened: false, reason: "no_fixtures" };
-  // The guard (and the bridge row's NOT NULL scheduled_at_basis) serves only a
-  // board with a start time.
-  if (live.some((r) => r.scheduledAt === null)) return { opened: false, reason: "not_scheduled" };
+  // A board with no start time is NOT refused (ruling 2026-10-10): the window
+  // hangs off this open, and its bridge row is minted on `opened_at`.
 
   // Every board through THE guard. Each predicate it holds was checked above,
   // so a null here is the round changing underneath this call.
@@ -276,7 +274,7 @@ export async function openRound(
 
     const claims: Claim[] = [];
     for (const p of pending) {
-      await attachToOpen(tx, p.board.f, open.id);
+      await attachToOpen(tx, p.board.f, open);
       for (const seat of p.seats) {
         if (await claimSeat(tx, p.board.f.fixtureId, seat.colour, open.id, now)) {
           claims.push({ board: p.board, seat });

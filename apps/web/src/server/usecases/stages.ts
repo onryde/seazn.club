@@ -81,6 +81,7 @@ import {
   SWISS_PAIRING_NOT_SWISS_CODE,
   SWISS_PAIRING_NOT_SWISS_MESSAGE,
 } from "@/lib/swiss-pairing";
+import { ONLINE_GAME_EXISTS_CODE } from "@/lib/open-round";
 import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
 import { personalPointsLeaderboard } from "./americano";
@@ -2056,6 +2057,43 @@ export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: s
  */
 async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
+  // Online play (T19, controller rulings Q1 + pre-review 2026-10-10). A
+  // board's bridge row records who was INVITED to it, per seat; those seats
+  // are about to go, so a game-less row goes with them and the re-paired
+  // board is invited afresh when the organiser opens the round again.
+  //
+  // A board a game stands behind — a recorded challenge, or T9's
+  // `create_sent_at` marker (a create whose outcome is unknown: a game MAY
+  // exist) — is never re-paired: the whole clear is REFUSED and, the caller's
+  // transaction rolling back, nothing changes. The organiser voids the game
+  // first (T16). Checked HERE, in the transaction that clears the seats, with
+  // everything it reads locked:
+  //   - the fixture rows FOR UPDATE, first — a bridge row T9 mints now
+  //     (guard.ts `ensureBridgeRow`, a seat-conditional insert under a SHARE
+  //     lock on the fixture) waits for this transaction, then finds the
+  //     seats gone and writes nothing;
+  //   - the delete row-locks the game-less rows it takes, so a claim or
+  //     marker racing it waits, then updates nothing;
+  //   - `for update` on what remains, so a marker or challenge committed
+  //     before this read refuses the clear.
+  await tx`select id from fixtures where id in ${tx(ids)} order by id for update`;
+  await tx`
+    delete from fixture_external_play
+     where fixture_id in ${tx(ids)}
+       and challenge_id is null and create_sent_at is null`;
+  const [game] = await tx<{ fixture_id: string }[]>`
+    select fixture_id from fixture_external_play
+     where fixture_id in ${tx(ids)}
+       and (challenge_id is not null or create_sent_at is not null)
+     limit 1
+     for update`;
+  if (game) {
+    throw new HttpError(
+      409,
+      "An online game exists on a board this would clear. Void the game first, then try again.",
+      ONLINE_GAME_EXISTS_CODE,
+    );
+  }
   await tx`
     update fixtures set
       home_entrant_id = null,
@@ -2065,16 +2103,6 @@ async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<v
       home_slot_label = null,
       away_slot_label = null
     where id in ${tx(ids)}`;
-  // Online play (T19, controller ruling Q1 2026-10-10): a board's bridge row
-  // records who was INVITED to it, per seat. Those seats are gone, so the row
-  // goes with them — the re-paired board is invited afresh when the organiser
-  // opens the round again, in a fresh window. A row a game stands behind is
-  // left exactly as it is: a recorded challenge, or a create whose outcome is
-  // unknown (T9's `create_sent_at` marker — a game MAY exist).
-  await tx`
-    delete from fixture_external_play
-     where fixture_id in ${tx(ids)}
-       and challenge_id is null and create_sent_at is null`;
 }
 
 /**

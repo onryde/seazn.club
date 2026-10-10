@@ -74,10 +74,16 @@ export function bridgeTakesInvites(b: InviteBridgeFacts | null): boolean {
  * a fixture between rounds (openRound refuses a row that names another open,
  * loudly). A row with a game behind it is left exactly as it is.
  */
-export async function attachToOpen(db: AnySql, f: OnlinePlayFixture, roundOpenId: string): Promise<void> {
+export async function attachToOpen(
+  db: AnySql,
+  f: OnlinePlayFixture,
+  open: { id: string; roundOpenedAt: Date },
+): Promise<void> {
+  // A board with no start time is minted on the round's open (ruling
+  // 2026-10-10) — the basis the guard's stale check then never moves.
   await db`
     insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, round_open_id)
-    values (${f.fixtureId}, ${f.orgId}, ${f.scheduledAt}, ${roundOpenId})
+    values (${f.fixtureId}, ${f.orgId}, ${f.scheduledAt ?? open.roundOpenedAt}, ${open.id})
     on conflict (fixture_id) do update
        set round_open_id = excluded.round_open_id, updated_at = now()
      where fixture_external_play.status = 'pending'
@@ -128,7 +134,8 @@ export async function sendFixtureInvite(a: {
           orgName: f.orgName,
           opponentName: seat.opponent.displayName,
           roundNo: a.roundNo,
-          scheduledLabel: utcLabel(f.scheduledAt, locale),
+          // No start time ⇒ the game is on from the round's open (D12).
+          scheduledLabel: utcLabel(f.scheduledAt ?? a.roundOpenedAt, locale),
           deadlineLabel: utcLabel(deadline, locale),
           fixtureUrl,
         },
@@ -202,7 +209,7 @@ export async function resendExternalPlayNotice(
   if (!pos || !open) throw new HttpError(409, "Open the round before inviting its players", "ROUND_NOT_OPEN");
 
   // A no-op on a row a game stands behind (attachToOpen's own predicate).
-  await attachToOpen(sql, f, open.id);
+  await attachToOpen(sql, f, open);
   const seats = await boardSeats(f);
   let emailed = 0;
   for (const seat of seats) {

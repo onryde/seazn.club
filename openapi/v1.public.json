@@ -16285,7 +16285,7 @@
     },
     "/api/v1/stages/{id}/unpair": {
       "post": {
-        "summary": "Unpair latest Swiss round (shells kept) — clears sides on the highest fully seated round when it has no played results; Pair-minted bye awards do not block. 422 when the stage is not `swiss`",
+        "summary": "Unpair latest Swiss round (shells kept) — clears sides on the highest fully seated round when it has no played results; Pair-minted bye awards do not block. 422 when the stage is not `swiss`; 409 ONLINE_GAME_EXISTS when an online (Lichess) game exists, or may exist, on a board it would clear — nothing changes, void the game first",
         "tags": [
           "stages"
         ],
@@ -16444,6 +16444,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
