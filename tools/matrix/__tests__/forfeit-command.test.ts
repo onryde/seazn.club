@@ -312,6 +312,16 @@ describe("rule 10 — the required sequences, every step checked", () => {
       expect(lastForfeit(m)).toMatchObject({ code: "ABANDONED_SETTLE_OR_VOID" });
       return 1;
     } },
+    // The sweep's find on the merged W2b tree (seed 20261009, path 25:4:1:1:1, [Settle(0,0), Forfeit(0,0)]): once a
+    // settle has decided the abandoned match, D4 no longer applies (events.ts `abandonActive && settlement === null`,
+    // loop D review M-6). Nothing is left to settle or replay, so the forfeit falls to guarantee 4.
+    { name: "forfeit over a settled abandon", sport: "generic", play: async ({ m, d, sf1 }) => {
+      await run(m, d, "Settle", 0, 2);
+      expect(row(d, sf1).status).toBe("decided");
+      await forfeit(m, d, 0, "home", "walkover");
+      expect(lastForfeit(m)).toMatchObject({ code: "ALREADY_DECIDED" });
+      return 1;
+    } },
     { name: "void then forfeit", sport: "generic", play: async ({ m, d, sf1 }) => {
       await run(m, d, "Score", 0, 1);
       await run(m, d, "Void", 0, 0);
@@ -493,8 +503,8 @@ describe("rule 10 — fast-check: any sequence over Walkover, Forfeit, Void, Wit
   const ALL = [...COMMAND_KINDS, ...OPT_IN_KINDS];
   /** MATRIX_FC_SEED replays a CI red locally (model-settle.test.ts reads the same variable). */
   const SEED = Number(process.env.MATRIX_FC_SEED ?? 20261009);
-  const SPORTS = ["generic", "football", "boardgame"] as const;
-  const RUNS = 100;
+  const SPORTS = SPORT_KEYS;
+  const RUNS = 200;
   const CODES = ["INVALID_EVENT", "FORFEIT_REASON_WRONG_PHASE", "ABANDONED_SETTLE_OR_VOID", "ALREADY_DECIDED", "DOUBLE_WALKOVER_NO_NEXT_MATCH"] as const;
 
   async function sweep(seed: number) {
@@ -520,10 +530,9 @@ describe("rule 10 — fast-check: any sequence over Walkover, Forfeit, Void, Wit
     return totals;
   }
 
-  // Three sports, not the registry (cost: 100 runs of up to 30 commands each): one per forfeit phase table — generic
-  // (walkovers in pre only), football (a team sport, its lineups) and chess (walkovers in play and tie-break, D3).
-  // The per-state table above sweeps the registry.
-  it("over one knockout shape and three sports: invariants hold, Forfeit is accepted (a double walkover among them) and refused by each of the table's codes, and the sweep replays from its seed", async () => {
+  // The registry, 200 runs a sport (both sweeps ~2.4s). Since a settle lifts D4 (loop D review M-6) an unsettled
+  // abandon is only Settle → Void → Forfeit on one fixture, and three sports at 100 runs never drew it.
+  it("over one knockout shape and every sport: invariants hold, Forfeit is accepted (a double walkover among them) and refused by each of the table's codes, and the sweep replays from its seed", async () => {
     const totals = await sweep(SEED);
     expect(totals.runs).toBe(SPORTS.length * RUNS);
     expect(totals.steps).toBeGreaterThan(0);

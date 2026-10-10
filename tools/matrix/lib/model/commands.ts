@@ -472,7 +472,7 @@ const FORFEIT_W_MAX = FORFEIT_SIDES.length * FORFEIT_REASONS.length - 1;
 
 /** What the product answers a forfeit the model draws, by the plan's rule tables — the first that applies decides:
  *  PF-2 (the server refuses `withdrew` from every writer but the withdrawal cascade, INVALID_EVENT); D3 R1 (`both` with
- *  any reason but walkover, INVALID_EVENT); D4 (an active abandon, ABANDONED_SETTLE_OR_VOID); R0 (the match is over:
+ *  any reason but walkover, INVALID_EVENT); D4 (an active abandon nothing has settled, ABANDONED_SETTLE_OR_VOID); R0 (the match is over:
  *  guarantee 4, ALREADY_DECIDED — a HELD match, needs_decision, is left to the product: the cascade's own withdrew is
  *  admitted there, PF-1, and the model cannot see that rule whole); R2/R3 (a walkover outside the sport's declared
  *  `walkoverPhases ?? ["pre"]`, or `both` in a tie-break, FORFEIT_REASON_WRONG_PHASE); R4 (retired or disqualified
@@ -514,7 +514,10 @@ export function forfeitVerdict(m: ModelState, f: FixtureModel, by: ForfeitSide, 
   if (reason === "withdrew") return refuse("INVALID_EVENT");
   if (by === "both" && reason !== "walkover") return refuse("INVALID_EVENT");
   const ledger = knownLedger(f);
-  if (liveEntries(ledger).some((e) => e.type === "core.abandon")) return refuse("ABANDONED_SETTLE_OR_VOID");
+  // D4 holds only while nothing has settled the abandon (events.ts: `abandonActive && settlement === null`, review M-6):
+  // a settled abandon is decided, so the forfeit falls to guarantee 4 (ALREADY_DECIDED) below.
+  const live = liveEntries(ledger);
+  if (live.some((e) => e.type === "core.abandon") && !live.some((e) => e.type === "core.settle")) return refuse("ABANDONED_SETTLE_OR_VOID");
   if (f.status === "needs_decision") return "either";
   const phase = forfeitPhaseOf(m, f, ledger);
   if (phase === null) return "either";
