@@ -364,6 +364,13 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     const lo = this.loserFeeds.get(f.id);
     const loser = w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id;
     if (lo !== undefined && loser !== null) Object.assign(this.fixtures.find((x) => x.id === lo.to)!, { [KEY[lo.side]]: loser });
+    // scoring.ts resolveBracketSeats after fillSlot (loop F, X-WD-3): an arrival beside a seat its withdrawn entrant
+    // left walks over at once.
+    for (const e of [to, lo]) {
+      if (e === undefined || (this.vacant.get(e.to)?.size ?? 0) === 0) continue;
+      const stage = this.stages.find((s) => s.id === this.fixtures.find((x) => x.id === e.to)!.stage_id);
+      if (stage !== undefined) this.#resolveSeats(stage);
+    }
   }
   #markVacant(fixtureId: string, side: Side): void {
     this.vacant.set(fixtureId, (this.vacant.get(fixtureId) ?? new Set<Side>()).add(side));
@@ -386,7 +393,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
         const lone = bye ? f.home_entrant_id : vac.has("away") ? f.home_entrant_id : vac.has("home") ? f.away_entrant_id : null;
         if (lone === null) continue;
         f.status = "forfeited";
-        f.outcome = { kind: "award", winner: lone };
+        f.outcome = { kind: "award", winner: lone, loser: null, reason: "bye" }; // awardSeededByes (W2b C-5)
         this.#feed(f);
         changed = true;
       }
