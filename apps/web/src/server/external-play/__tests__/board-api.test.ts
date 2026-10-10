@@ -527,7 +527,9 @@ describe("recovery lookups — White's outgoing challenges and ongoing games (T9
   it("listOutgoingChallenges GETs /api/challenge with the token as a bearer", async () => {
     const f = vi.fn(async () => res(JSON.stringify({ in: [], out: [OUT_CHALLENGE] }), 200));
     expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("lio_w")).toEqual({
-      ok: true, challenges: [{ id: "C8fNpisS", destUserId: "mary", status: "created" }],
+      // N1 (fix round 2): the fields recovery matches on are kept, as the
+      // spec declares them; the shape is the spec's — measurement owed (T17).
+      ok: true, challenges: [{ id: "C8fNpisS", destUserId: "mary", status: "created", rated: false, variantKey: "standard", timeControl: { type: "clock", limit: 300, increment: 3 }, color: "white" }],
     });
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://li.test/api/challenge");
@@ -564,8 +566,35 @@ describe("recovery lookups — White's outgoing challenges and ongoing games (T9
   it("listOutgoingChallenges: an open challenge (destUser null, spec) is read, with no destination", async () => {
     const f = vi.fn(async () => res(JSON.stringify({ out: [{ ...OUT_CHALLENGE, destUser: null }] }), 200));
     expect(await api(f as unknown as typeof fetch).listOutgoingChallenges("t")).toEqual({
-      ok: true, challenges: [{ id: "C8fNpisS", destUserId: null, status: "created" }],
+      ok: true, challenges: [{ id: "C8fNpisS", destUserId: null, status: "created", rated: false, variantKey: "standard", timeControl: { type: "clock", limit: 300, increment: 3 }, color: "white" }],
     });
+  });
+
+  it("listOutgoingChallenges: a match field it cannot read is NULL — never guessed, never a list failure — swept and counted", async () => {
+    // Identity fields (id, status, destUser) still fail the whole list (above);
+    // the fields a recovery MATCHES on are the matcher's to judge, so an
+    // unreadable one is null and the matcher holds the fixture (N1).
+    const cases: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+      ["rated absent", { rated: undefined }, { rated: null }],
+      ["rated a string", { rated: "false" }, { rated: null }],
+      ["variant absent", { variant: undefined }, { variantKey: null }],
+      ["variant with no key", { variant: { name: "Standard" } }, { variantKey: null }],
+      ["timeControl absent", { timeControl: undefined }, { timeControl: null }],
+      ["correspondence (declared, lila JsonView)", { timeControl: { type: "correspondence", daysPerTurn: 3 } },
+        { timeControl: { type: "correspondence", limit: null, increment: null } }],
+      ["clock with no limit", { timeControl: { type: "clock", increment: 3 } },
+        { timeControl: { type: "clock", limit: null, increment: 3 } }],
+      ["color absent", { color: undefined }, { color: null }],
+    ];
+    let checked = 0;
+    for (const [name, over, want] of cases) {
+      const f = vi.fn(async () => res(JSON.stringify({ out: [{ ...OUT_CHALLENGE, ...over }] }), 200));
+      const got = await api(f as unknown as typeof fetch).listOutgoingChallenges("t");
+      expect(got, name).toMatchObject({ ok: true });
+      expect(got.ok && got.challenges[0], name).toMatchObject({ id: "C8fNpisS", ...want });
+      checked += 1;
+    }
+    expect(checked).toBe(8);
   });
 
   it("listOngoingGames GETs /api/account/playing?nb=50 and reads the MEASURED entry", async () => {
@@ -633,8 +662,79 @@ describe("recovery lookups — White's outgoing challenges and ongoing games (T9
   });
 });
 
+describe("exportGameMeta — the static facts a recovery verifies a candidate on (T9 N1)", () => {
+  // MEASURED: export-live-clocks.json is the byte-for-byte body of
+  // GET /game/export/QbFCQzuF?moves=false (Accept: application/json, no
+  // Authorization) from spike-battery2.log — `clock.initial` is SECONDS
+  // (600 beside centisecond `clocks`), `variant` a plain string, `createdAt`
+  // epoch ms.
+  const MEASURED = raw("export-live-clocks.json");
+
+  it("GETs the export with moves=false and NO token, and reads the measured body", async () => {
+    const f = vi.fn(async () => res(MEASURED, 200));
+    expect(await api(f as unknown as typeof fetch).exportGameMeta("QbFCQzuF")).toEqual({
+      ok: true,
+      meta: {
+        gameId: "QbFCQzuF", rated: false, variant: "standard",
+        clockInitialSeconds: 600, clockIncrementSeconds: 5, createdAtMs: 1791541734490,
+      },
+    });
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://li.test/game/export/QbFCQzuF?moves=false");
+    expect(init.method).toBe("GET");
+    expect(new Headers(init.headers).has("authorization"), "the export is public").toBe(false);
+  });
+
+  it("a refusal keeps its class: 429 is rate_limited, 404 unavailable — never a meta", async () => {
+    let checked = 0;
+    for (const [status, code] of [[429, "rate_limited"], [404, "unavailable"], [503, "unavailable"]] as const) {
+      const f = vi.fn(async () => res("{}", status));
+      expect(await api(f as unknown as typeof fetch).exportGameMeta("g"), String(status)).toMatchObject({ ok: false, code });
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a body it cannot read as THIS game is unavailable — swept and counted", async () => {
+    const m = JSON.parse(MEASURED) as Record<string, unknown>;
+    const bad = ["not json", "null", "[]", "{}", JSON.stringify({ ...m, id: 7 }), JSON.stringify({ ...m, id: "OtherGm1" })];
+    let checked = 0;
+    for (const body of bad) {
+      const f = vi.fn(async () => res(body, 200));
+      expect(await api(f as unknown as typeof fetch).exportGameMeta("QbFCQzuF"), body)
+        .toMatchObject({ ok: false, code: "unavailable" });
+      checked += 1;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("a fact it cannot read is NULL, never a default — swept and counted", async () => {
+    const m = JSON.parse(MEASURED) as Record<string, unknown>;
+    const cases: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+      ["rated absent", { rated: undefined }, { rated: null }],
+      ["rated a string", { rated: "false" }, { rated: null }],
+      ["variant absent", { variant: undefined }, { variant: null }],
+      ["variant an object", { variant: { key: "standard" } }, { variant: null }],
+      ["no clock (a correspondence game)", { clock: undefined },
+        { clockInitialSeconds: null, clockIncrementSeconds: null }],
+      ["clock with no increment", { clock: { initial: 600 } }, { clockInitialSeconds: 600, clockIncrementSeconds: null }],
+      ["createdAt absent", { createdAt: undefined }, { createdAtMs: null }],
+      ["createdAt a string", { createdAt: "1791541734490" }, { createdAtMs: null }],
+    ];
+    let checked = 0;
+    for (const [name, over, want] of cases) {
+      const f = vi.fn(async () => res(JSON.stringify({ ...m, ...over }), 200));
+      const got = await api(f as unknown as typeof fetch).exportGameMeta("QbFCQzuF");
+      expect(got, name).toMatchObject({ ok: true });
+      expect(got.ok && got.meta, name).toMatchObject({ gameId: "QbFCQzuF", ...want });
+      checked += 1;
+    }
+    expect(checked).toBe(8);
+  });
+});
+
 describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () => {
-  it("each of the ten functions arms AbortSignal.timeout with the shared constant", async () => {
+  it("each of the eleven functions arms AbortSignal.timeout with the shared constant", async () => {
     const spy = vi.spyOn(AbortSignal, "timeout");
     const f = vi.fn(async () => res('{"ok":true,"id":"ch1"}', 200));
     const client = api(f as unknown as typeof fetch);
@@ -650,6 +750,7 @@ describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () =
       ["listOutgoingChallenges", () => client.listOutgoingChallenges("t")],
       ["listOngoingGames", () => client.listOngoingGames("t")],
       ["cancelChallenge", () => client.cancelChallenge({ token: "t", challengeId: "c" })],
+      ["exportGameMeta", () => client.exportGameMeta("g")],
     ];
     let checked = 0;
     for (const [name, run] of calls) {
@@ -660,8 +761,8 @@ describe("LICHESS_TIMEOUT_MS covers every call, and nothing streams (§4)", () =
     }
     // Anti-vacuity: the sweep must cover the whole surface, and zero is a
     // failure. If a function is added to the module, this count reds.
-    expect(checked).toBe(10);
-    expect(Object.keys(client).length).toBe(10);
+    expect(checked).toBe(11);
+    expect(Object.keys(client).length).toBe(11);
     spy.mockRestore();
   });
 

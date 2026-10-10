@@ -41,11 +41,16 @@ import "server-only";
 // recorded, or a 429 lila refused before acting). A claim that carries it —
 // stale because its minter died after Lichess answered and before the commit,
 // or re-armed by an organiser — first looks the game up: White's outgoing
-// challenges to Black, and White's ongoing games against Black. Found ⇒
-// adopt; both lookups succeed and find nothing ⇒ re-create; any lookup
-// fails ⇒ hold (`create_outcome_unknown`). The lookups run in parallel and
-// the marker write renews the claim, so no stretch of a claim's life spans
-// more than two Lichess calls (2 × LICHESS_TIMEOUT_MS < MINT_CLAIM_STALE_MS).
+// challenges to Black, and White's ongoing games against Black. A candidate
+// is adopted only when it is provably OUR create (fix round 2, N1): unrated,
+// standard, the fixture's clock, and created within [create_sent_at − 60 s,
+// now] — an ongoing game is verified through its export, a challenge on its
+// own fields. Exactly one such game ⇒ adopt; none, with every lookup read ⇒
+// re-create; two, or any candidate that cannot be verified, or any lookup
+// failing ⇒ hold (`create_outcome_unknown`). The lookups run in parallel,
+// then the exports in parallel, and the marker write renews the claim, so no
+// stretch of a claim's life spans more than two Lichess call-times
+// (2 × LICHESS_TIMEOUT_MS < MINT_CLAIM_STALE_MS).
 //
 // A GAME THIS CALL MADE BUT COULD NOT RECORD (its claim lost mid-flight) is
 // cancelled at Lichess, best-effort, with White's token — unless another
@@ -58,15 +63,18 @@ import {
   acceptChallenge,
   cancelChallenge,
   createChallengeToUser,
+  exportGameMeta,
   listOngoingGames,
   listOutgoingChallenges,
+  type GameMeta,
+  type OutgoingChallenge,
 } from "@/server/external-play/lichess/board-api";
 import { roundOpenFor } from "@/server/external-play/round-open";
 import { assertTimeControl, type TimeControl } from "@/server/external-play/time-controls";
 import type { BoardErrorCode, NeedsReason } from "@/server/external-play/types";
 import { MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
 import { log } from "@/server/logger";
-import { assertLichessConsentForPlay, getLichessAccessToken } from "../external-accounts";
+import { getLichessAccessToken } from "../external-accounts";
 import {
   effectiveBridge,
   ensureBridgeRow,
@@ -77,11 +85,14 @@ import {
   type OnlinePlayFixture,
   type Side,
 } from "./guard";
-import { isPlayableFixtureStatus, seatPlayer } from "./preflight";
+import { isPlayableFixtureStatus, playGrantRefusal, seatPlayer, type GrantRefusal } from "./preflight";
 
 export type CreateOutcome =
   | { created: true; gameId: string }
-  | { created: false; reason: "not_ready" | "already" | "unplayable" | "provider_error" | "no_person" };
+  | {
+      created: false;
+      reason: "not_ready" | "already" | "unplayable" | "provider_error" | "no_person" | GrantRefusal;
+    };
 
 export type CreateGameDeps = { now?: Date; publish?: (fixtureId: string) => Promise<void> };
 
@@ -146,9 +157,12 @@ export async function createGameIfReady(
   // a consent stamp AND every scope in PLAY_SCOPES (board:play to move,
   // challenge:write for White's create, challenge:read for the crash-recovery
   // lookup). Both players, or the game can be
-  // created and then not played.
+  // created and then not played. The seat asks the same gate first (fix round
+  // 2); this stays as defence, and answers by NAME, never a bare not_ready —
+  // T14's re-link screen is drawn on these two reasons.
   for (const userId of [homeUserId, awayUserId]) {
-    if (!(await hasPlayGrant(userId))) return { created: false, reason: "not_ready" };
+    const refused = await playGrantRefusal(userId);
+    if (refused) return { created: false, reason: refused };
   }
 
   // M12: creation succeeding proves nothing about playability, so the clock
@@ -169,6 +183,13 @@ export async function createGameIfReady(
     seatPlayer({ fixtureId, personId: homePersonId }, { now }),
     seatPlayer({ fixtureId, personId: awayPersonId }, { now }),
   ]);
+  // A seat refused on the grant keeps its name (an unlink between our gate
+  // and the seat); every other seat refusal is "not ready yet".
+  for (const seat of seats) {
+    if (!seat.seated && (seat.reason === "lichess_link_required" || seat.reason === "lichess_reconsent_required")) {
+      return { created: false, reason: seat.reason };
+    }
+  }
   if (seats.some((s) => !s.seated)) return { created: false, reason: "not_ready" };
 
   // Colour is READ from the pairing. White's token creates, so White's
@@ -329,7 +350,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   let accepted = false;
   let sentHere = false;
   if (claimRow.create_sent_at !== null) {
-    const found = await findSentGame(plan, whiteToken);
+    const found = await findSentGame(plan, whiteToken, claimRow.create_sent_at, () => fixedNow ?? new Date());
     if (found.kind === "unknown") {
       const held = await holdForOrganiser(fixtureId, claim, {
         needsReason: "create_outcome_unknown",
@@ -337,9 +358,10 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
       });
       return held ? { stage: "held" } : { stage: "lost" };
     }
-    if (found.kind !== "none") {
+    if (found.kind === "game") {
+      // An ongoing game at Lichess: already accepted, so nothing to accept.
       gameId = found.id;
-      accepted = found.kind === "game";
+      accepted = true;
     }
   }
 
@@ -421,15 +443,67 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   return { stage: "created", gameId };
 }
 
+/** What an earlier claimant's send left at Lichess, as far as can be shown.
+ *  Only an ongoing GAME is ever adopted: a challenge cannot be bound to the
+ *  marker in time (below), so at best it is unverified. */
 type SentGame =
   | { kind: "none" }
-  | { kind: "challenge"; id: string }
   | { kind: "game"; id: string }
   | { kind: "unknown"; why: string };
 
 /** Challenge statuses that are not a live invitation (ChallengeStatus,
  *  lichess-org/api spec): such a challenge can never become this game. */
 const CLOSED_CHALLENGE = new Set(["canceled", "declined"]);
+
+/** N1 (controller ruling, fix round 2): a candidate counts as ours only if it
+ *  was created within [create_sent_at − SENT_SKEW_MS, now]. The marker is
+ *  written before the send; the skew allows for lila's clock against ours. */
+const SENT_SKEW_MS = 60_000;
+
+type Verdict = "ours" | "not_ours" | "unverified";
+
+/** A candidate's facts, each true (as our create made it), false (differs)
+ *  or null (cannot be read). ANY difference proves it is not ours; otherwise
+ *  any unreadable fact leaves it unverified — never adopted on a guess. */
+function verdictOf(facts: Array<boolean | null>): Verdict {
+  if (facts.some((f) => f === false)) return "not_ours";
+  if (facts.some((f) => f === null)) return "unverified";
+  return "ours";
+}
+const fact = <T>(v: T | null, ok: (v: T) => boolean): boolean | null => (v === null ? null : ok(v));
+
+/** An ongoing game, judged on its export's static facts (board-api
+ *  exportGameMeta; `clock.initial` is SECONDS there, as `plan.tc` is). */
+function gameVerdict(m: GameMeta, plan: CreationPlan, sentAt: Date, now: Date): Verdict {
+  return verdictOf([
+    fact(m.rated, (r) => r === false),
+    fact(m.variant, (v) => v === "standard"),
+    fact(m.clockInitialSeconds, (x) => x === plan.tc.limitSeconds),
+    fact(m.clockIncrementSeconds, (x) => x === plan.tc.incrementSeconds),
+    fact(m.createdAtMs, (t) => t >= sentAt.getTime() - SENT_SKEW_MS),
+    fact(m.createdAtMs, (t) => t <= now.getTime()),
+  ]);
+}
+
+/** A challenge not (yet) a game, judged on its own fields — the shape is the
+ *  API spec's; measurement owed (T17). Our create sends rated=false,
+ *  variant=standard, color=white and the fixture's clock. */
+function challengeVerdict(c: OutgoingChallenge, plan: CreationPlan): Verdict {
+  const tc = c.timeControl;
+  // A declared non-clock type (correspondence, unlimited) is not ours.
+  const isClock = tc === null ? null : tc.type === "clock";
+  return verdictOf([
+    fact(c.rated, (r) => r === false),
+    fact(c.variantKey, (v) => v === "standard"),
+    tc !== null && tc.type === "clock" ? fact(tc.limit, (x) => x === plan.tc.limitSeconds) : isClock,
+    tc !== null && tc.type === "clock" ? fact(tc.increment, (x) => x === plan.tc.incrementSeconds) : isClock,
+    fact(c.color, (x) => x === "white"),
+    // createdAt: ChallengeJson carries none (lichess-org/api ChallengeJson;
+    // lila modules/challenge/src/main/JsonView.scala at c91f1d09d), so the
+    // time bound can never be shown for a challenge.
+    null,
+  ]);
+}
 
 /**
  * I2's lookup: did an earlier claimant's create reach Lichess? Both lists are
@@ -438,9 +512,17 @@ const CLOSED_CHALLENGE = new Set(["canceled", "declined"]);
  * only proof of absence may re-create. A candidate is White's challenge to
  * Black that is still open, or White's ongoing game, as White, against Black;
  * one already recorded on any bridge row is another fixture's game, not ours.
- * Two candidates cannot be told apart, so they are "unknown" too.
+ * Each surviving candidate is then VERIFIED (N1): a game through its export
+ * (in parallel — one more call-time), a challenge on its own fields; an id in
+ * both lists is the game. One verified game is adopted; two are "unknown"
+ * (ambiguous); any candidate that cannot be verified is "unknown" too.
  */
-async function findSentGame(plan: CreationPlan, whiteToken: string): Promise<SentGame> {
+async function findSentGame(
+  plan: CreationPlan,
+  whiteToken: string,
+  sentAt: Date,
+  clock: () => Date,
+): Promise<SentGame> {
   const [outgoing, ongoing] = await Promise.all([
     listOutgoingChallenges(whiteToken),
     listOngoingGames(whiteToken),
@@ -450,23 +532,44 @@ async function findSentGame(plan: CreationPlan, whiteToken: string): Promise<Sen
   if (!ongoing.complete) return { kind: "unknown", why: "ongoing_list:page_full" };
 
   const black = plan.black.lichessId.toLowerCase();
-  const candidates = new Map<string, "challenge" | "game">();
+  const challenges = new Map<string, OutgoingChallenge>();
   for (const c of outgoing.challenges) {
-    if (c.destUserId?.toLowerCase() === black && !CLOSED_CHALLENGE.has(c.status)) candidates.set(c.id, "challenge");
+    if (c.destUserId?.toLowerCase() === black && !CLOSED_CHALLENGE.has(c.status)) challenges.set(c.id, c);
   }
+  const games = new Set<string>();
   for (const g of ongoing.games) {
-    if (g.color === "white" && g.opponentId?.toLowerCase() === black) candidates.set(g.gameId, "game");
+    if (g.color === "white" && g.opponentId?.toLowerCase() === black) games.add(g.gameId);
   }
-  if (candidates.size > 0) {
+  const all = [...new Set([...challenges.keys(), ...games])];
+  if (all.length > 0) {
     const recorded = await sql<{ challenge_id: string }[]>`
-      select challenge_id from fixture_external_play where challenge_id = any(${[...candidates.keys()]})`;
-    for (const r of recorded) candidates.delete(r.challenge_id);
+      select challenge_id from fixture_external_play where challenge_id = any(${all})`;
+    for (const r of recorded) {
+      challenges.delete(r.challenge_id);
+      games.delete(r.challenge_id);
+    }
   }
-  const ids = [...candidates.keys()];
-  if (ids.length === 0) return { kind: "none" };
-  if (ids.length > 1) return { kind: "unknown", why: `ambiguous: ${ids.join(",")}` };
-  const id = ids[0]!;
-  return { kind: candidates.get(id)!, id };
+
+  const gameIds = [...games];
+  const metas = await Promise.all(gameIds.map((id) => exportGameMeta(id)));
+  const now = clock();
+  const ours: string[] = [];
+  const unverified: string[] = [];
+  const tally = (id: string, v: Verdict) => {
+    if (v === "ours") ours.push(id);
+    else if (v === "unverified") unverified.push(id);
+  };
+  gameIds.forEach((id, i) => {
+    const m = metas[i]!;
+    tally(id, m.ok ? gameVerdict(m.meta, plan, sentAt, now) : "unverified");
+  });
+  for (const [id, c] of challenges) {
+    if (!games.has(id)) tally(id, challengeVerdict(c, plan));
+  }
+  if (unverified.length > 0) return { kind: "unknown", why: `unverified: ${unverified.join(",")}` };
+  if (ours.length > 1) return { kind: "unknown", why: `ambiguous: ${ours.join(",")}` };
+  if (ours.length === 1) return { kind: "game", id: ours[0]! };
+  return { kind: "none" };
 }
 
 /** Minor b: a game this call created and could not record. Cancel it with
@@ -555,23 +658,6 @@ async function noteThrottled(fixtureId: string, err: CreationRateLimited): Promi
  *  silent: an operator can find the stray game by id. */
 function reportUnrecorded(fixtureId: string, challengeId: string, why: string): void {
   log.error({ fixtureId, challengeId, why }, "lichess: created a challenge this fixture does not record");
-}
-
-/** T2's assertLichessConsentForPlay, read as a boolean. Only its two 422
- *  refusals mean "not ready"; anything else (a database error) propagates. */
-async function hasPlayGrant(userId: string): Promise<boolean> {
-  try {
-    await assertLichessConsentForPlay(userId);
-    return true;
-  } catch (err) {
-    if (
-      err instanceof HttpError &&
-      (err.code === "LICHESS_LINK_REQUIRED" || err.code === "LICHESS_RECONSENT_REQUIRED")
-    ) {
-      return false;
-    }
-    throw err;
-  }
 }
 
 /** T5's setup gate, read as a nullable. Only INVALID_TIME_CONTROL means

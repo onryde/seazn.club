@@ -40,7 +40,7 @@ import {
 } from "../external-play/preflight";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { withdrawEntrantCascade } from "../withdrawal";
-import { unlinkLichess } from "../external-accounts";
+import { PLAY_SCOPES, unlinkLichess } from "../external-accounts";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 
 /** The round is opened ten minutes before the scheduled time in these
@@ -228,6 +228,17 @@ async function meetingRows(fixtureId: string): Promise<number> {
   const rows = await sql<{ fixture_id: string }[]>`
     select fixture_id from fixture_video_meetings where fixture_id = ${fixtureId}`;
   return rows.length;
+}
+
+/** The grant every link made before spec §3.1's 2026-10-10 amendment carries
+ *  — typed, not read from PLAY_SCOPES: it is what the earlier consent screen
+ *  granted, and the play gate now refuses it (fix round 1b). */
+const PRE_AMENDMENT_GRANT = ["board:play", "challenge:write"];
+async function narrowGrant(userId: string): Promise<void> {
+  await sql`update user_external_accounts set scopes = ${sql.array(PRE_AMENDMENT_GRANT)} where user_id = ${userId}`;
+}
+async function restoreGrant(userId: string): Promise<void> {
+  await sql`update user_external_accounts set scopes = ${sql.array([...PLAY_SCOPES])} where user_id = ${userId}`;
 }
 
 /** A refusal that must carry no token and must not have touched RealtimeKit. */
@@ -1175,7 +1186,11 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
     // From the RULING, not the code: a token only once every other check has
     // passed, and only for the caller's own participant.
     const TOKEN_BEARING = new Set(["camera_required", "camera_lost"]);
-    const TOKENLESS = new Set(["window_closed", "not_a_player", "round_not_open", "fixture_not_playable", "video_unavailable"]);
+    const TOKENLESS = new Set([
+      "window_closed", "not_a_player", "round_not_open", "fixture_not_playable", "video_unavailable",
+      // Fix round 2: the play grant, checked before any token is minted.
+      "lichess_link_required", "lichess_reconsent_required",
+    ]);
     expect(
       [...SEAT_REFUSAL_REASONS].sort(),
       "the code's reason list is exactly the ruling's — a new reason needs a row here",
@@ -1206,6 +1221,16 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
       rtk.failWhen((m, p) => (m === "GET" && p.endsWith("/active-session") ? json(503, { success: false }) : null));
       seen.set("video_unavailable", await claim(s, "home", rtk));
     }
+    {
+      const s = await req();
+      await sql`delete from user_external_accounts where user_id = ${s.home.userId}`;
+      seen.set("lichess_link_required", await claim(s, "home", fakeRealtimeKit()));
+    }
+    {
+      const s = await req();
+      await narrowGrant(s.home.userId);
+      seen.set("lichess_reconsent_required", await claim(s, "home", fakeRealtimeKit()));
+    }
     const camS = await req();
     {
       seen.set("camera_required", await claim(camS, "home", fakeRealtimeKit()));
@@ -1228,6 +1253,86 @@ describe.skipIf(!process.env.DATABASE_URL)("which refusals carry a token (contro
     await expectOwnToken(camS, "home", seen.get("camera_required")!);
     await expectOwnToken(lostS, "home", seen.get("camera_lost")!);
     expect(checked, "anti-vacuity: every refusal reason produced once").toBe(SEAT_REFUSAL_REASONS.length);
+  });
+});
+
+// ─── The play grant at the seat (fix round 2, controller ruling) ──────────
+//
+// T2's gate (assertLichessConsentForPlay) is asked by the SEAT, after the
+// identity checks and before any token is minted, so a player whose grant is
+// missing or stale is told so by name — the re-link screen's two reasons —
+// instead of being seated into a room whose game can never be created.
+
+describe.skipIf(!process.env.DATABASE_URL)("the play grant is checked at the seat (fix round 2)", () => {
+  it("no link, or a stale grant, is refused BY NAME under every camera policy — no token, no RealtimeKit call — swept and counted", async () => {
+    const arrange: Array<[string, (s: Seeded) => Promise<void>]> = [
+      ["lichess_link_required", async (s) => {
+        // The real writer; its revoke goes to Lichess over global fetch.
+        const revoke = vi.fn(async () => new Response(null, { status: 200 }));
+        vi.stubGlobal("fetch", revoke);
+        try {
+          await unlinkLichess(s.home.userId);
+        } finally {
+          vi.unstubAllGlobals();
+        }
+        expect(revoke, "premise: the real unlink ran").toHaveBeenCalledTimes(1);
+      }],
+      ["lichess_reconsent_required", (s) => narrowGrant(s.home.userId)],
+    ];
+    let checked = 0;
+    for (const policy of ["off", "optional", "required"] as const) {
+      for (const [reason, run] of arrange) {
+        const s = await seed({ cameraPolicy: policy });
+        await run(s);
+        const rtk = fakeRealtimeKit();
+        expectInertRefusal(await claim(s, "home", rtk), reason, rtk);
+        expect(await participantRows(s.fixtureId), `${policy}/${reason}: nothing minted`).toEqual([]);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: three policies × two refusals").toBe(6);
+  });
+
+  it("the positive pair: the full grant, consented, is seated — under off with no RealtimeKit call", async () => {
+    const s = await seed({ cameraPolicy: "off" });
+    await narrowGrant(s.home.userId);
+    await restoreGrant(s.home.userId); // re-consented: the full grant again
+    const rtk = fakeRealtimeKit();
+    expect(await claim(s, "home", rtk)).toEqual({ seated: true, participant: null });
+    expect(rtk.http).toEqual([]);
+  });
+
+  it("RE-ENTRY after T+20 by a player whose grant was downgraded since is refused, no token; the opponent, grant intact, re-enters", async () => {
+    const s = await seed({ cameraPolicy: "required" });
+    const rtk = fakeRealtimeKit();
+    await seatBothLive(s, rtk);
+    await recordGame(s, { status: "live" });
+    await narrowGrant(s.home.userId);
+    const late = fakeRealtimeKit();
+    expectInertRefusal(await claim(s, "home", late, LATE), "lichess_reconsent_required", late);
+    const opponent = await claim(s, "away", rtk, LATE);
+    expect(opponent.seated, "the opponent re-enters").toBe(true);
+  });
+
+  it("a refusal that re-linking cannot cure comes FIRST: a board that cannot be played, an unopened round, a closed window — swept and counted", async () => {
+    const cases: Array<[string, () => Promise<{ s: Seeded; at: Date }>]> = [
+      ["fixture_not_playable", async () => {
+        const s = await seed({ cameraPolicy: "required" });
+        await sql`update fixtures set status = 'decided' where id = ${s.fixtureId}`;
+        return { s, at: NOW };
+      }],
+      ["round_not_open", async () => ({ s: await seed({ cameraPolicy: "required", roundOpenedAt: undefined }), at: NOW })],
+      ["window_closed", async () => ({ s: await seed({ cameraPolicy: "required" }), at: LATE })],
+    ];
+    let checked = 0;
+    for (const [reason, arrange] of cases) {
+      const { s, at } = await arrange();
+      await narrowGrant(s.home.userId);
+      const rtk = fakeRealtimeKit();
+      expectInertRefusal(await claim(s, "home", rtk, at), reason, rtk);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
   });
 });
 
@@ -1475,7 +1580,11 @@ type Act =
   | { kind: "create" }
   | { kind: "start" }
   | { kind: "end"; to: "finished" | "needs_organiser" }
-  | { kind: "foreign" };
+  | { kind: "foreign" }
+  // Fix round 2: a player's grant goes stale (the pre-amendment grant) or is
+  // restored by re-consenting.
+  | { kind: "narrow"; side: Side }
+  | { kind: "relink"; side: Side };
 
 const side = fc.constantFrom<Side>("home", "away");
 const act: fc.Arbitrary<Act> = fc.oneof(
@@ -1494,6 +1603,8 @@ const act: fc.Arbitrary<Act> = fc.oneof(
     weight: 1,
   },
   { arbitrary: fc.constant<Act>({ kind: "foreign" }), weight: 1 },
+  { arbitrary: side.map((x): Act => ({ kind: "narrow", side: x })), weight: 1 },
+  { arbitrary: side.map((x): Act => ({ kind: "relink", side: x })), weight: 1 },
 );
 /** Edge weighting. LIVE: a seated-and-live player, so the lose/re-verify
  *  paths (camera_lost) are reached, not just possible. CREATED+late: T9's game
@@ -1520,15 +1631,36 @@ const CREATED_PREFIX: Act[] = [
 const GAME_PREFIX: Act[] = [...CREATED_PREFIX, { kind: "start" }];
 const GAME_LEFT_PREFIX: Act[] = [...GAME_PREFIX, { kind: "leave", side: "home" }, { kind: "late" }];
 const ENDED_PREFIX: Act[] = [...GAME_PREFIX, { kind: "end", to: "finished" }, { kind: "late" }];
-const FOREIGN_PREFIX: Act[] = [{ kind: "open" }, { kind: "foreign" }];
+// Fix round 2: the prefixes whose counter was reached only by the random
+// tail now END WITH the claim they exist for — adding two actions to the
+// alphabet moved the seeded tails, and a path reached by luck went to zero.
+const FOREIGN_PREFIX: Act[] = [{ kind: "open" }, { kind: "foreign" }, { kind: "late" }, { kind: "seat", side: "home" }];
+/** Fix round 2: a seated player's grant goes stale after the game, then T+20
+ *  passes — the re-entry the grant must refuse. */
+const STALE_REENTRY_PREFIX: Act[] = [
+  ...GAME_PREFIX, { kind: "narrow", side: "home" }, { kind: "late" }, { kind: "seat", side: "home" },
+];
+/** Two downgrades reach `off`, then a seat. */
+const OFF_PREFIX: Act[] = [{ kind: "open" }, { kind: "downgrade" }, { kind: "downgrade" }, { kind: "seat", side: "home" }];
+/** A stale grant refused, re-consented, seated again. */
+const RELINK_PREFIX: Act[] = [
+  { kind: "open" },
+  { kind: "narrow", side: "home" },
+  { kind: "seat", side: "home" },
+  { kind: "relink", side: "home" },
+  { kind: "seat", side: "home" },
+];
 const prefix = fc.oneof(
   { arbitrary: fc.constant<Act[]>([]), weight: 2 },
   { arbitrary: fc.constant<Act[]>(LIVE_PREFIX), weight: 1 },
-  { arbitrary: fc.constant<Act[]>([...CREATED_PREFIX, { kind: "late" }]), weight: 1 },
+  { arbitrary: fc.constant<Act[]>([...CREATED_PREFIX, { kind: "late" }, { kind: "seat", side: "home" }]), weight: 1 },
   { arbitrary: fc.constant<Act[]>(GAME_PREFIX), weight: 2 },
   { arbitrary: fc.constant<Act[]>(GAME_LEFT_PREFIX), weight: 1 },
   { arbitrary: fc.constant<Act[]>(ENDED_PREFIX), weight: 1 },
   { arbitrary: fc.constant<Act[]>(FOREIGN_PREFIX), weight: 1 },
+  { arbitrary: fc.constant<Act[]>(STALE_REENTRY_PREFIX), weight: 1 },
+  { arbitrary: fc.constant<Act[]>(OFF_PREFIX), weight: 1 },
+  { arbitrary: fc.constant<Act[]>(RELINK_PREFIX), weight: 1 },
 );
 const scenario = fc
   .tuple(prefix, fc.array(act, { minLength: 1, maxLength: 16 }))
@@ -1572,6 +1704,12 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
         violationsRequiredNotLive: 0,
         violationsBeforeOpen: 0,
         violationsOutsideWindow: 0,
+        // Fix round 2: the play grant.
+        narrows: 0,
+        relinks: 0,
+        reconsentRefused: 0,
+        lateReentryReconsentRefused: 0,
+        violationsSeatedWithoutGrant: 0,
       };
 
       await fc.assert(
@@ -1593,6 +1731,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
           const pid: Record<Side, string | null> = { home: null, away: null };
           const peers: Record<Side, number> = { home: 0, away: 0 };
           const verified: Record<Side, boolean> = { home: false, away: false };
+          const grant: Record<Side, boolean> = { home: true, away: true };
 
           /** One claim, checked against the model. Returns whether it seated. */
           const check = async (sd: Side, where: string): Promise<boolean> => {
@@ -1610,6 +1749,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
             // needs a live player — a null tile is no exemption.
             if (got.seated && m.policy === "required" && !live) totals.violationsRequiredNotLive += 1;
             if (m.late && !reentry && (got.seated || carriesToken)) totals.violationsOutsideWindow += 1;
+            if (got.seated && !grant[sd]) totals.violationsSeatedWithoutGrant += 1;
 
             if (!m.roundOpen) {
               expect(got, where).toEqual({ seated: false, reason: "round_not_open" });
@@ -1624,6 +1764,14 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
               if (m.game === "none") totals.lateNoGame += 1;
               else if (m.game === "others") totals.lateForeignGame += 1;
               else totals.lateGameOver += 1;
+              return false;
+            }
+            if (!grant[sd]) {
+              // After every check re-linking cannot cure; before any token.
+              expect(got, where).toEqual({ seated: false, reason: "lichess_reconsent_required" });
+              expect(rtk.http.length, `${where}: no RealtimeKit call`).toBe(httpBefore);
+              totals.reconsentRefused += 1;
+              if (m.late) totals.lateReentryReconsentRefused += 1;
               return false;
             }
             if (m.late) {
@@ -1728,6 +1876,18 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
                 m.bridge = x.to;
                 totals.ends += 1;
               }
+            } else if (x.kind === "narrow") {
+              if (grant[x.side]) {
+                await narrowGrant(s[x.side].userId);
+                grant[x.side] = false;
+                totals.narrows += 1;
+              }
+            } else if (x.kind === "relink") {
+              if (!grant[x.side]) {
+                await restoreGrant(s[x.side].userId);
+                grant[x.side] = true;
+                totals.relinks += 1;
+              }
             } else if (x.kind === "foreign") {
               if (m.game === "none") {
                 await recordGame(s, { status: "ready", white: `other-w-${RUN}`, black: `other-b-${RUN}` });
@@ -1780,6 +1940,11 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random orderings of open /
       expect(totals.lateReentryCameraRefused, "re-entry past T+20, a camera refusal with a token").toBeGreaterThan(0);
       expect(totals.lateReentryOnReady, "re-entry on a `ready` bridge").toBeGreaterThan(0);
       expect(totals.lateReentryOnLive, "re-entry on a `live` bridge").toBeGreaterThan(0);
+      expect(totals.violationsSeatedWithoutGrant, "INVARIANT: nobody seated without the full grant").toBe(0);
+      expect(totals.narrows, "grants gone stale").toBeGreaterThan(0);
+      expect(totals.relinks, "grants restored").toBeGreaterThan(0);
+      expect(totals.reconsentRefused, "re-consent refusals").toBeGreaterThan(0);
+      expect(totals.lateReentryReconsentRefused, "re-entry past T+20 refused on a stale grant").toBeGreaterThan(0);
     },
     300_000,
   );

@@ -35,6 +35,7 @@ const board = vi.hoisted(() => ({
   listOutgoingChallenges: vi.fn(),
   listOngoingGames: vi.fn(),
   cancelChallenge: vi.fn(),
+  exportGameMeta: vi.fn(),
 }));
 vi.mock("@/server/external-play/lichess/board-api", () => board);
 
@@ -201,6 +202,7 @@ describe.skipIf(!process.env.DATABASE_URL)("property: random interleavings of se
       board.listOutgoingChallenges.mockResolvedValue({ ok: false, code: "unavailable", raw: "unexpected lookup" });
       board.listOngoingGames.mockResolvedValue({ ok: false, code: "unavailable", raw: "unexpected lookup" });
       board.cancelChallenge.mockResolvedValue({ ok: true });
+      board.exportGameMeta.mockResolvedValue({ ok: false, code: "unavailable", raw: "unexpected export" });
       preflight.seatPlayer.mockImplementation(async (a: { personId: string }) =>
         current!.arrived.has(a.personId)
           ? { seated: true, participant: null }

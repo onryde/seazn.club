@@ -16,6 +16,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
+import { assertLichessConsentForPlay } from "../external-accounts";
 import {
   RealtimeKitError,
   addParticipant,
@@ -47,14 +48,26 @@ export const SEAT_REFUSAL_REASONS = [
   "round_not_open",
   "fixture_not_playable",
   "video_unavailable",
+  // Fix round 2 (controller ruling): T2's play gate, asked by the seat.
+  "lichess_link_required",
+  "lichess_reconsent_required",
 ] as const;
+
+/** The two seat refusals T2's play gate can produce. */
+export type GrantRefusal = "lichess_link_required" | "lichess_reconsent_required";
 
 export type SeatResult =
   | { seated: true; participant: ParticipantToken | null }
   | { seated: false; reason: "camera_required" | "camera_lost"; participant: ParticipantToken }
   | {
       seated: false;
-      reason: "window_closed" | "not_a_player" | "round_not_open" | "fixture_not_playable" | "video_unavailable";
+      reason:
+        | "window_closed"
+        | "not_a_player"
+        | "round_not_open"
+        | "fixture_not_playable"
+        | "video_unavailable"
+        | GrantRefusal;
     };
 
 type Video = {
@@ -71,6 +84,22 @@ export type PreflightDeps = {
 };
 
 const REAL_VIDEO: Video = { ensureMeeting, addParticipant, hasLiveVideoPublisher, refreshParticipantToken };
+
+/** T2's assertLichessConsentForPlay as a seat reason: its two 422s map to
+ *  `lichess_link_required` / `lichess_reconsent_required` (the codes T14's
+ *  re-link screen is drawn on); anything else — a 503
+ *  LICHESS_TOKEN_UNAVAILABLE, a database error — is not a consent refusal and
+ *  propagates. T9 reuses it, so creation names the same two reasons. */
+export async function playGrantRefusal(userId: string | null): Promise<GrantRefusal | null> {
+  try {
+    await assertLichessConsentForPlay(userId);
+    return null;
+  } catch (err) {
+    if (err instanceof HttpError && err.code === "LICHESS_LINK_REQUIRED") return "lichess_link_required";
+    if (err instanceof HttpError && err.code === "LICHESS_RECONSENT_REQUIRED") return "lichess_reconsent_required";
+    throw err;
+  }
+}
 
 /** Controller ruling Q2 (2026-10-09): a board is playable only while it is
  *  `scheduled` or `in_play`. A withdrawal leaves it `abandoned` (league
@@ -111,6 +140,14 @@ export async function seatPlayer(
   // T+20 is the deadline to be seated and have the game created, not a cap on
   // the game (spec §3.6): a seated player reloading mid-game comes back in.
   if (phase === "closed" && !isReentry(f, player)) return { seated: false, reason: "window_closed" };
+
+  // T2's play gate (fix round 2, controller ruling): AFTER the checks above —
+  // a board that cannot be played, a round not open or a window closed are
+  // not cured by re-linking, so they answer first — and BEFORE any token is
+  // minted, under EVERY camera policy (`off` seats with no video at all). A
+  // seat is a promise that T9 can create the game and this player can move.
+  const refused = await playGrantRefusal(player.userId);
+  if (refused) return { seated: false, reason: refused };
 
   const policy = await fixtureCameraPolicy(a.fixtureId);
   if (policy === "off") {

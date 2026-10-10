@@ -247,8 +247,16 @@ export async function assertPersonIdsLinkedForOnlinePlay(
  *  timestamp AND every scope in PLAY_SCOPES, because a grant from the
  *  identity-only flow cannot submit a move and would 401 mid-game, one
  *  without `challenge:write` cannot create White's challenge, and one without
- *  `challenge:read` cannot be recovered after a crashed create. Called by T8 (seat) and T9
- *  (creation); T14 renders the re-consent screen on this code. */
+ *  `challenge:read` cannot be recovered after a crashed create.
+ *
+ *  Production callers, both through preflight.ts `playGrantRefusal`, which maps
+ *  the two 422s to the reasons `lichess_link_required` /
+ *  `lichess_reconsent_required` and lets anything else propagate:
+ *  - T8's `seatPlayer`, after its identity, board and window checks and
+ *    before any participant token is minted (fix round 2);
+ *  - T9's `createGameIfReady`, as defence before the seats, answering the
+ *    same two reasons.
+ *  T14 renders the re-link screen on those reasons. */
 export async function assertLichessConsentForPlay(userId: string | null): Promise<void> {
   if (!userId) {
     throw new HttpError(
