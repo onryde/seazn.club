@@ -1168,6 +1168,13 @@ Elsewhere the text is the controller's record.
      and the harness cite rulings 53 + 106; the earlier comment calling the knockout extension "owner ruling 53" was
      the orchestrator's reading and is corrected (class 17).
 
+107. **W2b does not fix `tools/bench`** (2026-10-10, owner: "update the index, don't fix"). Answers plan Q2. The bench
+     breakage W2b causes (`pack-schema.ts:1098-1108` outcome-kind exhaustiveness check, the `award.method` readers at
+     `run-suite.ts:1643` / `oracle.ts:1320`, and the `suite11`/`_tiny` payloads) is recorded as owed in the bench
+     index's status log (`bench-product-value/bench-prompts/_INDEX.md`, 2026-10-10) and is not edited by W2b. Task 10
+     Step 4 is dropped. Known cost: turbo typecheck and the bench vitest step red on the W2b PR and on main after
+     merge until the bench programme lands its fix.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
