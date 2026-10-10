@@ -67,21 +67,20 @@ export function bridgeTakesInvites(b: InviteBridgeFacts | null): boolean {
 
 /**
  * Make sure the board's bridge row exists and names THIS round's open, so a
- * seat stamp can be written on it. A row that names another open (or none)
- * has its stamps cleared as it is attached: a stamp records an invite for the
- * open its row names, and a row moving opens has invited nobody for this one.
- * A row with a game behind it is left exactly as it is.
+ * seat stamp can be written on it. An existing row names either no open
+ * (written by another entry point, e.g. T9's ensureBridgeRow — and then it
+ * carries no stamp, by CHECK) or this one: there is one open row per
+ * (stage, round), it is never deleted (FK RESTRICT), and no product path moves
+ * a fixture between rounds (openRound refuses a row that names another open,
+ * loudly). A row with a game behind it is left exactly as it is.
  */
 export async function attachToOpen(db: AnySql, f: OnlinePlayFixture, roundOpenId: string): Promise<void> {
   await db`
     insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, round_open_id)
     values (${f.fixtureId}, ${f.orgId}, ${f.scheduledAt}, ${roundOpenId})
     on conflict (fixture_id) do update
-       set round_open_id = excluded.round_open_id,
-           white_emailed_at = null, black_emailed_at = null,
-           updated_at = now()
-     where fixture_external_play.round_open_id is distinct from excluded.round_open_id
-       and fixture_external_play.status = 'pending'
+       set round_open_id = excluded.round_open_id, updated_at = now()
+     where fixture_external_play.status = 'pending'
        and fixture_external_play.challenge_id is null
        and fixture_external_play.create_sent_at is null`;
 }
