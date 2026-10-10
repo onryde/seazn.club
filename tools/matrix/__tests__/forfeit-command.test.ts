@@ -444,6 +444,27 @@ describe("rule 10 — the required sequences, every step checked", () => {
     for (const [name, n] of Object.entries(judged)) expect(n, `${name}: the table was never judged`).toBeGreaterThan(0);
   });
 
+  it("a withdrawn entrant is not judged by the table check: a table that lists only its active entrants passes, and the forfeit's active side is still judged (the witness of the check's withdrawn exclusion)", async () => {
+    class DropsWithdrawn extends ModelFakeDriver {
+      override async standings(stageId: string, poolId: string | null) {
+        const out = await super.standings(stageId, poolId);
+        const gone = new Set(this.entrants.filter((e) => e.status === "withdrawn").map((e) => e.id));
+        return { ...out, rows: out.rows.filter((r) => !gone.has(r.entrantId)) };
+      }
+    }
+    const { m, d } = await league("generic", () => new DropsWithdrawn({}));
+    await forfeit(m, d, 0, "away", "walkover");
+    const f = [...d.fixtures].find((x) => liveForfeits(d, x.id).length > 0)!;
+    // Seeded: the forfeit's home side withdrew and its cascade is done. Every command that withdraws runs a cascade,
+    // and the state after it is the point here.
+    const gone = f.home_entrant_id!;
+    d.entrants.find((e) => e.id === gone)!.status = "withdrawn";
+    m.withdrawn.add(gone);
+    const before = m.stepChecks.get(FORFEIT_TABLE_CHECK) ?? 0;
+    await checkStep(m, d);
+    expect((m.stepChecks.get(FORFEIT_TABLE_CHECK) ?? 0) - before, "the away side alone").toBe(1);
+  });
+
   it("a table that counts a voided forfeit again reds model-table-counts-one-result-per-forfeit by name (the league sequences above are its positive pair)", async () => {
     class CountsVoidedForfeits extends ModelFakeDriver {
       override async standings(stageId: string, poolId: string | null) {

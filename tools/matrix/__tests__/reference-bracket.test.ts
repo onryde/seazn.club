@@ -600,6 +600,23 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     expect(refused.length).toBe(3);
   });
 
+  it("through a driver: a W2b scenario on a bracket OWES its forfeits — a product whose fixtures are already under way when the hook looks leaves it nothing to forfeit, and the check fails by name '0 of 0 judged' (the sweep above is its positive pair)", async () => {
+    // Since review I-1 a refused BARE forfeit is a drive, so refusing walkovers no longer empties the count, and a
+    // refused retirement throws out of RT-PART by name. Zero forfeit drives is now the hook finding no scheduled fixture
+    // in any round. The play loop still decides every match, so the run looks whole, and only the owed rule reds.
+    class StartsUnderWay extends FakeKnockoutDriver {
+      override rows() { return super.rows().map((r) => (r.status === "scheduled" ? { ...r, status: "in_play" } : r)); }
+    }
+    const sport = "football";
+    const variant = offlineBuilderDefault(sport);
+    const spec: CaseSpec = { caseId: `knockout|${sport}|${variant}|WO-PRE`, row: "knockout", sport, variant, scenario: "WO-PRE", canary: false };
+    const out = await SCENARIOS["WO-PRE"].run({ driver: new StartsUnderWay(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+    const check = out.assertions.find((c) => c.id === "life-reference-bracket-finish")!;
+    expect(`${check.verdict}: ${check.evidence.join(" | ")}`).toMatch(/^fail: .*0 of 0 judged/);
+    // It is the forfeits that are missing, not the bracket: every decided match was still judged.
+    expect(check.checked).toBeGreaterThan(1);
+  });
+
   it("judgeDrive (review I-1): a refused drive is judged against the oracle's refusal — the same code passes, another code or a refusal the oracle does not make fails by name, and an accepted write the oracle refuses still fails", () => {
     const dwFinal = { asked: { kind: "double_walkover" } as const, next: { line: "none" } as const, status: "scheduled", outcome: null };
     const agree = judgeDrive(drive({ ...dwFinal, refusal: { status: 409, code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" } }));
