@@ -262,7 +262,8 @@ type CreationPlan = {
   fixtureId: string;
   homeEntrantId: string;
   awayEntrantId: string;
-  scheduledAt: Date;
+  /** The board's start time as planned; `null` ⇒ none (ruling 2026-10-10). */
+  scheduledAt: Date | null;
   roundOpenedAt: Date;
   whiteSide: Side;
   white: { userId: string; lichessId: string };
@@ -297,7 +298,7 @@ async function createAtDequeue(plan: CreationPlan, fixedNow: Date | undefined): 
   if (
     g.homeEntrantId !== plan.homeEntrantId ||
     g.awayEntrantId !== plan.awayEntrantId ||
-    g.scheduledAt.getTime() !== plan.scheduledAt.getTime()
+    (g.scheduledAt?.getTime() ?? null) !== (plan.scheduledAt?.getTime() ?? null)
   ) {
     return { stage: "refused" }; // re-paired or rescheduled while queued
   }

@@ -85,7 +85,9 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
     expect(await loadOnlinePlayFixture(fixture.id)).toBeNull();
   });
 
-  it("missing scheduled_at ⇒ null", async () => {
+  it("missing scheduled_at ⇒ SERVED, with scheduledAt null (ruling 2026-10-10: D12 anchors on the open)", async () => {
+    // Was "⇒ null" until the controller ruled that an unscheduled online
+    // Swiss board is playable; its bridge basis is the round's opened_at.
     const s = await seedOnlineChessFixture({
       onlinePlay: "lichess",
       divisionStarted: true,
@@ -93,7 +95,34 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
       linked: true,
     });
     await sql`update fixtures set scheduled_at = null where id = ${s.fixtureId}`;
-    expect(await loadOnlinePlayFixture(s.fixtureId)).toBeNull();
+    const f = await loadOnlinePlayFixture(s.fixtureId);
+    expect(f).not.toBeNull();
+    expect(f!.scheduledAt).toBeNull();
+  });
+
+  it("a NULL start time is never a reschedule: a pending, challenge-less row on ANY basis is not stale and not reset", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+    });
+    const basis = new Date(T.getTime() - 60 * 60_000);
+    await sql`
+      insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis)
+      values (${s.fixtureId}, ${s.orgId}, 'pending', ${basis})`;
+    await sql`update fixtures set scheduled_at = null where id = ${s.fixtureId}`;
+    const f = (await loadOnlinePlayFixture(s.fixtureId))!;
+    expect(f.bridge).not.toBeNull();
+    expect(isStale(f)).toBe(false);
+    expect(effectiveBridge(f)).toBe(f.bridge);
+    await resetStaleBridge(f); // a no-op
+    const again = (await loadOnlinePlayFixture(s.fixtureId))!;
+    expect(again.bridge!.scheduled_at_basis.getTime()).toBe(basis.getTime());
+    // positive pair: the moment the board gets a real time that differs from
+    // the basis, the same row IS stale.
+    await sql`update fixtures set scheduled_at = ${T} where id = ${s.fixtureId}`;
+    expect(isStale((await loadOnlinePlayFixture(s.fixtureId))!)).toBe(true);
   });
 
   it("missing home entrant ⇒ null", async () => {
@@ -153,7 +182,7 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
       bridge: null,
     });
     if (!f) throw new Error("unreachable — toMatchObject above requires non-null");
-    expect(f.scheduledAt.getTime()).toBe(T.getTime());
+    expect(f.scheduledAt?.getTime()).toBe(T.getTime());
   });
 
   it(

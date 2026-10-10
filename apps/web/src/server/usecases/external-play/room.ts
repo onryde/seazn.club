@@ -45,8 +45,10 @@ export type RoomIdentity = { kind: "session"; userId: string } | { kind: "token"
 export type MatchRoomView = {
   fixtureId: string;
   phase: RoomPhase;
-  opensAt: string;
-  deadline: string;
+  /** `null` ⇒ nothing to show yet: the round is not opened and the board has
+   *  no start time (ruling 2026-10-10). */
+  opensAt: string | null;
+  deadline: string | null;
   you: { side: Side; colour: "white" | "black"; checkedIn: boolean };
   opponent: { name: string; checkedIn: boolean };
   status: ExternalPlayStatus;
@@ -102,7 +104,9 @@ async function resolveWithSides(
   }
   const claims = await verifyMatchRoomToken(identity.token).catch(() => null);
   if (!claims || claims.fixtureId !== f.fixtureId) return null;
-  if (Date.parse(claims.scheduledAt) !== f.scheduledAt.getTime()) return null; // rescheduled ⇒ link dead
+  // rescheduled ⇒ link dead. A board with no start time matches no `sat`
+  // claim at all (nothing mints one for it).
+  if (f.scheduledAt === null || Date.parse(claims.scheduledAt) !== f.scheduledAt.getTime()) return null;
   const player = [home, away].find((s) => s.personId === claims.personId) ?? null;
   return player ? { player, home, away } : null;
 }
@@ -189,12 +193,13 @@ async function buildView(
     away.lichess !== null &&
     (!bridge || (bridge.status === "pending" && bridge.challenge_id === null));
 
-  const w = windowFor(anchor ?? f.scheduledAt);
+  const basis = anchor ?? f.scheduledAt;
+  const w = basis === null ? null : windowFor(basis);
   return {
     fixtureId: f.fixtureId,
     phase,
-    opensAt: w.opensAt.toISOString(),
-    deadline: w.deadline.toISOString(),
+    opensAt: w?.opensAt.toISOString() ?? null,
+    deadline: w?.deadline.toISOString() ?? null,
     you: { side: player.side, colour, checkedIn: youCheckedIn },
     opponent: { name: opponent.displayName, checkedIn: opponentCheckedIn },
     status,

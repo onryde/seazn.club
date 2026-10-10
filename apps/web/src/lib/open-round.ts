@@ -8,13 +8,7 @@ import type { DictionaryKey } from "@/lib/i18n-keys";
 
 /** Why a round was NOT opened. Each is refused before anything is written —
  *  no stamp, no invite. */
-export const OPEN_ROUND_REFUSALS = [
-  "no_fixtures",
-  "not_paired",
-  "not_scheduled",
-  "division_not_started",
-  "clock_not_playable",
-] as const;
+export const OPEN_ROUND_REFUSALS = ["no_fixtures", "not_paired", "division_not_started", "clock_not_playable"] as const;
 export type OpenRoundRefusal = (typeof OPEN_ROUND_REFUSALS)[number];
 
 /** Why one board of an opened round was not invited. Reported per fixture. */
@@ -41,7 +35,6 @@ export const OPEN_ROUND_ALREADY_OPEN_KEY: DictionaryKey = "externalPlay.openRoun
 export const OPEN_ROUND_REFUSAL_KEYS: Readonly<Record<OpenRoundRefusal, DictionaryKey>> = {
   no_fixtures: "externalPlay.openRound.noFixtures",
   not_paired: "externalPlay.openRound.notPaired",
-  not_scheduled: "externalPlay.openRound.notScheduled",
   division_not_started: "externalPlay.openRound.divisionNotStarted",
   clock_not_playable: "externalPlay.openRound.clockNotPlayable",
 };
@@ -50,3 +43,9 @@ export const OPEN_ROUND_SKIP_KEYS: Readonly<Record<OpenRoundSkipReason, Dictiona
   window_closed: "externalPlay.openRound.skipped.windowClosed",
   send_failed: "externalPlay.openRound.skipped.sendFailed",
 };
+
+/** A re-pair (Swiss unpair, or the pre-Start delete-entrant that unpairs) is
+ *  refused while a game stands — or may stand — behind any board it would
+ *  clear (controller ruling, 2026-10-10). The organiser voids the game first. */
+export const ONLINE_GAME_EXISTS_CODE = "ONLINE_GAME_EXISTS";
+export const ONLINE_GAME_EXISTS_KEY: DictionaryKey = "externalPlay.onlineGameExists";

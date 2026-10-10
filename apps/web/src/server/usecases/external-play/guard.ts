@@ -6,6 +6,7 @@ import { sql } from "@/lib/db";
 import { mapBoardgameClockToLichess, type BoardgameClockInput } from "@/server/external-play/clock";
 import type { ExternalPlayStatus, LichessClock, NeedsReason } from "@/server/external-play/types";
 import { getFixtureState } from "@/server/usecases/fixtures";
+import { roundOpenFor } from "@/server/external-play/round-open";
 import { mintOrgOwnerAuth } from "./auth";
 
 export type Side = "home" | "away";
@@ -48,7 +49,11 @@ export type OnlinePlayFixture = {
   orgName: string;
   competitionSlug: string;
   divisionSlug: string;
-  scheduledAt: Date;
+  /** `null` ⇒ the board has no start time (an unscheduled online Swiss round,
+   *  controller ruling 2026-10-10). D12 hangs every window on the round's
+   *  open, so a board needs no start time to be played; its bridge row's
+   *  `scheduled_at_basis` is then the round's `opened_at`. */
+  scheduledAt: Date | null;
   homeEntrantId: string;
   awayEntrantId: string;
   fixtureStatus: string;
@@ -106,7 +111,8 @@ type LoadedRow = Omit<OnlinePlayFixture, "clock" | "bridge"> & {
  * `null` unless every predicate holds: boardgame sport, `onlinePlay:
  * 'lichess'` in the division config, the division has left setup/scheduled
  * (a fixture is not scoreable before then — `scoreEvent` would refuse it
- * anyway), the fixture has a schedule and both entrants, the fixture is not
+ * anyway), the fixture has both entrants (a start time is NOT required —
+ * D12 anchors the window on the round's open; ruling 2026-10-10), the fixture is not
  * finalized/cancelled, and the division's clock config maps onto a Lichess
  * clock (a legacy Bronstein/delay config is simply not online — Task 11's
  * settings save refuses saving one for an `onlinePlay: 'lichess'` division,
@@ -128,7 +134,6 @@ export async function loadOnlinePlayFixture(fixtureId: string): Promise<OnlinePl
        and d.sport_key = 'boardgame'
        and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
        and d.status not in ('setup', 'scheduled')
-       and f.scheduled_at is not null
        and f.home_entrant_id is not null
        and f.away_entrant_id is not null
        and f.status not in ('finalized', 'cancelled')`;
@@ -166,6 +171,10 @@ export function isStale(f: OnlinePlayFixture): boolean {
     !!b &&
     b.status === "pending" &&
     b.challenge_id === null &&
+    // A board with NO start time is never "rescheduled": its basis is the
+    // round's open (ruling 2026-10-10). Only a move to a real time that
+    // differs from the basis is a reschedule.
+    f.scheduledAt !== null &&
     b.scheduled_at_basis.getTime() !== f.scheduledAt.getTime()
   );
 }
@@ -189,10 +198,11 @@ export function effectiveBridge(f: OnlinePlayFixture): BridgeRow | null {
  * create to a second claimant — two games at Lichess for one board.
  */
 export async function resetStaleBridge(f: OnlinePlayFixture): Promise<void> {
-  if (!isStale(f)) return;
+  const at = f.scheduledAt;
+  if (at === null || !isStale(f)) return;
   await sql`
     update fixture_external_play
-       set scheduled_at_basis = ${f.scheduledAt},
+       set scheduled_at_basis = ${at},
            white_side = null, white_lichess_id = null,
            black_lichess_id = null, expires_at = null,
            white_emailed_at = null, black_emailed_at = null,
@@ -200,16 +210,44 @@ export async function resetStaleBridge(f: OnlinePlayFixture): Promise<void> {
            last_error = null, updated_at = now()
      where fixture_id = ${f.fixtureId}
        and status = 'pending' and challenge_id is null
-       and scheduled_at_basis <> ${f.scheduledAt}`;
+       and scheduled_at_basis <> ${at}`;
 }
 
 /** Idempotent — the first caller across every entry point creates the row;
  *  every other one is a no-op. */
 export async function ensureBridgeRow(f: OnlinePlayFixture): Promise<void> {
+  const basis = await bridgeBasis(f);
+  // Minted only while the fixture still seats the entrants `f` was read
+  // with, under a SHARE lock on the fixture row. A Swiss seat clear
+  // (stages.ts `clearSwissFixtureSeats`) locks the fixture rows FOR UPDATE
+  // before it checks for games, so a mint racing it waits, then re-reads
+  // the seats it cleared and writes nothing: no row — hence no claim, no
+  // marker, no game — can appear behind a check that never saw one
+  // (pre-review ruling 2026-10-10). Every caller's next write is
+  // conditional on the row and reads 0 rows as lost/busy.
   await sql`
     insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis)
-    values (${f.fixtureId}, ${f.orgId}, ${f.scheduledAt})
+    select fx.id, ${f.orgId}::uuid, ${basis}::timestamptz
+      from fixtures fx
+     where fx.id = ${f.fixtureId}
+       and fx.home_entrant_id = ${f.homeEntrantId}
+       and fx.away_entrant_id = ${f.awayEntrantId}
+       for share
     on conflict (fixture_id) do nothing`;
+}
+
+/** The basis a NEW bridge row is minted with: the board's start time, or —
+ *  for a board with none — its round's `opened_at` (ruling 2026-10-10). A
+ *  board with neither has no basis yet, and nothing may mint its row: every
+ *  writer runs only after the round is opened, so reaching this is a broken
+ *  premise, said loudly rather than left to a NOT NULL violation. */
+export async function bridgeBasis(f: OnlinePlayFixture, roundOpenedAt?: Date | null): Promise<Date> {
+  if (f.scheduledAt !== null) return f.scheduledAt;
+  const opened = roundOpenedAt ?? (await roundOpenFor(sql, f.fixtureId))?.roundOpenedAt ?? null;
+  if (opened === null) {
+    throw new Error(`bridgeBasis: fixture ${f.fixtureId} has no start time and its round is not open`);
+  }
+  return opened;
 }
 
 type SideRow = {
