@@ -4,3 +4,4 @@ export * from "./guard";
 export * from "./queue";
 export * from "./invite";
 export * from "./open-round";
+export * from "./play";
