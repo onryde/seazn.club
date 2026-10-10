@@ -15,6 +15,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import fc from "fast-check";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
@@ -256,6 +257,9 @@ function answerOf(e: Expect) {
 
 /** Lichess's OWN status list: the recorded OpenAPI enum (the same 14 as
  *  scalachess Status.scala), plus T3's explicit "unrecognised" marker. */
+const BRACKETS_ALL = StageKind.options.filter((k) => BRACKET_STAGE_KINDS.has(k));
+const DECIDING_ALL = StageKind.options.filter((k) => !BRACKET_STAGE_KINDS.has(k));
+
 const DECLARED_STATUSES: string[] = (() => {
   const dir = join(dirname(fileURLToPath(import.meta.url)), "../../external-play/__fixtures__/lichess");
   const text = readFileSync(join(dir, "openapi-GameStatusName.yaml"), "utf8");
@@ -914,5 +918,202 @@ describe.runIf(HAS_DB)("writeResultFrom — assumptions are guards", () => {
       code: "FOLD_STATUS_MISMATCH",
     });
     expect(await typesOf(g.fixtureId)).toEqual(["boardgame.pairing"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Property (TEST-STRATEGY rule 10): status × winner × stage kind × the
+// fixture's state before the game ends × a sequence of repeat and foreign
+// calls, against the rulebook above. Stratified: every (fixture state ×
+// outcome class) prefix runs exactly FOUR times, once per (bracket?, White
+// on away?) cell, so no path's counter rests on draw luck (a first cut drew
+// those freely and left `held_aborted` at 0 — measured). The status, winner,
+// stage kind within its class, and the call tail are drawn.
+// ---------------------------------------------------------------------------
+type Pre = "ready" | "live" | "started" | "held" | "withdrawn" | "voided" | "decided_by_hand";
+const PRE_STATES: readonly Pre[] = ["ready", "live", "started", "held", "withdrawn", "voided", "decided_by_hand"];
+/** The fixture already had its decision before Lichess's result arrived. */
+const SETTLED_BEFORE = new Set<Pre>(["withdrawn", "voided", "decided_by_hand"]);
+
+const W = fc.constantFrom<Colour>("white", "black");
+const CLASSES = {
+  decisive: fc.record({ status: fc.constantFrom("mate", "resign", "outoftime", "timeout"), winner: W }),
+  drawn: fc.oneof(
+    fc.record({ status: fc.constantFrom("draw", "stalemate", "insufficientMaterialClaim"), winner: fc.constant(null) }),
+    fc.record({ status: fc.constantFrom("outoftime", "timeout"), winner: fc.constant(null) }),
+  ),
+  aborted: fc.record({
+    status: fc.constantFrom("aborted", "noStart"),
+    winner: fc.constantFrom<Colour | null>("white", "black", null),
+  }),
+  organiser: fc.oneof(
+    fc.record({
+      status: fc.constantFrom("cheat", "variantEnd", "unknownFinish", "unrecognised"),
+      winner: fc.constantFrom<Colour | null>("white", "black", null),
+    }),
+    // Shapes Lichess never sends — held, never guessed.
+    fc.record({ status: fc.constantFrom("mate", "resign"), winner: fc.constant(null) }),
+    fc.record({ status: fc.constantFrom("draw", "stalemate", "insufficientMaterialClaim"), winner: W }),
+  ),
+  nonterminal: fc.record({
+    status: fc.constantFrom("created", "started"),
+    winner: fc.constantFrom<Colour | null>(null, "white"),
+  }),
+} as const;
+
+describe.runIf(HAS_DB)("writeResultFrom — property: status × fixture state × repeat calls against the rulebook", () => {
+  // One run per (bracket, whiteAway) cell — see the header.
+  const CELLS = [
+    { bracket: false, whiteAway: false },
+    { bracket: false, whiteAway: true },
+    { bracket: true, whiteAway: false },
+    { bracket: true, whiteAway: true },
+  ] as const;
+  const RUNS_PER_PREFIX = CELLS.length;
+  const PREFIXES = PRE_STATES.flatMap((pre) => (Object.keys(CLASSES) as (keyof typeof CLASSES)[]).map((cls) => ({ pre, cls })));
+  const totals: Record<string, number> = {};
+  const bump = (k: string) => (totals[k] = (totals[k] ?? 0) + 1);
+
+  async function snapshotOf(fixtureId: string) {
+    const ledger = await sql<{ id: string; type: string }[]>`
+      select id, type from score_events where fixture_id = ${fixtureId} order by seq`;
+    return { ledger, bridge: await bridgeOf(fixtureId), fixture: await fixtureOf(fixtureId) };
+  }
+
+  async function build(pre: Pre, kind: string, whiteAway: boolean): Promise<Game> {
+    const g = pre === "live" || pre === "withdrawn" ? await liveGame({ whiteAway }) : await readyGame({ whiteAway });
+    const auth = await mintOrgOwnerAuth(g.orgId);
+    const tip = async () => (await typesOf(g.fixtureId)).length;
+    if (pre === "started") await scoreEvent(auth, g.fixtureId, { expected_seq: await tip(), type: "core.start", payload: {} });
+    if (pre === "held") await holdForOrganiser({ fixtureId: g.fixtureId, reason: "token_revoked" });
+    if (pre === "withdrawn") await withdrawEntrantCascade(auth, g.black.entrantId);
+    if (pre === "voided") {
+      await scoreEvent(auth, g.fixtureId, { expected_seq: await tip(), type: "core.abandon", payload: { reason: "void" } });
+    }
+    if (pre === "decided_by_hand") {
+      await scoreEvent(auth, g.fixtureId, { expected_seq: await tip(), type: "core.start", payload: {} });
+      await scoreEvent(auth, g.fixtureId, {
+        expected_seq: await tip(),
+        type: "boardgame.result",
+        payload: { winner: g.home.entrantId, method: "adjudication" },
+      });
+    }
+    // The kind last, so every pre-state is built the way a league builds it
+    // (a withdrawal from a bracket fixture in phase `pre` is W2b's).
+    await sql`update stages set kind = ${kind} where id = ${g.stageId}`;
+    return g;
+  }
+
+  it("answers per the rulebook; writes at most one result; never decides a bracket draw; a repeat or foreign call changes nothing", { timeout: 600_000 }, async () => {
+    let runs = 0;
+    let checks = 0;
+    for (const { pre, cls } of PREFIXES) {
+      let k = 0; // this prefix's run index → its cell
+      await fc.assert(
+        fc.asyncProperty(
+          CLASSES[cls],
+          fc.constantFrom(...BRACKETS_ALL),
+          fc.constantFrom(...DECIDING_ALL),
+          fc.array(fc.constantFrom("same", "foreign"), { minLength: 0, maxLength: 2 }),
+          async (outcome, bracketKind, decidingKind, tail) => {
+            runs++;
+            const cell = CELLS[k++ % CELLS.length]!;
+            const kind = cell.bracket ? bracketKind : decidingKind;
+            const whiteAway = cell.whiteAway;
+            const g = await build(pre, kind, whiteAway);
+            const bracket = BRACKET_STAGE_KINDS.has(kind);
+            expect(bracket, "premise: the cell's kind is the cell's class").toBe(cell.bracket);
+            const s = snap(g, outcome.status === "unrecognised"
+              ? { status: "unrecognised", rawStatus: "laterStatus", winner: outcome.winner }
+              : { status: outcome.status, winner: outcome.winner });
+            const nonterminal = outcome.status === "created" || outcome.status === "started";
+            const e: Expect = nonterminal || !SETTLED_BEFORE.has(pre) ? rulebook(outcome.status, outcome.winner, bracket) : { wrote: "none" };
+            const key = resultIdempotencyKey(g.fixtureId, s);
+            const before = await snapshotOf(g.fixtureId);
+            let afterFirst: Awaited<ReturnType<typeof snapshotOf>> | null = null;
+
+            for (const [i, call] of ["same", ...tail].entries()) {
+              const label = `${pre}/${cls}/${outcome.status}/${outcome.winner}/${kind}/${whiteAway ? "wA" : "wH"} call ${i} ${call}`;
+              const out = await writeResultFrom(call === "same" ? s : { ...s, gameId: `${g.gameId}-other` }, g.fixtureId);
+              const now = await snapshotOf(g.fixtureId);
+              // Invariants after EVERY step.
+              expect(now.ledger.map((x) => x.type), `${label}: never a forfeit`).not.toContain("core.forfeit");
+              expect(now.ledger.filter((x) => x.type === "core.start").length, `${label}: one start at most`).toBeLessThanOrEqual(1);
+              const [{ n: keyed }] = await sql<{ n: number }[]>`
+                select count(*)::int as n from score_events where fixture_id = ${g.fixtureId} and idempotency_key = ${key}`;
+              expect(keyed, `${label}: our result at most once`).toBeLessThanOrEqual(1);
+              if (bracket) expect(now.fixture.outcome?.kind, `${label}: a bracket draw is never decided`).not.toBe("draw");
+              checks += 4;
+
+              if (call === "foreign") {
+                expect(out, `${label}: a foreign game is never written`).toEqual({ wrote: "none" });
+                expect(now, `${label}: nothing moved`).toEqual(afterFirst ?? before);
+                bump("foreign");
+                continue;
+              }
+              expect(out, label).toEqual(answerOf(e));
+              if (afterFirst !== null) {
+                expect(now, `${label}: a repeat changes nothing`).toEqual(afterFirst);
+                bump("replay_same");
+                continue;
+              }
+              afterFirst = now;
+              // Positive obligations of the FIRST call.
+              if (e.wrote === "decided" || e.wrote === "draw") {
+                expect(keyed, `${label}: the result IS recorded`).toBe(1);
+                const [ev] = await sql<{ payload: { winner: string | null; method?: string } }[]>`
+                  select payload from score_events where fixture_id = ${g.fixtureId} and idempotency_key = ${key}`;
+                const winner = e.wrote === "decided" ? entrantOf(g, outcome.winner!) : null;
+                expect(ev!.payload.winner, `${label}: winner entrant`).toBe(winner);
+                expect(ev!.payload.method ?? null, `${label}: method`).toBe(e.method);
+                expect(now.fixture.outcome?.kind, label).toBe(e.wrote === "decided" ? "win" : "draw");
+                expect(now.ledger.map((x) => x.type).slice(0, before.ledger.length), `${label}: appended, nothing rewritten`)
+                  .toEqual(before.ledger.map((x) => x.type));
+                expect(now.bridge, `${label}: the bridge is T11's to finish`).toEqual(before.bridge);
+                bump(e.wrote);
+                bump(pre === "started" ? "already_live" : "started_by_us");
+                if (e.wrote === "decided" && whiteAway) bump("white_away_written");
+                if (e.wrote === "decided" && bracket) bump("bracket_decisive_written");
+              } else if (e.wrote === "aborted" || e.wrote === "needs_organiser") {
+                expect(now.ledger, `${label}: a hold writes no event`).toEqual(before.ledger);
+                expect(now.bridge!.status, label).toBe("needs_organiser");
+                const reason = e.wrote === "aborted" ? "aborted" : e.reason;
+                expect(now.bridge!.needs_reason, `${label}: hold reason`).toBe(pre === "held" ? "token_revoked" : reason);
+                bump(e.wrote === "aborted" ? "held_aborted" : `held_${e.reason}`);
+                if (pre === "held") bump("first_diagnosis_kept");
+              } else {
+                expect(now, `${label}: nothing moved`).toEqual(before);
+                bump(nonterminal ? "none_nonterminal" : "none_settled");
+              }
+            }
+          },
+        ),
+        { numRuns: RUNS_PER_PREFIX, endOnFailure: true },
+      );
+    }
+    expect(runs, "anti-vacuity: the property ran").toBe(RUNS_PER_PREFIX * PREFIXES.length);
+    console.info(`[T12 property] runs=${runs} checks=${checks} ${JSON.stringify(totals)}`);
+    let checked = 0;
+    for (const path of [
+      "decided",
+      "draw",
+      "held_aborted",
+      "held_provider_error",
+      "held_tiebreak_owed",
+      "none_nonterminal",
+      "none_settled",
+      "replay_same",
+      "foreign",
+      "started_by_us",
+      "already_live",
+      "white_away_written",
+      "bracket_decisive_written",
+      "first_diagnosis_kept",
+    ]) {
+      expect(totals[path] ?? 0, `anti-vacuity: ${path}`).toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked).toBe(14);
+    expect(checks).toBeGreaterThan(0);
   });
 });
