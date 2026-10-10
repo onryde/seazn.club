@@ -56,6 +56,11 @@ vi.mock("@/server/external-play/lichess/board-api", () => board);
 const race = vi.hoisted(() => ({
   guardNullFor: null as string | null,
   afterSeats: null as null | (() => Promise<void>),
+  // `${fixtureId}|${colour}` whose whole sendFixtureInvite / releaseSeat call
+  // THROWS (outside the sender's own per-recipient catch): review M1.
+  sendThrows: new Set<string>(),
+  releaseThrows: new Set<string>(),
+  afterEnsure: null as null | (() => Promise<void>),
 }));
 vi.mock("../guard", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../guard")>();
@@ -63,12 +68,28 @@ vi.mock("../guard", async (importOriginal) => {
     ...actual,
     loadOnlinePlayFixture: async (id: string) =>
       race.guardNullFor === id ? null : actual.loadOnlinePlayFixture(id),
+    ensureBridgeRow: async (...args: Parameters<typeof actual.ensureBridgeRow>) => {
+      await actual.ensureBridgeRow(...args);
+      if (race.afterEnsure) {
+        const hook = race.afterEnsure;
+        race.afterEnsure = null;
+        await hook();
+      }
+    },
   };
 });
 vi.mock("../invite", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../invite")>();
   return {
     ...actual,
+    sendFixtureInvite: async (a: Parameters<typeof actual.sendFixtureInvite>[0]) => {
+      if (race.sendThrows.has(`${a.fixture.fixtureId}|${a.seat.colour}`)) throw new Error("staged: sender threw");
+      return actual.sendFixtureInvite(a);
+    },
+    releaseSeat: async (...args: Parameters<typeof actual.releaseSeat>) => {
+      if (race.releaseThrows.has(`${args[1]}|${args[2]}`)) throw new Error("staged: release failed");
+      return actual.releaseSeat(...args);
+    },
     boardSeats: async (f: Parameters<typeof actual.boardSeats>[0]) => {
       const seats = await actual.boardSeats(f);
       if (race.afterSeats) {
@@ -83,10 +104,16 @@ vi.mock("../invite", async (importOriginal) => {
 
 import { openRound, roundOpenedAt } from "../open-round";
 import { bridgeTakesInvites } from "../invite";
-import { seatPlayer } from "../preflight";
+import { organiserOverrideVideo, seatPlayer } from "../preflight";
 import { createGameIfReady } from "../create-game";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
-import { addFixture, generateStageFixtures, unpairSwissRound, createStages } from "../../stages";
+import {
+  addFixture,
+  generateStageFixtures,
+  rebuildStageFixtures,
+  unpairSwissRound,
+  createStages,
+} from "../../stages";
 import { deleteEntrant } from "../../entrants";
 import { patchDivision } from "../../divisions";
 import { moveFixture } from "../../schedule";
@@ -108,6 +135,9 @@ beforeEach(() => {
   mail.fail.clear();
   race.guardNullFor = null;
   race.afterSeats = null;
+  race.sendThrows.clear();
+  race.releaseThrows.clear();
+  race.afterEnsure = null;
   vi.clearAllMocks();
   __resetCreationQueue();
   board.createChallengeToUser.mockResolvedValue({ ok: true, challengeId: `gm-${randomUUID().slice(0, 12)}` });
@@ -300,6 +330,90 @@ describe.skipIf(!HAS_DB)("openRound — the window (Q2)", () => {
     expect(await bridgeOf(fixtureId)).toBeNull(); // nothing attached, nothing stamped
   });
 
+  // Review I1 (fix round 1, ruling 2026-10-10): "nobody invited" counts the
+  // stamps on EVERY bridge row bound to this open, whatever became of its
+  // board — a game, a result, a hold. Before the fix the neighbour dropped
+  // out of the count, the late board read "zero invited", and the WHOLE
+  // round's window was re-stamped past T+20.
+  const neighbour: [string, (fixtureId: string, t0: Date) => Promise<void>][] = [
+    [
+      "holds a game (real T9 create)",
+      async (f, t0) => {
+        const out = await createGameIfReady(f, { publish: async () => undefined, now: new Date(t0.getTime() + MIN) });
+        expect(out.created, "premise: the game was made").toBe(true);
+      },
+    ],
+    [
+      "had a game that then finished (result forced by SQL: T12 is not built)",
+      async (f, t0) => {
+        const out = await createGameIfReady(f, { publish: async () => undefined, now: new Date(t0.getTime() + MIN) });
+        expect(out.created, "premise: the game was made").toBe(true);
+        await sql`update fixture_external_play set status = 'finished' where fixture_id = ${f}`;
+        await sql`update fixtures set status = 'finalized' where id = ${f}`;
+      },
+    ],
+    [
+      "is held for the organiser (real T9 create, outcome unknown)",
+      async (f, t0) => {
+        board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "outcome_unknown", raw: "timeout" });
+        const out = await createGameIfReady(f, { publish: async () => undefined, now: new Date(t0.getTime() + MIN) });
+        expect(out).toEqual({ created: false, reason: "provider_error" });
+        expect((await bridgeOf(f))!.status, "premise: held").toBe("needs_organiser");
+      },
+    ],
+  ];
+  it.each(neighbour)(
+    "a late board after the window, while the round's only invited board %s ⇒ window_closed, opened_at UNCHANGED, nobody mailed",
+    async (_name, become) => {
+      const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, spares: 1 });
+      const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - 10 * MIN);
+      expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 2, skipped: [] });
+      await become(r.boards[0]!.fixtureId, t0);
+      const { fixtureId } = await lateBoard(r);
+      mail.sent.length = 0;
+
+      expect(await open(r, 1, new Date())).toEqual({
+        opened: false,
+        reason: "already_open",
+        skipped: [{ fixtureId, reason: "window_closed" }],
+      });
+      expect(mail.sent).toHaveLength(0);
+      expect((await stampRows(r.stageId))[0]!.opened_at.getTime(), "the round's window did not move").toBe(
+        t0.getTime(),
+      );
+      expect(await bridgeOf(fixtureId)).toBeNull();
+    },
+  );
+
+  it("a round whose only board was invited and then RESCHEDULED: after T+20 its re-invite is window_closed and opened_at does not move", async () => {
+    // The reschedule's reset (T7) clears the board's stamps so its players
+    // are re-mailed with the new time — inside the round's window. It must not
+    // read as "nobody was ever invited" and re-stamp the round.
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - 10 * MIN);
+    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 2, skipped: [] });
+    const fixtureId = r.boards[0]!.fixtureId;
+    await moveFixture(r.owner, fixtureId, { scheduled_at: "2026-10-01T16:00:00.000Z" });
+    mail.sent.length = 0;
+
+    expect(await open(r, 1, new Date())).toEqual({
+      opened: false,
+      reason: "already_open",
+      skipped: [{ fixtureId, reason: "window_closed" }],
+    });
+    expect(mail.sent).toHaveLength(0);
+    expect((await stampRows(r.stageId))[0]!.opened_at.getTime()).toBe(t0.getTime());
+    // positive pair: the same reschedule INSIDE the window re-invites that
+    // board, and the window still does not move.
+    const r2 = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const t1 = new Date(Date.now() - 5 * MIN);
+    await open(r2, 1, t1);
+    await moveFixture(r2.owner, r2.boards[0]!.fixtureId, { scheduled_at: "2026-10-01T16:00:00.000Z" });
+    mail.sent.length = 0;
+    expect(await open(r2, 1, new Date())).toEqual({ opened: true, invited: 2, skipped: [] });
+    expect((await stampRows(r2.stageId))[0]!.opened_at.getTime()).toBe(t1.getTime());
+  });
+
   it("positive pair: the same late board inside the window IS invited, and the window does not move", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, spares: 1 });
     const now = new Date();
@@ -340,6 +454,36 @@ describe.skipIf(!HAS_DB)("openRound — stamp before send, un-stamp on a failed 
     // left to invite.
     expect(await open(r)).toEqual({ opened: false, reason: "already_open", skipped: [] });
     expect(mail.sent).toHaveLength(4);
+  });
+
+  // Review M1: one seat's send throwing must not strand the seats after it.
+  // Staged in the order claims are sent: the FIRST board's white seat.
+  it("a send that THROWS fails that seat alone: every other seat is still mailed, it is un-stamped and reported, the audit is written", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+    const [b0, b1] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0]];
+    race.sendThrows.add(`${b0.fixtureId}|white`);
+    expect(await open(r)).toEqual({ opened: true, invited: 3, skipped: [{ fixtureId: b0.fixtureId, reason: "send_failed" }] });
+    expect(mail.sent).toHaveLength(3);
+    expect(mail.sent.filter((m) => m.fixtureUrl.includes(b1.fixtureId))).toHaveLength(2);
+    const row = (await bridgeOf(b0.fixtureId))!;
+    expect(row.white_emailed_at, "the thrown seat is un-stamped, so the next open retries it").toBeNull();
+    expect(row.black_emailed_at).not.toBeNull();
+    expect(await auditTypes(r.competitionId)).toEqual(["external_play.round_opened"]);
+    // ...and the retry is that seat alone.
+    race.sendThrows.clear();
+    mail.sent.length = 0;
+    expect(await open(r)).toEqual({ opened: true, invited: 1, skipped: [] });
+    expect(mail.sent).toHaveLength(1);
+  });
+
+  it("an un-stamp that THROWS leaves that seat stamped but REPORTED, and still mails every other seat and writes the audit", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+    const [b0, b1] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0]];
+    race.sendThrows.add(`${b0.fixtureId}|white`);
+    race.releaseThrows.add(`${b0.fixtureId}|white`);
+    expect(await open(r)).toEqual({ opened: true, invited: 3, skipped: [{ fixtureId: b0.fixtureId, reason: "send_failed" }] });
+    expect(mail.sent.filter((m) => m.fixtureUrl.includes(b1.fixtureId))).toHaveLength(2);
+    expect(await auditTypes(r.competitionId)).toEqual(["external_play.round_opened"]);
   });
 
   it("when EVERY send failed, the round holds no invited seat, so the re-open starts a fresh window", async () => {
@@ -478,9 +622,19 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
     expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 4, skipped: [] });
     expect(sentTo()).toEqual(emailsOf(r).sort());
     // The mail names the open as the start (no start time to name): the
-    // open's UTC hour and minute, never the epoch a NULL formats as.
-    const hhmm = t0.toISOString().slice(11, 16);
-    expect(mail.sent.map((m) => m.scheduledLabel).filter((l) => l.includes(hhmm))).toHaveLength(4);
+    // open's UTC day, hour and minute, never the epoch a NULL formats as.
+    // A locale may print a 12- or a 24-hour clock ("07:09 PM" / "19:09"),
+    // so either form of the open's own time is accepted — a fixed one went
+    // red every afternoon UTC.
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const h = t0.getUTCHours();
+    const mm = pad(t0.getUTCMinutes());
+    const clocks = [`${pad(h)}:${mm}`, `${pad(((h + 11) % 12) + 1)}:${mm}`];
+    const day = String(t0.getUTCDate());
+    const named = mail.sent
+      .map((m) => m.scheduledLabel)
+      .filter((l) => clocks.some((c) => l.includes(c)) && new RegExp(`\\b${day}\\b`).test(l));
+    expect(named).toHaveLength(4);
     for (const b of r.boards) {
       const [row] = await sql<{ basis: Date }[]>`
         select scheduled_at_basis as basis from fixture_external_play where fixture_id = ${b.fixtureId}`;
@@ -527,6 +681,79 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
     const [row] = await sql<{ basis: Date }[]>`
       select scheduled_at_basis as basis from fixture_external_play where fixture_id = ${fixture_id}`;
     expect(row!.basis.getTime()).toBe(t0.getTime());
+  });
+
+  // Review M3 (fix round 1): the pre-open video override reached
+  // bridgeBasis's "no basis" assertion on a NULL-time board — a 500. It must
+  // answer exactly what a timed board answers: the override is recorded, and
+  // the seat is still round_not_open.
+  it.each([
+    ["a timed board", new Date("2026-10-01T12:10:00.000Z")],
+    ["a board with no start time", null],
+  ] as const)("the pre-open video override answers the same on %s: recorded, and the seat stays round_not_open", async (_n, at) => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, scheduledAt: at, cameraPolicy: "required" });
+    const b = r.boards[0]!;
+    await organiserOverrideVideo({ fixtureId: b.fixtureId, actorUserId: r.ownerUserId, note: "vendor outage" });
+    const [row] = await sql<{ video_override_at: Date | null }[]>`
+      select video_override_at from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    expect(row?.video_override_at, "the override is recorded").not.toBeNull();
+    const kinds = await sql<{ kind: string }[]>`select kind from online_chess_audit where fixture_id = ${b.fixtureId}`;
+    expect(kinds.map((k) => k.kind)).toEqual(["video_override"]);
+    expect(await seatPlayer({ fixtureId: b.fixtureId, personId: b.home.personId })).toEqual({
+      seated: false,
+      reason: "round_not_open",
+    });
+  });
+
+  it("a NULL-time board's row minted pre-open (by the override) is rebased onto opened_at when the round opens", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, scheduledAt: null, cameraPolicy: "required" });
+    const b = r.boards[0]!;
+    await organiserOverrideVideo({ fixtureId: b.fixtureId, actorUserId: r.ownerUserId, note: "vendor outage" });
+    const t0 = new Date(Date.now() - 2 * MIN);
+    expect(await open(r, 1, t0)).toEqual({ opened: true, invited: 2, skipped: [] });
+    const [row] = await sql<{ basis: Date; override: Date | null }[]>`
+      select scheduled_at_basis as basis, video_override_at as override
+        from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    expect(row!.basis.getTime()).toBe(t0.getTime());
+    expect(row!.override, "the override survives the open").not.toBeNull();
+  });
+
+  it("the override locks the fixture BEFORE the bridge row (the seat clear's order), so a clear holding the fixture cannot deadlock it", async () => {
+    // Staged: the override has minted its row; then a seat clear takes the
+    // fixture lock (here: another session). The override's transaction must
+    // wait on the FIXTURE, holding nothing — so that session can still lock
+    // the bridge row, as the clear's next step does.
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, cameraPolicy: "required" });
+    const fixtureId = r.boards[0]!.fixtureId;
+    const holder = await sql.reserve();
+    try {
+      race.afterEnsure = async () => {
+        await holder`begin`;
+        await holder`select id from fixtures where id = ${fixtureId} for update`;
+      };
+      let done = false;
+      const p = organiserOverrideVideo({ fixtureId, actorUserId: r.ownerUserId, note: "vendor outage" }).finally(
+        () => (done = true),
+      );
+      let waited = false;
+      for (let i = 0; i < 100 && !waited && !done; i++) {
+        const [w] = await sql<{ n: number }[]>`
+          select count(*)::int as n from pg_stat_activity
+           where datname = current_database() and wait_event_type = 'Lock' and query ilike '%from fixtures%for share%'`;
+        waited = w!.n > 0;
+        if (!waited) await new Promise((res) => setTimeout(res, 50));
+      }
+      expect(waited, "the override never waited on the fixture first").toBe(true);
+      // The clear's next lock: the bridge row. Free, because the override
+      // took nothing before the fixture.
+      await holder`select fixture_id from fixture_external_play where fixture_id = ${fixtureId} for update nowait`;
+      await holder`commit`;
+      await p;
+      expect((await bridgeOf(fixtureId)) !== null).toBe(true);
+    } finally {
+      await holder`rollback`.catch(() => undefined);
+      holder.release();
+    }
   });
 
   it("assumption guard: a NULL-time board in an UNOPENED round has no basis, and minting its row says so", async () => {
@@ -582,9 +809,15 @@ describe.skipIf(!HAS_DB)("openRound — boards with NO start time (ruling 2026-1
     await moveFixture(r.owner, quietBoard.fixtureId, { scheduled_at: X });
 
     // The next open reads both through the guard: the quiet board's row is
-    // reset onto the new time (its invite with it) and re-invited; the game
-    // board's row is untouched.
+    // reset onto the new time (its invite with it) and re-invited INSIDE the
+    // round's own window; the game board's row is untouched, and its stamps
+    // still count as invited, so the round is NOT re-stamped (review I1).
+    const [before] = await stampRows(r.stageId);
     expect(await open(r)).toEqual({ opened: true, invited: 2, skipped: [] });
+    expect((await stampRows(r.stageId))[0]!.opened_at.getTime(), "opened_at did not move").toBe(
+      before!.opened_at.getTime(),
+    );
+    expect(await auditTypes(r.competitionId)).toEqual(["external_play.round_opened", "external_play.round_reinvited"]);
     expect(sentTo()).toEqual([quietBoard.home.email, quietBoard.away.email].sort());
     const [quiet] = await sql<{ basis: Date; w: Date | null; b: Date | null }[]>`
       select scheduled_at_basis as basis, white_emailed_at as w, black_emailed_at as b
@@ -700,6 +933,52 @@ describe.skipIf(!HAS_DB)("openRound — the real producer feeds the real consume
     expect(d!.camera_policy).toBeNull();
     // ...and relaxing stays allowed after the open (D9).
     await patchDivision(r.owner, r.divisionId, { camera_policy: "off" });
+  });
+
+  it("review M9: an upgrade racing an open is judged AFTER the open commits — staged on the division lock, both real calls", async () => {
+    // Another session holds the division lock. The REAL open queues on it
+    // first, then the REAL upgrade. Released, the open runs and commits; the
+    // upgrade's gate must be read after that (inside its own transaction,
+    // under the same lock) and refuse. Read before its transaction, it would
+    // have seen no open and committed the tightening behind a live round.
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const advisoryWaiters = async () => {
+      const [w] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity
+         where datname = current_database() and wait_event_type = 'Lock' and wait_event = 'advisory'`;
+      return w!.n;
+    };
+    const until = async (n: number, what: string) => {
+      let seen = 0;
+      for (let i = 0; i < 100 && seen < n; i++) {
+        seen = await advisoryWaiters();
+        if (seen < n) await new Promise((res) => setTimeout(res, 50));
+      }
+      expect(seen, what).toBeGreaterThanOrEqual(n);
+    };
+    const holder = await sql.reserve();
+    try {
+      await holder`begin`;
+      await holder`select pg_advisory_xact_lock(hashtext(${"division:" + r.divisionId}))`;
+      const opening = open(r).then(
+        (v) => ({ ok: true as const, v }),
+        (e: unknown) => ({ ok: false as const, e }),
+      );
+      await until(1, "the open never queued on the division lock");
+      const upgrading = refusal(patchDivision(r.owner, r.divisionId, { camera_policy: "required" })).catch(
+        (e: unknown) => ({ status: -1, code: String(e) }),
+      );
+      await until(2, "the upgrade never queued on the division lock (its gate was read outside it)");
+      await holder`commit`;
+      const o = await opening;
+      expect(o.ok && o.v).toEqual({ opened: true, invited: 2, skipped: [] });
+      expect(await upgrading).toEqual({ status: 409, code: "POLICY_LOCKED" });
+    } finally {
+      await holder`rollback`.catch(() => undefined);
+      holder.release();
+    }
+    const [d] = await sql<{ camera_policy: string | null }[]>`select camera_policy from divisions where id = ${r.divisionId}`;
+    expect(d!.camera_policy, "the tightening never committed").toBeNull();
   });
 
   it("positive pair: before any open, the same upgrade is accepted", async () => {
@@ -933,7 +1212,8 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
     // Staged, not raced. Board B has no bridge row yet (forced by SQL: it
     // stands for a board T9's ensureBridgeRow would mint, e.g. one added
     // after the open). T9 has already read B's seats. Another session holds
-    // board A's row so the unpair is seen PAUSED mid-clear; T9's mint for B
+    // board A's row so the unpair is seen PAUSED mid-clear (locking the
+    // bridge rows, its fixture locks already held); T9's mint for B
     // must then wait behind the clear and, once it commits, insert nothing —
     // the clear's check never saw a row, so no row may appear after it.
     const s = await seedOnlineSwiss({ players: 4, pairing: "fold" });
@@ -965,7 +1245,8 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
       const unpair = settle(unpairSwissRound(s.owner, s.stageId));
       let paused = false;
       for (let i = 0; i < 100 && !paused; i++) {
-        paused = await waiting("%delete from fixture_external_play%");
+        // Paused locking the round's bridge rows — after the fixtures.
+        paused = await waiting("%from fixture_external_play%for update%");
         if (!paused) await new Promise((res) => setTimeout(res, 50));
       }
       expect(paused, "the unpair never paused mid-clear").toBe(true);
@@ -991,6 +1272,46 @@ describe.skipIf(!HAS_DB)("openRound — re-pairing after the open", () => {
     expect(await bridgeOf(b), "the mint found the seats gone and wrote nothing").toBeNull();
     const [seats] = await sql`select home_entrant_id, away_entrant_id from fixtures where id = ${b}`;
     expect(seats).toEqual({ home_entrant_id: null, away_entrant_id: null });
+  });
+
+  // Review M8 (fix round 1): Rebuild deletes the stage's fixtures, and the
+  // bridge FK CASCADEs — a live game's only record would go with them.
+  const gameKinds: [string, (fixtureId: string) => Promise<void>][] = [
+    [
+      "a recorded game",
+      async (f) => {
+        expect((await createGameIfReady(f, { publish: async () => undefined })).created).toBe(true);
+      },
+    ],
+    [
+      "a create of unknown outcome",
+      async (f) => {
+        board.createChallengeToUser.mockResolvedValueOnce({ ok: false, code: "outcome_unknown", raw: "timeout" });
+        await createGameIfReady(f, { publish: async () => undefined });
+        expect((await bridgeOf(f))!.create_sent_at, "premise: the T9 marker").not.toBeNull();
+      },
+    ],
+  ];
+  it.each(gameKinds)("rebuild REFUSES a stage with %s on a board — 409 ONLINE_GAME_EXISTS, nothing deleted", async (_n, make) => {
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold" });
+    const before = await swissRound1(s.stageId);
+    await open(s);
+    await make(before[0]!.fixtureId);
+    const ids = before.map((b) => b.fixtureId);
+    const snapshot = await roundState(s.stageId, ids);
+
+    expect(await refusal(rebuildStageFixtures(s.owner, s.stageId))).toEqual({ status: 409, code: "ONLINE_GAME_EXISTS" });
+    expect(await roundState(s.stageId, ids)).toEqual(snapshot);
+  });
+
+  it("positive pair: rebuild of an opened stage with NO game goes through (its game-less rows go with the fixtures)", async () => {
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold" });
+    const before = await swissRound1(s.stageId);
+    await open(s);
+    await rebuildStageFixtures(s.owner, s.stageId);
+    for (const b of before) expect(await bridgeOf(b.fixtureId)).toBeNull();
+    const [gone] = await sql`select 1 from fixtures where id in ${sql(before.map((b) => b.fixtureId))}`;
+    expect(gone, "the old fixtures were replaced").toBeUndefined();
   });
 
   it("delete-entrant REFUSES likewise when the entrant's round has a game", async () => {

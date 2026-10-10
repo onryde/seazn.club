@@ -5870,6 +5870,8 @@
   "externalPlay.openRound.skipped.windowClosed": "Niet uitgenodigd: de tijd om plaats te nemen aan dit bord is voorbij.",
   "externalPlay.openRound.skipped.sendFailed": "De uitnodigingsmail kon niet worden verstuurd. Open de ronde opnieuw om het nog eens te proberen.",
   "externalPlay.onlineGameExists": "Er is een online partij op een bord dat hierdoor leeg zou worden. Maak de partij eerst ongeldig en probeer het dan opnieuw.",
+  "externalPlay.resend.windowClosed": "Het venster van deze ronde is gesloten, dus er kan geen uitnodiging worden verstuurd. Open de ronde opnieuw om de spelers uit te nodigen.",
+  "externalPlay.resend.boardHeld": "Dit bord wacht op een beslissing van de organisator, dus het krijgt geen uitnodiging.",
   "externalPlay.needsOrganiser": "Deze online partij heeft een bevestiging van de organisator nodig.",
   "externalPlay.queue.title": "Online spelen — uitslag nodig",
   "externalPlay.queue.help": "Deze Lichess-partijen eindigden niet netjes. Regel ze hier.",

@@ -16,16 +16,18 @@ import "server-only";
 import type postgres from "postgres";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { ONLINE_GAME_EXISTS_CODE, RESEND_BOARD_HELD_CODE, RESEND_WINDOW_CLOSED_CODE } from "@/lib/open-round";
 import { appOrigin, sendExternalPlayInviteEmail } from "@/lib/email";
 import { toLocale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { roundOpenAt } from "@/server/external-play/round-open";
-import { windowFor } from "@/server/external-play/window";
+import { roomPhase, windowFor } from "@/server/external-play/window";
 import {
   loadOnlinePlayFixture,
   loadSides,
+  resetStaleBridge,
   whiteSideOf,
   type OnlinePlayFixture,
   type SidePlayer,
@@ -80,12 +82,19 @@ export async function attachToOpen(
   open: { id: string; roundOpenedAt: Date },
 ): Promise<void> {
   // A board with no start time is minted on the round's open (ruling
-  // 2026-10-10) — the basis the guard's stale check then never moves.
+  // 2026-10-10) — the basis the guard's stale check then never moves — and a
+  // row minted for it before the open (the D11 override's provisional basis,
+  // review M3) is rebased onto the open here. A timed board's basis is left
+  // to the stale check (resetStaleBridge), never moved by an attach.
   await db`
     insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, round_open_id)
     values (${f.fixtureId}, ${f.orgId}, ${f.scheduledAt ?? open.roundOpenedAt}, ${open.id})
     on conflict (fixture_id) do update
-       set round_open_id = excluded.round_open_id, updated_at = now()
+       set round_open_id = excluded.round_open_id,
+           scheduled_at_basis = case when ${f.scheduledAt === null}::boolean
+                                     then excluded.scheduled_at_basis
+                                     else fixture_external_play.scheduled_at_basis end,
+           updated_at = now()
      where fixture_external_play.status = 'pending'
        and fixture_external_play.challenge_id is null
        and fixture_external_play.create_sent_at is null`;
@@ -172,26 +181,47 @@ export async function claimSeat(
 }
 
 /** Undo THIS call's claim after its send failed, so the next open retries.
- *  Conditional on the exact stamp this call wrote — never clears another's. */
+ *  Conditional on the exact stamp this call wrote — never clears another's.
+ *  A row whose OTHER seat holds no stamp either was reached by nobody, so it
+ *  is unbound from the open too: the binding is the round's record that
+ *  someone was invited (openRound's "anyone invited?"), and a send that
+ *  reached nobody is not that. */
 export async function releaseSeat(db: AnySql, fixtureId: string, colour: Colour, at: Date): Promise<void> {
   const col = db(STAMP_COLUMN[colour]);
+  const other = db(STAMP_COLUMN[colour === "white" ? "black" : "white"]);
   await db`
-    update fixture_external_play set ${col} = null, updated_at = now()
+    update fixture_external_play
+       set ${col} = null,
+           round_open_id = case when ${other} is null then null else round_open_id end,
+           updated_at = now()
      where fixture_id = ${fixtureId} and ${col} = ${at}`;
 }
 
 /**
  * POST /fixtures/{id}/external-play/resend — the organiser re-sends one
  * board's invite to both players. An explicit organiser act, so it sends
- * whether or not a seat was invited before; it does not create a game. A seat
- * whose stamp is still empty (its open-round send failed) is stamped when this
- * send gets through, so the round's next open does not mail it a second time.
+ * whether or not a seat was invited before; it does not create a game.
+ *
+ * It holds openRound's rules (review M6, fix round 1):
+ *   - the WINDOW: after the round's T+20 nobody is invited, ⇒ 409
+ *     WINDOW_CLOSED (an organiser who wants a fresh window opens the round);
+ *   - the GAME rule: no invite into a board a game stands — or may stand —
+ *     behind (409 ONLINE_GAME_EXISTS), nor one held for the organiser (409
+ *     BOARD_HELD);
+ *   - the per-seat LOCK: under the division lock every pairing write and
+ *     openRound take, the board is re-read and each un-invited seat is
+ *     CLAIMED before anything is sent, so a concurrent open cannot mail that
+ *     seat again; a claimed seat whose send fails is un-stamped, so the
+ *     round's next open retries it. A seat invited before is re-mailed and
+ *     keeps its stamp.
  */
 export async function resendExternalPlayNotice(
   auth: AuthCtx,
   fixtureId: string,
   origin: string,
+  deps: { now?: Date } = {},
 ): Promise<{ emailed: number }> {
+  const now = deps.now ?? new Date();
   const f = await loadOnlinePlayFixture(fixtureId);
   // Not an online board, or not this org's: the same 404, so a probe cannot
   // tell which.
@@ -202,30 +232,76 @@ export async function resendExternalPlayNotice(
   if (!isPlayableFixtureStatus(f.fixtureStatus)) {
     throw new HttpError(409, "This board can no longer be played", "FIXTURE_NOT_PLAYABLE");
   }
-  const [pos] = await sql<{ stageId: string; roundNo: number }[]>`
-    select stage_id as "stageId", round_no as "roundNo" from fixtures where id = ${fixtureId}`;
-  const open = pos ? await roundOpenAt(sql, pos.stageId, pos.roundNo) : null;
+  const [pos] = await sql<{ stageId: string; roundNo: number; divisionId: string }[]>`
+    select stage_id as "stageId", round_no as "roundNo", division_id as "divisionId"
+      from fixtures where id = ${fixtureId}`;
+  const opened = pos ? await roundOpenAt(sql, pos.stageId, pos.roundNo) : null;
   // D12: nobody is invited to a round the organiser has not opened.
-  if (!pos || !open) throw new HttpError(409, "Open the round before inviting its players", "ROUND_NOT_OPEN");
-
-  // A no-op on a row a game stands behind (attachToOpen's own predicate).
-  await attachToOpen(sql, f, open);
+  if (!pos || !opened) throw new HttpError(409, "Open the round before inviting its players", "ROUND_NOT_OPEN");
+  await resetStaleBridge(f); // a rescheduled, game-less row starts over (T7), as in openRound
   const seats = await boardSeats(f);
+
+  const decision = await sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + pos.divisionId}))`;
+    const [fx] = await tx<{ home: string | null; away: string | null; status: string; roundNo: number }[]>`
+      select home_entrant_id as home, away_entrant_id as away, status, round_no as "roundNo"
+        from fixtures where id = ${fixtureId}`;
+    if (
+      !fx ||
+      fx.home !== f.homeEntrantId ||
+      fx.away !== f.awayEntrantId ||
+      fx.roundNo !== pos.roundNo ||
+      !isPlayableFixtureStatus(fx.status)
+    ) {
+      throw new HttpError(409, "This board changed while the invite was being sent. Try again.", "ROUND_CHANGED");
+    }
+    // The open row is never deleted (FK RESTRICT); re-read under the lock for
+    // the window it carries now (a re-stamp may have moved it).
+    const open = (await roundOpenAt(tx, pos.stageId, pos.roundNo))!;
+    if (roomPhase(now, open.roundOpenedAt) === "closed") {
+      throw new HttpError(409, "This round's window has closed. Open the round again to invite its players.", RESEND_WINDOW_CLOSED_CODE);
+    }
+    const [b] = await tx<{ status: string; challenge_id: string | null; create_sent_at: Date | null }[]>`
+      select status, challenge_id, create_sent_at from fixture_external_play
+       where fixture_id = ${fixtureId} for update`;
+    if (b && (b.challenge_id !== null || b.create_sent_at !== null)) {
+      throw new HttpError(409, "An online game exists on this board, so it takes no invite.", ONLINE_GAME_EXISTS_CODE);
+    }
+    if (b && b.status !== "pending") {
+      throw new HttpError(409, "This board is waiting for an organiser's decision, so it takes no invite.", RESEND_BOARD_HELD_CODE);
+    }
+    await attachToOpen(tx, f, open);
+    const claimed = new Set<Colour>();
+    for (const seat of seats) {
+      if (await claimSeat(tx, fixtureId, seat.colour, open.id, now)) claimed.add(seat.colour);
+    }
+    return { open, claimed };
+  });
+
   let emailed = 0;
   for (const seat of seats) {
-    const ok = await sendFixtureInvite({
-      fixture: f,
-      seat,
-      roundNo: pos.roundNo,
-      roundOpenedAt: open.roundOpenedAt,
-      origin,
-    });
-    if (!ok) continue;
-    emailed += 1;
-    const col = sql(STAMP_COLUMN[seat.colour]);
-    await sql`
-      update fixture_external_play set ${col} = now(), updated_at = now()
-       where fixture_id = ${fixtureId} and ${col} is null and round_open_id = ${open.id}`;
+    let ok = false;
+    try {
+      ok = await sendFixtureInvite({
+        fixture: f,
+        seat,
+        roundNo: pos.roundNo,
+        roundOpenedAt: decision.open.roundOpenedAt,
+        origin,
+      });
+    } catch (err) {
+      log.error({ fixtureId, colour: seat.colour, err }, "external-play resend: send threw");
+    }
+    if (ok) {
+      emailed += 1;
+      continue;
+    }
+    if (!decision.claimed.has(seat.colour)) continue; // invited before: that stamp stands
+    try {
+      await releaseSeat(sql, fixtureId, seat.colour, now);
+    } catch (err) {
+      log.error({ fixtureId, colour: seat.colour, err }, "external-play resend: un-stamp after a failed send threw");
+    }
   }
   return { emailed };
 }

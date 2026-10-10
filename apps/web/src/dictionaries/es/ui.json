@@ -5870,6 +5870,8 @@
   "externalPlay.openRound.skipped.windowClosed": "Sin invitar: ya pasó el plazo para ocupar el puesto en este tablero.",
   "externalPlay.openRound.skipped.sendFailed": "No se pudo enviar el correo de invitación. Abre la ronda de nuevo para reintentarlo.",
   "externalPlay.onlineGameExists": "Hay una partida en línea en un tablero que esto vaciaría. Anula primero la partida y vuelve a intentarlo.",
+  "externalPlay.resend.windowClosed": "La ventana de esta ronda se ha cerrado, así que no se puede enviar ninguna invitación. Vuelve a abrir la ronda para invitar a sus jugadores.",
+  "externalPlay.resend.boardHeld": "Este tablero está a la espera de una decisión del organizador, así que no admite invitaciones.",
   "externalPlay.needsOrganiser": "Esta partida en línea necesita que el organizador confirme el resultado.",
   "externalPlay.queue.title": "Juego en línea — falta resultado",
   "externalPlay.queue.help": "Estas partidas de Lichess no terminaron bien. Resuélvelas aquí.",

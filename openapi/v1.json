@@ -50788,7 +50788,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/resend": {
       "post": {
-        "summary": "Re-email the Seazn fixture URL for an online-play fixture (does not mint a new Lichess challenge)",
+        "summary": "Re-email the Seazn fixture URL to both players of an online-play fixture (does not mint a new Lichess challenge). Session only, never an API key. 409 ROUND_NOT_OPEN before the round is opened, WINDOW_CLOSED after its T+20 deadline, ONLINE_GAME_EXISTS when a game exists (or may exist) on the board, BOARD_HELD while it awaits an organiser decision, ALREADY_RESOLVED / FIXTURE_NOT_PLAYABLE for a settled board, ROUND_CHANGED when it was re-paired mid-call",
         "tags": [
           "fixtures"
         ],
