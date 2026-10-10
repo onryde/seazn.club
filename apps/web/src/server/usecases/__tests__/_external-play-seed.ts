@@ -14,7 +14,7 @@ import type { CameraPolicy } from "@/lib/camera-policy";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages } from "../stages";
+import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
 import { PLAY_SCOPES, upsertLichessLink } from "../external-accounts";
 
@@ -218,5 +218,230 @@ export async function seedOnlineChessFixture(
     fixtureId: fixture.id,
     home: { entrantId: home.id, personId: white.personId, userId: white.userId, lichessId: white.lichessId },
     away: { entrantId: away.id, personId: black.personId, userId: black.userId, lichessId: black.lichessId },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// T19 — a whole ROUND of online boards (the organiser opens a round, not a
+// fixture). Same building blocks as seedOnlineChessFixture: a real competition,
+// division and entrants through the product usecases; the league boards
+// themselves are inserted by SQL exactly as that seed inserts its one fixture.
+
+export type SeedSide = SeedPlayer & { entrantId: string; email: string };
+
+export type SeedRoundBoard = { fixtureId: string; home: SeedSide; away: SeedSide };
+
+export type SeedOnlineChessRoundOpts = {
+  /** The round the boards sit in. Defaults to 1. */
+  roundNo?: number;
+  /** Fully paired boards. */
+  fixtures: number;
+  /** One extra board with an EMPTY away seat that is not a bye — an unpaired
+   *  slot (status scheduled, no outcome). */
+  unpaired?: boolean;
+  /** One extra one-sided award bye row, the shape swissGen writes
+   *  (`home = winner, away = null, forfeited, {award, winner}`). */
+  bye?: boolean;
+  /** Linked pairs entered BEFORE Start but seated on no board — the players a
+   *  board added to the round later (addFixture) seats. The entrant list
+   *  locks at Start, so they cannot be entered afterwards. */
+  spares?: number;
+  /** Defaults to true (Start pressed). */
+  divisionStarted?: boolean;
+  /** Every board's scheduled_at. `null` ⇒ the boards carry no start time. */
+  scheduledAt?: Date | null;
+  /** Stored clock. Defaults to 15+10 (a ship-1 control). */
+  clock?: { base: number; increment?: number; delay?: number };
+  onlinePlay?: "off" | "lichess";
+  cameraPolicy?: CameraPolicy;
+};
+
+export type SeedOnlineChessRoundResult = {
+  orgId: string;
+  competitionId: string;
+  divisionId: string;
+  stageId: string;
+  roundNo: number;
+  owner: AuthCtx;
+  ownerUserId: string;
+  boards: SeedRoundBoard[];
+  /** The unpaired board, when asked for. */
+  unpairedFixtureId: string | null;
+  /** The bye row and its recipient, when asked for. */
+  bye: { fixtureId: string; side: SeedSide } | null;
+  spares: { home: SeedSide; away: SeedSide }[];
+};
+
+const ROUND_T = new Date("2026-10-01T12:10:00.000Z");
+
+async function seedLinkedEntrant(owner: AuthCtx, divisionId: string, name: string): Promise<SeedSide> {
+  const lichessId = `r-${randomUUID().slice(0, 10)}`;
+  const p = await seedPlayer(owner.orgId, name, lichessId, true);
+  const [e] = await createEntrants(owner, divisionId, [
+    { display_name: name, kind: "individual", members: [{ person_id: p.personId, is_captain: false, roles: [] }] },
+  ]);
+  const [u] = await sql<{ email: string }[]>`select email from users where id = ${p.userId}`;
+  return { ...p, entrantId: e!.id, email: u!.email };
+}
+
+/** Two new linked entrants in a division that has not started. */
+export async function seedLinkedPair(
+  owner: AuthCtx,
+  divisionId: string,
+): Promise<{ home: SeedSide; away: SeedSide }> {
+  return {
+    home: await seedLinkedEntrant(owner, divisionId, `Late ${randomUUID().slice(0, 4)} W`),
+    away: await seedLinkedEntrant(owner, divisionId, `Late ${randomUUID().slice(0, 4)} B`),
+  };
+}
+
+export async function seedOnlineChessRound(opts: SeedOnlineChessRoundOpts): Promise<SeedOnlineChessRoundResult> {
+  const roundNo = opts.roundNo ?? 1;
+  const owner = await seedOwner();
+  const ownerUserId = owner.userId;
+  if (!ownerUserId) throw new Error("seedOwner returned a session with no userId");
+  const competition = await createCompetition(owner, {
+    name: "T19 Cup",
+    visibility: "public",
+    branding: {},
+    starts_on: "2026-10-01",
+    ends_on: "2026-10-02",
+  });
+  const division = await createDivision(owner, competition.id, {
+    name: "Open",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: {
+      variant: "classical",
+      onlinePlay: opts.onlinePlay ?? "lichess",
+      clock: opts.clock ?? { base: 900, increment: 10 },
+    },
+    ...(opts.cameraPolicy ? { camera_policy: opts.cameraPolicy } : {}),
+  });
+  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
+  const at = opts.scheduledAt === undefined ? ROUND_T : opts.scheduledAt;
+  let seq = 0;
+  const insertBoard = async (home: string | null, away: string | null, extra?: { status: string; outcome: unknown }) => {
+    seq += 1;
+    const [row] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
+                            status, outcome, home_entrant_id, away_entrant_id, scheduled_at)
+      values (${stage!.id}, ${division.id}, ${owner.orgId}, ${roundNo}, ${seq}, ${`t19-${randomUUID().slice(0, 8)}`},
+              ${extra?.status ?? "scheduled"}, ${extra ? sql.json(extra.outcome as never) : null},
+              ${home}, ${away}, ${at})
+      returning id`;
+    return row!.id;
+  };
+  const boards: SeedRoundBoard[] = [];
+  for (let i = 0; i < opts.fixtures; i++) {
+    const home = await seedLinkedEntrant(owner, division.id, `P${i + 1}W`);
+    const away = await seedLinkedEntrant(owner, division.id, `P${i + 1}B`);
+    boards.push({ fixtureId: await insertBoard(home.entrantId, away.entrantId), home, away });
+  }
+  let unpairedFixtureId: string | null = null;
+  if (opts.unpaired) {
+    const lone = await seedLinkedEntrant(owner, division.id, "Lone");
+    unpairedFixtureId = await insertBoard(lone.entrantId, null);
+  }
+  let bye: SeedOnlineChessRoundResult["bye"] = null;
+  if (opts.bye) {
+    const side = await seedLinkedEntrant(owner, division.id, "Bye");
+    const fixtureId = await insertBoard(side.entrantId, null, {
+      status: "forfeited",
+      outcome: { kind: "award", winner: side.entrantId },
+    });
+    bye = { fixtureId, side };
+  }
+  const spares: { home: SeedSide; away: SeedSide }[] = [];
+  for (let i = 0; i < (opts.spares ?? 0); i++) spares.push(await seedLinkedPair(owner, division.id));
+  if (seq === 0 && (opts.divisionStarted ?? true)) {
+    // Start GENERATES a first stage that holds no fixture — this seed's boards
+    // are its own SQL rows, so a board-less round cannot be started here.
+    throw new Error("seedOnlineChessRound: a started division needs at least one board row");
+  }
+  if (opts.divisionStarted ?? true) await startDivision(owner, division.id);
+  return {
+    orgId: owner.orgId,
+    competitionId: competition.id,
+    divisionId: division.id,
+    stageId: stage!.id,
+    roundNo,
+    owner,
+    ownerUserId,
+    boards,
+    unpairedFixtureId,
+    bye,
+    spares,
+  };
+}
+
+export type SeedOnlineSwissResult = {
+  orgId: string;
+  competitionId: string;
+  divisionId: string;
+  stageId: string;
+  owner: AuthCtx;
+  ownerUserId: string;
+  players: SeedSide[];
+};
+
+/** A STARTED online Swiss stage with round 1 minted and paired through the
+ *  real generator (`generateStageFixtures` twice: shells, then seats), its
+ *  boards given a start time, then Start. The re-pair tests drive the REAL
+ *  `unpairSwissRound` + `generateStageFixtures` against this. */
+export async function seedOnlineSwiss(opts: {
+  players: number;
+  rounds?: number;
+  pairing?: "fold" | "rank_adjacent";
+  cameraPolicy?: CameraPolicy;
+}): Promise<SeedOnlineSwissResult> {
+  const owner = await seedOwner();
+  const ownerUserId = owner.userId;
+  if (!ownerUserId) throw new Error("seedOwner returned a session with no userId");
+  const competition = await createCompetition(owner, {
+    name: "T19 Swiss",
+    visibility: "public",
+    branding: {},
+    starts_on: "2026-10-01",
+    ends_on: "2026-10-02",
+  });
+  const division = await createDivision(owner, competition.id, {
+    name: "Open",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
+    ...(opts.cameraPolicy ? { camera_policy: opts.cameraPolicy } : {}),
+  });
+  const players: SeedSide[] = [];
+  for (let i = 0; i < opts.players; i++) {
+    const lichessId = `s-${randomUUID().slice(0, 10)}`;
+    const p = await seedPlayer(owner.orgId, `S${i + 1}`, lichessId, true);
+    const [e] = await createEntrants(owner, division.id, [
+      { display_name: `S${i + 1}`, kind: "individual", seed: i + 1, members: [{ person_id: p.personId, is_captain: false, roles: [] }] },
+    ]);
+    const [u] = await sql<{ email: string }[]>`select email from users where id = ${p.userId}`;
+    players.push({ ...p, entrantId: e!.id, email: u!.email });
+  }
+  const [stage] = await createStages(owner, division.id, {
+    seq: 1,
+    kind: "swiss",
+    name: "Swiss",
+    config: { rounds: opts.rounds ?? 3 },
+    progression: null,
+  });
+  await generateStageFixtures(owner, stage!.id); // shells
+  await generateStageFixtures(owner, stage!.id, opts.pairing ? { pairing: opts.pairing } : {}); // seat round 1
+  // A start time on every board: the guard serves only scheduled fixtures, and
+  // a timetable write is not what these tests are about.
+  await sql`update fixtures set scheduled_at = ${ROUND_T} where stage_id = ${stage!.id}`;
+  await startDivision(owner, division.id);
+  return {
+    orgId: owner.orgId,
+    competitionId: competition.id,
+    divisionId: division.id,
+    stageId: stage!.id,
+    owner,
+    ownerUserId,
+    players,
   };
 }

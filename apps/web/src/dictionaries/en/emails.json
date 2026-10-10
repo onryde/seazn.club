@@ -387,5 +387,13 @@
   "externalPlayReady.body": "Your online chess game against <strong>{opponentName}</strong> is set for {when}. Open the fixture on Seazn to play on Lichess.",
   "externalPlayReady.button": "Open fixture",
   "externalPlayReady.footer": "You received this because you're entered in an online chess division at {orgName} on Seazn Club.",
-  "externalPlayReady.text": "Your game vs {opponentName} ({when}) is ready. Open your fixture: {fixtureUrl}"
+  "externalPlayReady.text": "Your game vs {opponentName} ({when}) is ready. Open your fixture: {fixtureUrl}",
+  "externalPlayInvite.subject": "Round {roundNo} is open — your game vs {opponentName}",
+  "externalPlayInvite.preheader": "Take your seat on Seazn by {deadline}.",
+  "externalPlayInvite.title": "Your round is open",
+  "externalPlayInvite.body": "The organiser has opened round {roundNo}. Your online chess game against <strong>{opponentName}</strong> is scheduled for {when}.",
+  "externalPlayInvite.deadline": "Open the game on Seazn and take your seat by <strong>{deadline}</strong>.",
+  "externalPlayInvite.button": "Open game",
+  "externalPlayInvite.footer": "You received this because you're entered in an online chess division at {orgName} on Seazn Club.",
+  "externalPlayInvite.text": "Round {roundNo} is open. Your game vs {opponentName} is scheduled for {when}. Take your seat by {deadline}: {fixtureUrl}"
 }

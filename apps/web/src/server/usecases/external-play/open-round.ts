@@ -1,0 +1,320 @@
+import "server-only";
+// The organiser opens a round (D12, spec §3.2). Swiss PAIRS the next round by
+// itself; opening and inviting is the organiser's act, because an invite
+// starts a clock against real people who have to be at a screen. Nothing
+// seats (T8) and no game is created (T9) until this stamps
+// `stage_round_opens`, and T−10/T+20 hang off that stamp.
+//
+// THE RULES (controller rulings 2026-10-10, Q1–Q3):
+//   - Refusals come first and write NOTHING: authorisation, an offline
+//     division (422), then `division_not_started`, `clock_not_playable`
+//     (addendum 1 — T6 gates a clock only when it CHANGES, so a pre-gate
+//     stored clock is re-checked here), `no_fixtures`, `not_paired`,
+//     `not_scheduled`.
+//   - The invite record is the per-seat stamp (invite.ts). Opening invites
+//     every seat of the round that can still take an invite and has not been
+//     invited for THIS open — idempotent per seat. One invite per player, per
+//     board, per pairing.
+//   - The window: a first open stamps `opened_at`. A re-open RE-STAMPS
+//     `opened_at`/`opened_by` (a fresh window) ONLY when the round holds zero
+//     invited seats — what a re-pair leaves, because `clearSwissFixtureSeats`
+//     deletes the unseated boards' bridge rows. A partly invited round keeps
+//     its window; a board whose window has already closed is not invited and
+//     is reported per fixture as `window_closed` (Q2). No window ever moves
+//     for a partly invited round.
+//   - A board a game stands behind (or may: T9's create marker) is never
+//     invited into and counts on neither side of that rule.
+//   - Each seat is stamped BEFORE its mail is sent and un-stamped if the send
+//     fails, so a re-open retries it and nobody is mailed twice. A crash
+//     between the stamp and the send loses that one invite; the organiser's
+//     Resend (invite.ts) is the way back.
+//
+// `stage_round_opens` is SEALED (FORCE RLS, no app_user grant), so the stamp
+// is written through the privileged `sql` client — which is why the actor is
+// authorised HERE, first, against the stage's own org, before any write.
+import { getOrgRole } from "@/lib/auth";
+import { sql } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import type { OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
+import { EDITOR_ROLES } from "@/lib/types";
+import type { BoardgameClockInput } from "@/server/external-play/clock";
+import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
+import { assertTimeControl } from "@/server/external-play/time-controls";
+import { roomPhase } from "@/server/external-play/window";
+import { audit } from "../audit";
+import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
+import {
+  attachToOpen,
+  boardSeats,
+  bridgeTakesInvites,
+  claimSeat,
+  releaseSeat,
+  sendFixtureInvite,
+  type Colour,
+  type InviteBridgeFacts,
+  type InviteSeat,
+} from "./invite";
+import { isPlayableFixtureStatus } from "./preflight";
+
+export type { OpenRoundRefusal, OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
+
+/** The planned name for the one reader of the open stamp (round-open.ts,
+ *  addendum 3). `null` ⇒ the organiser has not opened this round. */
+export async function roundOpenedAt(a: { stageId: string; roundNo: number }): Promise<Date | null> {
+  return (await roundOpenAt(sql, a.stageId, a.roundNo))?.roundOpenedAt ?? null;
+}
+
+/** Test seam only — the route passes none. `now` stamps `opened_at` and the
+ *  seat stamps, and is the clock the window is judged on. */
+export type OpenRoundDeps = { now?: Date; origin?: string };
+
+type StageRow = {
+  orgId: string;
+  divisionId: string;
+  competitionId: string;
+  sportKey: string;
+  config: unknown;
+  divisionStatus: string;
+};
+
+type RoundFixtureRow = {
+  id: string;
+  status: string;
+  homeEntrantId: string | null;
+  awayEntrantId: string | null;
+  scheduledAt: Date | null;
+};
+
+type Board = { f: OnlinePlayFixture; seats: [InviteSeat, InviteSeat] };
+
+type BridgeFactsRow = InviteBridgeFacts & {
+  fixture_id: string;
+  white_emailed_at: Date | null;
+  black_emailed_at: Date | null;
+};
+
+type Claim = { board: Board; seat: InviteSeat };
+
+type Decision =
+  | { kind: "nothing"; skipped: OpenRoundSkip[] }
+  | { kind: "opened" | "reopened" | "reinvited"; open: RoundOpenRow; claims: Claim[] };
+
+const AUDIT_TYPE = {
+  opened: "external_play.round_opened",
+  reopened: "external_play.round_reopened",
+  reinvited: "external_play.round_reinvited",
+} as const;
+
+/** T5's catalogue on the clock the division STORES. Only INVALID_TIME_CONTROL
+ *  means "not playable"; anything else propagates. */
+function storedClockPlayable(config: unknown): boolean {
+  try {
+    assertTimeControl((config as { clock?: BoardgameClockInput } | null)?.clock);
+    return true;
+  } catch (err) {
+    if (err instanceof HttpError && err.code === "INVALID_TIME_CONTROL") return false;
+    throw err;
+  }
+}
+
+function roundChanged(): HttpError {
+  return new HttpError(409, "The round changed while it was being opened — try again", "ROUND_CHANGED");
+}
+
+export async function openRound(
+  a: { stageId: string; roundNo: number; actorUserId: string },
+  deps: OpenRoundDeps = {},
+): Promise<OpenRoundResult> {
+  const now = deps.now ?? new Date();
+
+  // The stage id is the caller's; the privileged read only resolves which org
+  // it belongs to, and the actor is checked against THAT org next.
+  const [st] = await sql<StageRow[]>`
+    select s.org_id as "orgId", s.division_id as "divisionId", d.competition_id as "competitionId",
+           d.sport_key as "sportKey", d.config, d.status as "divisionStatus"
+      from stages s join divisions d on d.id = s.division_id
+     where s.id = ${a.stageId}`;
+  if (!st) throw new HttpError(404, "stage not found");
+
+  // Authorise FIRST. The same role set every organiser write is held to
+  // (EDITOR_ROLES, via the same getOrgRole requireOrgAuth reads); the route
+  // has already run requireResourceAuth(stage, write) — this is the usecase
+  // refusing to write for an actor who is not an organiser of this org.
+  const role = await getOrgRole(st.orgId, a.actorUserId);
+  if (role === null || !(EDITOR_ROLES as readonly string[]).includes(role)) {
+    throw new HttpError(403, "Only an organiser of this organisation can open a round", "OPEN_ROUND_FORBIDDEN");
+  }
+
+  if (!supportsOnlinePlay(st.sportKey) || readOnlinePlay(st.config) !== "lichess") {
+    throw new HttpError(422, "This round is not played online", "ROUND_NOT_ONLINE");
+  }
+  // The guard serves no board of a division that has not started.
+  if (st.divisionStatus === "setup" || st.divisionStatus === "scheduled") {
+    return { opened: false, reason: "division_not_started" };
+  }
+  if (!storedClockPlayable(st.config)) return { opened: false, reason: "clock_not_playable" };
+
+  const rows = await sql<RoundFixtureRow[]>`
+    select id, status, home_entrant_id as "homeEntrantId", away_entrant_id as "awayEntrantId",
+           scheduled_at as "scheduledAt"
+      from fixtures
+     where stage_id = ${a.stageId} and round_no = ${a.roundNo}
+     order by seq_in_round, id`;
+  // A bye is `forfeited` and a withdrawn board `abandoned`: neither is played,
+  // so neither is unpaired and neither is invited. T8's predicate is the one
+  // authority for "still playable".
+  const live = rows.filter((r) => isPlayableFixtureStatus(r.status));
+  if (live.some((r) => r.homeEntrantId === null || r.awayEntrantId === null)) {
+    return { opened: false, reason: "not_paired" };
+  }
+  // The empty case: no row at all, or only byes and settled boards.
+  if (live.length === 0) return { opened: false, reason: "no_fixtures" };
+  // The guard (and the bridge row's NOT NULL scheduled_at_basis) serves only a
+  // board with a start time.
+  if (live.some((r) => r.scheduledAt === null)) return { opened: false, reason: "not_scheduled" };
+
+  // Every board through THE guard. Each predicate it holds was checked above,
+  // so a null here is the round changing underneath this call.
+  const boards: Board[] = [];
+  for (const r of live) {
+    const f = await loadOnlinePlayFixture(r.id);
+    if (!f) throw roundChanged();
+    await resetStaleBridge(f); // a rescheduled, game-less row starts over (T7)
+    boards.push({ f, seats: await boardSeats(f) });
+  }
+
+  const decision = await sql.begin(async (tx): Promise<Decision> => {
+    // The lock every pairing write takes (generate, unpair, addFixture,
+    // deleteEntrant): under it the seats this call is about to invite cannot
+    // be re-paired, and two opens of one round cannot interleave.
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + st.divisionId}))`;
+    const ids = boards.map((b) => b.f.fixtureId);
+    const fresh = await tx<{ id: string; home: string | null; away: string | null; status: string; stageId: string; roundNo: number }[]>`
+      select id, home_entrant_id as home, away_entrant_id as away, status,
+             stage_id as "stageId", round_no as "roundNo"
+        from fixtures where id in ${tx(ids)}`;
+    const byId = new Map(fresh.map((r) => [r.id, r]));
+    for (const b of boards) {
+      const r = byId.get(b.f.fixtureId);
+      if (
+        !r ||
+        r.home !== b.f.homeEntrantId ||
+        r.away !== b.f.awayEntrantId ||
+        r.stageId !== a.stageId ||
+        r.roundNo !== a.roundNo ||
+        !isPlayableFixtureStatus(r.status)
+      ) {
+        throw roundChanged();
+      }
+    }
+
+    const existing = await roundOpenAt(tx, a.stageId, a.roundNo);
+    const bridges = await tx<BridgeFactsRow[]>`
+      select fixture_id, status, challenge_id, create_sent_at,
+             white_emailed_at, black_emailed_at
+        from fixture_external_play where fixture_id in ${tx(ids)}`;
+    const bridgeOf = new Map(bridges.map((b) => [b.fixture_id, b]));
+    // A stamp is only ever written on a row naming this round's open (CHECK
+    // fixture_external_play_invite_needs_open_round_check + the binding
+    // trigger, and one open row per (stage, round)), so a stamp on a board of
+    // this round IS an invite for this open.
+    const invitedFor = (fixtureId: string, colour: Colour): boolean => {
+      const b = bridgeOf.get(fixtureId);
+      if (!existing || !b) return false;
+      return (colour === "white" ? b.white_emailed_at : b.black_emailed_at) !== null;
+    };
+
+    const takes = boards.filter((b) => bridgeTakesInvites(bridgeOf.get(b.f.fixtureId) ?? null));
+    let invitedSeats = 0;
+    const pending: { board: Board; seats: InviteSeat[] }[] = [];
+    for (const board of takes) {
+      const open = board.seats.filter((s) => !invitedFor(board.f.fixtureId, s.colour));
+      invitedSeats += board.seats.length - open.length;
+      if (open.length > 0) pending.push({ board, seats: open });
+    }
+
+    let open: RoundOpenRow;
+    let kind: "opened" | "reopened" | "reinvited";
+    if (!existing) {
+      const [row] = await tx<RoundOpenRow[]>`
+        insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
+        values (${a.stageId}, ${st.orgId}, ${a.roundNo}, ${now}, ${a.actorUserId})
+        returning id, opened_at as "roundOpenedAt", opened_by as "openedBy"`;
+      open = row!;
+      kind = "opened";
+    } else if (pending.length === 0) {
+      return { kind: "nothing", skipped: [] };
+    } else if (invitedSeats === 0) {
+      // Nobody this round can still reach was invited (a re-pair deleted the
+      // rows, or every send failed): the window starts now, for everyone.
+      const [row] = await tx<RoundOpenRow[]>`
+        update stage_round_opens set opened_at = ${now}, opened_by = ${a.actorUserId}
+         where id = ${existing.id}
+        returning id, opened_at as "roundOpenedAt", opened_by as "openedBy"`;
+      open = row!;
+      kind = "reopened";
+    } else {
+      open = existing;
+      kind = "reinvited";
+      if (roomPhase(now, open.roundOpenedAt) === "closed") {
+        return {
+          kind: "nothing",
+          skipped: pending.map((p) => ({ fixtureId: p.board.f.fixtureId, reason: "window_closed" as const })),
+        };
+      }
+    }
+
+    const claims: Claim[] = [];
+    for (const p of pending) {
+      await attachToOpen(tx, p.board.f, open.id);
+      for (const seat of p.seats) {
+        if (await claimSeat(tx, p.board.f.fixtureId, seat.colour, open.id, now)) {
+          claims.push({ board: p.board, seat });
+        }
+      }
+    }
+    return { kind, open, claims };
+  });
+
+  if (decision.kind === "nothing") {
+    return { opened: false, reason: "already_open", skipped: decision.skipped };
+  }
+
+  // Sent AFTER the commit: a mail cannot be rolled back, so the stamp is
+  // committed first and released on a failed send.
+  let invited = 0;
+  const failed = new Set<string>();
+  for (const c of decision.claims) {
+    const ok = await sendFixtureInvite({
+      fixture: c.board.f,
+      seat: c.seat,
+      roundNo: a.roundNo,
+      roundOpenedAt: decision.open.roundOpenedAt,
+      origin: deps.origin,
+    });
+    if (ok) {
+      invited += 1;
+    } else {
+      await releaseSeat(sql, c.board.f.fixtureId, c.seat.colour, now);
+      failed.add(c.board.f.fixtureId);
+    }
+  }
+  const skipped: OpenRoundSkip[] = [...failed].map((fixtureId) => ({ fixtureId, reason: "send_failed" }));
+
+  await audit(
+    sql,
+    st.competitionId,
+    st.orgId,
+    AUDIT_TYPE[decision.kind],
+    {
+      stageId: a.stageId,
+      roundNo: a.roundNo,
+      roundOpenedAt: decision.open.roundOpenedAt.toISOString(),
+      invited,
+      skipped,
+    },
+    a.actorUserId,
+  );
+  return { opened: true, invited, skipped };
+}

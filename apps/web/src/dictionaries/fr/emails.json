@@ -387,5 +387,13 @@
   "externalPlayReady.body": "Votre partie d'échecs en ligne contre <strong>{opponentName}</strong> est prévue pour {when}. Ouvrez la rencontre sur Seazn pour jouer sur Lichess.",
   "externalPlayReady.button": "Ouvrir la rencontre",
   "externalPlayReady.footer": "Vous recevez ceci car vous êtes inscrit dans une division d'échecs en ligne chez {orgName} sur Seazn Club.",
-  "externalPlayReady.text": "Votre partie contre {opponentName} ({when}) est prête. Ouvrez la rencontre : {fixtureUrl}"
+  "externalPlayReady.text": "Votre partie contre {opponentName} ({when}) est prête. Ouvrez la rencontre : {fixtureUrl}",
+  "externalPlayInvite.subject": "La ronde {roundNo} est ouverte — votre partie contre {opponentName}",
+  "externalPlayInvite.preheader": "Prenez place sur Seazn avant {deadline}.",
+  "externalPlayInvite.title": "Votre ronde est ouverte",
+  "externalPlayInvite.body": "L'organisateur a ouvert la ronde {roundNo}. Votre partie d'échecs en ligne contre <strong>{opponentName}</strong> est prévue pour {when}.",
+  "externalPlayInvite.deadline": "Ouvrez la partie sur Seazn et prenez place avant <strong>{deadline}</strong>.",
+  "externalPlayInvite.button": "Ouvrir la partie",
+  "externalPlayInvite.footer": "Vous recevez ceci car vous êtes inscrit dans une division d'échecs en ligne chez {orgName} sur Seazn Club.",
+  "externalPlayInvite.text": "La ronde {roundNo} est ouverte. Votre partie contre {opponentName} est prévue pour {when}. Prenez place avant {deadline} : {fixtureUrl}"
 }

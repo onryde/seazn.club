@@ -68,6 +68,8 @@ import {
   type ReportSubmittedArgs,
   externalPlayReadyTemplate,
   type ExternalPlayReadyArgs,
+  externalPlayInviteTemplate,
+  type ExternalPlayInviteArgs,
 } from "@/lib/email-templates";
 import { paragraph, panel, renderEmail } from "@/lib/email-templates/compose";
 import { escapeHtml, money } from "@/lib/email-templates/shared";
@@ -215,7 +217,9 @@ export async function sendClaimInviteEmail(
 
 /** Origin for officiating emails fired from request-less paths — same
  *  override order as the registration senders. */
-function appOrigin(): string {
+/** The absolute origin links in mail point at. Exported for senders that
+ *  build their own CTA URL with no request in hand (T19's round open). */
+export function appOrigin(): string {
   return (
     process.env.OAUTH_BASE_URL ||
     process.env.NEXT_PUBLIC_BASE_URL ||
@@ -259,6 +263,22 @@ export async function sendExternalPlayReadyEmail(
     to,
     transactional: true,
     ...externalPlayReadyTemplate(args, dict),
+  });
+}
+
+/** D12 (T19): the organiser opened the round — sent once per player, per
+ *  board, per pairing. Transactional: an invite starts a clock against the
+ *  player, so the suppression list must not swallow it. */
+export async function sendExternalPlayInviteEmail(
+  to: string,
+  args: ExternalPlayInviteArgs,
+  locale: Locale = "en",
+): Promise<boolean> {
+  const dict = await getDictionary(locale, "emails");
+  return send({
+    to,
+    transactional: true,
+    ...externalPlayInviteTemplate(args, dict),
   });
 }
 

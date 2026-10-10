@@ -22,16 +22,30 @@ type AnySql = postgres.TransactionSql | postgres.Sql;
 
 export type RoundOpen = { roundOpenedAt: Date; openedBy: string | null };
 
-/** `null` ⇒ this fixture's round has never been opened. (`openedBy` is NOT
- *  NULL in V432; the type keeps the plan's declared `string | null`.) */
-export async function roundOpenFor(db: AnySql, fixtureId: string): Promise<RoundOpen | null> {
-  const rows = await db<{ roundOpenedAt: Date; openedBy: string | null }[]>`
-    select sro.opened_at as "roundOpenedAt", sro.opened_by as "openedBy"
-      from fixtures f
-      join stage_round_opens sro
-        on sro.stage_id = f.stage_id and sro.round_no = f.round_no
-     where f.id = ${fixtureId}`;
+/** The stamp row itself — what T19's open writes and re-reads under its lock.
+ *  `id` is what `fixture_external_play.round_open_id` names. */
+export type RoundOpenRow = RoundOpen & { id: string };
+
+/** THE read of `stage_round_opens` (T19 folded the by-key read in here rather
+ *  than add a second reader — controller addendum 3). `null` ⇒ this
+ *  (stage, round) has never been opened. (`openedBy` is NOT NULL in V432; the
+ *  type keeps the plan's declared `string | null`.) */
+export async function roundOpenAt(db: AnySql, stageId: string, roundNo: number): Promise<RoundOpenRow | null> {
+  const rows = await db<RoundOpenRow[]>`
+    select id, opened_at as "roundOpenedAt", opened_by as "openedBy"
+      from stage_round_opens
+     where stage_id = ${stageId} and round_no = ${roundNo}`;
   return rows[0] ?? null;
+}
+
+/** `null` ⇒ this fixture's round has never been opened (or there is no such
+ *  fixture). Resolves the fixture's (stage, round) and asks `roundOpenAt`. */
+export async function roundOpenFor(db: AnySql, fixtureId: string): Promise<RoundOpen | null> {
+  const [f] = await db<{ stageId: string; roundNo: number }[]>`
+    select stage_id as "stageId", round_no as "roundNo" from fixtures where id = ${fixtureId}`;
+  if (!f) return null;
+  const open = await roundOpenAt(db, f.stageId, f.roundNo);
+  return open ? { roundOpenedAt: open.roundOpenedAt, openedBy: open.openedBy } : null;
 }
 
 /** Has ANY round of this division been opened at or before `now`? T6's
