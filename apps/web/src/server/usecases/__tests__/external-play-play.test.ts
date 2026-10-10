@@ -1372,9 +1372,7 @@ const PREFIXES: Op[][] = [
   // White offers at 2, Black's move clears it, White re-offers at 4: recent.
   [T_, T_, { k: "draw", who: "white", accept: true }, T_, T_, { k: "draw", who: "white", accept: true }],
 ];
-const scenarioArb = fc
-  .tuple(fc.constantFrom(...PREFIXES), fc.array(opArb, { minLength: 0, maxLength: 28, size: "max" }))
-  .map(([prefix, tail]) => [...prefix, ...tail]);
+const tailArb = fc.array(opArb, { minLength: 0, maxLength: 28, size: "max" });
 
 /** An independent UCI replay (the test's, not fenAfter): the position, or
  *  the index of the first move chess.js rejects. */
@@ -1396,14 +1394,17 @@ function replayLedger(moves: readonly string[]): { board: Chess; illegalAt: numb
 const toUci = (m: { from: string; to: string; promotion?: string }) => `${m.from}${m.to}${m.promotion ?? ""}`;
 
 describe.runIf(HAS_DB)("act — property: interleavings against a lila model", () => {
-  const NUM_RUNS = 40;
+  // Every prefix runs the same number of times — drawing one at random
+  // left a path's counter at 0 in ~4% of suites (measured: abort, 1 in 3).
+  const RUNS_PER_PREFIX = 3;
+  const NUM_RUNS = RUNS_PER_PREFIX * PREFIXES.length;
   const totals: Record<string, number> = {};
   const bump = (k: string, n = 1) => (totals[k] = (totals[k] ?? 0) + n);
 
   it("the ledger stays a legal, alternating, duplicate-free PREFIX of Lichess's game; nothing lands after the end; a 5xx is never 'rejected'", { timeout: 600_000 }, async () => {
     let runs = 0;
-    await fc.assert(
-      fc.asyncProperty(scenarioArb, async (ops) => {
+    for (const prefix of PREFIXES) await fc.assert(
+      fc.asyncProperty(tailArb.map((tail) => [...prefix, ...tail]), async (ops) => {
         runs++;
         const g = await readyGame();
         const outsider = await seedPlayer(g.orgId, "Spectator", `o-${randomUUID().slice(0, 8)}`, true);
@@ -1659,7 +1660,7 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
         }
         bump("reoffer_blocked", lila.reofferBlocked);
       }),
-      { numRuns: NUM_RUNS, endOnFailure: true },
+      { numRuns: RUNS_PER_PREFIX, endOnFailure: true },
     );
     expect(runs, "anti-vacuity: the property ran").toBe(NUM_RUNS);
     console.info(`[T10 property] runs=${runs} ${JSON.stringify(totals)}`);
