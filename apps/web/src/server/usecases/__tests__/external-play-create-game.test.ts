@@ -1543,7 +1543,8 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       ["another initial clock (seconds)", () => ({ clockInitialSeconds: OUR_CLOCK.limit * 2 })],
       ["another increment", () => ({ clockIncrementSeconds: OUR_CLOCK.increment + 1 })],
       ["created before the marker's skew", (sent) => ({ createdAtMs: sent.getTime() - SKEW_MS - 1 })],
-      ["created after now", () => ({ createdAtMs: NOW.getTime() + 1 })],
+      // Fix round 3 (R2-1): a createdAt AFTER now is no longer "not ours" —
+      // lila's clock may run ahead of ours; see the symmetric-window tests.
     ];
     let checked = 0;
     for (const [name, over] of cases) {
@@ -1555,21 +1556,53 @@ describe.skipIf(!process.env.DATABASE_URL)("I2 — a create that may have reache
       await expectRecreated(s.fixtureId, name);
       checked += 1;
     }
-    expect(checked, "anti-vacuity: every field the ruling names").toBe(6);
+    expect(checked, "anti-vacuity: every field the ruling names").toBe(5);
   });
 
-  it("the time bound is inclusive at both ends: created at create_sent_at − 60 s, or at now, is ours", async () => {
+  // Fix round 3 (R2-1, controller ruling): the window is SYMMETRIC —
+  // [create_sent_at − 60 s, now + 60 s] — because lila's clock can run ahead
+  // of ours, and calling our own game "not ours" would create it twice.
+  it("the time bound is inclusive at both ends: created at create_sent_at − 60 s, at now, at now + 30 s and at now + 60 s is ours", async () => {
     let checked = 0;
-    for (const [name, at] of [["the skew edge", (sent: Date) => sent.getTime() - SKEW_MS], ["now", () => NOW.getTime()]] as const) {
+    for (const [name, at] of [
+      ["the lower skew edge", (sent: Date) => sent.getTime() - SKEW_MS],
+      ["now", () => NOW.getTime()],
+      ["now + 30 s (lila's clock ahead)", () => NOW.getTime() + 30_000],
+      ["the upper skew edge, now + 60 s", () => NOW.getTime() + SKEW_MS],
+    ] as const) {
       const s = await seed();
       const sent = await crashedAfterSend(s);
       const theirs = freshGameId();
       board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
       exportsAnswer({ [theirs]: ourMeta(theirs, sent, { createdAtMs: at(sent) }) });
       expect(await createGameIfReady(s.fixtureId, { now: NOW }), name).toEqual({ created: true, gameId: theirs });
+      expect(board.createChallengeToUser, `${name}: never re-sent`).not.toHaveBeenCalled();
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a game created BEYOND now + 60 s is HELD, never re-created — a clock that far off cannot tell ours from not — swept and counted", async () => {
+    let checked = 0;
+    for (const [name, ms] of [["now + 90 s", 90_000], ["just past the edge", SKEW_MS + 1]] as const) {
+      const s = await seed();
+      const sent = await crashedAfterSend(s);
+      const theirs = freshGameId();
+      board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
+      exportsAnswer({ [theirs]: ourMeta(theirs, sent, { createdAtMs: NOW.getTime() + ms }) });
+      await expectHeld(s.fixtureId, name, `unverified: ${theirs}`);
       checked += 1;
     }
     expect(checked).toBe(2);
+  });
+
+  it("…but a candidate that is provably NOT ours on another fact is excluded even when its createdAt is past the window", async () => {
+    const s = await seed();
+    const sent = await crashedAfterSend(s);
+    const theirs = freshGameId();
+    board.listOngoingGames.mockResolvedValue({ ok: true, complete: true, games: [playing(theirs, s.away.lichessId)] });
+    exportsAnswer({ [theirs]: ourMeta(theirs, sent, { createdAtMs: NOW.getTime() + 90_000, rated: true }) });
+    await expectRecreated(s.fixtureId, "rated, from the future");
   });
 
   it("an ongoing candidate with ANY fact its export cannot give ⇒ held, never adopted, never re-created — swept and counted", async () => {

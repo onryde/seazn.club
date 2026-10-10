@@ -44,9 +44,10 @@ import "server-only";
 // challenges to Black, and White's ongoing games against Black. A candidate
 // is adopted only when it is provably OUR create (fix round 2, N1): unrated,
 // standard, the fixture's clock, and created within [create_sent_at − 60 s,
-// now] — an ongoing game is verified through its export, a challenge on its
-// own fields. Exactly one such game ⇒ adopt; none, with every lookup read ⇒
-// re-create; two, or any candidate that cannot be verified, or any lookup
+// now + 60 s] (symmetric since fix round 3, R2-1: a createdAt beyond it
+// holds, never re-creates) — an ongoing game is verified through its export,
+// a challenge on its own fields. Exactly one such game ⇒ adopt; none, with
+// every lookup read ⇒ re-create; two, or any candidate that cannot be verified, or any lookup
 // failing ⇒ hold (`create_outcome_unknown`). The lookups run in parallel,
 // then the exports in parallel, and the marker write renews the claim, so no
 // stretch of a claim's life spans more than two Lichess call-times
@@ -455,9 +456,13 @@ type SentGame =
  *  lichess-org/api spec): such a challenge can never become this game. */
 const CLOSED_CHALLENGE = new Set(["canceled", "declined"]);
 
-/** N1 (controller ruling, fix round 2): a candidate counts as ours only if it
- *  was created within [create_sent_at − SENT_SKEW_MS, now]. The marker is
- *  written before the send; the skew allows for lila's clock against ours. */
+/** N1 (controller ruling, fix round 2; made symmetric in fix round 3, R2-1):
+ *  a candidate counts as ours only if it was created within
+ *  [create_sent_at − SENT_SKEW_MS, now + SENT_SKEW_MS]. The marker is written
+ *  before the send; the skew allows for lila's clock against ours, in either
+ *  direction. A createdAt EARLIER than the window is not ours (excluded); one
+ *  LATER than it cannot be judged — a clock that far ahead could be hiding
+ *  our own game — so it is unverified and holds, never re-creates. */
 const SENT_SKEW_MS = 60_000;
 
 type Verdict = "ours" | "not_ours" | "unverified";
@@ -481,7 +486,8 @@ function gameVerdict(m: GameMeta, plan: CreationPlan, sentAt: Date, now: Date): 
     fact(m.clockInitialSeconds, (x) => x === plan.tc.limitSeconds),
     fact(m.clockIncrementSeconds, (x) => x === plan.tc.incrementSeconds),
     fact(m.createdAtMs, (t) => t >= sentAt.getTime() - SENT_SKEW_MS),
-    fact(m.createdAtMs, (t) => t <= now.getTime()),
+    // Beyond now + skew: unverifiable (null ⇒ hold), never "not ours".
+    m.createdAtMs === null ? null : m.createdAtMs <= now.getTime() + SENT_SKEW_MS ? true : null,
   ]);
 }
 
