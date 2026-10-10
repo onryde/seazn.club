@@ -431,6 +431,36 @@ describe.runIf(HAS_DB)("writeResultFrom — every terminal status (spec §3.6)",
     expect(checked, "statuses checked").toBe(DECLARED_STATUSES.length + 1);
   });
 
+  it("EVERY status × EVERY winner Lichess could report (white, black, none) lands where the rulebook says — counted", async () => {
+    // The typical-winner sweep above checks one cell per status; a winnerless
+    // timeout, a winnerless mate or a drawn status carrying a winner are
+    // separate branches, and a mutant on one of them survived that sweep
+    // (measured: timeout-without-winner recorded as "time" was killed only
+    // by the property, which reaches that cell by draw).
+    const WINNERS: (Colour | null)[] = ["white", "black", null];
+    let checked = 0;
+    let written = 0;
+    let held = 0;
+    for (const status of [...DECLARED_STATUSES, "unrecognised"]) {
+      for (const winner of WINNERS) {
+        const g = await readyGame();
+        const s = snap(g, status === "unrecognised"
+          ? { status, rawStatus: "someStatusLichessAddsLater", winner }
+          : { status, winner });
+        const e = rulebook(status, winner, false);
+        const label = `${status}/${winner ?? "none"}`;
+        expect(await writeResultFrom(s, g.fixtureId), label).toEqual(answerOf(e));
+        await expectWritten(g, s, e, label);
+        if (e.wrote === "decided" || e.wrote === "draw") written++;
+        if (e.wrote === "aborted" || e.wrote === "needs_organiser") held++;
+        checked++;
+      }
+    }
+    expect(checked, "cells checked").toBe((DECLARED_STATUSES.length + 1) * WINNERS.length);
+    expect(written, "anti-vacuity: some cells write").toBeGreaterThan(0);
+    expect(held, "anti-vacuity: some cells hold").toBeGreaterThan(0);
+  });
+
   it("a NON-terminal status writes nothing at all", async () => {
     let checked = 0;
     for (const status of ["created", "started"] as const) {
