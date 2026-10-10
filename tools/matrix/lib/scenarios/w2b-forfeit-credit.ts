@@ -9,8 +9,9 @@
 //   AB-AWARD  an abandon with a result: leading / level (award policy), cricket's
 //             minimum overs passed / not reached                                     X-AB-1, X-AB-2, CK-AB-1/2
 //   WD-CASC   a knockout's withdrawal cascade: TBD seat, held / tie-break pending,
-//             not started, a line whose two seats both die, and a final whose two
-//             seats both departed (it goes to settle, left open by rule)            X-WD-1..4, BG-WO-2/3
+//             not started, a line whose two seats both die, and the final beside
+//             that void: crowned by bye, or, on alternate cells, its finalist
+//             withdrawn first (void, title vacant: W4's)                       X-WD-1..4, BG-WO-2/3
 //
 // A credited score the product shows in its table (X-WO-1) is judged against the walkover-credit reference family
 // (@seazn/reference), asked with the drive's offender and, after START, the scoresheet so far (scoresheetOf); a credit
@@ -26,9 +27,10 @@ import { isTerminal, toObservedOutcome, type ObservedFixture, type ObservedOutco
 import type { CreditCase } from "@seazn/reference";
 import type { CheckResult } from "../results.ts";
 import { sportModule, stageCfg } from "../sport-cfg.ts";
+import { routeTo, type Route } from "../routing.ts";
 import { generateStream, levelReachable, partialPlay } from "../streams/index.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type ForfeitReason, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
-import { AWARD_POLICY, DLS_ON, abandonOverride, w2bApplies } from "../w2b-cells.ts";
+import { AWARD_POLICY, DLS_ON, abandonOverride, w2bApplies, w2bCells } from "../w2b-cells.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, decideFixture, ensureLineups, liveEvents, playDivision, recordPosted, setUpDivision, snapshot, type DivisionSetup, type RoundHooks } from "./common.ts";
@@ -345,7 +347,24 @@ export function heldStream(sport: string, cfg: unknown, home: string, away: stri
   }
 }
 
+/** WD-CASC's final half (re-review round 2, item 2). One bracket reaches only one of the two shapes the final can take
+ *  beside SF2's void, so they alternate along WD-CASC's planned cells (w2bCells order). The seat rule reads seats and
+ *  statuses, never the sport, and the sport's own part of the choreography (QF2's held stream) runs on every cell.
+ *  - "crowned": a2 waits in the final; SF2's void kills its other seat, so a2 walks over by bye and is crowned (X-DW-2).
+ *  - "vacant": a2 withdraws from the final while its other seat is TBD (X-WD-3), and SF2's void then kills that seat
+ *    too: the final is void and nobody is crowned. That is the vacant title, which the spec hands to W4 (§2.2,
+ *    W2b-R10): W2b pins the product's answer and changes nothing. */
+export type FinalHalf = "crowned" | "vacant";
+export function wdCascFinalHalf(row: string, sport: string): FinalHalf {
+  const i = w2bCells("WD-CASC").findIndex((c) => c.row === row && c.sport === sport);
+  if (i < 0) throw new W2bMisplanned("WD-CASC", row, sport, "not one of the scenario's cells (w2b-cells.ts), so it has no final half");
+  return i % 2 === 1 ? "vacant" : "crowned";
+}
+/** The vacant half's step: a2 withdraws from the final while its other seat is TBD. */
+export const FINAL_TBD = "final opponent TBD";
+
 interface WdRecord {
+  readonly half: FinalHalf;
   readonly steps: WithdrawStep[];
   /** fixture → who withdrew from it, who remained, and what it was when they did. */
   readonly walked: { fixtureId: string; withdrawn: string; remaining: string; label: string }[];
@@ -383,7 +402,8 @@ const byExt = (fixtures: readonly ObservedFixture[], key: string): ObservedFixtu
 
 /** X-WD-3: the semi-final whose seat went dead while its other seat was TBD walks the arriving opponent over — by bye,
  *  the award a dead seat's opponent gets (W2b C-5: no loser, reason "bye") — and the withdrawn entrants are seated
- *  nowhere after the fixture they left. Nothing is voided but SF2, the dead-seat rule's void (bothSeatsDead). */
+ *  nowhere after the fixture they left. Nothing is voided but SF2, the dead-seat rule's void (bothSeatsDead), and in the
+ *  vacant half the final, the same rule's (finalVacant). */
 export function tbdSeatWalksOver(r: WdRecord, fixtures: readonly ObservedFixture[]): CheckResult {
   if (r.lines === null || r.w1 === null || r.a2 === null) return assertion("w2b-withdrawal-tbd-seat", [{ ok: false, note: "the choreography never reached its first withdrawal" }]);
   const sf = byExt(fixtures, r.lines.a.sf);
@@ -391,13 +411,19 @@ export function tbdSeatWalksOver(r: WdRecord, fixtures: readonly ObservedFixture
   const a = o !== null && o.kind === "award" ? o : null;
   const items: Item[] = [{ ok: sf?.status === "forfeited" && a !== null && a.winner === r.a2 && a.loser === null && a.reason === "bye", note: `${r.lines.a.sf}: ${sf?.status ?? "(missing)"} ${o === null ? "no outcome" : JSON.stringify(o)}, wanted the arriving ${r.a2} walked over by bye (no loser, reason bye: C-5)` }];
   const lines = r.lines;
-  for (const [who, left] of [[r.w1, lines.a.qf[0].id], [r.a3, lines.b.qf[0].id]] as const) {
+  // Who departed, and the fixtures each keeps a seat in: the ones played before her withdrawal. The vacant half's a2
+  // keeps QF2 and SF1 (both walked over to her) and leaves the final.
+  const departed: [string | null, string[]][] = [[r.w1, [lines.a.qf[0].id]], [r.a3, [lines.b.qf[0].id]]];
+  if (r.half === "vacant") departed.push([r.a2, [lines.a.qf[1].id, ...(sf === undefined ? [] : [sf.id])]]);
+  for (const [who, kept] of departed) {
     if (who === null) continue;
-    const again = fixtures.filter((f) => f.id !== left && (f.home === who || f.away === who));
-    items.push({ ok: again.length === 0, note: `${who} withdrew after ${left} and is seated again in ${again.map((f) => f.id).join(", ")}` });
+    const again = fixtures.filter((f) => !kept.includes(f.id) && (f.home === who || f.away === who));
+    items.push({ ok: again.length === 0, note: `${who} withdrew after ${kept.join(", ")} and is seated again in ${again.map((f) => f.id).join(", ")}` });
   }
-  const voids = fixtures.filter((f) => (f.status === "abandoned" || f.status === "cancelled") && f.extKey !== lines.b.sf);
-  items.push({ ok: voids.length === 0, note: `the cascade voided ${voids.map((f) => f.id).join(", ")} (X-WD-2/3: it never voids; only SF2's dead-seat void is owed)` });
+  // The vacant half's final void is the dead-seat rule's too, and finalVacant judges it.
+  const owed = r.half === "vacant" ? [lines.b.sf, lines.final] : [lines.b.sf];
+  const voids = fixtures.filter((f) => (f.status === "abandoned" || f.status === "cancelled") && !owed.includes(f.extKey ?? ""));
+  items.push({ ok: voids.length === 0, note: `the cascade voided ${voids.map((f) => f.id).join(", ")} (X-WD-2/3: it never voids; only the dead-seat rule's voids are owed: ${owed.join(", ")})` });
   return assertion("w2b-withdrawal-tbd-seat", items);
 }
 
@@ -406,8 +432,9 @@ export function tbdSeatWalksOver(r: WdRecord, fixtures: readonly ObservedFixture
  *    other seat. Both seats are dead but only one departed — nobody withdrew from QF4 — so SF2 is a void: abandoned,
  *    no outcome, nobody seated. (Both departed would be X-WD-4's double walkover; the matrix cannot drive it — a second
  *    withdrawal there finds its opponent TBD or already walked over, never withdrawn — so it is the fake's unit test's.)
- *  - The final: a2 walked over SF1 beside w1's dead seat and waits there; the seat SF2's void feeds is dead, so a2 walks
- *    over by bye and holds the title. */
+ *  - The final, in the crowned half (wdCascFinalHalf): a2 walked over SF1 beside w1's dead seat and waits there; the
+ *    seat SF2's void feeds is dead, so a2 walks over by bye and holds the title. The vacant half's final is
+ *    finalVacant's. */
 export function bothSeatsDead(r: WdRecord, fixtures: readonly ObservedFixture[], finalRanks: readonly string[] | null): CheckResult {
   if (r.lines === null || r.a2 === null) return assertion("w2b-withdrawal-both-seats-dead", [{ ok: false, note: "the choreography never reached the second line" }]);
   const sf = byExt(fixtures, r.lines.b.sf);
@@ -415,11 +442,58 @@ export function bothSeatsDead(r: WdRecord, fixtures: readonly ObservedFixture[],
   const sfSeats = sf === undefined ? [] : [sf.home, sf.away].filter((e): e is string => e !== null);
   const fa = fin?.outcome?.kind === "award" ? fin.outcome : null;
   const text = (o: ObservedFixture["outcome"] | undefined) => (o == null ? "no outcome" : JSON.stringify(o));
-  return assertion("w2b-withdrawal-both-seats-dead", [
+  const items: Item[] = [
     { ok: r.dw !== null && r.dw.refusal === null, note: r.dw === null ? "the quarter-final double walkover was never posted" : `${r.dw.fixtureId}: the double walkover was refused ${r.dw.refusal?.status ?? ""} ${r.dw.refusal?.code ?? ""}` },
     { ok: sf?.status === "abandoned" && sf.outcome == null && sfSeats.length === 0, note: `${r.lines.b.sf}: ${sf?.status ?? "(missing)"} ${text(sf?.outcome)}, seats ${sfSeats.join(" v ") || "nobody"} — wanted abandoned with no outcome, seats nobody (a departed seat beside a recorded double walkover is a void)` },
-    { ok: fin?.status === "forfeited" && fa !== null && fa.winner === r.a2 && fa.loser === null && fa.reason === "bye", note: `${r.lines.final}: ${fin?.status ?? "(missing)"} ${text(fin?.outcome)} — wanted forfeited bye award to ${r.a2} (the seat SF2's void feeds is dead, X-DW-2)` },
-    { ok: finalRanks?.[0] === r.a2, note: `the stage crowned ${finalRanks?.[0] ?? "(none)"} (finalRanks of ${finalRanks?.length ?? 0}), wanted ${r.a2}` },
+  ];
+  if (r.half === "crowned") {
+    items.push(
+      { ok: fin?.status === "forfeited" && fa !== null && fa.winner === r.a2 && fa.loser === null && fa.reason === "bye", note: `${r.lines.final}: ${fin?.status ?? "(missing)"} ${text(fin?.outcome)} — wanted forfeited bye award to ${r.a2} (the seat SF2's void feeds is dead, X-DW-2)` },
+      { ok: finalRanks?.[0] === r.a2, note: `the stage crowned ${finalRanks?.[0] ?? "(none)"} (finalRanks of ${finalRanks?.length ?? 0}), wanted ${r.a2}` },
+    );
+  }
+  return assertion("w2b-withdrawal-both-seats-dead", items);
+}
+
+/** apps/web/src/server/public-site/champion.ts BRACKET_SETTLED: the statuses a bracket crown reads a winner off. A
+ *  copy, because this layer may not import apps/web/src/server (boundary.test.ts); w2b-scenarios.test.ts pins it to
+ *  the product's text. */
+export const CROWN_SETTLED: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
+
+/** Who the product crowns on a knockout stage, by champion.ts bracketChampion's rule: the final (isFinal, never a
+ *  third-place match) when it is settled AND produced a winner. A knockout has exactly one final, so the rule's later-
+ *  final clause (a double elimination's reset) never applies; a stage flagging any other number of finals is refused
+ *  by name, never read as "nobody". */
+export function knockoutCrown(fixtures: readonly ObservedFixture[]): { ok: true; winner: string | null } | { ok: false; why: string } {
+  const finals = fixtures.filter((f) => f.isFinal === true && f.thirdPlace !== true);
+  if (finals.length !== 1) return { ok: false, why: `the stage flags ${finals.length} finals (${finals.map((f) => f.id).join(", ") || "none"}), wanted one` };
+  const [only] = finals;
+  const o = only.outcome;
+  const winner = o !== null && (o.kind === "win" || o.kind === "award") ? o.winner : null;
+  return { ok: true, winner: CROWN_SETTLED.has(only.status) ? winner : null };
+}
+
+/** The vacant title's owner (spec §2.2's handover, W2b-R10: W4, with joint winners). A route, so the Q-A guard reads the
+ *  wave it names (routing.ts). */
+export const VACANT_TITLE_ROUTE: Route = routeTo("W4", "a vacant title: a finalist withdrawn beside a voided feeder leaves the final void and crowns nobody (X-WD-3); the forfeit-credit wave pins the product's answer and changes nothing");
+/** The vacant half's title, naming the deferral. */
+export const FINAL_VACANT_TITLE = `X-WD-3/${VACANT_TITLE_ROUTE.wave}: finalist withdraws beside a voided feeder — final void, title vacant (${VACANT_TITLE_ROUTE.wave} owns vacant titles)`;
+
+/** The vacant half (wdCascFinalHalf). a2 withdrew from the final while its other seat was TBD, so her seat there is
+ *  dead and departed; SF2's void then killed the other seat, which did not depart. Two dead seats, one departed, is a
+ *  void (stages.ts resolveBracketSeats), and a void final crowns nobody (champion.ts). That is the vacant title: the
+ *  spec hands it to W4, and W2b pins the product's answer without changing it. Both items read what the run observed:
+ *  the final's row, and the crown the product's own rule gives the stage's rows. */
+export function finalVacant(r: WdRecord, fixtures: readonly ObservedFixture[]): CheckResult {
+  if (r.lines === null || r.a2 === null) return assertion("w2b-withdrawal-final-vacant", [{ ok: false, note: `${FINAL_VACANT_TITLE}: the choreography never reached the final` }]);
+  const fin = byExt(fixtures, r.lines.final);
+  const seats = fin === undefined ? [] : [fin.home, fin.away].filter((e): e is string => e !== null);
+  const crown = knockoutCrown(fixtures);
+  return assertion("w2b-withdrawal-final-vacant", [
+    { ok: fin?.status === "abandoned" && fin.outcome == null && seats.length === 0, note: `${FINAL_VACANT_TITLE}: ${r.lines.final} is ${fin?.status ?? "(missing)"} ${fin?.outcome == null ? "no outcome" : JSON.stringify(fin.outcome)}, seats ${seats.join(" v ") || "nobody"} — wanted abandoned with no outcome, seats nobody` },
+    crown.ok
+      ? { ok: crown.winner === null, note: `${FINAL_VACANT_TITLE}: the product's crown rule names ${crown.winner ?? "nobody"} — wanted nobody` }
+      : { ok: false, note: `${FINAL_VACANT_TITLE}: ${crown.why}` },
   ]);
 }
 
@@ -591,7 +665,7 @@ const abAward = scenario("AB-AWARD", async (ctx, rec, setup) => {
 });
 
 const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
-  const r: WdRecord = { steps: [], walked: [], w1: null, a2: null, a3: null, lines: null, dw: null };
+  const r: WdRecord = { half: wdCascFinalHalf(ctx.spec.row, ctx.spec.sport), steps: [], walked: [], w1: null, a2: null, a3: null, lines: null, dw: null };
   const cfg = stageCfg(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind);
   const withdraw = async (entrantId: string, label: string) => {
     let answer: WithdrawOut;
@@ -637,6 +711,9 @@ const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
       await withdraw(qf2.home_entrant_id!, held.label);
       r.walked.push({ fixtureId: qf2.id, withdrawn: qf2.home_entrant_id!, remaining: r.a2, label: held.label });
       await stopIfLeftOpen(qf2.id, held.label, qf2.home_entrant_id!, true);
+      // The vacant half (wdCascFinalHalf; re-review round 2, item 2): a2 walked over SF1 beside w1's dead seat and into
+      // the final at once (X-WD-3), and withdraws from it while its other seat is TBD. SF2's void kills that seat later.
+      if (r.half === "vacant") await withdraw(r.a2, FINAL_TBD);
       // BG-WO-2 and the bracket row: QF3 not started when its home side withdraws.
       await withdraw(qf3.home_entrant_id!, "not started");
       r.walked.push({ fixtureId: qf3.id, withdrawn: qf3.home_entrant_id!, remaining: qf3.away_entrant_id!, label: "not started" });
@@ -652,7 +729,8 @@ const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
   // The cascades wrote several fixtures no single recorded withdrawal explains: this scenario's own checks judge each.
   return finish(ctx, rec, setup, plays, (observed) => {
     const fixtures = observed.stages[0].fixtures;
-    return Promise.resolve([withdrawalsWalkOver(r, fixtures), tbdSeatWalksOver(r, fixtures), bothSeatsDead(r, fixtures, observed.stages[0].complete?.finalRanks ?? null)]);
+    const own = [withdrawalsWalkOver(r, fixtures), tbdSeatWalksOver(r, fixtures), bothSeatsDead(r, fixtures, observed.stages[0].complete?.finalRanks ?? null)];
+    return Promise.resolve(r.half === "vacant" ? [...own, finalVacant(r, fixtures)] : own);
   }, { resultsAsPosted: false });
 });
 

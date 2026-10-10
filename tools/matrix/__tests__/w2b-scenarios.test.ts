@@ -23,7 +23,8 @@ import {
   hasNoNextMatch, isolatedTable, ladderUnmoved, partialPlayStands, pickDoubleWalkover, scoresheetOf, wireGraph, withRefusals, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
 } from "../lib/scenarios/w2b-checks.ts";
 import {
-  W2B_SCENARIOS, W2bCascadeLeftOpen, W2bMisplanned, abandonDelta, abandonPlan, cascadeLeftOpen, abandonWithResult, bothSeatsDead, goalLead, heldStream, knockoutLines, tableJudged, tbdSeatWalksOver, withdrawalsWalkOver,
+  CROWN_SETTLED, FINAL_TBD, FINAL_VACANT_TITLE, W2B_SCENARIOS, W2bCascadeLeftOpen, W2bMisplanned, abandonDelta, abandonPlan, cascadeLeftOpen, abandonWithResult, bothSeatsDead, finalVacant, goalLead, heldStream, knockoutCrown, knockoutLines, tableJudged, tbdSeatWalksOver,
+  wdCascFinalHalf, withdrawalsWalkOver,
 } from "../lib/scenarios/w2b-forfeit-credit.ts";
 import { SCENARIO_KEYS, planSliceCases } from "../lib/slice.ts";
 import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
@@ -546,6 +547,7 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
   // W2b C-5: the bye award a dead seat's arriving opponent gets (awardSeededByes) — no loser, reason bye.
   const bye = (winner: string): ObservedOutcome => ({ kind: "award", winner, loser: null, reason: "bye" });
   const r = {
+    half: "crowned" as const,
     steps: [
       { entrantId: w1, label: "semi-final opponent TBD", answer: answer() },
       { entrantId: qf2.home_entrant_id!, label: "held", answer: answer({ walked_over_held: 1 }) },
@@ -564,7 +566,7 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
     // Review Focus 1: a3's departed seat beside QF4's RECORDED double walkover — nobody withdrew from QF4 — is a void.
     ext(lines.b.sf, null, null, "abandoned", null),
     // X-DW-2 (and the 2026-09-21 cascade ruling): the seat the void feeds is dead, so its opponent walks over.
-    ext(lines.final, a2, null, "forfeited", bye(a2)),
+    { ...ext(lines.final, a2, null, "forfeited", bye(a2)), isFinal: true },
   ];
   const ranks = [a2];
   it("the rule's run passes all three; each reds when its own fixture is wrong", () => {
@@ -618,6 +620,7 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
     ];
     for (const [name, key, row, rk, why] of deadRows) {
       const got = bothSeatsDead(r, swap(key, row), rk);
+      // A final row swapped in keeps its flag: the crown is read off the flagged final.
       expect(got.verdict, name).toBe("fail");
       expect(got.evidence.join(" | "), name).toMatch(why);
     }
@@ -625,6 +628,70 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
     expect(bothSeatsDead({ ...r, dw: { ...r.dw, refusal: { status: 409, code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" } } }, good, ranks).verdict, "the DW refused").toBe("fail");
     // The voids item exempts SF2 alone: a void anywhere else is still the cascade voiding (X-WD-2/3).
     expect(tbdSeatWalksOver(r, swap(lines.final, ext(lines.final, null, null, "abandoned", null))).verdict, "the final voided").toBe("fail");
+  });
+  // The vacant half (re-review round 2, item 2): a2 withdraws from the final while its other seat is TBD, and SF2's void
+  // then kills that seat. Expected values from the ruling (final void, nobody crowned: W4's vacant title) and C-5/X-WD-3.
+  const vr = { ...r, half: "vacant" as const, steps: [...r.steps.slice(0, 2), { entrantId: a2, label: FINAL_TBD, answer: answer() }, ...r.steps.slice(2)] };
+  const finalRow = (home: string | null, away: string | null, status: string, outcome: ObservedOutcome | null, extra: Partial<ObservedFixture> = {}) => ({ ...ext(lines.final, home, away, status, outcome), isFinal: true, ...extra });
+  const vacant = good.map((g) => (g.extKey === lines.final ? finalRow(null, null, "abandoned", null) : g));
+  it(`${FINAL_VACANT_TITLE}: each check passes on the rule's rows and reds on every other shape`, () => {
+    expect(withdrawalsWalkOver(vr, vacant)).toMatchObject({ verdict: "pass", checked: 7 });
+    expect(tbdSeatWalksOver(vr, vacant)).toMatchObject({ verdict: "pass", checked: 5 });
+    expect(bothSeatsDead(vr, vacant, null), "the final is finalVacant's, so finalRanks are not read").toMatchObject({ verdict: "pass", checked: 2 });
+    expect(finalVacant(vr, vacant)).toMatchObject({ verdict: "pass", checked: 2 });
+    // The crowned half's rows are not the vacant half's: its bye-crowned final reds both items, and its void would red
+    // the crowned half's voids item (above), never this one's.
+    const crownedFinal = finalVacant(vr, good);
+    expect(crownedFinal).toMatchObject({ verdict: "fail", checked: 2 });
+    expect(crownedFinal.evidence.length).toBe(2);
+    for (const line of crownedFinal.evidence) expect(line.startsWith(FINAL_VACANT_TITLE), "each line names the deferral").toBe(true);
+    expect(crownedFinal.evidence.join(" | ")).toMatch(new RegExp(`is forfeited .*"reason":"bye".*wanted abandoned with no outcome`));
+    expect(crownedFinal.evidence.join(" | ")).toMatch(new RegExp(`crown rule names ${a2} — wanted nobody`));
+    const swapF = (f: ObservedFixture) => vacant.map((g) => (g.extKey === lines.final ? f : g));
+    const rows: [string, ObservedFixture[], boolean, boolean, RegExp][] = [
+      // name, rows, final item ok, crown item ok, the evidence
+      ["the final left open", swapF(finalRow(null, null, "scheduled", null)), false, true, /is scheduled no outcome, seats nobody — wanted abandoned/],
+      ["her seat kept", swapF(finalRow(a2, null, "abandoned", null)), false, true, new RegExp(`is abandoned no outcome, seats ${a2} — wanted`)],
+      ["a void that kept a winner", swapF(finalRow(null, null, "abandoned", { kind: "win", winner: a2 })), false, true, /is abandoned \{"kind":"win"/],
+      ["crowned by a decided final", swapF(finalRow(a2, "z", "decided", { kind: "win", winner: "z" })), false, false, /crown rule names z — wanted nobody/],
+      ["no final flagged", swapF({ ...finalRow(null, null, "abandoned", null), isFinal: undefined }), true, false, /flags 0 finals \(none\), wanted one/],
+      ["two finals flagged", [...vacant, fx("f-x", "z", "y", "decided", { kind: "win", winner: "z" }, { extKey: "x", isFinal: true })], true, false, /flags 2 finals/],
+    ];
+    for (const [name, fixtures, finalOk, crownOk, why] of rows) {
+      const got = finalVacant(vr, fixtures);
+      expect(got.verdict, name).toBe("fail");
+      expect(got.evidence.length, `${name}: one evidence line per failing item`).toBe(Number(!finalOk) + Number(!crownOk));
+      expect(got.evidence.join(" | "), name).toMatch(why);
+    }
+    expect(rows.length).toBe(6);
+    // A third-place match is never the final, settled or not (champion.ts): the stage still crowns nobody.
+    expect(finalVacant(vr, [...vacant, fx("f-3p", "z", "y", "decided", { kind: "win", winner: "z" }, { extKey: "3p", isFinal: true, thirdPlace: true })]).verdict).toBe("pass");
+    // X-WD-3 for a2: she keeps QF2 and SF1 (both walked over to her) and is seated nowhere after.
+    const again = tbdSeatWalksOver(vr, swapF(finalRow(a2, null, "abandoned", null)));
+    expect(again.verdict).toBe("fail");
+    expect(again.evidence.join(" | ")).toMatch(new RegExp(`${a2} withdrew after ${qf2.id}, f-${lines.a.sf} and is seated again in f-${lines.final}`));
+    // The final void is owed in this half only, and a void anywhere else still reds.
+    expect(tbdSeatWalksOver(vr, vacant.map((g) => (g.extKey === qf1.ext_key ? ext(qf1.ext_key!, w1, qf1.away_entrant_id, "cancelled", null) : g))).verdict, "QF1 voided").toBe("fail");
+    // knockoutCrown on the crowned half's rows names a2: the positive pair of "nobody".
+    expect(knockoutCrown(good)).toEqual({ ok: true, winner: a2 });
+    // A crown read off the bye award (forfeited is a settled status, C-5) — and never off an unsettled status.
+    expect(knockoutCrown(good.map((g) => (g.extKey === lines.final ? finalRow(a2, null, "scheduled", bye(a2)) : g)))).toEqual({ ok: true, winner: null });
+  });
+  it("the final half alternates along WD-CASC's planned cells, so every run drives both shapes; a cell outside the plan is refused by name", () => {
+    const cells = w2bCells("WD-CASC");
+    const halves = cells.map((c) => wdCascFinalHalf(c.row, c.sport));
+    expect(halves.filter((h) => h === "crowned").length).toBe(Math.ceil(cells.length / 2));
+    expect(halves.filter((h) => h === "vacant").length).toBe(Math.floor(cells.length / 2));
+    expect(halves.filter((h) => h === "vacant").length).toBeGreaterThan(0);
+    expect(() => wdCascFinalHalf("league", "generic")).toThrow(W2bMisplanned);
+  });
+  it("CROWN_SETTLED is champion.ts BRACKET_SETTLED, read from the product", () => {
+    const text = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps/web/src/server/public-site/champion.ts"), "utf8");
+    const m = /export const BRACKET_SETTLED[^=]*=\s*new Set\(\[([^\]]*)\]/.exec(text);
+    expect(m, "champion.ts no longer declares BRACKET_SETTLED").not.toBeNull();
+    const product = [...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+    expect(product.length).toBeGreaterThan(0);
+    expect([...CROWN_SETTLED].sort()).toEqual(product.sort());
   });
   it("a withdrawn side's fixture left open stops the case by the rule's name; a terminal one plays on", () => {
     // The truth-run's find (pre-D): football's held QF2 stayed needs_decision after its home side withdrew, and the round
@@ -646,10 +713,13 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
     expect(new W2bCascadeLeftOpen("x").message).toBe("scenario: WD-CASC — x");
   });
   it("a choreography that never began fails each check by name (never a vacuous pass)", () => {
-    const empty = { steps: [], walked: [], w1: null, a2: null, a3: null, lines: null, dw: null };
-    expect(withdrawalsWalkOver(empty, good)).toMatchObject({ verdict: "fail", checked: 1 });
-    expect(tbdSeatWalksOver(empty, good)).toMatchObject({ verdict: "fail", checked: 1 });
-    expect(bothSeatsDead(empty, good, ranks)).toMatchObject({ verdict: "fail", checked: 1 });
+    for (const half of ["crowned", "vacant"] as const) {
+      const empty = { half, steps: [], walked: [], w1: null, a2: null, a3: null, lines: null, dw: null };
+      expect(withdrawalsWalkOver(empty, good), half).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(tbdSeatWalksOver(empty, good), half).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(bothSeatsDead(empty, good, ranks), half).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(finalVacant(empty, good), half).toMatchObject({ verdict: "fail", checked: 1 });
+    }
   });
 });
 
@@ -943,28 +1013,40 @@ describe("each table scenario, run on the league fake", () => {
 // resolveBracketSeats): a TBD seat dies and the arriving opponent walks over by bye; a dead seat beside a RECORDED double
 // walkover is a void (Review Focus 1), and the seat that void feeds walks its opponent over.
 describe("WD-CASC end to end on the single-elimination fake (review I-6, re-pinned to loop F's cascade)", () => {
-  it("every sport: the three WD-CASC checks pass on counted items, nothing is left open by rule, and no check fails", async () => {
+  it("every sport: the WD-CASC checks pass on counted items in both final halves (crowned; vacant, W4's), nothing is left open by rule, and no check fails", async () => {
     const cells = w2bCells("WD-CASC");
     expect(cells.map((c) => c.sport).sort()).toEqual([...SPORT_KEYS].sort());
     const failures: string[] = [];
     let judged = 0;
+    const halves = { crowned: 0, vacant: 0 };
     for (const { row, sport } of cells) {
       const variant = variantFor(sport);
       const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|WD-CASC`, row, sport, variant, scenario: "WD-CASC", canary: false };
       const out = await SCENARIOS["WD-CASC"].run({ driver: new FakeKnockoutDriver({ singleElim: true }), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
       for (const c of out.assertions) if (c.verdict === "fail") failures.push(`${sport} ${c.id}: ${c.reason}`);
-      for (const id of ["w2b-withdrawal-walks-over", "w2b-withdrawal-tbd-seat", "w2b-withdrawal-both-seats-dead"]) {
+      const half = wdCascFinalHalf(row, sport);
+      halves[half]++;
+      // Per half, from the choreography: the two walkovers (QF2, QF3) and its withdrawals (w1, QF2's home, QF3's home,
+      // a3, and the vacant half's a2); SF1's bye, each departed entrant seated nowhere after, no void but the owed ones;
+      // the double walkover and SF2's void, plus the crowned final's bye and crown; the vacant final's void and crown.
+      const want: Record<string, number> = half === "crowned"
+        ? { "w2b-withdrawal-walks-over": 2 + 4, "w2b-withdrawal-tbd-seat": 1 + 2 + 1, "w2b-withdrawal-both-seats-dead": 2 + 2 }
+        : { "w2b-withdrawal-walks-over": 2 + 5, "w2b-withdrawal-tbd-seat": 1 + 3 + 1, "w2b-withdrawal-both-seats-dead": 2, "w2b-withdrawal-final-vacant": 2 };
+      for (const [id, n] of Object.entries(want)) {
         const c = out.assertions.find((x) => x.id === id);
         expect(c, `${sport} ${id}`).toBeDefined();
+        expect(c!.checked, `${sport} ${id}`).toBe(n);
         judged += c!.checked;
       }
+      expect(out.assertions.some((x) => x.id === "w2b-withdrawal-final-vacant"), `${sport}: the final-vacant check runs in the vacant half only`).toBe(half === "vacant");
       expect(out.assertions.find((c) => c.id === "life-loop-bounded")?.verdict, sport).toBe("pass");
       expect(out.notes.filter((n) => n.includes("(exempt)")), sport).toEqual([]);
     }
     expect(failures).toEqual([]);
-    // Per cell: the two walkovers and four withdrawals the choreography makes (QF2, QF3; w1, QF2's home, QF3's home, a3),
-    // SF1's bye plus w1 and a3 never re-seated plus no void but SF2's, and the four dead-seat items.
-    expect(judged).toBe(cells.length * (2 + 4 + 4 + 4));
+    expect(halves.crowned, "the crowned half ran").toBeGreaterThan(0);
+    expect(halves.vacant, "the vacant half ran").toBeGreaterThan(0);
+    expect(halves.crowned + halves.vacant).toBe(cells.length);
+    expect(judged).toBe(halves.crowned * (6 + 4 + 4) + halves.vacant * (7 + 5 + 2 + 2));
   });
 });
 
