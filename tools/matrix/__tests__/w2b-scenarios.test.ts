@@ -356,6 +356,45 @@ describe("feedGraph: the engine's wiring, trusted only on the stage the product 
   });
 });
 
+describe("loop F I-5 on the knockout fake: its double-walkover refusal is the product's feedsNextMatch over BOTH of a fixture's lines", () => {
+  // single-sport: the refusal reads the fake's feed edges, never the sport.
+  async function doubleElim(n: number) {
+    const variant = variantFor("generic");
+    const d = new FakeKnockoutDriver({ doubleElim: true });
+    const spec: CaseSpec = { caseId: `double_elim|generic|${variant}|DW-ALL`, row: "double_elim", sport: "generic", variant, scenario: "DW-ALL", canary: false };
+    await setUpDivision({ driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("generic", variant), tag: "t", denied: [] }, new Recorder(), n);
+    return { d, byKey: (k: string) => d.fixtures.find((f) => f.ext_key === k)! };
+  }
+  const DW: StreamEvent[] = [{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }];
+
+  it("a two-entrant double elim's winners' match — its winner AND its loser into the grand final — is refused 409 DOUBLE_WALKOVER_NO_NEXT_MATCH, unwritten; a four-entrant opener (two different fixtures) is accepted", async () => {
+    const two = await doubleElim(2);
+    const wb = two.byKey("wb-r0-i0");
+    const gf = two.byKey("gf");
+    expect([two.d.feeds.get(wb.id)?.to, two.d.loserFeeds.get(wb.id)?.to], "premise: both of its lines go to the grand final").toEqual([gf.id, gf.id]);
+    const refused = await two.d.postStream(wb.id, DW).then(() => null, (e: unknown) => e);
+    expect(refused).toBeInstanceOf(RefusedCall);
+    expect(refused).toMatchObject(DW_NO_NEXT);
+    expect(wb.events, "the refused fixture is unwritten").toEqual([]);
+    const four = await doubleElim(4);
+    const opener = four.byKey("wb-r0-i0");
+    const lines = [four.d.feeds.get(opener.id)?.to, four.d.loserFeeds.get(opener.id)?.to];
+    expect(lines.every((t) => t !== undefined) && lines[0] !== lines[1], "premise: the opener's two lines go to two fixtures").toBe(true);
+    await four.d.postStream(opener.id, DW);
+    expect((opener.outcome as { kind?: unknown } | null)?.kind, "accepted").toBe("double_walkover");
+  });
+
+  it("the fake lays out no bracket reset (generateDoubleElim, no bracketReset): a reset's grand final is unreachable on it, so I-5's reset is witnessed on the feed graph and the oracle's next line instead", async () => {
+    const { d } = await doubleElim(4);
+    const field = F8.slice(0, 4);
+    const keys = d.fixtures.map((f) => f.ext_key);
+    expect(keys).toEqual(BRACKET_OF.double_elim!(field, {}).fixtures.map((g) => g.id));
+    const replay = BRACKET_OF.double_elim!(field, { bracketReset: true }).fixtures.find((g) => g.conditional === true);
+    expect(replay, "premise: the engine's reset has a conditional replay").toBeDefined();
+    expect(keys).not.toContain(replay!.id);
+  });
+});
+
 describe("deadSeats (X-DW-2): a double walkover kills both seats it feeds; one dead seat is a walkover, two a double walkover", () => {
   it("a knockout quarter-final's double walkover kills one seat of its semi-final, and nothing beyond (the walkover's winner plays on)", () => {
     const { gen, graph } = bracket("knockout", F8);

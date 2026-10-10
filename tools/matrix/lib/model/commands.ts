@@ -29,14 +29,16 @@ import { fenceBlocking } from "./fences.ts";
 import { ledgerEnvelopes, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 import {
   COMMAND_KINDS, FORFEIT_REFUSAL_CHECK, OPT_IN_KINDS, SETTLE_REFUSAL_CHECK, ModelViolation, NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
-  absorbFixtures, checkStep, ensureModelLineups, entrantInput, fedCandidates, fedMatchStarted, markUnknown, readRoster, recordFinding, rosterLocked,
+  absorbFixtures, checkStep, ensureModelLineups, entrantInput, fedCandidates, fedMatchStarted, inLastRound, lastRoundReadDiverges, markUnknown, readRoster, recordFinding, rosterLocked,
   type AnyCommandKind, type CommandCounts, type CommandKind, type FixtureModel, type ModelState, type OptInKind, type StepVerdict,
 } from "./state.ts";
 
 export { COMMAND_KINDS, OPT_IN_KINDS, ModelViolation, checkStep, newModelState, type AnyCommandKind, type CommandKind, type FixtureModel, type ModelState, type OptInKind } from "./state.ts";
 
+/** The field a model run opens with (model.ts); AddEntrant grows it before Start. */
+export const MODEL_ENTRANTS = 4;
 /** The roster ceiling: the model grows a field, it does not stress one. */
-const MAX_ENTRANTS = 8;
+export const MAX_ENTRANTS = 8;
 
 /** Candidate `k` of `xs`. `ready()` guarantees candidates; an empty list here
  *  is a model defect, refused by name rather than read as `undefined`. */
@@ -262,6 +264,11 @@ class Start extends Cmd {
   readonly kind = "Start" as const;
   protected ready(m: ModelState) { return !m.started; }
   protected async act(m: ModelState, d: OrganiserDriver) {
+    // The field is laid out here, once (Withdraw waits for Start; a later entrant meets the roster lock).
+    const read = lastRoundReadDiverges(m.stageKind, m.stageConfig, m.entrants.length);
+    if (read.diverges.length > 0) {
+      throw new Error(`model: a ${m.stageKind} of ${m.entrants.length} (${JSON.stringify(m.stageConfig)}) lays out ${read.diverges.join(", ")}, where the model's last-round read of X-DW-3 is not the product's next-match rule (loop F I-5: both lines into one fixture) — the model holds no feed edges, so it cannot judge this shape`);
+    }
     await d.start(m.divisionId);
     m.started = true;
     absorbFixtures(m, await d.listFixtures(m.divisionId));
@@ -503,11 +510,14 @@ function forfeitPhaseOf(m: ModelState, f: FixtureModel, ledger: readonly LedgerE
 }
 
 /** X-DW-3: the bracket fixture has no next match — on a feeding bracket, nothing sits in a later round (the final, a
- *  third-place match). The model sees no feed edges; a later round is the structural read fedCandidates uses too. */
+ *  third-place match). Not the product's feedsNextMatch by name, for a named reason: the model sees no feed edges (the
+ *  product's fixture list serves none), so the last round is the structural read fedCandidates uses too. It IS the
+ *  product's rule on every bracket the model starts — Start refuses, by name, a shape where they part (loop F I-5,
+ *  state.ts lastRoundReadDiverges). */
 function noNextMatch(m: ModelState, f: FixtureModel): boolean {
   const round = f.round;
   if (!NEXT_MATCH_LOCK.kinds.includes(m.stageKind) || round === null) return false;
-  return ![...m.fixtures.values()].some((g) => g.round !== null && g.round > round);
+  return inLastRound(round, [...m.fixtures.values()].map((g) => g.round));
 }
 
 export function forfeitVerdict(m: ModelState, f: FixtureModel, by: ForfeitSide, reason: ForfeitReason): ForfeitVerdict {

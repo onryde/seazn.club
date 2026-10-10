@@ -17,6 +17,7 @@ import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateSt
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
+import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { liveEvents } from "../lib/scenarios/common.ts";
@@ -760,9 +761,10 @@ export class FakeSwissDriver extends FakeLeagueDriver {
  *  fixture are out of this fake's scope and thrown by name. */
 /*  `thirdPlace: true` (W2b review I-1) makes it the knockout_third_place row's knockout ON THE ENGINE's single elim
  *  (generateSingleElim, thirdPlace), keyed as the product keys it (ext_key, is_final, third_place), so the harness's
- *  feed graph and nextLineOf resolve on it. As the server does (scoring.ts, X-DW-3), a double walkover on a fixture
- *  whose winner feeds no next match (the final, the third-place match) is refused 409 DOUBLE_WALKOVER_NO_NEXT_MATCH
- *  and writes nothing — on every shape this fake plays. An accepted one that feeds a next match seats nobody there (the
+ *  feed graph and nextLineOf resolve on it. As the server does (append-event.ts, X-DW-3), a double walkover on a
+ *  fixture that feeds no next match by the product's feedsNextMatch (no line out: the final, the third-place match; or
+ *  both lines into one fixture: a two-entrant double elim's winners' match, loop F I-5) is refused 409
+ *  DOUBLE_WALKOVER_NO_NEXT_MATCH and writes nothing — on every shape this fake plays (a bracket reset is not one). An accepted one that feeds a next match seats nobody there (the
  *  dead-seat cascade, X-DW-2, is the product's and is not mirrored: a scenario that needs it runs on the product). */
 export interface FakeKnockoutOptions {
   readonly pagePlayoff?: boolean; readonly stepladder?: boolean; readonly doubleElim?: boolean; readonly thirdPlace?: boolean;
@@ -1007,7 +1009,9 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     const f = this.fixtures.find((x) => x.id === id)!;
     const dw = events.some((e) => e.type === "core.forfeit" && (e.payload as { by?: unknown }).by === "both");
-    if (dw && !this.feeds.has(id)) { // the model fake's and the oracle's rule: the WINNER feeds no next match
+    // The server's rule (append-event.ts X-DW-3): the product's own feedsNextMatch over the fixture's two lines — none,
+    // or (loop F I-5) both into ONE fixture (a two-entrant double elim's winners' match), is no next match.
+    if (dw && !feedsNextMatch({ winner_to_fixture: this.feeds.get(id)?.to ?? null, loser_to_fixture: this.loserFeeds.get(id)?.to ?? null })) {
       throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, engineHttpStatus("DOUBLE_WALKOVER_NO_NEXT_MATCH"), "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a double walkover needs a next match");
     }
     const out = await super.postStream(id, events, prefix);

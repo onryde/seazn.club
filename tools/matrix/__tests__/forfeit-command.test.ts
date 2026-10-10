@@ -6,14 +6,16 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EngineError } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import type { RowKey } from "../lib/catalogue.ts";
+import { ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
-import { COMMAND_KINDS, ModelViolation, OPT_IN_KINDS, SWISS_BIAS, checkStep, commandOf, modelCommands, newModelState, type ModelState } from "../lib/model/commands.ts";
+import { COMMAND_KINDS, MAX_ENTRANTS, MODEL_ENTRANTS, ModelViolation, OPT_IN_KINDS, SWISS_BIAS, checkStep, commandOf, modelCommands, newModelState, type ModelState } from "../lib/model/commands.ts";
 import { biasFor } from "../lib/model/run-cell.ts";
-import { DW_ADVANCES_NOBODY_CHECK, FORFEIT_ONE_RESULT_CHECK, FORFEIT_REFUSAL_CHECK, FORFEIT_TABLE_CHECK } from "../lib/model/state.ts";
+import { DW_ADVANCES_NOBODY_CHECK, FORFEIT_ONE_RESULT_CHECK, FORFEIT_REFUSAL_CHECK, FORFEIT_TABLE_CHECK, NEXT_MATCH_LOCK, lastRoundReadDiverges, modelRowRefusal } from "../lib/model/state.ts";
+import { BRACKET_OF } from "../lib/scenarios/terminal-finals.ts";
 import { loadRegressions, replayFences } from "../lib/scenario-catalogue.ts";
 import { resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
@@ -244,6 +246,70 @@ describe("Forfeit's contract per state (D3 rule table, D4, PF-2, X-DW-3)", () =>
     expect(lm.forfeits.length, "the forfeit was asked and answered").toBe(before + 1);
     expect(lastForfeit(lm)!.code).not.toBe("DOUBLE_WALKOVER_NO_NEXT_MATCH");
     expect(row(d, sf1).id).toBe(sf1);
+  });
+
+  // The model holds no feed edges (the product's fixture list serves none: driver/types.ts FixtureRow), so its X-DW-3 is
+  // the structural last round. It is the product's feedsNextMatch exactly where the two agree; loop F I-5 is where they
+  // part — a match whose winner AND loser feed one fixture is not in the last round, and has no next match.
+  it("loop F I-5 on the model: its last-round read IS the product's next-match rule on every bracket row it drives, at every field it can start (its first field up to its ceiling) — swept, every fixture counted", () => {
+    // single-sport: the read is the bracket's shape, never the sport.
+    const kinds = new Set<string>();
+    let rows = 0;
+    let laidOut = 0;
+    let fixtures = 0;
+    for (const r of ROW_KEYS) {
+      if (modelRowRefusal(r) !== null) continue;
+      const [body, ...rest] = stagesForRow(r);
+      expect(rest, `${r}: the model drives single-stage rows only`).toEqual([]);
+      if (!NEXT_MATCH_LOCK.kinds.includes(body!.kind)) continue;
+      rows++;
+      kinds.add(body!.kind);
+      for (let n = MODEL_ENTRANTS; n <= MAX_ENTRANTS; n++) {
+        // A size the engine cannot lay out is one the product's Start refuses: no fixture of it is ever judged.
+        const engineLaysOut = (() => {
+          try {
+            BRACKET_OF[body!.kind]!(Array.from({ length: n }, (_, i) => `e${i + 1}`), body!.config);
+            return true;
+          } catch (e) {
+            if (EngineError.is(e)) return false;
+            throw e;
+          }
+        })();
+        const read = lastRoundReadDiverges(body!.kind, body!.config, n);
+        expect(read.diverges, `${r} (${body!.kind} ${JSON.stringify(body!.config)}) of ${n}`).toEqual([]);
+        expect(read.checked > 0, `${r} of ${n}: fixtures read exactly when the engine lays the field out`).toBe(engineLaysOut);
+        if (engineLaysOut) laidOut++;
+        fixtures += read.checked;
+      }
+    }
+    expect(rows, "bracket rows the model drives").toBeGreaterThan(0);
+    expect(kinds, "the kind I-5 bites on is among them").toContain("double_elim");
+    expect(laidOut, "shapes read").toBeGreaterThanOrEqual(rows);
+    expect(fixtures).toBeGreaterThan(laidOut);
+  });
+
+  it("loop F I-5 on the model: where the two part — a bracket reset's grand final, a two-entrant double elim's winners' match — the read names each, and Start refuses the shape by name before the product is asked", async () => {
+    const field = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
+    // The engine's own declarations: the reset's first grand final is its non-conditional final; a two-entrant double
+    // elim's winners' match is the one fixture fed nothing.
+    const resetGf = BRACKET_OF.double_elim!(field(4), { bracketReset: true }).fixtures.find((g) => g.isFinal === true && g.conditional !== true)!.id;
+    const opener = BRACKET_OF.double_elim!(field(2), {}).fixtures.find((g) => g.homeFrom === undefined && g.awayFrom === undefined)!.id;
+    expect(lastRoundReadDiverges("double_elim", { bracketReset: true }, 4).diverges).toEqual([resetGf]);
+    expect(lastRoundReadDiverges("double_elim", {}, 2).diverges).toEqual([opener]);
+    expect(lastRoundReadDiverges("double_elim", { bracketReset: true }, 2).diverges).toEqual([opener, resetGf]);
+    expect(lastRoundReadDiverges("double_elim", {}, 4), "the positive pair: no reset at four").toMatchObject({ diverges: [] });
+    expect(MODEL_ENTRANTS, "the model's first field is above the two-entrant shape").toBeGreaterThan(2);
+    // A feeding kind with no generator is refused, never passed as agreeing; today every feeding kind has one.
+    expect(() => lastRoundReadDiverges("double_elim", {}, 4, {})).toThrow(/feeds next matches, but BRACKET_OF lays out no bracket/);
+    expect(NEXT_MATCH_LOCK.kinds.filter((k) => BRACKET_OF[k] === undefined), "feeding kinds with no generator").toEqual([]);
+    expect(lastRoundReadDiverges("ladder", {}, 4), "a kind with no feed edges reads nothing").toEqual({ checked: 0, diverges: [] });
+    // Through the real producer: a started double elim with a reset is refused at Start, the division never started.
+    const d = new ModelFakeDriver({});
+    const base = await newModelState({ driver: d, row: "league", sport: "generic", variant: offlineBuilderDefault("generic"), entrants: MODEL_ENTRANTS, tag: "t" });
+    const m: ModelState = { ...base, stageKind: "double_elim", stageConfig: { bracketReset: true } };
+    await expect(commandOf("Start", 0, 0, false).run(m, d)).rejects.toThrow(new RegExp(`lays out ${resetGf}, .*X-DW-3.*loop F I-5`));
+    expect(m.started).toBe(false);
+    expect(d.fixtures, "the product was never asked to start").toEqual([]);
   });
 
   it("a refusal with ANY OTHER code than the table's is a defect (model-forfeit-refused-by-name)", async () => {

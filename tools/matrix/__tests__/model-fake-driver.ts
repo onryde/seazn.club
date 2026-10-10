@@ -45,6 +45,7 @@
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
+import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { stageCfg } from "../lib/sport-cfg.ts";
 import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
@@ -341,15 +342,17 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   }
   /** W2b's two server rules on an organiser's core.forfeit, before the fold (the cascade's own writes are exempt):
    *  PF-2 — `withdrew` is the withdrawal cascade's alone, refused from every other writer INVALID_EVENT (422); X-DW-3 —
-   *  a double walkover on a bracket fixture with no next match (no feed edge out: a final, a third-place match) is
-   *  refused DOUBLE_WALKOVER_NO_NEXT_MATCH, the fixture left open. */
+   *  a double walkover on a bracket fixture with no next match (the product's feedsNextMatch over its lines: no feed
+   *  edge out, a final, a third-place match) is refused DOUBLE_WALKOVER_NO_NEXT_MATCH, the fixture left open. */
   #serverForfeitRules(f: FakeFixture, ev: StreamEvent, path: string): void {
     const p = (ev.payload ?? {}) as { by?: unknown; reason?: unknown };
     if (p.reason === "withdrew") throw new RefusedCall("POST", path, 422, "INVALID_EVENT", "a withdrawal is recorded by withdrawing the entrant, not by a forfeit");
     const kind = this.stage?.kind ?? null;
     // W2b D19: the feeding bracket kinds only — a ladder (forbidsLevelResult, but no feed edges) takes one anywhere.
     // A double walkover is `both` + walkover (X-DW-1); `both` with another reason is the schema's R1, INVALID_EVENT.
-    if (p.by === "both" && p.reason === "walkover" && kind !== null && BRACKET_STAGE_KINDS.has(kind) && !this.feeds.has(f.id)) {
+    // This fake wires winner lines only (feed() — the model's brackets hold no loser line), so its loser line is null.
+    const feeds = feedsNextMatch({ winner_to_fixture: this.feeds.get(f.id)?.target ?? null, loser_to_fixture: null });
+    if (p.by === "both" && p.reason === "walkover" && kind !== null && BRACKET_STAGE_KINDS.has(kind) && !feeds) {
       throw new RefusedCall("POST", path, engineHttpStatus("DOUBLE_WALKOVER_NO_NEXT_MATCH"), "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a double walkover needs a next match — reschedule, record a walkover if one side turned up, or settle");
     }
   }

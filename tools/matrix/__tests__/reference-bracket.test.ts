@@ -505,35 +505,59 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     expect(() => forfeitPlayOf("boardgame", ccfg, "h", "a", [...drawn, { type: "core.forfeit", payload: { by: "a", reason: "walkover" } }])).toThrow(/drawn chess game/);
   });
 
-  it("nextLineOf: a final, a last rung and a third-place match feed no next match (X-DW-3), every other bracket match does — read from the engine's wiring, swept over every bracket generator; a ladder feeds none (D19); an unreadable layout is unresolved by name", () => {
+  it("nextLineOf: a final (both grand finals of a reset), a last rung, a third-place match and a match whose two sides meet again in one fixture feed no next match (X-DW-3, loop F I-5), every other bracket match does — read from the engine's wiring, swept over every bracket generator; a ladder feeds none (D19); an unreadable layout is unresolved by name", () => {
     const ids = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
     const rowsOf = (gen: { fixtures: readonly { id: string; home?: string; away?: string }[] }): FixtureRow[] =>
       gen.fixtures.map((g, i) => ({ id: `row-${g.id}`, stage_id: "s", pool_id: null, round_no: 1, fixture_no: i + 1, home_entrant_id: g.home ?? null, away_entrant_id: g.away ?? null, status: "scheduled", outcome: null, ext_key: g.id }));
-    const shapes: readonly [string, Record<string, unknown>, ReturnType<typeof generateSingleElim>, boolean][] = [
-      ["knockout", { thirdPlace: true }, generateSingleElim({ entrants: ids(8), thirdPlace: true }), false],
-      ["knockout", {}, generateSingleElim({ entrants: ids(8), thirdPlace: false }), false],
-      ["page_playoff", {}, generatePagePlayoff({ entrants: ids(4) }), false],
-      ["stepladder", {}, generateStepladder({ entrants: ids(4) }), false],
-      ["double_elim", {}, generateDoubleElim({ entrants: ids(4) }), false],
-      ["double_elim", { bracketReset: true }, generateDoubleElim({ entrants: ids(4), bracketReset: true }), true],
+    const shapes: readonly [string, Record<string, unknown>, ReturnType<typeof generateSingleElim>][] = [
+      ["knockout", { thirdPlace: true }, generateSingleElim({ entrants: ids(8), thirdPlace: true })],
+      ["knockout", {}, generateSingleElim({ entrants: ids(8), thirdPlace: false })],
+      ["page_playoff", {}, generatePagePlayoff({ entrants: ids(4) })],
+      ["stepladder", {}, generateStepladder({ entrants: ids(4) })],
+      ["double_elim", {}, generateDoubleElim({ entrants: ids(4) })],
+      ["double_elim", { bracketReset: true }, generateDoubleElim({ entrants: ids(4), bracketReset: true })],
+      ["double_elim", {}, generateDoubleElim({ entrants: ids(2) })],
+      ["double_elim", { bracketReset: true }, generateDoubleElim({ entrants: ids(2), bracketReset: true })],
     ];
+    // The product's rule (apps/web bracket-next-match.ts, loop F I-5), read off the engine's own declarations: its isFinal
+    // and thirdPlace flags (both grand finals of a reset are isFinal), and a fixture fed from BOTH sides of one match —
+    // that match only replays its own two entrants (a reset's grand final, a two-entrant double elim's winners' match).
     let none = 0;
     let next = 0;
-    for (const [kind, config, gen, reset] of shapes) {
+    let rematches = 0;
+    for (const [kind, config, gen] of shapes) {
       const rows = rowsOf(gen);
-      for (const g of gen.fixtures as readonly { id: string; isFinal?: boolean; thirdPlace?: boolean; conditional?: boolean }[]) {
-        const terminal = (reset ? g.conditional === true : g.isFinal === true) || g.thirdPlace === true;
+      const fixtures = gen.fixtures as readonly { id: string; isFinal?: boolean; thirdPlace?: boolean; homeFrom?: { fixtureId: string }; awayFrom?: { fixtureId: string } }[];
+      const rematch = (id: string) => fixtures.some((h) => h.homeFrom?.fixtureId === id && h.awayFrom?.fixtureId === id);
+      for (const g of fixtures) {
+        const terminal = g.isFinal === true || g.thirdPlace === true || rematch(g.id);
         const line = nextLineOf(kind, config, rows.find((r) => r.ext_key === g.id)!, rows);
-        expect(line.line, `${kind} ${g.id}`).toBe(terminal ? "none" : "next");
+        expect(line.line, `${kind} ${JSON.stringify(config)} of ${gen.fixtures.length} ${g.id}`).toBe(terminal ? "none" : "next");
         if (terminal) none++; else next++;
+        if (rematch(g.id)) rematches++;
       }
     }
+    // A reset's grand final at 4 and at 2, and the 2-entrant winners' match with and without a reset: four rematches.
+    expect(rematches).toBe(4);
     expect(none).toBeGreaterThanOrEqual(shapes.length); // every shape has at least its final
     expect(next).toBeGreaterThan(0);
     const ko = rowsOf(generateSingleElim({ entrants: ids(4), thirdPlace: false }));
     expect(nextLineOf("ladder", {}, ko[0]!, ko)).toEqual({ line: "none" });
     expect(nextLineOf("knockout", {}, { ...ko[0]!, ext_key: null }, ko)).toEqual({ line: "unresolved", why: expect.stringMatching(/carries no ext_key/) });
     expect(nextLineOf("league", {}, ko[0]!, ko)).toEqual({ line: "unresolved", why: expect.stringMatching(/no bracket generator for 'league'/) });
+    // The one-line-per-side guards, reached with an injected layout (loserSeatOf's rule): pp-q1's winner, then its
+    // loser, wired into two different fixtures is unresolved by name; the engine's own layout is the positive pair, and
+    // names the WINNER line's target (pp-final), not the loser's (pp-q2).
+    const pp = rowsOf(generatePagePlayoff({ entrants: ids(4) }));
+    const twice = (side: "winner" | "loser") => ({ page_playoff: () => ({ rounds: 3, fixtures: [
+      { id: "pp-q1", round: 0, home: "e1", away: "e2" }, { id: "pp-elim", round: 0, home: "e3", away: "e4" },
+      { id: "pp-q2", round: 1, homeFrom: { fixtureId: "pp-q1", side }, awayFrom: { fixtureId: "pp-elim", side: "winner" as const } },
+      { id: "pp-final", round: 2, isFinal: true, homeFrom: { fixtureId: "pp-q1", side }, awayFrom: { fixtureId: "pp-q2", side: "winner" as const } },
+    ] }) }) as unknown as Parameters<typeof nextLineOf>[4];
+    for (const side of ["winner", "loser"] as const) {
+      expect(nextLineOf("page_playoff", {}, pp[0]!, pp, twice(side)), side).toEqual({ line: "unresolved", why: expect.stringMatching(new RegExp(`wires 2 ${side} lines out of pp-q1`)) });
+    }
+    expect(nextLineOf("page_playoff", {}, pp[0]!, pp)).toEqual({ line: "next", target: "pp-final" });
   });
 
   it("the comparison counts the W2b forfeits it judged: N of M in its reason; forfeits driven and none judged FAILS, and so does a run that owed them and drove none (zero judged, R25)", () => {

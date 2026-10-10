@@ -17,7 +17,7 @@
 // fix round 1, T14-R3) — and a row the model does not drive is refused by
 // family (ModelUnsupported).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
-import { forbidsLevelResult, isLevelOutcome, type StageKind } from "@seazn/engine/core";
+import { EngineError, forbidsLevelResult, isLevelOutcome, type StageKind } from "@seazn/engine/core";
 import { nextMatchFixtureId, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
 import { stagesForRow, type RowKey, type StagePostBody } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
@@ -26,6 +26,8 @@ import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture,
 import { NotAWave, WAVE_ID, type Route } from "../routing.ts";
 import { lineupItems, lineupWarningLine, putOwedLineups, type LineupSink } from "../scenarios/lineup-plan.ts";
 import { entrantName, rosterMembers, rosterSize } from "../scenarios/rosters.ts";
+import { BRACKET_OF } from "../scenarios/terminal-finals.ts";
+import { hasNoNextMatch, wireGraph } from "../scenarios/w2b-checks.ts";
 import { entrantKindFor, resolveSportCfg, stageCfg } from "../sport-cfg.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
@@ -258,6 +260,37 @@ export function fedCandidates(m: ModelState, f: FixtureModel, refusal?: RefusedC
   const mine = [f.home, f.away].filter((e): e is string => e !== null);
   const holds = (g: FixtureModel) => (g.home !== null && mine.includes(g.home)) || (g.away !== null && mine.includes(g.away));
   return [...m.fixtures.values()].filter((g) => g.round !== null && g.round > round && holds(g));
+}
+
+/** X-DW-3 on the model: `round` is the last round — no fixture sits in a later one. The model holds no feed edges (the
+ *  product's fixture list serves none: driver/types.ts FixtureRow), so this structural read stands in for the product's
+ *  feedsNextMatch; lastRoundReadDiverges says where it may (commands.ts noNextMatch reads it, Start guards it). */
+export function inLastRound(round: number, rounds: Iterable<number | null>): boolean {
+  for (const r of rounds) if (r !== null && r > round) return false;
+  return true;
+}
+
+/** Loop F I-5, an assumption made a guard: on the engine's bracket for this stage (`kind`, `config`) and a field of
+ *  `entrants`, each fixture's last-round read against the PRODUCT's next-match rule (w2b-checks hasNoNextMatch: apps/web
+ *  bracket-next-match.ts feedsNextMatch, over the engine's two lines out of it). `diverges`: the fixtures where the two
+ *  part — a match whose winner AND loser feed one fixture (a bracket reset's grand final, a two-entrant double elim's
+ *  winners' match) has no next match, yet is not in the last round. `checked`: the fixtures read. A kind with no feed
+ *  edges reads nothing; so does a field the engine cannot lay out (the product's Start refuses it, so no fixture is
+ *  ever judged). A feeding kind with no generator is refused by name, never passed. */
+export function lastRoundReadDiverges(kind: string, config: Readonly<Record<string, unknown>>, entrants: number, generators: typeof BRACKET_OF = BRACKET_OF): { checked: number; diverges: string[] } {
+  if (!NEXT_MATCH_LOCK.kinds.includes(kind)) return { checked: 0, diverges: [] };
+  const gen = generators[kind];
+  if (gen === undefined) throw new Error(`model: '${kind}' feeds next matches, but BRACKET_OF lays out no bracket for it — add its generator before the model reads its X-DW-3`);
+  let bracket: ReturnType<typeof gen>;
+  try {
+    bracket = gen(Array.from({ length: entrants }, (_, i) => `e${i + 1}`), config);
+  } catch (e) {
+    if (EngineError.is(e)) return { checked: 0, diverges: [] };
+    throw e;
+  }
+  const graph = wireGraph(bracket.fixtures);
+  const rounds = bracket.fixtures.map((g) => g.round);
+  return { checked: bracket.fixtures.length, diverges: bracket.fixtures.filter((g) => inLastRound(g.round, rounds) !== hasNoNextMatch(graph, g.id)).map((g) => g.id) };
 }
 
 /** fed-seats.ts `!isCascadeWalkover(t) && hasStarted(t)` for one candidate,

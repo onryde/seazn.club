@@ -31,6 +31,7 @@
 // COUNTED and named, never silent, and a run that judged nothing fails (zero is a failure, R25).
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { FORFEIT_REASONS, LEVEL_KINDS, OutOfScope, RuledOut, requireFamily, type Action, type BracketCase, type BracketExpect, type LevelKind, type PlayResult, type WinMethod } from "@seazn/reference";
+import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
 import { foldStream } from "./fold.ts";
 import type { ObservedOutcome } from "./observed.ts";
 import { BRACKET_OF } from "./scenarios/terminal-finals.ts";
@@ -48,10 +49,11 @@ export type LoserSeat =
    *  match was driven, or null when it is empty. */
   | { readonly line: "seat"; readonly target: string; readonly slot: "home" | "away"; readonly seated: string | null };
 
-/** W2b (X-DW-3, plan D19): whether the engine's bracket wires THIS match's winner into a next match. */
+/** W2b (X-DW-3, plan D19): whether the engine's bracket feeds THIS match into a next match (nextLineOf). */
 export type NextLine =
   | { readonly line: "next"; readonly target: string }
-  /** No winner line out of this match: a final, a last rung, a third-place match — and a ladder challenge (D19). */
+  /** No next match: no line out (a final, a last rung, a third-place match, a ladder challenge — D19), or both lines into
+   *  one fixture (loop F I-5: a bracket reset's grand final, a two-entrant double elim's winners' match). */
   | { readonly line: "none" }
   /** The wiring could not be read for this stage; `why` names it. A double walkover here is not judged. */
   | { readonly line: "unresolved"; readonly why: string };
@@ -253,15 +255,26 @@ export function loserSeatOf(stageKind: string, config: Record<string, unknown>, 
   return { line: "seat", target, slot, seated: slot === "home" ? into.home_entrant_id : into.away_entrant_id };
 }
 
-/** W2b (X-DW-3): where the engine's bracket wires the WINNER of the match `row` — the next match it feeds, none, or
- *  why the layout could not be read (loserSeatOf's rule). A ladder wires no feed edge (plan D19): none. */
+/** W2b (X-DW-3): whether the match `row` feeds a next match, by the PRODUCT's own predicate (apps/web
+ *  bracket-next-match.ts feedsNextMatch, the one its double-walkover writers share) over the engine's two lines out of
+ *  it — none, or (loop F I-5) both lines into ONE fixture, which only replays the same two entrants; else the next match
+ *  (its winner line's target) — or why the layout could not be read (loserSeatOf's rule). A ladder wires no feed edge
+ *  (plan D19): none. */
 export function nextLineOf(stageKind: string, config: Record<string, unknown>, row: FixtureRow, rows: readonly FixtureRow[], generators: typeof BRACKET_OF = BRACKET_OF): NextLine {
   if (stageKind === "ladder") return { line: "none" }; // D19
   const layout = layoutOf(stageKind, config, row, rows, generators);
   if ("why" in layout) return { line: "unresolved", why: layout.why };
-  const fed = layout.fixtures.filter((g) => [g.homeFrom, g.awayFrom].some((ref) => ref !== undefined && ref.side === "winner" && ref.fixtureId === layout.key));
-  if (fed.length > 1) return { line: "unresolved", why: `the engine wires ${fed.length} winner lines out of ${layout.key}` };
-  return fed[0] === undefined ? { line: "none" } : { line: "next", target: fed[0].id };
+  const out = (side: "winner" | "loser") => layout.fixtures.filter((g) => [g.homeFrom, g.awayFrom].some((ref) => ref !== undefined && ref.side === side && ref.fixtureId === layout.key));
+  const won = out("winner");
+  const lost = out("loser");
+  for (const [side, fed] of [["winner", won], ["loser", lost]] as const) {
+    if (fed.length > 1) return { line: "unresolved", why: `the engine wires ${fed.length} ${side} lines out of ${layout.key}` };
+  }
+  const winner = won[0]?.id ?? null;
+  const loser = lost[0]?.id ?? null;
+  if (!feedsNextMatch({ winner_to_fixture: winner, loser_to_fixture: loser })) return { line: "none" };
+  // feedsNextMatch holds with a line out, so one of the two is set; the winner's is the next match the drive names.
+  return { line: "next", target: winner ?? loser };
 }
 
 /** Judge one drive against the oracle. The oracle is asked through `requireFamily` first, so a bracket kind with no

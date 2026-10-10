@@ -126,12 +126,13 @@ describe("tools/matrix import boundary", () => {
     expect(naming).toEqual(["lib/driver/browser-driver.ts"]);
   });
 
-  it("the product's next-match predicate is a file plain node can load: it exists and imports nothing, and only the W2b checks name it", () => {
+  it("the product's next-match predicate is a file plain node can load: it exists and imports nothing, and only its two readers name it — the W2b checks' feed graph and the oracle's next line (the model reads it through the checks)", () => {
     const file = join(REPO, BRACKET_NEXT_MATCH);
     expect(existsSync(file), BRACKET_NEXT_MATCH).toBe(true);
     expect(importsOf(file), `${BRACKET_NEXT_MATCH} must stay import-free`).toEqual([]);
-    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === BRACKET_NEXT_MATCH)).map((m) => relative(MATRIX, m));
-    expect(naming).toEqual(["lib/scenarios/w2b-checks.ts"]);
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === BRACKET_NEXT_MATCH)).map((m) => relative(MATRIX, m)).sort();
+    // reference-bracket.ts cannot read it through the checks: w2b-checks → assertions.ts → reference-bracket.ts.
+    expect(naming).toEqual(["lib/reference-bracket.ts", "lib/scenarios/w2b-checks.ts"]);
   });
 
   it("the test-module check sees every import shape it is held to, and no shipped module reaches __tests__ (anti-vacuity: the scan reads every module)", () => {
