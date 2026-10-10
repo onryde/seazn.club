@@ -29,8 +29,8 @@
 // from `builtinModules` and reds if `SPORT_KEY` ever carries more, fewer, or
 // different keys than the engine ships.
 import type { MessageKey } from "@/lib/messages";
-import type { EngineErrorCode, ForfeitReason, SettleMethod, SquadProvenance, SquadRole } from "@seazn/engine/core";
-import { forfeitPhaseRefusalOf, type RefusalPhase } from "@/lib/forfeit-phase-refusal";
+import type { EngineErrorCode, SettleMethod, SquadProvenance, SquadRole } from "@seazn/engine/core";
+import { forfeitPhaseRefusalOf, type RefusalPhase, type WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
 import type { TIEBREAK_RUNGS as ENGINE_TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { swatchName } from "@/lib/brand-palette";
 import { interpolate } from "@/lib/i18n-runtime";
@@ -1328,17 +1328,17 @@ export const ENGINE_ERROR_REASON_KEY: Partial<Record<EngineErrorCode, Readonly<R
 const SEAT_DEPARTED_KEY: MessageKey = "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed";
 
 /** W2b loop-F M-4: FORFEIT_REASON_WRONG_PHASE's named sentences and their words. Exhaustive Records, so a phase or a
- *  reason the engine adds is a tsc red here, never a raw key on screen. */
+ *  reason the engine adds is a tsc red here, never a raw key on screen. The reasons are the WRITER's (loop-F R-3): the
+ *  refusal never names PF-2's cascade-only `withdrew` (`forfeitPhaseRefusalOf` subtracts it), so it has no word. */
 export const FORFEIT_PHASE_KEY: Record<RefusalPhase, MessageKey> = {
   pre: "forfeit.phase.pre",
   play: "forfeit.phase.play",
   tiebreak: "forfeit.phase.tiebreak",
 };
-export const FORFEIT_REASON_KEY: Record<ForfeitReason, MessageKey> = {
+export const FORFEIT_REASON_KEY: Record<WriterForfeitReason, MessageKey> = {
   walkover: "forfeit.reason.walkover",
   retired: "forfeit.reason.retired",
   disqualified: "forfeit.reason.disqualified",
-  withdrew: "forfeit.reason.withdrew",
 };
 const FORFEIT_WRONG_PHASE_NAMED_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named";
 const FORFEIT_WRONG_PHASE_BOTH_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak";

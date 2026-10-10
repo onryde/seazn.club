@@ -255,8 +255,8 @@ export interface SideInfo {
    *  Optional: existing test fixtures and callers that never render
    *  `LineupEditor` predate this field. */
   kind?: string;
-  /** W2b D-R9: the entrant has withdrawn (`entrants.status`) — the settle dialog never offers them. Optional for the
-   *  same reason as `kind`. */
+  /** W2b D-R9: the entrant has LEFT THE FIELD — withdrawn or disqualified (`DEPARTED_STATUSES`, loop-F tidy) — so the
+   *  settle dialog never offers them. Optional for the same reason as `kind`. */
   withdrawn?: boolean;
   members: MemberIn[];
   lineup: LineupSlotIn[];

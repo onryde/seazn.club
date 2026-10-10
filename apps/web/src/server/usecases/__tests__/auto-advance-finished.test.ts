@@ -14,7 +14,7 @@ import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { finalizeFixture, scoreEvent } from "../scoring";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, getStandings } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -178,9 +178,9 @@ describe.skipIf(!HAS_DB)("D18 / X-AB-2: auto-advance fires when every group fixt
 describe.skipIf(!HAS_DB)("M-10: an expunged group fixture is closed for auto-advance; a plain abandon is not", () => {
   const BADMINTON = "badminton";
   const BWF = "bwf";
-  async function playBadminton(auth: AuthCtx, id: string) {
+  async function playBadminton(auth: AuthCtx, id: string, homeWins = true) {
     await post(auth, id, "core.start");
-    for (let g = 0; g < 2; g++) await post(auth, id, "badminton.game.summary", { home: 21, away: 10 });
+    for (let g = 0; g < 2; g++) await post(auth, id, "badminton.game.summary", homeWins ? { home: 21, away: 10 } : { home: 10, away: 21 });
     const [r] = await sql<{ status: string }[]>`select status from fixtures where id = ${id}`;
     expect(r!.status, "rig: a played match is decided").toBe("decided");
   }
@@ -200,8 +200,32 @@ describe.skipIf(!HAS_DB)("M-10: an expunged group fixture is closed for auto-adv
     expect(n, "rig: three abandoned fixtures, each with its expunge abandon").toBe(3);
     const rest = without(r, leaver);
     expect(rest, "the three fixtures among the others").toHaveLength(3);
-    for (const id of rest) await playBadminton(r.auth, id);
+    // Loop-F tidy: a LADDER among the three who stayed — X beats both, Y beats Z, Z loses both — so Z, who played every
+    // match, has no point either. "Excluded" and "ranked last" then differ: ranked, the leaver (nothing played) would
+    // sit beside Z; the take (ranks 1-2) is X and Y either way, so the seats alone cannot tell them apart.
+    const stayed = [...new Set(rest.flatMap((id) => [...r.sides[r.fixtures.indexOf(id)]!]))].filter((id): id is string => id !== null).sort();
+    expect(stayed, "rig: three entrants stayed").toHaveLength(3);
+    const [x, y, z] = stayed as [string, string, string];
+    const beats = (w: string, l: string) => (w === x) || (w === y && l === z);
+    for (const id of rest) {
+      const [home, away] = r.sides[r.fixtures.indexOf(id)]!;
+      await playBadminton(r.auth, id, beats(home!, away!));
+    }
     expect(await advanced(r)).toEqual({ koFixtures: 1, koSeated: 1, autoAdvanced: 1, group: ["abandoned", "decided"] });
+    const [ko] = await sql<{ home: string | null; away: string | null }[]>`
+      select home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${r.koId}`;
+    const seated = [ko!.home, ko!.away];
+    expect(seated, "the leaver does not advance").not.toContain(leaver);
+    expect([...seated].sort(), "the two who won a match advance").toEqual([x, y].sort());
+    // D5: her expunged lines leave the table for EVERYONE — each of the three who stayed counts two matches, not three,
+    // and her own row (the snapshot keeps a departed entrant's row) counts none.
+    const rows = (await getStandings(r.auth, r.groupId)).rows as { entrantId: string; played: number }[];
+    const played = Object.fromEntries(rows.map((q) => [q.entrantId, q.played]));
+    expect([played[x], played[y], played[z]], "the three who stayed: two matches each").toEqual([2, 2, 2]);
+    expect(played[leaver] ?? 0, "the leaver: nothing counted").toBe(0);
+    // NOT pinned (loop-F tidy finding, routed to the owner): the snapshot RANKS her — last, below Z who lost both — and
+    // a take that reaches her rank seats her and walks her over (F14). Whether an expunged leaver belongs in the
+    // qualification ranks at all is unruled; pinning either answer here would freeze it.
   }, 120_000);
 
   it("the negative pair: a plain (organiser) abandon in the same group still holds the stage", async () => {

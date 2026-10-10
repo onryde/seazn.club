@@ -954,9 +954,12 @@ describe("scoring-vocab covers what the engine declares", () => {
   });
 
   it("M-4: FORFEIT_REASON_WRONG_PHASE names the phase and the allowed reasons in every locale; a double walkover in a tie-break is its own sentence", () => {
-    // The engine's own declarations: every phase the guard refuses in, every forfeit reason (FORFEIT_REASONS).
-    const reasons: readonly string[] = FORFEIT_REASONS;
-    expect(Object.keys(FORFEIT_REASON_KEY).sort(), "one word per engine forfeit reason").toEqual([...reasons].sort());
+    // The engine's own declarations: every phase the guard refuses in, every forfeit reason (FORFEIT_REASONS) — less
+    // spec PF-2's cascade-only `withdrew`, which no writer this refusal reaches may record (loop-F R-3).
+    const PF2_CASCADE_ONLY: readonly string[] = ["withdrew"];
+    const reasons: readonly string[] = FORFEIT_REASONS.filter((r) => !PF2_CASCADE_ONLY.includes(r));
+    expect(reasons.length, "the engine declares writer reasons").toBeGreaterThan(0);
+    expect(Object.keys(FORFEIT_REASON_KEY).sort(), "one word per reason a writer may record").toEqual([...reasons].sort());
     expect(Object.keys(FORFEIT_PHASE_KEY).sort()).toEqual([...REFUSAL_PHASES].sort());
     let checked = 0;
     for (const [locale, dict] of Object.entries(LOCALES)) {
@@ -967,8 +970,9 @@ describe("scoring-vocab covers what the engine declares", () => {
       const named = dict["engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named"]!;
       const both = dict["engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak"]!;
       expect([named.includes("{phase}"), named.includes("{allowed}"), both.includes("{allowed}")], locale).toEqual([true, true, true]);
+      // The engine lists the cascade's `withdrew` (it admits it in every phase); the sentence names only the walkover.
       const allowed = ["walkover", "withdrew"];
-      const words = `${dict["forfeit.reason.walkover"]}, ${dict["forfeit.reason.withdrew"]}`;
+      const words = dict["forfeit.reason.walkover"]!;
       expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "play", allowed, both: false }), locale).toBe(
         interpolate(named, { phase: dict["forfeit.phase.play"]!, allowed: words }),
       );
@@ -981,6 +985,10 @@ describe("scoring-vocab covers what the engine declares", () => {
       );
       // The empty case: no extras (an older server) reads the code's own copy, which names no rule it cannot know.
       expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", null), locale).toBe(dict["engineError.FORFEIT_REASON_WRONG_PHASE"]);
+      // R-3's empty case: a phase admitting ONLY the cascade's reason names nothing — the code's own copy again.
+      expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "raw", m, "score.failed", { phase: "pre", allowed: ["withdrew"], both: false }), locale).toBe(
+        dict["engineError.FORFEIT_REASON_WRONG_PHASE"],
+      );
       checked++;
     }
     expect(checked).toBe(4);

@@ -33,7 +33,7 @@ import {
 } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { DEPARTED_STATUSES, createEntrants } from "../entrants";
+import { DEPARTED_STATUSES, createEntrants, patchEntrant } from "../entrants";
 import { completeStage, createStages, generateStageFixtures, getStandings, writeDepartedSeat } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
@@ -565,6 +565,126 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     }
     expect((await fixtureRow(parentId)).outcome).toEqual(seatWalkover(a.away_entrant_id!));
   });
+
+  it("R-1: a departed LOSER's seat is stamped at the decision — a void of that line revives the third-place line her dead feed voided, and the field side re-deciding it is seated in a LIVE line, never the abandoned one", async () => {
+    // single-sport: badminton; the un-fill reads the feed graph and the entrant status, not the sport. Every
+    // DEPARTED_STATUSES member: a disqualification is a status change with no cascade, and a W2a-era withdrawal left
+    // the same shape (a departed entrant still seated in an unplayed line).
+    let checked = 0;
+    for (const departed of [...DEPARTED_STATUSES]) {
+      const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+      const rows = await rowsOf(s.stageId);
+      const [a, b, ...more] = rows.filter((r) => r.home_entrant_id && r.away_entrant_id);
+      if (!a || !b || more.length > 0) throw new Error(`${departed}: rig — two seated semis`);
+      if (a.loser_to_fixture === null || a.loser_to_fixture !== b.loser_to_fixture) throw new Error(`${departed}: rig — both semis' losers feed one third-place line`);
+      const thirdId = a.loser_to_fixture;
+      // The seat's label as the generator drew it — the label a revived seat waits under again.
+      const drawn = slotLabel(rows.find((r) => r.id === thirdId)!, a.loser_to_slot);
+      expect(drawn, `${departed}: rig — the generator labelled the seat`).not.toBeNull();
+      // Semi B walks over at its home's withdrawal: an award, whose loser edge is dead (X-DE-1).
+      await withdrawEntrantCascade(s.auth, b.home_entrant_id!);
+      // Semi A's away leaves the field with no cascade, then loses semi A: a departed loser (X-WD-5).
+      await patchEntrant(s.auth, a.away_entrant_id!, { status: departed } as never);
+      await playBadminton(s.auth, a.id, true);
+      const voided = await fixtureRow(thirdId);
+      expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], `${departed}: rig — both loser feeds dead: the third-place line is void`).toEqual([
+        "abandoned",
+        null,
+        null,
+        null,
+      ]);
+      await voidLatest(s.auth, a.id);
+      expect((await fixtureRow(a.id)).status, `${departed}: rig — semi A is open again`).toBe("in_play");
+      const revived = await fixtureRow(thirdId);
+      expect([revived.status, revived.outcome, seatOf(revived, a.loser_to_slot), slotLabel(revived, a.loser_to_slot)], `${departed}: the void revives the third-place line, waiting on semi A`).toEqual([
+        "scheduled",
+        null,
+        null,
+        drawn,
+      ]);
+      // Re-decided the other way: she wins (a departed winner is stamped, never seated) and the field side loses — seated
+      // in the live third-place line, which then walks him over semi B's dead side.
+      for (let g = 0; g < 3 && (await fixtureRow(a.id)).status === "in_play"; g++) {
+        await post(s.auth, a.id, "badminton.game.summary", { home: 10, away: 21 });
+      }
+      expect((await fixtureRow(a.id)).status, `${departed}: rig — she won semi A`).toBe("decided");
+      const third = await fixtureRow(thirdId);
+      expect([third.status, third.outcome, seatOf(third, a.loser_to_slot)], `${departed}: the field loser is in a live line, walked over semi B's dead side`).toEqual([
+        "forfeited",
+        seatWalkover(a.home_entrant_id!),
+        a.home_entrant_id,
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(DEPARTED_STATUSES.size);
+  }, 120_000);
+
+  it("R-1 consequence: BOTH semis lost by departed entrants — both third-place seats are departure-dead, a line that feeds nothing stays open (X-WD-4/D19, as a final does), and the stage still completes on its final", async () => {
+    // single-sport: badminton. Before R-1 a departed loser's seat was dead but unstamped, so this line was VOIDED; the
+    // stamp makes both seats departures, which is X-WD-4's "every side withdrew" — and D19 writes no double walkover on
+    // a line with no next match. Bracket completion ranks an unplayed third-place line by the fallback (bracketRanks).
+    const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+    const [a, b] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
+    if (!a || !b || a.loser_to_fixture === null || a.loser_to_fixture !== b.loser_to_fixture) throw new Error("rig: two semis into one third-place line");
+    for (const sf of [a, b]) {
+      await patchEntrant(s.auth, sf.away_entrant_id!, { status: "disqualified" } as never);
+      await playBadminton(s.auth, sf.id, true);
+    }
+    const third = await fixtureRow(a.loser_to_fixture);
+    expect([third.status, third.outcome, labelOf(third, 1), labelOf(third, 2)], "both seats stamped dead; nothing written on the line").toEqual([
+      "scheduled",
+      null,
+      BYE_KEY,
+      BYE_KEY,
+    ]);
+    expect(await activeTypes(third.id)).toEqual([]);
+    const final = await playBadminton(s.auth, a.winner_to_fixture!, true);
+    expect((await completeStage(s.auth, s.stageId)).completed, "the final decided the stage").toBe(true);
+    expect(final.status).toBe("decided");
+  }, 120_000);
+
+  it("R-4: the way out the settle dialog names when BOTH sides of a held line have left — void back into play, then a disqualification forfeit for either side: nobody advances, and the next match walks the other semi's winner over", async () => {
+    // single-sport: football, the held-line rig (a 0-0 at full time is held in a bracket). The dialog's state is a
+    // LEGACY row (PF-8a: a W2a withdrawal left the held line alone) or a disqualification (a status change, no
+    // cascade) — one side each here, the two departures the dialog counts.
+    const s = await seedBracket({ ...football, stageKind: "knockout", entrants: 4 });
+    const [a, b] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
+    if (!a || !b || a.winner_to_fixture === null || a.winner_to_fixture !== b.winner_to_fixture) throw new Error("rig: two semis into one final");
+    await heldFootball(s.auth, a.id);
+    await sql`update entrants set status = 'withdrawn' where id = ${a.home_entrant_id}`;
+    await patchEntrant(s.auth, a.away_entrant_id!, { status: "disqualified" } as never);
+    // Nobody can be named: both settles are refused (C17 over DEPARTED_STATUSES).
+    let refusals = 0;
+    for (const winner of [a.home_entrant_id!, a.away_entrant_id!]) {
+      await expect(post(s.auth, a.id, "core.settle", { winner, method: SETTLE_BY_ORGANISER }), winner).rejects.toMatchObject({ code: "SETTLE_NOT_APPLICABLE" });
+      refusals++;
+    }
+    expect(refusals).toBe(2);
+    // Step 1, take back: the full-time whistle is voided and the match is live again.
+    const [ft] = active(await ledgerOf(a.id)).slice(-1);
+    expect([ft?.type, (ft?.payload as { phase?: string } | undefined)?.phase], "rig: the newest live event is full time").toEqual(["football.period", "FT"]);
+    await voidLatest(s.auth, a.id);
+    expect((await fixtureRow(a.id)).status, "back into play").toBe("in_play");
+    // A disqualification of BOTH is not a recordable event: the engine's `core.forfeit` schema admits `by: "both"` only
+    // as a walkover (core/events.ts), and football records a walkover only before the start (R2, walkoverPhases).
+    await expect(post(s.auth, a.id, "core.forfeit", { by: "both", reason: "disqualified" })).rejects.toMatchObject({ code: "INVALID_EVENT" });
+    await expect(post(s.auth, a.id, "core.forfeit", { by: "both", reason: "walkover" })).rejects.toMatchObject({ code: "FORFEIT_REASON_WRONG_PHASE" });
+    // Step 2, a disqualification forfeit for either side — the console's Forfeit… with the reason "disqualified". Its
+    // nominal winner has left too: stamped, never seated (I-1), so nobody advances from the line.
+    await post(s.auth, a.id, "core.forfeit", { by: a.home_entrant_id, reason: "disqualified" });
+    const closed = await fixtureRow(a.id);
+    expect([closed.status, closed.outcome?.kind], "the line is closed by the forfeit").toEqual(["forfeited", "award"]);
+    const final = await fixtureRow(a.winner_to_fixture);
+    expect([seatOf(final, a.winner_to_slot), labelOf(final, a.winner_to_slot)], "nobody advances from it: the seat is dead").toEqual([null, BYE_KEY]);
+    // The other semi decides: its winner walks over the dead seat in the final.
+    await post(s.auth, b.id, "core.start");
+    await post(s.auth, b.id, "football.goal", { by: b.home_entrant_id });
+    await post(s.auth, b.id, "football.period", { phase: "HT" });
+    await post(s.auth, b.id, "football.period", { phase: "FT" });
+    expect((await fixtureRow(b.id)).status, "rig: the other semi decided").toBe("decided");
+    const walked = await fixtureRow(a.winner_to_fixture);
+    expect([walked.status, walked.outcome], "the final walks the other semi's winner over").toEqual(["forfeited", seatWalkover(b.home_entrant_id!)]);
+  }, 120_000);
 
   it("I-5: a double-elimination grand final WITH a bracket reset is a final — a double walkover on it is refused, a withdrawal leaves it open, and the resolver never writes one", async () => {
     // single-sport: badminton; the rule reads the feed graph (both edges into the reset), never the sport.

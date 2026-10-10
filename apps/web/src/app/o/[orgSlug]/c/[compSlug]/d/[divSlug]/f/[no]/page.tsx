@@ -15,7 +15,7 @@ import {
 import { getDivision } from "@/server/usecases/divisions";
 import { getScheduleSettings } from "@/server/usecases/schedule";
 import { getCompetition } from "@/server/usecases/competitions";
-import { getEntrant } from "@/server/usecases/entrants";
+import { DEPARTED_STATUSES, getEntrant } from "@/server/usecases/entrants";
 import { resolveModule } from "@/server/engine-db";
 import {
   FixtureConsole,
@@ -117,7 +117,9 @@ export default async function FixturePage({
       id: entrant.id,
       name: entrant.display_name,
       kind: entrant.kind,
-      withdrawn: entrant.status === "withdrawn",
+      // Left the field — withdrawn OR disqualified (the ONE departed vocabulary): the settle dialog never offers her,
+      // as the server refuses a settle naming either (append-event.ts C17, loop-F tidy).
+      withdrawn: DEPARTED_STATUSES.has(entrant.status),
       members: entrant.members as SideInfo["members"],
       lineup: lineup.slots as LineupSlotIn[],
     };

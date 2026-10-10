@@ -430,11 +430,15 @@ describe("cursor pagination", () => {
 describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons to the wire and the copy", () => {
   const rulebookAllowed = (phase: string, walkoverPhases: readonly string[]) =>
     FORFEIT_REASONS.filter((r) => (r === "walkover" ? walkoverPhases.includes(phase) : r === "withdrew" ? true : phase !== "pre"));
+  // Spec PF-2: `withdrew` is recorded by the withdrawal cascade alone; every writer this refusal reaches is refused it,
+  // so the wire and the sentence never offer it (loop-F R-3).
+  const PF2_CASCADE_ONLY: readonly string[] = ["withdrew"];
   const enM = (k: string, v?: Record<string, string | number>) => interpolate((uiEn as Record<string, string>)[k]!, v);
 
   it("every sport, before the start and once play started: the refusal's phase and reasons reach the wire and the sentence", async () => {
     let refused = 0;
     let nothingToRefuse = 0;
+    let onlyCascade = 0;
     for (const { key, module: mod } of sportCases()) {
       const cfg = mod.configSchema.parse(mod.variants[Object.keys(mod.variants)[0]!] ?? {});
       const lineups = defaultLineupPair(mod.positions);
@@ -442,8 +446,9 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
       for (const prefix of [[], [{ type: "core.start", payload: {} }]] as const) {
         const head = prefix.map((e, i) => makeEnvelope(i + 1, e));
         const phase = mod.forfeitPhase(foldMatch(mod as never, cfg, lineups, head) as never);
-        const allowed = rulebookAllowed(phase, walkoverPhases);
-        const reason = FORFEIT_REASONS.find((r) => !allowed.includes(r));
+        const engineAllowed = rulebookAllowed(phase, walkoverPhases);
+        const allowed = engineAllowed.filter((r) => !PF2_CASCADE_ONLY.includes(r));
+        const reason = FORFEIT_REASONS.find((r) => !engineAllowed.includes(r));
         if (reason === undefined) {
           nothingToRefuse++;
           continue;
@@ -461,7 +466,14 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
           throw caught;
         });
         expect(res.status, label).toBe(409);
+        expect((caught as EngineError).data, `${label}: the engine itself lists the cascade's reason`).toMatchObject({ allowed: engineAllowed });
         const error = (await body(res)).error as Record<string, unknown>;
+        if (allowed.length === 0) {
+          // Only the cascade's reason fits this phase: nothing a writer may record, so the code's own copy.
+          expect(error, label).toEqual({ code: "FORFEIT_REASON_WRONG_PHASE", message: (caught as EngineError).message });
+          onlyCascade++;
+          continue;
+        }
         expect(error, label).toEqual({ code: "FORFEIT_REASON_WRONG_PHASE", message: (caught as EngineError).message, phase, allowed, both: false });
         const words = allowed.map((r) => enM(`forfeit.reason.${r}`)).join(", ");
         expect(scoringErrorText(error.code as string, error.message as string, enM as never, "score.failed", error), label).toBe(
@@ -471,7 +483,7 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
       }
     }
     // Every sport refuses a retirement before the start (R4), so at least one refusal per sport.
-    expect(refused, `refused (nothing to refuse in ${nothingToRefuse} sport×phase cases)`).toBeGreaterThanOrEqual(sportCases().length);
+    expect(refused, `refused (nothing to refuse in ${nothingToRefuse}, only the cascade's reason in ${onlyCascade} sport×phase cases)`).toBeGreaterThanOrEqual(sportCases().length);
   });
 
   it("the empty case: an unreadable shape forwards code + message only, and the copy is the code's own", async () => {
@@ -483,6 +495,8 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
       { phase: "pre", allowed: [], both: false },
       { phase: "pre", allowed: ["made_up"], both: false },
       { phase: "pre", allowed: ["withdrew"] },
+      // R-3: the phase admits only the cascade's reason — nothing this writer may record, so nothing is named.
+      { phase: "pre", allowed: ["withdrew"], both: false },
     ]) {
       const res = await v1(async () => {
         throw new EngineError("FORFEIT_REASON_WRONG_PHASE", "m", data);
@@ -492,6 +506,6 @@ describe("M-4: FORFEIT_REASON_WRONG_PHASE carries its phase and allowed reasons 
       expect(scoringErrorText("FORFEIT_REASON_WRONG_PHASE", "m", enM as never, "score.failed", error)).toBe(enM("engineError.FORFEIT_REASON_WRONG_PHASE"));
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(7);
   });
 });

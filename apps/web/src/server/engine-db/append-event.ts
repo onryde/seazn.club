@@ -23,6 +23,7 @@ import { loadLineupPair } from "./lineups";
 import { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
 import { releaseFedSeats } from "./fed-seats";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
+import { isCascadeOnlyForfeitReason } from "@/lib/forfeit-phase-refusal";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
@@ -226,9 +227,12 @@ function assertW2bWriteGuards(
       method: payload[retired.field],
     });
   }
+  // The cascade-only reasons are ONE list (lib/forfeit-phase-refusal.ts), which the WRONG_PHASE copy also subtracts so
+  // it never offers a writer a reason refused here (loop-F R-3).
+  const cascadeOnlyForfeit = candidate.type === "core.forfeit" && isCascadeOnlyForfeitReason(payload.reason);
   const withdrew = candidate.type === "core.forfeit" && payload.reason === "withdrew";
   const expunge = candidate.type === "core.abandon" && payload.expunge === true;
-  if ((withdrew || expunge) && writer !== "withdrawal_cascade") {
+  if ((cascadeOnlyForfeit || expunge) && writer !== "withdrawal_cascade") {
     throw new EngineError("INVALID_EVENT", "only a withdrawal records this — withdraw the entrant instead", {
       fixtureId: fixture.id,
       reason: "cascade_only",
@@ -425,8 +429,12 @@ export async function appendEventInTx(
     // names no entrant either way; the fold refuses it below with its own 4xx, as before D-R7.
     if (typeof winner === "string" && ENTRANT_ID_SHAPE.test(winner)) {
       const [w] = await tx<{ status: string }[]>`select status from entrants where id = ${winner}`;
-      if (w?.status === "withdrawn") {
-        throw new EngineError("SETTLE_NOT_APPLICABLE", "that entrant has withdrawn — settle for the remaining entrant", {
+      // Loop-F tidy: the server's ONE departed vocabulary (withdrawn or disqualified), never a restated 'withdrawn' — a
+      // disqualified entrant is out of the field as surely. Imported lazily: `usecases/entrants` sits above this file
+      // (entrants → stages → … → append-event), and a static edge back up reorders the cycle (fed-seats.ts, M-2).
+      const { DEPARTED_STATUSES } = await import("@/server/usecases/entrants");
+      if (w !== undefined && DEPARTED_STATUSES.has(w.status)) {
+        throw new EngineError("SETTLE_NOT_APPLICABLE", "that entrant has left the field — settle for the remaining entrant", {
           fixtureId,
           reason: SETTLE_REFUSAL_REASON.withdrawn,
           winner,

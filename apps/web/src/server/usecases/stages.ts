@@ -3633,10 +3633,11 @@ export async function fillSlot(
   return row?.id ?? null;
 }
 
-/** Loop-F I-1: the seat a DEPARTED winner would have filled is stamped dead instead (`BYE_SLOT_LABEL`, as her
- *  withdrawal stamps it, X-WD-3/D17), so the cascade walks the line's other side over it — a departed entrant is never
- *  re-seated by a decision taken after she left (a void re-opened her line, and she won it again). Only an EMPTY seat
- *  of an undecided line; the id it stamped, or null. */
+/** Loop-F I-1 / R-1: the seat a DEPARTED entrant would have filled — as the winner (a void re-opened her line, and she
+ *  won it again) or as the loser (X-WD-5) — is stamped dead instead (`BYE_SLOT_LABEL`, as her withdrawal stamps it,
+ *  X-WD-3/D17), so the cascade walks the line's other side over it and a void of the deciding line finds the stamp
+ *  (fed-seats.ts `planRelease`). A departed entrant is never seated by a decision taken after she left. Only an EMPTY
+ *  seat of an undecided line; the id it stamped, or null. */
 export async function stampDepartedSeat(tx: Tx, fixtureId: string, slot: number): Promise<string | null> {
   const bye = tx.json(BYE_SLOT_LABEL as never);
   const [row] = slot === 1

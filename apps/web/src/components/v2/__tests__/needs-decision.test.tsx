@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { BRACKET_KINDS, StageKind, foldMatch, outcomeOf, foldMatchWithStoppage } from "@seazn/engine/core";
+import { BRACKET_KINDS, FORFEIT_REASONS, StageKind, foldMatch, outcomeOf, foldMatchWithStoppage } from "@seazn/engine/core";
 import { boardgame } from "@seazn/engine/sports/boardgame"; // the "./sports/*" subpath export (engine package.json)
 import { declaredCfgs, defaultLineupPair, forEachSport, makeEnvelope } from "@seazn/engine/testkit";
 import { renderToStaticMarkup } from "react-dom/server";
 import { NeedsDecisionBlock, SettleDialog, confirmBlocked, finalizeVisible, hasActiveAbandon, heldCause, needsDecision, type HeldCause } from "../needs-decision";
 import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 
 // W2a Task 11 (spec §5.5, UI-1 option A; controller ruling C12). The console's "Needs a decision" block shows iff the
 // stage is a bracket kind AND the kernel's own `settleApplies` is true, fed the same facts. Pure predicates — the
@@ -289,5 +292,25 @@ describe("the settle dialog never offers a withdrawn entrant (D-R9)", () => {
       checked++;
     }
     expect(checked).toBe(3);
+  });
+
+  // Loop-F R-4: the sentence names the way out, in every locale — the route withdrawal-w2b.test.ts "R-4" drives: void
+  // back into play, then a forfeit for either side with the engine's own reason value `disqualified` (the console's
+  // Forfeit… prompt takes the value itself, so it is never translated). A disqualification of BOTH is no event (the
+  // engine's core.forfeit admits `by: "both"` only as a walkover), so no locale offers it.
+  it("R-4: the no-choice sentence names the way out in every locale — void back into play, then a disqualification forfeit", () => {
+    const DQ: (typeof FORFEIT_REASONS)[number] = "disqualified";
+    expect(FORFEIT_REASONS, "the engine declares the reason the sentence names").toContain(DQ);
+    const LOCALES: [string, Record<string, string>][] = [["en", en], ["es", es], ["fr", fr], ["nl", nl]];
+    const lines = new Set<string>();
+    let checked = 0;
+    for (const [locale, dict] of LOCALES) {
+      const line = dict["score.needsDecision.noChoice"]!;
+      expect(line.includes(DQ), `${locale}: names the forfeit reason the console takes`).toBe(true);
+      lines.add(line);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(lines.size, "four translations, not one sentence copied").toBe(4);
   });
 });

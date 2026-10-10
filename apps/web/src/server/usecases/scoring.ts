@@ -789,15 +789,20 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
       if (filled !== null) advanced.push(filled);
     }
     // W2b X-WD-5: a departed entrant (`DEPARTED_STATUSES`: withdrawn or disqualified) is never seated on a loser
-    // edge. A settle on a LEGACY held line (plan PF-8a — W2a left a withdrawn entrant's held line held) names her as its
-    // loser; her seat stays empty instead, and the cascade below reads it dead (`loserFeederIsDead`) and walks her
-    // opponent over it.
-    const loserWithdrawn =
+    // edge. A decision that names her as its loser — a settle on a LEGACY held line (plan PF-8a), or a line she lost
+    // after a disqualification (a status change, no cascade) — leaves her seat empty, and the cascade below reads it
+    // dead (`loserFeederIsDead`) and walks her opponent over it. Loop-F R-1: the seat is STAMPED dead as well, as a
+    // departed winner's is (I-1), so a void of this line finds the stamp and revives whatever the dead seat settled — a
+    // third-place line voided because both its loser feeds were dead stays void otherwise, and the side re-deciding
+    // this line would be seated into the abandoned row.
+    const loserDeparted =
       loser !== undefined &&
       (await tx<{ id: string }[]>`select id from entrants where id = ${loser} and status in ${tx([...DEPARTED_STATUSES])}`)
         .length > 0;
-    if (loser && !loserWithdrawn && fixture.loser_to_fixture && fixture.loser_to_slot) {
-      const filled = await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
+    if (loser && fixture.loser_to_fixture && fixture.loser_to_slot) {
+      const filled = loserDeparted
+        ? await stampDepartedSeat(tx, fixture.loser_to_fixture, fixture.loser_to_slot)
+        : await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
       if (filled !== null) advanced.push(filled);
     }
     // The cascade (owner ruling 2026-09-21, resolveBracketSeats). Gated on this

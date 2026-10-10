@@ -26,6 +26,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
+import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
@@ -564,8 +565,14 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
   // Round numbers restart per stage (natural key stage+round+seq) — scope the
   // completeness probe to THIS stage, else a scheduled knockout round 1 blocks
   // the group round 1 recap forever.
+  //
+  // Loop-F tidy (owner ruling 105's sibling): a CANCELLED line, and an `abandoned` one whose active abandon is a
+  // withdrawal's EXPUNGE (W2b D5 — the match left the table), owe nothing, so they close the round as they close the
+  // stage for auto-advance (scoring.ts) — the one probe, `hasActiveAbandonSql`'s expunge clause. A plain recorded
+  // abandon still holds the round. Neither is a result, so the recap's results list below takes only DECIDED rows.
   const [{ open }] = await tx<{ open: number }[]>`
-    select count(*) filter (where status not in ('decided','finalized','forfeited'))::int as open
+    select count(*) filter (where status not in ('decided','finalized','forfeited','cancelled')
+                              and not ${hasActiveAbandonSql(tx, "fixtures", { expunge: true })})::int as open
     from fixtures
     where division_id = ${fx.division_id} and stage_id = ${fx.stage_id} and round_no = ${roundNo}`;
   if (open > 0) return null; // round not complete yet
@@ -580,6 +587,7 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     left join entrants a on a.id = f.away_entrant_id
     left join match_states m on m.fixture_id = f.id
     where f.division_id = ${fx.division_id} and f.stage_id = ${fx.stage_id} and f.round_no = ${roundNo}
+      and f.status in ${tx([...DECIDED])}
     order by f.fixture_no nulls last, f.id`;
   const results = resultRows.map((r) => ({
     // Unreachable: every row here is a DECIDED/FINALIZED/FORFEITED TABLE_KINDS (league/group/swiss) fixture, and those never get a null entrant — round-robin/swiss generation and addFixture always seat both sides, and appendEvent refuses to decide a fixture with one still null.

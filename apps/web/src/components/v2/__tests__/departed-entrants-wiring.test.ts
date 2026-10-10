@@ -79,3 +79,18 @@ describe("the division page treats a disqualification as a departure (N22)", () 
     expect(passes.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe("the fixture page treats a disqualification as a departure in the settle dialog (loop-F tidy)", () => {
+  // The server refuses a settle naming a departed winner over DEPARTED_STATUSES (append-event.ts C17; driven in
+  // settle-seating.test.ts "C17 over the ONE departed vocabulary"). The page's `withdrawn` flag is what keeps the
+  // SettleDialog from offering that refused choice (needs-decision.test.tsx drives the dialog off the flag), so it must
+  // read the same set — a page-local "withdrawn" literal offered a disqualified entrant.
+  const source = read("app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx");
+
+  it("derives the settle flag from DEPARTED_STATUSES, never a status literal", () => {
+    const match = source.match(/withdrawn: [^,\n]+,/);
+    expect(match, "the side's settle flag is no longer derived on this page").not.toBeNull();
+    expect(match![0]).toBe("withdrawn: DEPARTED_STATUSES.has(entrant.status),");
+    expect(source).toMatch(/import\s*\{[^}]*DEPARTED_STATUSES[^}]*\}\s*from\s*"@\/server\/usecases\/entrants"/);
+  });
+});

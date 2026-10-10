@@ -2281,7 +2281,6 @@ export type DictionaryKey =
   | "forfeit.reason.disqualified"
   | "forfeit.reason.retired"
   | "forfeit.reason.walkover"
-  | "forfeit.reason.withdrew"
   | "forgotPw.sendReset"
   | "forgotPw.sending"
   | "forgotPw.sentBody"

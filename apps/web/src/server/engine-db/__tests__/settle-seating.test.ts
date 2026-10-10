@@ -9,6 +9,7 @@ import { completeStageIfReady } from "@/server/engine-db/competition";
 import { scoreEvent, onDecided } from "@/server/usecases/scoring";
 import { loadBracketFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
+import { DEPARTED_STATUSES, patchEntrant } from "@/server/usecases/entrants";
 import { assertNoLevelSeat, SEATING_STATUSES } from "../level-seat";
 import { declaredVariant, seedBracket } from "./helpers/seed-bracket";
 
@@ -263,6 +264,28 @@ describe.skipIf(!HAS_DB)("X-BR-2 / X-ST-1: held, never seated; the settle seats 
     await post(t.auth, t.sf, "core.settle", { winner: t.home, method: "organiser" }); // the positive pair
     expect((await row(t.sf)).status).toBe("decided");
     expect(await seated(t.final)).toEqual([t.home]);
+  });
+
+  it("C17 over the ONE departed vocabulary (loop-F tidy): a DISQUALIFIED winner is refused like a withdrawn one — a disqualification is a status change with no cascade, so her held line stays held", async () => {
+    // single-sport: chess, the held-line rig above; the guard reads the entrant's status, not the sport. Every
+    // DEPARTED_STATUSES member, so a narrowed set reds here.
+    let checked = 0;
+    for (const departed of [...DEPARTED_STATUSES]) {
+      const t = await heldChess();
+      await patchEntrant(t.auth, t.away, { status: departed } as never);
+      expect([(await row(t.sf)).status, (await row(t.sf)).outcome], `${departed}: rig — her line is still held`).toEqual(["needs_decision", { kind: "draw" }]);
+      const before = await seq(t.sf);
+      await expect(post(t.auth, t.sf, "core.settle", { winner: t.away, method: "organiser" }), departed).rejects.toMatchObject({
+        code: "SETTLE_NOT_APPLICABLE",
+        data: { reason: "withdrawn", winner: t.away },
+      });
+      expect(await seq(t.sf), `${departed}: the refusal wrote nothing`).toBe(before);
+      expect(await seated(t.final), departed).toEqual([]);
+      await post(t.auth, t.sf, "core.settle", { winner: t.home, method: "organiser" }); // the positive pair
+      expect(await seated(t.final), departed).toEqual([t.home]);
+      checked++;
+    }
+    expect(checked).toBe(DEPARTED_STATUSES.size);
   });
 
   it("X-ST-1 (Review Focus 2): a second settle is refused SETTLE_NOT_APPLICABLE and seats nobody twice", async () => {

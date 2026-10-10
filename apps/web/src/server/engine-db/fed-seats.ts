@@ -326,11 +326,12 @@ async function planRelease(
     if (!t) continue;
     const occupant = edge.slot === 1 ? t.home_entrant_id : t.away_entrant_id;
     if (occupant === null) {
-      // Loop-F I-1: the entrant this decision sent down the edge LEFT, and her departure stamped the seat dead
-      // (X-WD-3/D17's `writeDepartedSeat`, or X-WD-5's dead loser seat) — so the seat holds nobody to take back, and
-      // the line beyond it may have been settled on her absence. Taking the decision back makes the seat wait for
-      // this line again: the stamp is lifted to the drawn label, and the line it fed is revived on the Review Focus 1
-      // path (a cascade walkover reset and what it advanced released; a cascade void or a departure double walkover
+      // Loop-F I-1 / R-1: the entrant this decision sent down the edge LEFT, and the seat is stamped dead — by her
+      // withdrawal after she was seated (X-WD-3/D17's `writeDepartedSeat`), or by the decision itself when she had
+      // already left (`onDecided`'s `stampDepartedSeat`, winner or X-WD-5 loser), or by the cascade walking her
+      // opponent over the empty seat — so the seat holds nobody to take back, and the line beyond it may have been
+      // settled on her absence. Taking the decision back makes the seat wait for this line again: the stamp is lifted
+      // to the drawn label, and the line it fed is revived on the Review Focus 1 path (a cascade walkover reset and what it advanced released; a cascade void or a departure double walkover
       // reset and what IT killed revived) — or, when that next match was recorded, refused NEXT_MATCH_STARTED.
       const leaver = edge.side === "winner" ? was.winner : was.loser;
       if (leaver === undefined || !departed.has(leaver) || !seatIsStamped(t, edge.slot)) continue;
