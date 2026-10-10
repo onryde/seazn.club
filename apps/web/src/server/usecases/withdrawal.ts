@@ -7,13 +7,23 @@ import "server-only";
 //     Swiss NEVER expunges (owner ruling 2026-09-24): played results stand and
 //     every paired board walks over — an expunged Swiss board stranded the
 //     division. The per-kind rule is the engine's `withdrawTableEntrant`.
-//   - brackets (knockout/double_elim/stepladder): opponents advance by
-//     walkover.
-//   - open formats (ladder/americano): remaining games void; the standings
-//     they earned stand.
-// The surgery itself rides the scoring ledger — core.forfeit for walkovers,
-// core.void + core.abandon for expunges — so standings recompute, undo works
-// and the public cache invalidates exactly like any other scoring write.
+//   - brackets (knockout/double_elim/stepladder, and since W2b X-WD-2
+//     page_playoff and ladder — `WITHDRAWAL_WALKOVER_KINDS`): opponents
+//     advance by walkover, whatever state the line is in (W2b spec §5.4):
+//     a held level result (X-WD-1), a chess tie-break (R14) and a
+//     scorer-abandoned line (D-G2 corner 1, its abandon voided first) all
+//     walk over with retirement credit; a TBD opponent gets a dead seat
+//     (X-WD-3, plan D17); both sides gone is a double walkover (X-WD-4).
+//   - americano: remaining games void (expunged); the standings they earned
+//     stand.
+// The surgery itself rides the scoring ledger — core.forfeit{reason:
+// "withdrew"} for walkovers, core.void + core.abandon{expunge: true} for
+// expunges (D5) — so standings recompute, undo works and the public cache
+// invalidates exactly like any other scoring write. Two writes carry no event,
+// as `awardSeededByes` writes a bye: the dead seat and the double walkover
+// (`writeDepartedSeat`, stages.ts). Every ledger write names its writer
+// (`withdrawal_cascade`): PF-2 refuses `withdrew` and `expunge` from anyone
+// else. Not one transaction (ruling 101): each write commits on its own.
 // Finalized fixtures are locked (spec 03) and are reported, not touched.
 import { deciderPending } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -23,6 +33,7 @@ import {
   type BracketFixture,
   type FixtureUpdate,
 } from "@seazn/engine/competition";
+import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { resolveModule } from "@/server/engine-db/registry";
 import {
@@ -31,13 +42,18 @@ import {
   tableWithdrawalInputs,
 } from "@/lib/table-withdrawal";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { getEntrant, patchEntrant } from "./entrants";
+import { log } from "@/server/logger";
+import { getEntrant, listEntrants, patchEntrant } from "./entrants";
 import { getDivision } from "./divisions";
-import { BRACKET_WALKOVER_KINDS, listStages } from "./stages";
-import { listDivisionFixtures, listEvents, getFixtureState } from "./fixtures";
-import { scoreEvent } from "./scoring";
+import { BRACKET_WALKOVER_KINDS, listStages, writeDepartedSeat } from "./stages";
+import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
+import { invalidatePublicCache, scoreEvent } from "./scoring";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
+/** W2b X-WD-2 (plan premise 19): the kinds a withdrawal walks over. `BRACKET_WALKOVER_KINDS` also gates F14's
+ *  departed-qualifier draw at generation, which the spec does not change for page_playoff or ladder — so the
+ *  withdrawal path has its own superset instead of widening that one. */
+export const WITHDRAWAL_WALKOVER_KINDS: ReadonlySet<string> = new Set([...BRACKET_WALKOVER_KINDS, "page_playoff", "ladder"]);
 // The table policy's reading of DB statuses — shared with the qualification
 // builder so the two cannot disagree about who a departure would expunge.
 const SETTLED = WITHDRAWAL_PLAYED_STATUSES;
@@ -45,39 +61,44 @@ const PENDING = WITHDRAWAL_PENDING_STATUSES;
 
 /** A bracket fixture's status as the engine's withdrawal planner reads it. Every fixtures.status is named; an unknown
  *  one throws (review N4, as `engineFixtureStatus` does) rather than silently reading as "void".
- *  `deciderPending` is the engine's verdict on the fixture's fold (`deciderOwed`). */
-export function bracketWithdrawalStatus(status: string, deciderPending: boolean): "decided" | "scheduled" | "void" {
-  if (deciderPending) {
-    // W2a loop R I-1 (ruling D-R1, option a): a game whose decider is still owed — a chess knockout draw in its
-    // tie-break, `in_play` with no outcome — is a HOLD, the C17 shape below: walking it over would send
-    // `core.forfeit`, which boardgame refuses outside phase "live" (422 WRONG_PHASE, the entrant never withdrawn).
-    // The organiser settles it for the remaining entrant. A decider owes a started game with no outcome and no
-    // abandon, which folds to `in_play` and nothing else — any other status here is a contradiction, not a hold.
-    if (status !== "in_play") throw new Error(`bracketWithdrawalStatus: a pending decider on a "${status}" fixture`);
-    return "void";
-  }
+ *
+ *  W2b (spec §5.4, R8/R14; C-2): there are no holds any more. "scheduled" is a line the planner hands to the remaining
+ *  side, and three W2a holds are now exactly that — a held level result (X-WD-1), a chess tie-break pending (R14: it
+ *  is `in_play`, and the engine admits `withdrew` in every phase but "over") and a scorer-abandoned, unsettled line
+ *  (D-G2 corner 1: `applyUpdate` voids its abandon first, so the pre-abandon score stands). `activeAbandon` tells that
+ *  last one from the cascade's own void (abandoned, no event), which is dead already and walks nobody over. The D-R1
+ *  contradiction throw went with the hold: a pending decider no longer changes the mapping. */
+export function bracketWithdrawalStatus(status: string, activeAbandon: boolean): "decided" | "scheduled" | "void" {
   if (SETTLED.has(status)) return "decided";
   if (PENDING.has(status)) return "scheduled";
   switch (status) {
-    // W2a (ruling C17): a HELD fixture is passed as "void" so the planner walks nobody over on it: it stays
-    // needs_decision, and the organiser settles it for the remaining entrant (a settle naming the withdrawn one is
-    // refused SETTLE_NOT_APPLICABLE). The auto-walkover of a held fixture is W2b's (spec §2.3).
     case "needs_decision":
-      return "void";
+      return "scheduled";
     case "abandoned":
+      return activeAbandon ? "scheduled" : "void";
     case "cancelled":
       return "void";
     default:
       throw new Error(`bracketWithdrawalStatus: unknown fixtures.status "${status}"`);
   }
 }
-const REASON = "entrant withdrew";
+/** The closed forfeit reason (engine `FORFEIT_REASONS`; finding 14: the English "entrant withdrew" is refused by the
+ *  strict schema) — also the abandon reason of an expunge. */
+const REASON = "withdrew";
+const CASCADE = { writer: "withdrawal_cascade" } as const;
 
-/** D-R1 — does this `in_play` fixture still owe its decider? The engine's own `deciderPending`, fed the stored fold.
- *  The settlement is null because the caller asks only of an `in_play` row: an active settle folds to `decided`. */
+/** Was this line HELD when its entrant withdrew — `walked_over_held` counts what used to wait for a settle: a held
+ *  level result, a tie-break still owed (the engine's own `deciderPending` over the stored fold; an `in_play` row
+ *  carries no active settle, which folds to `decided`), or a scorer's abandon. */
 async function deciderOwed(auth: AuthCtx, sportModule: AnySportModule, fixtureId: string): Promise<boolean> {
   const { state } = await getFixtureState(auth, fixtureId);
   return deciderPending(sportModule as never, { state: state as never, settlement: null });
+}
+
+/** The ACTIVE abandons in a ledger: a `core.abandon` no `core.void` targets (voids are not voidable). */
+function activeAbandons(events: readonly EventOut[]): EventOut[] {
+  const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
+  return events.filter((e) => e.type === "core.abandon" && !voided.has(e.id));
 }
 
 export interface WithdrawCascadeOut {
@@ -89,6 +110,9 @@ export interface WithdrawCascadeOut {
   voided: number;
   /** Finalized fixtures are immutable — listed so the organiser knows. */
   skipped_finalized: number;
+  /** W2b: of `walkovers`, the lines that were HELD (a level result, a tie-break owed, a scorer's abandon) — each was
+   *  waiting for the organiser's settle under W2a, and is walked over now (merge notice N1). */
+  walked_over_held: number;
 }
 
 interface FixtureRowLite {
@@ -100,6 +124,8 @@ interface FixtureRowLite {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   outcome: unknown;
+  winner_to_fixture: string | null;
+  loser_to_fixture: string | null;
 }
 
 /** Void every effective (not-yet-voided) state-bearing event, newest first,
@@ -124,12 +150,20 @@ async function voidAndAbandon(auth: AuthCtx, fixtureId: string): Promise<void> {
       payload: { event_id: target.id },
     });
   }
+  await expungeAbandon(auth, fixtureId);
+}
+
+/** D5 / PF-4: an expunge's abandon carries `expunge: true`, so the match leaves the table entirely (`outcomeOf` reads
+ *  null while it is active) — without it a sport whose abandon folds to a RESULT credits the table (cricket's no
+ *  result, a football award policy). Both expunge writers come through here. */
+async function expungeAbandon(auth: AuthCtx, fixtureId: string): Promise<void> {
   const state = await getFixtureState(auth, fixtureId);
-  await scoreEvent(auth, fixtureId, {
-    expected_seq: state.last_seq,
-    type: "core.abandon",
-    payload: { reason: REASON },
-  });
+  await scoreEvent(
+    auth,
+    fixtureId,
+    { expected_seq: state.last_seq, type: "core.abandon", payload: { reason: REASON, expunge: true } },
+    CASCADE,
+  );
 }
 
 async function applyUpdate(
@@ -137,33 +171,50 @@ async function applyUpdate(
   update: FixtureUpdate & { walkoverBy?: string },
   fixture: FixtureRowLite,
   out: WithdrawCascadeOut,
+  held: boolean,
 ): Promise<void> {
   if (fixture.status === "finalized" || fixture.status === "cancelled") {
     out.skipped_finalized++;
     return;
   }
   if (update.status === "walkover" && update.walkoverTo !== undefined && update.walkoverBy) {
+    // D-G2 corner 1 (X-AB-4's void-then-forfeit): a forfeit over an active abandon is refused (D4,
+    // ABANDONED_SETTLE_OR_VOID), so the abandon is voided first — the score recorded before it stands.
+    if (fixture.status === "abandoned") {
+      for (const abandon of activeAbandons(await listEvents(auth, fixture.id, 0))) {
+        const state = await getFixtureState(auth, fixture.id);
+        await scoreEvent(auth, fixture.id, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: abandon.id } }, CASCADE);
+      }
+    }
+    // No `core.start` first: `withdrew` is legal in every phase but "over" (R5), so an unstarted board forfeits as is.
     const state = await getFixtureState(auth, fixture.id);
-    await scoreEvent(auth, fixture.id, {
-      expected_seq: state.last_seq,
-      type: "core.forfeit",
-      payload: { by: update.walkoverBy, reason: REASON },
-    });
+    await scoreEvent(
+      auth,
+      fixture.id,
+      { expected_seq: state.last_seq, type: "core.forfeit", payload: { by: update.walkoverBy, reason: REASON } },
+      CASCADE,
+    );
     out.walkovers++;
+    if (held) out.walked_over_held++;
     return;
   }
   // void — pending fixtures abandon directly; resulted ones expunge first.
   if (SETTLED.has(fixture.status) && fixture.outcome !== null) {
     await voidAndAbandon(auth, fixture.id);
   } else {
-    const state = await getFixtureState(auth, fixture.id);
-    await scoreEvent(auth, fixture.id, {
-      expected_seq: state.last_seq,
-      type: "core.abandon",
-      payload: { reason: REASON },
-    });
+    await expungeAbandon(auth, fixture.id);
   }
   out.voided++;
+}
+
+/** X-WD-3 / X-WD-4's no-event writes (`writeDepartedSeat`), committed on their own and published like a score: the
+ *  fixture and every seat the cascade then changed. A cache that could not be dropped is logged, never thrown — the
+ *  write has committed (scoring's R10 M3 shape). */
+async function departSeat(auth: AuthCtx, fixtureId: string, entrantId: string, mode: "tbd" | "double_walkover"): Promise<void> {
+  const touched = await withTenant(auth.orgId, (tx) => writeDepartedSeat(tx, fixtureId, entrantId, mode));
+  await invalidatePublicCache(auth.orgId, fixtureId, false, undefined, touched).catch((err: unknown) => {
+    log.error({ err, fixture: fixtureId }, "withdrawal: public cache invalidation failed (the dead seat stands)");
+  });
 }
 
 export async function withdrawEntrantCascade(
@@ -182,6 +233,7 @@ export async function withdrawEntrantCascade(
     walkovers: 0,
     voided: 0,
     skipped_finalized: 0,
+    walked_over_held: 0,
   };
 
   // Before the tournament starts there is nothing to settle: fixtures (if
@@ -199,7 +251,8 @@ export async function withdrawEntrantCascade(
       byStage.set(f.stage_id, list);
     }
 
-    const plan: { update: FixtureUpdate & { walkoverBy?: string }; fixture: FixtureRowLite }[] = [];
+    type Step = { update: FixtureUpdate & { walkoverBy?: string }; fixture: FixtureRowLite; bracket?: { kind: string; held: boolean } };
+    const plan: Step[] = [];
     for (const stage of stages) {
       const mine = byStage.get(stage.id) ?? [];
       if (mine.length === 0) continue;
@@ -227,19 +280,23 @@ export async function withdrawEntrantCascade(
           const f = byId.get(u.fixtureId);
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f });
         }
-      } else if (BRACKET_WALKOVER_KINDS.has(stage.kind)) {
+      } else if (WITHDRAWAL_WALKOVER_KINDS.has(stage.kind)) {
         const sportModule = resolveModule(division.sport_key, division.module_version);
         const bracketFixtures: BracketFixture[] = [];
+        const held = new Set<string>();
         for (const f of mine) {
+          const abandoned = f.status === "abandoned" && activeAbandons(await listEvents(auth, f.id, 0)).length > 0;
           const owed = f.status === "in_play" && (await deciderOwed(auth, sportModule, f.id));
+          if (f.status === "needs_decision" || owed || abandoned) held.add(f.id);
           bracketFixtures.push({
             id: f.id,
             round: f.round_no,
-            status: bracketWithdrawalStatus(f.status, owed),
+            status: bracketWithdrawalStatus(f.status, abandoned),
             home: f.home_entrant_id ?? undefined,
             away: f.away_entrant_id ?? undefined,
           });
         }
+        // The planner is kind-blind (it walks every unsettled line of the entrant over to its opponent).
         const result = withdrawBracketEntrant(
           { id: stage.id, kind: stage.kind as "knockout" | "double_elim" | "stepladder" },
           entrantId,
@@ -248,10 +305,10 @@ export async function withdrawEntrantCascade(
         if (out.policy === "none") out.policy = "walkover";
         for (const u of result.updates) {
           const f = byId.get(u.fixtureId);
-          if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f });
+          if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f, bracket: { kind: stage.kind, held: held.has(f.id) } });
         }
       } else {
-        // Open formats: remaining games void; earned standings stand.
+        // americano: remaining games void (expunged, D5); earned standings stand.
         for (const f of mine) {
           if (PENDING.has(f.status)) plan.push({ update: { fixtureId: f.id, status: "void" }, fixture: f });
         }
@@ -259,12 +316,36 @@ export async function withdrawEntrantCascade(
       }
     }
 
+    // X-WD-4: who has already left — an opponent on this list gets no walkover (it would seat a withdrawn entrant).
+    const gone = new Set(
+      (await listEntrants(auth, division.id)).filter((e) => e.status === "withdrawn").map((e) => e.id),
+    );
     for (const step of plan) {
-      // A TBD opponent can't receive a walkover — void that slot instead.
-      if (step.update.status === "walkover" && !step.update.walkoverTo) {
-        step.update = { fixtureId: step.update.fixtureId, status: "void" };
+      const u = step.update;
+      if (step.bracket && u.status === "walkover") {
+        if (u.walkoverTo === undefined) {
+          // X-WD-3 (plan D17): nobody is on the other side yet to receive a walkover. Her seat is emptied and stamped
+          // dead, so whoever arrives walks over it in the same write that seats them (`resolveBracketSeats`).
+          await departSeat(auth, u.fixtureId, entrantId, "tbd");
+          out.walkovers++;
+          continue;
+        }
+        if (gone.has(u.walkoverTo)) {
+          // X-WD-4: both sides of the line have now withdrawn — a double walkover, no event (as a bye is written),
+          // which seats nobody (X-DW-2) — unless the line feeds nothing: a final has no next match (D19, X-DW-3), so
+          // it stays open for W4's vacant title, and nothing is written. A ladder challenge is exempt (D19).
+          const feeds = step.fixture.winner_to_fixture !== null || step.fixture.loser_to_fixture !== null || step.bracket.kind === "ladder";
+          if (feeds) {
+            await departSeat(auth, u.fixtureId, entrantId, "double_walkover");
+            out.walkovers++;
+          }
+          continue;
+        }
+      } else if (u.status === "walkover" && !u.walkoverTo) {
+        // A table stage's TBD opponent can't receive a walkover — void that slot instead.
+        step.update = { fixtureId: u.fixtureId, status: "void" };
       }
-      await applyUpdate(auth, step.update, step.fixture, out);
+      await applyUpdate(auth, step.update, step.fixture, out, step.bracket?.held === true);
     }
   }
 

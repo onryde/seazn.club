@@ -2001,6 +2001,7 @@ export type DictionaryKey =
   | "engineError.WRONG_PHASE"
   | "engineErrorReason.LEVEL_RESULT_IN_BRACKET.finalize_unsettled"
   | "engineErrorReason.SETTLE_NOT_APPLICABLE.withdrawn"
+  | "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed"
   | "entrants.add.kind"
   | "entrants.add.pairPlayers"
   | "entrants.add.player"

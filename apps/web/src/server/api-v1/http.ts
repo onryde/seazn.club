@@ -248,6 +248,14 @@ async function v1Inner<T>(
         const reason = (err.data as { reason?: unknown } | undefined)?.reason;
         if (isSettleRefusalReason(reason)) extra = { reason };
       }
+      // W2b D11 (PF-9): STAGE_SEAT_DEPARTED names the departed entrant and the match to record — her display name
+      // and the board's own ref, never an id in the copy (lib/scoring-vocab.ts renders it in the reader's language).
+      if (err.code === "STAGE_SEAT_DEPARTED") {
+        const d = err.data as { reason?: unknown; entrant?: unknown; match?: unknown } | undefined;
+        if (d?.reason === "seat_departed" && typeof d.entrant === "string") {
+          extra = { reason: "seat_departed", entrant: d.entrant, match: d.match ?? null };
+        }
+      }
       return errorResponse(requestId, status, err.code, err.message, extra);
     }
     if (err instanceof PaymentRequiredError) {

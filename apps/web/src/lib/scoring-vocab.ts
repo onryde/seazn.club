@@ -1322,6 +1322,10 @@ export const ENGINE_ERROR_REASON_KEY: Partial<Record<EngineErrorCode, Readonly<R
   },
 };
 
+/** W2b D11: STAGE_SEAT_DEPARTED's named sentence. Not in ENGINE_ERROR_REASON_KEY: it carries {entrant} and {match},
+ *  which only `scoringErrorText` fills — a reason-keyed reader with no params would print the placeholders. */
+const SEAT_DEPARTED_KEY: MessageKey = "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed";
+
 /** Localized copy for an engine refusal; null when the code isn't an engine one. */
 export const engineErrorLabel = (code: string, m: MsgFn, reason?: unknown): string | null => {
   if (!(code in ENGINE_ERROR_KEY)) return null;
@@ -1604,6 +1608,15 @@ export function scoringErrorText(
   fallback: MessageKey,
   extra?: Record<string, unknown> | null,
 ): string {
+  // W2b D11: STAGE_SEAT_DEPARTED names the entrant (by name) and the match (by the board's label) in the reader's
+  // language. Without both on the wire it reads the code's own copy, never an id.
+  if (code === "STAGE_SEAT_DEPARTED" && extra?.reason === "seat_departed") {
+    const ref = nextMatchRefOf({ next_match: extra.match });
+    if (typeof extra.entrant === "string" && extra.entrant.length > 0 && ref) {
+      return m(SEAT_DEPARTED_KEY, { entrant: extra.entrant, match: nextMatchLabel(ref, m) });
+    }
+    return m(ENGINE_ERROR_KEY.STAGE_SEAT_DEPARTED);
+  }
   const engine = code ? engineErrorLabel(code, m, extra?.reason) : null;
   if (engine !== null) return engine;
   if (code === NEXT_MATCH_STARTED_CODE) {
@@ -1620,7 +1633,7 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(WICKET_KEY), ...Object.values(EXTRA_KEY),
   ...Object.values(SPORT_KEY), ...Object.values(SWATCH_KEY),
   ...Object.values(EVENT_KEY), ...Object.values(ENGINE_ERROR_KEY),
-  ...Object.values(ENGINE_ERROR_REASON_KEY).flatMap((byReason) => Object.values(byReason ?? {})),
+  ...Object.values(ENGINE_ERROR_REASON_KEY).flatMap((byReason) => Object.values(byReason ?? {})), SEAT_DEPARTED_KEY,
   ...Object.values(POSITION_KEY), ...Object.values(PLAYER_STAT_KEY),
   ...Object.values(AWARD_KEY),
   ...Object.values(SQUAD_ROLE_KEY), ...Object.values(SQUAD_PROVENANCE_KEY),

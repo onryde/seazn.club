@@ -1,10 +1,11 @@
-// W2a loop R I-1 (ruling D-R1, option a). A chess knockout game drawn into its tie-break is `in_play` with no outcome
-// (the module's phase "tiebreak"). The withdrawal cascade used to read it as a pending fixture and walk the opponent
-// over with `core.forfeit` — which boardgame refuses outside phase "live" — so the withdrawal 422'd WRONG_PHASE and the
-// entrant was never withdrawn. A fixture whose decider is still owed (the engine's `deciderPending`) is a HOLD, the
-// C17 shape: nobody is walked over on it, and the organiser settles it for the remaining entrant.
-// Ruling D-R7: the held decider must not seat the withdrawn entrant by the OTHER door either — a scorer recording the
-// decider event itself (`boardgame.tiebreak {winner}`) is refused exactly as C17 refuses the settle.
+// W2a loop R I-1 (ruling D-R1, option a) held a chess knockout game drawn into its tie-break (`in_play`, no outcome,
+// the module's phase "tiebreak") on a withdrawal, because boardgame then refused `core.forfeit` outside phase "live".
+// W2b ruling R14 supersedes it: the engine admits `withdrew` in every phase but "over" (R5) and boardgame walks over in
+// "tiebreak" (BG-WO-3), so a pending decider now WALKS OVER like any other unsettled line — the classical game stands.
+// Ruling D-R7 still guards the LEGACY row W2a's hold left behind (plan PF-8a: an entrant withdrawn while her tie-break
+// stayed owed): the held decider must not seat the withdrawn entrant by the OTHER door — a scorer recording the
+// decider event itself (`boardgame.tiebreak {winner}`) is refused exactly as C17 refuses the settle. New rows cannot
+// reach that state, so those tests force it (`legacyHold`).
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { BRACKET_KINDS, deciderPending, type StageKind } from "@seazn/engine/core";
@@ -20,7 +21,7 @@ import { v1 } from "@/server/api-v1/http";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { scoreEvent } from "@/server/usecases/scoring";
-import { BRACKET_WALKOVER_KINDS, createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -85,8 +86,17 @@ async function started(sport: string, stageKind: StageKind, variant?: string) {
   return { ...s, id, home: r.home_entrant_id!, away: r.away_entrant_id!, next: r.winner_to_fixture };
 }
 
-describe.skipIf(!HAS_DB)("I-1 (ruling D-R1): a withdrawal never walks over a fixture whose decider is pending", () => {
-  it("I-1: chess knockout — a drawn game in its tie-break HOLDS on a withdrawal: the entrant is withdrawn, nobody is walked over, and the organiser's settle seats the remaining entrant", async () => {
+/** The award a withdrawal's `core.forfeit{by: loser, reason: "withdrew"}` folds to (engine §5.1). */
+const withdrewAward = (winner: string, loser: string) => ({ kind: "award", winner, loser, reason: "withdrew" });
+
+/** PF-8a: the LEGACY row — a W2a withdrawal held the owed decider (D-R1) and only flipped the entrant's status. New
+ *  rows cannot reach it (R14 walks the line over), so the D-R7/N2/D-R8 refusals are proved on a forced flip. */
+const legacyHold = async (entrantId: string) => {
+  await sql`update entrants set status = 'withdrawn' where id = ${entrantId}`;
+};
+
+describe.skipIf(!HAS_DB)("R14 (supersedes D-R1): a withdrawal walks over a fixture whose decider is pending", () => {
+  it("R14: chess knockout — a drawn game in its tie-break is WALKED OVER on a withdrawal: the entrant is withdrawn, the remaining entrant is seated, the classical draw stays in the ledger", async () => {
     const t = await started("boardgame", "knockout", "classical");
     await DECIDER_DRIVERS.boardgame!(t.auth, t.id);
     expect((await row(t.id)).status, "the rig: a drawn KO game is in_play").toBe("in_play");
@@ -96,23 +106,14 @@ describe.skipIf(!HAS_DB)("I-1 (ruling D-R1): a withdrawal never walks over a fix
     const out = await withdrawEntrantCascade(t.auth, t.away);
 
     expect(await entrantStatus(t.away)).toBe("withdrawn");
-    expect(out.walkovers).toBe(0);
-    expect(await seq(t.id), "nothing was written on the held fixture").toBe(before);
-    expect((await row(t.id)).status).toBe("in_play");
-    expect(await pendingDecider("boardgame", t.id), "the decider is still owed").toBe(true);
-    expect(await seated(t.next!)).toEqual([]);
+    expect([out.walkovers, out.walked_over_held]).toEqual([1, 1]);
+    expect(await seq(t.id), "exactly one event: the forfeit, no second start").toBe(before + 1);
+    const r = await row(t.id);
+    expect([r.status, r.outcome]).toEqual(["forfeited", withdrewAward(t.home, t.away)]);
+    expect(await seated(t.next!)).toEqual([t.home]);
     // The second call: the withdrawal already happened, so it is refused and writes nothing.
     await expect(withdrawEntrantCascade(t.auth, t.away)).rejects.toMatchObject({ status: 409 });
-    expect(await seq(t.id)).toBe(before);
-    // The C17 settle: never for the withdrawn entrant, then for the remaining one — which seats them.
-    await expect(post(t.auth, t.id, "core.settle", { winner: t.away, method: "organiser" })).rejects.toMatchObject({
-      code: "SETTLE_NOT_APPLICABLE",
-      data: { reason: "withdrawn" },
-    });
-    expect(await seq(t.id)).toBe(before);
-    await post(t.auth, t.id, "core.settle", { winner: t.home, method: "organiser" });
-    expect((await row(t.id)).status).toBe("decided");
-    expect(await seated(t.next!)).toEqual([t.home]);
+    expect(await seq(t.id)).toBe(before + 1);
   });
 
   it("I-1 positive pair: chess knockout — a LIVE, undrawn game is walked over to the remaining entrant as today", async () => {
@@ -122,14 +123,13 @@ describe.skipIf(!HAS_DB)("I-1 (ruling D-R1): a withdrawal never walks over a fix
     const out = await withdrawEntrantCascade(t.auth, t.away);
 
     expect(await entrantStatus(t.away)).toBe("withdrawn");
-    expect(out.walkovers).toBe(1);
+    expect([out.walkovers, out.walked_over_held], "a live game is not a held one").toEqual([1, 0]);
     const r = await row(t.id);
-    expect(r.status).toBe("forfeited");
-    expect(r.outcome).toMatchObject({ kind: "win", winner: t.home });
+    expect([r.status, r.outcome]).toEqual(["forfeited", withdrewAward(t.home, t.away)]);
     expect(await seated(t.next!)).toEqual([t.home]);
   });
 
-  it("I-1 (partial cascade): pending league games AND a drawn knockout decider — the whole cascade completes: the league games void, the decider holds, the entrant is withdrawn", async () => {
+  it("I-1 (partial cascade): pending league games AND a drawn knockout decider — the whole cascade completes: the league games void, the decider walks over (R14), the entrant is withdrawn", async () => {
     // Before D-R1 the plan voided the league games (each its own committed write) and THEN 422'd on the knockout
     // walkover, leaving the games abandoned and the entrant still registered. Single sport: the decider is chess's.
     const s = await seedBracket({ sport: "boardgame", variant: declaredVariant("boardgame", "classical"), stageKind: "league", entrants: 4 });
@@ -157,12 +157,12 @@ describe.skipIf(!HAS_DB)("I-1 (ruling D-R1): a withdrawal never walks over a fix
     expect(out.policy).toBe("expunge");
     expect(out.voided).toBe(before.length);
     expect((await league()).map((r) => r.status)).toEqual(before.map(() => "abandoned"));
-    expect(out.walkovers).toBe(0);
-    expect((await row(sf!.id)).status).toBe("in_play");
-    expect(await seq(sf!.id)).toBe(koSeq);
+    expect([out.walkovers, out.walked_over_held]).toEqual([1, 1]);
+    expect((await row(sf!.id)).status).toBe("forfeited");
+    expect(await seq(sf!.id), "one forfeit on the knockout line").toBe(koSeq + 1);
   });
 
-  it("I-1 sweep: every sport × every engine bracket kind — a live fixture is walked over (walkover kinds) or voided (the others); only a pending decider holds", async () => {
+  it("I-1 sweep: every sport × every engine bracket kind — a live fixture is walked over, and so is a pending decider (R14; X-WD-2 adds page_playoff and ladder)", async () => {
     // The decider sports, from the engine's declarations — never a typed list.
     const deciderSports = builtinModules.filter((m) => typeof m.awaitingDecider === "function").map((m) => m.key);
     expect(deciderSports.length, "the engine declares at least one decider sport").toBeGreaterThan(0);
@@ -183,21 +183,17 @@ describe.skipIf(!HAS_DB)("I-1 (ruling D-R1): a withdrawal never walks over a fix
             expect(await pendingDecider(m.key, t.id), `${label}: the rig owes no decider`).toBe(false);
           }
           const before = await seq(t.id);
-          await expect(withdrawEntrantCascade(t.auth, t.away), label).resolves.toMatchObject({ status: "withdrawn" });
+          await expect(withdrawEntrantCascade(t.auth, t.away), label).resolves.toMatchObject({
+            status: "withdrawn",
+            walkovers: 1,
+            voided: 0,
+            walked_over_held: drive ? 1 : 0,
+          });
           expect(await entrantStatus(t.away), label).toBe("withdrawn");
           const r = await row(t.id);
-          if (!BRACKET_WALKOVER_KINDS.has(kind)) {
-            // Open formats (page playoff, ladder): the remaining game voids, decider or not (header ruling).
-            expect(r.status, label).toBe("abandoned");
-          } else if (drive) {
-            expect(r.status, label).toBe("in_play");
-            expect(await seq(t.id), `${label}: nothing written`).toBe(before);
-            expect(await pendingDecider(m.key, t.id), `${label}: still owed`).toBe(true);
-          } else {
-            expect(r.status, label).toBe("forfeited");
-            // A walkover outcome is a `win` or an `award` (spec 03 §3, sport's choice); both name the winner.
-            expect(r.outcome?.winner, label).toBe(t.home);
-          }
+          // Every bracket kind walks over now (X-WD-2), decider pending or not (R14): one forfeit, no second start.
+          expect([r.status, r.outcome], label).toEqual(["forfeited", withdrewAward(t.home, t.away)]);
+          expect(await seq(t.id), `${label}: one event`).toBe(before + 1);
           if (drive) held++;
           else live++;
         }
@@ -230,7 +226,7 @@ async function scorerOn(orgId: string, fixtureId: string): Promise<AuthCtx> {
   return { orgId, via: "session", userId: user!.id, role: null, keyId: null };
 }
 
-describe.skipIf(!HAS_DB)("D-R7: a held decider cannot seat a withdrawn entrant through the decider event", () => {
+describe.skipIf(!HAS_DB)("D-R7 (legacy rows, PF-8a): a held decider cannot seat a withdrawn entrant through the decider event", () => {
   it("D-R7: every engine decider event naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE (withdrawn) and writes nothing; naming the remaining entrant is accepted and seats them — for a scorer and for the organiser", async () => {
     const deciders = builtinModules.flatMap((m) => (m.deciderTypes ?? []).map((type) => ({ sport: m.key, type })));
     expect(deciders.length, "the engine declares at least one decider event").toBeGreaterThan(0);
@@ -244,7 +240,7 @@ describe.skipIf(!HAS_DB)("D-R7: a held decider cannot seat a withdrawn entrant t
         const label = `${d.type} as ${who}`;
         const t = await started(d.sport, "knockout");
         await DECIDER_DRIVERS[d.sport]!(t.auth, t.id);
-        await withdrawEntrantCascade(t.auth, t.away);
+        await legacyHold(t.away);
         expect(await pendingDecider(d.sport, t.id), `${label}: the rig holds an owed decider`).toBe(true);
         const auth = who === "scorer" ? await scorerOn(t.auth.orgId, t.id) : t.auth;
         const before = await seq(t.id);
@@ -268,7 +264,7 @@ describe.skipIf(!HAS_DB)("D-R7: a held decider cannot seat a withdrawn entrant t
     // `entrants.id` is a uuid: the C17/D-R7 lookup must never hand Postgres a non-uuid (22P02 → a 500 on the wire).
     const t = await started("boardgame", "knockout", "classical");
     await DECIDER_DRIVERS.boardgame!(t.auth, t.id);
-    await withdrawEntrantCascade(t.auth, t.away);
+    await legacyHold(t.away);
     const types = ["core.settle", ...builtinModules.flatMap((m) => m.deciderTypes ?? [])];
     expect(types.length, "settle plus at least one decider type").toBeGreaterThan(1);
     const payloadFor = (type: string, winner: string) =>
@@ -328,7 +324,7 @@ describe.skipIf(!HAS_DB)("D-R8: the withdrawn-winner refusal reaches both surfac
     expect(withdrawn).not.toBe(en["engineError.SETTLE_NOT_APPLICABLE"]);
     const t = await started("boardgame", "knockout", "classical");
     await DECIDER_DRIVERS.boardgame!(t.auth, t.id);
-    await withdrawEntrantCascade(t.auth, t.away);
+    await legacyHold(t.away);
     const refusals = [
       { label: "scorer tie-break", auth: await scorerOn(t.auth.orgId, t.id), type: "boardgame.tiebreak", payload: DECIDER_EVENT_PAYLOADS["boardgame.tiebreak"]!(t.away) },
       { label: "organiser settle", auth: t.auth, type: "core.settle", payload: { winner: t.away, method: "organiser" } },

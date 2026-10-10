@@ -239,3 +239,38 @@ describe("the settle dialog never truncates a name (M12)", () => {
     expect(checked).toBe(2);
   });
 });
+
+// W2b Task 8 (merge notice D-R9; legacy rows only, PF-8a): a W2a withdrawal left a held line held, so its settle dialog
+// offered the withdrawn entrant as a winner the server then refused (SETTLE_NOT_APPLICABLE withdrawn, C17). The dialog
+// now offers only the sides still in the competition. New rows cannot reach it: a withdrawal walks a held line over.
+describe("the settle dialog never offers a withdrawn entrant (D-R9)", () => {
+  const dialog = (home: { id: string; name: string; withdrawn?: boolean }, away: { id: string; name: string; withdrawn?: boolean }) =>
+    renderToStaticMarkup(
+      <SettleDialog
+        msg={(k) => (en as Record<string, string>)[k] ?? k}
+        cause="level"
+        home={home}
+        away={away}
+        busy={false}
+        settle={async () => ({ ok: true })}
+        onClose={() => {}}
+        onRefused={() => {}}
+      />,
+    );
+  const offered = (html: string) => [...html.matchAll(/data-testid="settle-winner-([^"]+)"/g)].map((m) => m[1]);
+
+  it("D-R9: a withdrawn side is not a choice; the remaining side is — on either seat", () => {
+    let checked = 0;
+    for (const gone of ["h", "a"] as const) {
+      const html = dialog({ id: "h", name: "Home", withdrawn: gone === "h" }, { id: "a", name: "Away", withdrawn: gone === "a" });
+      expect(offered(html), `${gone} withdrawn`).toEqual([gone === "h" ? "a" : "h"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("D-R9 positive pair: with nobody withdrawn (flag absent or false) both sides are offered, home first", () => {
+    expect(offered(dialog({ id: "h", name: "Home" }, { id: "a", name: "Away" }))).toEqual(["h", "a"]);
+    expect(offered(dialog({ id: "h", name: "Home", withdrawn: false }, { id: "a", name: "Away", withdrawn: false }))).toEqual(["h", "a"]);
+  });
+});

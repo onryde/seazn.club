@@ -363,7 +363,8 @@ describe.skipIf(!HAS_DB)("restoring an undone generation re-inserts every row ex
     await scoreEvent(auth, played!.id, {
       expected_seq: 1,
       type: "core.forfeit",
-      payload: { by: played!.away_entrant_id, reason: "no-show" },
+      // W2b: an engine FORFEIT_REASON (free-text "no-show" is refused); after the start that is `retired` (D3).
+      payload: { by: played!.away_entrant_id, reason: "retired" },
     });
     const generated = await wholeRows("stage_id", mainId);
     const walkover = generated.find((r) => r.id === played!.id)!;
@@ -625,7 +626,8 @@ async function record(auth: AuthCtx, fixtureId: string, kind: Recorded): Promise
   if (kind === "forfeited") {
     const [f] = await sql<{ away_entrant_id: string }[]>`select away_entrant_id from fixtures where id = ${fixtureId}`;
     await scoreEvent(auth, fixtureId, {
-      expected_seq: 1, type: "core.forfeit", payload: { by: f!.away_entrant_id, reason: "no-show" },
+      // W2b: an engine FORFEIT_REASON; after the start that is `retired` (D3 allows `walkover` only before it).
+      expected_seq: 1, type: "core.forfeit", payload: { by: f!.away_entrant_id, reason: "retired" },
     });
   } else if (kind === "abandoned") {
     await scoreEvent(auth, fixtureId, { expected_seq: 1, type: "core.abandon", payload: { reason: "waterlogged" } });

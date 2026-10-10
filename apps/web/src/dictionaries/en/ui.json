@@ -3927,6 +3927,7 @@
   "engineError.ABANDONED_SETTLE_OR_VOID": "This match was abandoned. To decide it, settle the match. If it is being replayed, void the abandon first.",
   "engineError.DOUBLE_WALKOVER_NO_NEXT_MATCH": "A final needs a result. Reschedule it, or record a walkover if one side turned up. If the competition must close without a match, settle it.",
   "engineError.STAGE_SEAT_DEPARTED": "A seat in this stage belongs to an entrant who has withdrawn. Record the walkover in that match to finish the stage.",
+  "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed": "{entrant} has withdrawn but still holds a seat in {match}. Record the walkover in {match} to finish the stage.",
   "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS": "These groups have played different numbers of games, so their standings can't be compared yet.",
   "scoring.position.set": "Set",
   "scoring.position.game": "Game",

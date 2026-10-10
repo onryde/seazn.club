@@ -249,6 +249,13 @@ async function boardRef(tx: Tx, t: Node): Promise<NextMatchRef> {
   return { ...ref, code: { key, params, ref_seq: rc.refSeq } };
 }
 
+/** W2b D11 (STAGE_SEAT_DEPARTED): a fixture named the way the schedule board names it, for a refusal that must say
+ *  WHICH match the organiser records (`boardRef`); null when there is no such fixture. */
+export async function fixtureBoardRef(tx: Tx, fixtureId: string): Promise<NextMatchRef | null> {
+  const node = await readNode(tx, fixtureId);
+  return node ? boardRef(tx, node) : null;
+}
+
 /** The SAME lock every append to that fixture takes (append-event.ts), held
  *  to commit. Without it the next match's first event could commit between
  *  the "not started" check and the write after it, and a match in play would
@@ -306,9 +313,13 @@ async function planRelease(
  *  - a cascade WALKOVER on the seat goes back to `scheduled` with no outcome and the seat's drawn label, and what
  *    the walkover advanced is released in turn (`planRelease`: refused NEXT_MATCH_STARTED if that next match started);
  *  - a cascade VOID line goes back to `scheduled`, and the seats IT killed revive the same way.
- *  A seat this feeder never killed (still waiting, label drawn) is left alone — and a bye label is never stamped
+ *  A seat this feeder never killed (still waiting, label drawn) is left alone — and the cascade never stamps a bye
  *  without its walkover (`resolveBracketSeats` stamps only beside a seated entrant, then `awardSeededByes` settles
- *  it in the same pass), so a stamped seat at rest is always the walkover case. */
+ *  it in the same pass), so a stamped seat a revive reaches is always the walkover case. The one stamp at rest is a
+ *  withdrawal's (X-WD-3, `writeDepartedSeat`): her own seat, which no feeder killed and no revive reaches.
+ *  W2b X-WD-4's DEPARTURE double walkover (`resolveBracketSeats`' `seatDeparted`) is never revived: every feed it is
+ *  written from — a withdrawal's stamp, another departure double walkover — carries no event a void could target,
+ *  and a RECORDED double walkover beside a dead seat makes a cascade void (above), not one. */
 interface Revive {
   target: string;
   slot: 1 | 2;
@@ -335,6 +346,8 @@ async function planRevive(tx: Tx, src: Node, revives: Revive[], plan: Step[], lo
     const label = edge.slot === 1 ? t.home_key : t.away_key;
     if (occupant !== null) continue; // a feeder that advanced nobody seated nobody (D20 asserts it)
     if (isCascadeVoid(t)) {
+      // The seat the reviving feeder fed goes back to its drawn label; a seat the line's OTHER side left dead (a
+      // withdrawal's stamp, X-WD-3) keeps its stamp, so the line waits for this side only.
       revives.push({ target: t.id, slot: edge.slot, label: drawnLabel(src, edge.side), kind: "void" });
       await planRevive(tx, t, revives, plan, locked);
       continue;

@@ -12,7 +12,7 @@ import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { engineFixtureStatus as toEngineStatus } from "@/lib/fixture-engine-status";
 import { log } from "@/server/logger";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "./level-seat";
-import { isLegacyForfeitWin } from "./fed-seats";
+import { fixtureBoardRef, isLegacyForfeitWin } from "./fed-seats";
 import { bracketEngineStatus, hasActiveAbandonSql } from "./recorded-abandon";
 import { inTheField } from "@/lib/entrant-field";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
@@ -707,11 +707,10 @@ export async function completeStageIfReady(
       // anyone still in the field — an unbeaten field entrant who won no final means the deciding game decided
       // nobody, and the loop G review measured exactly that: an abandoned final ranked its two finalists 3rd and
       // 4th behind the semi-final losers. A recorded abandon now holds the stage open (bracketEngineStatus), so
-      // that path no longer reaches here. One PRODUCT path still does (loop G re-review, probe P2; ruling D-G3,
-      // deferred to W2b): a stepladder qualifier who departs before the draw has her FINAL voided by the generator
-      // with no event (F14), fillSlot then seats the climber into that void row, and the field entrants are
-      // unbeaten — refused at generation and after every rung until the organiser forfeits the departed seed in
-      // the final (dead-feeder-cascade.test.ts pins it). Refuse, never snapshot a champion last.
+      // that path no longer reaches here. The one PRODUCT path W2a left (loop G re-review, probe P2; ruling D-G3) —
+      // a stepladder qualifier departed before the draw, her final voided with her seated in it and the climber
+      // seated into the void row — is gone too: W2b's generator stamps her seat dead instead (spec §5.4 corner 3,
+      // X-WD-3), and the climber walks over it. Refuse, never snapshot a champion last.
       const lost = new Set<string>();
       const finalWinners = new Set<string>();
       for (const bf of bracketFixtures) {
@@ -723,6 +722,32 @@ export async function completeStageIfReady(
       }
       const unranked = inputs.entrants.filter((id) => inputs.field.has(id) && !lost.has(id) && !finalWinners.has(id));
       if (unranked.length > 0) {
+        // W2b PF-9 / D11 (spec §5.4 corner 3): where the line that decided nobody still SEATS a departed entrant, the
+        // refusal is named — which entrant, which match — so the organiser knows the one match to record. (A row
+        // written before W2b, or by hand; the generator no longer seats a departed qualifier into an undecided line.)
+        const stuck = bracketFixtures.find(
+          (bf) =>
+            bf.winner === undefined &&
+            [bf.home, bf.away].some((id) => id !== undefined && unranked.includes(id)) &&
+            [bf.home, bf.away].some((id) => id !== undefined && !inputs.field.has(id)),
+        );
+        if (stuck) {
+          const departedId = [stuck.home, stuck.away].find((id) => id !== undefined && !inputs.field.has(id))!;
+          const [named] = await tx<{ display_name: string }[]>`select display_name from entrants where id = ${departedId}`;
+          const match = await fixtureBoardRef(tx, stuck.id);
+          throw new EngineError(
+            "STAGE_SEAT_DEPARTED",
+            `bracket stage ${stageId}: fixture ${stuck.id} seats departed entrant ${departedId} and decided nobody — record that match's result`,
+            {
+              stageId,
+              reason: "seat_departed",
+              entrantId: departedId,
+              fixtureId: stuck.id,
+              entrant: named?.display_name ?? null,
+              match,
+            },
+          );
+        }
         throw new EngineError(
           "CONFIG_INVALID",
           `bracket stage ${stageId} would rank ${unranked.length} unbeaten entrant(s) still in the field last: its deciding game decided nobody`,

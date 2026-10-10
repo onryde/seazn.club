@@ -830,6 +830,9 @@ interface GenFixture {
   isFinal?: boolean;
   thirdPlace?: boolean;
   conditional?: boolean;
+  /** W2b D-G3 corner 3 (X-WD-3): the seat a departed qualifier was drawn into, emptied — her opponent is still to be
+   *  fed — and stamped dead (`BYE_SLOT_LABEL`) at insert, so the arriving opponent walks over it. */
+  departedSeat?: "home" | "away";
 }
 
 interface ActiveEntrant {
@@ -925,6 +928,8 @@ function walkoverDepartedQualifiers(
   }));
   const awardTo = new Map<string, string>();
   const voided = new Set<string>();
+  const byExt = new Map(gen.map((g) => [g.extKey, g]));
+  const departedSeat = new Map<string, "home" | "away">();
   for (const entrantId of departed) {
     const { updates } = withdrawBracketEntrant(
       { id: stageId, kind: kind as "knockout" | "double_elim" | "stepladder" },
@@ -933,6 +938,19 @@ function walkoverDepartedQualifiers(
     );
     for (const u of updates) {
       if (u.status !== "walkover") continue;
+      // W2b D-G3 corner 3 (spec §5.4, X-WD-3): her opponent is a seat still to be FED — a stepladder's climber, any
+      // later round — so there is nobody to walk over to YET. Her seat is emptied and stamped dead instead of the
+      // line being voided, and whoever arrives walks over it with no organiser step (`resolveBracketSeats`). A
+      // bye's phantom side is not fed (no `*From`), so her structural bye stays the recipient-less void below.
+      if (u.walkoverTo === undefined) {
+        const g = byExt.get(u.fixtureId);
+        const side = g?.home === entrantId ? "home" : g?.away === entrantId ? "away" : undefined;
+        const fed = side === "home" ? g!.away === null && g!.awayFrom !== undefined : side === "away" ? g!.home === null && g!.homeFrom !== undefined : false;
+        if (side !== undefined && fed) {
+          departedSeat.set(u.fixtureId, side);
+          continue;
+        }
+      }
       // OWNER RULING 2026-09-21 (re-review C2): a walkover REQUIRES A LIVE
       // RECIPIENT. Where there is none — both sides of the pairing departed,
       // or the opponent seat is a TBD feed (stepladder, and every later
@@ -951,7 +969,7 @@ function walkoverDepartedQualifiers(
       awardTo.set(u.fixtureId, u.walkoverTo);
     }
   }
-  if (awardTo.size === 0 && voided.size === 0) return { gen, voided };
+  if (awardTo.size === 0 && voided.size === 0 && departedSeat.size === 0) return { gen, voided };
   // The two sets are disjoint by construction: a line is awarded only when
   // its opponent is live, and voided only when it is not.
   //
@@ -967,6 +985,8 @@ function walkoverDepartedQualifiers(
   // it), which is the evidence that this strip is the real guard.
   return {
     gen: gen.map((g) => {
+      const seat = departedSeat.get(g.extKey);
+      if (seat !== undefined) return { ...g, [seat]: null, departedSeat: seat };
       if (voided.has(g.extKey)) {
         const { award: awardedToNobody, ...rest } = g;
         void awardedToNobody;
@@ -2532,8 +2552,16 @@ async function generateStageFixturesWrite(
           seq_in_round: g.seqInRound,
           home_entrant_id,
           away_entrant_id,
-          home_slot_label: home_entrant_id ? null : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.homeFrom)),
-          away_slot_label: away_entrant_id ? null : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.awayFrom)),
+          home_slot_label: home_entrant_id
+            ? null
+            : g.departedSeat === "home"
+              ? BYE_SLOT_LABEL
+              : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.homeFrom)),
+          away_slot_label: away_entrant_id
+            ? null
+            : g.departedSeat === "away"
+              ? BYE_SLOT_LABEL
+              : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.awayFrom)),
           ext_key: g.extKey,
           // `abandoned` is what a VOID line is in this column: the cascade
           // reaches the same state by posting `core.abandon`
@@ -3730,8 +3758,12 @@ function loserFeederIsDead(f: {
   status: string;
   outcome: { kind?: string; winner?: string; method?: string } | null;
   has_active_abandon: boolean;
+  loser_withdrawn: boolean;
 }): boolean {
   if (feederIsDead(f)) return true;
+  // W2b X-WD-5: a withdrawn entrant is never seated on a loser edge — a settle on a LEGACY held line (plan PF-8a)
+  // names her as its loser; `onDecided` does not seat her, and her seat is dead here so the opponent walks over it.
+  if (f.loser_withdrawn) return true;
   // W2b X-DE-1: a forfeit loser is out of the tournament — an `award` names no loser to send on, and neither does a
   // legacy chess forfeit win (fed-seats.ts `isLegacyForfeitWin`, the same reading `advancingSides` fills from).
   return f.outcome?.kind === "award" || isLegacyForfeitWin(f.outcome);
@@ -3758,6 +3790,16 @@ function seatFeederIsDead(e: FeederEdge | undefined): boolean {
   return e.via === "winner" ? feederIsDead(e.row) : loserFeederIsDead(e.row);
 }
 
+/** W2b X-WD-4 — an open seat dead THROUGH DEPARTURE, as opposed to a void: the seat its withdrawn entrant left (the
+ *  cascade's dead-seat stamp, X-WD-3 / plan D17 — `bye`), or one whose winner feed is a DEPARTURE double walkover
+ *  (both its sides withdrew: written with no event, by `writeDepartedSeat` or by this resolver — `departed_walkover`).
+ *  A line whose two seats are both dead this way had every side withdraw, which is a double walkover (X-WD-4), not a
+ *  void. Any other dead feeder — a void, a cancelled line, a forfeit loser, and a RECORDED double walkover (its
+ *  `core.forfeit{by:"both"}` behind it: nobody withdrew, the plan's Review Focus 1 voids that line) — keeps the void. */
+function seatDeparted(bye: boolean, e: FeederEdge | undefined): boolean {
+  return bye || (e !== undefined && e.via === "winner" && e.row.departed_walkover);
+}
+
 interface SeatRow {
   id: string;
   home_entrant_id: string | null;
@@ -3773,6 +3815,10 @@ interface SeatRow {
   /** W2a NEW-H1 (D4): abandoned, and the ledger holds a `core.abandon` no `core.void` targets — ONE definition,
    *  `hasActiveAbandonSql` (engine-db/recorded-abandon.ts), shared with stage completion (D-G1). See `feederIsDead`. */
   has_active_abandon: boolean;
+  /** W2b X-WD-5: the loser this row's outcome names has withdrawn (`loserFeederIsDead`). */
+  loser_withdrawn: boolean;
+  /** W2b X-WD-4: a double walkover with no live event behind it — a departure, never a recorded one (`seatDeparted`). */
+  departed_walkover: boolean;
 }
 
 /** Push the winners of the lines `awardSeededByes` just settled into the seats
@@ -3803,6 +3849,56 @@ async function advanceSettledByes(tx: Tx, settled: string[]): Promise<string[]> 
     if (advanced !== null) out.push(advanced);
   }
   return out;
+}
+
+/**
+ * W2b X-WD-3 / X-WD-4 — the withdrawal cascade's two writes that carry no event (as `awardSeededByes` writes a bye),
+ * then the cascade over the stage (`resolveBracketSeats`). Returns every fixture id it changed, this one first.
+ *
+ * - `"tbd"` (plan D17): her opponent is not known yet, so no walkover can be recorded. Her seat is emptied and stamped
+ *   `bracket.slot.bye` — dead — and whoever arrives walks over it in the same write that seats them. The F14 pattern
+ *   (`walkoverDepartedQualifiers`), applied after the draw.
+ * - `"double_walkover"`: both entrants of the line have withdrawn. `forfeited` + `{kind: "double_walkover"}`, both
+ *   seats kept (the run sheet names who did not play), and nobody advances (X-DW-2). The caller writes it only on a
+ *   line that feeds a next match (D19).
+ *
+ * Each update is guarded on the row the cascade judged — under the fixture's own append lock — so a write that finds
+ * nothing means that row moved under it.
+ *
+ * @throws Error when the guarded write matches nothing: an assumption broken, never a silent no-op.
+ */
+export async function writeDepartedSeat(
+  tx: Tx,
+  fixtureId: string,
+  entrantId: string,
+  mode: "tbd" | "double_walkover",
+): Promise<string[]> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + fixtureId}))`;
+  const bye = tx.json(BYE_SLOT_LABEL as never);
+  const [row] =
+    mode === "tbd"
+      ? await tx<{ id: string; stage_id: string }[]>`
+          update fixtures set
+            home_entrant_id = case when home_entrant_id = ${entrantId} then null else home_entrant_id end,
+            home_slot_label = case when home_entrant_id = ${entrantId} then ${bye} else home_slot_label end,
+            away_entrant_id = case when away_entrant_id = ${entrantId} then null else away_entrant_id end,
+            away_slot_label = case when away_entrant_id = ${entrantId} then ${bye} else away_slot_label end
+          where id = ${fixtureId} and status = 'scheduled' and outcome is null
+            and ((home_entrant_id = ${entrantId} and away_entrant_id is null)
+              or (away_entrant_id = ${entrantId} and home_entrant_id is null))
+          returning id, stage_id`
+      : await tx<{ id: string; stage_id: string }[]>`
+          update fixtures set status = 'forfeited', outcome = ${tx.json({ kind: "double_walkover" } as never)}
+          where id = ${fixtureId} and status in ('scheduled', 'in_play', 'needs_decision', 'abandoned')
+            and home_entrant_id is not null and away_entrant_id is not null
+            and (home_entrant_id = ${entrantId} or away_entrant_id = ${entrantId})
+          returning id, stage_id`;
+  if (!row) {
+    throw new Error(`writeDepartedSeat: fixture ${fixtureId} is no longer the undecided line entrant ${entrantId} was judged on (${mode})`);
+  }
+  const touched = [row.id];
+  for (const id of await resolveBracketSeats(tx, row.stage_id)) if (!touched.includes(id)) touched.push(id);
+  return touched;
 }
 
 /** One pass per round is the theoretical worst case (a chain of voids can walk
@@ -3882,7 +3978,15 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
       select id, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
              status, outcome, winner_to_fixture, winner_to_slot,
              loser_to_fixture, loser_to_slot,
-             ${hasActiveAbandonSql(tx, "fixtures")} as has_active_abandon
+             ${hasActiveAbandonSql(tx, "fixtures")} as has_active_abandon,
+             exists (select 1 from entrants e
+                     where e.id::text = fixtures.outcome ->> 'loser' and e.status = 'withdrawn') as loser_withdrawn,
+             (fixtures.outcome ->> 'kind' = 'double_walkover'
+              and not exists (select 1 from score_events ev
+                              where ev.fixture_id = fixtures.id and ev.type <> 'core.void'
+                                and not exists (select 1 from score_events v
+                                                where v.fixture_id = ev.fixture_id and v.voids_event_id = ev.id)))
+               as departed_walkover
       from fixtures where stage_id = ${stageId}`;
     const feederOf = new Map<string, FeederEdge>();
     for (const r of rows) {
@@ -3899,14 +4003,37 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
       const openHome = f.home_entrant_id === null;
       const openAway = f.away_entrant_id === null;
       if (!openHome && !openAway) continue;
-      const deadHome = openHome && seatFeederIsDead(feederOf.get(`${f.id}:1`));
-      const deadAway = openAway && seatFeederIsDead(feederOf.get(`${f.id}:2`));
+      // W2b X-WD-3 (plan D17): a seat the withdrawal cascade stamped dead is dead whatever its feeder says — the
+      // entrant who held it has left, and nobody else was ever coming to it.
+      const byeHome = openHome && f.home_slot_label?.key === BYE_SLOT_LABEL.key;
+      const byeAway = openAway && f.away_slot_label?.key === BYE_SLOT_LABEL.key;
+      const feedHome = feederOf.get(`${f.id}:1`);
+      const feedAway = feederOf.get(`${f.id}:2`);
+      const deadHome = openHome && (byeHome || seatFeederIsDead(feedHome));
+      const deadAway = openAway && (byeAway || seatFeederIsDead(feedAway));
       if (openHome && openAway) {
         // Nobody is here and nobody is coming: the line is void, and it becomes
         // a dead feeder itself on the next pass. A single dead feeder is NOT
         // enough — the other side is still on its way, and stamping now would
         // be exactly the premature hardening the ruling forbids.
         if (!deadHome || !deadAway) continue;
+        if (seatDeparted(byeHome, feedHome) && seatDeparted(byeAway, feedAway)) {
+          // W2b X-WD-4: both sides of this line have departed — a double walkover, written as a bye is (no event),
+          // which seats nobody and is a dead feeder for the next pass (X-DW-2). A FINAL feeds nothing, and a double
+          // walkover needs a next match (D19, X-DW-3): it stays open for W4's vacant title, and nothing is written.
+          if (f.winner_to_fixture === null && f.loser_to_fixture === null) continue;
+          const [walked] = await tx<{ id: string }[]>`
+            update fixtures set status = 'forfeited', outcome = ${tx.json({ kind: "double_walkover" } as never)}
+            where id = ${f.id} and stage_id = ${stageId}
+              and status = 'scheduled' and outcome is null
+              and home_entrant_id is null and away_entrant_id is null
+            returning id`;
+          if (walked) {
+            touched.add(walked.id);
+            wrote++;
+          }
+          continue;
+        }
         const [voided] = await tx<{ id: string }[]>`
           update fixtures set status = 'abandoned'
           where id = ${f.id} and stage_id = ${stageId}

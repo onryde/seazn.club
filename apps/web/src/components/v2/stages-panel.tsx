@@ -21,6 +21,7 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { seedingErrorMessage } from "@/lib/seeding-error";
+import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import {
@@ -1801,6 +1802,12 @@ export function classifyActError(
     (err.code === SWISS_PAIRING_ROUND_ONE_ONLY_CODE || err.code === SWISS_PAIRING_NOT_SWISS_CODE)
   ) {
     return { tone: "warning", text: msg("schedule.pairing.error.roundOneOnly"), refresh: true };
+  }
+  // W2b D11 (spec §5.4 corner 3): Complete refused because a departed entrant still holds a seat in a line that
+  // decided nobody. Amber — one match to record — named in the reader's language (`scoringErrorText`), never the
+  // server's English sentence with its ids.
+  if (err instanceof ApiV1Error && err.code === "STAGE_SEAT_DEPARTED") {
+    return { tone: "warning", text: scoringErrorText(err.code, err.message, msg, "schedule.error.failed", err.extra), refresh: false };
   }
   const precondition = generatePreconditionMessage(err, msg, stageName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };

@@ -778,7 +778,13 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
       const filled = await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
       if (filled !== null) advanced.push(filled);
     }
-    if (loser && fixture.loser_to_fixture && fixture.loser_to_slot) {
+    // W2b X-WD-5: a withdrawn entrant is never seated on a loser edge. A settle on a LEGACY held line (plan PF-8a — W2a
+    // left a withdrawn entrant's held line held) names her as its loser; her seat stays empty instead, and the cascade
+    // below reads it dead (`loserFeederIsDead`) and walks her opponent over it.
+    const loserWithdrawn =
+      loser !== undefined &&
+      (await tx<{ id: string }[]>`select id from entrants where id = ${loser} and status = 'withdrawn'`).length > 0;
+    if (loser && !loserWithdrawn && fixture.loser_to_fixture && fixture.loser_to_slot) {
       const filled = await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
       if (filled !== null) advanced.push(filled);
     }
@@ -819,12 +825,19 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         update stages set config = config || ${tx.json({ rank_overrides: overrides } as never)}
         where id = ${fixture.stage_id}`;
     }
-    // Ladder (Jul3/08 §6): the challenger taking the game takes the position.
-    if (fixture.kind === "ladder" && winner !== undefined && loser !== undefined) {
+    // Ladder (Jul3/08 §6): the challenger taking the game takes the position — a walkover too. `advancingSides`
+    // sends no loser on for an `award` (a forfeit loser is out of a BRACKET, X-DE-1), but a ladder moves nobody to a
+    // seat: it swaps the two positions the award names. W2b X-WD-2: a holder who withdraws from a pending challenge
+    // is walked over, and without this she kept the top of the ladder — a withdrawn champion. A bye names no loser.
+    const ladderLoser =
+      loser ?? ((fixture.outcome as { kind?: string; loser?: string | null } | null)?.kind === "award"
+        ? ((fixture.outcome as { loser?: string | null }).loser ?? undefined)
+        : undefined);
+    if (fixture.kind === "ladder" && winner !== undefined && ladderLoser !== undefined) {
       const cfg = fixture.stage_config as { ladder_order?: string[] };
       const order = [...(cfg.ladder_order ?? [])];
       const wi = order.indexOf(winner);
-      const li = order.indexOf(loser);
+      const li = order.indexOf(ladderLoser);
       if (wi >= 0 && li >= 0 && wi > li) {
         [order[wi], order[li]] = [order[li]!, order[wi]!];
         // Server-side merge (design §T2) — see the rank_overrides write above.

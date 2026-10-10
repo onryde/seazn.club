@@ -117,6 +117,7 @@ export default async function FixturePage({
       id: entrant.id,
       name: entrant.display_name,
       kind: entrant.kind,
+      withdrawn: entrant.status === "withdrawn",
       members: entrant.members as SideInfo["members"],
       lineup: lineup.slots as LineupSlotIn[],
     };

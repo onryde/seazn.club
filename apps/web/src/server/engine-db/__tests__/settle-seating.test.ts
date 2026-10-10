@@ -232,11 +232,25 @@ describe.skipIf(!HAS_DB)("X-BR-2 / X-ST-1: held, never seated; the settle seats 
     expect(await seated(t.final)).toEqual([t.home]);
   });
 
-  it("X-ST-1 (ruling C17, Review Focus 5): a withdrawal leaves a held fixture needs_decision; a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE (withdrawn), and a settle for the remaining one seats them", async () => {
+  it("W2b X-WD-1 (supersedes the C17 hold): a withdrawal walks a held fixture over to the remaining side, and the final seats them", async () => {
     const t = await heldChess();
-    await withdrawEntrantCascade(t.auth, t.away);
+    const before = await seq(t.sf);
+    const out = await withdrawEntrantCascade(t.auth, t.away);
+    expect([out.walkovers, out.walked_over_held]).toEqual([1, 1]);
     const r = await row(t.sf);
-    expect(r.status).toBe("needs_decision"); // withdrawBracketEntrant skips it (withdrawal.ts → "void", stage.ts)
+    expect(r.status).toBe("forfeited");
+    expect(r.outcome).toEqual({ kind: "award", winner: t.home, loser: t.away, reason: "withdrew" });
+    expect(await seq(t.sf)).toBe(before + 1); // one core.forfeit, no settle
+    expect(await seated(t.final)).toEqual([t.home]);
+  });
+
+  it("X-ST-1 (ruling C17, Review Focus 5) on a LEGACY row — an entrant withdrawn while her fixture stayed held (pre-W2b): a settle naming the withdrawn entrant is refused SETTLE_NOT_APPLICABLE (withdrawn), and a settle for the remaining one seats them", async () => {
+    const t = await heldChess();
+    // The pre-W2b cascade skipped the held line and only flipped her status; W2b's cascade walks it over (above), so
+    // the legacy shape is a raw status flip.
+    await sql`update entrants set status = 'withdrawn' where id = ${t.away}`;
+    const r = await row(t.sf);
+    expect(r.status).toBe("needs_decision");
     expect(r.outcome).toEqual({ kind: "draw" });
     expect(await seated(t.final)).toEqual([]);
     const before = await seq(t.sf);

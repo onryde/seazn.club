@@ -255,6 +255,9 @@ export interface SideInfo {
    *  Optional: existing test fixtures and callers that never render
    *  `LineupEditor` predate this field. */
   kind?: string;
+  /** W2b D-R9: the entrant has withdrawn (`entrants.status`) — the settle dialog never offers them. Optional for the
+   *  same reason as `kind`. */
+  withdrawn?: boolean;
   members: MemberIn[];
   lineup: LineupSlotIn[];
 }
@@ -1482,8 +1485,8 @@ export function FixtureConsole({
         <NeedsDecisionBlock
           msg={msg}
           cause={heldCause({ outcome: live.outcome, events })}
-          home={{ id: home.id, name: homeName! }}
-          away={{ id: away.id, name: awayName! }}
+          home={{ id: home.id, name: homeName!, withdrawn: home.withdrawn === true }}
+          away={{ id: away.id, name: awayName!, withdrawn: away.withdrawn === true }}
           busy={busy || padSyncing}
           settle={settle}
         />

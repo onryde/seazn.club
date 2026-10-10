@@ -84,8 +84,10 @@ interface BlockProps {
   msg: Msg;
   /** Ruling D-H3 — which sentence the block says (`heldCause`). */
   cause: HeldCause;
-  home: { id: string; name: string };
-  away: { id: string; name: string };
+  /** `withdrawn` (W2b D-R9, legacy rows only): a side that has left the competition is never offered as the winner —
+   *  the server refuses it (C17). New rows cannot hold a withdrawn entrant on a held line: a withdrawal walks it over. */
+  home: { id: string; name: string; withdrawn?: boolean };
+  away: { id: string; name: string; withdrawn?: boolean };
   busy: boolean;
   /** Sends `core.settle` and reports the server's answer — the localized refusal on a 4xx. */
   settle: (payload: { winner: string; method: SettleMethod; note?: string }) => Promise<SettleResult>;
@@ -223,7 +225,7 @@ export function SettleDialog(props: BlockProps & { onClose: () => void; onRefuse
         <fieldset className="mt-4 min-w-0">
           <legend className="text-sm font-medium text-slate-700">{msg("score.needsDecision.whoAdvances")}</legend>
           <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
-            {[props.home, props.away].map((e) => (
+            {[props.home, props.away].filter((e) => e.withdrawn !== true).map((e) => (
               <button
                 key={e.id}
                 type="button"

@@ -403,7 +403,8 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     // A's walkover survives the withdrawal untouched.
     const ahAfter = afterWithdraw.find((f) => f.id === ah.id)!;
     expect(ahAfter.status).toBe("forfeited");
-    expect(ahAfter.outcome).toEqual({ kind: "award", method: "walkover", winner: A });
+    // W2b (loop D): an award names its loser and its reason — a recorded walkover is reason `walkover`.
+    expect(ahAfter.outcome).toEqual({ kind: "award", winner: A, loser: H, reason: "walkover" });
 
     const pairNext = await generateStageFixtures(rig.auth, rig.swissId);
     o.pairNext = { created: pairNext.created, reshaped: pairNext.reshaped };
@@ -412,12 +413,15 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
 
     const r2 = await fixturesOf(rig.swissId);
     o.afterPairNext = record(rig, r2);
-    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: S1 v S2", "sw-r2-b2: A v S4", "sw-r2-bye: S5 bye"]);
+    // W2b X-WO-1 + BD-WO-1 (loop D): a badminton walkover is credited 2-0 in games, each 21-0, and the same
+    // credited score breaks ties — so A (+42) ranks above the played 21-10, 21-10 winners (+22), and H (-42) last.
+    // Over [A, S1, S2, S4, S5] (H gone) the fifth takes the bye.
+    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S2 v S4", "sw-r2-bye: S5 bye"]);
     const seatedR2 = inRound(r2, 2).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]);
     expect(seatedR2, "H is absent from round 2").not.toContain(H);
     const bye = inRound(r2, 2).find((f) => f.ext_key === "sw-r2-bye")!;
     expect(bye.status).toBe("forfeited");
-    expect(bye.outcome).toEqual({ kind: "award", winner: rig.idOf("S5") });
+    expect(bye.outcome, "C-5: a bye names no loser, reason bye").toEqual({ kind: "award", winner: rig.idOf("S5"), loser: null, reason: "bye" });
     // The two surviving boards keep their id, time and court; the bye row is
     // new and nobody has scheduled it.
     for (const key of ["sw-r2-b1", "sw-r2-b2"]) {
@@ -437,12 +441,13 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     const table = await swissTable(rig);
     o.standingsAfterR2 = table;
     // H is still IN the swiss table after withdrawing — ranked last, with the
-    // forfeit counted as a played loss. S1 and A tie on 4 points and are split
-    // only by seed (flagged `tieUnbroken`, which is what the seeding tie is).
+    // forfeit counted as a played loss.
+    // W2b X-WO-1 + BD-WO-1: round 2 paired A v S1 (above), so S1 beats A and S2 beats S4 — S1 and S2 on 4 points
+    // (both +44 on points: four 21-10 games each), A on 2 (+42 credited, −22).
     expect(table).toEqual([
       "1 S1 P2 W2 L0 4pts",
-      "2 A P2 W2 L0 4pts",
-      "3 S2 P2 W1 L1 2pts",
+      "2 S2 P2 W2 L0 4pts",
+      "3 A P2 W1 L1 2pts",
       "4 S5 P2 W1 L1 2pts",
       "5 S4 P2 W0 L2 0pts",
       "6 H P1 W0 L1 0pts",
@@ -450,12 +455,14 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
 
     const ko = await seedKnockout(rig);
     o.knockout = ko;
-    expect(ko.proposalRanks).toEqual(["1 S1", "2 A", "3 S2", "4 S5"]);
-    expect(ko.ties).toEqual([{ reason: "seed", who: ["A", "S1"] }]);
-    // Confirm with no pick is refused: the organiser must resolve S1/A.
+    expect(ko.proposalRanks, "the swiss table's order (above)").toEqual(["1 S1", "2 S2", "3 A", "4 S5"]);
+    // S1 and S2 are level on every table key (4 points, +44 each), so only seed splits them — the flagged tie.
+    expect(ko.ties).toEqual([{ reason: "seed", who: ["S1", "S2"] }]);
+    // Confirm with no pick is refused: the organiser must resolve S1/S2.
     expect(ko.bareConfirm).toMatchObject({ http: 422, code: "SEEDING_TIE_UNRESOLVED" });
     expect(ko.filled).toBe(4);
-    expect(ko.semis).toEqual(["S1 v S5", "S2 v A"]);
+    // The draw's layout pairs 1 v 4 and 3 v 2 (seed 3 at home, as the pre-W2b pin had S2 v A): A is seed 3 now.
+    expect(ko.semis).toEqual(["S1 v S5", "A v S2"]);
     expect(ko.semis.join(" "), "H is not a qualifier").not.toContain("H");
   });
 
@@ -483,7 +490,9 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     const afterWithdraw = await fixturesOf(rig.swissId);
     const ahAfter = afterWithdraw.find((f) => f.id === ah.id)!;
     expect(ahAfter.status).toBe("forfeited");
-    expect(ahAfter.outcome).toEqual({ kind: "award", method: "entrant withdrew", winner: A });
+    // W2b (spec §5.4): the cascade's forfeit carries the engine reason `withdrew` (the English "entrant withdrew" is
+    // refused by the strict forfeit schema), and the award names the loser.
+    expect(ahAfter.outcome).toEqual({ kind: "award", winner: A, loser: H, reason: "withdrew" });
     // Round 2 is unseated, so the withdrawal leaves its shells alone.
     expect(inRound(afterWithdraw, 2).every((f) => f.home_entrant_id === null && f.away_entrant_id === null)).toBe(true);
     expect(inRound(afterWithdraw, 2).map((f) => f.ext_key)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b3"]);
@@ -492,10 +501,12 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     o.r1 = record(rig, inRound(await fixturesOf(rig.swissId), 1));
     o.standings = await swissTable(rig);
     // A has the win; H is still in the table with the walkover as a loss.
+    // W2b X-WO-1 + BD-WO-1 (loop D): a badminton walkover is credited 2-0 in games, each 21-0, and the same
+    // credited score breaks ties — so A (+42) ranks above the played 21-10, 21-10 winners (+22), and H (-42) last.
     expect(o.standings).toEqual([
-      "1 S1 P1 W1 L0 2pts",
-      "2 S2 P1 W1 L0 2pts",
-      "3 A P1 W1 L0 2pts",
+      "1 A P1 W1 L0 2pts",
+      "2 S1 P1 W1 L0 2pts",
+      "3 S2 P1 W1 L0 2pts",
       "4 S4 P1 W0 L1 0pts",
       "5 S5 P1 W0 L1 0pts",
       "6 H P1 W0 L1 0pts",
@@ -508,7 +519,8 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     expect(pairNext.reshaped).toEqual({ matches_added: 0, matches_removed: 1, byes_added: 1, byes_removed: 0 });
     const rows = await fixturesOf(rig.swissId);
     o.after = record(rig, rows);
-    expect(roundShape(rig, rows, 2)).toEqual(["sw-r2-b1: S1 v S2", "sw-r2-b2: A v S4", "sw-r2-bye: S5 bye"]);
+    // W2b X-WO-1 + BD-WO-1: A's credited 21-0, 21-0 ranks it first of the winners (as in S1).
+    expect(roundShape(rig, rows, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S2 v S4", "sw-r2-bye: S5 bye"]);
     expect(inRound(rows, 2).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]), "H is absent from round 2").not.toContain(H);
   });
 
@@ -534,9 +546,10 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     // swissGen read every `award` as a bye, so the pair never reached `played`
     // and the implicit-bye pass credited the absent H a pairing point. A
     // two-sided walkover is now a played match: S1, S2 and A are on 1, S4, S5
-    // and H on 0; A, the lowest-ranked winner, floats down onto S4 and H meets
-    // S5.
-    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: S1 v S2", "sw-r2-b2: A v S4", "sw-r2-b3: S5 v H"]);
+    // and H on 0, and H meets S5.
+    // W2b X-WO-1 + BD-WO-1 (loop D): a badminton walkover is credited 2-0 in games, each 21-0, and the same
+    // credited score breaks ties — so A (+42) ranks above the played 21-10, 21-10 winners (+22), and H (-42) last.
+    expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S2 v S4", "sw-r2-b3: S5 v H"]);
     const hBoard = inRound(r2, 2).find((f) => f.home_entrant_id === H || f.away_entrant_id === H)!;
     expect([hBoard.home_entrant_id, hBoard.away_entrant_id], "A meets H once only").not.toContain(A);
     const hOpponent = hBoard.home_entrant_id === H ? hBoard.away_entrant_id : hBoard.home_entrant_id;
@@ -547,10 +560,12 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     await decideRound(rig, 2, new Set([hBoard.id]));
     const table = await swissTable(rig);
     o.standingsAfterR2 = table;
+    // W2b X-WO-1 + BD-WO-1: round 2 paired A v S1 (above), so S1 beats A and S2 beats S4, S5 takes H's walkover — S1 and S2 on 4 points
+    // (both +44 on points: four 21-10 games each), A on 2 (+42 credited, −22).
     expect(table).toEqual([
       "1 S1 P2 W2 L0 4pts",
-      "2 A P2 W2 L0 4pts",
-      "3 S2 P2 W1 L1 2pts",
+      "2 S2 P2 W2 L0 4pts",
+      "3 A P2 W1 L1 2pts",
       "4 S5 P2 W1 L1 2pts",
       "5 S4 P2 W0 L2 0pts",
       "6 H P2 W0 L2 0pts",
@@ -558,14 +573,17 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
 
     const ko = await seedKnockout(rig);
     o.knockout = ko;
-    // The same four qualifiers, tie and semis as S1, where H withdrew instead:
-    // A earns its second win on court against S4 (the probe first recorded A
-    // qualifying on two walkovers against H). S2 and S5 are separated by the
-    // table's tie-break (not flagged), so only S1/A is a flagged tie.
-    expect(ko.proposalRanks).toEqual(["1 S1", "2 A", "3 S2", "4 S5"]);
-    expect(ko.ties).toEqual([{ reason: "seed", who: ["A", "S1"] }]);
+    // The same four qualifiers and semis as S1, where H withdrew instead. S1/S2 are level on every key, as in S1;
+    // and here A and S5 are too — each one 21-0, 21-0 walkover (+42, BD-WO-1) and one 21-10, 21-10 loss (−22) —
+    // so both pairs are flagged seed ties (in S1, S5's second point is a bye, credited differently, and separates).
+    expect(ko.proposalRanks, "the swiss table's order (above)").toEqual(["1 S1", "2 S2", "3 A", "4 S5"]);
+    expect(ko.ties).toEqual([
+      { reason: "seed", who: ["S1", "S2"] },
+      { reason: "seed", who: ["A", "S5"] },
+    ]);
     expect(ko.bareConfirm).toMatchObject({ http: 422, code: "SEEDING_TIE_UNRESOLVED" });
-    expect(ko.semis).toEqual(["S1 v S5", "S2 v A"]);
+    // The draw's layout pairs 1 v 4 and 3 v 2 (seed 3 at home, as the pre-W2b pin had S2 v A): A is seed 3 now.
+    expect(ko.semis).toEqual(["S1 v S5", "A v S2"]);
     expect(ko.semis.join(" ")).not.toContain("H");
   });
 

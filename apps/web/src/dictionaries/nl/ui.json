@@ -3927,6 +3927,7 @@
   "engineError.ABANDONED_SETTLE_OR_VOID": "Deze wedstrijd is gestaakt. Beslis de wedstrijd om hem af te ronden. Wordt hij overgespeeld, maak dan eerst het staken ongedaan.",
   "engineError.DOUBLE_WALKOVER_NO_NEXT_MATCH": "Een finale heeft een uitslag nodig. Plan hem opnieuw, of leg een walk-over vast als één kant kwam opdagen. Moet de competitie zonder wedstrijd sluiten, beslis hem dan.",
   "engineError.STAGE_SEAT_DEPARTED": "Een plek in deze fase hoort bij een deelnemer die zich heeft teruggetrokken. Leg de walk-over in die wedstrijd vast om de fase af te ronden.",
+  "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed": "{entrant} heeft zich teruggetrokken maar heeft nog een plek in {match}. Leg de walk-over in {match} vast om de fase af te ronden.",
   "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS": "Deze groepen hebben een verschillend aantal wedstrijden gespeeld, dus hun standen kunnen nog niet met elkaar worden vergeleken.",
   "scoring.position.set": "Set",
   "scoring.position.game": "Game",

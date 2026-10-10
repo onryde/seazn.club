@@ -3927,6 +3927,7 @@
   "engineError.ABANDONED_SETTLE_OR_VOID": "Este partido fue abandonado. Para decidirlo, resuelve el partido. Si se va a volver a jugar, anula primero el abandono.",
   "engineError.DOUBLE_WALKOVER_NO_NEXT_MATCH": "Una final necesita un resultado. Reprográmala, o registra una incomparecencia si un lado se presentó. Si la competición debe cerrarse sin partido, resuélvela.",
   "engineError.STAGE_SEAT_DEPARTED": "Un puesto de esta fase pertenece a un participante que se ha retirado. Registra la incomparecencia en ese partido para terminar la fase.",
+  "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed": "{entrant} se ha retirado pero aún ocupa un puesto en {match}. Registra la incomparecencia en {match} para terminar la fase.",
   "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS": "Estos grupos han jugado un número distinto de partidos, así que sus clasificaciones todavía no se pueden comparar.",
   "scoring.position.set": "Set",
   "scoring.position.game": "Juego",
