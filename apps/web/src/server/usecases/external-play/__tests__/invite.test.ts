@@ -353,6 +353,81 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     }
   });
 
+  // Review M6 (fix round 1): the bridge row is read FOR UPDATE, so T9's
+  // claim marker cannot land between the resend's game check and its seat
+  // claim. Staged: a writer holds the row while it sets the marker T9's claim
+  // sets (`create_sent_at`). The resend must wait for it, then see the marker
+  // and refuse. Without the lock it reads "no game", waits only at its
+  // attach, and then mails a board whose game is being made.
+  it("the bridge row lock: a resend racing T9's create marker waits for it, then refuses 409 ONLINE_GAME_EXISTS and mails nobody", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const f = r.boards[0]!.fixtureId;
+    await open(r);
+    mail.sent.length = 0;
+    const holder = await sql.reserve();
+    try {
+      await holder`begin`;
+      await holder`update fixture_external_play set create_sent_at = now(), updated_at = now() where fixture_id = ${f}`;
+      let done = false;
+      const p = resendExternalPlayNotice(r.owner, f, ORIGIN).finally(() => (done = true));
+      p.catch(() => undefined);
+      let waited = false;
+      for (let i = 0; i < 100 && !waited && !done; i++) {
+        const [w] = await sql<{ n: number }[]>`
+          select count(*)::int as n from pg_stat_activity
+           where datname = current_database() and wait_event_type = 'Lock'
+             and query ilike '%fixture_external_play%'`;
+        waited = w!.n > 0;
+        if (!waited) await new Promise((res) => setTimeout(res, 50));
+      }
+      expect(done, "the resend ran through a held bridge row").toBe(false);
+      expect(waited).toBe(true);
+      await holder`commit`;
+      expect(await refusal(p)).toEqual({ status: 409, code: "ONLINE_GAME_EXISTS" });
+      expect(mail.sent).toHaveLength(0);
+    } finally {
+      await holder`rollback`.catch(() => undefined);
+      holder.release();
+    }
+  });
+
+  // Review M6 (fix round 1): the resend re-reads the board under the
+  // division lock. A re-pair that holds the lock while the resend waits must
+  // not leave the resend mailing the board's OLD players. Staged: the holder
+  // re-seats home by SQL inside the held lock, as unpair + generate would
+  // under that same lock.
+  it("a board re-paired while the resend waits on the division lock ⇒ 409 ROUND_CHANGED; its old players are not mailed", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, spares: 1 });
+    const f = r.boards[0]!.fixtureId;
+    await open(r);
+    mail.sent.length = 0;
+    const holder = await sql.reserve();
+    try {
+      await holder`begin`;
+      await holder`select pg_advisory_xact_lock(hashtext(${"division:" + r.divisionId}))`;
+      await holder`update fixtures set home_entrant_id = ${r.spares[0]!.home.entrantId} where id = ${f}`;
+      let done = false;
+      const p = resendExternalPlayNotice(r.owner, f, ORIGIN).finally(() => (done = true));
+      p.catch(() => undefined);
+      let waited = false;
+      for (let i = 0; i < 100 && !waited && !done; i++) {
+        const [w] = await sql<{ n: number }[]>`
+          select count(*)::int as n from pg_stat_activity
+           where datname = current_database() and wait_event_type = 'Lock' and wait_event = 'advisory'`;
+        waited = w!.n > 0;
+        if (!waited) await new Promise((res) => setTimeout(res, 50));
+      }
+      expect(done, "the resend ran through a held division lock").toBe(false);
+      expect(waited).toBe(true);
+      await holder`commit`;
+      expect(await refusal(p)).toEqual({ status: 409, code: "ROUND_CHANGED" });
+      expect(mail.sent).toHaveLength(0);
+    } finally {
+      await holder`rollback`.catch(() => undefined);
+      holder.release();
+    }
+  });
+
   it("another organisation's caller gets the same 404 as a board that is not online", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
     await open(r);
