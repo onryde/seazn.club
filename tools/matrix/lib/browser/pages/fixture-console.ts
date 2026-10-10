@@ -12,8 +12,13 @@
 //    `scoring` (:685 — status not finalized) — so a finalized console drops it.
 //  - Start is `score-start-match` → send("core.start", {}) (:1026-1031), shown
 //    while the status is scheduled (`started`, :725). The console never
-//    starts a match by itself: a forfeit on a scheduled fixture is preceded
-//    by the Start tap here, as HttpDriver.forfeit posts [START, forfeit].
+//    starts a match by itself, and its Forfeit is mounted only once it has
+//    started — so a forfeit here is one on a match under way. A forfeit on a
+//    scheduled fixture is not the console's (review I-5): a walkover is
+//    recorded BEFORE core.start (D3 R2), and a retirement after the sport's
+//    play, which the console's bare forfeit drops (D3 R4). BrowserDriver sends
+//    those over http until the forfeit dialog (W2b Task 11), and forfeitUi
+//    refuses a console still showing Start by name (ConsoleForfeitNotStarted).
 //  - ForfeitButton (:1294, :1336-1408) renders while not decided: toggle
 //    `score-forfeit` → `score-forfeit-home|away` → TextPromptDialog (opens
 //    "walkover") → send("core.forfeit", {by, reason}). Those steps are the
@@ -50,6 +55,15 @@ export class ForfeitNeedsBothSides extends Error {
   constructor(fixtureId: string) {
     super(`browser: fixture ${fixtureId} has an empty side — the console's Forfeit names two entrants, so there is no forfeit to author`);
     this.name = "ForfeitNeedsBothSides";
+  }
+}
+
+/** The console still offers Start: the match is scheduled, and tapping Start before a forfeit would record core.start
+ *  ahead of a walkover the rule records before it (D3 R2) — refused by name, never tapped (review I-5). */
+export class ConsoleForfeitNotStarted extends Error {
+  constructor(fixtureId: string) {
+    super(`browser: fixture ${fixtureId}'s console still offers Start — a forfeit on a match not yet started is not the console's to record (it would tap Start first); it goes over http`);
+    this.name = "ConsoleForfeitNotStarted";
   }
 }
 
@@ -95,23 +109,19 @@ export async function postForfeit(page: Pick<Page, "waitForResponse"> & PadPage,
   return data;
 }
 
-/** Forfeits the open console's match for `by` (an entrant id); every events
- *  answer the console produced, in order: core.start's first when the fixture
- *  was still scheduled, then core.forfeit's. A `by` naming neither side, or
- *  an unauthorable reason, is the bench's own refusal (organiserStepsFor). */
+/** Forfeits the open console's match, already under way, for `by` (an entrant id); the console's answer to the
+ *  core.forfeit, as a one-element list. A console still offering Start is refused by name (ConsoleForfeitNotStarted):
+ *  nothing is tapped. A `by` naming neither side, or an unauthorable reason, is the bench's own refusal
+ *  (organiserStepsFor). */
 export async function forfeitUi(c: PageCtx, fixture: ForfeitFixture, by: string, reason: ForfeitReason): Promise<PostedEvent[]> {
   const { page } = c;
   const steps = forfeitSteps(fixture, by, reason);
-  const t = actBudget(c, 1);
   const nav = navBudget(c);
   const start = page.getByTestId(START_MATCH_TESTID);
-  // The first act is Start while the match is scheduled, else the Forfeit toggle.
+  // Start mounted means scheduled: refused, never tapped. Otherwise the Forfeit toggle is the first act.
   await reload(c, { control: start.or(page.getByTestId(FORFEIT_TESTID)), what: "the console's Start or Forfeit" });
+  if ((await start.count()) > 0) throw new ConsoleForfeitNotStarted(fixture.id);
   const posted: PostedEvent[] = [];
-  if ((await start.count()) > 0) {
-    posted.push((await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixture.id) }, () => start.click({ timeout: t }), t)).data);
-    await awaitScreen(() => start.waitFor({ state: "detached", timeout: nav }), "the console, started", nav);
-  }
   const before = await shoot(c, "07-forfeit-before");
   posted.push(await postForfeit(page, c, fixture.id, steps));
   await awaitScreen(() => page.getByTestId(FORFEIT_TESTID).waitFor({ state: "detached", timeout: nav }), "the console, decided by forfeit", nav);

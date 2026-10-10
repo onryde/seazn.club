@@ -23,7 +23,7 @@ import {
 } from "../lib/browser/pages/ctx.ts";
 import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
-import { ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
+import { ConsoleForfeitNotStarted, ForfeitNeedsBothSides, abandonUi, eventsPath, forfeitBudgets, forfeitSteps, forfeitUi, postForfeit, voidLastUi } from "../lib/browser/pages/fixture-console.ts";
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
@@ -1401,6 +1401,75 @@ describe("abandonUi: the console's Abandon (W2a Task 14 Step 8)", () => {
 // the detail sheet's form (name, Ends on) → "Use this template", which POSTs
 // /api/v1/competitions/from-template; a created competition router.push()es
 // to its page, a degraded one opens the degrade modal and stays on /c/new.
+// Review I-5: the console mounts Forfeit only once the match has started (fixture-console.tsx: Start while scheduled), and
+// its Forfeit posts the bare core.forfeit. A walkover is recorded BEFORE core.start (D3 R2), so a forfeit on a console
+// still offering Start is refused by name — never a Start tap followed by a walkover the rule then refuses.
+describe("forfeitUi: a console still offering Start is refused by name; one under way taps Forfeit and answers its core.forfeit", () => {
+  const BASE = "http://localhost:3999";
+  const fx = { id: "fx-1", home_entrant_id: "e-home", away_entrant_id: "e-away" };
+  interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
+
+  function forfeitPage(started: boolean) {
+    const log: string[] = [];
+    let screen = 0;
+    let deliver: (() => void) | null = null;
+    const answer = { seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" };
+    const response: Resp = { request: () => ({ method: () => "POST" }), url: () => `${BASE}/api/v1/fixtures/fx-1/events`, status: () => 201, json: () => Promise.resolve({ ok: true, data: answer }) };
+    const submit = `[data-testid="${PROMPT_SUBMIT_TESTID}"]`;
+    type Loc = { d: string; first(): Loc; or(o: Loc): Loc; count(): Promise<number>; waitFor(w?: { state?: string }): Promise<void>; elementHandles(): Promise<unknown[]>; click(): Promise<void>; fill(v: string): Promise<void> };
+    const loc = (d: string): Loc => ({
+      d,
+      first: () => loc(d),
+      or: (o) => loc(`${d}|${o.d}`),
+      // Start is mounted while scheduled, and only then; every other control the console shows.
+      count: async () => (d === `testid:${START_MATCH_TESTID}` ? (started ? 0 : 1) : 1),
+      waitFor: async (w) => { log.push(`wait ${w?.state} ${d}`); },
+      elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
+      click: async () => { log.push(`click ${d}`); screen++; if (d === submit) deliver?.(); },
+      fill: async (v) => { log.push(`fill ${d} ${v}`); screen++; },
+    });
+    const page = {
+      reload: async () => { log.push("reload"); },
+      getByTestId: (id: string) => loc(`testid:${id}`),
+      locator: (sel: string) => loc(sel),
+      waitForResponse: (pred: (r: Resp) => boolean, o: { timeout: number }): Promise<Resp> => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, o.timeout);
+        deliver = () => { if (pred(response)) { clearTimeout(timer); resolve(response); } };
+      }),
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: unknown) => ({ jsonValue: async () => fn(arg), dispose: async () => undefined }),
+      evaluate: async () => ({ scrollWidth: 1280, clientWidth: 1280 }),
+      screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence: new Evidence("/r", "case-1", fs) };
+    return { ctx, log };
+  }
+
+  it("Start mounted (scheduled): ConsoleForfeitNotStarted, naming the fixture, and NOTHING tapped — no Start, no Forfeit", async () => {
+    const g = forfeitPage(false);
+    const e = await forfeitUi(g.ctx, fx, "e-away", "walkover").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ConsoleForfeitNotStarted);
+    expect((e as Error).message).toMatch(/fixture fx-1's console still offers Start/);
+    expect(g.log[0]).toBe("reload");
+    expect(g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"))).toEqual([]);
+  });
+
+  it("under way (no Start): the four Forfeit steps are tapped and the console's answer is the core.forfeit's alone (the positive pair)", async () => {
+    const g = forfeitPage(true);
+    const posted = await forfeitUi(g.ctx, fx, "e-away", "walkover");
+    expect(posted).toEqual([{ seq: 4, status: "forfeited", outcome: null, event_id: "ev-4" }]);
+    const acts = g.log.filter((l) => l.startsWith("click") || l.startsWith("fill"));
+    expect(acts.length).toBe(forfeitSteps(fx, "e-away", "walkover").length);
+    expect(acts.some((l) => l.includes(START_MATCH_TESTID))).toBe(false);
+    expect(acts.at(-1)).toBe(`click [data-testid="${PROMPT_SUBMIT_TESTID}"]`);
+  });
+});
+
 describe("createFromTemplateUi: the card, the sheet, the product's answer", () => {
   const BASE = "http://localhost:3999";
   interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }

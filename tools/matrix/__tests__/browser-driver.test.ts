@@ -23,7 +23,7 @@ import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
 import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
+  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
@@ -2211,11 +2211,49 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     expect(seen).toEqual([]);
   });
 
-  it("a forfeit on a still-scheduled match answers core.start first: that row is stored too, and only the forfeit's row is compared", async () => {
-    const { driver } = make({ http: orgHttp([asRow(2, START), asRow(3, FORFEIT)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(2, "in_play"), answer(3, "forfeited")] } });
+  it("review I-5: a forfeit the console cannot record as the rule has it goes over http while the console's turn is open — a walkover on a scheduled match (stream or direct), generated play, a double walkover — exempt by its route; the turn stays open for the one it can", async () => {
+    const forfeits: unknown[][] = [];
+    let status = "scheduled";
+    const h = stubHttp({
+      listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      fixtureState: async () => ({ status, last_seq: 1, outcome: null }),
+      ledger: async (...a: never[]) => [asRow(3, FORFEIT)].filter((r) => r.seq > (a[1] as number)),
+      forfeit: async (...a: never[]) => { forfeits.push(a); return [answer(1 + forfeits.length, "forfeited")]; },
+      listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,
+    });
+    const { driver, pageCalls } = make({ http: h, pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(3, "forfeited")] } });
     await built(driver, spec("knockout"));
-    const posted = await driver.postStream("f1", [FORFEIT], "p");
-    expect(posted.map((x) => x.stored)).toEqual([START, FORFEIT]);
+    expect(driver.paths.forfeit).toBeUndefined(); // the empty case first
+    // A walkover on a scheduled match: the console would tap Start first (D3 R2 refuses a walkover after it).
+    const streamed = await driver.postStream("f1", [FORFEIT], "a");
+    expect(streamed.map((x) => x.seq), "the http answer, never read as the console's").toEqual([2]);
+    await driver.forfeit("f1", "e2", "walkover", "b");
+    // Under way, but with generated play: the console's bare forfeit would drop it.
+    status = "in_play";
+    await driver.forfeit("f1", "e2", "retired", "c", [START, RESULT]);
+    // A double walkover: the console's Forfeit names one entrant.
+    await driver.forfeit("f1", "both", "walkover", "d");
+    expect(pageCalls).not.toContain("forfeitUi");
+    expect(forfeits.map((a) => a.slice(0, 3))).toEqual([["f1", "e2", "walkover"], ["f1", "e2", "walkover"], ["f1", "e2", "retired"], ["f1", "both", "walkover"]]);
+    expect(forfeits[2]![4], "the play reaches HttpDriver.forfeit's own composition").toEqual([START, RESULT]);
+    expect(driver.paths.forfeit).toEqual({ browser: 0, http: 4 });
+    const cov = only(driver, "mixed-driver-coverage");
+    expect(cov.verdict).toBe("pass");
+    expect(cov.evidence).toContain(`forfeit: exempt — → ${FORFEIT_DIALOG_ROUTE.wave}: ${FORFEIT_DIALOG_ROUTE.why}`);
+    // The one the console can: under way, one named entrant, no play — the browser's turn was never used up.
+    await driver.forfeit("f1", "e2", "walkover", "e");
+    expect(pageCalls.filter((c) => c === "forfeitUi")).toHaveLength(1);
+    expect(driver.paths.forfeit).toEqual({ browser: 1, http: 4 });
+    expect(h.calls).not.toContain("postStream");
+  });
+
+  it("review I-5: with no forfeit the console could not record, nothing is exempt — a forfeit that only ever ran over http after the browser's turn is not excused by the route", async () => {
+    const { driver } = make({ http: orgHttp([asRow(3, FORFEIT)]), pads: PADS, replay: replayOf([]).fn, pages: { forfeitUi: async () => [answer(3, "forfeited")] } });
+    await built(driver, spec("knockout"));
+    await driver.postStream("f1", [FORFEIT], "a"); // needs_decision (orgHttp): the console's
+    const cov = only(driver, "mixed-driver-coverage");
+    expect(cov.verdict).toBe("pass");
+    expect(cov.evidence.join("\n")).not.toContain("forfeit: exempt");
   });
 
   it("a forfeit in a stream is the console's Forfeit (the existing route), after the scorer's events", async () => {
@@ -2313,6 +2351,7 @@ describe("BrowserDriver — organiser-only events inside a stream (W2a Task 14 S
     const forfeits: unknown[][] = [];
     const h = stubHttp({
       listFixtures: async () => [F1], getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+      fixtureState: async () => ({ status: "in_play", last_seq: 2, outcome: null }),
       ledger: async (...a: never[]) => [asRow(3, FORFEIT)].filter((r) => r.seq > (a[1] as number)),
       forfeit: async (...a: never[]) => { forfeits.push(a); return [answer(9, "forfeited")]; },
       listStages: async () => [stageRef("s1", 1, "knockout")], listEntrants: async () => ENTRANTS,

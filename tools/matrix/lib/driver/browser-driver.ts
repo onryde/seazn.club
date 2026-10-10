@@ -135,6 +135,12 @@ export const PUBLIC_DATA_REVALIDATE_S = 30;
  *  NoOrganiserPath below spells the wave as a literal (the Q-A guard reads a
  *  literal only, PF-3); browser-driver.test.ts pins the two together. */
 export const OVERRIDE_ROUTE = routeTo("W2", "the rules editor is not driven in the browser; its wave owns the editor fixes (rulings 33, 47)");
+/** The forfeits the console's Forfeit cannot record as the rule has them (review I-5). It names ONE of the two entrants
+ *  (no double walkover), taps Start first on a scheduled match (a walkover is recorded BEFORE core.start — D3 R2 refuses
+ *  one after it) and posts the bare core.forfeit (none of the sport's play a retirement follows, D3 R4). Each of those
+ *  goes over http — HttpDriver.forfeit's own composition, streams/index.ts forfeitPosting — until the console's forfeit
+ *  dialog (W2b Task 11) exists, exempt by this route; an http forfeit does not use the browser's turn. */
+export const FORFEIT_DIALOG_ROUTE = routeTo("W2", "the console's forfeit dialog is not built: a double walkover, a forfeit on a match not yet started, and the play before a retirement are posted over http");
 /** The ledger row both finalize paths append (fixture-console.tsx send, scoring.ts finalizeFixture; text-pinned). */
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */
@@ -849,10 +855,10 @@ export class BrowserDriver implements OrganiserDriver {
   async #organiserEvent(fixtureId: string, event: StreamEvent, act: OrganiserAct, idempotencyPrefix: string): Promise<PostedEvent[]> {
     if (act.action === "forfeit") {
       // The existing forfeit route on either lane (its own ledger record and pages); the console's answers are
-      // verified against the ledger, an http one is filled in from it by #storedAllOrNone when the stream mixes.
-      const viaConsole = this.#wants("forfeit");
-      const posted = await this.forfeit(fixtureId, act.by, act.reason, idempotencyPrefix);
-      return viaConsole ? this.#consoleRows(fixtureId, event, posted) : posted;
+      // verified against the ledger, an http one is filled in from it by #storedAllOrNone when the stream mixes. The
+      // path is the one the forfeit TOOK (FORFEIT_DIALOG_ROUTE sends some over http while the console's turn is open).
+      const { posted, via } = await this.#forfeit(fixtureId, act.by, act.reason, idempotencyPrefix, []);
+      return via === "browser" ? this.#consoleRows(fixtureId, event, posted) : posted;
     }
     if (!this.#wants(act.action)) {
       this.#ledger.record(act.action, "http");
@@ -966,17 +972,25 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   async forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play: readonly StreamEvent[] = []): Promise<PostedEvent[]> {
-    // A double walkover has no console control until W2b Task 11's forfeit dialog (the console's Forfeit names one of
-    // the two entrants): it goes over HTTP, recorded as such.
-    if (!this.#wants("forfeit") || by === "both") {
+    return (await this.#forfeit(fixtureId, by, reason, idempotencyPrefix, play)).posted;
+  }
+
+  /** The console's Forfeit while the type's browser turn is open and the forfeit is one it records as the rule has it:
+   *  one named entrant, on a match already under way, with no play to post first. Anything else — a double walkover,
+   *  generated play, a fixture still scheduled — is HttpDriver.forfeit, exempt by FORFEIT_DIALOG_ROUTE while the
+   *  browser's turn was open (review I-5: the console would have dropped the play, or tapped Start before a walkover). */
+  async #forfeit(fixtureId: string, by: string, reason: ForfeitReason, idempotencyPrefix: string, play: readonly StreamEvent[]): Promise<{ posted: PostedEvent[]; via: "browser" | "http" }> {
+    const wanted = this.#wants("forfeit");
+    const onConsole = wanted && by !== "both" && play.length === 0 && (await this.#http.fixtureState(fixtureId)).status !== "scheduled";
+    if (!onConsole) {
+      if (wanted) this.#ledger.exempt("forfeit", FORFEIT_DIALOG_ROUTE);
       this.#ledger.record("forfeit", "http");
-      return this.#write(() => this.#http.forfeit(fixtureId, by, reason, idempotencyPrefix, play));
+      return { posted: await this.#write(() => this.#http.forfeit(fixtureId, by, reason, idempotencyPrefix, play)), via: "http" };
     }
-    const byEntrantId = by;
     const { where, row, no } = await this.#findFixture(fixtureId);
     this.#ledger.record("forfeit", "browser");
     await this.#ui((p) => p.openFixtureUi(this.#ctx, where, no));
-    return this.#write(() => this.#ui((p) => p.forfeitUi(this.#ctx, row, byEntrantId, reason)));
+    return { posted: await this.#write(() => this.#ui((p) => p.forfeitUi(this.#ctx, row, by, reason))), via: "browser" };
   }
 
   /** The fixture's ledger rows after `sinceSeq`: a read, always HTTP (a scenario that needs to prove a void asks). */
