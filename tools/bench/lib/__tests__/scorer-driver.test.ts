@@ -1159,10 +1159,10 @@ describe("organiserStepsFor — what the scorer pad cannot author, on the fixtur
   const ctx: TapAdapterContext = { cfg: SCORE_CFG, entrants: ENTRANTS };
 
   it("maps core.forfeit to the console's toggle, the forfeiting side's own button, the typed reason, and submit", () => {
-    expect(organiserStepsFor({ type: "core.forfeit", payload: { by: AWAY_ID, reason: "retired hurt" } }, ctx)).toEqual([
+    expect(organiserStepsFor({ type: "core.forfeit", payload: { by: AWAY_ID, reason: "retired" } }, ctx)).toEqual([
       { kind: "testid", testid: FORFEIT_TESTID },
       { kind: "testid", testid: `${FORFEIT_SIDE_TESTID_PREFIX}away` },
-      { kind: "text", testid: PROMPT_REASON_TESTID, value: "retired hurt" },
+      { kind: "text", testid: PROMPT_REASON_TESTID, value: "retired" },
       { kind: "testid", testid: PROMPT_SUBMIT_TESTID },
     ]);
     expect(organiserStepsFor({ type: "core.forfeit", payload: { by: HOME_ID, reason: "walkover" } }, ctx)[1]).toEqual({
@@ -1172,7 +1172,7 @@ describe("organiserStepsFor — what the scorer pad cannot author, on the fixtur
   });
 
   it.each([
-    [{ by: AWAY_ID, reason: " retired hurt" }, /trims/],
+    [{ by: AWAY_ID, reason: " retired" }, /trims/],
     [{ by: AWAY_ID, reason: "" }, /non-empty/],
     [{ by: AWAY_ID }, /non-empty/],
     [{ by: AWAY_ID, reason: "x", note: "y" }, /unknown key/],

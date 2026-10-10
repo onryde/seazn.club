@@ -1003,12 +1003,12 @@ describe("R59 — the three d-tiny routes, played through the real driver (fix r
 
   it("(c) a forfeit is an ORGANISER action on a freshly loaded console — toggle, side, typed reason, submit — and lands exactly", async () => {
     const world = fakeWorld();
-    const result = await player(world).playFixture(job([START, { type: "core.forfeit", payload: { by: "@away", reason: "retired hurt" } }]));
+    const result = await player(world).playFixture(job([START, { type: "core.forfeit", payload: { by: "@away", reason: "retired" } }]));
 
     expect(result.findings).toEqual([]);
     expect(world.rows.map((r) => [r.type, r.payload])).toEqual([
       ["core.start", {}],
-      ["core.forfeit", { by: AWAY, reason: "retired hurt" }],
+      ["core.forfeit", { by: AWAY, reason: "retired" }],
       ["core.finalize", {}],
     ]);
     expect(world.statusNow()).toBe("finalized");
@@ -1028,7 +1028,7 @@ describe("R59 — the three d-tiny routes, played through the real driver (fix r
       job([
         START,
         { type: "generic.score", payload: { by: "@home", points: 2 } },
-        { type: "core.forfeit", payload: { by: "@away", reason: "retired hurt" } },
+        { type: "core.forfeit", payload: { by: "@away", reason: "retired" } },
       ]),
     );
 

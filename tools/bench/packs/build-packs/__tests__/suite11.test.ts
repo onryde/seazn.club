@@ -144,7 +144,8 @@ describe("suite11 — Div A encoding (sets)", () => {
 
     const expected = (committed.expected.matches ?? []).find((m) => m.fixtureExtKey === "se-r0-i19");
     // "walkover", not "regulation" — the module carries the forfeit's reason
-    // onto the award's method, so the pack asserts what the fold really says.
+    // onto the award's reason (which the pack's `method` is compared against),
+    // so the pack asserts what the fold really says.
     expect(expected?.outcome).toMatchObject({
       kind: "award",
       winner: entrantRef("a", "Ian White"),

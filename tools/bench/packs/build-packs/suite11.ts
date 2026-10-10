@@ -12,7 +12,9 @@
 // a test in `__tests__/suite11.test.ts`.
 //
 // 1. THE ENGINE DERIVES THE SCORE, NOT THE PACK. A stream is `core.start`, one
-//    `generic.score` per set (or leg) won, then an EMPTY `generic.result`.
+//    `generic.score` per set (or leg) won, then an EMPTY `generic.result` —
+//    except the walkover, which is a lone `core.forfeit` with no `core.start`
+//    (W2b refuses a walkover once play has started).
 //    `applyResult` (generic.ts:110-114) settles from the running tally when the
 //    card carries no scores. Putting p1Score/p2Score on that card would hand
 //    the engine the answer and make `expected.matches` compare the pack
