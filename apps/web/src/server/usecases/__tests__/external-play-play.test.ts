@@ -1346,6 +1346,31 @@ describe.runIf(HAS_DB)("act — a move that ENDS the game (review I2)", () => {
     expect(checked, "anti-vacuity: three endings").toBe(3);
   });
 
+  it("the FIFTY-move rule ends the game on the 100th half-move without a pawn move or capture — ended:true; at 99 it is absent", { timeout: 60_000 }, async () => {
+    // scalachess @ 2ab0a403 variant/Variant.scala:146-147, 172-173: lila's
+    // autoDraw includes `halfMoveClock >= 100`. Knights only — no pawn move,
+    // no capture, no check, no position more than twice (so no fivefold) —
+    // found by a DFS over chess.js's legal moves and written in as a literal.
+    const line: string[] = ["b1a3","b8c6","a3b5","g8h6","b5d4","c6b8","d4b5","b8c6","b5d4","c6b8","d4b5","b8a6","b5d4","a6c5","d4b5","h6g8","b5d4","g8h6","d4b5","h6g8","b5d4","g8f6","d4b5","f6h5","b5d4","c5a6","d4b5","a6b8","b5d4","b8c6","d4b5","c6b8","b5d4","b8c6","d4b5","c6e5","b5d4","e5g6","d4b5","g6h4","b5d4","h5f6","d4b5","f6g8","b5d4","g8h6","d4b5","h6g8","b5d4","g8h6","d4b5","h6g4","b5d4","g4e5","d4b5","e5c6","b5d4","c6b8","d4b5","b8c6","b5d4","c6b8","d4b5","b8a6","b5d4","a6c5","d4b5","c5a6","b5d4","a6c5","d4b5","c5e6","b5d4","e6g5","d4b5","g5e6","b5d4","e6g5","d4b5","g5h3","b5d4","h4f5","d4b5","f5d6","b5d4","d6f5","d4b5","f5d6","b5d4","d6e4","d4b5","e4c5","b5d4","c5a6","d4b5","a6b8","b5d4","b8c6","d4b5","c6b8"];
+    expect(line.length, "premise: exactly 100 half-moves").toBe(100);
+    const at99 = boardAfter(line.slice(0, 99));
+    const at100 = boardAfter(line);
+    // Hand-written: b1-knight on b5, g8-knight on h3, b8-knight home again.
+    const FEN_100 = "rnbqkb1r/pppppppp/8/1N6/8/7n/PPPPPPPP/R1BQKBNR w KQkq - 100 51";
+    expect(at100.fen(), "premise: the hand-written position, half-move clock 100").toBe(FEN_100);
+    expect(at99.fen().split(" ")[4], "premise: the neighbour's clock").toBe("99");
+    expect([at99.isDrawByFiftyMoves(), at100.isDrawByFiftyMoves()], "premise: chess.js's own fifty-move predicate").toEqual([false, true]);
+    expect(at100.isCheckmate() || at100.isStalemate() || at100.isInsufficientMaterial(), "premise: nothing else ends it").toBe(false);
+    const g = await readyGame();
+    const { sent, deps } = boardStub();
+    await playOut(g, line.slice(0, 98), deps);
+    expect(await mv(g, "white", line[98]!, deps), "half-move 99").toStrictEqual(APPLIED);
+    expect(await mv(g, "black", line[99]!, deps), "half-move 100").toEqual({ ok: true, applied: true, ended: true });
+    expect(await ledger(g.fixtureId), "T10 writes no result").toMatchObject({ status: "live", move_count: 100 });
+    expect(sent.length).toBe(100);
+    expect(sent.at(-1)?.body).toMatchObject({ fen: FEN_100, status: "started" });
+  });
+
   it("a move that ends nothing carries NO `ended` — nor does a threefold repetition, which chess.js calls over and lila leaves to a claim", async () => {
     const cases = [
       { name: "an opening move", line: ["e2e4"], overByChessJs: false },
@@ -1518,7 +1543,7 @@ class LilaModel {
       this.moves.push(uci);
       if (this.offering[other(c)]) this.offering[other(c)] = false;
       if (this.board.isCheckmate()) this.over = "mate";
-      else if (this.board.isStalemate() || this.board.isInsufficientMaterial()) this.over = "draw";
+      else if (this.board.isStalemate() || this.board.isInsufficientMaterial() || this.board.isDrawByFiftyMoves()) this.over = "draw";
       return OK;
     });
   }

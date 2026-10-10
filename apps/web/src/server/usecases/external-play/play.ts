@@ -49,8 +49,8 @@ export type PlayResult =
   /** `applied: false` ⇒ nothing changed here: a duplicate absorbed, or a move
    *  Lichess accepted that another writer recorded first. `ended: true` ⇒
    *  the move we just recorded ENDED the game at Lichess — checkmate,
-   *  stalemate or insufficient material on the replayed board (controller
-   *  ruling on review I2). A report, not a result: T10 writes no status, and
+   *  stalemate, insufficient material or the fifty-move rule on the replayed
+   *  board (controller rulings on review I2, round 1b). A report, not a result: T10 writes no status, and
    *  T14 calls reconcile(game_end) on it. Absent on every other answer. */
   | { ok: true; applied: boolean; ended?: true }
   /** Lichess refused, or may have acted without saying so (`unavailable` on a
@@ -383,12 +383,15 @@ async function playMove(
 
 // lila source, not measured — T17. scalachess @ 2ab0a403 Position.scala:80
 // `end = checkMate || staleMate || autoDraw || variantEnd`: lila ends the
-// game ON the move for these. The ruling reports three of them; the rest of
-// `autoDraw` (variant/Variant.scala:146-147 — the fifty-move rule at a
-// half-move clock of 100, and fivefold repetition) and every flag fall are
-// left to T13's sweep. Threefold repetition is a CLAIM at lila (Drawer
-// `yes`), not an end, though chess.js's isGameOver counts it.
-const endsOnTheMove = (b: Chess) => b.isCheckmate() || b.isStalemate() || b.isInsufficientMaterial();
+// game ON the move for these. variant/Variant.scala:146-147 `autoDraw =
+// isInsufficientMaterial || fiftyMoves(history) || fivefoldRepetition`, and
+// :172-173 `fiftyMoves = halfMoveClock >= 100` — chess.js's
+// isDrawByFiftyMoves is the same count (half-moves >= 100). FIVEFOLD
+// repetition is NOT reported here: chess.js has no predicate for it, so it
+// stays with T13's sweep, as do flag falls. Threefold repetition is a CLAIM
+// at lila (Drawer `yes`), not an end, though chess.js's isGameOver counts it.
+const endsOnTheMove = (b: Chess) =>
+  b.isCheckmate() || b.isStalemate() || b.isInsufficientMaterial() || b.isDrawByFiftyMoves();
 
 async function ledgerOnFile(fixtureId: string, gameId: string): Promise<string[] | null> {
   const [row] = await sql<{ moves_uci: string[] }[]>`
