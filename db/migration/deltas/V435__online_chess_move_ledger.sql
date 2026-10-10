@@ -23,7 +23,7 @@
 --   last made an offer lila REGISTERED. lila refuses a re-offer within 20 plies
 --   of the last one (Game.scala `playerHasOfferedDrawRecently`) and answers it
 --   200 all the same, so without these the ledger would invent an offer lila
---   never holds. Never beyond the ledger's own length.
+--   never holds. Never below ply 2, never beyond the ledger's own length.
 --
 -- Additive and nullable/defaulted, so every existing row (pending, ready,
 -- needs_organiser) is valid as it stands: an empty ledger.
@@ -56,7 +56,9 @@ alter table fixture_external_play
     check ((white_ms is null or white_ms >= 0)
            and (black_ms is null or black_ms >= 0)
            and (clock_increment_s is null or clock_increment_s >= 0)),
-  -- An offer is made at a ply the game has already reached.
+  -- An offer is made at a ply the game has already reached, and never before
+  -- ply 2 — lila registers none earlier (Game.scala `playerCanOfferDraw`), so
+  -- an earlier one from any writer (T11's adoption included) is invented.
   add constraint fixture_external_play_draw_offer_ply_check
-    check ((white_draw_offer_ply is null or white_draw_offer_ply between 0 and move_count)
-           and (black_draw_offer_ply is null or black_draw_offer_ply between 0 and move_count));
+    check ((white_draw_offer_ply is null or white_draw_offer_ply between 2 and move_count)
+           and (black_draw_offer_ply is null or black_draw_offer_ply between 2 and move_count));

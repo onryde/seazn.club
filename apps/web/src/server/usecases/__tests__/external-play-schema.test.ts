@@ -500,16 +500,28 @@ describe.skipIf(!process.env.DATABASE_URL)("external play schema (V432/V433)", (
     expect(checked, "anti-vacuity: clock columns").toBe(3);
   });
 
-  it("V435: an offer ply within [0, move_count] is accepted, on each side", async () => {
+  it("V435: an offer ply within [2, move_count] is accepted, on each side", async () => {
     let checked = 0;
+    const three = ["e2e4", "e7e5", "g1f3"];
     for (const col of ["white_draw_offer_ply", "black_draw_offer_ply"] as const) {
-      expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 2, [col]: 2 }), `${col}=2`)
-        .toMatchObject({ accepted: true });
-      expect(await tryLedger({ moves: ["e2e4", "e7e5"], move_count: 2, [col]: 0 }), `${col}=0`)
-        .toMatchObject({ accepted: true });
+      expect(await tryLedger({ moves: three, move_count: 3, [col]: 2 }), `${col}=2`).toMatchObject({ accepted: true });
+      expect(await tryLedger({ moves: three, move_count: 3, [col]: 3 }), `${col}=3`).toMatchObject({ accepted: true });
       checked++;
     }
     expect(checked, "anti-vacuity: offer-ply columns").toBe(2);
+  });
+
+  it("V435: an offer ply BELOW 2 is refused, on each side — lila registers no offer before ply 2 (Game.scala playerCanOfferDraw)", async () => {
+    let checked = 0;
+    const three = ["e2e4", "e7e5", "g1f3"];
+    for (const col of ["white_draw_offer_ply", "black_draw_offer_ply"] as const) {
+      for (const ply of [1, 0]) {
+        expect(await tryLedger({ moves: three, move_count: 3, [col]: ply }), `${col}=${ply}`)
+          .toEqual(refusedBy(OFFER_PLY_CHECK));
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 columns × 2 plies").toBe(4);
   });
 
   it("V435: an offer ply BEYOND the ledger, or negative, is refused, on each side", async () => {
