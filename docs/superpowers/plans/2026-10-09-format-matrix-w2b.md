@@ -1602,6 +1602,7 @@ Pin `total`.
 - **D19. `DOUBLE_WALKOVER_NO_NEXT_MATCH`** is refused when the candidate is `core.forfeit{by:"both"}` AND the stage kind is `knockout`, `double_elim`, `stepladder` or `page_playoff` AND the fixture has `winner_to_fixture IS NULL AND loser_to_fixture IS NULL` (`fed-seats.ts:73-76`). That is the feed graph, never round names (§5.3).
   - Ladder challenges and table kinds are exempt. A ladder wires no feed edge by design (W2a loop G), and a double walkover there leaves the positions unchanged.
   - A third-place match has no outgoing edge, so it is refused (X-DW-3).
+  - **Amended in loop F review (I-5):** "no next match" also covers a fixture whose two edges point at the SAME fixture — a grand final with a bracket reset, and a 2-entrant double elimination's winners' match, both of which only feed a rematch. The single rule is `feedsNextMatch` in `apps/web/src/lib/bracket-next-match.ts`, read by append-event, withdrawal and stages. Authority: X-DW-3 ("a final"), since a reset grand final carries `isFinal`.
 - **D20. The new seat assertion.** `assertAdvancingSeat(stageKind, status, outcome, seatedEntrant)` throws `LEVEL_RESULT_SEATED` (500) with `data.reason: "advances_nobody"` when `advancesNobody(outcome)` and a seat is about to be filled from it. Reusing W2a's bug-shape code keeps "a seat that must not be filled" one code. The spec names no new one.
 
 **Interfaces consumed:** Task 3's `advancesNobody`, `OUTCOME_KINDS` and `AWARD_REASONS`; Task 6's `BracketFixture.walkedOver`.

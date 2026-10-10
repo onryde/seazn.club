@@ -2129,9 +2129,9 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(s.complete?.finalRanks?.[0]).toBe(winnerOf(final.outcome));
     expect(r.checks.find((c) => c.id === "I2-bracket-one-champion-ranks-permutation")).toMatchObject({ verdict: "pass", checked: ppField + 1 });
   });
-  // Final review m-2: R4's expected page_playoff policy is derived from what seed 3 had pending — ruling 53's
+  // Final review m-2: R4's expected page_playoff policy is derived from what seed 3 had pending — rulings 53 + 106's
   // derivation, as on a ladder or americano (X-WD-2 since put page_playoff on withdrawal.ts's bracket branch, whose
-  // rule ruling 53 is) — and never the fixed "not none". The expectation is read from the rows before the withdrawal, not from the judge.
+  // rule rulings 53 + 106 are) — and never the fixed "not none". The expectation is read from the rows before the withdrawal, not from the judge.
   /** The engine's page playoff on a reseed: seed 3 meets seed 2 in pp-elim, so it is out after round 1 with nothing pending. */
   class SeedThreeOutInRoundOne extends FakeKnockoutDriver {
     override startEngineBracket() {
