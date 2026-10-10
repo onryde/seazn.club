@@ -26,8 +26,37 @@ const DEFAULT_BASE = "https://lichess.org";
 export type BoardApiDeps = { fetch?: typeof fetch; baseUrl?: string };
 
 /** One of the caller's outgoing challenges, as the recovery lookup needs it.
- *  Shape from the API spec; measurement owed (T17). */
-export type OutgoingChallenge = { id: string; destUserId: string | null; status: string };
+ *  Shape from the API spec; measurement owed (T17). The match fields (T9 N1)
+ *  are null when unreadable — the matcher, not the parser, decides what an
+ *  unreadable one means. There is no `createdAt`: ChallengeJson carries none
+ *  (lichess-org/api ChallengeJson.yaml; lila modules/challenge/src/main/
+ *  JsonView.scala at c91f1d09d, read 2026-10-10). */
+export type OutgoingChallenge = {
+  id: string;
+  destUserId: string | null;
+  status: string;
+  rated: boolean | null;
+  /** `variant.key` ("standard" for ours). */
+  variantKey: string | null;
+  /** `timeControl` (lila: clock ⇒ limit/increment in SECONDS; correspondence
+   *  and unlimited carry neither). */
+  timeControl: { type: string; limit: number | null; increment: number | null } | null;
+  /** The challenger's colour choice — `white` for every challenge we send. */
+  color: string | null;
+};
+/** The static facts of a game, from its public export (T9 N1). MEASURED
+ *  (spike-battery2.log, 2026-10-09): `rated`, `variant` (a string),
+ *  `clock.initial` / `clock.increment` in SECONDS, `createdAt` epoch ms. These
+ *  never change during a game, so the export's mid-game delay (M16: moves and
+ *  status lag) does not touch them. null = not readable. */
+export type GameMeta = {
+  gameId: string;
+  rated: boolean | null;
+  variant: string | null;
+  clockInitialSeconds: number | null;
+  clockIncrementSeconds: number | null;
+  createdAtMs: number | null;
+};
 /** One of the caller's ongoing games, from the caller's side. */
 export type OngoingGame = { gameId: string; color: "white" | "black"; opponentId: string | null };
 type Listed<T> = { ok: true } & T | { ok: false; code: BoardErrorCode; raw: string };
@@ -38,6 +67,23 @@ const ONGOING_PAGE = 50;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 const nonEmpty = (v: unknown): v is string => typeof v === "string" && v !== "";
+const boolOrNull = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const strOrNull = (v: unknown): string | null => (nonEmpty(v) ? v : null);
+
+/** The match fields of one ChallengeJson entry (T9 N1), each null when it
+ *  cannot be read. */
+function challengeMatchFields(c: Record<string, unknown>): Omit<OutgoingChallenge, "id" | "destUserId" | "status"> {
+  const tc = c.timeControl;
+  return {
+    rated: boolOrNull(c.rated),
+    variantKey: isRecord(c.variant) ? strOrNull(c.variant.key) : null,
+    timeControl: isRecord(tc) && nonEmpty(tc.type)
+      ? { type: tc.type, limit: numOrNull(tc.limit), increment: numOrNull(tc.increment) }
+      : null,
+    color: strOrNull(c.color),
+  };
+}
 
 /** Every item or nothing: one entry we cannot read could be the very game a
  *  recovery is looking for, so it fails the whole list (`null`). */
@@ -49,11 +95,11 @@ function readOutgoing(raw: string): OutgoingChallenge[] | null {
   for (const c of parsed.out) {
     if (!isRecord(c) || !nonEmpty(c.id) || typeof c.status !== "string") return null;
     if (c.destUser === null) {
-      out.push({ id: c.id, destUserId: null, status: c.status });
+      out.push({ id: c.id, destUserId: null, status: c.status, ...challengeMatchFields(c) });
       continue;
     }
     if (!isRecord(c.destUser) || !nonEmpty(c.destUser.id)) return null;
-    out.push({ id: c.id, destUserId: c.destUser.id, status: c.status });
+    out.push({ id: c.id, destUserId: c.destUser.id, status: c.status, ...challengeMatchFields(c) });
   }
   return out;
 }
@@ -345,6 +391,35 @@ export function createBoardApi(deps: BoardApiDeps = {}) {
         ? { ...common, status }
         : { ...common, status: "unrecognised", rawStatus: status };
     },
+
+    /** The static facts a crash recovery verifies an ongoing-game candidate on
+     *  (T9 N1). The MEASURED request: GET /game/export/{id}?moves=false,
+     *  Accept: application/json, no Authorization (spike-battery2.log; the
+     *  body is __fixtures__/lichess/export-live-clocks.json). A refusal keeps
+     *  its class; a body that is not THIS game (no id, another id) is
+     *  `unavailable`; a fact that cannot be read is null, never defaulted —
+     *  the caller holds on null, it never adopts on a guess. */
+    async exportGameMeta(gameId: string): Promise<Listed<{ meta: GameMeta }>> {
+      const out = await call(`/game/export/${encodeURIComponent(gameId)}?moves=false`, { method: "GET" });
+      if (out.status < 200 || out.status >= 300) {
+        return { ok: false, code: classifyBoardError(out.status, out.raw), raw: out.raw };
+      }
+      let parsed: unknown;
+      try { parsed = JSON.parse(out.raw); } catch { return { ok: false, code: "unavailable", raw: out.raw }; }
+      if (!isRecord(parsed) || parsed.id !== gameId) return { ok: false, code: "unavailable", raw: out.raw };
+      const clock = isRecord(parsed.clock) ? parsed.clock : {};
+      return {
+        ok: true,
+        meta: {
+          gameId,
+          rated: boolOrNull(parsed.rated),
+          variant: strOrNull(parsed.variant),
+          clockInitialSeconds: numOrNull(clock.initial),
+          clockIncrementSeconds: numOrNull(clock.increment),
+          createdAtMs: numOrNull(parsed.createdAt),
+        },
+      };
+    },
   };
 }
 
@@ -358,4 +433,5 @@ export const abortGame = defaultApi.abortGame;
 export const exportGame = defaultApi.exportGame;
 export const cancelChallenge = defaultApi.cancelChallenge;
 export const listOutgoingChallenges = defaultApi.listOutgoingChallenges;
+export const exportGameMeta = defaultApi.exportGameMeta;
 export const listOngoingGames = defaultApi.listOngoingGames;
