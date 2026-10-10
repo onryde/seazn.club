@@ -32,6 +32,7 @@
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
     "bcryptjs": "^3.0.3",
+    "chess.js": "1.4.0",
     "exceljs": "^4.4.0",
     "flexsearch": "^0.8.212",
     "ioredis": "^5.11.1",
