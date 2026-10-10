@@ -25,7 +25,7 @@ import {
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { bracketFirstRound } from "../lib/scenarios/f1-odd-field.ts";
-import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
+import { cascadeItems, expectedPolicy, policyFamilyFor, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { SIDE_SIZE_ROUTE, entrantName, rosterSize } from "../lib/scenarios/rosters.ts";
 import { entrantInput } from "../lib/model/state.ts";
 import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
@@ -2129,9 +2129,9 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(s.complete?.finalRanks?.[0]).toBe(winnerOf(final.outcome));
     expect(r.checks.find((c) => c.id === "I2-bracket-one-champion-ranks-permutation")).toMatchObject({ verdict: "pass", checked: ppField + 1 });
   });
-  // Final review m-2: page_playoff is an open-format kind (the text pin above), so R4's expected policy is the
-  // open-format rule over what seed 3 had pending — ruling 53's derivation, as on a ladder or americano — and
-  // never the fixed "not none". The expectation is read from the rows before the withdrawal, not from the judge.
+  // Final review m-2: R4's expected page_playoff policy is derived from what seed 3 had pending — ruling 53's
+  // derivation, as on a ladder or americano (X-WD-2 since put page_playoff on withdrawal.ts's bracket branch, whose
+  // rule ruling 53 is) — and never the fixed "not none". The expectation is read from the rows before the withdrawal, not from the judge.
   /** The engine's page playoff on a reseed: seed 3 meets seed 2 in pp-elim, so it is out after round 1 with nothing pending. */
   class SeedThreeOutInRoundOne extends FakeKnockoutDriver {
     override startEngineBracket() {
@@ -2146,7 +2146,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
   class ThroughAnswersNone extends FakeKnockoutDriver { override async withdraw(id: string) { return { ...(await super.withdraw(id)), policy: "none" as const }; } }
   const pending = (w: { before: readonly { status: string }[] }) => w.before.filter((b) => PENDING_STATUSES.includes(b.status)).length;
   const ppR4 = { ...ppRow, variant: "win_loss" } as const;
-  it("m-2, the empty case first: seed 3 out in round 1 holds nothing pending, so the open-format rule's answer is none — and the product's none passes r4-policy-reported (the fixed rule redded it)", async () => {
+  it("m-2, the empty case first: seed 3 out in round 1 holds nothing pending, so the derived rule's answer is none — and the product's none passes r4-policy-reported (the fixed rule redded it)", async () => {
     const r = await runOn(new SeedThreeOutInRoundOne({ pagePlayoff: true }), "R4", ppR4);
     const w = r.out.observed.withdrawal!;
     expect(w.before.length, "seed 3 played round 1").toBeGreaterThan(0);
@@ -2155,7 +2155,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
     // …and a walkover reported there is the misjudge the derivation catches.
     const wrong = await runOn(new OutAnswersWalkover({ pagePlayoff: true }), "R4", ppR4);
-    expect(wrong.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy walkover, expected none (0 pending at withdrawal; withdrawal.ts open-format rule)"] });
+    expect(wrong.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy walkover, expected none (0 pending at withdrawal; the bracket branch's rule, ruling 53)"] });
   });
   it("m-2, the positive pair: seed 3 through to pp-q2 holds one pending fixture, so walkover is expected — the product's walkover passes and a none fails, naming the pending count", async () => {
     const r = await runOn(new FakeKnockoutDriver({ pagePlayoff: true }), "R4", ppR4);
@@ -2164,7 +2164,70 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(w.policy).toBe("walkover");
     expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
     const none = await runOn(new ThroughAnswersNone({ pagePlayoff: true }), "R4", ppR4);
-    expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; withdrawal.ts open-format rule)"] });
+    expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; the bracket branch's rule, ruling 53)"] });
+  });
+  // Owner ruling 53 (loop F, withdrawal.ts's bracket branch): a knockout withdrawal with nothing pending answers none,
+  // so R4 derives a bracket kind's policy from what seed 3 had pending, as it does a page playoff's or a ladder's — the
+  // fixed "not none" passed a walkover with nothing pending and redded the product's none.
+  /** An 8-seat knockout with seed 3 laid where seed 7 stands: it meets seed 2 in round 1 and is out with nothing pending. */
+  class KoSeedThreeOut extends FakeKnockoutDriver {
+    override startEngineBracket() {
+      const real = new Map(this.entrants.map((e) => [e.id, e.seed]));
+      const laid: Record<number, number> = { 3: 7, 7: 3 };
+      for (const e of this.entrants) e.seed = laid[e.seed!] ?? e.seed;
+      try { return super.startEngineBracket(); } finally { for (const e of this.entrants) e.seed = real.get(e.id)!; }
+    }
+  }
+  class KoOutAnswersWalkover extends KoSeedThreeOut { override async withdraw(id: string) { return { ...(await super.withdraw(id)), policy: "walkover" as const }; } }
+  const koR4 = { row: "knockout", variant: "win_loss" } as const;
+  it("ruling 53 on a knockout, the empty case first: seed 3 out in round 1 holds nothing pending, so none is owed — the fake's none passes r4-policy-reported, and a walkover reds", async () => {
+    const r = await runOn(new KoSeedThreeOut({ singleElim: true }), "R4", koR4);
+    const w = r.out.observed.withdrawal!;
+    expect(w.before.length, "seed 3 played round 1").toBeGreaterThan(0);
+    expect(pending(w)).toBe(0);
+    expect(w.policy).toBe("none");
+    expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
+    const wrong = await runOn(new KoOutAnswersWalkover({ singleElim: true }), "R4", koR4);
+    expect(wrong.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy walkover, expected none (0 pending at withdrawal; the bracket branch's rule, ruling 53)"] });
+  });
+  it("ruling 53 on a knockout, the positive pair: seed 3 through to its semi-final holds one pending line, so walkover is owed — the fake's walkover passes and a none reds", async () => {
+    const r = await runOn(new FakeKnockoutDriver({ singleElim: true }), "R4", koR4);
+    const w = r.out.observed.withdrawal!;
+    expect(pending(w)).toBe(1);
+    expect(w.policy).toBe("walkover");
+    expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
+    const none = await runOn(new ThroughAnswersNone({ singleElim: true }), "R4", koR4);
+    expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; the bracket branch's rule, ruling 53)"] });
+  });
+  it("policyFamilyFor: a table kind answers by the table branch; every other kind's policy is derived from what was pending (ruling 53)", () => {
+    // Typed from ruling 53 (a bracket, ladder or page_playoff withdrawal with nothing pending answers none) and ruling
+    // 51/T15-R6 (americano's derived rule); the table kinds are the ones withdrawTableEntrant answers for.
+    const rows: [string, "table" | "pending"][] = [
+      ["league", "table"], ["group", "table"], ["swiss", "table"],
+      ["knockout", "pending"], ["double_elim", "pending"], ["stepladder", "pending"], ["page_playoff", "pending"], ["ladder", "pending"], ["americano", "pending"],
+    ];
+    for (const [kind, want] of rows) expect(policyFamilyFor(kind), kind).toBe(want);
+    expect(rows.length).toBe(9);
+  });
+  it("expectedPolicy on the bracket path: pending is scheduled or in play, and a HELD line too (C-2: needs_decision walks over); an abandoned line abstains by name (whether its abandon is active is not observed); a kind off the bracket path is refused", () => {
+    const snap = (status: string) => ({ id: `f-${status}`, status, outcome: null });
+    const rows: [string, string[], { want: "walkover" | "none"; pending: number } | RegExp][] = [
+      ["knockout", ["decided"], { want: "none", pending: 0 }],
+      ["knockout", [], { want: "none", pending: 0 }],
+      ["knockout", ["decided", "scheduled"], { want: "walkover", pending: 1 }],
+      ["knockout", ["in_play"], { want: "walkover", pending: 1 }],
+      ["knockout", ["needs_decision"], { want: "walkover", pending: 1 }],
+      ["ladder", ["needs_decision"], { want: "walkover", pending: 1 }],
+      ["page_playoff", ["forfeited"], { want: "none", pending: 0 }],
+      ["stepladder", ["abandoned"], /^cannot derive the policy: f-abandoned is abandoned, and whether its abandon is still active is not observed$/],
+    ];
+    for (const [kind, statuses, want] of rows) {
+      const got = expectedPolicy(statuses.map(snap), kind);
+      if (want instanceof RegExp) expect("abstain" in got ? got.abstain : JSON.stringify(got), `${kind} ${statuses}`).toMatch(want);
+      else expect(got, `${kind} ${statuses}`).toEqual(want);
+    }
+    expect(rows.length).toBe(8);
+    for (const kind of ["americano", "league"]) expect(() => expectedPolicy([], kind), kind).toThrow(/takes no bracket-path withdrawal/);
   });
   // Whole-branch review I-3: the product seats a page playoff walkover's loser NOWHERE (pp-q2 becomes a bye award that never
   // reaches a batch). The fake does the same, whichever of the two matches that feed pp-q2 finishes first - the order M1
