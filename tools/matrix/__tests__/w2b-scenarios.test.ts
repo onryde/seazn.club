@@ -19,7 +19,7 @@ import {
   hasNoNextMatch, isolatedTable, ladderUnmoved, partialPlayStands, pickDoubleWalkover, scoresheetOf, wireGraph, withRefusals, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
 } from "../lib/scenarios/w2b-checks.ts";
 import {
-  W2B_SCENARIOS, W2bCascadeLeftOpen, W2bMisplanned, abandonDelta, abandonPlan, cascadeLeftOpen, abandonWithResult, bothSeatsDead, goalLead, heldStream, knockoutLines, tableJudged, tbdSeatWalksOver, withdrawalsWalkOver,
+  FINAL_SETTLE_ROUTE, W2B_SCENARIOS, W2bCascadeLeftOpen, W2bMisplanned, abandonDelta, abandonPlan, cascadeLeftOpen, abandonWithResult, bothSeatsDead, goalLead, heldStream, knockoutLines, tableJudged, tbdSeatWalksOver, withdrawalsWalkOver,
 } from "../lib/scenarios/w2b-forfeit-credit.ts";
 import { SCENARIO_KEYS, planSliceCases } from "../lib/slice.ts";
 import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
@@ -533,7 +533,7 @@ describe("WD-CASC's checks (X-WD-1..4)", () => {
   const ext = (key: string, home: string | null, away: string | null, status: string, outcome: ObservedOutcome | null) => fx(id(key), home, away, status, outcome, { extKey: key });
   const w1 = qf1.home_entrant_id!; const a2 = qf2.away_entrant_id!; const a3 = qf3.away_entrant_id!;
   const r = {
-    steps: [{ entrantId: w1, label: "semi-final opponent TBD", answer: answer({ walkovers: 0 }) }, { entrantId: qf2.home_entrant_id!, label: "held", answer: answer() }],
+    steps: [{ entrantId: w1, label: "semi-final opponent TBD", answer: answer({ walkovers: 0 }) }, { entrantId: qf2.home_entrant_id!, label: "held", answer: answer() }, { entrantId: a2, label: "final opponent TBD", answer: answer({ walkovers: 0 }) }],
     walked: [{ fixtureId: qf2.id, withdrawn: qf2.home_entrant_id!, remaining: a2, label: "held" }],
     w1, a2, a3, lines, dw: { fixtureId: qf4.id, home: qf4.home_entrant_id!, away: qf4.away_entrant_id!, asked: { kind: "double_walkover" as const }, refusal: null },
   };
@@ -544,25 +544,38 @@ describe("WD-CASC's checks (X-WD-1..4)", () => {
     ext(qf4.ext_key!, qf4.home_entrant_id, qf4.away_entrant_id, "forfeited", { kind: "double_walkover" }),
     ext(lines.a.sf, null, a2, "forfeited", { kind: "award", winner: a2, loser: null, reason: "walkover" }),
     ext(lines.b.sf, null, null, "forfeited", { kind: "double_walkover" }),
-    ext(lines.final, a2, null, "forfeited", { kind: "award", winner: a2, loser: null, reason: "walkover" }),
+    // X-WD-4's final half (review I-6): a2 withdrew from it while its other seat was TBD, and SF2 advanced nobody.
+    ext(lines.final, null, null, "scheduled", null),
   ];
   it("the rule's run passes all three; each reds when its own fixture is wrong", () => {
-    expect(withdrawalsWalkOver(r, good)).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(withdrawalsWalkOver(r, good)).toMatchObject({ verdict: "pass", checked: 4 });
     expect(tbdSeatWalksOver(r, good)).toMatchObject({ verdict: "pass", checked: 4 });
-    expect(bothSeatsDead(r, good, [a2])).toMatchObject({ verdict: "pass", checked: 4 });
+    expect(bothSeatsDead(r, good, null)).toMatchObject({ verdict: "pass", checked: 5 });
     const swap = (key: string, f: ObservedFixture) => good.map((g) => (g.extKey === key ? f : g));
     expect(withdrawalsWalkOver(r, swap(qf2.ext_key!, ext(qf2.ext_key!, qf2.home_entrant_id, a2, "abandoned", null))).verdict).toBe("fail");
     expect(withdrawalsWalkOver({ ...r, steps: [...r.steps, { entrantId: "y", label: "x", answer: answer({ voided: 1 }) }] }, good).verdict, "a voiding answer").toBe("fail");
     const refused = withdrawalsWalkOver({ ...r, steps: [...r.steps, { entrantId: "y", label: "semi-final opponent TBD", answer: null, refusal: { status: 422, code: "WRONG_PHASE" } }] }, good);
-    expect(refused, "a refused withdrawal (X-WD-3)").toMatchObject({ verdict: "fail", checked: 4 });
+    expect(refused, "a refused withdrawal (X-WD-3)").toMatchObject({ verdict: "fail", checked: 5 });
     expect(refused.reason).toMatch(/withdrawal of y \(semi-final opponent TBD\) refused 422 WRONG_PHASE/);
     expect(tbdSeatWalksOver(r, swap(lines.a.sf, ext(lines.a.sf, w1, a2, "forfeited", { kind: "award", winner: a2, loser: w1, reason: WITHDREW }))).verdict, "W1 still seated").toBe("fail");
     expect(tbdSeatWalksOver(r, [...good, ext("other", w1, "z", "scheduled", null)]).verdict, "W1 seated later").toBe("fail");
     expect(tbdSeatWalksOver(r, swap(qf1.ext_key!, ext(qf1.ext_key!, w1, qf1.away_entrant_id, "cancelled", null))).verdict, "a voided fixture").toBe("fail");
-    expect(bothSeatsDead(r, swap(lines.b.sf, ext(lines.b.sf, null, null, "scheduled", null)), [a2]).verdict, "SF2 left open").toBe("fail");
-    expect(bothSeatsDead(r, swap(lines.final, ext(lines.final, a2, null, "scheduled", null)), [a2]).verdict, "final left open").toBe("fail");
-    expect(bothSeatsDead(r, good, [w1]).verdict, "wrong champion").toBe("fail");
-    expect(bothSeatsDead({ ...r, dw: { ...r.dw, refusal: { status: 409, code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" } } }, good, [a2]).verdict, "the DW refused").toBe("fail");
+    expect(bothSeatsDead(r, swap(lines.b.sf, ext(lines.b.sf, null, null, "scheduled", null)), null).verdict, "SF2 left open").toBe("fail");
+    // The final half, each way to go wrong: walked over to the withdrawn a2 (the pre-I-6 expectation), voided (today's
+    // both-dead line), still seating a2, decided, and a champion crowned.
+    const finalRows: [string, ObservedFixture, readonly string[] | null, RegExp][] = [
+      ["walked over to a2", ext(lines.final, a2, null, "forfeited", { kind: "award", winner: a2, loser: null, reason: "walkover" }), null, /wanted open with no outcome/],
+      ["voided", ext(lines.final, null, null, "abandoned", null), null, /abandoned no outcome, wanted open/],
+      ["a2 still seated", ext(lines.final, a2, null, "scheduled", null), null, new RegExp(`seats ${a2}, wanted nobody`)],
+      ["a champion crowned", ext(lines.final, null, null, "scheduled", null), [a2], new RegExp(`crowned ${a2}`)],
+    ];
+    for (const [name, row, ranks, why] of finalRows) {
+      const got = bothSeatsDead(r, swap(lines.final, row), ranks);
+      expect(got.verdict, name).toBe("fail");
+      expect(got.evidence.join(" | "), name).toMatch(why);
+    }
+    expect(finalRows.length).toBe(4);
+    expect(bothSeatsDead({ ...r, dw: { ...r.dw, refusal: { status: 409, code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" } } }, good, null).verdict, "the DW refused").toBe("fail");
   });
   it("a withdrawn side's fixture left open stops the case by the rule's name; a terminal one plays on", () => {
     // The truth-run's find (pre-D): football's held QF2 stayed needs_decision after its home side withdrew, and the round
@@ -873,5 +886,38 @@ describe("each table scenario, run on the league fake", () => {
     expect(c.verdict).toBe("fail");
     expect(c.checked).toBeGreaterThan(0);
     expect(c.reason).toMatch(/scoresheet so far — football\.card is not in its vocabulary/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review I-6: WD-CASC driven end to end. The single-elimination fake mirrors the plan's Task 8 cascade (D17):
+// - a held fixture walks over;
+// - a TBD seat dies, and the entrant who arrives there walks over at once;
+// - a line both of whose seats die is a double walkover, and a final both of whose seats die stays open.
+// Its walkover carries withdrawal.ts's own REASON, so the test is red until loop F lands D1's "withdrew". Today the
+// engine's closed reason list refuses "entrant withdrew", and the held QF2 is left open (W2bCascadeLeftOpen).
+describe("WD-CASC end to end on the single-elimination fake (review I-6)", () => {
+  it("every sport: the three WD-CASC checks pass on counted items, the final left open is excused by FINAL_SETTLE_ROUTE alone, and no check fails (red until loop F)", async () => {
+    const cells = w2bCells("WD-CASC");
+    expect(cells.map((c) => c.sport).sort()).toEqual([...SPORT_KEYS].sort());
+    const failures: string[] = [];
+    let judged = 0;
+    for (const { row, sport } of cells) {
+      const variant = variantFor(sport);
+      const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|WD-CASC`, row, sport, variant, scenario: "WD-CASC", canary: false };
+      const out = await SCENARIOS["WD-CASC"].run({ driver: new FakeKnockoutDriver({ singleElim: true }), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+      for (const c of out.assertions) if (c.verdict === "fail") failures.push(`${sport} ${c.id}: ${c.reason}`);
+      for (const id of ["w2b-withdrawal-walks-over", "w2b-withdrawal-tbd-seat", "w2b-withdrawal-both-seats-dead"]) {
+        const c = out.assertions.find((x) => x.id === id);
+        expect(c, `${sport} ${id}`).toBeDefined();
+        judged += c!.checked;
+      }
+      expect(out.assertions.find((c) => c.id === "life-loop-bounded")?.verdict, sport).toBe("pass");
+      expect(out.notes.filter((n) => n.includes(`(exempt) → ${FINAL_SETTLE_ROUTE.wave}: ${FINAL_SETTLE_ROUTE.why}`)).length, sport).toBe(1);
+    }
+    expect(failures).toEqual([]);
+    // Per cell: the two walkovers and five withdrawals the choreography makes (QF2, QF3; w1, QF2's home, a2, QF3's home,
+    // a3), SF1's walk plus w1, a3 never re-seated plus nothing voided, and the five both-seats-dead items.
+    expect(judged).toBe(cells.length * (2 + 5 + 4 + 5));
   });
 });

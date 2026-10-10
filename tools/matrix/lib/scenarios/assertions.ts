@@ -6,6 +6,7 @@ import type { PublicStandingsOut, StageRef } from "../driver/types.ts";
 import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun, type ObservedStage } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import { judgeDrive } from "../reference-bracket.ts";
+import type { Route } from "../routing.ts";
 import { resolveSportCfg } from "../sport-cfg.ts";
 import type { BuiltReadback, DivisionSetup, Recorder } from "./common.ts";
 import { lineupItems } from "./lineup-plan.ts";
@@ -336,8 +337,11 @@ export function stageCompleted(observed: ObservedRun): CheckResult {
  *  "drains" with work unplayed. The cap also makes I1/I2/I4 abstain
  *  (cut_short), and I4 accepts named refusals, so without this check any of
  *  them could read ✅ over an unfinished stage. */
-export function loopBounded(rec: Recorder, observed: ObservedRun): CheckResult {
-  const open = observed.stages.flatMap((s) => s.fixtures).filter((f) => !isTerminal(f.status));
+export function loopBounded(rec: Recorder, observed: ObservedRun, openByRule: ReadonlyMap<string, Route> = new Map()): CheckResult {
+  // `openByRule` (W2b review I-6): a fixture a signed rule leaves open, by ext key or id, with the route that owns
+  // what comes next. X-WD-4's final, both of whose seats departed, goes to settle. Only an OPEN fixture is excused,
+  // and the scenario that names it judges it itself.
+  const open = observed.stages.flatMap((s) => s.fixtures).filter((f) => !isTerminal(f.status) && !openByRule.has(f.extKey ?? f.id) && !openByRule.has(f.id));
   return assertion("life-loop-bounded", [
     { ok: rec.exit === "drained", note: `play loop exited ${rec.exit ?? "never"}` },
     { ok: open.length === 0, note: `${open.length} fixture(s) left unfinished: ${open.slice(0, 8).map((f) => `${f.id} ${f.status}`).join(", ")}` },

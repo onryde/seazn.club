@@ -32,6 +32,7 @@ import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } 
 import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
+import { routeTo } from "../lib/routing.ts";
 import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
 import { runSlice } from "../run.ts";
 import { FakeDeniedDriver, FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture, type FakeKnockoutOptions } from "./fake-driver.ts";
@@ -326,6 +327,23 @@ describe("shared assertions — empty case first, then each way to go red", () =
       rec.exit = exit;
       expect(loopBounded(rec, done)).toMatchObject({ verdict: "fail", checked: 2, evidence: [`play loop exited ${exit}`] });
     }
+  });
+
+  it("loopBounded's openByRule (W2b review I-6): an open fixture a rule leaves open is excused by its ext key or id; every other open fixture still reds", () => {
+    const rec = new Recorder();
+    rec.exit = "drained";
+    const route = routeTo("W4", "a final both of whose seats departed goes to settle");
+    const final = fx({ id: "f9", extKey: "r3-m1", home: null, away: null, status: "scheduled", outcome: null });
+    const other = fx({ id: "f3", status: "scheduled", outcome: null });
+    const rows: [string, ObservedFixture[], ReadonlyMap<string, typeof route>, string][] = [
+      ["by ext key", [fx({}), final], new Map([["r3-m1", route]]), "pass"],
+      ["by id", [fx({}), final], new Map([["f9", route]]), "pass"],
+      ["not named", [fx({}), final], new Map(), "fail"],
+      ["another open fixture", [fx({}), final, other], new Map([["r3-m1", route]]), "fail"],
+    ];
+    for (const [name, fixtures, open, want] of rows) expect(loopBounded(rec, run([], fixtures), open), name).toMatchObject({ verdict: want, checked: 2 });
+    expect(loopBounded(rec, run([], [fx({}), final, other]), new Map([["r3-m1", route]])).evidence).toEqual(["1 fixture(s) left unfinished: f3 scheduled"]);
+    expect(rows.length).toBe(4);
   });
 });
 

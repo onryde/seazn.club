@@ -9,7 +9,8 @@
 //   AB-AWARD  an abandon with a result: leading / level (award policy), cricket's
 //             minimum overs passed / not reached                                     X-AB-1, X-AB-2, CK-AB-1/2
 //   WD-CASC   a knockout's withdrawal cascade: TBD seat, held / tie-break pending,
-//             not started, and a line whose two seats both die                        X-WD-1..4, BG-WO-2/3
+//             not started, a line whose two seats both die, and a final whose two
+//             seats both departed (it goes to settle, left open by rule)            X-WD-1..4, BG-WO-2/3
 //
 // A credited score the product shows in its table (X-WO-1) is judged against the walkover-credit reference family
 // (@seazn/reference), asked with the drive's offender and, after START, the scoresheet so far (scoresheetOf); a credit
@@ -27,6 +28,7 @@ import type { CheckResult } from "../results.ts";
 import { sportModule, stageCfg } from "../sport-cfg.ts";
 import { generateStream, levelReachable, partialPlay } from "../streams/index.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type ForfeitReason, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
+import { routeTo, type Route } from "../routing.ts";
 import { AWARD_POLICY, DLS_ON, abandonOverride, w2bApplies } from "../w2b-cells.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
@@ -388,20 +390,29 @@ export function tbdSeatWalksOver(r: WdRecord, fixtures: readonly ObservedFixture
   return assertion("w2b-withdrawal-tbd-seat", items);
 }
 
-/** X-WD-4 (with X-DW-2): a fixture both of whose seats are dead — one by a withdrawal while the other was TBD, the
- *  other fed by a double walkover — is a double walkover, and the final it fed walks the other line's winner over to
- *  the title. */
+/** X-WD-4 and X-DW-3, the route for what follows. A final both of whose seats departed goes to settle, and the case
+ *  leaves it open. No stage of the matrix settles a final with no entrant seated (life-loop-bounded's openByRule). */
+export const FINAL_SETTLE_ROUTE: Route = routeTo("W4", "a final both of whose seats departed goes to settle (X-WD-4, X-DW-3), and no settle of a final with no entrant seated is driven");
+
+/** X-WD-4 (with X-DW-2 and X-DW-3; review I-6), both halves.
+ *  - SF2: a3 withdrew while its other seat was TBD, and QF4's double walkover feeds that seat. Both seats are dead, so
+ *    SF2 is a double walkover.
+ *  - The final: a2, QF2's walkover winner, walked over SF1 beside w1's dead seat, then withdrew while the final's other
+ *    seat was TBD. That seat is fed by SF2's double walkover. Both seats departed, so the final goes to settle: open,
+ *    no outcome, nobody seated, nobody crowned.
+ *  Two withdrawals alone never kill both seats of one fixture. The second entrant to arrive walks over at once (X-WD-3:
+ *  D17's bye award runs inside the arriving decision), so the second death is always a dead feeder. */
 export function bothSeatsDead(r: WdRecord, fixtures: readonly ObservedFixture[], finalRanks: readonly string[] | null): CheckResult {
   if (r.lines === null || r.a2 === null) return assertion("w2b-withdrawal-both-seats-dead", [{ ok: false, note: "the choreography never reached the second line" }]);
   const sf = byExt(fixtures, r.lines.b.sf);
   const fin = byExt(fixtures, r.lines.final);
-  const fo = fin?.outcome ?? null;
-  const fa = fo !== null && fo.kind === "award" ? fo : null;
+  const seated = fin === undefined ? [] : [fin.home, fin.away].filter((e): e is string => e !== null);
   return assertion("w2b-withdrawal-both-seats-dead", [
     { ok: r.dw !== null && r.dw.refusal === null, note: r.dw === null ? "the quarter-final double walkover was never posted" : `${r.dw.fixtureId}: the double walkover was refused ${r.dw.refusal?.status ?? ""} ${r.dw.refusal?.code ?? ""}` },
     { ok: sf?.status === "forfeited" && sf.outcome?.kind === "double_walkover", note: `${r.lines.b.sf}: ${sf?.status ?? "(missing)"} ${sf?.outcome == null ? "no outcome" : JSON.stringify(sf.outcome)}, wanted forfeited double_walkover` },
-    { ok: fin?.status === "forfeited" && fa !== null && fa.winner === r.a2, note: `${r.lines.final}: ${fin?.status ?? "(missing)"} ${fo === null ? "no outcome" : JSON.stringify(fo)}, wanted ${r.a2} walked over` },
-    { ok: finalRanks?.[0] === r.a2, note: `finalRanks[0] is ${finalRanks?.[0] ?? "(none)"}, wanted ${r.a2}` },
+    { ok: fin !== undefined && !isTerminal(fin.status) && fin.outcome === null, note: `${r.lines.final}: ${fin?.status ?? "(missing)"} ${fin?.outcome == null ? "no outcome" : JSON.stringify(fin.outcome)}, wanted open with no outcome (both seats departed: it goes to settle, X-WD-4, X-DW-3)` },
+    { ok: fin !== undefined && seated.length === 0, note: `${r.lines.final} seats ${seated.join(", ")}, wanted nobody: ${r.a2} withdrew from it and SF2 advanced nobody` },
+    { ok: finalRanks === null, note: `the stage crowned ${finalRanks?.[0] ?? "(none)"} (finalRanks of ${finalRanks?.length ?? 0}), wanted nobody: the final is open` },
   ]);
 }
 
@@ -416,7 +427,7 @@ function guard(key: W2bScenarioKey, ctx: ScenarioContext): void {
   }
 }
 
-async function finish(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, plays: Awaited<ReturnType<typeof playDivision>>, own: (observed: ObservedRun) => Promise<CheckResult[]>, opts: { resultsAsPosted?: false } = {}): Promise<ScenarioOutput> {
+async function finish(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, plays: Awaited<ReturnType<typeof playDivision>>, own: (observed: ObservedRun) => Promise<CheckResult[]>, opts: { resultsAsPosted?: false; openByRule?: ReadonlyMap<string, Route> } = {}): Promise<ScenarioOutput> {
   const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
   const pub = await ctx.driver.publicStandings({ orgSlug: ctx.orgSlug, competitionSlug: setup.competition.slug, divisionSlug: setup.division.slug });
   return {
@@ -429,7 +440,7 @@ async function finish(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
       ...(opts.resultsAsPosted === false ? [] : [resultsAsPosted(rec, observed)]),
       publicStandingsMatch(observed, pub),
       stageCompleted(observed),
-      loopBounded(rec, observed),
+      loopBounded(rec, observed, opts.openByRule),
       advanceSeededAsDeclared(plays, observed, rec.withdrawn),
       lineupsPut(rec, setup),
       // I-3: every bracket drive — the scenario's forfeits and double walkovers among them — against the bracket-finish
@@ -619,6 +630,9 @@ const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
       await withdraw(qf2.home_entrant_id!, held.label);
       r.walked.push({ fixtureId: qf2.id, withdrawn: qf2.home_entrant_id!, remaining: r.a2, label: held.label });
       await stopIfLeftOpen(qf2.id, held.label, qf2.home_entrant_id!, true);
+      // X-WD-4's final half (review I-6). a2 arrived at SF1 beside w1's dead seat and walked over into the final at once
+      // (X-WD-3). Its withdrawal now finds the final's other seat TBD, so its seat there is dead too.
+      await withdraw(r.a2, "final opponent TBD");
       // BG-WO-2 and the bracket row: QF3 not started when its home side withdraws.
       await withdraw(qf3.home_entrant_id!, "not started");
       r.walked.push({ fixtureId: qf3.id, withdrawn: qf3.home_entrant_id!, remaining: qf3.away_entrant_id!, label: "not started" });
@@ -631,11 +645,14 @@ const wdCasc = scenario("WD-CASC", async (ctx, rec, setup) => {
     },
   };
   const plays = await playDivision(ctx, rec, setup, hooks);
+  // X-WD-4: the final, both seats departed, goes to settle. The case leaves it open by rule, and bothSeatsDead judges it.
+  const openByRule = new Map<string, Route>(r.lines === null ? [] : [[r.lines.final, FINAL_SETTLE_ROUTE]]);
+  for (const [key, route] of openByRule) rec.notes.push(`WD-CASC: ${key} is left open by rule (exempt) → ${route.wave}: ${route.why}`);
   // The cascades wrote several fixtures no single recorded withdrawal explains: this scenario's own checks judge each.
   return finish(ctx, rec, setup, plays, (observed) => {
     const fixtures = observed.stages[0].fixtures;
     return Promise.resolve([withdrawalsWalkOver(r, fixtures), tbdSeatWalksOver(r, fixtures), bothSeatsDead(r, fixtures, observed.stages[0].complete?.finalRanks ?? null)]);
-  }, { resultsAsPosted: false });
+  }, { resultsAsPosted: false, openByRule });
 });
 
 export const w2bScenarios: Readonly<Record<W2bScenarioKey, Scenario>> = Object.freeze({
