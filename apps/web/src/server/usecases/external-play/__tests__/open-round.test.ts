@@ -646,6 +646,25 @@ describe.skipIf(!HAS_DB)("openRound — the round changing underneath (assumptio
     expect(mail.sent).toHaveLength(0);
   });
 
+  it("a board whose bridge row names ANOTHER round's open is refused loudly, never read as invited", async () => {
+    // Not product-reachable (no path moves a fixture between rounds); forced
+    // by SQL to reach the assertion that says so.
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, spares: 1 });
+    await open(r);
+    const late = r.spares[0]!;
+    const { fixture_id } = await addFixture(r.owner, r.stageId, {
+      home_entrant_id: late.home.entrantId,
+      away_entrant_id: late.away.entrantId,
+      round_no: 2,
+      scheduled_at: "2026-10-01T13:10:00.000Z",
+    });
+    await open(r, 2);
+    await sql`update fixtures set round_no = 1 where id = ${fixture_id}`;
+    mail.sent.length = 0;
+    await expect(open(r)).rejects.toThrow(/names open .* not this round's/);
+    expect(mail.sent).toHaveLength(0);
+  });
+
   // Each clause of the locked re-check, on its own: the board changes after
   // its seats were read and before the lock.
   const changes: [string, (fixtureId: string, spare: string) => Promise<unknown>][] = [

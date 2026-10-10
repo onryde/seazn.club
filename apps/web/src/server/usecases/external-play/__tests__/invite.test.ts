@@ -195,6 +195,17 @@ describe.skipIf(!HAS_DB)("resendExternalPlayNotice", () => {
     expect(mail.sent).toHaveLength(0);
   });
 
+  it("a resend the provider refuses is not counted and leaves that seat un-stamped", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const b = r.boards[0]!;
+    mail.fail.add(b.home.email);
+    await open(r); // home's send fails ⇒ home un-stamped
+    const before = (await rowOf(b.fixtureId))!;
+    const homeCol = before.white_emailed_at === null ? "white_emailed_at" : "black_emailed_at";
+    expect(await resendExternalPlayNotice(r.owner, b.fixtureId, ORIGIN)).toEqual({ emailed: 1 });
+    expect((await rowOf(b.fixtureId))![homeCol], "a refused send records no invite").toBeNull();
+  });
+
   it("a board whose game was made before any invite: Resend leaves the game row exactly as it was", async () => {
     // Reached by the real path: a board added to the round after the open,
     // seated and created by its players before the organiser opened again.

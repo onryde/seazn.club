@@ -90,6 +90,7 @@ type Board = { f: OnlinePlayFixture; seats: [InviteSeat, InviteSeat] };
 
 type BridgeFactsRow = InviteBridgeFacts & {
   fixture_id: string;
+  round_open_id: string | null;
   white_emailed_at: Date | null;
   black_emailed_at: Date | null;
 };
@@ -210,14 +211,23 @@ export async function openRound(
 
     const existing = await roundOpenAt(tx, a.stageId, a.roundNo);
     const bridges = await tx<BridgeFactsRow[]>`
-      select fixture_id, status, challenge_id, create_sent_at,
+      select fixture_id, status, challenge_id, create_sent_at, round_open_id,
              white_emailed_at, black_emailed_at
         from fixture_external_play where fixture_id in ${tx(ids)}`;
     const bridgeOf = new Map(bridges.map((b) => [b.fixture_id, b]));
-    // A stamp is only ever written on a row naming this round's open (CHECK
+    // A stamp is only ever written on a row naming its round's open (CHECK
     // fixture_external_play_invite_needs_open_round_check + the binding
-    // trigger, and one open row per (stage, round)), so a stamp on a board of
-    // this round IS an invite for this open.
+    // trigger), there is one open row per (stage, round), and no product path
+    // moves a fixture between rounds — so a row of this round names no open
+    // or THIS one, and a stamp on it IS an invite for this open. Asserted, not
+    // assumed: a row naming another open would read its stamps as this
+    // round's invites and silently mail nobody.
+    const foreign = bridges.find((b) => b.round_open_id !== null && b.round_open_id !== existing?.id);
+    if (foreign) {
+      throw new Error(
+        `openRound: bridge row of fixture ${foreign.fixture_id} names open ${foreign.round_open_id}, not this round's`,
+      );
+    }
     const invitedFor = (fixtureId: string, colour: Colour): boolean => {
       const b = bridgeOf.get(fixtureId);
       if (!existing || !b) return false;
