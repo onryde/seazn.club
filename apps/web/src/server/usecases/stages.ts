@@ -2065,6 +2065,16 @@ async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<v
       home_slot_label = null,
       away_slot_label = null
     where id in ${tx(ids)}`;
+  // Online play (T19, controller ruling Q1 2026-10-10): a board's bridge row
+  // records who was INVITED to it, per seat. Those seats are gone, so the row
+  // goes with them — the re-paired board is invited afresh when the organiser
+  // opens the round again, in a fresh window. A row a game stands behind is
+  // left exactly as it is: a recorded challenge, or a create whose outcome is
+  // unknown (T9's `create_sent_at` marker — a game MAY exist).
+  await tx`
+    delete from fixture_external_play
+     where fixture_id in ${tx(ids)}
+       and challenge_id is null and create_sent_at is null`;
 }
 
 /**
