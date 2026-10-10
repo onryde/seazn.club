@@ -95,6 +95,9 @@ function advancingWinner(outcome: unknown): string | undefined {
   return o.kind === "win" || o.kind === "award" ? o.winner : undefined;
 }
 
+/** fed-seats.ts advancesNobody: a double walkover advances nobody (X-DW-2). */
+const isDoubleWalkover = (outcome: unknown): boolean => (outcome as { kind?: unknown } | null)?.kind === "double_walkover";
+
 /** append-event.ts LOCKED_FIXTURE_STATUSES: refused before the fold. */
 const LOCKED = new Set(["finalized", "cancelled"]);
 /** lib/table-withdrawal.ts WITHDRAWAL_PLAYED_STATUSES: a result to void first. */
@@ -129,9 +132,13 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   readonly feeds = new Map<string, { target: string; slot: 1 | 2 }>();
   /** A swiss stage's bye shells (the product's `sw-r<n>-bye` ext_key). Reset per division. */
   readonly byeShells = new Set<string>();
-  /** `<fixture id>:<slot>`: a bracket seat whose withdrawn entrant's opponent was still TBD (X-WD-3, plan Task 8) — dead,
-   *  never voided; the opponent who arrives there is walked over. Reset per division. */
+  /** `<fixture id>:<slot>`: a bracket seat no entrant will reach (stages.ts resolveBracketSeats' dead seat) — one whose
+   *  withdrawn entrant's opponent was still TBD (X-WD-3, plan Task 8), or one a double walkover or a void feeds (X-DW-2,
+   *  Review Focus 1). The opponent who arrives beside it is walked over by bye. Reset per division. */
   readonly deadSeats = new Set<string>();
+  /** The dead seats that DEPARTED (resolveBracketSeats' seatDeparted): a withdrawal's emptied seat. A double walkover
+   *  the model records always carries its event, so the seat it kills is dead, not departed. Reset per division. */
+  readonly departedSeats = new Set<string>();
   constructor(opts: ModelFakeOpts = {}) {
     super("org-model");
     this.opts = opts;
@@ -181,9 +188,9 @@ export class ModelFakeDriver extends FakeLeagueDriver {
         await this.walkoverFixture(f, entrantId);
         continue;
       }
-      this.deadSeats.add(`${f.id}:${home ? 1 : 2}`);
       if (home) f.home_entrant_id = null;
       else f.away_entrant_id = null;
+      this.#killSeat(f, home ? 1 : 2, true);
     }
     entrant.status = "withdrawn";
     return { entrant_id: entrantId, status: "withdrawn", policy: mine.length > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
@@ -201,6 +208,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     this.feeds.clear();
     this.byeShells.clear();
     this.deadSeats.clear();
+    this.departedSeats.clear();
     this.stage = null;
     this.completed = false;
     this.#lateEntrant = false;
@@ -364,6 +372,8 @@ export class ModelFakeDriver extends FakeLeagueDriver {
    *  throw, or null. A cascade walkover is reset, and whatever it advanced
    *  moves too. */
   #release(f: FakeFixture, next: unknown, path: string, plan: (() => void)[]): RefusedCall | null {
+    // Review Focus 1: a double walkover taken back (voided) revives the seat it killed (fed-seats.ts releaseFedSeats).
+    if (isDoubleWalkover(f.outcome) && !isDoubleWalkover(next)) return this.#revive(f, path, plan);
     const edge = this.feeds.get(f.id);
     const was = advancingWinner(f.outcome);
     if (edge === undefined || was === undefined || was === advancingWinner(next)) return null;
@@ -393,12 +403,17 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   }
   /** usecases/scoring.ts onDecided → fillSlot: the winner goes forward, into an empty seat only. An arrival into a
    *  fixture whose other seat is dead (X-WD-3) is walked over at once (scoring.ts resolveBracketSeats after fillSlot),
-   *  with no event, and goes on. */
+   *  with no event, and goes on. A double walkover advances nobody (X-DW-2): the seat it feeds is dead (#killSeat). */
   #fill(f: FakeFixture): void {
     const edge = this.feeds.get(f.id);
     const w = advancingWinner(f.outcome);
     const t = edge === undefined ? undefined : this.fixtures.find((x) => x.id === edge.target);
-    if (edge === undefined || w === undefined || t === undefined) return;
+    if (edge === undefined || t === undefined) return;
+    if (isDoubleWalkover(f.outcome)) {
+      this.#killSeat(t, edge.slot, false);
+      return;
+    }
+    if (w === undefined) return;
     if (edge.slot === 1 && t.home_entrant_id === null && !this.deadSeats.has(`${t.id}:1`)) t.home_entrant_id = w;
     if (edge.slot === 2 && t.away_entrant_id === null && !this.deadSeats.has(`${t.id}:2`)) t.away_entrant_id = w;
     if (this.deadSeats.has(`${t.id}:${edge.slot === 1 ? 2 : 1}`) && t.status === NEXT.notStarted) {
@@ -406,6 +421,72 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       t.outcome = { kind: "award", winner: w, loser: null, reason: "bye" }; // awardSeededByes (W2b C-5)
       this.#fill(t);
     }
+  }
+  /** stages.ts resolveBracketSeats (loop F) on one seat that just died — a withdrawal's emptied seat (departed) or the
+   *  seat a double walkover or a void feeds (dead, not departed), as fake-driver.ts killSlot plays it:
+   *  - an entrant waiting opposite walks over at once: `forfeited` + the bye award, no event (W2b C-5), and goes on;
+   *  - the other seat still on its way: nothing yet (the arrival is #fill's bye);
+   *  - the other seat dead too: a void, `abandoned` with no outcome, nobody seated (Review Focus 1), and the seat it
+   *    feeds dies in turn. Both seats DEPARTED would be X-WD-4's departure double walkover, which the model cannot
+   *    reach: a withdrawal empties only a seat whose opponent is TBD, and an arrival beside a dead seat is walked over
+   *    at once, so no line has two withdrawn sides. It is refused by name, never played. */
+  #killSeat(t: FakeFixture, slot: 1 | 2, departed: boolean): void {
+    const key = `${t.id}:${slot}`;
+    const otherKey = `${t.id}:${slot === 1 ? 2 : 1}`;
+    this.deadSeats.add(key);
+    if (departed) this.departedSeats.add(key);
+    if (t.status !== NEXT.notStarted || t.outcome !== null) return;
+    const waiting = slot === 1 ? t.away_entrant_id : t.home_entrant_id;
+    if (waiting !== null) {
+      t.status = "forfeited";
+      t.outcome = { kind: "award", winner: waiting, loser: null, reason: "bye" }; // awardSeededByes (W2b C-5)
+      this.#fill(t);
+      return;
+    }
+    if (!this.deadSeats.has(otherKey)) return;
+    if (this.departedSeats.has(key) && this.departedSeats.has(otherKey)) {
+      throw new Error(`fake: both seats of ${t.id} departed (X-WD-4's departure double walkover) — the model never seats two withdrawn sides on one line, so this is not modelled`);
+    }
+    t.status = "abandoned";
+    t.outcome = null;
+    const edge = this.feeds.get(t.id);
+    const next = edge === undefined ? undefined : this.fixtures.find((x) => x.id === edge.target);
+    if (edge !== undefined && next !== undefined) this.#killSeat(next, edge.slot, false);
+  }
+  /** fed-seats.ts reviveDeadSeats (W2b Review Focus 1): voiding a double walkover makes its feeder live again, so the
+   *  seat it killed revives under the un-fill's own rules — PLANNED into `plan` like every release, so a refusal writes
+   *  nothing. A departed seat (a withdrawal's) is never revived: no feeder killed it.
+   *  - a cascade walkover on it (the bye award): back to scheduled, no outcome, and what it advanced is released in
+   *    turn (#release: refused NEXT_MATCH_STARTED when that next match started);
+   *  - a cascade void: back to scheduled, and the seat IT killed revives the same way;
+   *  - still waiting: the seat is live again. */
+  #revive(src: FakeFixture, path: string, plan: (() => void)[]): RefusedCall | null {
+    const edge = this.feeds.get(src.id);
+    const t = edge === undefined ? undefined : this.fixtures.find((x) => x.id === edge.target);
+    if (edge === undefined || t === undefined) return null;
+    const key = `${t.id}:${edge.slot}`;
+    const occupant = edge.slot === 1 ? t.home_entrant_id : t.away_entrant_id;
+    if (!this.deadSeats.has(key) || this.departedSeats.has(key) || occupant !== null) return null;
+    const live = () => this.deadSeats.delete(key);
+    if (t.status === "abandoned" && t.outcome === null && t.home_entrant_id === null && t.away_entrant_id === null && liveEntries(this.ledgers.get(t.id) ?? []).length === 0) {
+      plan.push(() => {
+        live();
+        t.status = NEXT.notStarted;
+      });
+      return this.#revive(t, path, plan);
+    }
+    if (this.#cascade(t)) {
+      const refused = this.#release(t, null, path, plan);
+      if (refused !== null) return refused;
+      plan.push(() => {
+        live();
+        t.status = NEXT.notStarted;
+        t.outcome = null;
+      });
+      return null;
+    }
+    plan.push(live);
+    return null;
   }
   /** withdrawal.ts applyUpdate + voidAndAbandon: a played fixture has every
    *  live state-bearing event voided, newest first; then core.abandon. */

@@ -21,6 +21,7 @@ import { generateStream, partialPlay } from "../lib/streams/index.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
+import { nextMatchStartedText } from "./product-text.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** Captured at c7a7557ac, before this task touched the model; never regenerated (D10). */
@@ -465,6 +466,164 @@ describe("rule 10 — the required sequences, every step checked", () => {
     expect(checked).toBe(3);
   });
 
+  /** Re-review round 2, item 3: the model fake's double walkover kills the seat it feeds (fake-driver.ts feed/killSlot,
+   *  stages.ts resolveBracketSeats). Expected values from the rules: C-5's bye award beside a dead seat, Review Focus 1's
+   *  void when both seats are dead and not both departed, and its revive when the double walkover is voided. */
+  const DW: StreamEvent[] = [{ type: "core.forfeit", payload: { by: "both", reason: "walkover" } }];
+  const bye = (winner: string | null) => ({ status: "forfeited", outcome: { kind: "award", winner, loser: null, reason: "bye" } });
+  const voidOf = async (d: ModelFakeDriver, id: string, type: string) => {
+    const e = [...d.ledgers.get(id)!].reverse().find((x) => x.type === type)!;
+    await d.postStream(id, [{ type: "core.void", payload: { event_id: e.id } }]);
+  };
+  it("a double walkover kills the seat it feeds: the entrant beside it walks over by bye, whichever arrives first (X-DW-2, C-5)", async () => {
+    // single-sport: the seat rule reads seats and statuses, never the sport.
+    let checked = 0;
+    for (const order of ["dw first", "arrival first"] as const) {
+      const b = await bracket("generic");
+      const sf2 = row(b.d, b.sf2);
+      const win = () => b.d.postStream(b.sf2, stream("generic", sf2.home_entrant_id!, sf2.away_entrant_id!, { kind: "win", winner: "away" }));
+      if (order === "arrival first") await win();
+      await b.d.postStream(b.sf1, DW);
+      expect(row(b.d, b.sf1), `${order}: premise`).toMatchObject({ status: "forfeited", outcome: { kind: "double_walkover" } });
+      expect(row(b.d, b.fin).home_entrant_id, `${order}: the double walkover seats nobody`).toBeNull();
+      if (order === "dw first") {
+        expect(row(b.d, b.fin), "the other side is still on its way: nothing yet").toMatchObject({ status: "scheduled", outcome: null });
+        await win();
+      }
+      expect(row(b.d, b.fin), order).toMatchObject({ away_entrant_id: sf2.away_entrant_id, ...bye(sf2.away_entrant_id) });
+      expect(b.d.ledgers.get(b.fin) ?? [], `${order}: the bye writes no event`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("a line whose two seats are dead and not both departed is a void — two recorded double walkovers, or a departed seat beside one (Review Focus 1)", async () => {
+    // single-sport: as above.
+    const two = await bracket("generic");
+    await two.d.postStream(two.sf1, DW);
+    await two.d.postStream(two.sf2, DW);
+    expect(row(two.d, two.fin), "two recorded double walkovers").toMatchObject({ status: "abandoned", outcome: null, home_entrant_id: null, away_entrant_id: null });
+    // The departed seat first: sf2's winner waits in the final and withdraws while its other seat is TBD (X-WD-3).
+    const one = await bracket("generic");
+    const sf2 = row(one.d, one.sf2);
+    await one.d.postStream(one.sf2, stream("generic", sf2.home_entrant_id!, sf2.away_entrant_id!, { kind: "win", winner: "away" }));
+    expect(await one.d.withdraw(sf2.away_entrant_id!)).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0 });
+    expect(row(one.d, one.fin), "premise: her seat emptied, the other still on its way").toMatchObject({ status: "scheduled", away_entrant_id: null });
+    await one.d.postStream(one.sf1, DW);
+    expect(row(one.d, one.fin), "a departed seat beside a recorded double walkover").toMatchObject({ status: "abandoned", outcome: null, home_entrant_id: null, away_entrant_id: null });
+  });
+  it("voiding the double walkover revives the seat it killed: the bye walkover goes back to waiting, and so does a void, whose other dead seat stays dead; a seat still waiting is live again (Review Focus 1)", async () => {
+    // single-sport: as above.
+    const b = await bracket("generic");
+    const [sf1, sf2] = [row(b.d, b.sf1), row(b.d, b.sf2)];
+    await b.d.postStream(b.sf2, stream("generic", sf2.home_entrant_id!, sf2.away_entrant_id!, { kind: "win", winner: "away" }));
+    await b.d.postStream(b.sf1, DW);
+    expect(row(b.d, b.fin), "premise").toMatchObject(bye(sf2.away_entrant_id));
+    await voidOf(b.d, b.sf1, "core.forfeit");
+    expect(row(b.d, b.fin), "the walkover is taken back; the arrival keeps her seat").toMatchObject({ status: "scheduled", outcome: null, home_entrant_id: null, away_entrant_id: sf2.away_entrant_id });
+    await b.d.postStream(b.sf1, stream("generic", sf1.home_entrant_id!, sf1.away_entrant_id!, { kind: "win", winner: "home" }));
+    expect(row(b.d, b.fin), "the revived seat fills: a match to play").toMatchObject({ status: "scheduled", outcome: null, home_entrant_id: sf1.home_entrant_id, away_entrant_id: sf2.away_entrant_id });
+    // A void revives too; the seat the OTHER double walkover killed stays dead, so sf1's next winner walks over by bye.
+    const v = await bracket("generic");
+    const vsf1 = row(v.d, v.sf1);
+    await v.d.postStream(v.sf1, DW);
+    await v.d.postStream(v.sf2, DW);
+    expect(row(v.d, v.fin), "premise").toMatchObject({ status: "abandoned", outcome: null });
+    await voidOf(v.d, v.sf1, "core.forfeit");
+    expect(row(v.d, v.fin), "the void is taken back").toMatchObject({ status: "scheduled", outcome: null, home_entrant_id: null, away_entrant_id: null });
+    await v.d.postStream(v.sf1, stream("generic", vsf1.home_entrant_id!, vsf1.away_entrant_id!, { kind: "win", winner: "home" }));
+    expect(row(v.d, v.fin), "beside sf2's still-dead seat").toMatchObject({ home_entrant_id: vsf1.home_entrant_id, ...bye(vsf1.home_entrant_id) });
+    // A seat still waiting (its other side on its way) when its killer is taken back is simply live again.
+    const w = await bracket("generic");
+    const wsf1 = row(w.d, w.sf1);
+    await w.d.postStream(w.sf1, DW);
+    await voidOf(w.d, w.sf1, "core.forfeit");
+    await w.d.postStream(w.sf1, stream("generic", wsf1.home_entrant_id!, wsf1.away_entrant_id!, { kind: "win", winner: "home" }));
+    expect(row(w.d, w.fin), "the revived seat is filled, nothing walked over").toMatchObject({ status: "scheduled", outcome: null, home_entrant_id: wsf1.home_entrant_id });
+  });
+  it("a double walkover's take-back is refused NEXT_MATCH_STARTED when the bye it caused already sent its winner into a started match, and writes nothing", async () => {
+    // single-sport: as above. f1 feeds f2's home seat, f2 feeds f3's home seat; e3 waits in f2, e4 in f3.
+    const d = new ModelFakeDriver({});
+    const base = await newModelState({ driver: d, row: "league", sport: "generic", variant: offlineBuilderDefault("generic"), entrants: 4, tag: "t" });
+    if (d.stage === null) throw new Error("test: no stage");
+    d.stage.kind = "knockout";
+    const m: ModelState = { ...base, stageKind: "knockout" };
+    const [e1, e2, e3, e4] = m.entrants as [string, string, string, string];
+    const [f1, f2, f3] = [d.seat(1, e1, e2), d.seat(2, null, e3), d.seat(3, null, e4)];
+    d.feed(f1.id, f2.id, 1);
+    d.feed(f2.id, f3.id, 1);
+    await commandOf("Start", 0, 0, false).run(m, d);
+    await d.postStream(f1.id, DW);
+    expect(row(d, f2.id), "premise: e3 walks over by bye").toMatchObject(bye(e3));
+    expect(row(d, f3.id).home_entrant_id, "premise: and goes on").toBe(e3);
+    await d.postStream(f3.id, partialPlay({ sportKey: "generic", cfg: knockoutCfg("generic"), stageKind: "knockout", home: e3, away: e4, outcome: { kind: "abandon" } }));
+    expect(row(d, f3.id).status, "premise: the next match started").toBe("in_play");
+    const before = d.ledgers.get(f1.id)!.length;
+    const e = await voidOf(d, f1.id, "core.forfeit").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect((e as RefusedCall).code).toBe(nextMatchStartedText().code);
+    expect(d.ledgers.get(f1.id)!.length, "a refused take-back writes nothing").toBe(before);
+    expect(row(d, f2.id), "the bye stands").toMatchObject(bye(e3));
+    expect(row(d, f3.id).home_entrant_id).toBe(e3);
+  });
+  /** A started knockout on hand-built rows (`seats`), the stage reading as a knockout: model-core.test.ts's shape. */
+  async function chain(n: number, seats: (d: ModelFakeDriver, es: string[]) => void) {
+    const d = new ModelFakeDriver({});
+    const base = await newModelState({ driver: d, row: "league", sport: "generic", variant: offlineBuilderDefault("generic"), entrants: n, tag: "t" });
+    if (d.stage === null) throw new Error("test: no stage");
+    d.stage.kind = "knockout";
+    const m: ModelState = { ...base, stageKind: "knockout" };
+    seats(d, [...m.entrants]);
+    await commandOf("Start", 0, 0, false).run(m, d);
+    return d;
+  }
+  it("a void kills the seat it feeds in turn, and taking back the double walkover behind it revives the chain (Review Focus 1)", async () => {
+    // single-sport: as above. a and b feed v; v feeds f's home seat, where e5 waits opposite.
+    let ids: Record<string, string> = {};
+    const d = await chain(6, (dd, [e1, e2, e3, e4, e5]) => {
+      const [a, b, v, f] = [dd.seat(1, e1!, e2!), dd.seat(1, e3!, e4!), dd.seat(2, null, null), dd.seat(3, null, e5!)];
+      dd.feed(a.id, v.id, 1);
+      dd.feed(b.id, v.id, 2);
+      dd.feed(v.id, f.id, 1);
+      ids = { a: a.id, b: b.id, v: v.id, f: f.id, e5: e5! };
+    });
+    await d.postStream(ids.a!, DW);
+    await d.postStream(ids.b!, DW);
+    expect(row(d, ids.v!), "two recorded double walkovers").toMatchObject({ status: "abandoned", outcome: null });
+    expect(row(d, ids.f!), "the void kills the seat it feeds: e5 walks over by bye").toMatchObject(bye(ids.e5!));
+    await voidOf(d, ids.a!, "core.forfeit");
+    expect(row(d, ids.v!), "the void is taken back").toMatchObject({ status: "scheduled", outcome: null });
+    expect(row(d, ids.f!), "and so is the bye it caused").toMatchObject({ status: "scheduled", outcome: null, home_entrant_id: null, away_entrant_id: ids.e5 });
+  });
+  it("a withdrawal's emptied seat is never revived: its feeder seated her, and a double walkover recorded there later and taken back leaves it dead", async () => {
+    // single-sport: as above. sf2's winner X waits in the final and withdraws while its other seat is TBD (X-WD-3);
+    // the organiser then takes sf2's result back, records a double walkover there, and takes that back too.
+    const b = await bracket("generic");
+    const sf2 = row(b.d, b.sf2);
+    const [h, x] = [sf2.home_entrant_id!, sf2.away_entrant_id!];
+    await b.d.postStream(b.sf2, stream("generic", h, x, { kind: "win", winner: "away" }));
+    await b.d.withdraw(x);
+    expect(row(b.d, b.fin).away_entrant_id, "premise: her seat is emptied").toBeNull();
+    for (const e of [...b.d.ledgers.get(b.sf2)!].reverse()) await b.d.postStream(b.sf2, [{ type: "core.void", payload: { event_id: e.id } }]);
+    expect(row(b.d, b.sf2).outcome, "premise: sf2's result taken back").toBeNull();
+    await b.d.postStream(b.sf2, DW);
+    await voidOf(b.d, b.sf2, "core.forfeit");
+    await b.d.postStream(b.sf2, stream("generic", h, x, { kind: "win", winner: "home" }));
+    expect(row(b.d, b.fin).away_entrant_id, "the withdrawal's seat stays dead: nobody is seated there").toBeNull();
+    const sf1 = row(b.d, b.sf1);
+    await b.d.postStream(b.sf1, stream("generic", sf1.home_entrant_id!, sf1.away_entrant_id!, { kind: "win", winner: "home" }));
+    expect(row(b.d, b.fin), "sf1's winner walks over beside it").toMatchObject({ home_entrant_id: sf1.home_entrant_id, ...bye(sf1.home_entrant_id) });
+  });
+  it("a line both of whose seats departed (X-WD-4's departure double walkover) is not modelled, and says so by name", async () => {
+    // single-sport: as above. The model cannot reach it (no line seats two withdrawn sides), so the state is rigged:
+    // sf2's seat in the final is marked departed, then sf1's winner withdraws while that seat is TBD.
+    const b = await bracket("generic");
+    const sf1 = row(b.d, b.sf1);
+    await b.d.postStream(b.sf1, stream("generic", sf1.home_entrant_id!, sf1.away_entrant_id!, { kind: "win", winner: "home" }));
+    b.d.deadSeats.add(`${b.fin}:2`);
+    b.d.departedSeats.add(`${b.fin}:2`);
+    await expect(b.d.withdraw(sf1.home_entrant_id!)).rejects.toThrow(/both seats of .* departed \(X-WD-4's departure double walkover\).*not modelled/);
+  });
+
   /** Review I-4: the same rule on a TABLE — the league's standings read after every step (FORFEIT_TABLE_CHECK). */
   it("on a league: void-then-forfeit and a second forfeit each leave the table counting ONE result per active forfeit, read from the standings after every step; each sequence judged", async () => {
     const SEQS: readonly { name: string; sport: string; play: (b: Awaited<ReturnType<typeof league>>) => Promise<void> }[] = [
@@ -558,13 +717,25 @@ describe("rule 10 — fast-check: any sequence over Walkover, Forfeit, Void, Wit
     expect(arbs.length).toBe(ALL.length);
     const moves = arbs.filter((_, i) => (MOVES as readonly string[]).includes(ALL[i]!));
     expect(moves.length).toBe(MOVES.length);
-    const totals = { runs: 0, steps: 0, accepted: 0, doubles: 0, dw: 0, one: 0, codes: Object.fromEntries(CODES.map((c) => [c, 0])) as Record<string, number> };
+    const totals = { runs: 0, steps: 0, accepted: 0, doubles: 0, dw: 0, one: 0, byeBesideDw: 0, voidBesideDw: 0, dwTakenBack: 0, codes: Object.fromEntries(CODES.map((c) => [c, 0])) as Record<string, number> };
     for (const sport of SPORTS) {
       await fc.assert(fc.asyncProperty(fc.commands(moves, { maxCommands: 30 }), async (cmds) => {
-        const { m, d } = await bracket(sport);
+        const b = await bracket(sport);
+        const { m, d } = b;
         await fc.asyncModelRun(() => ({ model: m, real: d }), cmds);
         totals.runs++;
         totals.steps += m.steps.length;
+        // Round 2, item 3: the run ended with the final beside a double walkover (its bye, or a void), or took one back.
+        const fin = row(d, b.fin);
+        if ([b.sf1, b.sf2].some((id) => (row(d, id).outcome as { kind?: string } | null)?.kind === "double_walkover")) {
+          if (fin.status === "forfeited" && (fin.outcome as { reason?: string } | null)?.reason === "bye") totals.byeBesideDw++;
+          if (fin.status === "abandoned" && fin.outcome === null) totals.voidBesideDw++;
+        }
+        for (const id of [b.sf1, b.sf2]) {
+          const led = d.ledgers.get(id) ?? [];
+          const voided = new Set(led.flatMap((e) => (e.voids === undefined ? [] : [e.voids])));
+          if (led.some((e) => e.type === "core.forfeit" && (e.payload as { by: string }).by === "both" && voided.has(e.id))) totals.dwTakenBack++;
+        }
         const fs = (m as ModelState & { forfeits: { status: number; code: string | null }[] }).forfeits;
         totals.accepted += fs.filter((x) => x.status < 300).length;
         for (const x of fs) if (x.code !== null && x.code in totals.codes) totals.codes[x.code]!++;
@@ -586,6 +757,11 @@ describe("rule 10 — fast-check: any sequence over Walkover, Forfeit, Void, Wit
     expect(totals.doubles, "no double walkover was ever posted").toBeGreaterThan(0);
     expect(totals.dw, "no double walkover was ever judged").toBeGreaterThan(0);
     expect(totals.one, "no active forfeit was ever judged").toBeGreaterThan(0);
+    expect(totals.byeBesideDw, "no final was ever walked over beside a double walkover").toBeGreaterThan(0);
+    // A void beside a double walkover needs two on one run (both semis, or one beside a withdrawal): this seed's draw
+    // ends there in no run (measured 0 of 2,200), so voidBesideDw is carried in the replay's equality below, not owed;
+    // the unit witnesses above drive both shapes.
+    expect(totals.dwTakenBack, "no double walkover was ever taken back").toBeGreaterThan(0);
     for (const c of CODES) expect(totals.codes[c], `no Forfeit was ever refused ${c}`).toBeGreaterThan(0);
     expect(await sweep(SEED)).toEqual(totals);
   });
