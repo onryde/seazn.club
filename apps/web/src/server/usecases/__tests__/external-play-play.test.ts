@@ -1295,6 +1295,79 @@ describe.runIf(HAS_DB)("act — non-canonical UCI lila would play (review I1)", 
   });
 });
 
+// ---------------------------------------------------------------------------
+// A move that ENDS the game (review I2, controller ruling). T10 reports the
+// end so T14 can reconcile at once; it adjudicates nothing and writes no
+// status. `ended` is lila's automatic end on a move (scalachess @ 2ab0a403
+// Position.scala:80 `end = checkMate || staleMate || autoDraw …`) limited by
+// the ruling to checkmate, stalemate and insufficient material — the
+// expected value below is chess.js's own predicate on an independent
+// replay, never play.ts.
+
+/** The reference board after `line`, replayed by the test. */
+const boardAfter = (line: readonly string[]) => {
+  const b = new Chess();
+  for (const m of line) b.move(uciMove(m));
+  return b;
+};
+
+const ENDINGS = [
+  { name: "checkmate (Fool's mate)", is: (b: Chess) => b.isCheckmate(),
+    line: ["f2f3", "e7e5", "g2g4", "d8h4"] },
+  { name: "stalemate (Loyd's ten-move stalemate)", is: (b: Chess) => b.isStalemate(),
+    line: ["e2e3", "a7a5", "d1h5", "a8a6", "h5a5", "h7h5", "h2h4", "a6h6", "a5c7", "f7f6", "c7d7", "e8f7", "d7b7",
+      "d8d3", "b7b8", "d3h7", "b8c8", "f7g6", "c8e6"] },
+  { name: "insufficient material (bare kings, Kxe6)", is: (b: Chess) => b.isInsufficientMaterial(),
+    line: ["a2a4", "b8c6", "g1h3", "h7h6", "b2b4", "c6b4", "c2c4", "b4a2", "a1a2", "g8f6", "h3g5", "h6g5", "a4a5",
+      "h8h2", "h1h2", "f6g4", "h2h5", "g4f2", "e1f2", "a8b8", "h5g5", "f7f5", "g5g7", "f8g7", "d1e1", "f5f4", "a2a1",
+      "g7a1", "d2d3", "b7b6", "c1f4", "b6a5", "f4c7", "d8c7", "e1a5", "b8b1", "a5a1", "b1f1", "f2f1", "c7c4", "a1a7",
+      "c4d3", "a7d7", "e8d7", "e2d3", "d7d6", "f1g1", "c8f5", "g1h1", "f5d3", "g2g4", "d3f5", "g4f5", "d6c6", "h1g1",
+      "c6d6", "g1f2", "e7e6", "f5e6", "d6e6"] },
+] as const;
+
+describe.runIf(HAS_DB)("act — a move that ENDS the game (review I2)", () => {
+  it("checkmate, stalemate and insufficient material each answer ended:true — the row stays 'live', the move is broadcast, nothing is adjudicated", { timeout: 60_000 }, async () => {
+    let checked = 0;
+    for (const e of ENDINGS) {
+      const ref = boardAfter(e.line);
+      expect(e.is(ref), `premise: chess.js calls ${e.name}`).toBe(true);
+      expect(boardAfter(e.line.slice(0, -1)).isGameOver(), `premise: ${e.name} is reached by the LAST move`).toBe(false);
+      const g = await readyGame();
+      const { sent, deps } = boardStub();
+      await playOut(g, e.line.slice(0, -1), deps);
+      const who = (e.line.length - 1) % 2 === 0 ? "white" : "black";
+      expect(await mv(g, who, e.line.at(-1)!, deps), e.name).toEqual({ ok: true, applied: true, ended: true });
+      const l = await ledger(g.fixtureId);
+      expect(l, `${e.name}: T10 writes no result`).toMatchObject({ status: "live", moves_uci: [...e.line] });
+      expect(sent.length, `${e.name}: the ending move is broadcast like any other`).toBe(e.line.length);
+      expect(sent.at(-1)?.body, e.name).toMatchObject({ fen: ref.fen(), status: "started" });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: three endings").toBe(3);
+  });
+
+  it("a move that ends nothing carries NO `ended` — nor does a threefold repetition, which chess.js calls over and lila leaves to a claim", async () => {
+    const cases = [
+      { name: "an opening move", line: ["e2e4"], overByChessJs: false },
+      // Nf3 Nf6 Ng1 Ng8 twice: the start position for the third time.
+      { name: "threefold repetition", line: ["g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1", "f6g8"], overByChessJs: true },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const ref = boardAfter(c.line);
+      expect(ref.isGameOver(), `premise: chess.js's own isGameOver for ${c.name}`).toBe(c.overByChessJs);
+      expect(ref.isCheckmate() || ref.isStalemate() || ref.isInsufficientMaterial(), `premise: ${c.name}`).toBe(false);
+      const g = await readyGame();
+      const { deps } = boardStub();
+      await playOut(g, c.line.slice(0, -1), deps);
+      const who = (c.line.length - 1) % 2 === 0 ? "white" : "black";
+      expect(await mv(g, who, c.line.at(-1)!, deps), c.name).toStrictEqual(APPLIED);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
 describe("publishRoomBroadcast", () => {
   const BODY: RoomBroadcast = {
     fen: "x",
@@ -1746,7 +1819,9 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
           // Sequential, so no other writer: a move Lichess ACCEPTED (and
           // answered) is a move recorded, applied, broadcast.
           if (onTurn && lila.ply > lilaPlyBefore && !lila.lastWasFiveXX) {
-            expect(r, "Lichess accepted it ⇒ applied").toEqual(APPLIED);
+            // A move that ends lila's game says so (review I2) — the model's
+            // own end, not T10's arithmetic.
+            expect(r, "Lichess accepted it ⇒ applied").toEqual(lila.over === null ? APPLIED : { ...APPLIED, ended: true });
             expect(after.moves_uci).toEqual(lila.moves);
             bump("lichess_ok_recorded");
           }

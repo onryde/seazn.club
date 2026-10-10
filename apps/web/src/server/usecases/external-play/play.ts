@@ -47,8 +47,12 @@ export type PlayAction =
 
 export type PlayResult =
   /** `applied: false` ⇒ nothing changed here: a duplicate absorbed, or a move
-   *  Lichess accepted that another writer recorded first. */
-  | { ok: true; applied: boolean }
+   *  Lichess accepted that another writer recorded first. `ended: true` ⇒
+   *  the move we just recorded ENDED the game at Lichess — checkmate,
+   *  stalemate or insufficient material on the replayed board (controller
+   *  ruling on review I2). A report, not a result: T10 writes no status, and
+   *  T14 calls reconcile(game_end) on it. Absent on every other answer. */
+  | { ok: true; applied: boolean; ended?: true }
   /** Lichess refused, or may have acted without saying so (`unavailable` on a
    *  5xx MAY have played the move): never "not played" — reconcile (T11). */
   | { ok: false; reconcile: true; reason: BoardErrorCode }
@@ -353,16 +357,16 @@ async function playMove(
 
   // The ledger is Lichess's record; the FEN is ours. If chess.js cannot
   // replay what Lichess accepted, broadcasting would show the wrong board.
-  const replay = fenAfter(row.moves_uci);
-  if (replay.replayed !== row.moves_uci.length) {
+  const after = replay(row.moves_uci);
+  if (after.replayed !== row.moves_uci.length) {
     log.error(
-      { fixtureId: f.fixtureId, gameId, replayed: replay.replayed, moveCount: row.move_count },
+      { fixtureId: f.fixtureId, gameId, replayed: after.replayed, moveCount: row.move_count },
       "lichess: an accepted move does not replay — nothing broadcast, left to reconcile",
     );
     return { ok: false, reconcile: true, reason: "unavailable" };
   }
   await ctx.publish(f.fixtureId, {
-    fen: replay.fen,
+    fen: after.board.fen(),
     lastMove: uci,
     turn: turnAt(row.move_count),
     whiteMs: row.white_ms,
@@ -370,8 +374,17 @@ async function playMove(
     status: "started",
     drawOfferBy: row.draw_offer_by,
   });
-  return { ok: true, applied: true };
+  return endsOnTheMove(after.board) ? { ok: true, applied: true, ended: true } : { ok: true, applied: true };
 }
+
+// lila source, not measured — T17. scalachess @ 2ab0a403 Position.scala:80
+// `end = checkMate || staleMate || autoDraw || variantEnd`: lila ends the
+// game ON the move for these. The ruling reports three of them; the rest of
+// `autoDraw` (variant/Variant.scala:146-147 — the fifty-move rule at a
+// half-move clock of 100, and fivefold repetition) and every flag fall are
+// left to T13's sweep. Threefold repetition is a CLAIM at lila (Drawer
+// `yes`), not an end, though chess.js's isGameOver counts it.
+const endsOnTheMove = (b: Chess) => b.isCheckmate() || b.isStalemate() || b.isInsufficientMaterial();
 
 async function ledgerOnFile(fixtureId: string, gameId: string): Promise<string[] | null> {
   const [row] = await sql<{ moves_uci: string[] }[]>`
