@@ -747,5 +747,20 @@
         "name": "a deciding set the retiree never reached"
       }
     ]
+  },
+  {
+    "id": "award-offender-bye-winner-seat",
+    "file": "packages/engine/src/sport/forfeit-credit.ts",
+    "find": "if (loser == null) return winnerSide === \"home\" ? \"away\" : \"home\";",
+    "replace": "if (loser == null) return winnerSide;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/forfeit-credit.test.ts"
+        ],
+        "name": "every sport: the typed loser is the offender"
+      }
+    ]
   }
 ]

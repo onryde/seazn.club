@@ -483,7 +483,9 @@ describe("M-4: an award arm seats its offender from the award's typed `loser`, n
       const [home, away] = delta({ kind: "award", winner: H, loser: A, reason: "walkover" });
       expect([home.entrantId, home.won, away.entrantId, away.lost], m.key).toEqual([H, 1, A, 1]);
       // a bye has no loser: the seat that is not the winner's (C-5)
-      expect(delta({ kind: "award", winner: H, loser: null, reason: "bye" }).map((d) => d.won), `${m.key} bye`).toEqual([1, 0]);
+      const bye = delta({ kind: "award", winner: H, loser: null, reason: "bye" });
+      expect(bye.map((d) => d.entrantId), `${m.key} bye seats`).toEqual([H, A]);
+      expect(bye.map((d) => d.won), `${m.key} bye`).toEqual([1, 0]);
       expect(() => delta({ kind: "award", winner: H, loser: "Z", reason: "walkover" }), `${m.key} stranger`).toThrow();
       expect(() => delta({ kind: "award", winner: H, loser: H, reason: "walkover" }), `${m.key} winner as loser`).toThrow(/loser/);
       checked++;

@@ -165,7 +165,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
   });
 
   it("X-DW-4: a double walkover gives neither side a head-to-head point — the mini-table is level and the cascade falls through", () => {
-    // Sport-agnostic by construction (the mini-table reads only the delta pair), so one sport per kind of ledger.
+    // single-sport: sport-agnostic by construction (the mini-table reads only the delta pair), so one sport per kind of ledger.
     let checked = 0;
     for (const key of ["football", "volleyball", "cricket", "boardgame"]) {
       const m = mod(key);
@@ -189,7 +189,7 @@ describe("X-DW-4: a double walkover in a table (spec §5.3; plan D14)", () => {
 
 describe("X-DW-4 / TN-WO-1 / CK-WO-1: excluded keys move no ratio (spec §5.3: tie-break readers honour `excluded`)", () => {
   it("TN-WO-1: a tennis walkover leaves both sides' game % where the played matches put it, and does move set %", () => {
-    // Single sport: TN-WO-1 is tennis's own row.
+    // single-sport: TN-WO-1 is tennis's own row.
     const m = mod("tennis");
     const cfg = firstCfg(m);
     const base = [played(m, cfg, X, Y, 1).pair, played(m, cfg, Y, X, 2).pair];
@@ -207,7 +207,7 @@ describe("X-DW-4 / TN-WO-1 / CK-WO-1: excluded keys move no ratio (spec §5.3: t
   });
 
   it("CK-WO-1: a cricket walkover leaves the winner's NRR untouched and charges the defaulter its full quota", () => {
-    // Single sport: CK-WO-1 is cricket's own row; limited overs (PF-6: an unlimited match has no NRR to keep).
+    // single-sport: CK-WO-1 is cricket's own row; limited overs (PF-6: an unlimited match has no NRR to keep).
     const m = mod("cricket");
     const limited = declaredCfgs(m as never).filter(({ cfg }) => (cfg as { ballsPerInnings: number | null }).ballsPerInnings !== null);
     let compared = 0;
