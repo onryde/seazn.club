@@ -1156,6 +1156,12 @@ Elsewhere the text is the controller's record.
      queries if the Supabase MCP connects (incl. `complete_stages_holding_one`, which is not a forfeit count); if it
      does not, this ruling stands.
 
+105. **An expunged group fixture no longer blocks auto-advance** (2026-10-10, owner: "fix it"). Pre-existing gap found
+     in the W2b loop F review (M-10): a table withdrawal under 50% expunges its fixtures, which stay `abandoned`, so
+     the auto-advance open count never reached 0 and the group never advanced. W2b counts an `abandoned` fixture whose
+     active abandon carries `expunge: true` as closed for auto-advance; an organiser's plain abandon still holds, as
+     before.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
