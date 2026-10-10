@@ -5,7 +5,7 @@
 // rows), the cfg's own declarations (points, awardScore, best-of) and the engine bracket generator's feed edges —
 // never the product's answer and never the engine's forfeitCredit.
 import { EngineError } from "@seazn/engine/core";
-import { CreditRefused, walkoverCredit, type CreditCase } from "@seazn/reference";
+import { CreditRefused, walkoverCredit, type CreditAnswer, type CreditCase } from "@seazn/reference";
 import type { FixtureRow, StandingsRowWire } from "../driver/types.ts";
 import { type ObservedFixture, type ObservedOutcome } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
@@ -394,22 +394,62 @@ export function scoresheetOf(sport: string, cfg: Record<string, unknown>, events
   }
 }
 
+/** The table points the family's `points` answer means, read off the stage cfg's OWN points table (X-WO-1): "win" is
+ *  a win and a loss — the winner the cfg's win points, the offender its loss points; "zero" is nothing for either side
+ *  (X-DW-4). The table is the sport's declaration: `points {win, loss}` (the goal, period, cricket, carrom and tennis
+ *  cfgs), chess's `scoring {win, loss}` (half-points), generic's `points {w, l}`, or the set sports' `pointsMap`, looked
+ *  up by the CREDITED set score (exact "W-L", else "*" — FIVB's points-by-set-score table). A cfg none of those reads
+ *  is refused by name. */
+export function forfeitPoints(cfg: Record<string, unknown>, points: "win" | "zero", winner: Readonly<Record<string, number>>): { readonly winner: number; readonly loser: number } | { readonly unread: string } {
+  if (points === "zero") return { winner: 0, loser: 0 };
+  const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  for (const key of ["points", "scoring"] as const) {
+    const table = cfg[key] as Record<string, unknown> | undefined;
+    if (table !== undefined && num(table.win) && num(table.loss)) return { winner: table.win, loser: table.loss };
+  }
+  const generic = cfg.points as Record<string, unknown> | undefined;
+  if (generic !== undefined && num(generic.w) && num(generic.l)) return { winner: generic.w, loser: generic.l };
+  const map = cfg.pointsMap as Record<string, unknown> | undefined;
+  if (map !== undefined && typeof map === "object") {
+    const score = `${winner.sets_won ?? "?"}-${winner.sets_lost ?? "?"}`;
+    const pair = map[score] ?? map["*"];
+    if (!Array.isArray(pair) || pair.length !== 2 || !num(pair[0]) || !num(pair[1])) return { unread: `the cfg's pointsMap has no pair for the credited set score ${score} (nor "*")` };
+    return { winner: pair[0], loser: pair[1] };
+  }
+  return { unread: "the cfg declares no points table this check reads (points or scoring {win, loss}, points {w, l}, or pointsMap)" };
+}
+
 /** One forfeited match's table expectation from the walkover-credit family — or the family's refusal, by name, for
- *  the caller to count as a FAILING item (never thrown past it, never skipped). A one-sided forfeit credits the side
- *  it went to the winner's metrics with W1, the offender the loser's with L1; a double walkover (X-DW-4) is P1 L1,
- *  0 points, and no score for either side. */
-export function creditExpectation(c: CreditCase, sides: { readonly home: string; readonly away: string; readonly offender: "home" | "away" | "both" }): { readonly expect: (entrantId: string) => ExpectedDelta } | { readonly refused: string } {
-  let credit: ReturnType<typeof walkoverCredit>;
+ *  the caller to count as a FAILING item (never thrown past it, never skipped). */
+export function creditExpectation(c: CreditCase, sides: ForfeitSides): { readonly expect: (entrantId: string) => ExpectedDelta } | { readonly refused: string } {
+  let credit: CreditAnswer;
   try {
     credit = walkoverCredit(c);
   } catch (e) {
     if (e instanceof CreditRefused) return { refused: `walkover-credit refused (${e.reason}): ${e.message}` };
     throw e;
   }
+  return expectationOf(credit, c.cfg, sides);
+}
+
+type ForfeitSides = { readonly home: string; readonly away: string; readonly offender: "home" | "away" | "both" };
+
+/** The family's answer as the table's expected delta. A one-sided forfeit credits the side it went to the winner's
+ *  metrics with W1 and its win points, the offender the loser's with L1 and its loss points (forfeitPoints); a double
+ *  walkover (X-DW-4) is P1 L1, 0 points, and no score for either side — each side's credit asserted zero ON ITS OWN, so
+ *  a non-zero key on one is never hidden by the other's zero. An answer the rule contradicts is refused by name. */
+export function expectationOf(credit: CreditAnswer, cfg: Record<string, unknown>, sides: ForfeitSides): { readonly expect: (entrantId: string) => ExpectedDelta } | { readonly refused: string } {
+  const pts = forfeitPoints(cfg, credit.points, credit.winner);
+  if ("unread" in pts) return { refused: `the forfeit's table points (${credit.points}): ${pts.unread}` };
   if (sides.offender === "both") {
-    const zero = { ...credit.winner, ...credit.loser };
+    for (const [side, m] of [["winner", credit.winner], ["loser", credit.loser]] as const) {
+      const off = Object.entries(m).filter(([, v]) => v !== 0);
+      if (off.length > 0) return { refused: `walkover-credit's double walkover credits its ${side} side ${off.map(([k, v]) => `${k} ${v}`).join(", ")}: X-DW-4 credits no score` };
+    }
+    if (pts.winner !== 0 || pts.loser !== 0) return { refused: `walkover-credit's double walkover answers points '${credit.points}': X-DW-4 is 0 points for both` };
+    const zero = Object.fromEntries([...Object.keys(credit.winner), ...Object.keys(credit.loser)].map((k) => [k, 0]));
     return { expect: () => ({ scalars: { played: 1, won: 0, drawn: 0, lost: 1, points: 0 }, metrics: zero }) };
   }
   const loser = sides.offender === "home" ? sides.home : sides.away;
-  return { expect: (e) => (e === loser ? { scalars: { played: 1, won: 0, lost: 1 }, metrics: credit.loser } : { scalars: { played: 1, won: 1, lost: 0 }, metrics: credit.winner }) };
+  return { expect: (e) => (e === loser ? { scalars: { played: 1, won: 0, lost: 1, points: pts.loser }, metrics: credit.loser } : { scalars: { played: 1, won: 1, lost: 0, points: pts.winner }, metrics: credit.winner }) };
 }

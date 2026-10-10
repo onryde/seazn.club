@@ -15,7 +15,7 @@ import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { BRACKET_OF } from "../lib/scenarios/terminal-finals.ts";
 import { W2B_SCENARIO_KEYS, type CaseSpec } from "../lib/scenarios/types.ts";
 import {
-  DW_NO_NEXT, FeedGraphUnresolved, NO_PLACEMENT, ScoresheetUnread, WITHDREW, creditExpectation, deadSeats, doubleWalkoverAdvancesNobody, doubleWalkoverRecorded, doubleWalkoverRefusedAtTheEnd, feedGraph, forfeitRecorded,
+  DW_NO_NEXT, FeedGraphUnresolved, NO_PLACEMENT, ScoresheetUnread, WITHDREW, creditExpectation, deadSeats, expectationOf, forfeitPoints, doubleWalkoverAdvancesNobody, doubleWalkoverRecorded, doubleWalkoverRefusedAtTheEnd, feedGraph, forfeitRecorded,
   hasNoNextMatch, isolatedTable, ladderUnmoved, partialPlayStands, pickDoubleWalkover, scoresheetOf, wireGraph, withRefusals, type FeedGraph, type ForfeitDrive, type LocalDelta, type RefusalProbe,
 } from "../lib/scenarios/w2b-checks.ts";
 import {
@@ -637,26 +637,61 @@ describe("walkover-credit (the reference family) as the harness asks it: the sco
     expect(() => scoresheetOf("curling", {}, [], "h", "a")).toThrow(/no scoresheet reading/);
   });
 
-  it("creditExpectation: a one-sided forfeit credits the OTHER side the winner's metrics (W1) and the offender the loser's (L1); a double walkover is L1 and zero for both; a refusal comes back BY NAME, never thrown, never skipped", () => {
+  it("creditExpectation: a one-sided forfeit credits the OTHER side the winner's metrics (W1) and its win points, the offender the loser's (L1) and its loss points; a double walkover is L1, 0 points and zero for both; a refusal comes back BY NAME, never thrown, never skipped", () => {
     const sides = { home: "h", away: "a" };
-    const wo = creditExpectation({ sport: "football", cfg: { awardScore: { goals: 3 } }, reason: "walkover", by: "away" }, { ...sides, offender: "away" });
+    // Hand-written cfgs, each with its sport's points table (FB 3/1/0; FIVB's 3-2 → 2:1, else 3:0; generic 3/1/0).
+    const fb = { awardScore: { goals: 3 }, points: { win: 3, draw: 1, loss: 0 } };
+    const wo = creditExpectation({ sport: "football", cfg: fb, reason: "walkover", by: "away" }, { ...sides, offender: "away" });
     expect("expect" in wo).toBe(true);
     if (!("expect" in wo)) return;
-    // FB-WO-1: 3-0 to the side that turned up.
-    expect(wo.expect("h")).toEqual({ scalars: { played: 1, won: 1, lost: 0 }, metrics: { gf: 3, ga: 0, gd: 3 } });
-    expect(wo.expect("a")).toEqual({ scalars: { played: 1, won: 0, lost: 1 }, metrics: { gf: 0, ga: 3, gd: -3 } });
-    // VB-RT-1: home retires at 10-12 in set 1 of a best of 3 — set 1 completed for away 25-10, set 2 25-0.
-    const vb = { bestOf: 3, setTo: 25, finalSetTo: 15, winBy: 2, cap: null };
+    // FB-WO-1: 3-0 to the side that turned up — a win's 3 points, the offender a loss's 0.
+    expect(wo.expect("h")).toEqual({ scalars: { played: 1, won: 1, lost: 0, points: 3 }, metrics: { gf: 3, ga: 0, gd: 3 } });
+    expect(wo.expect("a")).toEqual({ scalars: { played: 1, won: 0, lost: 1, points: 0 }, metrics: { gf: 0, ga: 3, gd: -3 } });
+    // VB-RT-1: home retires at 10-12 in set 1 of a best of 3 — set 1 completed for away 25-10, set 2 25-0: a 2-0 win, FIVB's "*" 3:0.
+    const vb = { bestOf: 3, setTo: 25, finalSetTo: 15, winBy: 2, cap: null, pointsMap: { "3-2": [2, 1], "2-1": [2, 1], "*": [3, 0] } };
     const rt = creditExpectation({ sport: "volleyball", cfg: vb, reason: "retired", by: "home", played: { home: [10], away: [12] } }, { ...sides, offender: "home" });
-    expect("expect" in rt && rt.expect("a")).toEqual({ scalars: { played: 1, won: 1, lost: 0 }, metrics: { sets_won: 2, sets_lost: 0, points_won: 50, points_lost: 10 } });
-    expect("expect" in rt && rt.expect("h")).toEqual({ scalars: { played: 1, won: 0, lost: 1 }, metrics: { sets_won: 0, sets_lost: 2, points_won: 10, points_lost: 50 } });
+    expect("expect" in rt && rt.expect("a")).toEqual({ scalars: { played: 1, won: 1, lost: 0, points: 3 }, metrics: { sets_won: 2, sets_lost: 0, points_won: 50, points_lost: 10 } });
+    expect("expect" in rt && rt.expect("h")).toEqual({ scalars: { played: 1, won: 0, lost: 1, points: 0 }, metrics: { sets_won: 0, sets_lost: 2, points_won: 10, points_lost: 50 } });
     // X-DW-4: P+1, L+1, 0 points, no score credited — for both sides.
-    const dw = creditExpectation({ sport: "generic", cfg: { resultMode: "score" }, reason: "double_walkover" }, { ...sides, offender: "both" });
+    const dw = creditExpectation({ sport: "generic", cfg: { resultMode: "score", points: { w: 3, d: 1, l: 0 } }, reason: "double_walkover" }, { ...sides, offender: "both" });
     for (const e of ["h", "a"]) expect("expect" in dw && dw.expect(e), e).toEqual({ scalars: { played: 1, won: 0, drawn: 0, lost: 1, points: 0 }, metrics: { for: 0, against: 0, diff: 0 } });
     // Refusals, by the family's own name (CreditRefused), returned to be judged as failures.
-    expect(creditExpectation({ sport: "football", cfg: { awardScore: { goals: 3 } }, reason: "retired", by: "home" }, { ...sides, offender: "home" })).toEqual({ refused: expect.stringMatching(/not-started|retired and disqualified are recorded after play started/) });
-    expect(creditExpectation({ sport: "football", cfg: { awardScore: { goals: 3 } }, reason: "retired", played: { home: [0], away: [1] } }, { ...sides, offender: "home" })).toEqual({ refused: expect.stringMatching(/names that side/) });
-    expect(creditExpectation({ sport: "football", cfg: {}, reason: "walkover", by: "away" }, { ...sides, offender: "away" })).toEqual({ refused: expect.stringMatching(/awardScore/) });
+    expect(creditExpectation({ sport: "football", cfg: fb, reason: "retired", by: "home" }, { ...sides, offender: "home" })).toEqual({ refused: expect.stringMatching(/not-started|retired and disqualified are recorded after play started/) });
+    expect(creditExpectation({ sport: "football", cfg: fb, reason: "retired", played: { home: [0], away: [1] } }, { ...sides, offender: "home" })).toEqual({ refused: expect.stringMatching(/names that side/) });
+    expect(creditExpectation({ sport: "football", cfg: { points: fb.points }, reason: "walkover", by: "away" }, { ...sides, offender: "away" })).toEqual({ refused: expect.stringMatching(/awardScore/) });
+    // A cfg with no points table this check reads is refused by name, not credited 0 (its positive pair: fb above).
+    expect(creditExpectation({ sport: "football", cfg: { awardScore: { goals: 3 } }, reason: "walkover", by: "away" }, { ...sides, offender: "away" })).toEqual({ refused: expect.stringMatching(/no points table/) });
+  });
+
+  it("forfeitPoints: a forfeit's 'win' is the points a PLAYED win and loss earn under the same cfg — the sport's own standingsDelta of its generated win stream, every sport (sweep of 11); 'zero' is nothing; an unread table is named", () => {
+    let checked = 0;
+    for (const sport of SPORT_KEYS) {
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variantFor(sport)), "league") as Record<string, unknown>;
+      const events = generateStream({ sportKey: sport, cfg, stageKind: "league", home: "h", away: "a", outcome: { kind: "win", winner: "home" } });
+      const folded = foldStream(sportModule(sport), cfg, "h", "a", events);
+      const [h, a] = sportModule(sport).standingsDelta(folded.outcome as never, cfg as never, { kind: "league" }, folded.state as never);
+      const credit = walkoverCredit({ sport, cfg, reason: "walkover" });
+      expect(credit.points, sport).toBe("win");
+      expect(forfeitPoints(cfg, credit.points, credit.winner), sport).toEqual({ winner: h.points, loser: a.points });
+      expect(h.points, `${sport}: a win earns points`).toBeGreaterThan(a.points);
+      expect(forfeitPoints(cfg, "zero", credit.winner), sport).toEqual({ winner: 0, loser: 0 });
+      checked++;
+    }
+    expect(checked).toBe(SPORT_KEYS.length);
+    expect(forfeitPoints({}, "win", {})).toEqual({ unread: expect.stringMatching(/no points table/) });
+    expect(forfeitPoints({ pointsMap: { "3-2": [2, 1] } }, "win", { sets_won: 3, sets_lost: 0 })).toEqual({ unread: expect.stringMatching(/no pair for the credited set score 3-0/) });
+    expect(forfeitPoints({ pointsMap: { "3-0": [3, 0], "*": [2, 1] } }, "win", { sets_won: 3, sets_lost: 0 }), "the exact score before the wildcard").toEqual({ winner: 3, loser: 0 });
+  });
+
+  it("expectationOf (M-8): a double walkover whose credit names a non-zero key on EITHER side alone is refused by name — the two sides are judged apart, never merged", () => {
+    const cfg = { points: { w: 3, d: 1, l: 0 } };
+    const both = { home: "h", away: "a", offender: "both" as const };
+    const answer = (winner: Record<string, number>, loser: Record<string, number>, points: "win" | "zero" = "zero") => ({ winner, loser, excluded: [], points, statsMatch: false });
+    expect(expectationOf(answer({ for: 0 }, { for: 0 }), cfg, both)).toHaveProperty("expect"); // the positive pair
+    // A merge {...winner, ...loser} would read for: 0 here — the loser's zero hiding the winner's 2.
+    expect(expectationOf(answer({ for: 2 }, { for: 0 }), cfg, both)).toEqual({ refused: expect.stringMatching(/credits its winner side for 2/) });
+    expect(expectationOf(answer({ for: 0 }, { against: 1 }), cfg, both)).toEqual({ refused: expect.stringMatching(/credits its loser side against 1/) });
+    expect(expectationOf(answer({ for: 0 }, { for: 0 }, "win"), cfg, both)).toEqual({ refused: expect.stringMatching(/X-DW-4 is 0 points/) });
   });
 
   it("withRefusals: each refused credit is a FAILING item counted beside the table's own; no refusal leaves the table's verdict as it was", () => {
@@ -706,6 +741,23 @@ describe("each table scenario, run on the league fake", () => {
       expect(own.size).toBe(r.pass.length + r.abstain.length);
     });
   }
+
+  it("WO-PRE (I-2): a product whose table gives a walkover's winner 0 points FAILS the walkover credit by name — the family's 'win' is the cfg's win points (the generic run above is its positive pair)", async () => {
+    class ZeroPoints extends FakeLeagueDriver {
+      override async standings(stageId: string, poolId: string | null) {
+        const out = await super.standings(stageId, poolId);
+        return { ...out, rows: out.rows.map((r) => ({ ...r, points: 0 })) };
+      }
+    }
+    const sport = "generic";
+    const variant = variantFor(sport);
+    const spec: CaseSpec = { caseId: `league|${sport}|${variant}|WO-PRE`, row: "league", sport, variant, scenario: "WO-PRE", canary: false };
+    const out = await SCENARIOS["WO-PRE"].run({ driver: new ZeroPoints(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+    const c = out.assertions.find((x) => x.id === "w2b-walkover-credit")!;
+    expect(c.verdict).toBe("fail");
+    expect(c.checked).toBeGreaterThan(0);
+    expect(c.evidence.join("\n")).toMatch(/points 0≠[1-9]/);
+  });
 
   it("RT-PART on league, every sport it is planned on: the retirement credit is judged against the walkover-credit family (X-RT-1, the *-RT-1 rows) with the drive's offender and its scoresheet — a pass on counted items, never an abstain", async () => {
     let sports = 0;
