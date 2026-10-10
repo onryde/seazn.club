@@ -839,7 +839,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect(labelOf(await fixtureRow(thirdId), a.loser_to_slot), "rig: the legacy shape — her dead seat carries no stamp").not.toBe(BYE_KEY);
     await post(s.auth, b.id, "core.forfeit", { by: b.away_entrant_id, reason: "walkover" });
     const voided = await fixtureRow(thirdId);
-    expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], "rig: both loser feeds dead — the line is void").toEqual(["abandoned", null, null, null]);
+    expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], "X-DW-2 (loser-edge-seat-not-dead killer): both loser feeds dead — the line is void").toEqual(["abandoned", null, null, null]);
     await voidLatest(s.auth, a.id);
     const revived = await fixtureRow(thirdId);
     expect([revived.status, revived.outcome, seatOf(revived, a.loser_to_slot), slotLabel(revived, a.loser_to_slot)], "the void waits for semi A again").toEqual([
