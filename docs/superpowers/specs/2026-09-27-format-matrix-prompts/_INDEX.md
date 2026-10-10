@@ -1162,6 +1162,12 @@ Elsewhere the text is the controller's record.
      active abandon carries `expunge: true` as closed for auto-advance; an organiser's plain abandon still holds, as
      before.
 
+106. **Ruling 53 extends to every bracket kind** (2026-10-10, owner "A"). Ruling 53 covered the ladder only. A
+     knockout, double-elimination, stepladder or page-playoff withdrawal that leaves nothing pending (e.g. an entrant
+     already eliminated) also reports policy `none`, not `walkover`, because nobody is walked over. `withdrawal.ts`
+     and the harness cite rulings 53 + 106; the earlier comment calling the knockout extension "owner ruling 53" was
+     the orchestrator's reading and is corrected (class 17).
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
