@@ -22,6 +22,12 @@
 -- 3. needs_reason gains 'create_outcome_unknown': the hold a lookup that
 --    could not prove the outcome lands on. Same constraint name, so
 --    NEEDS_REASONS (types.ts) and its pg_constraint read-back still match.
+--
+-- 4. needs_reason gains 'tiebreak_owed' (T12, spec §3.6): a drawn game in a
+--    bracket stage is HELD for the organiser and never written as decided —
+--    this branch's engine has no tie-break phase, so the hold is the bridge
+--    row. Amended into V434 (the CHECK's latest declaration) rather than a new
+--    version because the branch is unmerged; V435 is T10's move ledger.
 alter table fixture_external_play
   drop column url_white,
   drop column url_black,
@@ -33,5 +39,6 @@ alter table fixture_external_play
     'no_show_white', 'no_show_black', 'no_show_both',
     'not_started', 'aborted', 'mismatch', 'provider_error',
     'token_revoked', 'double_walkover_blocked',
-    'create_outcome_unknown'
+    'create_outcome_unknown',
+    'tiebreak_owed'
   ));
