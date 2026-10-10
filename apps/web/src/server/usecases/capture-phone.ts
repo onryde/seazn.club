@@ -28,7 +28,7 @@ import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import {
   DEAD_PHONE_TAKEOVER_SECONDS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
   PHONE_BEAT_RETENTION_HOURS, POLL_FAR_SECONDS, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES,
-  srtEnabled, streamIngestHost, streamPlaybackHost, tunable,
+  relayDriverMode, srtEnabled, streamPlaybackHost, tunable,
 } from "@/server/relay/config";
 import { beatAnswer, wireBeatAnswer } from "@/server/relay/domain/beat-answer";
 import { wireEndReason, type DbEndReason } from "@/server/relay/domain/end-reason";
@@ -38,7 +38,7 @@ import { pollSecondsFor } from "@/server/relay/domain/poll-seconds";
 import { ACTIVE_STATES, isActive, type FailReason, type SessionState } from "@/server/relay/domain/session";
 import { slotState } from "@/server/relay/domain/slot";
 import { normaliseCode } from "@/server/relay/domain/stream-code";
-import { ingestCred } from "@/server/relay/ingest-cred";
+import { ingestCred, ingestHostOf } from "@/server/relay/ingest-cred";
 import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
@@ -293,7 +293,10 @@ async function serveCred(
     await tx`select id from fixture_stream_sessions where id = ${sessionId} for update`;
     const input = await readFirstInput(tx, sessionId);
     if (!input || input.rtmps === null || input.srt === null) throw unavailable("ingest credentials missing");
-    const r = ingestCred({ srt: input.srt, rtmps: input.rtmps }, { ingestHost: streamIngestHost(), srtEnabled: srtOn, latencyMs: SRT_LATENCY_MS });
+    const r = ingestCred(
+      { srt: input.srt, rtmps: input.rtmps },
+      { expectedHost: ingestHostOf(relayDriverMode()), srtEnabled: srtOn, latencyMs: SRT_LATENCY_MS },
+    );
     if (!r.ok) {
       log.error({ sid: sessionId, orgId: resolved.orgId, which: r.which }, "capture descriptor: ingest_host_unexpected");
       throw unavailable("ingest_host_unexpected");

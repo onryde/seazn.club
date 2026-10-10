@@ -46,7 +46,7 @@ afterAll(() => setRelayDriversForTest(null));
 const URL_PATTERN = /^https:\/\/[^/]+\/score\/dl_[A-Za-z0-9_-]{43}$/;
 const MINT = { max: 10, windowSeconds: 60 };
 
-const ENV_KEYS = ["RELAY_KEK", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_INGEST_HOST", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "DEVICE_LINK_KEK"] as const;
+const ENV_KEYS = ["RELAY_KEK", "OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "STREAM_PLAYBACK_HOST", "STREAM_SRT_ENABLED", "RELAY_DRIVERS", "DEVICE_LINK_KEK"] as const;
 const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 beforeAll(() => {
   for (const k of ENV_KEYS) delete process.env[k];
