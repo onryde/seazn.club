@@ -42,3 +42,11 @@ export function isOneSidedAwardBye(f: {
   const seated = home ?? away;
   return seated === o.winner;
 }
+
+/** W2b C-5 (spec §5.1): a bye is an `award` nobody forfeited — `reason: "bye"`, no loser — which the engine credits
+ *  exactly today's bye delta (sport/forfeit-credit.ts; `bye-deltas.json` pins it per sport). ONE shape for the three
+ *  server bye writers (usecases/stages.ts: the Swiss bye, the generator's bye, `awardSeededByes`' SQL twin) and
+ *  `awardByeDelta`'s synthesised one (engine-db/competition.ts). */
+export function byeAward(winner: string): { kind: "award"; winner: string; loser: null; reason: "bye" } {
+  return { kind: "award", winner, loser: null, reason: "bye" };
+}

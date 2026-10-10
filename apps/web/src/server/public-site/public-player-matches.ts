@@ -47,8 +47,11 @@ import type postgres from "postgres";
 import { unstable_cache } from "next/cache";
 import {
   EngineError,
+  isLevelOutcome,
   resolveVoids,
+  summaryOf,
   type EventEnvelope,
+  type LevelWithdrawal,
   type Lineup,
   type LineupPair,
   type LineupSlot,
@@ -255,15 +258,34 @@ export function figuresFor(all: FixtureFigures | null, people: readonly string[]
  * throws, and the caller degrades that line to no score.
  */
 export function scoreLineFor(
-  stored: { summary: MatchRow["summary"]; state: unknown },
+  stored: { summary: MatchRow["summary"]; state: unknown; outcome?: unknown },
   myEntrantId: string,
   homeEntrantId: string | null,
-  module: Pick<AnySportModule, "summary">,
+  module: Pick<AnySportModule, "summary" | "outcome">,
 ): string | null {
   const headline = typeof stored.summary?.headline === "string" ? stored.summary.headline : null;
   if (myEntrantId === homeEntrantId) return headline;
   if (stored.state === null || stored.state === undefined) return null;
-  return (module.summary(sidesExchanged(stored.state)) as { headline: string }).headline;
+  const exchanged = sidesExchanged(stored.state);
+  return (summaryOf(module, { state: exchanged as never, settlement: null, levelWithdrawal: storedLevelWithdrawal(module, exchanged, stored.outcome) }) as {
+    headline: string;
+  }).headline;
+}
+
+/** W2b PF-1 off STORED rows (no fold here): the fixture's outcome is a withdrawal's award while the module's own
+ *  stored state still holds a level result — exactly the shape the kernel's `levelWithdrawal` leaves (the module never
+ *  saw the withdrawal), so the away line overlays the same award the home headline (append-event's `summaryOf`) and
+ *  the table show. A withdrawal the module itself folded (before play, or over a decisive score) has the award in its
+ *  own state already and needs no overlay. */
+function storedLevelWithdrawal(
+  module: Pick<AnySportModule, "outcome">,
+  state: unknown,
+  outcome: unknown,
+): LevelWithdrawal | null {
+  const o = outcome as { kind?: string; winner?: string; loser?: string | null; reason?: string } | null | undefined;
+  if (o?.kind !== "award" || o.reason !== "withdrew" || typeof o.winner !== "string" || typeof o.loser !== "string") return null;
+  if (!isLevelOutcome(module.outcome(state as never))) return null;
+  return { winner: o.winner, loser: o.loser, eventId: "stored" };
 }
 
 /** A folded state with its two sides exchanged (see `scoreLineFor`). */
@@ -287,7 +309,7 @@ function ownSideScoreLine(r: MatchRow): string | null {
   }
   try {
     return scoreLineFor(
-      { summary: r.summary, state: r.away_state },
+      { summary: r.summary, state: r.away_state, outcome: r.outcome },
       r.my_entrant_id,
       r.home_entrant_id,
       resolveModule(r.sport_key, r.module_version),

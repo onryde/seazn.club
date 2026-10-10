@@ -39,7 +39,19 @@ describe("X-BR-2: the status rule (spec §5.4.2, D3)", () => {
     expect(fixtureStatusFromFold(WIN, [ev("core.start")], "knockout")).toBe("decided");
   });
 
-  it("a level outcome with an active forfeit in a bracket is still held — the forfeit names no winner it can seat", () => {
+  // W2b rewrite (plan D7, finding 5). W2a pinned the chess double forfeit here as a held `no_result`; W2b folds it to
+  // `double_walkover`, a decision that advances nobody, so it is no longer held: `forfeited`, whether a core.forfeit
+  // recorded it or the legacy `boardgame.result{double_forfeit}` did (no core.forfeit in the ledger). D7 still orders
+  // the level rule before the forfeit rule, so a level outcome beside a forfeit stays held.
+  it("W2b: a chess double forfeit is no longer held — forfeited double_walkover, with or without its core.forfeit; a level outcome beside a forfeit is still held", () => {
+    const dw: MatchOutcome = { kind: "double_walkover" };
+    let checked = 0;
+    for (const k of BRACKET_KINDS) {
+      expect(fixtureStatusFromFold(dw, [ev("core.forfeit", 1)], k), `${k} event`).toBe("forfeited");
+      expect(fixtureStatusFromFold(dw, [ev("core.start", 1), ev("boardgame.result", 2)], k), `${k} legacy`).toBe("forfeited");
+      checked++;
+    }
+    expect(checked).toBe(BRACKET_KINDS.size);
     expect(fixtureStatusFromFold({ kind: "no_result" }, [ev("core.start", 1), ev("core.forfeit", 2)], "knockout")).toBe("needs_decision");
   });
 

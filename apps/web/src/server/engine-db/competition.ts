@@ -5,13 +5,14 @@ import { withTenant } from "@/lib/db";
 // used to be a private copy here; the 2026-09-20 review found the Swiss copy
 // had drifted into calling any award outcome a bye, which let Unpair destroy
 // real two-sided forfeits. See that module's header.
-import { isOneSidedAwardBye } from "@/lib/fixture-bye";
+import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 // DB fixtures.status → engine FixtureStatus (spec 05 §1 vocabulary). ONE
 // mapping, shared with the qualification builder and the bracket rebuild in
 // usecases/stages.ts; the local name is kept so the call sites read as before.
 import { engineFixtureStatus as toEngineStatus } from "@/lib/fixture-engine-status";
 import { log } from "@/server/logger";
-import { assertNoLevelSeat } from "./level-seat";
+import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "./level-seat";
+import { isLegacyForfeitWin } from "./fed-seats";
 import { bracketEngineStatus, hasActiveAbandonSql } from "./recorded-abandon";
 import { inTheField } from "@/lib/entrant-field";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
@@ -98,6 +99,10 @@ function awardByeDelta(
   awayId: string | null,
 ): StandingsDelta {
   const winnerId = (outcome as Extract<MatchOutcome, { kind: "award" }>).winner;
+  // W2b C-5: the module is handed the TYPED bye (`reason: "bye"`, no loser), whatever the stored row carries — a bye
+  // written before W2b is `{kind: "award", winner}` alone — so a bye is credited exactly today's bye delta and never
+  // a walkover's goals or sets (forfeitCredit's "bye" case).
+  const bye = byeAward(winnerId) as MatchOutcome;
   const cfg = sportModule.configSchema.parse(rawCfg);
   const seatedHome = homeId === winnerId;
   const state = sportModule.init(cfg, {
@@ -106,8 +111,8 @@ function awardByeDelta(
   });
   // `standingsDelta` returns a mutable pair, `applyPointsRule` a readonly
   // `FixtureResult` — so this is a new local, not a reassignment (TS4104).
-  const rawPair = sportModule.standingsDelta(outcome, cfg, ctx, state);
-  const pair: FixtureResult = pointsRule ? applyPointsRule(outcome, rawPair, pointsRule) : rawPair;
+  const rawPair = sportModule.standingsDelta(bye, cfg, ctx, state);
+  const pair: FixtureResult = pointsRule ? applyPointsRule(bye, rawPair, pointsRule) : rawPair;
   const winner = pair[0].entrantId === winnerId ? pair[0] : pair[1];
   if (winner.entrantId !== winnerId) {
     throw new EngineError("CONFIG_INVALID", "award bye standings delta missing winner", {
@@ -146,26 +151,46 @@ export function parseExtKey(extKey: string | null): { bracket?: "WB" | "LB" | "G
 }
 
 // A decided/walkover bracket fixture's outcome jsonb names its winner/loser
-// (spec 03 §3 MatchOutcome). `win` names both directly; `award` (walkover/
-// forfeit, spec 05 §5) names only the winner — the loser is whichever side
-// isn't them, the same derivation testkit/simulation.ts uses for its own
-// award-outcome replay. draw/tie/no_result: a bracket fixture holding one is
-// needs_decision (W2a X-BR-2) and seats nobody, so they resolve to neither side
-// here; a level outcome under a SEATING status is the bug shape, and the
-// callers that know the stage kind assert it (level-seat.ts, X-BR-1).
+// (spec 03 §3 MatchOutcome), exhaustive over the engine's OUTCOME_KINDS, and —
+// W2b (spec §5.3, W2b-R11) — whether the bracket was WALKED OVER there, which
+// `bracketRanks` reads to pin an entrant's elimination to this fixture the way
+// seating already does (`BracketFixture.walkedOver`, engine stage.ts):
+//  - `win` names both directly; a LEGACY forfeit win (pre-W2b chess,
+//    `isLegacyForfeitWin`) is a forfeit — walked over, "loser";
+//  - `award` names its loser since W2b (`loser`, null for a bye). A row stored
+//    before W2b names only the winner, and the loser is whichever side isn't
+//    them (testkit/simulation.ts's own derivation). A loser means a forfeit —
+//    walked over, "loser"; no loser (a bye, one seat) means neither;
+//  - `double_walkover` names nobody — walked over, "both" (X-DW-2);
+//  - draw/tie/no_result: a bracket fixture holding one is needs_decision (W2a
+//    X-BR-2) and seats nobody, so neither side; a level outcome under a SEATING
+//    status is the bug shape, asserted by the callers that know the stage kind
+//    (level-seat.ts, X-BR-1).
 export function bracketWinnerLoser(
   outcome: unknown,
   home: string | null,
   away: string | null,
-): { winner?: string; loser?: string } {
+): { winner?: string; loser?: string; walkedOver?: "loser" | "both" } {
   if (!outcome) return {};
   const o = outcome as MatchOutcome;
-  if (o.kind === "win") return { winner: o.winner, loser: o.loser };
-  if (o.kind === "award") {
-    const loser = o.winner === home ? away : home;
-    return { winner: o.winner, ...(loser !== null ? { loser } : {}) };
+  switch (o.kind) {
+    case "win":
+      return isLegacyForfeitWin(o) ? { winner: o.winner, loser: o.loser, walkedOver: "loser" } : { winner: o.winner, loser: o.loser };
+    case "award": {
+      const loser = o.loser !== undefined ? o.loser : o.winner === home ? away : home;
+      return loser === null ? { winner: o.winner } : { winner: o.winner, loser, walkedOver: "loser" };
+    }
+    case "double_walkover":
+      return { walkedOver: "both" };
+    case "draw":
+    case "tie":
+    case "no_result":
+      return {};
+    default: {
+      const unknown: never = o;
+      throw new Error(`bracketWinnerLoser: outcome kind ${JSON.stringify((unknown as { kind?: unknown }).kind)} is not an engine OUTCOME_KINDS member`);
+    }
   }
-  return {};
 }
 
 // Rebuild one DB fixture row into the engine's BracketFixture shape (spec 05
@@ -181,10 +206,16 @@ export function bracketWinnerLoser(
 // the grand final depending on array order. thirdPlace status is structural
 // (parsed from ext_key, never guessed) and settles it unconditionally: a
 // thirdPlace fixture is never the decider, full stop.
-function toBracketFixture(f: FixtureRow, stageKind: string): BracketFixture {
+function toBracketFixture(
+  f: FixtureRow,
+  stageKind: string,
+  seatsOf: (fixtureId: string) => readonly [string | null, string | null] | null,
+): BracketFixture {
   assertNoLevelSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome }); // X-BR-1
+  // W2b D20: a double walkover seated nobody in the seats it feeds.
+  assertAdvancingSeat({ fixtureId: f.id, stageKind, status: f.status, outcome: f.outcome, seatedEntrant: fedSeatOccupant(f, seatsOf) });
   const { bracket, thirdPlace } = parseExtKey(f.ext_key);
-  const { winner, loser } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
+  const { winner, loser, walkedOver } = bracketWinnerLoser(f.outcome, f.home_entrant_id, f.away_entrant_id);
   return {
     id: f.id,
     round: f.round_no,
@@ -197,6 +228,7 @@ function toBracketFixture(f: FixtureRow, stageKind: string): BracketFixture {
     ...(f.away_entrant_id !== null ? { away: f.away_entrant_id } : {}),
     ...(winner !== undefined ? { winner } : {}),
     ...(loser !== undefined ? { loser } : {}),
+    ...(walkedOver !== undefined ? { walkedOver } : {}),
   };
 }
 
@@ -245,6 +277,11 @@ interface FixtureRow {
   /** W2a D-G1: abandoned with an ACTIVE `core.abandon` (recorded-abandon.ts) — read by the bracket and ladder
    *  completion branches through `bracketEngineStatus`. */
   has_active_abandon: boolean;
+  /** W2b D20 — the feed edges, so the bracket read can assert a double walkover seated nobody. */
+  winner_to_fixture: string | null;
+  winner_to_slot: number | null;
+  loser_to_fixture: string | null;
+  loser_to_slot: number | null;
 }
 
 interface StageInputs {
@@ -286,6 +323,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   const fixtures = await tx<FixtureRow[]>`
     select f.id, f.status, f.round_no, f.pool_id, f.home_entrant_id, f.away_entrant_id,
            f.outcome, f.config_snapshot, f.ext_key, m.state,
+           f.winner_to_fixture, f.winner_to_slot, f.loser_to_fixture, f.loser_to_slot,
            ${hasActiveAbandonSql(tx)} as has_active_abandon
     from fixtures f left join match_states m on m.fixture_id = f.id
     where f.stage_id = ${stageId}
@@ -651,7 +689,8 @@ export async function completeStageIfReady(
         kind: inputs.kind,
         ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
       };
-      const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind));
+      const seats = new Map(inputs.fixtures.map((f) => [f.id, [f.home_entrant_id, f.away_entrant_id] as const]));
+      const bracketFixtures: BracketFixture[] = inputs.fixtures.map((f) => toBracketFixture(f, inputs.kind, (id) => seats.get(id) ?? null));
       // Refine: only fixtures with no onward winner feed are finals (a
       // fixture whose winner feeds nowhere is the bracket's deciding game).
       const feeders = await tx<{ id: string }[]>`
@@ -678,6 +717,8 @@ export async function completeStageIfReady(
       for (const bf of bracketFixtures) {
         if (!SETTLED_FIXTURE_STATUSES.has(bf.status)) continue;
         if (bf.loser !== undefined) lost.add(bf.loser);
+        // PF-5 (X-DW-2): both entrants of a double walkover are out, beaten by absence.
+        if (bf.walkedOver === "both") for (const id of [bf.home, bf.away]) if (id !== undefined) lost.add(id);
         if (bf.isFinal === true && bf.winner !== undefined) finalWinners.add(bf.winner);
       }
       const unranked = inputs.entrants.filter((id) => inputs.field.has(id) && !lost.has(id) && !finalWinners.has(id));

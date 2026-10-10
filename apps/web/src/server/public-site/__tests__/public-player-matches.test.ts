@@ -78,7 +78,15 @@ vi.mock("@/server/engine-db/fold", async (importOriginal) => {
 });
 const foldsOf = (fixtureId: string) => foldSpy.calls.filter((id) => id === fixtureId).length;
 
-import { foldMatch, type EventEnvelope, type LineupPair, type ScoreSummary } from "@seazn/engine/core";
+import {
+  foldMatch,
+  foldMatchWithStoppage,
+  outcomeOf,
+  summaryOf,
+  type EventEnvelope,
+  type LineupPair,
+  type ScoreSummary,
+} from "@seazn/engine/core";
 import { resolvePositions, type AnySportModule, type ModuleEvent } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { boardgame } from "@seazn/engine/sports/boardgame";
@@ -2052,5 +2060,49 @@ describe("scoreLineFor — every registered sport, over its recorded golden ledg
     expect(mismatches).toEqual([]);
     expect(inPlay).toBeGreaterThan(0);
     expect(decided).toBeGreaterThan(0);
+  });
+});
+
+describe("scoreLineFor — W2b PF-1: a withdrawal over a held level result reads the AWARD from both sides", () => {
+  // single-sport: football — the bracket level result PF-1 admits a withdrawal over (0-0 FT), with a credited score
+  // (FB-WO-1: `awardScore.goals`–0 at 0-0) that differs from the draw, so the line can witness the overlay.
+  const cfg = football.configSchema.parse({}) as { awardScore: { goals: number } };
+  const G = cfg.awardScore.goals;
+  const pair = defaultLineupPair(resolvePositions(football, cfg));
+  const level: ModuleEvent[] = [
+    { type: "core.start", payload: {} },
+    { type: "football.period", payload: { phase: "HT" } },
+    { type: "football.period", payload: { phase: "FT" } },
+  ];
+  /** What `match_states` + `fixtures` hand the reader: the stored headline (append-event's `summaryOf`), the module
+   *  state (a JSON round trip) and the fixture's outcome (`outcomeOf`). */
+  const storedFrom = (events: ModuleEvent[], lineups: LineupPair) => {
+    const folded = foldMatchWithStoppage(football, cfg, lineups, events.map((e, i) => makeEnvelope(i, e)));
+    return {
+      folded,
+      stored: {
+        summary: summaryOf(football, folded),
+        state: JSON.parse(JSON.stringify(folded.state)),
+        outcome: outcomeOf(football, folded),
+      },
+    };
+  };
+  it("the away side withdrew: home reads G — 0, the away line reads 0 — G (the swapped fold's own summaryOf)", () => {
+    const withdrew = (by: string): ModuleEvent => ({ type: "core.forfeit", payload: { by, reason: "withdrew" } });
+    const { folded, stored } = storedFrom([...level, withdrew(pair.away.entrantId)], pair);
+    expect(folded.levelWithdrawal, "rig: the kernel admitted the withdrawal over the level result").not.toBeNull();
+    const oracle = storedFrom([...level, withdrew(pair.away.entrantId)], { home: pair.away, away: pair.home }).stored.summary.headline;
+    expect({
+      home: scoreLineFor(stored, pair.home.entrantId, pair.home.entrantId, football),
+      away: scoreLineFor(stored, pair.away.entrantId, pair.home.entrantId, football),
+      oracle,
+    }).toEqual({ home: `${G} — 0`, away: `0 — ${G}`, oracle: `0 — ${G}` });
+  });
+  it("the negative pair: the held draw with no withdrawal reads 0 — 0 from both sides", () => {
+    const { stored } = storedFrom(level, pair);
+    expect([
+      scoreLineFor(stored, pair.home.entrantId, pair.home.entrantId, football),
+      scoreLineFor(stored, pair.away.entrantId, pair.home.entrantId, football),
+    ]).toEqual(["0 — 0", "0 — 0"]);
   });
 });

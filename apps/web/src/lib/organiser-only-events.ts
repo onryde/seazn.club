@@ -10,11 +10,15 @@ export const ORGANISER_ONLY: ReadonlySet<string> = new Set(ORGANISER_ONLY_EVENT_
 
 /** D-O1: sport events that record a forfeit or walkover through one payload field. Restated here because the pad
  *  cannot import the engine's fold; pinned EQUAL to the list derived from the engine's own declarations (every
- *  module's `eventSchemas` enum value whose application decides the match as a forfeit) in
- *  `server/usecases/__tests__/organiser-only-events.test.ts`, so a sport that gains such a value reds that test. */
-export const ORGANISER_ONLY_SPORT_EVENTS: Readonly<Record<string, { readonly field: string; readonly values: readonly string[] }>> = {
-  "boardgame.result": { field: "method", values: ["forfeit", "double_forfeit"] },
-};
+ *  module's `eventSchemas` enum value whose application decides the match as a forfeit, an award or a double
+ *  walkover) in `server/usecases/__tests__/organiser-only-events.test.ts`, so a sport that gains such a value reds
+ *  that test.
+ *
+ *  EMPTY since W2b (spec §5.2, C-4, D15): chess's two forfeit methods (`boardgame.result{method: forfeit |
+ *  double_forfeit}`) are RETIRED ON WRITE — refused for every writer, organiser included (append-event.ts
+ *  `RETIRED_ON_WRITE_SPORT_EVENTS`) — and a chess forfeit is a `core.forfeit` like every other sport's, organiser-only
+ *  through `ORGANISER_ONLY_EVENT_TYPES`. The derivation subtracts the retired set, so it derives this empty table. */
+export const ORGANISER_ONLY_SPORT_EVENTS: Readonly<Record<string, { readonly field: string; readonly values: readonly string[] }>> = {};
 
 /** THE predicate: is this (type, payload) organiser-only? A core type always; a sport event when its declared field
  *  carries one of its forfeit values. Anything unrecognised is NOT organiser-only (the engine validates payloads). */

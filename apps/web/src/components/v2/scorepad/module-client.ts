@@ -11,8 +11,8 @@
 // rather than silently resolving `latest`. That is load-bearing here, not
 // incidental — a division pinned to an older module version must render
 // THAT version's contract, never whatever shipped most recently.
-import { EngineError, foldMatch } from "@seazn/engine/core";
-import type { EventEnvelope, FoldableModule, FoldOptions, LineupPair } from "@seazn/engine/core";
+import { EngineError, foldMatch, foldMatchWithStoppage } from "@seazn/engine/core";
+import type { EventEnvelope, FoldableModule, FoldOptions, LevelWithdrawal, LineupPair } from "@seazn/engine/core";
 import { registry, type AnySportModule } from "@seazn/engine/sport";
 import { registerBuiltins } from "@seazn/engine/sports";
 
@@ -57,4 +57,21 @@ export function foldClient<Cfg, State>(
   opts?: FoldOptions,
 ): State {
   return foldMatch(module, cfg, lineups, events, opts);
+}
+
+/**
+ * The same fold as `foldClient`, plus the one kernel fact the pad's HEADLINE needs beside the state: W2b PF-1's
+ * `levelWithdrawal` (a withdrawal the kernel admitted over a held level result). The module never sees that event,
+ * so its state still reads the draw; `summaryOf` overlays the award so the pad's headline agrees with the server's
+ * stored one (append-event.ts) and the table. `state` is byte-for-byte `foldClient`'s.
+ */
+export function foldClientFacts<Cfg, State>(
+  module: FoldableModule<Cfg, State>,
+  cfg: Cfg,
+  lineups: LineupPair,
+  events: readonly EventEnvelope[],
+  opts?: FoldOptions,
+): { state: State; levelWithdrawal: LevelWithdrawal | null } {
+  const folded = foldMatchWithStoppage(module, cfg, lineups, events, opts);
+  return { state: folded.state, levelWithdrawal: folded.levelWithdrawal };
 }

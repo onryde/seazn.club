@@ -1,0 +1,148 @@
+// W2b Task 7 (plan D18; X-AB-2; spec §13 premise 9). Auto-advance fires when every fixture of the stage is FINISHED:
+// decided, forfeited, finalized — and an abandon that gave a result is decided (ST-G1). The open count used to treat
+// `finalized` as unfinished, so a stage whose organiser finalized as they went never advanced. A group (league) stage
+// feeds a knockout of its top two, auto_progress on. Real Postgres.
+import { randomUUID } from "node:crypto";
+import { afterAll, describe, expect, it } from "vitest";
+import { builtinModules } from "@seazn/engine/sports";
+import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { createCompetition } from "../competitions";
+import { createDivision, patchDivision } from "../divisions";
+import { createEntrants } from "../entrants";
+import { startDivision } from "../schedule";
+import { finalizeFixture, scoreEvent } from "../scoring";
+import { createStages, generateStageFixtures } from "../stages";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const c = g._sql;
+  g._sql = undefined;
+  await c?.end();
+});
+
+// single-sport: cricket — the one sport whose abandon gives a points-bearing result in a table (CK-AB-2), and whose
+// default tie-break cascade ends on seed, so a table with a double walkover still ranks without drawing lots.
+const SPORT = "cricket";
+const VARIANT = "t20";
+const cricket = builtinModules.find((m) => m.key === SPORT)!;
+const CFG = cricket.configSchema.parse(cricket.variants[VARIANT]) as { ballsPerInnings: number };
+
+const tip = async (id: string) =>
+  (await sql<{ s: number }[]>`select coalesce(max(seq), 0)::int as s from score_events where fixture_id = ${id}`)[0]!.s;
+const post = async (auth: AuthCtx, id: string, type: string, payload: unknown = {}) =>
+  scoreEvent(auth, id, { expected_seq: await tip(id), type, payload } as never);
+
+/** A full T20 match: the side batting first makes 150, the chase falls short in its full quota. */
+async function play(auth: AuthCtx, id: string) {
+  await post(auth, id, "core.start");
+  await post(auth, id, "cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: CFG.ballsPerInnings });
+  const out = await post(auth, id, "cricket.innings.summary", { runs: 100, wickets: 6, legalBalls: CFG.ballsPerInnings });
+  expect(out.status, "rig: a played match is decided").toBe("decided");
+}
+
+async function rig() {
+  const suffix = randomUUID().slice(0, 8);
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug) values (${"AA " + suffix}, ${"aa-" + suffix}) returning id`;
+  await setOrgPlan(orgId);
+  await invalidateOrgEntitlements(orgId);
+  const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "AA " + suffix, visibility: "private", branding: {} });
+  const division = await createDivision(auth, comp.id, {
+    name: "Open",
+    slug: "open-" + suffix,
+    sport_key: SPORT,
+    variant_key: VARIANT,
+    config: cricket.variants[VARIANT] as Record<string, unknown>,
+  });
+  const kind = cricket.entrantModel?.defaultKind ?? "individual";
+  await createEntrants(
+    auth,
+    division.id,
+    ["A", "B", "C", "D"].map((n, i) => ({ kind, display_name: n, seed: i + 1, members: [] })),
+  );
+  await patchDivision(auth, division.id, { auto_progress: true });
+  const [group, ko] = await createStages(auth, division.id, [
+    { seq: 1, kind: "league", name: "Group", config: {} },
+    {
+      seq: 2,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }], placement: "rank_order", timing: "on_complete" },
+    },
+  ]);
+  const { fixtures } = await generateStageFixtures(auth, group!.id);
+  await startDivision(auth, division.id);
+  expect(fixtures.length, "rig: a four-entrant group has six fixtures").toBe(6);
+  return { auth, divisionId: division.id, groupId: group!.id, koId: ko!.id, fixtures: fixtures.map((f) => f.id) };
+}
+
+/** Every fixture but the last is played and FINALIZED as the organiser goes; the last is `last`. */
+async function finishGroup(auth: AuthCtx, fixtures: readonly string[], last: (id: string) => Promise<void>) {
+  for (const id of fixtures.slice(0, -1)) {
+    await play(auth, id);
+    await finalizeFixture(auth, id, await tip(id));
+  }
+  await last(fixtures[fixtures.length - 1]!);
+}
+
+async function advanced(r: Awaited<ReturnType<typeof rig>>) {
+  const [ko] = await sql<{ n: number; seated: number }[]>`
+    select count(*)::int as n,
+           count(*) filter (where home_entrant_id is not null and away_entrant_id is not null)::int as seated
+      from fixtures where stage_id = ${r.koId}`;
+  const [ev] = await sql<{ n: number }[]>`
+    select count(*)::int as n from division_events where division_id = ${r.divisionId} and type = 'stage_auto_advanced'`;
+  const [st] = await sql<{ s: string[] }[]>`select array_agg(distinct status order by status) as s from fixtures where stage_id = ${r.groupId}`;
+  return { koFixtures: ko!.n, koSeated: ko!.seated, autoAdvanced: ev!.n, group: st!.s };
+}
+
+describe.skipIf(!HAS_DB)("D18 / X-AB-2: auto-advance fires when every group fixture is finished", () => {
+  it("every group fixture finalized → the knockout is seeded", async () => {
+    const r = await rig();
+    await finishGroup(r.auth, r.fixtures, async (id) => {
+      await play(r.auth, id);
+      await finalizeFixture(r.auth, id, await tip(id));
+    });
+    expect(await advanced(r)).toEqual({ koFixtures: 1, koSeated: 1, autoAdvanced: 1, group: ["finalized"] });
+  }, 120_000);
+
+  it("the same with one fixture an abandon-with-result (decided, CK-AB-2) → seeded", async () => {
+    const r = await rig();
+    await finishGroup(r.auth, r.fixtures, async (id) => {
+      await post(r.auth, id, "core.start");
+      const out = await post(r.auth, id, "core.abandon", { reason: "rain" });
+      expect([out.status, (out.outcome as { kind: string }).kind], "rig: a rain no-result").toEqual(["decided", "no_result"]);
+    });
+    expect(await advanced(r)).toEqual({ koFixtures: 1, koSeated: 1, autoAdvanced: 1, group: ["decided", "finalized"] });
+  }, 120_000);
+
+  it("the same with one double walkover (forfeited) → seeded", async () => {
+    const r = await rig();
+    await finishGroup(r.auth, r.fixtures, async (id) => {
+      const out = await post(r.auth, id, "core.forfeit", { by: "both", reason: "walkover" });
+      expect(out.status, "rig: a double walkover").toBe("forfeited");
+    });
+    expect(await advanced(r)).toEqual({ koFixtures: 1, koSeated: 1, autoAdvanced: 1, group: ["finalized", "forfeited"] });
+  }, 120_000);
+
+  it("the negative pair: one fixture in_play → not seeded", async () => {
+    const r = await rig();
+    // The in-play fixture is started first; the rest finish (and finalize) after it, so the LAST write is a finalize
+    // that runs the auto-advance check with one fixture still open.
+    const [open, ...rest] = r.fixtures;
+    await post(r.auth, open!, "core.start");
+    for (const id of rest) {
+      await play(r.auth, id);
+      await finalizeFixture(r.auth, id, await tip(id));
+    }
+    expect(await advanced(r)).toEqual({ koFixtures: 0, koSeated: 0, autoAdvanced: 0, group: ["finalized", "in_play"] });
+  }, 120_000);
+});

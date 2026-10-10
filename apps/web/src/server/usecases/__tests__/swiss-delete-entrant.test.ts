@@ -540,7 +540,7 @@ describe.runIf(HAS_DB)("swiss — Unpair rescues an already-stranded round", () 
     const orphan = inRound(stranded, 1).find((f) => f.ext_key === "sw-r1-bye")!;
     expect(orphan.home_entrant_id).toBeNull();
     expect(orphan.away_entrant_id).toBeNull();
-    expect(orphan.outcome).toEqual({ kind: "award", winner: byeHolder });
+    expect(orphan.outcome).toEqual({ kind: "award", winner: byeHolder, loser: null, reason: "bye" }); // W2b C-5
 
     const out = await unpairSwissRound(auth, stageId);
     expect(out).toEqual({ cleared: 4, round: 1 });

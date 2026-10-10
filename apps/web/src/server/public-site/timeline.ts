@@ -62,12 +62,15 @@ import {
   kernelOwnsEvent,
   reduceLineupEvent,
   resolveVoids,
+  summaryOf,
   type EventEnvelope,
+  type LevelWithdrawal,
   type LineupPair,
   type ScoreSummary,
   type SquadState,
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { admittedLevelWithdrawal } from "@/lib/level-withdrawal";
 import { matchPhase, periodBreakdown, servingSide, setBreakdown, type PeriodScoreRow, type SetScore } from "@/lib/public-site";
 import { log } from "@/server/logger";
 import {
@@ -664,7 +667,9 @@ function derivedLines(
  *  - the RECORDED pass turns each surviving envelope into exactly one line and
  *    cannot throw — it never touches the module;
  *  - the DERIVED pass replays `init` / `apply` the way `foldMatch` does and
- *    diffs `module.summary(state)` for closed sets and periods. A ledger the
+ *    diffs the fold's summary (`summaryOf`, so a withdrawal the kernel admitted
+ *    over a held level result reads as the award it is — W2b PF-1) for closed
+ *    sets and periods. A ledger the
  *    module refuses part-way (a stale config, an event beyond a decided match)
  *    stops the derivation THERE and keeps whatever it had — a spectator page
  *    must not 500 because the eleventh event of a hundred is unfoldable, and
@@ -721,8 +726,10 @@ export function buildTimeline(args: TimelineArgs): TimelineResult {
     let state = module.init(cfg, lineups);
     let squads: SquadState = initSquads(lineups);
     if (module.onLineup !== undefined) state = module.onLineup(state, squads);
-    let previous: ScoreSummary | null = module.summary(state);
     let settled = false;
+    let levelWithdrawal: LevelWithdrawal | null = null;
+    const summarise = () => summaryOf(module, { state, settlement: null, levelWithdrawal });
+    let previous: ScoreSummary | null = summarise();
 
     for (let i = 0; i < active.length; i++) {
       const event = active[i]!;
@@ -740,10 +747,19 @@ export function buildTimeline(args: TimelineArgs): TimelineResult {
             if (module.onLineup !== undefined) state = module.onLineup(state, squads);
           }
         }
+        // W2b PF-1: the one kernel-owned event that changes the RESULT. Its summary is diffed like any other.
+        const admitted = admittedLevelWithdrawal(event, lineups);
+        if (admitted !== null) {
+          levelWithdrawal = admitted;
+          const summary = summarise();
+          const extra = derivedLines(previous, summary, event, sportKey, sides);
+          if (extra.length > 0) derivedAfter.set(i, extra);
+          previous = summary;
+        }
         continue;
       }
       state = module.apply(state, event, { strict: false, squads });
-      const summary = module.summary(state);
+      const summary = summarise();
       const extra = derivedLines(previous, summary, event, sportKey, sides);
       if (extra.length > 0) derivedAfter.set(i, extra);
       previous = summary;

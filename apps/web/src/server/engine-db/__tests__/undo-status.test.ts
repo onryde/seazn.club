@@ -168,9 +168,10 @@ describe.skipIf(!HAS_DB)("undo keeps fixtures.status coherent with the fold (v3/
   it("undoing a forfeit reopens the fixture (was: stuck forfeited)", async () => {
     const s = await seed("badminton", BADMINTON_CFG);
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+    // W2b D3 (Appendix A X-RS-1): once play has started a forfeit is a retirement, not a walkover.
     const forfeit = await appendEvent(s.orgId, s.fixtureId, 1, {
       type: "core.forfeit",
-      payload: { by: s.away, reason: "walkover" },
+      payload: { by: s.away, reason: "retired" },
     });
     expect(forfeit.status).toBe("forfeited");
 

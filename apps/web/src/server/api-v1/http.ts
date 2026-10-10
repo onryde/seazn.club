@@ -77,6 +77,11 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   LEVEL_RESULT_IN_BRACKET: 409,
   // An assertion (X-BR-1): reaching it is a server bug, so it surfaces as one.
   LEVEL_RESULT_SEATED: 500,
+  // W2b (spec §7) — each a state of THIS fixture the organiser resolves another way (the copy says which).
+  FORFEIT_REASON_WRONG_PHASE: 409,
+  ABANDONED_SETTLE_OR_VOID: 409,
+  DOUBLE_WALKOVER_NO_NEXT_MATCH: 409,
+  STAGE_SEAT_DEPARTED: 409,
 };
 
 // HTTP status → stable machine code for non-engine errors.

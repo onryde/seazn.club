@@ -7,9 +7,11 @@
 // its `bracketDeciders` adds), at the live states its own `arbitraryEvent` walk reaches. Each value is sent the way
 // the pad pairs it (the padSpec action offering it, its side attribution named, then null, then omitted), the way
 // the schema reads (sides named, then null), and inside the walk's own events of that type. Any value whose
-// application ENDS the match without a played result (`award`, `no_result`) is flagged and must be gated or
-// excluded with a named reason. The derived gated list — a value that decides the match as itself (the outcome
-// names it as its method), as an award, or (a forfeit-vocabulary value) as a no_result — must equal
+// application ENDS the match without a played result (W2b's vocabulary: an `award`, or an outcome that advances
+// nobody — `advancesNobody`, the double walkover) is flagged and must be gated, retired or excluded with a named
+// reason. The derived gated list — a value that decides the match as itself (the outcome names it as its method), as
+// an award, or as a double walkover — minus the values the server RETIRES ON WRITE (W2b D15: refused for every
+// writer, so no longer an organiser privilege; append-event.ts `RETIRED_ON_WRITE_SPORT_EVENTS`) must equal
 // lib/organiser-only-events.ts's table.
 //
 // Authorities are the AuthCtx shapes the real doors produce: a device link minted and resolved through
@@ -17,6 +19,7 @@
 // fixture_officials row), and the organiser shapes (owner, admin, a write-scoped API key).
 import { randomBytes as kekBytes, randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { advancesNobody } from "@seazn/engine/core";
 import { buildPathObject, resolvePositions, type PadAction } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { buildWalk, declaredCfgs, defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
@@ -28,6 +31,7 @@ import {
   ORGANISER_ONLY_SPORT_EVENTS,
 } from "@/lib/organiser-only-events";
 import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
+import { RETIRED_ON_WRITE_SPORT_EVENTS } from "@/server/engine-db/append-event";
 import { seedBracket, type SeededBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { createDeviceLink } from "@/server/usecases/device-links";
 import { scoreEvent } from "@/server/usecases/scoring";
@@ -240,7 +244,7 @@ const sweep = (() => {
               item.applied++;
               const o = mm.outcome(next);
               if (o === null) continue;
-              const decisive = o.kind === "award" || o.kind === "no_result";
+              const decisive = o.kind === "award" || advancesNobody(o as never);
               const names = value !== null && o.method === value;
               if (!decisive && !names) continue;
               if (decisive) item.decisive.set(keyOf(t.p), t.p);
@@ -267,9 +271,21 @@ const candidates = sweep.items
     verdict: i.decisive.size > 0 || i.namesMethod.size > 0 ? ("forfeit" as const) : i.applied > 0 ? ("not-a-forfeit" as const) : ("unreached" as const),
   }));
 const GATED_SPORT = candidates.filter((c) => c.verdict === "forfeit").map((c) => c.item);
+/** W2b D15: is this payload a value the server retires on write (refused for every writer, organiser included)? */
+const isRetired = (type: string, p: Payload): boolean => {
+  const r = RETIRED_ON_WRITE_SPORT_EVENTS[type];
+  return r !== undefined && r.values.includes(p[r.field] as string);
+};
+const retiredItem = (i: Pick<Item, "type" | "path" | "value">): boolean => {
+  const r = RETIRED_ON_WRITE_SPORT_EVENTS[i.type];
+  return r !== undefined && r.field === i.path && r.values.includes(i.value!);
+};
+/** The derived forfeits the server refuses for everyone, and the ones that stay an organiser privilege. */
+const RETIRED_SPORT = GATED_SPORT.filter(retiredItem);
+const ORGANISER_SPORT = GATED_SPORT.filter((i) => !retiredItem(i));
 const derivedTable = (() => {
   const table: Record<string, { field: string; values: string[] }> = {};
-  for (const i of GATED_SPORT) (table[i.type] ??= { field: i.path!, values: [] }).values.push(i.value!);
+  for (const i of ORGANISER_SPORT) (table[i.type] ??= { field: i.path!, values: [] }).values.push(i.value!);
   return table;
 })();
 
@@ -340,6 +356,18 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
     expect(GATED_SPORT.length).toBeGreaterThan(0);
   });
 
+  it("D15: every value the server retires on write is a derived forfeit (no stale retirement), and chess's two forfeit methods are exactly the retired set", () => {
+    let checked = 0;
+    for (const [type, r] of Object.entries(RETIRED_ON_WRITE_SPORT_EVENTS))
+      for (const value of r.values) {
+        expect(GATED_SPORT.some((i) => i.type === type && i.path === r.field && i.value === value), `${type}.${r.field}=${value}`).toBe(true);
+        checked++;
+      }
+    expect(checked).toBe(RETIRED_SPORT.length);
+    // spec §5.2 / finding 15: the single and the double forfeit, both recorded through core.forfeit since W2b.
+    expect(RETIRED_SPORT.map(itemId).sort()).toEqual(["boardgame.result.method=double_forfeit", "boardgame.result.method=forfeit"]);
+  });
+
   it("D-O1: lib/organiser-only-events.ts's sport table is EXACTLY the derived list", () => {
     const norm = (t: Readonly<Record<string, { readonly field: string; readonly values: readonly string[] }>>) =>
       Object.fromEntries(Object.entries(t).map(([k, v]) => [k, { field: v.field, values: [...v.values].sort() }]));
@@ -365,33 +393,38 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
     for (const c of candidates) {
       const p: Payload = {};
       setPath(p, c.item.path!, c.item.value);
-      expect(isOrganiserOnlyEvent(c.item.type, p), itemId(c.item)).toBe(c.verdict === "forfeit");
+      expect(isOrganiserOnlyEvent(c.item.type, p), itemId(c.item)).toBe(c.verdict === "forfeit" && !retiredItem(c.item));
       checked++;
     }
     // Review I-1: every payload the fold decided as the forfeit — the pad's, the schema's, the walk's — is gated,
-    // whichever side shape it carries (named, null, omitted).
+    // whichever side shape it carries (named, null, omitted); a retired one is refused for everyone instead (D15).
     let witnesses = 0;
     for (const i of GATED_SPORT)
       for (const p of [...i.decisive.values(), ...i.namesMethod.values()]) {
-        expect(isOrganiserOnlyEvent(i.type, p), `${itemId(i)} ${keyOf(p)}`).toBe(true);
+        expect([isOrganiserOnlyEvent(i.type, p), isRetired(i.type, p)], `${itemId(i)} ${keyOf(p)}`).toEqual(retiredItem(i) ? [false, true] : [true, false]);
         witnesses++;
       }
     expect(witnesses).toBeGreaterThanOrEqual(GATED_SPORT.length);
-    // Ordinary values: every other value the sweep sent at a gated field (checkmate, agreement, …) is NOT gated.
+    // Ordinary values: every other value the sweep sent at a gated or retired field (checkmate, agreement, …) is
+    // neither gated nor retired.
+    const fields: Record<string, { field: string; values: readonly string[] }> = { ...derivedTable };
+    for (const [type, r] of Object.entries(RETIRED_ON_WRITE_SPORT_EVENTS)) {
+      fields[type] = { field: r.field, values: [...(fields[type]?.field === r.field ? fields[type]!.values : []), ...r.values] };
+    }
     let ordinary = 0;
     for (const i of sweep.items) {
-      const row = derivedTable[i.type];
+      const row = fields[i.type];
       if (!row || i.path !== row.field || row.values.includes(i.value!)) continue;
       const p: Payload = {};
       setPath(p, i.path, i.value);
-      expect(isOrganiserOnlyEvent(i.type, p), itemId(i)).toBe(false);
+      expect([isOrganiserOnlyEvent(i.type, p), isRetired(i.type, p)], itemId(i)).toEqual([false, false]);
       ordinary++;
     }
     expect(ordinary, "ordinary values at a gated field").toBeGreaterThan(0);
     expect(checked).toBe(ORGANISER_ONLY_EVENT_TYPES.length + candidates.length);
   });
 
-  it("I-1: the vocabulary-free sweep — every value that ends a match as an award or no_result is gated or excluded with a named reason", () => {
+  it("I-1: the vocabulary-free sweep — every value that ends a match as an award or a double walkover is gated, retired or excluded with a named reason", () => {
     const flagged = sweep.items.filter((i) => i.decisive.size > 0);
     expect(flagged.length, "zero flagged = the sweep saw nothing").toBeGreaterThan(0);
     let checked = 0;
@@ -400,7 +433,9 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
         checked++;
         continue;
       }
-      for (const p of i.decisive.values()) expect(isOrganiserOnlyEvent(i.type, p), `${itemId(i)} ${keyOf(p)} ends the match unplayed`).toBe(true);
+      for (const p of i.decisive.values()) {
+        expect(isOrganiserOnlyEvent(i.type, p) || isRetired(i.type, p), `${itemId(i)} ${keyOf(p)} ends the match unplayed`).toBe(true);
+      }
       checked++;
     }
     expect(checked).toBe(flagged.length);
@@ -420,7 +455,8 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
     expect(decidesAsItself.sort()).toEqual(Object.keys(VOCABULARY_GAP).sort());
     // The class the vocabulary finds: boardgame's single forfeit decides as itself, with no award or no_result.
     const forfeit = GATED_SPORT.find((i) => i.type === "boardgame.result" && i.value === "forfeit");
-    expect(forfeit, "the single forfeit is gated").toBeDefined();
+    expect(forfeit, "the single forfeit is found").toBeDefined();
+    expect(retiredItem(forfeit!), "…and retired on write (D15)").toBe(true);
     expect(forfeit!.decisive.size, "found by the vocabulary alone: it never ends the match as award/no_result").toBe(0);
     expect(forfeit!.namesMethod.size).toBeGreaterThan(0);
   });
@@ -440,9 +476,11 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
     expect(never.sort()).toEqual(Object.keys(UNREACHED_TYPES).sort());
   });
 
-  it("I-1: the DB matrix posts every pad- and schema-shaped forfeit, the real double forfeit among them", () => {
-    expect(SPORT_ROWS.length).toBeGreaterThanOrEqual(GATED_SPORT.length);
-    const posted = SPORT_ROWS.map((r) => ({ type: r.type, payload: r.payload({ home: "HOME-ID", away: "AWAY-ID" }) }));
+  it("I-1: the DB matrices post every pad- and schema-shaped forfeit — gated ones to the authority matrix, retired ones (the real double forfeit among them) to the refusal-for-everyone matrix", () => {
+    expect(SPORT_ROWS.length).toBeGreaterThanOrEqual(ORGANISER_SPORT.length);
+    expect(RETIRED_ROWS.length).toBeGreaterThanOrEqual(RETIRED_SPORT.length);
+    expect(RETIRED_ROWS.length).toBeGreaterThan(0);
+    const posted = RETIRED_ROWS.map((r) => ({ type: r.type, payload: r.payload({ home: "HOME-ID", away: "AWAY-ID" }) }));
     expect(posted).toEqual(
       expect.arrayContaining([
         { type: "boardgame.result", payload: { winner: null, method: "double_forfeit" } },
@@ -538,7 +576,9 @@ const CORE_ROWS: Gated[] = RULED_CORE_TYPES.map((type) => ({
   type,
   payload: (f) => {
     if (type === "core.settle") return { winner: f.home, method: "lot" };
-    if (type === "core.forfeit") return { by: f.away, reason: "walkover" };
+    // W2b D3: the row is posted on a STARTED fixture (`ready`), where a forfeit is a retirement — a walkover is
+    // refused there (FORFEIT_REASON_WRONG_PHASE), which X-RS-3 below proves per reason.
+    if (type === "core.forfeit") return { by: f.away, reason: "retired" };
     return { reason: "rain" };
   },
   ...(type === "core.settle" ? { prep: "abandon" as const } : {}),
@@ -547,9 +587,13 @@ const CORE_ROWS: Gated[] = RULED_CORE_TYPES.map((type) => ({
  *  walk's placeholder entrants swapped for the seeded fixture's. */
 const forFixture = (p: unknown, f: { home: string; away: string }): unknown =>
   p === "H" ? f.home : p === "A" ? f.away : p && typeof p === "object" ? Object.fromEntries(Object.entries(p).map(([k, v]) => [k, forFixture(v, f)])) : p;
-const SPORT_ROWS: Gated[] = GATED_SPORT.flatMap((i) =>
-  [...i.padWitness.values()].map((w) => ({ label: `${itemId(i)} ${keyOf(w)}`, sport: i.sport, type: i.type, payload: (f: { home: string; away: string }) => forFixture(w, f) })),
-);
+const rowsOf = (items: readonly Item[]): Gated[] =>
+  items.flatMap((i) =>
+    [...i.padWitness.values()].map((w) => ({ label: `${itemId(i)} ${keyOf(w)}`, sport: i.sport, type: i.type, payload: (f: { home: string; away: string }) => forFixture(w, f) })),
+  );
+const SPORT_ROWS: Gated[] = rowsOf(ORGANISER_SPORT);
+/** D15: the retired shapes, posted to every authority and refused for all of them. */
+const RETIRED_ROWS: Gated[] = rowsOf(RETIRED_SPORT);
 const GATED: Gated[] = [...CORE_ROWS, ...SPORT_ROWS];
 
 /** A started 2-draw knockout of `sport` (its first declared variant); for settle, abandoned first (X-ST-1). */
@@ -581,8 +625,67 @@ describe.skipIf(!HAS_DB)("X-ST-2: organiser-only on the server, per gated row ×
         expect(await fixtureStatus(id), `${row.label} ${who}`).toBe(statusBefore);
         checked++;
       }
-    expect(SPORT_ROWS.length).toBeGreaterThan(0);
     expect(checked).toBe(GATED.length * REFUSED.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("D15: every retired chess forfeit shape is refused INVALID_EVENT chess_forfeit_method_retired for EVERY authority, organiser included, and nothing is written", async () => {
+    let checked = 0;
+    for (const row of RETIRED_ROWS)
+      for (const who of [...REFUSED, ...ALLOWED]) {
+        const { s, id, f } = await ready(row);
+        const auth = await asAuthority(s, id, who);
+        const before = await seq(id);
+        await expect(scoreEvent(auth, id, { expected_seq: before, type: row.type, payload: row.payload(f) }), `${row.label} ${who}`).rejects.toMatchObject({
+          code: "INVALID_EVENT",
+          data: expect.objectContaining({ reason: "chess_forfeit_method_retired" }),
+        });
+        expect(await seq(id), `${row.label} ${who}`).toBe(before);
+        checked++;
+      }
+    expect(checked).toBe(RETIRED_ROWS.length * (REFUSED.length + ALLOWED.length));
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("X-RS-3: every event that records a forfeit, walkover, retirement or double walkover is organiser-only — core.forfeit for all four reasons and both, refused 403 for a device link and an official scorer; the API key is the positive pair", async () => {
+    // single-sport: badminton. The gate reads the event TYPE (organiser-only-events.ts), never the sport; each reason
+    // is posted in the phase it belongs to (spec §4.1: a walkover before the start, a retirement or a
+    // disqualification after it), and the double walkover on a semi-final, which feeds a seat (D19).
+    const CASES = [
+      { reason: "walkover", by: "away", started: false },
+      { reason: "retired", by: "away", started: true },
+      { reason: "disqualified", by: "away", started: true },
+      { reason: "withdrew", by: "away", started: false },
+      { reason: "walkover", by: "both", started: false },
+    ] as const;
+    let refused = 0;
+    let accepted = 0;
+    for (const c of CASES)
+      for (const who of ["device_link", "official", "api_key"] as const) {
+        const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "knockout", entrants: 4 });
+        const id = s.fixtureIds[0]!;
+        if (c.started) await scoreEvent(s.auth, id, { expected_seq: 0, type: "core.start", payload: {} });
+        const [f] = await sql<{ away: string }[]>`select away_entrant_id as away from fixtures where id = ${id}`;
+        const auth = await asAuthority(s, id, who);
+        const before = await seq(id);
+        const write = scoreEvent(auth, id, { expected_seq: before, type: "core.forfeit", payload: { by: c.by === "both" ? "both" : f!.away, reason: c.reason } });
+        const label = `${c.by}/${c.reason} ${who}`;
+        if (who !== "api_key") {
+          await expect(write, label).rejects.toMatchObject({ status: 403, message: expect.stringMatching(/^Only an organiser can /) });
+          expect(await seq(id), label).toBe(before);
+          refused++;
+        } else if (c.reason === "withdrew") {
+          // PF-2: `withdrew` is the withdrawal cascade's alone — refused even for an organiser credential.
+          await expect(write, label).rejects.toMatchObject({ code: "INVALID_EVENT", data: expect.objectContaining({ reason: "cascade_only" }) });
+          expect(await seq(id), label).toBe(before);
+          refused++;
+        } else {
+          const out = await write;
+          expect([out.status, out.seq], label).toEqual(["forfeited", before + 1]);
+          accepted++;
+        }
+      }
+    expect({ refused, accepted }).toEqual({ refused: CASES.length * 2 + 1, accepted: CASES.length - 1 });
   });
 
   it("X-ST-2 defence in depth: a device-link credential is refused for every gated row even when its AuthCtx carries an organiser role", async () => {

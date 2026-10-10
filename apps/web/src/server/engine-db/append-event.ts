@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { withTenant, type Tx } from "@/lib/db";
 import {
+  advancesNobody,
   EngineError,
   foldMatchWithStoppage,
   forbidsLevelResult,
@@ -9,6 +10,7 @@ import {
   outcomeOf,
   resolveVoids,
   settleApplies,
+  summaryOf,
   type EventEnvelope,
   type MatchOutcome,
   type ScoreSummary,
@@ -42,7 +44,14 @@ export interface AppendInput {
   voids?: string;
   id?: string;
   recordedAt?: string;
+  /** W2b PF-2 — which server writer is appending. Set ONLY by the withdrawal cascade (`withdrawal.ts`, through
+   *  `scoreEvent`'s internal options, never a request field): `reason: "withdrew"` and `core.abandon{expunge:true}`
+   *  are cascade-only events, refused from every other writer — the console, a device link, the API, the importer. */
+  writer?: CascadeWriter;
 }
+
+/** The one writer that may record the cascade-only events (PF-2). */
+export type CascadeWriter = "withdrawal_cascade";
 
 export interface AppendResult {
   seq: number;
@@ -81,6 +90,9 @@ interface FixtureRow {
   /** V347 — the resolved cfg this fixture was SCORED under; null until its
    *  first event. See `fixture-cfg.ts` for why it exists. */
   config_snapshot: unknown;
+  /** W2b D19 — the feed graph: a double walkover needs a next match to send nobody to. */
+  winner_to_fixture: string | null;
+  loser_to_fixture: string | null;
 }
 interface StageRow {
   kind: string;
@@ -151,18 +163,94 @@ export function fixtureStatusFromFold(
   stageKind: string | null,
 ): string {
   const has = (type: string) => active.some((event) => event.type === type);
-  // W2a D3 (spec §5.4.2), in this order. 1: the organiser's settle decides,
-  // even an abandoned match (X-ST-1).
+  const levelInBracket = outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome);
+  // W2b D7 (spec §5.4, plan finding 5), in this order; the first rule that matches decides.
+  // 1: the organiser's settle decides, even an abandoned match (X-ST-1).
   if (has("core.settle")) return "decided";
-  // 2: abandon first otherwise (unchanged): cricket abandon folds to a
-  // no_result OUTCOME, but the fixture status stays "abandoned" — the
-  // 2026-09-21 "stuck and visible" ruling for an abandon nobody has settled.
-  if (has("core.abandon")) return "abandoned";
-  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided,
-  // nobody seated, closed by the organiser's core.settle.
-  if (outcome !== null && forbidsLevelResult(stageKind) && isLevelOutcome(outcome)) return "needs_decision";
-  if (outcome !== null) return has("core.forfeit") ? "forfeited" : "decided";
+  // 2: an abandon that decided nobody stays "abandoned" — the 2026-09-21 "stuck and visible" ruling, and what W2a's
+  // recorded-abandon readers, the desk's awaits-settle path and `needs-decision.tsx` key on: no outcome at all, or a
+  // level one where a level result is forbidden (a bracket). An abandon WITH a result — a DLS win, a football
+  // award-policy leader, or any result in a draw kind (a cricket no-result is 1 point each, CK-AB-2) — falls through
+  // and is decided like any other result (ST-G1).
+  if (has("core.abandon") && (outcome === null || levelInBracket)) return "abandoned";
+  // 3: a level result in a bracket is HELD (ruling 79, X-BR-2): not decided, nobody seated, closed by a settle.
+  if (levelInBracket) return "needs_decision";
+  // 4: keyed on the EVENT, as before (an award-policy abandon is no forfeit), plus a double walkover, whose legacy
+  // chess shape (`boardgame.result{double_forfeit}`) carries no core.forfeit (finding 5).
+  if (has("core.forfeit") || advancesNobody(outcome)) return "forfeited";
+  // 5: any other result.
+  if (outcome !== null) return "decided";
   return has("core.start") ? "in_play" : "scheduled";
+}
+
+/** W2b D15 (spec §5.2, finding 15) — sport events whose payload value is RETIRED ON WRITE: a chess forfeit is recorded
+ *  through `core.forfeit` now, so `boardgame.result{method: forfeit | double_forfeit}` is refused for every writer. A
+ *  stream that already holds one still replays (the engine folds it, BG-DW-1); only a NEW append is judged. Exported so
+ *  the organiser-only derivation (organiser-only-events.test.ts, D-O1) subtracts exactly this set and no other. */
+export const RETIRED_ON_WRITE_SPORT_EVENTS: Readonly<Record<string, { field: string; values: readonly string[] }>> = {
+  "boardgame.result": { field: "method", values: ["forfeit", "double_forfeit"] },
+};
+
+/** The kinds whose double walkover must send nobody somewhere (D19): every kind that forbids a level result except a
+ *  ladder, which wires no feed edge by design (W2a loop G) and keeps its positions on a double walkover. */
+const needsNextMatchForDoubleWalkover = (stageKind: string | null): boolean =>
+  forbidsLevelResult(stageKind) && stageKind !== "ladder";
+
+/**
+ * W2b append guards, ahead of the fold (each refusal aborts the transaction before anything is written):
+ *
+ * - D15: a retired sport-event value (`RETIRED_ON_WRITE_SPORT_EVENTS`) — INVALID_EVENT, `chess_forfeit_method_retired`.
+ * - PF-2: `core.forfeit{reason:"withdrew"}` and `core.abandon{expunge:true}` from any writer but the withdrawal
+ *   cascade — INVALID_EVENT, `cascade_only`.
+ * - PF-1 (server half): the cascade's `withdrew` over a stored result is admitted only on a HELD row
+ *   (`needs_decision`); the engine's admission is stage-blind, and a league draw is a result standings credit —
+ *   ALREADY_DECIDED, `withdrew_over_result`.
+ * - D19: `core.forfeit{by:"both"}` in a bracket kind on a fixture that feeds no seat (no `winner_to_fixture`, no
+ *   `loser_to_fixture` — the feed graph, never a round name) — DOUBLE_WALKOVER_NO_NEXT_MATCH. A final, a stepladder's
+ *   last rung, a page playoff final, a third-place match.
+ */
+function assertW2bWriteGuards(
+  fixture: Pick<FixtureRow, "id" | "status" | "outcome" | "winner_to_fixture" | "loser_to_fixture">,
+  stageKind: string | null,
+  candidate: Pick<EventEnvelope, "type" | "payload">,
+  writer: CascadeWriter | undefined,
+): void {
+  const payload = (candidate.payload ?? {}) as Record<string, unknown>;
+  const retired = RETIRED_ON_WRITE_SPORT_EVENTS[candidate.type];
+  if (retired !== undefined && retired.values.includes(payload[retired.field] as string)) {
+    throw new EngineError("INVALID_EVENT", "a chess forfeit is recorded as a forfeit, not as a game result", {
+      fixtureId: fixture.id,
+      reason: "chess_forfeit_method_retired",
+      method: payload[retired.field],
+    });
+  }
+  const withdrew = candidate.type === "core.forfeit" && payload.reason === "withdrew";
+  const expunge = candidate.type === "core.abandon" && payload.expunge === true;
+  if ((withdrew || expunge) && writer !== "withdrawal_cascade") {
+    throw new EngineError("INVALID_EVENT", "only a withdrawal records this — withdraw the entrant instead", {
+      fixtureId: fixture.id,
+      reason: "cascade_only",
+    });
+  }
+  if (withdrew && fixture.outcome !== null && fixture.status !== "needs_decision") {
+    throw new EngineError("ALREADY_DECIDED", "this match already has a result", {
+      fixtureId: fixture.id,
+      reason: "withdrew_over_result",
+      status: fixture.status,
+    });
+  }
+  if (
+    candidate.type === "core.forfeit" &&
+    payload.by === "both" &&
+    needsNextMatchForDoubleWalkover(stageKind) &&
+    fixture.winner_to_fixture === null &&
+    fixture.loser_to_fixture === null
+  ) {
+    throw new EngineError("DOUBLE_WALKOVER_NO_NEXT_MATCH", "a match with no next match can't be a double walkover", {
+      fixtureId: fixture.id,
+      stage: stageKind,
+    });
+  }
 }
 
 /** Which door the DECIDING append came through (`result_entered.source`, fix
@@ -190,7 +278,7 @@ export async function appendEventInTx(
 
   const [fixture] = await tx<FixtureRow[]>`
     select id, division_id, stage_id, home_entrant_id, away_entrant_id, status, outcome,
-           config_snapshot
+           config_snapshot, winner_to_fixture, loser_to_fixture
     from fixtures where id = ${fixtureId}
   `;
   if (!fixture) {
@@ -310,6 +398,8 @@ export async function appendEventInTx(
   // (PROMPT-61, above) — that must keep happening exactly as it does today,
   // so the catch below re-throws unchanged and never touches SQL itself.
   const stageKind = stage?.kind ?? null;
+  // W2b — the append guards that need what only the server knows: who is writing, the stored status, the feed graph.
+  assertW2bWriteGuards(fixture, stageKind, candidate, input.writer);
   // W2a (spec §5.4.3). The settle and finalize guards read the ledger BEFORE the candidate, so they run ahead of
   // the fold: a sport module refuses a finalize of an undecided fixture itself (WRONG_PHASE) inside the fold, which
   // would otherwise answer first for an abandon with no outcome and for a pending chess tie-break.
@@ -398,7 +488,8 @@ export async function appendEventInTx(
     }
   })();
   const state = folded.state;
-  const summary = sportModule.summary(state);
+  // W2b PF-1: the headline agrees with the table when a withdrawal was admitted over a held level result.
+  const summary = summaryOf(sportModule, folded);
   // W2a finding 1: a settle lives beside module state (outcomeOf).
   const outcome = outcomeOf(sportModule, folded);
   const active = resolveVoids(stream);

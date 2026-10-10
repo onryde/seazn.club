@@ -423,22 +423,6 @@ describe.skipIf(!HAS_DB)("Rebuild fixtures on a board the generator itself voide
   });
 });
 
-/** Abandon `fixtureId` the way an organiser does on the day — `core.abandon`
- *  needs a non-empty `reason` (CoreAbandon is a strictObject), so a bare `{}`
- *  is rejected at runtime. */
-async function abandon(auth: AuthCtx, fixtureId: string): Promise<void> {
-  await scoreEvent(auth, fixtureId, {
-    expected_seq: (await getFixtureState(auth, fixtureId)).last_seq,
-    type: "core.start",
-    payload: {},
-  });
-  await scoreEvent(auth, fixtureId, {
-    expected_seq: (await getFixtureState(auth, fixtureId)).last_seq,
-    type: "core.abandon",
-    payload: { reason: "waterlogged" },
-  });
-}
-
 // Review round 5, N1 — the cascade originally inverted `winner_to_fixture`
 // ONLY, so a seat fed by `loser_to_fixture` was invisible to it. That edge is
 // intra-stage in four shipped shapes (losers bracket, grand-final reset,
@@ -548,15 +532,24 @@ describe.skipIf(!HAS_DB)("a seat fed by a LOSER edge is cascaded too (N1)", () =
   // regression guard for the narrowing, because the generator's OWN void is an
   // `abandoned` row too and must keep cascading.
   it("an abandoned feeder that carries an outcome leaves BOTH of its seats alone", async () => {
-    const rig = await seedQualifiedStage(4, "knockout", { thirdPlace: true });
-    await generateStageFixtures(rig.auth, rig.stageId);
+    // single-sport: cricket — its rain abandon folds to a no_result (CK-AB-2), the outcome-carrying abandon this ruling
+    // is about. W2b (GN-AB-1) made generic's abandon fold to no outcome at all, so this file's generic rig can no
+    // longer reach the shape.
+    const cricket = builtinModules.find((m) => m.key === "cricket")!;
+    const balls = (cricket.configSchema.parse(cricket.variants.t20) as { ballsPerInnings: number }).ballsPerInnings;
+    const s = await seedBracket({ sport: "cricket", variant: declaredVariant("cricket", "t20"), stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+    const rig = { auth: s.auth, stageId: s.stageId };
     const atGen = await rowsOf(rig.stageId);
     const semis = atGen.filter((r) => r.loser_to_fixture !== null);
+    expect(semis, "rig: two semi-finals feed the final and the third-place match").toHaveLength(2);
     const thirdId = semis[0]!.loser_to_fixture!;
     const finalId = semis[0]!.winner_to_fixture!;
 
-    await play(rig.auth, semis[0]!.id);
-    await abandon(rig.auth, semis[1]!.id);
+    await post(rig.auth, semis[0]!.id, "core.start");
+    await post(rig.auth, semis[0]!.id, "cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: balls });
+    await post(rig.auth, semis[0]!.id, "cricket.innings.summary", { runs: 100, wickets: 6, legalBalls: balls });
+    await post(rig.auth, semis[1]!.id, "core.start");
+    await post(rig.auth, semis[1]!.id, "core.abandon", { reason: "rain" });
 
     // The shape is read back off the row `core.abandon` actually wrote, not
     // typed here, so a change to the engine's own declarations moves this test
@@ -779,7 +772,8 @@ async function scorerAbandon(auth: AuthCtx, id: string): Promise<void> {
 async function walkoverForHome(auth: AuthCtx, id: string): Promise<void> {
   const r = await fixtureRow(id);
   await post(auth, id, "core.start");
-  await post(auth, id, "core.forfeit", { by: r.away_entrant_id, reason: "walkover" });
+  // W2b D3 (X-RS-1): once play has started a forfeit is a retirement, not a walkover.
+  await post(auth, id, "core.forfeit", { by: r.away_entrant_id, reason: "retired" });
 }
 
 /** Decide a chess game for home over the board: a real `win` with a LOSER (a forfeit's award seats no loser). */
@@ -903,7 +897,7 @@ describe.skipIf(!HAS_DB)("NEW-H1: a scorer's abandon is not a generator void (sp
     expect(abandoned.outcome, "the NEW-H1 shape: abandoned with NO outcome").toBeNull();
     const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
     await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
-    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "walkover" } } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "retired" } } as never);
     const [fin] = await sql<{ status: string; outcome: unknown }[]>`select status, outcome from fixtures where id = ${r2!.winner_to_fixture}`;
     expect(fin).toEqual({ status: "scheduled", outcome: null });
     // The positive pair: the seat WAS actionable (its sibling filled), so the cascade really did look at it.
@@ -923,7 +917,7 @@ describe.skipIf(!HAS_DB)("NEW-H1: a scorer's abandon is not a generator void (sp
     expect(events!.n, "premise: the generator's void has no ledger at all").toBe(0);
     const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
     await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
-    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "walkover" } } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "retired" } } as never);
     const [fin] = await sql<{ status: string }[]>`select status from fixtures where id = ${r2!.winner_to_fixture}`;
     expect(fin!.status).toBe("forfeited");
   });
@@ -943,7 +937,7 @@ describe.skipIf(!HAS_DB)("NEW-H1: a scorer's abandon is not a generator void (sp
     await sql`update fixtures set status = 'abandoned', outcome = null where id = ${sf1!}`;
     const [r2] = await sql<{ away_entrant_id: string; winner_to_fixture: string }[]>`select away_entrant_id, winner_to_fixture from fixtures where id = ${sf2!}`;
     await scoreEvent(s.auth, sf2!, { expected_seq: 0, type: "core.start", payload: {} } as never);
-    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "walkover" } } as never);
+    await scoreEvent(s.auth, sf2!, { expected_seq: 1, type: "core.forfeit", payload: { by: r2!.away_entrant_id, reason: "retired" } } as never);
     const [fin] = await sql<{ status: string }[]>`select status from fixtures where id = ${r2!.winner_to_fixture}`;
     expect(fin!.status).toBe("forfeited"); // feederIsDead(sf1) === true: the voided abandon did not count as active
   });

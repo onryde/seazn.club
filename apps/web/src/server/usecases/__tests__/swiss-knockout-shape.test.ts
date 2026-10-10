@@ -293,7 +293,7 @@ describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actu
     // the shape in front of it and let the defect through — it asserted where
     // the bye was and never what state it was in.
     expect(byes[0]!.status, "a bye is a walkover, never 'scheduled'").toBe("forfeited");
-    expect(byes[0]!.outcome).toEqual({ kind: "award", winner: byes[0]!.home_entrant_id });
+    expect(byes[0]!.outcome).toEqual({ kind: "award", winner: byes[0]!.home_entrant_id, loser: null, reason: "bye" }); // W2b C-5
 
     // The other is a REAL match, and it is 2nd against 3rd — not 1st against
     // anyone. Byeing the wrong end of the table is the shape this refuses.

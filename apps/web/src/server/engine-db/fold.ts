@@ -4,6 +4,7 @@ import {
   EngineError,
   foldMatchWithStoppage,
   outcomeOf,
+  summaryOf,
   resolveVoids,
   type EventEnvelope,
   type LineupPair,
@@ -172,7 +173,8 @@ export function foldFrom(fixtureId: string, inputs: FoldInputs): FoldedFixture {
     fixtureId,
     lastSeq: envelopes[envelopes.length - 1]!.seq,
     state,
-    summary: sportModule.summary(state),
+    // W2b PF-1: the headline that agrees with the table (a withdrawal admitted over a held level result).
+    summary: summaryOf(sportModule, folded),
     outcome: outcomeOf(sportModule, folded),
     active: resolveVoids(envelopes),
   };

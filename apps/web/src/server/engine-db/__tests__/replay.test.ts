@@ -59,21 +59,23 @@ describe.skipIf(!HAS_DB)("replayOutcomeFor", () => {
   });
 
   it("X-BR-2: replay of a held knockout fixture reports needs_decision (the stage kind reaches the replay)", async () => {
-    // A chess double forfeit folds to no_result (chess.md §7) — a level outcome, which a knockout HOLDS
-    // (ruling 79). Not a draw, so the tie-break overlay never opens: the hold is reached directly.
-    const s = await seedBracket({ sport: "boardgame", variant: declaredVariant("boardgame", "classical"), stageKind: "knockout", entrants: 2 });
+    // single-sport: football reaches a held bracket fixture by PLAY — 0-0 at full time is a draw, which a knockout
+    // HOLDS (ruling 79, X-BR-2). W2b retired the chess double forfeit this used (D15: refused on write; it now folds
+    // to a double walkover, which is forfeited, not held).
+    const s = await seedBracket({ sport: "football", variant: declaredVariant("football", "11-a-side"), stageKind: "knockout", entrants: 2 });
     const fixtureId = s.fixtureIds[0]!;
     const key = `idem-${randomUUID()}`;
     await appendEvent(s.auth.orgId, fixtureId, 0, { type: "core.start", payload: {} });
-    const original = await appendEvent(s.auth.orgId, fixtureId, 1, {
-      type: "boardgame.result",
-      payload: { winner: null, method: "double_forfeit" },
+    await appendEvent(s.auth.orgId, fixtureId, 1, { type: "football.period", payload: { phase: "HT" } });
+    const original = await appendEvent(s.auth.orgId, fixtureId, 2, {
+      type: "football.period",
+      payload: { phase: "FT" },
       idempotencyKey: key,
     });
-    expect(original.outcome).toEqual({ kind: "no_result" });
+    expect(original.outcome).toEqual({ kind: "draw" });
     expect(original.status, "the keyed write must actually hold the fixture").toBe("needs_decision");
     // Move the fold (a void erases the result), so a replay that folded the whole ledger would say in_play.
-    const undone = await appendEvent(s.auth.orgId, fixtureId, 2, {
+    const undone = await appendEvent(s.auth.orgId, fixtureId, 3, {
       type: "core.void",
       payload: { event_id: original.event.id },
       voids: original.event.id,

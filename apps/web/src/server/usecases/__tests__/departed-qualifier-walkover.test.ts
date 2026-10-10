@@ -204,9 +204,13 @@ describe.runIf(HAS_DB)("a qualifier who departs before Generate — walkover, no
 
     const walkover = rows.find((r) => r.ext_key === line[0])!;
     expect(walkover.status, "a departed qualifier's line is settled at generation").toBe("forfeited");
-    expect(walkover.outcome, "the opponent is awarded the match").toMatchObject({
+    // W2b C-5: the generator writes the award a withdrawal records once the bracket exists (the cascade's
+    // `core.forfeit{by: departed, reason: "withdrew"}` folds to exactly this), never a bye — both seats are filled.
+    expect(walkover.outcome, "the opponent is awarded the match").toEqual({
       kind: "award",
       winner: survivor,
+      loser: departed,
+      reason: "withdrew",
     });
     // Both seats stay filled — this is a two-sided walkover (the shape
     // `core.forfeit` produces post-generation), not a one-sided BYE, which is

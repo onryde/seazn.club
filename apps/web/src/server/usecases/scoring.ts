@@ -13,9 +13,10 @@ import { deferred } from "@/lib/deferred";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { EngineError } from "@seazn/engine/core";
 import { appendEvent, replayOutcomeFor } from "@/server/engine-db";
+import type { CascadeWriter } from "@/server/engine-db/append-event";
 import { recomputeStandings } from "@/server/engine-db";
 import { advancingSides } from "@/server/engine-db/fed-seats";
-import { assertNoLevelSeat } from "@/server/engine-db/level-seat";
+import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -141,6 +142,9 @@ export async function scoreEvent(
   auth: AuthCtx,
   fixtureId: string,
   input: AppendEventRequest,
+  /** Server-internal, never a request field (W2b PF-2): the withdrawal cascade names itself here, and only it may
+   *  record the cascade-only events (append-event.ts `assertW2bWriteGuards`). */
+  opts: { writer?: CascadeWriter } = {},
 ): Promise<ScoreOutcome> {
   // A FAST PATH, no longer the guarantee (W2, design §6). Until this wave the
   // cache was the ONLY thing standing between a retry and a second write, so a
@@ -200,6 +204,7 @@ export async function scoreEvent(
       // or past its 24h TTL. The column is nullable and NULLs are distinct in
       // a unique index, so un-keyed callers are entirely unaffected.
       idempotencyKey: input.idempotency_key ?? null,
+      ...(opts.writer !== undefined ? { writer: opts.writer } : {}),
       ...(input.type === "core.void" &&
       typeof (input.payload as { event_id?: unknown })?.event_id === "string"
         ? { voids: (input.payload as { event_id: string }).event_id }
@@ -730,6 +735,8 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         status: string;
         stage_id: string;
         pool_id: string | null;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
         winner_to_fixture: string | null;
         winner_to_slot: number | null;
         loser_to_fixture: string | null;
@@ -740,7 +747,8 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         division_id: string;
       }[]
     >`
-      select f.outcome, f.status, f.stage_id, f.pool_id, f.winner_to_fixture, f.winner_to_slot,
+      select f.outcome, f.status, f.stage_id, f.pool_id, f.home_entrant_id, f.away_entrant_id,
+             f.winner_to_fixture, f.winner_to_slot,
              f.loser_to_fixture, f.loser_to_slot, s.kind, f.ext_key,
              s.config as stage_config, s.division_id
       from fixtures f join stages s on s.id = f.stage_id
@@ -748,6 +756,21 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     if (!fixture) return null;
     // X-BR-1: a level outcome under a seating status in a bracket is the bug shape (level-seat.ts).
     assertNoLevelSeat({ fixtureId, stageKind: fixture.kind, status: fixture.status, outcome: fixture.outcome });
+    // W2b D20: a double walkover advances nobody, so a seat it feeds holding one of its entrants is the bug shape.
+    const fed = new Map<string, readonly [string | null, string | null]>();
+    for (const target of [fixture.winner_to_fixture, fixture.loser_to_fixture]) {
+      if (target === null || fed.has(target)) continue;
+      const [t] = await tx<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+        select home_entrant_id, away_entrant_id from fixtures where id = ${target}`;
+      if (t) fed.set(target, [t.home_entrant_id, t.away_entrant_id]);
+    }
+    assertAdvancingSeat({
+      fixtureId,
+      stageKind: fixture.kind,
+      status: fixture.status,
+      outcome: fixture.outcome,
+      seatedEntrant: fedSeatOccupant(fixture, (id) => fed.get(id) ?? null),
+    });
     // One reading of who advances, shared with the un-fill (fed-seats.ts), so
     // the two can never disagree about which name a decision put where.
     const { winner, loser } = advancingSides(fixture.outcome);
@@ -840,8 +863,11 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
     const [stage] = await tx<{ status: string }[]>`
       select status from stages where id = ${stageId}`;
     if (stage?.status === "complete") return false;
+    // W2b D18 (spec §13 premise 9): the FINISHED statuses — a result (decided, forfeited), a locked result
+    // (finalized: an organiser who finalizes as they go must still advance) and a cancelled fixture. Everything else
+    // (scheduled, in_play, needs_decision, abandoned) is still owed something.
     const [{ open }] = await tx<{ open: number }[]>`
-      select count(*) filter (where status <> 'decided' and status <> 'forfeited')::int as open
+      select count(*) filter (where status not in ('decided', 'forfeited', 'finalized', 'cancelled'))::int as open
       from fixtures where stage_id = ${stageId}`;
     return open === 0;
   });

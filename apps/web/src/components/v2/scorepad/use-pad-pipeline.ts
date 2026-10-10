@@ -320,9 +320,9 @@
 // the new id in the same commit that retires the target from
 // `pendingEnvelopes` — see `runDrain`'s ack branch.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EngineError, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
+import { EngineError, summaryOf, type EventEnvelope, type LevelWithdrawal, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { foldClient } from "./module-client";
+import { foldClient, foldClientFacts } from "./module-client";
 import { indexedDbQueueStore } from "./queue-store";
 import {
   boundTo,
@@ -1218,13 +1218,15 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // (or forever, if even THAT throws — see the `??` fallback below).
   const lastGoodStateRef = useRef<unknown>(undefined);
 
-  const foldedState = useMemo(() => {
-    if (serverOverride !== undefined) return serverOverride;
+  // W2b PF-1: the fold's `levelWithdrawal` rides beside the state, for the headline only (`summary` below). A server
+  // override is a bare state (no kernel facts), and a degraded fold is the last good STATE — both read none.
+  const folded = useMemo((): { state: unknown; levelWithdrawal: LevelWithdrawal | null } => {
+    if (serverOverride !== undefined) return { state: serverOverride, levelWithdrawal: null };
     const events = [...ledgerEvents, ...pendingEnvelopes.values()];
     try {
-      const state = foldClient(sportModule, cfg, lineups, events);
-      lastGoodStateRef.current = state;
-      return state;
+      const facts = foldClientFacts(sportModule, cfg, lineups, events);
+      lastGoodStateRef.current = facts.state;
+      return facts;
     } catch (err) {
       // A violating OPTIMISTIC guess — e.g. this hook's own local knowledge
       // is momentarily stale (the exact S12/#421 class: a foreign event not
@@ -1250,11 +1252,16 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       if (lastRejection === null || lastRejection.code !== code || lastRejection.message !== message) {
         setLastRejection({ code, message });
       }
-      return lastGoodStateRef.current ?? sportModule.init(cfg, lineups);
+      return { state: lastGoodStateRef.current ?? sportModule.init(cfg, lineups), levelWithdrawal: null };
     }
   }, [sportModule, cfg, lineups, ledgerEvents, pendingEnvelopes, serverOverride, lastRejection]);
+  const foldedState = folded.state;
 
-  const summary = useMemo(() => sportModule.summary(foldedState), [sportModule, foldedState]);
+  // `summaryOf`, never `module.summary`: on PF-1's path the headline shows the withdrawal's award (X-WO-1).
+  const summary = useMemo(
+    () => summaryOf(sportModule, { state: folded.state, settlement: null, levelWithdrawal: folded.levelWithdrawal }),
+    [sportModule, folded],
+  );
 
   const refreshDepth = useCallback(async () => {
     setQueueDepth(await depth(store));
