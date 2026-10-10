@@ -19,7 +19,7 @@ import "server-only";
 // writer left, so the loser of a race updates nothing rather than
 // overwriting the winner, and a concurrent clock correction is read, not
 // overwritten, because every SET expression is evaluated against that row.
-import { Chess } from "chess.js";
+import { Chess, type Square } from "chess.js";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { publishRoomBroadcast, type RoomBroadcast } from "@/lib/realtime";
@@ -29,7 +29,7 @@ import {
   resignGame as realResignGame,
   submitMove as realSubmitMove,
 } from "@/server/external-play/lichess/board-api";
-import { assertUci } from "@/server/external-play/lichess/uci";
+import { assertUci, invalidUci } from "@/server/external-play/lichess/uci";
 import type { BoardCall, BoardErrorCode } from "@/server/external-play/types";
 import { log } from "@/server/logger";
 import { getLichessAccessToken } from "../external-accounts";
@@ -91,11 +91,9 @@ const NOT_FOUND = () => new HttpError(404, "This match room could not be found",
 const DRAW_MIN_PLY = 2;
 const DRAW_REOFFER_PLIES = 20;
 
-/** Replay a UCI list into a FEN. chess.js (BSD-2) is a RENDERER here, never
- *  an arbiter: Lichess decides legality (spec §1), so a move it accepted and
- *  chess.js rejects stops the replay and leaves the caller to reconcile —
- *  it must not refuse the player's move. Throws nothing. */
-export function fenAfter(moves: readonly string[]): { fen: string; replayed: number } {
+/** The board after `moves`, as far as chess.js can follow them, and how
+ *  many it applied. An empty list is chess.js's own start position. */
+function replay(moves: readonly string[]): { board: Chess; replayed: number } {
   const board = new Chess();
   let replayed = 0;
   for (const uci of moves) {
@@ -105,12 +103,53 @@ export function fenAfter(moves: readonly string[]): { fen: string; replayed: num
     try {
       board.move(promotion === undefined ? { from, to } : { from, to, promotion });
     } catch {
-      return { fen: board.fen(), replayed };
+      break;
     }
     replayed++;
   }
-  // An empty list is chess.js's own start position — no special case.
+  return { board, replayed };
+}
+
+/** Replay a UCI list into a FEN. chess.js (BSD-2) is a RENDERER here, never
+ *  an arbiter: Lichess decides legality (spec §1), so a move it accepted and
+ *  chess.js rejects stops the replay and leaves the caller to reconcile —
+ *  it must not refuse the player's move. Throws nothing. */
+export function fenAfter(moves: readonly string[]): { fen: string; replayed: number } {
+  const { board, replayed } = replay(moves);
   return { fen: board.fen(), replayed };
+}
+
+// lila source, not measured — live measurement owed (T17). Two well-formed
+// strings lila PLAYS that chess.js (and lila's own move stream) write
+// differently, scalachess @ 2ab0a403d7f4a8a3a6dec2e898e6b4c301d0aaad:
+//   Position.scala:401 — a standard castle takes BOTH its rook's square and
+//   the king's target as the king's destination (`destInput = List(rook,
+//   kingTo)`): `e1h1` is O-O, recorded by lila as `e1g1`.
+//   variant/Variant.scala:112-117 `findMove` — a pawn move to the last rank
+//   with no suffix is played as a QUEEN ("lichobile will send … b2a1 instead
+//   of b2a1q"). The same lookup REFUSES a suffix on a move that does not
+//   promote (`m.promotion == promotion`), so that form never reaches us.
+// Recorded verbatim, either one stops chess.js's replay for the rest of the
+// game, so no later move is ever broadcast (review I1).
+/** The move string the ledger records for `uci`, judged in the position
+ *  after `moves`: a king-to-rook castle is rewritten to the king's own move;
+ *  a promotion with no suffix is REFUSED (400, nothing sent) — lila would
+ *  pick a queen the player never chose, M5's class of surprise. Anything
+ *  else is returned as it came, for Lichess to judge — and so is everything
+ *  when chess.js cannot follow the ledger: a position it only half-knows is
+ *  no ground for rewriting or refusing a move. */
+function canonicalUci(moves: readonly string[], uci: string): string {
+  const { board, replayed } = replay(moves);
+  if (replayed !== moves.length || uci.length !== 4) return uci;
+  const to = uci.slice(2, 4);
+  for (const m of board.moves({ square: uci.slice(0, 2) as Square, verbose: true })) {
+    if (m.to === to && m.promotion !== undefined) throw invalidUci();
+    // A king cannot capture its own rook, so the rook's square names the
+    // castle and nothing else — chess.js says whether that castle is legal.
+    const rookSquare = m.isKingsideCastle() ? `h${m.from[1]}` : m.isQueensideCastle() ? `a${m.from[1]}` : null;
+    if (rookSquare === to) return m.lan;
+  }
+  return uci;
 }
 
 const turnAt = (ply: number): Colour => (ply % 2 === 0 ? "white" : "black");
@@ -233,7 +272,7 @@ type LedgerRow = {
 async function playMove(
   game: Game,
   colour: Colour,
-  uci: string,
+  sent: string,
   ctx: Ctx<{ submit: NonNullable<PlayDeps["submitMove"]> }>,
 ): Promise<PlayResult> {
   const { fixture: f, gameId, ply } = game;
@@ -243,22 +282,27 @@ async function playMove(
     // ABSORB: the tab one move behind re-sends the move already on file.
     // Only while it is NOT the caller's turn — the last move on file is then
     // theirs — so their genuinely different next move is never eaten.
-    if (game.moves.at(-1) === uci) return { ok: true, applied: false };
+    // Canonical against canonical, judged where it was played: before the
+    // last move on file, so `e1h1` re-sent is the `e1g1` it became.
+    if (canonicalUci(game.moves.slice(0, -1), sent) === game.moves.at(-1)) return { ok: true, applied: false };
     return { ok: false, reconcile: true, reason: "not_your_turn_or_over" };
   }
+  // Everything below — the submit, the twin-tab and lost-append compares,
+  // the ledger and the broadcast — speaks the canonical form only.
+  const uci = canonicalUci(game.moves, sent);
 
   const tok = await ctx.token();
   if (tok === null) return { ok: false, reconcile: false, reason: "lichess_link_required" };
-  const sent = await ctx.submit({ token: tok, gameId, uci });
-  if (!sent.ok) {
+  const answer = await ctx.submit({ token: tok, gameId, uci });
+  if (!answer.ok) {
     // A twin tab's identical move won the race at Lichess and ours was
     // refused as out of turn: the move the player chose IS played.
-    if (sent.code === "not_your_turn_or_over" && (await ledgerOnFile(f.fixtureId, gameId))?.[ply] === uci) {
+    if (answer.code === "not_your_turn_or_over" && (await ledgerOnFile(f.fixtureId, gameId))?.[ply] === uci) {
       return { ok: true, applied: false };
     }
     // Nothing is written on a refusal — and `unavailable` (a 5xx, a timeout)
     // MAY have played the move, so it is never recorded as "not played".
-    return { ok: false, reconcile: true, reason: sent.code };
+    return { ok: false, reconcile: true, reason: answer.code };
   }
 
   const limitMs = f.clock.limit * 1000;
