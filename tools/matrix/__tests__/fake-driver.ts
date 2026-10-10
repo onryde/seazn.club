@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError, forbidsLevelResult, type MatchOutcome, type StageKind } from "@seazn/engine/core";
-import { generateDoubleElim, generatePagePlayoff, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
+import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
@@ -707,7 +707,13 @@ export class FakeSwissDriver extends FakeLeagueDriver {
  *  fixture whose other slot is filled is awarded through (the product's
  *  bye award at generation, stages.ts:2614+). Two such dead slots on one
  *  fixture are out of this fake's scope and thrown by name. */
-export interface FakeKnockoutOptions { readonly pagePlayoff?: boolean; readonly stepladder?: boolean; readonly doubleElim?: boolean }
+/*  `thirdPlace: true` (W2b review I-1) makes it the knockout_third_place row's knockout ON THE ENGINE's single elim
+ *  (generateSingleElim, thirdPlace), keyed as the product keys it (ext_key, is_final, third_place), so the harness's
+ *  feed graph and nextLineOf resolve on it. As the server does (scoring.ts, X-DW-3), a double walkover on a fixture
+ *  whose winner feeds no next match (the final, the third-place match) is refused 409 DOUBLE_WALKOVER_NO_NEXT_MATCH
+ *  and writes nothing — on every shape this fake plays. An accepted one that feeds a next match seats nobody there (the
+ *  dead-seat cascade, X-DW-2, is the product's and is not mirrored: a scenario that needs it runs on the product). */
+export interface FakeKnockoutOptions { readonly pagePlayoff?: boolean; readonly stepladder?: boolean; readonly doubleElim?: boolean; readonly thirdPlace?: boolean }
 type Slot = "home_entrant_id" | "away_entrant_id";
 export class FakeKnockoutDriver extends FakeLeagueDriver {
   /** fixture id → the next round's fixture and slot its winner fills. */
@@ -717,6 +723,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   readonly pagePlayoff: boolean;
   readonly stepladder: boolean;
   readonly doubleElim: boolean;
+  readonly thirdPlace: boolean;
   /** `<row id>:<slot>`: a slot fed by a bye line's loser, which never fills (doubleElim). */
   readonly deadSlots = new Set<string>();
   /** The engine's fixture id (pp-q1, …) → the fake's row id, in the engine's order. */
@@ -726,6 +733,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     this.pagePlayoff = opts.pagePlayoff === true;
     this.stepladder = !this.pagePlayoff && opts.stepladder === true;
     this.doubleElim = !this.pagePlayoff && !this.stepladder && opts.doubleElim === true;
+    this.thirdPlace = !this.pagePlayoff && !this.stepladder && !this.doubleElim && opts.thirdPlace === true;
   }
   /** The single stage kind this fake plays. */
   get bracketKind(): string { return this.pagePlayoff ? "page_playoff" : this.stepladder ? "stepladder" : this.doubleElim ? "double_elim" : "knockout"; }
@@ -740,7 +748,8 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     let bracket: GeneratedBracket;
     try {
       const opts = { entrants: this.entrants.map((e) => e.id), seeds: new Map(this.entrants.map((e) => [e.id, e.seed ?? Number.MAX_SAFE_INTEGER])) };
-      bracket = this.pagePlayoff ? generatePagePlayoff(opts) : this.doubleElim ? generateDoubleElim(opts) : generateStepladder(opts);
+      const bySeed = [...opts.entrants].sort((a, b) => opts.seeds.get(a)! - opts.seeds.get(b)!);
+      bracket = this.pagePlayoff ? generatePagePlayoff(opts) : this.doubleElim ? generateDoubleElim(opts) : this.thirdPlace ? generateSingleElim({ entrants: bySeed, thirdPlace: true }) : generateStepladder(opts);
     } catch (e) {
       if (!EngineError.is(e)) throw e;
       throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus(e.code), e.code, e.message);
@@ -749,7 +758,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     // (stages.ts bracketToGen `extKey: f.id`; fixtures.ts listDivisionFixtures
     // serves ext_key and is_final) — I2 reads a page playoff's champion off them.
     for (const g of bracket.fixtures) {
-      const tags = { ext_key: g.id, is_final: g.isFinal === true };
+      const tags = { ext_key: g.id, is_final: g.isFinal === true, ...(g.thirdPlace === true ? { third_place: true } : {}) };
       const row = g.award !== undefined
         ? this.seat(g.round + 1, g.award, null, { ...tags, status: "forfeited", outcome: { kind: "award", winner: g.award, loser: null, reason: "bye" } })
         : this.seat(g.round + 1, g.home ?? null, g.away ?? null, tags);
@@ -772,7 +781,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   override start(): Promise<StartOut> {
     return settle(() => {
       this.log("start");
-      if (this.pagePlayoff || this.stepladder || this.doubleElim) return this.startEngineBracket();
+      if (this.pagePlayoff || this.stepladder || this.doubleElim || this.thirdPlace) return this.startEngineBracket();
       const size = 2 ** Math.ceil(Math.log2(Math.max(2, this.entrants.length)));
       let order = [1, 2];
       while (order.length < size) order = order.flatMap((s) => [s, order.length * 2 + 1 - s]);
@@ -843,8 +852,12 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     return { entrant_id: entrantId, status: "withdrawn", policy: pending > 0 ? "walkover" : "none", walkovers, voided: 0, skipped_finalized: 0 };
   }
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
-    const out = await super.postStream(id, events, prefix);
     const f = this.fixtures.find((x) => x.id === id)!;
+    const dw = events.some((e) => e.type === "core.forfeit" && (e.payload as { by?: unknown }).by === "both");
+    if (dw && !this.feeds.has(id)) { // the model fake's and the oracle's rule: the WINNER feeds no next match
+      throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, engineHttpStatus("DOUBLE_WALKOVER_NO_NEXT_MATCH"), "DOUBLE_WALKOVER_NO_NEXT_MATCH", "a double walkover needs a next match");
+    }
+    const out = await super.postStream(id, events, prefix);
     if (f.outcome !== null) this.feed(f); // a held level result has no winner, so it seats nobody (X-BR-1)
     return out;
   }
@@ -864,6 +877,16 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
         if (!this.feeds.has(f.id)) champion = w;
       }
       out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));
+      if (this.thirdPlace) {
+        // The final's winner, then its loser, then the third-place match's winner and loser, then the rest by round.
+        const pair = (row: FakeFixture | undefined): string[] => {
+          const w = (row?.outcome as { winner?: unknown } | null | undefined)?.winner;
+          if (row === undefined || typeof w !== "string") return [];
+          return [w, w === row.home_entrant_id ? row.away_entrant_id! : row.home_entrant_id!];
+        };
+        const top = [...pair(this.fixtures.find((x) => x.is_final === true)), ...pair(this.fixtures.find((x) => x.third_place === true))];
+        return { completed: true, events: [{ type: "stage_completed", finalRanks: [...top, ...out.map((x) => x.id).filter((e) => !top.includes(e))] }] };
+      }
       return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(champion === null ? [] : [champion]), ...out.map((x) => x.id)] }] };
     });
   }

@@ -32,7 +32,7 @@ const defaultLevel = (a: RequestedOutcome): LevelKind | null =>
 const defaultForfeitPlay = (a: RequestedOutcome): PlayResult | null =>
   a.kind === "double_walkover" ? { kind: "none" } : a.kind === "forfeit" ? (a.at === "before_start" ? { kind: "none" } : { kind: "in_progress" }) : null;
 const drive = (over: Partial<BracketDrive> & { asked: RequestedOutcome }): BracketDrive =>
-  ({ fixtureId: "f1", stageKind: "knockout", sport: "football", home: "a", away: "b", levelAs: defaultLevel(over.asked), status: "decided", outcome: null, loser: { line: "none" }, next: { line: "next", target: "f-next" }, forfeitPlay: defaultForfeitPlay(over.asked), ...over });
+  ({ fixtureId: "f1", stageKind: "knockout", sport: "football", home: "a", away: "b", levelAs: defaultLevel(over.asked), status: "decided", outcome: null, loser: { line: "none" }, next: { line: "next", target: "f-next" }, forfeitPlay: defaultForfeitPlay(over.asked), refusal: null, ...over });
 const award = (winner: string, loser: string, reason: string): ObservedOutcome => ({ kind: "award", winner, loser, reason });
 const win = (winner: string, method?: string): ObservedOutcome => ({ kind: "win", winner, ...(method === undefined ? {} : { method }) });
 
@@ -584,7 +584,7 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     process.stderr.write(`I-3 judged: ${judged} W2b forfeit drive(s) over ${cases} knockout case(s)\n`);
   });
 
-  it("through a driver: a W2b scenario on a bracket OWES its forfeits — a product that refuses every walkover leaves none to judge, and the check fails by name (the sweep above is its positive pair)", async () => {
+  it("through a driver: a product that refuses every walkover has each refusal JUDGED against the oracle (review I-1: a refused bare forfeit is a drive, never dropped) — the check fails by name, every walkover counted (the sweep above is its positive pair)", async () => {
     class RefusesForfeits extends FakeKnockoutDriver {
       override forfeit(id: string): Promise<never> { return Promise.reject(new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, "FORFEIT_REASON_WRONG_PHASE", "refused on purpose")); }
     }
@@ -594,7 +594,25 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     const out = await SCENARIOS["WO-PRE"].run({ driver: new RefusesForfeits(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
     const check = out.assertions.find((c) => c.id === "life-reference-bracket-finish")!;
     expect(check.verdict).toBe("fail");
-    expect(check.evidence.join("\n")).toMatch(/forfeits and double walkovers: 0 of 0 judged/);
+    const refused = check.evidence.filter((e) => /refusal: the product refused it 409 FORFEIT_REASON_WRONG_PHASE, the oracle accepts it/.test(e));
+    expect(refused.length, check.evidence.join("\n")).toBeGreaterThan(0);
+    // Every walkover the scenario asked for is among them: one a round of the knockout of 8 (three rounds).
+    expect(refused.length).toBe(3);
+  });
+
+  it("judgeDrive (review I-1): a refused drive is judged against the oracle's refusal — the same code passes, another code or a refusal the oracle does not make fails by name, and an accepted write the oracle refuses still fails", () => {
+    const dwFinal = { asked: { kind: "double_walkover" } as const, next: { line: "none" } as const, status: "scheduled", outcome: null };
+    const agree = judgeDrive(drive({ ...dwFinal, refusal: { status: 409, code: "DOUBLE_WALKOVER_NO_NEXT_MATCH" } }));
+    expect(agree).toMatchObject({ judged: true, ok: true });
+    const other = judgeDrive(drive({ ...dwFinal, refusal: { status: 422, code: "FORFEIT_REASON_WRONG_PHASE" } }));
+    expect(other).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/refusal: the oracle refuses action 0 with DOUBLE_WALKOVER_NO_NEXT_MATCH, the product 422 FORFEIT_REASON_WRONG_PHASE/) });
+    const uncoded = judgeDrive(drive({ ...dwFinal, refusal: { status: 500, code: null } }));
+    expect(uncoded).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/the product 500 \(no code\)/) });
+    // A walkover the oracle accepts, refused by the product, the fixture left scheduled.
+    const wo = judgeDrive(drive({ asked: fw("away", "walkover", "before_start"), status: "scheduled", outcome: null, refusal: { status: 409, code: "FORFEIT_REASON_WRONG_PHASE" } }));
+    expect(wo).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/refusal: the product refused it 409 FORFEIT_REASON_WRONG_PHASE, the oracle accepts it/) });
+    // Accepted where the oracle refuses: the existing line, unchanged.
+    expect(judgeDrive(drive({ ...dwFinal, status: "forfeited", outcome: { kind: "double_walkover" } }))).toMatchObject({ judged: true, ok: false, note: expect.stringMatching(/the oracle refuses action 0 with DOUBLE_WALKOVER_NO_NEXT_MATCH, which the harness drove as legal/) });
   });
 
   it("through a driver: a double walkover decided on the page-playoff fake carries the ENGINE's next line — pp-elim feeds pp-q2 and agrees; pp-final feeds nothing, so a product that accepted it there reds by X-DW-3", async () => {
@@ -613,6 +631,8 @@ describe("I-3: a W2b forfeit and a double walkover reach the oracle as its forfe
     expect(elim.forfeitPlay).toEqual({ kind: "none" });
     expect(judgeDrive(elim)).toMatchObject({ judged: true, ok: true });
     // The final, seated by hand so it can be driven: a product that accepts a double walkover there is wrong (X-DW-3).
+    // The fake refuses one there, as the server does — so the wrong product is this fake with the rule switched off.
+    driver.feeds.set(row("pp-final").id, { to: "nowhere", slot: "home_entrant_id" });
     const final = row("pp-final");
     const [h, a] = setup.entrants.slice(0, 2).map((e) => e.id);
     Object.assign(final, { home_entrant_id: h, away_entrant_id: a });

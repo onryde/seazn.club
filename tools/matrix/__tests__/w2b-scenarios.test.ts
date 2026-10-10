@@ -29,7 +29,7 @@ import { GeneratorUnsupported, OutcomeUnreachable, type StreamEvent } from "../l
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
 import { AWARD_POLICY, DLS_ON, bracketRootRow, minOversRule, knockoutRootRow, rootKindRows, tableRootRow, thirdPlaceRows, w2bApplies, w2bCells } from "../lib/w2b-cells.ts";
-import { FakeLeagueDriver } from "./fake-driver.ts";
+import { FakeKnockoutDriver, FakeLeagueDriver } from "./fake-driver.ts";
 
 const variantFor = offlineBuilderDefault;
 const rootKind = (row: RowKey): string => stagesForRow(row)[0]!.kind;
@@ -773,6 +773,54 @@ describe("each table scenario, run on the league fake", () => {
       expect(own.size).toBe(r.pass.length + r.abstain.length);
     });
   }
+
+  it("DW-ALL on knockout_third_place (review I-1): nowhere to place an accepted double walkover, and the refusals at the final and the third-place match are JUDGED by the bracket-finish oracle — the run passes on a correct product, every sport (the row's 11 cells)", async () => {
+    let judged = 0;
+    const cells = w2bCells("DW-ALL").filter((c) => c.row === "knockout_third_place");
+    expect(cells.map((c) => c.sport).sort()).toEqual([...SPORT_KEYS].sort());
+    for (const { sport } of cells) {
+      const variant = variantFor(sport);
+      const spec: CaseSpec = { caseId: `knockout_third_place|${sport}|${variant}|DW-ALL`, row: "knockout_third_place", sport, variant, scenario: "DW-ALL", canary: false };
+      const out = await SCENARIOS["DW-ALL"].run({ driver: new FakeKnockoutDriver({ thirdPlace: true }), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+      const by = new Map(out.assertions.map((c) => [c.id, c]));
+      const finish = by.get("life-reference-bracket-finish")!;
+      expect(`${finish.verdict}: ${finish.reason}`, sport).toMatch(/^pass/);
+      // The two refusals (the final, the third-place match) are among the judged forfeits — never "0 of 0".
+      const m = /forfeits and double walkovers: (\d+) of (\d+) judged/.exec(finish.reason);
+      expect(m, sport).not.toBeNull();
+      expect(Number(m![1]), sport).toBe(2);
+      expect(Number(m![2]), sport).toBe(2);
+      const refused = by.get("w2b-double-walkover-final-refused")!;
+      // Three items a probe (refused, by the code, the fixture unmoved): the final's and the third-place match's.
+      expect(`${refused.verdict} ${refused.checked}: ${refused.reason} ${refused.evidence.join(" | ")}`, sport).toMatch(/^pass 6:/);
+      expect(by.get("w2b-double-walkover-recorded")?.verdict, sport).toBe("abstain");
+      expect(by.get("w2b-double-walkover-recorded")?.reason, sport).toBe(NO_PLACEMENT);
+      expect(by.get("life-built-as-posted")?.verdict, sport).toBe("pass");
+      judged += Number(m![1]);
+    }
+    expect(judged).toBe(2 * SPORT_KEYS.length);
+  });
+
+  it("DW-ALL on knockout_third_place: a product that ACCEPTS the double walkover at the final reds the bracket-finish oracle by name (the run above is its positive pair)", async () => {
+    class AcceptsAtTheEnd extends FakeKnockoutDriver {
+      override async postStream(id: string, events: readonly StreamEvent[], prefix = "") {
+        const dw = events.some((e) => e.type === "core.forfeit" && (e.payload as { by?: unknown }).by === "both");
+        const f = this.fixtures.find((x) => x.id === id)!;
+        if (!dw || f.is_final !== true) return super.postStream(id, events, prefix);
+        // The defect: the final recorded as a double walkover — nobody wins the title.
+        Object.assign(f, { status: "forfeited", outcome: { kind: "double_walkover" } });
+        f.events.push(...events);
+        return [{ seq: 1, event_id: `${id}-dw`, status: "forfeited", outcome: { kind: "double_walkover" } }];
+      }
+    }
+    const sport = "generic";
+    const variant = variantFor(sport);
+    const spec: CaseSpec = { caseId: `knockout_third_place|${sport}|${variant}|DW-ALL`, row: "knockout_third_place", sport, variant, scenario: "DW-ALL", canary: false };
+    const out = await SCENARIOS["DW-ALL"].run({ driver: new AcceptsAtTheEnd({ thirdPlace: true }), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+    const finish = out.assertions.find((c) => c.id === "life-reference-bracket-finish")!;
+    expect(finish.verdict).toBe("fail");
+    expect(finish.evidence.join("\n")).toMatch(/the oracle refuses action 0 with DOUBLE_WALKOVER_NO_NEXT_MATCH, which the harness drove as legal/);
+  });
 
   it("WO-PRE (I-2): a product whose table gives a walkover's winner 0 points FAILS the walkover credit by name — the family's 'win' is the cfg's win points (the generic run above is its positive pair)", async () => {
     class ZeroPoints extends FakeLeagueDriver {

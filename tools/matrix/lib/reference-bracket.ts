@@ -78,6 +78,10 @@ export interface BracketDrive {
   /** W2b: the play a forfeit (or a double walkover) was recorded on, read from the stream the harness posted
    *  (forfeitPlayOf); null for a drive that posted no forfeit. */
   readonly forfeitPlay: PlayResult | null;
+  /** W2b (review I-1): the product's refusal of the drive's one bare write (a forfeit before START, which writes
+   *  nothing when refused) — judged against the oracle's `refused`, never dropped; null when the product accepted it.
+   *  `status` and `outcome` are then the fixture as the refusal left it. */
+  readonly refusal: { readonly status: number; readonly code: string | null } | null;
 }
 
 export type Judgement =
@@ -277,7 +281,16 @@ export function judgeDrive(d: BracketDrive): Judgement {
   }
   const where = `${d.fixtureId} (${d.stageKind} x ${d.sport}, asked ${d.asked.kind})`;
   const bad: string[] = [];
-  for (const r of expect.refused) bad.push(`the oracle refuses action ${r.index} with ${r.code}, which the harness drove as legal`);
+  // A refusal the product answered is judged against the oracle's: the same write refused with the same code (the drive
+  // posts ONE bare write, so the oracle refuses exactly one), and one the oracle accepts is the product's defect.
+  const refused = d.refusal;
+  if (refused === null) {
+    for (const r of expect.refused) bad.push(`the oracle refuses action ${r.index} with ${r.code}, which the harness drove as legal`);
+  } else {
+    const said = `${refused.status} ${refused.code ?? "(no code)"}`;
+    if (expect.refused.length === 0) bad.push(`refusal: the product refused it ${said}, the oracle accepts it`);
+    else if (expect.refused.length > 1 || expect.refused[0].code !== refused.code) bad.push(`refusal: the oracle refuses ${expect.refused.map((r) => `action ${r.index} with ${r.code}`).join(", ")}, the product ${said}`);
+  }
   if (d.status !== expect.status) bad.push(`status: oracle ${expect.status}, product ${d.status}`);
   const won = d.outcome !== null && (d.outcome.kind === "win" || d.outcome.kind === "award") ? d.outcome : null;
   if (expect.advances === null) {

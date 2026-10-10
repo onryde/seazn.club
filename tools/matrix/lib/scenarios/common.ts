@@ -561,9 +561,38 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   if (forfeit !== null && fresh.at(-1)?.type !== "core.forfeit") throw new Error(`scenario: ${f.id} — the ${outcomeLabel(asked)} stream ends with ${fresh.at(-1)?.type ?? "nothing"}, not its core.forfeit`);
   const play = fresh.slice(0, -1);
   const now = forfeit === null ? fresh : forfeitPosting(state.status, forfeit, play);
-  const posted = forfeit !== null
-    ? await ctx.driver.forfeit(f.id, forfeit.by, forfeit.reason, `${ctx.tag}:${f.id}`, play)
-    : await ctx.driver.postStream(f.id, now, `${ctx.tag}:${f.id}`);
+  /** A bracket drive, judged by the bracket-finish oracle (referenceBracketFinish). Its loser and next lines are read
+   *  AFTER the post (the product seats them as it decides), from the stage's own rows. */
+  const bracketDrive = async (o: { status: string | null; outcome: ObservedOutcome | null; live: readonly StreamEvent[] | null; refusal: BracketDrive["refusal"] }): Promise<void> => {
+    const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((r) => r.stage_id === stage.id);
+    const row = rows.find((r) => r.id === f.id);
+    const missing = { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } as const;
+    rec.bracketDrives.push({
+      fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked,
+      levelAs: levelKindOf(ctx.spec.sport, cfg, home, away, asked, generated),
+      status: o.status, outcome: o.outcome,
+      loser: row === undefined ? missing : loserSeatOf(stage.kind, stage.config, row, rows),
+      // W2b (I-3): the next-match line (X-DW-3) and the play the forfeit was recorded on, from what the product holds.
+      next: row === undefined ? missing : nextLineOf(stage.kind, stage.config, row, rows),
+      forfeitPlay: forfeit === null || o.live === null ? null : forfeitPlayOf(ctx.spec.sport, cfg, home, away, o.live),
+      refusal: o.refusal,
+    });
+  };
+  let posted: PostedEvent[];
+  try {
+    posted = forfeit !== null
+      ? await ctx.driver.forfeit(f.id, forfeit.by, forfeit.reason, `${ctx.tag}:${f.id}`, play)
+      : await ctx.driver.postStream(f.id, now, `${ctx.tag}:${f.id}`);
+  } catch (e) {
+    // W2b (review I-1): a refused BARE forfeit (one event — a walkover or a double walkover before START — so the
+    // refusal wrote nothing) is still a bracket drive: its refusal is judged against the oracle's (X-DW-3's refusal at
+    // a fixture with no next match among them), the fixture as the product holds it after. Then it propagates.
+    if (forfeit !== null && now.length === 1 && e instanceof RefusedCall && forbidsLevelResult(stage.kind)) {
+      const after = await ctx.driver.fixtureState(f.id);
+      await bracketDrive({ status: after.status, outcome: toObservedOutcome(after.outcome), live: liveEvents([...prior, ...now]), refusal: { status: e.status, code: e.code } });
+    }
+    throw e;
+  }
   // W1c Task 7: the pad path answers each event with the ledger row the
   // product actually stored. Fold those rows, so a browser run is judged on
   // what the product holds and never on what the harness meant to send. A
@@ -583,21 +612,8 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // organiser through the API (X-ST-2); a tie-break is the scorer's, recorded on the pad.
   if (asked.kind === "settle") rec.settlesPosted++;
   if (asked.kind === "tiebreak") rec.tiebreaksPosted++;
-  if (forbidsLevelResult(stage.kind)) {
-    // The loser line is read AFTER the post (the product seats it as it decides), from the stage's own rows.
-    const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((r) => r.stage_id === stage.id);
-    const row = rows.find((r) => r.id === f.id);
-    rec.bracketDrives.push({
-      fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked,
-      levelAs: levelKindOf(ctx.spec.sport, cfg, home, away, asked, generated),
-      status: posted.at(-1)?.status ?? null, outcome: productOutcome,
-      loser: row === undefined ? { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } : loserSeatOf(stage.kind, stage.config, row, rows),
-      // W2b (I-3): the next-match line (X-DW-3) and the play the forfeit was recorded on, from what the product holds.
-      next: row === undefined ? { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } : nextLineOf(stage.kind, stage.config, row, rows),
-      // A driver that answered nothing leaves no status, and judgeDrive judges no such drive: no play to read.
-      forfeitPlay: forfeit === null || posted.length === 0 ? null : forfeitPlayOf(ctx.spec.sport, cfg, home, away, liveEvents(whole)),
-    });
-  }
+  // A driver that answered nothing leaves no status, and judgeDrive judges no such drive: no play to read.
+  if (forbidsLevelResult(stage.kind)) await bracketDrive({ status: posted.at(-1)?.status ?? null, outcome: productOutcome, live: posted.length === 0 ? null : liveEvents(whole), refusal: null });
   const foreign = state.last_seq - prior.length;
   if (foreign !== 0) {
     rec.parity.push({ fixtureId: f.id, local: null, product: productOutcome, foreign, finishedBefore: null, request: null });
