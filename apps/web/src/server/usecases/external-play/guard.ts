@@ -40,6 +40,16 @@ export type BridgeRow = {
   needs_reason: NeedsReason | null;
   started_at: Date | null;
   finished_at: Date | null;
+  /** V435 — T10's move ledger: every move Lichess ACCEPTED, as UCI. */
+  moves_uci: string[];
+  move_count: number;
+  last_move_at: Date | null;
+  white_ms: number | null;
+  black_ms: number | null;
+  clock_increment_s: number | null;
+  draw_offer_by: "white" | "black" | null;
+  white_draw_offer_ply: number | null;
+  black_draw_offer_ply: number | null;
 };
 
 export type OnlinePlayFixture = {
@@ -80,6 +90,15 @@ type RawBridge = {
   needs_reason: NeedsReason | null;
   started_at: string | null;
   finished_at: string | null;
+  moves_uci: string[];
+  move_count: number;
+  last_move_at: string | null;
+  white_ms: number | null;
+  black_ms: number | null;
+  clock_increment_s: number | null;
+  draw_offer_by: "white" | "black" | null;
+  white_draw_offer_ply: number | null;
+  black_draw_offer_ply: number | null;
 };
 
 function reviveBridge(raw: RawBridge): BridgeRow {
@@ -97,6 +116,17 @@ function reviveBridge(raw: RawBridge): BridgeRow {
     needs_reason: raw.needs_reason,
     started_at: raw.started_at === null ? null : new Date(raw.started_at),
     finished_at: raw.finished_at === null ? null : new Date(raw.finished_at),
+    // jsonb carries the array and the integers natively; only the timestamp
+    // needs reviving.
+    moves_uci: raw.moves_uci,
+    move_count: raw.move_count,
+    last_move_at: raw.last_move_at === null ? null : new Date(raw.last_move_at),
+    white_ms: raw.white_ms,
+    black_ms: raw.black_ms,
+    clock_increment_s: raw.clock_increment_s,
+    draw_offer_by: raw.draw_offer_by,
+    white_draw_offer_ply: raw.white_draw_offer_ply,
+    black_draw_offer_ply: raw.black_draw_offer_ply,
   };
 }
 
