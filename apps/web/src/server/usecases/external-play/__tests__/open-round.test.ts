@@ -646,12 +646,20 @@ describe.skipIf(!HAS_DB)("openRound — the round changing underneath (assumptio
     expect(mail.sent).toHaveLength(0);
   });
 
-  it("a seat re-paired after the seats were read, before the lock ⇒ 409 ROUND_CHANGED, nobody mailed", async () => {
+  // Each clause of the locked re-check, on its own: the board changes after
+  // its seats were read and before the lock.
+  const changes: [string, (fixtureId: string, spare: string) => Promise<unknown>][] = [
+    ["home seat re-paired", (f, e) => sql`update fixtures set home_entrant_id = ${e} where id = ${f}`],
+    ["away seat re-paired", (f, e) => sql`update fixtures set away_entrant_id = ${e} where id = ${f}`],
+    ["moved to another round", (f) => sql`update fixtures set round_no = 99 where id = ${f}`],
+    ["settled (withdrawal)", (f) => sql`update fixtures set status = 'abandoned' where id = ${f}`],
+    ["deleted", (f) => sql`delete from fixtures where id = ${f}`],
+  ];
+  it.each(changes)("a board %s mid-call ⇒ 409 ROUND_CHANGED, nobody mailed", async (_name, change) => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1, spares: 1 });
-    const swapIn = r.spares[0]!;
     const fixtureId = r.boards[0]!.fixtureId;
     race.afterSeats = async () => {
-      await sql`update fixtures set away_entrant_id = ${swapIn.away.entrantId} where id = ${fixtureId}`;
+      await change(fixtureId, r.spares[0]!.away.entrantId);
     };
     expect(await refusal(open(r))).toEqual({ status: 409, code: "ROUND_CHANGED" });
     expect(await stampRows(r.stageId)).toHaveLength(0);

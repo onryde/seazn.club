@@ -190,18 +190,17 @@ export async function openRound(
     // be re-paired, and two opens of one round cannot interleave.
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + st.divisionId}))`;
     const ids = boards.map((b) => b.f.fixtureId);
-    const fresh = await tx<{ id: string; home: string | null; away: string | null; status: string; stageId: string; roundNo: number }[]>`
-      select id, home_entrant_id as home, away_entrant_id as away, status,
-             stage_id as "stageId", round_no as "roundNo"
+    const fresh = await tx<{ id: string; home: string | null; away: string | null; status: string; roundNo: number }[]>`
+      select id, home_entrant_id as home, away_entrant_id as away, status, round_no as "roundNo"
         from fixtures where id in ${tx(ids)}`;
     const byId = new Map(fresh.map((r) => [r.id, r]));
     for (const b of boards) {
       const r = byId.get(b.f.fixtureId);
+      // (A fixture never changes stage, so stage_id is not re-checked.)
       if (
         !r ||
         r.home !== b.f.homeEntrantId ||
         r.away !== b.f.awayEntrantId ||
-        r.stageId !== a.stageId ||
         r.roundNo !== a.roundNo ||
         !isPlayableFixtureStatus(r.status)
       ) {
