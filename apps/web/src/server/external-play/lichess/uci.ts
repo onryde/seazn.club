@@ -12,12 +12,14 @@ import { HttpError } from "@/lib/errors";
 
 export const UCI_RE = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
 
+/** The one refusal for a move string we will not forward. The message never
+ *  echoes the rejected value — a client string reflected into an error is a
+ *  reflection sink. */
+export const invalidUci = () => new HttpError(400, "That move is not a valid move.", "INVALID_UCI");
+
 /** Returns the value when it is well-formed UCI; throws 400 INVALID_UCI
- *  otherwise. The message never echoes the rejected value — a client string
- *  reflected into an error is a reflection sink. */
+ *  otherwise. */
 export function assertUci(value: string): string {
-  if (!UCI_RE.test(value)) {
-    throw new HttpError(400, "That move is not a valid move.", "INVALID_UCI");
-  }
+  if (!UCI_RE.test(value)) throw invalidUci();
   return value;
 }

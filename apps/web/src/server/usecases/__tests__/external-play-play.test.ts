@@ -723,6 +723,8 @@ function twinTabs(
   winner: string,
   loser: string,
   loserAnswer: BoardCall = { ok: false, code: "not_your_turn_or_over", raw: "Not your turn, or game already over" },
+  /** Moves already on file when both tabs submit. */
+  prefix: readonly string[] = [],
 ) {
   let arrived = 0;
   let release!: () => void;
@@ -738,10 +740,10 @@ function twinTabs(
     }
     expect(c.uci).toBe(loser);
     for (let i = 0; i < 200; i++) {
-      if ((await ledger(g.fixtureId)).move_count === 1) break;
+      if ((await ledger(g.fixtureId)).move_count === prefix.length + 1) break;
       await new Promise((r) => setTimeout(r, 10));
     }
-    expect((await ledger(g.fixtureId)).moves_uci, "premise: the winner is recorded first").toEqual([winner]);
+    expect((await ledger(g.fixtureId)).moves_uci, "premise: the winner is recorded first").toEqual([...prefix, winner]);
     refused = true;
     return loserAnswer;
   });
@@ -1131,6 +1133,162 @@ describe.runIf(HAS_DB)("act — the broadcast", () => {
         expect.objectContaining({ fixtureId: g.fixtureId, replayed: 0, moveCount: 1 }),
         expect.stringMatching(/does not replay/),
       );
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-canonical UCI (review I1). lila plays two well-formed strings chess.js
+// cannot replay — lila source, not measured; live measurement owed (T17):
+//   scalachess @ 2ab0a403 Position.scala:401 — a standard castle takes BOTH
+//   its rook's square and the king's target as the king's destination
+//   (`destInput = List(rook, kingTo)`), so `e1h1` is O-O;
+//   variant/Variant.scala:112-117 `findMove` — a pawn move to the last rank
+//   with no suffix is played as a queen.
+// Recorded verbatim, either one froze every later broadcast (the reviewer's
+// probe: 9 moves recorded, 6 broadcast). The castle is rewritten to the
+// king's own move before submit; the suffix-less promotion is refused.
+
+/** 1.e4 e5 2.Nf3 Nc6 3.Bc4 Bc5 4.d3 d6 5.Nc3 Nf6 6.Be3 Be6 7.Qd2 Qd7 — both
+ *  sides may castle on either wing; White to move. */
+const CASTLE_READY = [
+  "e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5", "d2d3", "d7d6", "b1c3", "g8f6", "c1e3", "c8e6", "d1d2", "d8d7",
+];
+/** 1.a4 b5 2.axb5 a6 3.bxa6 Bb7 4.axb7 Nc6 — White's pawn on b7 may promote
+ *  on b8 or capture on a8; White to move. */
+const PROMO_READY = ["a2a4", "b7b5", "a4b5", "a7a6", "b5a6", "c8b7", "a6b7", "b8c6"];
+
+// FENs written out as literals (from the SAN castles O-O / O-O-O — never
+// through our UCI path).
+const CASTLES = [
+  { who: "white", raw: "e1h1", canonical: "e1g1", before: [], reply: "a7a6",
+    fen: "r3k2r/pppq1ppp/2npbn2/2b1p3/2B1P3/2NPBN2/PPPQ1PPP/R4RK1 b kq - 7 8" },
+  { who: "white", raw: "e1a1", canonical: "e1c1", before: [], reply: "a7a6",
+    fen: "r3k2r/pppq1ppp/2npbn2/2b1p3/2B1P3/2NPBN2/PPPQ1PPP/2KR3R b kq - 7 8" },
+  { who: "black", raw: "e8h8", canonical: "e8g8", before: ["h2h3"], reply: "a2a3",
+    fen: "r4rk1/pppq1ppp/2npbn2/2b1p3/2B1P3/2NPBN1P/PPPQ1PP1/R3K2R w KQ - 1 9" },
+  { who: "black", raw: "e8a8", canonical: "e8c8", before: ["h2h3"], reply: "a2a3",
+    fen: "2kr3r/pppq1ppp/2npbn2/2b1p3/2B1P3/2NPBN1P/PPPQ1PP1/R3K2R w KQ - 1 9" },
+] as const;
+
+describe.runIf(HAS_DB)("act — non-canonical UCI lila would play (review I1)", () => {
+  it("a castle sent KING-TO-ROOK is submitted, recorded and broadcast as the king's move — both colours, both wings; the king's-target form is the same move; the game goes on", async () => {
+    let checked = 0;
+    for (const c of CASTLES) {
+      for (const form of [c.raw, c.canonical]) {
+        const label = `${c.who} ${form}`;
+        const g = await readyGame();
+        const { calls, sent, deps } = boardStub();
+        await playOut(g, [...CASTLE_READY, ...c.before], deps);
+        expect(await mv(g, c.who, form, deps), label).toEqual(APPLIED);
+        expect(calls.at(-1)?.uci, `${label}: Lichess is sent the king's own move`).toBe(c.canonical);
+        expect(sent.at(-1)?.body, label).toMatchObject({ fen: c.fen, lastMove: c.canonical });
+        // The probe's failure was every LATER move: the reply still plays and broadcasts.
+        expect(await mv(g, c.who === "white" ? "black" : "white", c.reply, deps), `${label}: the reply`).toEqual(APPLIED);
+        const l = await ledger(g.fixtureId);
+        expect(l.moves_uci, label).toEqual([...CASTLE_READY, ...c.before, c.canonical, c.reply]);
+        expect(sent.length, `${label}: one broadcast per recorded move`).toBe(l.move_count);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 colours × 2 wings × 2 forms").toBe(8);
+  });
+
+  it("a king-to-rook string is sent AS IT CAME when castling is not legal — at the start, and after the king walked and came back", async () => {
+    let checked = 0;
+    for (const [label, line] of [
+      ["start position", []],
+      ["castling rights lost (Kf1 a6 Ke1 a5)", [...CASTLE_READY, "e1f1", "a7a6", "f1e1", "a6a5"]],
+    ] as const) {
+      const g = await readyGame();
+      const { calls, sent, deps } = boardStub((c) =>
+        c.uci === "e1h1" ? { ok: false, code: "unavailable", raw: "400 Piece on e1 cannot move to h1" } : { ok: true },
+      );
+      await playOut(g, [...line], deps);
+      expect(await mv(g, "white", "e1h1", deps), label).toEqual(reconcile("unavailable"));
+      expect(calls.at(-1)?.uci, `${label}: not rewritten — Lichess judges it`).toBe("e1h1");
+      expect((await ledger(g.fixtureId)).moves_uci, label).toEqual([...line]);
+      expect(sent.length, label).toBe(line.length);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a promotion with NO suffix is refused 400 INVALID_UCI and sent nowhere — lila would pick a queen; with a suffix it plays", async () => {
+    // Single colour: the rank is the side-to-move's own last rank by
+    // chess.js's legal list, not a literal in our code.
+    const g = await readyGame();
+    const { calls, sent, deps } = boardStub();
+    await playOut(g, PROMO_READY, deps);
+    const before = await ledger(g.fixtureId);
+    let refused = 0;
+    for (const raw of ["b7b8", "b7a8"]) {
+      await expect(mv(g, "white", raw, deps), raw).rejects.toMatchObject({ status: 400, code: "INVALID_UCI" });
+      refused++;
+    }
+    expect(refused, "anti-vacuity: push and capture").toBe(2);
+    expect(calls.length, "nothing reached Lichess").toBe(PROMO_READY.length);
+    expect(sent.length, "nothing broadcast").toBe(PROMO_READY.length);
+    expect(await ledger(g.fixtureId)).toEqual(before);
+    expect(await mv(g, "white", "b7a8n", deps), "the under-promotion, suffixed").toEqual(APPLIED);
+    expect(calls.at(-1)?.uci).toBe("b7a8n");
+    expect(sent.at(-1)?.body).toMatchObject({ fen: "N2qkbnr/2pppppp/2n5/8/8/8/1PPPPPPP/RNBQKBNR b KQk - 0 5", lastMove: "b7a8n" });
+  });
+
+  it("a ROOK reaching the last rank with no suffix is not a promotion — it plays", async () => {
+    const g = await readyGame();
+    const { calls, sent, deps } = boardStub();
+    await playOut(g, PROMO_READY, deps);
+    expect(await mv(g, "white", "a1a8", deps)).toEqual(APPLIED);
+    expect(calls.at(-1)?.uci).toBe("a1a8");
+    expect(sent.at(-1)?.body).toMatchObject({ fen: "R2qkbnr/1Ppppppp/2n5/8/8/8/1PPPPPPP/1NBQKBNR b Kk - 0 5" });
+  });
+
+  it("a twin tab RE-SENDING the castle in either form is absorbed — canonical against canonical; the next real move still plays", async () => {
+    let checked = 0;
+    for (const [first, retap] of [["e1h1", "e1h1"], ["e1h1", "e1g1"], ["e1g1", "e1h1"]] as const) {
+      const label = `${first} then ${retap}`;
+      const g = await readyGame();
+      const { calls, sent, deps } = boardStub();
+      await playOut(g, CASTLE_READY, deps);
+      expect(await mv(g, "white", first, deps), label).toEqual(APPLIED);
+      const n = calls.length;
+      expect(await mv(g, "white", retap, deps), label).toEqual(ABSORBED);
+      expect(calls.length, `${label}: the retap never reached Lichess`).toBe(n);
+      expect(await mv(g, "black", "a7a6", deps), `${label}: the reply`).toEqual(APPLIED);
+      const l = await ledger(g.fixtureId);
+      expect(l.moves_uci, label).toEqual([...CASTLE_READY, "e1g1", "a7a6"]);
+      expect(sent.length, `${label}: one broadcast per recorded move`).toBe(l.move_count);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("twin tabs, one sending e1g1 and one e1h1: Lichess refuses the second after the first is recorded ⇒ absorbed, not reconciled", async () => {
+    const g = await readyGame();
+    const setup = boardStub();
+    await playOut(g, CASTLE_READY, setup.deps);
+    const { deps, refusedTab } = twinTabs(g, "e1g1", "e1g1", undefined, CASTLE_READY);
+    const results = await Promise.all([mv(g, "white", "e1g1", deps), mv(g, "white", "e1h1", deps)]);
+    expect(refusedTab(), "premise: the M6 path ran").toBe(true);
+    expect(results.sort((a, b) => Number(b.ok && b.applied) - Number(a.ok && a.applied))).toEqual([APPLIED, ABSORBED]);
+    expect((await ledger(g.fixtureId)).moves_uci).toEqual([...CASTLE_READY, "e1g1"]);
+  });
+
+  it("on a ledger chess.js cannot follow, nothing is rewritten — Lichess judges the string as sent", async () => {
+    // This stub "Lichess" accepts h2h5, which chess.js rejects, so
+    // our replay stops at ply 14 — a position where White COULD castle.
+    const g = await readyGame();
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    try {
+      const { calls, deps } = boardStub();
+      await playOut(g, CASTLE_READY, deps);
+      await mv(g, "white", "h2h5", deps);
+      await mv(g, "black", "a7a6", deps);
+      await mv(g, "white", "e1h1", deps);
+      expect(calls.at(-1)?.uci, "not judged against a position chess.js only half-knows").toBe("e1h1");
     } finally {
       errors.mockRestore();
     }
@@ -1695,5 +1853,194 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
       checked++;
     }
     expect(checked).toBe(23);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The property for RAW move strings (review I1). The interleavings property
+// above draws its moves from chess.js's own legal list and judges them with
+// chess.js, so it cannot see a string lila plays that chess.js does not
+// know. Here the strings are raw — the king-to-rook castles, promotions with
+// and without a suffix, and arbitrary well-formed UCI — and "Lichess" is a
+// model of scalachess's own move lookup (lila source, not measured — T17):
+//   variant/Variant.scala:116-117 `findMove`: a legal move whose destination
+//   is `to` and whose promotion is the suffix given, or a queen when none is
+//   given and the move promotes;
+//   Position.scala:401: a standard castle's destinations are the rook's
+//   square AND the king's target.
+// lila records the move it played in its own (king's-target) notation.
+
+type RawOp = { k: "raw"; uci: string } | { k: "legal"; pick: number } | { k: "retap" };
+
+/** scalachess's `findMove`, over chess.js's legal list: the move lila plays
+ *  for `raw`, or null when it refuses. */
+function lilaFinds(board: Chess, raw: string): { lan: string; promotes: boolean; castleToRook: boolean } | null {
+  const to = raw.slice(2, 4);
+  const suffix = raw.length > 4 ? raw.slice(4) : null;
+  for (const m of board.moves({ square: raw.slice(0, 2) as never, verbose: true })) {
+    const corner = m.isKingsideCastle() ? `h${m.from[1]}` : m.isQueensideCastle() ? `a${m.from[1]}` : null;
+    const dests = corner === null ? [m.to] : [m.to, corner];
+    const wanted = suffix ?? (m.promotion !== undefined ? "q" : null);
+    if (dests.includes(to) && (m.promotion ?? null) === wanted) {
+      return { lan: m.lan, promotes: m.promotion !== undefined, castleToRook: corner === to };
+    }
+  }
+  return null;
+}
+
+const FILES = "abcdefgh";
+const sqArb = fc.integer({ min: 0, max: 63 }).map((i) => `${FILES[i % 8]}${Math.floor(i / 8) + 1}`);
+const suffixArb = fc.option(fc.constantFrom("q", "r", "b", "n"), { nil: "" });
+const rawArb: fc.Arbitrary<string> = fc.oneof(
+  { weight: 4, arbitrary: fc.constantFrom("e1h1", "e1a1", "e8h8", "e8a8") },
+  { weight: 2, arbitrary: fc.constantFrom("e1g1", "e1c1", "e8g8", "e8c8") },
+  {
+    weight: 3,
+    arbitrary: fc
+      .tuple(fc.integer({ min: 0, max: 7 }), fc.integer({ min: -1, max: 1 }), fc.boolean(), suffixArb)
+      .filter(([f, d]) => f + d >= 0 && f + d <= 7)
+      .map(([f, d, white, s]) => `${FILES[f]}${white ? "7" : "2"}${FILES[f + d]}${white ? "8" : "1"}${s}`),
+  },
+  { weight: 3, arbitrary: fc.tuple(sqArb, sqArb, suffixArb).map(([a, b, s]) => `${a}${b}${s}`) },
+);
+const rawOpArb: fc.Arbitrary<RawOp> = fc.oneof(
+  { weight: 6, arbitrary: rawArb.map((uci) => ({ k: "raw" as const, uci })) },
+  { weight: 4, arbitrary: fc.record({ k: fc.constant("legal" as const), pick: fc.nat(80) }) },
+  { weight: 2, arbitrary: fc.constant({ k: "retap" as const }) },
+);
+const raw = (uci: string): RawOp => ({ k: "raw", uci });
+const RAW_PREFIXES: RawOp[][] = [
+  [],
+  [...CASTLE_READY.map(raw), raw("e1h1")],
+  [...CASTLE_READY.map(raw), raw("e1a1")],
+  [...CASTLE_READY.map(raw), raw("h2h3"), raw("e8h8")],
+  [...CASTLE_READY.map(raw), raw("h2h3"), raw("e8a8")],
+  [...CASTLE_READY.map(raw), raw("e1h1"), { k: "retap" }],
+  [...PROMO_READY.map(raw), raw("b7b8")],
+  [...PROMO_READY.map(raw), raw("b7a8n")],
+];
+
+describe.runIf(HAS_DB)("act — property: raw move strings against scalachess's move lookup", () => {
+  const RUNS_PER_PREFIX = 3;
+  const totals: Record<string, number> = {};
+  const bump = (k: string, n = 1) => (totals[k] = (totals[k] ?? 0) + n);
+
+  it("whatever string lila would play is recorded in lila's notation, replays, and is broadcast once; a suffix-less promotion is refused unsent; a retap in any form is absorbed", { timeout: 600_000 }, async () => {
+    let runs = 0;
+    const tailArb = fc.array(rawOpArb, { minLength: 0, maxLength: 16, size: "max" });
+    for (const prefix of RAW_PREFIXES) await fc.assert(
+      fc.asyncProperty(tailArb.map((tail) => [...prefix, ...tail]), async (ops) => {
+        runs++;
+        const g = await readyGame();
+        const lila = new Chess();
+        const lilaMoves: string[] = [];
+        let calls: string[] = [];
+        let published = 0;
+        let lastRecorded: { who: Who; raw: string } | null = null;
+        const deps: PlayDeps = {
+          submitMove: async (x) => {
+            calls.push(x.uci);
+            const found = lilaFinds(lila, x.uci);
+            if (found === null) return clientError(`Piece on ${x.uci.slice(0, 2)} cannot move to ${x.uci.slice(2, 4)}`);
+            lila.move(uciMove(found.lan));
+            lilaMoves.push(found.lan);
+            return OK;
+          },
+          publish: async () => {
+            published++;
+          },
+        };
+        for (const op of ops) {
+          if (lila.isGameOver()) {
+            bump("skip:game_over");
+            break;
+          }
+          const before = await ledger(g.fixtureId);
+          const turn: Who = before.move_count % 2 === 0 ? "white" : "black";
+          let who = turn;
+          let sentRaw: string;
+          if (op.k === "retap") {
+            if (lastRecorded === null) {
+              bump("skip:retap_before_any_move");
+              continue;
+            }
+            who = lastRecorded.who;
+            sentRaw = lastRecorded.raw;
+          } else if (op.k === "legal") {
+            const legal = lila.moves({ verbose: true });
+            sentRaw = legal[op.pick % legal.length]!.lan;
+          } else sentRaw = op.uci;
+          const found = op.k === "retap" ? null : lilaFinds(lila, sentRaw);
+          calls = [];
+          published = 0;
+          let result: PlayResult | null = null;
+          let thrown: { status?: number; code?: string } | null = null;
+          try {
+            result = await act({ fixtureId: g.fixtureId, personId: g[who].personId, action: { kind: "move", uci: sentRaw } }, deps);
+          } catch (err) {
+            const e = err as { status?: number; code?: string };
+            thrown = { status: e.status, code: e.code };
+          }
+          const after = await ledger(g.fixtureId);
+
+          if (op.k === "retap") {
+            // The tab one move behind re-sends what it sent: already on file.
+            expect(result, `retap ${sentRaw}`).toEqual(ABSORBED);
+            expect(calls, "a retap never reaches Lichess").toEqual([]);
+            bump(sentRaw === before.moves_uci.at(-1) ? "retap_absorbed_same" : "retap_absorbed_other_form");
+          } else if (found !== null && found.promotes && sentRaw.length === 4) {
+            expect(thrown, `${sentRaw}: lila would pick a queen`).toEqual({ status: 400, code: "INVALID_UCI" });
+            expect(calls, "refused unsent").toEqual([]);
+            bump("suffixless_promotion_refused");
+          } else if (found !== null) {
+            expect(thrown, sentRaw).toBeNull();
+            expect(calls, `${sentRaw}: Lichess is sent lila's own notation`).toEqual([found.lan]);
+            expect(result?.ok && result.applied, sentRaw).toBe(true);
+            expect(after.moves_uci, "recorded as lila records it").toEqual([...before.moves_uci, found.lan]);
+            lastRecorded = { who, raw: sentRaw };
+            if (found.castleToRook) bump(`castle_to_rook:${who}:${sentRaw.slice(2, 3)}`);
+            else if (found.promotes) bump("suffixed_promotion_recorded");
+            else bump(op.k === "legal" ? "legal_recorded" : "raw_recorded");
+          } else {
+            expect(thrown, sentRaw).toBeNull();
+            expect(calls, `${sentRaw}: lila refuses it — sent as it came`).toEqual([sentRaw]);
+            expect(result, sentRaw).toEqual(reconcile("unavailable"));
+            bump("raw_refused_by_lila");
+          }
+
+          // ---- invariants ----------------------------------------------------
+          expect(after.moves_uci, "the ledger IS lila's game").toEqual(lilaMoves);
+          const replay = replayLedger(after.moves_uci);
+          expect(replay.illegalAt, "the ledger replays (independent chess.js replay)").toBeNull();
+          bump("plies_checked", replay.turnsChecked);
+          expect(published, "one broadcast per recorded move, none otherwise").toBe(after.move_count - before.move_count);
+          bump("broadcasts_checked", published);
+          bump("ops");
+        }
+      }),
+      { numRuns: RUNS_PER_PREFIX, endOnFailure: true },
+    );
+    expect(runs, "anti-vacuity: the property ran").toBe(RUNS_PER_PREFIX * RAW_PREFIXES.length);
+    console.info(`[T10 raw-UCI property] runs=${runs} ${JSON.stringify(totals)}`);
+    let checked = 0;
+    for (const path of [
+      "castle_to_rook:white:h",
+      "castle_to_rook:white:a",
+      "castle_to_rook:black:h",
+      "castle_to_rook:black:a",
+      "retap_absorbed_same",
+      "retap_absorbed_other_form",
+      "suffixless_promotion_refused",
+      "suffixed_promotion_recorded",
+      "legal_recorded",
+      "raw_recorded",
+      "raw_refused_by_lila",
+      "plies_checked",
+      "broadcasts_checked",
+    ]) {
+      expect(totals[path] ?? 0, `anti-vacuity: ${path}`).toBeGreaterThan(0);
+      checked++;
+    }
+    expect(checked).toBe(13);
   });
 });
