@@ -1119,71 +1119,86 @@ describe("loop F's bracket cascade, read from the product, and the single-elimin
     expect(f().events.map((e) => e.type).slice(-2), "the cascade's writes").toEqual(["core.void", "core.forfeit"]);
   });
 
-  it("the multi-stage fake (groups then a knockout): a withdrawal whose next opponent is TBD empties her seat and counts a walkover, never a void; the arrival walks over by bye (C-5)", async () => {
+  /** The multi-stage fake's two bracket rows after a group (catalogue.ts): a knockout, and a page playoff (X-WD-2 puts
+   *  it on the bracket path, withdrawal.ts WITHDRAWAL_WALKOVER_KINDS). */
+  const MS_ROWS: readonly (readonly [RowKey, string])[] = [["groups_ko", "knockout"], ["group_playoffs", "page_playoff"]];
+  it("the multi-stage fake, groups then a knockout or a page playoff: a withdrawal whose next opponent is TBD empties her seat and counts a walkover, never a void; the arrival walks over by bye (C-5)", async () => {
     // single-sport: the seat rule reads seats and statuses, never the sport.
-    let answer: WithdrawOut | null = null;
-    let left: { fixture: string; side: "home_entrant_id" | "away_entrant_id"; who: string } | null = null;
-    class WithdrawsAWinner extends FakeMultiStageDriver {
-      override async postStream(id: string, events: readonly StreamEvent[], prefix = "") {
-        const out = await super.postStream(id, events, prefix);
-        const f = this.fixtures.find((x) => x.id === id)!;
-        const kind = this.stages.find((s) => s.id === f.stage_id)?.kind;
-        const w = (f.outcome as { winner?: unknown } | null)?.winner;
-        const to = this.feeds.get(id);
-        if (answer === null && kind === "knockout" && typeof w === "string" && to !== undefined) {
-          const next = this.fixtures.find((x) => x.id === to.to)!;
-          const side = to.side === "home" ? "home_entrant_id" : "away_entrant_id";
-          const other = to.side === "home" ? "away_entrant_id" : "home_entrant_id";
-          if (next[side] === w && next[other] === null) {
-            left = { fixture: next.id, side, who: w };
-            answer = await this.withdraw(w);
+    let checked = 0;
+    for (const [row, later] of MS_ROWS) {
+      let answer: WithdrawOut | null = null;
+      let left: { fixture: string; side: "home_entrant_id" | "away_entrant_id"; who: string } | null = null;
+      class WithdrawsAWinner extends FakeMultiStageDriver {
+        override async postStream(id: string, events: readonly StreamEvent[], prefix = "") {
+          const out = await super.postStream(id, events, prefix);
+          const f = this.fixtures.find((x) => x.id === id)!;
+          const kind = this.stages.find((s) => s.id === f.stage_id)?.kind;
+          const w = (f.outcome as { winner?: unknown } | null)?.winner;
+          const to = this.feeds.get(id);
+          if (answer === null && kind === later && typeof w === "string" && to !== undefined) {
+            const next = this.fixtures.find((x) => x.id === to.to)!;
+            const side = to.side === "home" ? "home_entrant_id" : "away_entrant_id";
+            const other = to.side === "home" ? "away_entrant_id" : "home_entrant_id";
+            if (next[side] === w && next[other] === null) {
+              left = { fixture: next.id, side, who: w };
+              answer = await this.withdraw(w);
+            }
           }
+          return out;
         }
-        return out;
       }
+      const d = new WithdrawsAWinner();
+      const variant = variantFor("generic");
+      const spec: CaseSpec = { caseId: `${row}|generic|${variant}|LIFECYCLE`, row, sport: "generic", variant, scenario: "LIFECYCLE", canary: false };
+      await SCENARIOS.LIFECYCLE.run({ driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("generic", variant), tag: "t", denied: [] });
+      expect(d.stages.map((s) => s.kind), `${row}: premise`).toContain(later);
+      expect(left, `${row}: premise — a ${later} winner went on to a TBD seat`).not.toBeNull();
+      expect(answer, row).toMatchObject({ walkovers: 1, voided: 0, walked_over_held: 0 });
+      const next = d.fixtures.find((x) => x.id === left!.fixture)!;
+      expect(next[left!.side], `${row}: her seat is emptied`).not.toBe(left!.who);
+      const arrival = next[left!.side === "home_entrant_id" ? "away_entrant_id" : "home_entrant_id"];
+      expect([next.status, next.outcome], `${row}: the arrival walks over by bye`).toEqual(["forfeited", { kind: "award", winner: arrival, loser: null, reason: "bye" }]);
+      const stage = d.stages.find((s) => s.kind === later)!;
+      expect(d.fixtures.filter((x) => x.stage_id === stage.id && x.status === "abandoned").map((x) => x.id), `${row}: nothing voided (X-WD-2)`).toEqual([]);
+      checked++;
     }
-    const d = new WithdrawsAWinner();
-    const variant = variantFor("generic");
-    const spec: CaseSpec = { caseId: `groups_ko|generic|${variant}|LIFECYCLE`, row: "groups_ko", sport: "generic", variant, scenario: "LIFECYCLE", canary: false };
-    await SCENARIOS.LIFECYCLE.run({ driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("generic", variant), tag: "t", denied: [] });
-    expect(left, "premise: a knockout winner went on to a TBD seat").not.toBeNull();
-    expect(answer).toMatchObject({ walkovers: 1, voided: 0, walked_over_held: 0 });
-    const next = d.fixtures.find((x) => x.id === left!.fixture)!;
-    expect(next[left!.side], "her seat is emptied").not.toBe(left!.who);
-    const arrival = next[left!.side === "home_entrant_id" ? "away_entrant_id" : "home_entrant_id"];
-    expect([next.status, next.outcome], "the arrival walks over by bye").toEqual(["forfeited", { kind: "award", winner: arrival, loser: null, reason: "bye" }]);
-    const ko = d.stages.find((s) => s.kind === "knockout")!;
-    expect(d.fixtures.filter((x) => x.stage_id === ko.id && x.status === "abandoned").map((x) => x.id), "nothing voided").toEqual([]);
+    expect(checked).toBe(MS_ROWS.length);
   });
 
-  it("the multi-stage fake: a knockout line HELD (a level result, needs_decision) when its side withdraws walks over to the opponent and counts held (C-2, X-WD-1)", async () => {
-    // single-sport: football is the sport whose knockout holds a level result for the organiser's settle.
-    let answer: WithdrawOut | null = null;
-    let held: { id: string; home: string; away: string } | null = null;
-    class WithdrawsAHeldSide extends FakeMultiStageDriver {
-      override async postStream(id: string, events: readonly StreamEvent[], prefix = "") {
-        // The harness posts a held line and its settle together: post up to the settle, withdraw while it is held, and
-        // let the settle meet the walked-over fixture.
-        const at = events.findIndex((e) => e.type === "core.settle");
-        if (answer !== null || at <= 0) return super.postStream(id, events, prefix);
-        const out = await super.postStream(id, events.slice(0, at), prefix);
-        const f = this.fixtures.find((x) => x.id === id)!;
-        if (f.status !== "needs_decision" || f.home_entrant_id === null || f.away_entrant_id === null) return [...out, ...(await super.postStream(id, events.slice(at), prefix))];
-        held = { id, home: f.home_entrant_id, away: f.away_entrant_id };
-        answer = await this.withdraw(f.home_entrant_id);
-        return out;
+  it("the multi-stage fake, groups then a knockout or a page playoff: a line HELD (a level result, needs_decision) when its side withdraws walks over to the opponent and counts held (C-2, X-WD-1, X-WD-2)", async () => {
+    // single-sport: football is the sport whose bracket lines hold a level result for the organiser's settle.
+    let checked = 0;
+    for (const [row, later] of MS_ROWS) {
+      let answer: WithdrawOut | null = null;
+      let held: { id: string; home: string; away: string } | null = null;
+      class WithdrawsAHeldSide extends FakeMultiStageDriver {
+        override async postStream(id: string, events: readonly StreamEvent[], prefix = "") {
+          // The harness posts a held line and its settle together: post up to the settle, withdraw while it is held,
+          // and let the settle meet the walked-over fixture.
+          const at = events.findIndex((e) => e.type === "core.settle");
+          if (answer !== null || at <= 0) return super.postStream(id, events, prefix);
+          const out = await super.postStream(id, events.slice(0, at), prefix);
+          const f = this.fixtures.find((x) => x.id === id)!;
+          if (f.status !== "needs_decision" || f.home_entrant_id === null || f.away_entrant_id === null) return [...out, ...(await super.postStream(id, events.slice(at), prefix))];
+          held = { id, home: f.home_entrant_id, away: f.away_entrant_id };
+          answer = await this.withdraw(f.home_entrant_id);
+          return out;
+        }
       }
+      const d = new WithdrawsAHeldSide();
+      const variant = variantFor("football");
+      const spec: CaseSpec = { caseId: `${row}|football|${variant}|LIFECYCLE`, row, sport: "football", variant, scenario: "LIFECYCLE", canary: false };
+      // The harness's own settle of that line then meets a decided fixture; how the run judges that is not this test's.
+      await SCENARIOS.LIFECYCLE.run({ driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("football", variant), tag: "t", denied: [] }).catch((e: unknown) => {
+        if (!(e instanceof RefusedCall)) throw e;
+      });
+      expect(held, `${row}: premise — a ${later} line was held`).not.toBeNull();
+      const f = d.fixtures.find((x) => x.id === held!.id)!;
+      expect(d.stages.find((s) => s.id === f.stage_id)?.kind, `${row}: premise`).toBe(later);
+      expect(answer, row).toMatchObject({ walkovers: 1, voided: 0, walked_over_held: 1 });
+      expect([f.status, f.outcome], `${row}: walked over to the remaining side`).toEqual(["forfeited", { kind: "award", winner: held!.away, loser: held!.home, reason: WITHDREW }]);
+      checked++;
     }
-    const d = new WithdrawsAHeldSide();
-    const variant = variantFor("football");
-    const spec: CaseSpec = { caseId: `groups_ko|football|${variant}|LIFECYCLE`, row: "groups_ko", sport: "football", variant, scenario: "LIFECYCLE", canary: false };
-    // The harness's own settle of that line then meets a decided fixture; how the run judges that is not this test's.
-    await SCENARIOS.LIFECYCLE.run({ driver: d, spec, orgSlug: "o", cfg: resolveSportCfg("football", variant), tag: "t", denied: [] }).catch((e: unknown) => {
-      if (!(e instanceof RefusedCall)) throw e;
-    });
-    expect(held, "premise: a knockout line was held").not.toBeNull();
-    expect(answer).toMatchObject({ walkovers: 1, voided: 0, walked_over_held: 1 });
-    const f = d.fixtures.find((x) => x.id === held!.id)!;
-    expect([f.status, f.outcome], "walked over to the remaining side").toEqual(["forfeited", { kind: "award", winner: held!.away, loser: held!.home, reason: WITHDREW }]);
+    expect(checked).toBe(MS_ROWS.length);
   });
 });
