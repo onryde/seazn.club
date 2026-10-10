@@ -1,71 +1,136 @@
-// Capture QR v2 §6.4 (W15, W21, A18) — the descriptor's ingest credential, pure. Every expected url below is the
-// stored value with ONLY its hostname changed, written out in full: `rtmps:` is not a special scheme, so a `URL`
-// round-trip must keep `:443` and `/live/`, and a test that rebuilt the expectation through `URL` would share the bug.
-// The stored values are the shapes Cloudflare returns (design 2026-09-07 "Observed") and the fake's (fakes.ts).
+// Capture QR v2 §6.4 (W21, W26, A18) — the descriptor's ingest credential, pure. W26 (owner, 2026-10-05) put both legs
+// on Cloudflare's own host; the STREAM_INGEST_HOST rewrite was removed on 2026-10-10 (owner ruling). What is left:
+// the stored values are served as stored, a url on any host but the one this deployment's driver issues is refused
+// (`ingest_host_unexpected`), SRT on/off (A18) and the latency.
+//
+// Every expected url is written out in full from its SOURCE, never rebuilt through `URL` (a test that did would share
+// the bug): Cloudflare's are the measured values (docs/superpowers/specs/2026-09-11-cloudflare-stream-measured.md
+// :199-201, `rtmps://live.cloudflare.com:443/live/` and `srt://live.cloudflare.com:778`), the fake's come out of the
+// REAL FakeIngest (fakes.ts), folded through `ingestCred` here so the producer and the check cannot drift apart.
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): nothing here reads a sport.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CaptureCred } from "@/server/api-v1/capture-schemas";
-import { FAKE_PLAYBACK_HOST, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS, streamIngestHost, streamPlaybackHost } from "../config";
-import { CLOUDFLARE_INGEST_HOST, ingestCred, srtEnabled, type RawCred } from "../ingest-cred";
+import * as config from "../config";
+import { FAKE_PLAYBACK_HOST, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS, streamPlaybackHost, type RelayDriverMode } from "../config";
+import { FakeIngest } from "../fakes";
+import { CLOUDFLARE_INGEST_HOST, FAKE_INGEST_HOST, ingestCred, ingestHostOf, srtEnabled, type RawCred } from "../ingest-cred";
 
+/** The measured Cloudflare values (2026-09-11 measured doc :199-201) — the same literals W26 and the contracts name. */
+const CF_RTMPS = "rtmps://live.cloudflare.com:443/live/";
+const CF_SRT = "srt://live.cloudflare.com:778";
 const CF: RawCred = {
-  srt: { url: "srt://live.cloudflare.com:778", streamId: "abc123-0", passphrase: "pass-phrase-xyz" },
-  rtmps: { url: "rtmps://live.cloudflare.com:443/live/", streamKey: "rtmps-key-123" },
-};
-const FAKE: RawCred = {
-  srt: { url: "srt://fake.ingest.invalid:778", streamId: "sid-0", passphrase: "fake-pass" },
-  rtmps: { url: "rtmps://fake.ingest.invalid:443/live/", streamKey: "fake-key" },
+  srt: { url: CF_SRT, streamId: "abc123-0", passphrase: "pass-phrase-xyz" },
+  rtmps: { url: CF_RTMPS, streamKey: "rtmps-key-123" },
 };
 const ON = { srtEnabled: true, latencyMs: SRT_LATENCY_MS };
+const LIVE = { expectedHost: CLOUDFLARE_INGEST_HOST, ...ON };
 
-describe("ingestCred (§6.4, W15, W21)", () => {
-  it("PREMISE: the stored Cloudflare host is the one the module rewrites from", () => {
+afterEach(() => { vi.unstubAllEnvs(); });
+
+describe("ingestCred (§6.4, W21, W26)", () => {
+  it("PREMISE: Cloudflare's host is the measured one, and the fixture is the measured pair", () => {
+    expect(CLOUDFLARE_INGEST_HOST).toBe("live.cloudflare.com");
     expect(new URL(CF.rtmps.url).hostname).toBe(CLOUDFLARE_INGEST_HOST);
     expect(new URL(CF.srt.url).hostname).toBe(CLOUDFLARE_INGEST_HOST);
   });
 
-  it("host set: RTMPS is rewritten (scheme, port and path kept, exact string), SRT is served UNCHANGED (W21)", () => {
-    const r = ingestCred(CF, { ingestHost: "live.seazn.club", ...ON });
-    expect(r.ok).toBe(true);
+  it("Cloudflare's values under Cloudflare's host: both legs served EXACTLY as stored (scheme, port and path kept)", () => {
+    const r = ingestCred(CF, LIVE);
+    expect(r).toEqual({
+      ok: true, preferred: QR_PREFERRED_DEFAULT,
+      cred: {
+        srt: { url: CF_SRT, streamId: "abc123-0", passphrase: "pass-phrase-xyz", latencyMs: SRT_LATENCY_MS },
+        rtmps: { url: CF_RTMPS, streamKey: "rtmps-key-123" },
+      },
+    });
     if (!r.ok) return;
-    expect(r.cred.rtmps).toEqual({ url: "rtmps://live.seazn.club:443/live/", streamKey: "rtmps-key-123" });
-    expect(r.cred.srt).toEqual({ url: "srt://live.cloudflare.com:778", streamId: "abc123-0", passphrase: "pass-phrase-xyz", latencyMs: SRT_LATENCY_MS });
-    expect(r.preferred).toBe(QR_PREFERRED_DEFAULT);
     expect(CaptureCred.parse(r.cred)).toEqual(r.cred);
   });
 
-  it("host set: a foreign RTMPS host is refused on rtmps; a foreign SRT host on srt — each alone", () => {
+  it("REGRESSION GUARD (W26; the rewrite was removed 2026-10-10): a set STREAM_INGEST_HOST has NO effect — RTMPS stays on Cloudflare's host", () => {
+    const keys = Object.keys(config);
+    expect(keys.length, "premise: the config namespace was read").toBeGreaterThan(0);
+    expect(keys, "the setting's reader is gone").not.toContain("streamIngestHost");
+    vi.stubEnv("STREAM_INGEST_HOST", "live.seazn.club");
+    expect(process.env.STREAM_INGEST_HOST, "premise: the variable IS set for this call").toBe("live.seazn.club");
+    const r = ingestCred(CF, LIVE);
+    expect(r).toMatchObject({ ok: true, cred: { rtmps: { url: CF_RTMPS }, srt: { url: CF_SRT } } });
+    // And with SRT off, where only RTMPS is served, it is still Cloudflare's.
+    expect(ingestCred(CF, { ...LIVE, srtEnabled: false })).toMatchObject({ ok: true, cred: { srt: null, rtmps: { url: CF_RTMPS } } });
+  });
+
+  it("a foreign host is refused on its own leg — rtmps alone, srt alone, a suffix trick; Cloudflare's own passes (the positive pair)", () => {
     const rtmpsForeign = { ...CF, rtmps: { ...CF.rtmps, url: "rtmps://evil.example:443/live/" } };
-    expect(ingestCred(rtmpsForeign, { ingestHost: "live.seazn.club", ...ON })).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
+    expect(ingestCred(rtmpsForeign, LIVE)).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
     const srtForeign = { ...CF, srt: { ...CF.srt, url: "srt://evil.example:778" } };
-    expect(ingestCred(srtForeign, { ingestHost: "live.seazn.club", ...ON })).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "srt" });
+    expect(ingestCred(srtForeign, LIVE)).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "srt" });
     // A suffix trick is not the host: `live.cloudflare.com.evil.example` is a different hostname.
     const suffix = { ...CF, rtmps: { ...CF.rtmps, url: "rtmps://live.cloudflare.com.evil.example:443/live/" } };
-    expect(ingestCred(suffix, { ingestHost: "live.seazn.club", ...ON })).toMatchObject({ ok: false, which: "rtmps" });
+    expect(ingestCred(suffix, LIVE)).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
+    // W15's retired custom host is foreign too: a stored url on it is never served (capture trusts only Cloudflare's).
+    const custom = { ...CF, rtmps: { ...CF.rtmps, url: "rtmps://live.seazn.club:443/live/" } };
+    expect(ingestCred(custom, LIVE)).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
+    expect(ingestCred(CF, LIVE)).toMatchObject({ ok: true });
   });
 
-  it("host set, SRT off: a foreign SRT host is not judged — it is not served (srt: null)", () => {
+  it("SRT off (A18): a foreign SRT host is not judged — it is not served (srt: null) — but a foreign RTMPS host still is", () => {
     const srtForeign = { ...CF, srt: { ...CF.srt, url: "srt://evil.example:778" } };
-    const r = ingestCred(srtForeign, { ingestHost: "live.seazn.club", srtEnabled: false, latencyMs: SRT_LATENCY_MS });
-    expect(r).toMatchObject({ ok: true, cred: { srt: null }, preferred: "rtmps" });
-  });
-
-  it("host unset: the fake's values pass through untouched, both legs", () => {
-    const r = ingestCred(FAKE, { ingestHost: null, ...ON });
-    expect(r).toEqual({
-      ok: true, preferred: QR_PREFERRED_DEFAULT,
-      cred: { srt: { ...FAKE.srt, latencyMs: SRT_LATENCY_MS }, rtmps: { url: "rtmps://fake.ingest.invalid:443/live/", streamKey: "fake-key" } },
+    expect(ingestCred(srtForeign, { ...LIVE, srtEnabled: false })).toEqual({
+      ok: true, preferred: "rtmps", cred: { srt: null, rtmps: { url: CF_RTMPS, streamKey: "rtmps-key-123" } },
     });
+    const rtmpsForeign = { ...CF, rtmps: { ...CF.rtmps, url: "rtmps://evil.example:443/live/" } };
+    expect(ingestCred(rtmpsForeign, { ...LIVE, srtEnabled: false })).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
   });
 
   it("srtEnabled false (A18): srt is null and preferred is rtmps — preferred never names a null shape", () => {
-    const r = ingestCred(CF, { ingestHost: "live.seazn.club", srtEnabled: false, latencyMs: SRT_LATENCY_MS });
-    expect(r).toEqual({ ok: true, preferred: "rtmps", cred: { srt: null, rtmps: { url: "rtmps://live.seazn.club:443/live/", streamKey: "rtmps-key-123" } } });
+    const r = ingestCred(CF, { ...LIVE, srtEnabled: false });
+    expect(r).toEqual({ ok: true, preferred: "rtmps", cred: { srt: null, rtmps: { url: CF_RTMPS, streamKey: "rtmps-key-123" } } });
+  });
+
+  it("the REAL fake's output under the fake driver's host passes through untouched, both legs; under Cloudflare's it is foreign", async () => {
+    const issued = await new FakeIngest().createLiveInput({ sessionId: "s1", slot: 0 });
+    const raw: RawCred = { srt: issued.srt, rtmps: issued.rtmps };
+    expect(new URL(raw.rtmps.url).hostname, "premise: the fake issues RTMPS on its own host").toBe(FAKE_INGEST_HOST);
+    expect(new URL(raw.srt.url).hostname, "premise: the fake issues SRT on its own host").toBe(FAKE_INGEST_HOST);
+    expect(ingestCred(raw, { expectedHost: ingestHostOf("fake"), ...ON })).toEqual({
+      ok: true, preferred: QR_PREFERRED_DEFAULT,
+      cred: {
+        srt: { url: "srt://fake.ingest.invalid:778", streamId: issued.srt.streamId, passphrase: issued.srt.passphrase, latencyMs: SRT_LATENCY_MS },
+        rtmps: { url: "rtmps://fake.ingest.invalid:443/live/", streamKey: issued.rtmps.streamKey },
+      },
+    });
+    expect(ingestCred(raw, { expectedHost: ingestHostOf("live"), ...ON })).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
+    // …and the converse: Cloudflare's values under the fake driver are foreign.
+    expect(ingestCred(CF, { expectedHost: ingestHostOf("fake"), ...ON })).toEqual({ ok: false, reason: "ingest_host_unexpected", which: "rtmps" });
+  });
+
+  it("a second call answers the same and leaves the stored values untouched (pure)", () => {
+    const raw = structuredClone(CF);
+    const first = ingestCred(raw, LIVE);
+    const second = ingestCred(raw, LIVE);
+    expect(second).toEqual(first);
+    expect(raw).toEqual(CF);
   });
 });
 
-describe("the three ingest settings (§6.15)", () => {
+describe("ingestHostOf — the one host each driver mode issues", () => {
+  it("fake → the fake's host; live and disabled → Cloudflare's (every mode, counted)", () => {
+    const table: [RelayDriverMode, string][] = [
+      ["fake", "fake.ingest.invalid"],     // fakes.ts createLiveInput, both legs
+      ["live", "live.cloudflare.com"],     // the measured value (W26)
+      ["disabled", "live.cloudflare.com"], // the descriptor refuses `relay_disabled` first; strict, never lenient, if reached
+    ];
+    let checked = 0;
+    for (const [mode, want] of table) {
+      expect(ingestHostOf(mode), mode).toBe(want);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every RelayDriverMode").toBe(3);
+  });
+});
+
+describe("the ingest settings that remain (§6.15)", () => {
   it("srtEnabled: unset and blank read TRUE (the W21 default); 'false' reads false; junk throws naming the variable", () => {
     expect(srtEnabled({})).toBe(true);
     expect(srtEnabled({ STREAM_SRT_ENABLED: "" })).toBe(true);
@@ -75,17 +140,20 @@ describe("the three ingest settings (§6.15)", () => {
     expect(() => srtEnabled({ STREAM_SRT_ENABLED: "0" })).toThrow(/STREAM_SRT_ENABLED/);
   });
 
-  it("streamIngestHost: unset/blank = null; a bare host is read; a scheme or path is refused", () => {
-    expect(streamIngestHost({})).toBeNull();
-    expect(streamIngestHost({ STREAM_INGEST_HOST: "  " })).toBeNull();
-    expect(streamIngestHost({ STREAM_INGEST_HOST: "live.stg.seazn.club" })).toBe("live.stg.seazn.club");
-    expect(() => streamIngestHost({ STREAM_INGEST_HOST: "rtmps://live.seazn.club" })).toThrow(/STREAM_INGEST_HOST/);
-    expect(() => streamIngestHost({ STREAM_INGEST_HOST: "live.seazn.club/x" })).toThrow(/STREAM_INGEST_HOST/);
-  });
-
   it("streamPlaybackHost: set = itself; unset under the FAKE driver = the fake's host; unset under a LIVE driver = null (503 playback_unconfigured)", () => {
     expect(streamPlaybackHost({ STREAM_PLAYBACK_HOST: "customer-x.cloudflarestream.com", RELAY_DRIVERS: "live" })).toBe("customer-x.cloudflarestream.com");
     expect(streamPlaybackHost({ NODE_ENV: "test" })).toBe(FAKE_PLAYBACK_HOST);
     expect(streamPlaybackHost({ RELAY_DRIVERS: "live" })).toBeNull();
+  });
+
+  it("streamPlaybackHost: blank reads unset; a scheme, port or path is refused naming the variable (a bare hostname only)", () => {
+    expect(streamPlaybackHost({ STREAM_PLAYBACK_HOST: "  ", RELAY_DRIVERS: "live" })).toBeNull();
+    expect(streamPlaybackHost({ STREAM_PLAYBACK_HOST: " customer-x.cloudflarestream.com ", RELAY_DRIVERS: "live" })).toBe("customer-x.cloudflarestream.com");
+    let refused = 0;
+    for (const bad of ["https://customer-x.cloudflarestream.com", "customer-x.cloudflarestream.com:443", "customer-x.cloudflarestream.com/x"]) {
+      expect(() => streamPlaybackHost({ STREAM_PLAYBACK_HOST: bad, RELAY_DRIVERS: "live" }), bad).toThrow(/STREAM_PLAYBACK_HOST must be a bare hostname/);
+      refused++;
+    }
+    expect(refused, "anti-vacuity").toBe(3);
   });
 });
