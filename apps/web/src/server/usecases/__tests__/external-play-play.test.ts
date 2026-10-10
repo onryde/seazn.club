@@ -1326,6 +1326,7 @@ type Op =
   | { k: "outsider" }
   | { k: "fail"; played: boolean }
   | { k: "illegal"; sq: number }
+  | { k: "echo" }
   | { k: "resign"; who: Who }
   | { k: "abort"; who: Who }
   | { k: "draw"; who: Who; accept: boolean }
@@ -1345,6 +1346,7 @@ const opArb: fc.Arbitrary<Op> = fc.oneof(
   { weight: 1, arbitrary: fc.constant({ k: "outsider" as const }) },
   { weight: 2, arbitrary: fc.record({ k: fc.constant("fail" as const), played: fc.boolean() }) },
   { weight: 1, arbitrary: fc.record({ k: fc.constant("illegal" as const), sq: fc.nat(63) }) },
+  { weight: 1, arbitrary: fc.constant({ k: "echo" as const }) },
   { weight: 1, arbitrary: fc.record({ k: fc.constant("resign" as const), who: whoArb }) },
   { weight: 1, arbitrary: fc.record({ k: fc.constant("abort" as const), who: whoArb }) },
   { weight: 4, arbitrary: fc.record({ k: fc.constant("draw" as const), who: whoArb, accept: fc.boolean() }) },
@@ -1365,6 +1367,7 @@ const PREFIXES: Op[][] = [
   [T_, { k: "dup" }],
   [T_, T_, { k: "fail", played: true }, { k: "draw", who: "white", accept: true }, { k: "refresh" }],
   [T_, { k: "illegal", sq: 12 }],
+  [T_, { k: "echo" }],
   [{ k: "outsider" }],
   // White offers at 2, Black's move clears it, White re-offers at 4: recent.
   [T_, T_, { k: "draw", who: "white", accept: true }, T_, T_, { k: "draw", who: "white", accept: true }],
@@ -1411,6 +1414,7 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
         let finishedLedger: string[] | null = null;
         let lastSubmitted: { who: Who; uci: string } | null = null;
         let published = 0;
+        let bodies: RoomBroadcast[] = [];
         let lichessCalls = 0;
         const whoOf = (token: string): Who => {
           if (token === tokenOf(g.white)) return "white";
@@ -1426,8 +1430,9 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
           resignGame: async (x) => (seen(x.gameId), whoOf(x.token), lila.resign()),
           abortGame: async (x) => (seen(x.gameId), whoOf(x.token), lila.abort()),
           offerOrAcceptDraw: async (x) => (seen(x.gameId), lila.draw(whoOf(x.token), x.accept)),
-          publish: async () => {
+          publish: async (_f, body) => {
             published++;
+            bodies.push(body);
           },
         };
         const run = async (personId: string, action: PlayAction) => {
@@ -1444,8 +1449,12 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
           const terminalBefore = before.status === "finished";
           const lilaOverBefore = lila.over !== null;
           published = 0;
+          bodies = [];
           lichessCalls = 0;
           lila.lastWasFiveXX = false;
+          const lilaPlyBefore = lila.ply;
+          /** Whether the acting player is on turn by OUR ledger (move-like ops). */
+          let onTurn: boolean | null = null;
           let out: { result?: PlayResult; thrown?: { status?: number; code?: string } } | null = null;
           let submitted: string | null = null;
           const ourTurn: Who = before.move_count % 2 === 0 ? "white" : "black";
@@ -1466,6 +1475,7 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
               }
               submitted = uci;
               lastSubmitted = { who, uci };
+              onTurn = who === ourTurn;
               out = await run(g[who].personId, { kind: "move", uci });
               break;
             }
@@ -1475,6 +1485,7 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
                 continue;
               }
               submitted = lastSubmitted.uci;
+              onTurn = lastSubmitted.who === ourTurn;
               out = await run(g[lastSubmitted.who].personId, { kind: "move", uci: lastSubmitted.uci });
               break;
             }
@@ -1490,7 +1501,23 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
             case "illegal": {
               const sq = `${"abcdefgh"[op.sq % 8]}${Math.floor(op.sq / 8) + 1}`;
               submitted = `${sq}${sq}`; // well-formed (assertUci passes) and never legal
+              onTurn = true;
               out = await run(g[ourTurn].personId, { kind: "move", uci: submitted });
+              break;
+            }
+            case "echo": {
+              // The player on turn sends the string of the move on file —
+              // the opponent's. Not a duplicate: it is theirs to send, and
+              // Lichess's to judge.
+              const last = before.moves_uci.at(-1);
+              if (last === undefined) {
+                bump("skip:echo_before_any_move");
+                continue;
+              }
+              submitted = last;
+              onTurn = true;
+              out = await run(g[ourTurn].personId, { kind: "move", uci: last });
+              if (!terminalBefore) bump("echo_forwarded");
               break;
             }
             case "resign":
@@ -1552,6 +1579,18 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
           if (op.k === "illegal" && r && !r.ok) bump("illegal_refused");
           if (op.k === "resign" && r?.ok) bump("resign_forwarded");
           if (op.k === "abort" && r?.ok) bump("abort_forwarded");
+          // Who reaches Lichess: an on-turn move always does (Lichess judges
+          // it); an off-turn one never does (we answer it ourselves).
+          if (onTurn !== null && !terminalBefore) {
+            expect(lichessCalls, onTurn ? "an on-turn move reaches Lichess" : "an off-turn move never does").toBe(onTurn ? 1 : 0);
+          }
+          // Sequential, so no other writer: a move Lichess ACCEPTED (and
+          // answered) is a move recorded, applied, broadcast.
+          if (onTurn && lila.ply > lilaPlyBefore && !lila.lastWasFiveXX) {
+            expect(r, "Lichess accepted it ⇒ applied").toEqual(APPLIED);
+            expect(after.moves_uci).toEqual(lila.moves);
+            bump("lichess_ok_recorded");
+          }
           if (lilaOverBefore && op.k !== "refresh") {
             expect(after.move_count, "nothing is accepted after the game is over").toBe(before.move_count);
             bump("after_over_checked");
@@ -1562,6 +1601,36 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
           const drawChanged = op.k === "draw" && after.draw_offer_by !== before.draw_offer_by;
           if (op.k !== "refresh") expect(published, "one broadcast per recorded change").toBe((grew ? 1 : 0) + (drawChanged ? 1 : 0));
           if (drawChanged) bump(after.draw_offer_by === null ? "draw_cleared" : "draw_recorded");
+          // lila never hands a standing offer to the other side: a "yes"
+          // against it is the accept, a "no" only clears it.
+          if (op.k === "draw" && before.draw_offer_by !== null && after.draw_offer_by !== null) {
+            expect(after.draw_offer_by, "an offer is never flipped to the other side").toBe(before.draw_offer_by);
+            bump("standing_offer_checks");
+          }
+          // Every broadcast IS the row: an independent replay's board, the
+          // last move, the turn by parity, the standing offer.
+          for (const body of bodies) {
+            const ref = replayLedger(after.moves_uci).board;
+            expect(body).toMatchObject({
+              fen: ref.fen(),
+              lastMove: after.moves_uci.at(-1) ?? null,
+              turn: after.move_count % 2 === 0 ? "white" : "black",
+              status: "started",
+              drawOfferBy: after.draw_offer_by,
+            });
+            bump("broadcasts_checked");
+          }
+          // 'ready' means created, never started (T13); 'live' means a move
+          // was recorded and started_at stamped.
+          if (after.status === "ready") {
+            expect(after.move_count, "'ready' has no moves").toBe(0);
+            expect(after.started_at, "'ready' was never started").toBeNull();
+          }
+          if (after.status === "live") {
+            expect(after.move_count, "'live' has a move").toBeGreaterThan(0);
+            expect(after.started_at, "'live' was started").not.toBeNull();
+          }
+          bump("status_checks");
 
           // ---- invariants ----------------------------------------------------
           expect(after.move_count).toBe(after.moves_uci.length);
@@ -1615,10 +1684,15 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
       "plies_checked",
       "five_xx_played_adopted",
       "reoffer_blocked",
+      "echo_forwarded",
+      "lichess_ok_recorded",
+      "standing_offer_checks",
+      "broadcasts_checked",
+      "status_checks",
     ]) {
       expect(totals[path] ?? 0, `anti-vacuity: ${path}`).toBeGreaterThan(0);
       checked++;
     }
-    expect(checked).toBe(18);
+    expect(checked).toBe(23);
   });
 });
