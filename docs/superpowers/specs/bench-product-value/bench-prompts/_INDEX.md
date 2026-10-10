@@ -174,21 +174,19 @@ fall back from, is live — no B-prompt needs its fallback path.
 
 (append as sessions run)
 
-- 2026-10-10 — **OWED TO THE BENCH: format-matrix W2b breaks `tools/bench`
-  and does not fix it** (owner: "update the index, don't fix"). Not a
-  session row. W2b (branch `feat/format-matrix-w2b`) adds a sixth outcome
-  kind, `double_walkover`, to the engine's `MatchOutcome`, and drops
-  `award.method` for `award.reason`. Owed here, by the bench programme, not
-  by W2b: (1) `tools/bench/lib/pack-schema.ts:1098-1108` —
-  `_OutcomeKindsAreExhaustive` reds `tsc` by design (`PackExpectedOutcome`
-  has five kinds); add a `double_walkover` arm. (2) `run-suite.ts:1643`
-  (R3-protected) and `oracle.ts:1320` read `award.method` — switch to
-  `reason`. (3) `packs/build-packs/{suite11,_tiny}.ts` declared walkover
-  payloads. W2b touches no `tools/bench` file. Consequence: `npx turbo run
-  typecheck` (it reaches `tools/**` through `tsconfig.scripts.json`) and the
-  bench vitest step (`ci.yml:237`) will be red from the moment W2b merges
-  until this is done. See format-matrix `_INDEX.md` ruling 107.
-
+- 2026-10-10 — **Format-matrix W2b moved the bench onto its outcome shape**
+  (owner-approved bench edit, format-matrix `_INDEX.md` ruling 107). Not a
+  session row. W2b adds a sixth outcome kind, `double_walkover`, and
+  replaces `award.method` with `award.reason`. Done in W2b's own PR: a
+  `double_walkover` arm in `PackExpectedOutcome` and the outcome-claim kinds
+  (both additive, both flagged in the PR body per `_RULES.md` §4); one
+  shared `packMethodOf` reader (a pack's `award.method` is compared against
+  the engine's `award.reason`; packs keep writing `method`); `suite11`'s
+  walkover is a lone `core.forfeit` with no `core.start`, since W2b refuses
+  a walkover after play starts; `_tiny`'s `retired hurt` → `retired`. Bench
+  vitest 1909/1909. Still owed to the bench, by W2b Task 11:
+  `lib/drivers/scorer.ts` `organiserStepsFor` uses the console forfeit
+  testids Task 11 replaces.
 - 2026-10-04 — **The bench moved to `tools/bench` (`@seazn/bench`).** This
   carries out a controller ruling (see "Decisions already made"); it is not
   a session row, and B07b–B18 are unaffected except for the path. Branch

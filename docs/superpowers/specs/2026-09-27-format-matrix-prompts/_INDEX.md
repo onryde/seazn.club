@@ -1168,13 +1168,15 @@ Elsewhere the text is the controller's record.
      and the harness cite rulings 53 + 106; the earlier comment calling the knockout extension "owner ruling 53" was
      the orchestrator's reading and is corrected (class 17).
 
-107. **W2b does not fix `tools/bench`** (2026-10-10, owner: "update the index, don't fix"). Answers plan Q2. The bench
-     breakage W2b causes (`pack-schema.ts:1098-1108` outcome-kind exhaustiveness check, the `award.method` readers at
-     `run-suite.ts:1643` / `oracle.ts:1320`, and the `suite11`/`_tiny` payloads) is recorded as owed in the bench
-     index's status log (`bench-product-value/bench-prompts/_INDEX.md`, 2026-10-10) and is not edited by W2b. Task 10
-     Step 4 is dropped. Known cost: turbo typecheck and the bench vitest step red on the W2b PR and on main after
-     merge until the bench programme lands its fix.
-
+107. **W2b fixes `tools/bench` in its own PR** (2026-10-10, owner: first "update the index, don't fix", then "if it is
+     a 30-min job with Sonnet, fine; otherwise disable that bench in CI", then "an hour is fine"). Answers plan Q2. A
+     bench lane (`feat/format-matrix-w2b-bench`, merged into W2b) moved the bench onto the W2b outcome shape: the
+     `double_walkover` arm in `PackExpectedOutcome` and the claim kinds, one shared `packMethodOf` (a pack's
+     `award.method` compares against the engine's `award.reason`), `suite11`'s walkover as a lone `core.forfeit` with
+     no `core.start`, and `_tiny` `retired hurt` → `retired`. Bench vitest went from 1613/1840 to 1909/1909. The pack
+     `method` stays a free string (narrowing it would not be additive under the bench `_RULES.md` §4 freeze). The PR
+     body must flag both additive PackSchema changes for the owner, as §4 requires. The owner's permission covers the
+     R3-protected `run-suite.ts` / `PackSchema` edits for this fix only.
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
