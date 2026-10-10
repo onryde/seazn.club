@@ -9,7 +9,7 @@ import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { foldStream } from "../lib/fold.ts";
 import { toObservedOutcome } from "../lib/observed.ts";
 import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
-import { generateStream } from "../lib/streams/index.ts";
+import { ForfeitPostingRefused, forfeitPosting, generateStream, partialPlay } from "../lib/streams/index.ts";
 import { ALL_OUTCOMES, FORFEIT_REASONS, OutcomeUnreachable, outcomeLabel, type RequestedOutcome, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
@@ -102,6 +102,37 @@ describe("W2b generator breadth (spec §5.6)", () => {
     expect(fresh.length).toBe(1 + 2 * REASONS.length * 2);
     const labels = [...ALL_OUTCOMES.filter((o) => o.kind !== "forfeit"), ...fresh].map(outcomeLabel);
     expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it("forfeitPosting (M-2): on a scheduled fixture a walkover or double walkover WITH play, and a retirement or disqualification with NONE, are refused by name; each well-formed pair posts, and a fixture under way takes the forfeit bare", () => {
+    // The rows: D3 R2 (a walkover is recorded before START) and D3 R4 (a retirement or disqualification after START and
+    // some play), over each reason the harness posts and the double walkover. Play is generic's real partial play.
+    const play = partialPlay(req("generic", { kind: "forfeit", by: "home", reason: "retired", at: "after_start" }));
+    expect(play[0]?.type).toBe("core.start");
+    const rows: [string, "walkover" | "retired" | "disqualified", boolean, RegExp | null][] = [
+      ["H", "walkover", false, null], ["H", "walkover", true, /a walkover forfeit on a scheduled fixture is recorded before core\.start/],
+      ["both", "walkover", false, null], ["both", "walkover", true, /a double walkover on a scheduled fixture is recorded before core\.start/],
+      ["A", "retired", true, null], ["A", "retired", false, /a retired forfeit on a scheduled fixture is recorded after core\.start and some play, but none/],
+      ["A", "disqualified", true, null], ["A", "disqualified", false, /a disqualified forfeit .* but none/],
+    ];
+    let checked = 0;
+    for (const [by, reason, withPlay, refused] of rows) {
+      const given = withPlay ? play : [];
+      const post = () => forfeitPosting("scheduled", { by, reason }, given);
+      if (refused === null) expect(post().map((e) => e.type), `${by} ${reason} play=${withPlay}`).toEqual([...given.map((e) => e.type), "core.forfeit"]);
+      else {
+        expect(post, `${by} ${reason} play=${withPlay}`).toThrow(ForfeitPostingRefused);
+        expect(post, `${by} ${reason} play=${withPlay}`).toThrow(refused);
+      }
+      // Under way, the forfeit goes in bare whatever play was generated.
+      expect(forfeitPosting("live", { by, reason }, given), `${by} ${reason} live`).toEqual([{ type: "core.forfeit", payload: { by, reason } }]);
+      checked++;
+    }
+    expect(checked).toBe(8);
+    expect(() => forfeitPosting("scheduled", { by: "A", reason: "retired" }, play.slice(1))).toThrow(/starts with core\.start, not/);
+    // A request the rule refuses is refused by generateStream too, not posted.
+    expect(() => generateStream(req("generic", { kind: "forfeit", by: "home", reason: "retired", at: "before_start" }))).toThrow(ForfeitPostingRefused);
+    expect(() => generateStream(req("generic", { kind: "forfeit", by: "away", reason: "walkover", at: "after_start" }))).toThrow(ForfeitPostingRefused);
   });
 
   it("X-DW-1: the harness observes double_walkover as itself, never as undecided", () => {

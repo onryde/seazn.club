@@ -65,16 +65,40 @@ export function partialPlay(req: StreamRequest): StreamEvent[] {
   return play;
 }
 
+/** A forfeit the harness would post in a shape the rule refuses on a scheduled fixture — refused by name BEFORE it is
+ *  posted, so the product's refusal is never mistaken for its verdict on a well-formed forfeit (review M-2). */
+export class ForfeitPostingRefused extends Error {
+  override readonly name = "ForfeitPostingRefused";
+  constructor(detail: string) {
+    super(`streams: forfeit posting refused — ${detail}`);
+  }
+}
+
+/** The reasons recorded only AFTER play began (D3 R4: the phase guard refuses one before START), and the ones recorded
+ *  only BEFORE it (D3 R2: a walkover, and a double walkover, after START is refused outside a chess game under way).
+ *  `withdrew` is neither: it is the withdrawal cascade's own reason, written in any phase, never posted by the harness. */
+const IN_PLAY_REASONS: readonly ForfeitReason[] = ["retired", "disqualified"];
+const PRE_PLAY_REASONS: readonly ForfeitReason[] = ["walkover"];
+
 /** The events a forfeit is posted as, given the fixture's status now — the ONE composition generateStream, the drivers
  *  and decideFixture share (W2b D3, finding 10). On a fixture already under way the forfeit goes in bare. On a
  *  SCHEDULED one, `play` goes in before it: START and the sport's partial play for a retirement or a disqualification
  *  (partialPlay — the phase guard refuses one before play, D3 R4), and nothing for a walkover or a double walkover,
- *  which are recorded before START (the guard refuses a walkover after it, R2). `by` is an entrant id, or "both". */
+ *  which are recorded before START (the guard refuses a walkover after it, R2). `by` is an entrant id, or "both".
+ *  On a scheduled fixture, a walkover (or double walkover) WITH play and a retirement or disqualification with NONE
+ *  are refused by name (ForfeitPostingRefused), as is play that does not open with START. */
 export function forfeitPosting(status: string, forfeit: { readonly by: string; readonly reason: ForfeitReason }, play: readonly StreamEvent[]): StreamEvent[] {
   const ev: StreamEvent = { type: "core.forfeit", payload: { by: forfeit.by, reason: forfeit.reason } };
   if (status !== "scheduled") return [ev];
+  const what = forfeit.by === "both" ? "a double walkover" : `a ${forfeit.reason} forfeit`;
+  if ((forfeit.by === "both" || PRE_PLAY_REASONS.includes(forfeit.reason)) && play.length > 0) {
+    throw new ForfeitPostingRefused(`${what} on a scheduled fixture is recorded before ${START.type}, but ${play.length} event(s) of play were given (D3 R2)`);
+  }
+  if (forfeit.by !== "both" && IN_PLAY_REASONS.includes(forfeit.reason) && play.length === 0) {
+    throw new ForfeitPostingRefused(`${what} on a scheduled fixture is recorded after ${START.type} and some play, but none was given (D3 R4)`);
+  }
   const first = play.at(0);
-  if (first !== undefined && first.type !== START.type) throw new Error(`streams: the play before a forfeit starts with ${START.type}, not ${first.type}`);
+  if (first !== undefined && first.type !== START.type) throw new ForfeitPostingRefused(`the play before a forfeit starts with ${START.type}, not ${first.type}`);
   return [...play, ev];
 }
 
@@ -186,8 +210,7 @@ export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null)
   if (o.kind === "draw") return outcome.kind === "draw" ? "match" : "mismatch";
   if (o.kind === "tie") return outcome.kind === "tie" ? "match" : "mismatch";
   if (o.kind === "win") return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) ? "match" : "mismatch";
-  // `as string` until loop D's MatchOutcome (D2: the double_walkover arm) reaches this lane.
-  if (o.kind === "double_walkover") return (outcome.kind as string) === "double_walkover" ? "match" : "mismatch";
+  if (o.kind === "double_walkover") return outcome.kind === "double_walkover" ? "match" : "mismatch";
   // W2b (D2): a forfeit folds to an AWARD to the other side, carrying the reason asked (X-RS-1).
   const beneficiary = idOf(req, o.by === "home" ? "away" : "home");
   return outcome.kind === "award" && outcome.winner === beneficiary && (outcome as { reason?: unknown }).reason === o.reason ? "match" : "mismatch";
