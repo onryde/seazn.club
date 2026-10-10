@@ -257,6 +257,29 @@ describe.runIf(HAS_DB)("act — the first move, from T9's real 'ready' row", () 
     expect(sent.length).toBe(1);
   });
 
+  it("the guard REVIVES the ledger for its readers (T11, T14): an array, numbers, and last_move_at as a Date", async () => {
+    // to_jsonb(ep) carries timestamps as ISO strings; reviveBridge parses
+    // them back. T10 itself reads the row in SQL, so this pins the seam.
+    const g = await readyGame();
+    const { deps } = boardStub();
+    await mv(g, "white", "e2e4", deps, at(0));
+    await by(g, "black", { kind: "draw", accept: true }, deps); // ply 1: no offer, nothing written
+    const b = (await loadOnlinePlayFixture(g.fixtureId))!.bridge!;
+    expect(b.last_move_at).toBeInstanceOf(Date);
+    expect(b).toMatchObject({
+      status: "live",
+      moves_uci: ["e2e4"],
+      move_count: 1,
+      last_move_at: at(0),
+      white_ms: BASE_S * 1000,
+      black_ms: BASE_S * 1000,
+      clock_increment_s: INC_S,
+      draw_offer_by: null,
+      white_draw_offer_ply: null,
+      black_draw_offer_ply: null,
+    });
+  });
+
   it("started_at is stamped ONCE — the second move leaves it at the first move's time", async () => {
     const g = await readyGame();
     const { deps } = boardStub();
@@ -424,6 +447,15 @@ describe.runIf(HAS_DB)("act — the order of the checks (shape, game, caller, gr
     } finally {
       errors.mockRestore();
     }
+  });
+
+  it("a 'ready' row with NO game id is a broken row ⇒ 404, nothing sent", async () => {
+    // SQL-damaged: T9 sets status and challenge_id in one update.
+    const g = await readyGame();
+    await sql`update fixture_external_play set challenge_id = null where fixture_id = ${g.fixtureId}`;
+    const { calls, deps } = boardStub();
+    await expect(mv(g, "white", "e2e4", deps)).rejects.toMatchObject(NOT_FOUND);
+    expect(calls).toEqual([]);
   });
 
   it("colour is the RECORDED one: a pairing card swapping colours AFTER creation moves nothing", async () => {
@@ -608,6 +640,34 @@ describe.runIf(HAS_DB)("act — turn, absorb and races (Review Focus 2)", () => 
     expect((await ledger(g.fixtureId)).moves_uci).toEqual(["e2e4"]);
   });
 
+  it("twin tabs, same move, the other tab's call answering a 5xx AFTER the move is on file ⇒ still reconcile — only M6's refusal is read as 'a twin won'", async () => {
+    const g = await readyGame();
+    const { deps, refusedTab } = twinTabs(g, "e2e4", "e2e4", { ok: false, code: "unavailable", raw: "502" });
+    const results = await Promise.all([mv(g, "white", "e2e4", deps), mv(g, "white", "e2e4", deps)]);
+    expect(refusedTab()).toBe(true);
+    expect(results.filter((r) => r.ok && r.applied).length).toBe(1);
+    expect(results.filter((r) => !r.ok)).toEqual([reconcile("unavailable")]);
+  });
+
+  it("Lichess accepts, then the append finds a DIFFERENT game on the row (an organiser re-create) ⇒ nothing written onto it", async () => {
+    // SQL-set, standing for T16's re-create: the row now names another game.
+    const g = await readyGame();
+    const replacement = freshGameId();
+    const warns = vi.spyOn(log, "warn");
+    try {
+      const { sent, deps } = boardStub(async () => {
+        await sql`update fixture_external_play set challenge_id = ${replacement} where fixture_id = ${g.fixtureId}`;
+        return { ok: true };
+      });
+      expect(await mv(g, "white", "e2e4", deps)).toEqual(ABSORBED);
+      expect(await ledger(g.fixtureId), "the new game's ledger is untouched").toMatchObject({ moves_uci: [], move_count: 0, status: "ready" });
+      expect(sent).toEqual([]);
+      expect(warns).toHaveBeenCalledWith(expect.objectContaining({ gameId: g.gameId, ply: 0 }), expect.stringMatching(/could not record/));
+    } finally {
+      warns.mockRestore();
+    }
+  });
+
   it("Lichess accepts, then the append finds the row moved on by reconcile WITH our move ⇒ absorbed, no warning, no broadcast", async () => {
     const g = await readyGame();
     const warns = vi.spyOn(log, "warn");
@@ -658,7 +718,12 @@ describe.runIf(HAS_DB)("act — turn, absorb and races (Review Focus 2)", () => 
  *  have read the ledger and called; then Lichess accepts `winner` and
  *  answers the other tab's call (M6's 400) only once the winner's move is ON
  *  FILE — the order that makes the loser's re-read meaningful. */
-function twinTabs(g: Game, winner: string, loser: string) {
+function twinTabs(
+  g: Game,
+  winner: string,
+  loser: string,
+  loserAnswer: BoardCall = { ok: false, code: "not_your_turn_or_over", raw: "Not your turn, or game already over" },
+) {
   let arrived = 0;
   let release!: () => void;
   const bothIn = new Promise<void>((r) => (release = r));
@@ -678,7 +743,7 @@ function twinTabs(g: Game, winner: string, loser: string) {
     }
     expect((await ledger(g.fixtureId)).moves_uci, "premise: the winner is recorded first").toEqual([winner]);
     refused = true;
-    return { ok: false, code: "not_your_turn_or_over", raw: "Not your turn, or game already over" };
+    return loserAnswer;
   });
   return { deps: stub.deps, refusedTab: () => refused };
 }
