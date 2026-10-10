@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { requireFixturePage } from "@/server/page-auth";
 import {
   eventRecorderNames,
+  fixtureFeedsNextMatch,
   getFixture,
   getFixtureState,
   getLineup,
@@ -66,7 +67,7 @@ export default async function FixturePage({
   // applied. Deliberately not `division.config`, which is what this page used
   // to hand the pad: it disagrees with the fold for any scored fixture, and it
   // cannot see a per-stage format override at all.
-  const [division, state, events, recorderNames, availability, schedule, padLoad] =
+  const [division, state, events, recorderNames, availability, schedule, padLoad, feedsNext] =
     await Promise.all([
       getDivision(auth, fixture.division_id),
       getFixtureState(auth, id),
@@ -77,6 +78,8 @@ export default async function FixturePage({
       // W2a: `{ cfg, stageKind }` — the cfg drives the pad; the stage kind drives the console's held block (Task 11)
       // and the pad's bracket rules (Task 12). Never discarded: a kind read and dropped is the inert seam.
       loadFixturePadCfg(auth, id),
+      // Loop-F tidy 2: the held block's no-choice sentence on a line that feeds no next match (a final, third place).
+      fixtureFeedsNextMatch(auth, id),
     ]);
   const { cfg: padCfg, stageKind } = padLoad;
   const [competition, planKey] = await Promise.all([
@@ -234,6 +237,7 @@ export default async function FixturePage({
             round_no: fixture.round_no,
             home_slot_label: fixture.home_slot_label,
             away_slot_label: fixture.away_slot_label,
+            feeds_next_match: feedsNext,
           }}
           sport={{
             key: division.sport_key,

@@ -94,3 +94,15 @@ describe("the fixture page treats a disqualification as a departure in the settl
     expect(source).toMatch(/import\s*\{[^}]*DEPARTED_STATUSES[^}]*\}\s*from\s*"@\/server\/usecases\/entrants"/);
   });
 });
+
+describe("the fixture console hands the held block the line's next-match read (loop-F tidy 2)", () => {
+  // The dialog's no-choice sentence branches on it (needs-decision.test.tsx "tidy-2"); the page passes the read
+  // (stream-mount.test.tsx "hands the console whether the line feeds a next match"). This is the link between them —
+  // the console renders the dialog only once opened, so a static render of the console cannot see the prop.
+  const source = read("components/v2/fixture-console.tsx");
+  it("passes fixture.feeds_next_match to NeedsDecisionBlock", () => {
+    const block = source.match(/<NeedsDecisionBlock[\s\S]*?\/>/);
+    expect(block, "the console mounts the held block").not.toBeNull();
+    expect(block![0]).toContain("feedsNextMatch={fixture.feeds_next_match}");
+  });
+});

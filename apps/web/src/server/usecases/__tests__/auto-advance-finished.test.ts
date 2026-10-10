@@ -222,7 +222,10 @@ describe.skipIf(!HAS_DB)("M-10: an expunged group fixture is closed for auto-adv
     const rows = (await getStandings(r.auth, r.groupId)).rows as { entrantId: string; played: number }[];
     const played = Object.fromEntries(rows.map((q) => [q.entrantId, q.played]));
     expect([played[x], played[y], played[z]], "the three who stayed: two matches each").toEqual([2, 2, 2]);
-    expect(played[leaver] ?? 0, "the leaver: nothing counted").toBe(0);
+    // Her row is PRESENT (the snapshot keeps a departed entrant's row) — `?? 0` would read a vanished row as zero.
+    expect(rows.map((q) => q.entrantId).sort(), "four rows: the three who stayed and her").toEqual([leaver, x, y, z].sort());
+    expect(Object.hasOwn(played, leaver), "the leaver's row is present").toBe(true);
+    expect(played[leaver], "the leaver: nothing counted").toBe(0);
     // NOT pinned (loop-F tidy finding, routed to the owner): the snapshot RANKS her — last, below Z who lost both — and
     // a take that reaches her rank seats her and walks her over (F14). Whether an expunged leaver belongs in the
     // qualification ranks at all is unruled; pinning either answer here would freeze it.

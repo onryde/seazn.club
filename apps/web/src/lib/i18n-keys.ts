@@ -5543,6 +5543,7 @@ export type DictionaryKey =
   | "score.needsDecision.method.lot"
   | "score.needsDecision.method.organiser"
   | "score.needsDecision.noChoice"
+  | "score.needsDecision.noChoice.place"
   | "score.needsDecision.note"
   | "score.needsDecision.settle"
   | "score.needsDecision.title"

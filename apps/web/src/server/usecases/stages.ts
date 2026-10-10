@@ -58,7 +58,7 @@ import { resolveModule } from "@/server/engine-db";
 // arithmetic — see parseExtKey's own comment).
 import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
-import { isLegacyForfeitWin } from "@/server/engine-db/fed-seats";
+import { killsLoserEdge } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import {
   isSwissBoardSeated,
@@ -3787,8 +3787,9 @@ function loserFeederIsDead(f: {
   // names her as its loser; `onDecided` does not seat her, and her seat is dead here so the opponent walks over it.
   if (f.loser_withdrawn) return true;
   // W2b X-DE-1: a forfeit loser is out of the tournament — an `award` names no loser to send on, and neither does a
-  // legacy chess forfeit win (fed-seats.ts `isLegacyForfeitWin`, the same reading `advancingSides` fills from).
-  return f.outcome?.kind === "award" || isLegacyForfeitWin(f.outcome);
+  // legacy chess forfeit win — fed-seats.ts `killsLoserEdge`, the one reading the un-fill releases the edge from too
+  // (loop-F tidy 2), beside `advancingSides`, which fills from it.
+  return killsLoserEdge(f.outcome);
 }
 
 /** Which of the two predicates applies depends on WHICH EDGE seated the feeder,

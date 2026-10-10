@@ -314,6 +314,9 @@ interface Props {
      *  is null (V360's fixtures.home/away_slot_label). */
     home_slot_label?: SlotLabel | null;
     away_slot_label?: SlotLabel | null;
+    /** Loop-F tidy 2: the line feeds a next match (`fixtureFeedsNextMatch`) — the held block's no-choice sentence
+     *  reads it (needs-decision.tsx `feedsNextMatch`). */
+    feeds_next_match?: boolean;
   };
   sport: SportInfo;
   home: SideInfo | null;
@@ -1487,6 +1490,7 @@ export function FixtureConsole({
           cause={heldCause({ outcome: live.outcome, events })}
           home={{ id: home.id, name: homeName!, withdrawn: home.withdrawn === true }}
           away={{ id: away.id, name: awayName!, withdrawn: away.withdrawn === true }}
+          feedsNextMatch={fixture.feeds_next_match}
           busy={busy || padSyncing}
           settle={settle}
         />

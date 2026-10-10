@@ -2548,6 +2548,7 @@
   "score.needsDecision.dialogTitle": "Resolver el partido",
   "score.needsDecision.whoAdvances": "¿Quién avanza?",
   "score.needsDecision.noChoice": "Los dos participantes han dejado la competición, así que ninguno puede avanzar desde este partido. Para cerrarlo, anula la última entrada para reabrir el juego y registra después el abandono de cualquiera de los dos con el motivo «disqualified»: nadie avanza desde él.",
+  "score.needsDecision.noChoice.place": "Los dos participantes han dejado la competición, así que el puesto que decide este partido no puede ser para ninguno de ellos. Deja el partido abierto: cualquier resultado que registres aquí, también un abandono, otorgaría ese puesto a alguien que ya no compite.",
   "score.needsDecision.why": "¿Por qué?",
   "score.needsDecision.method.lot": "Por sorteo",
   "score.needsDecision.method.higherSeed": "Mejor cabeza de serie / mejor clasificado de grupo",

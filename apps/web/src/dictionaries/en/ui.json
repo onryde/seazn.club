@@ -2593,6 +2593,7 @@
   "score.needsDecision.dialogTitle": "Settle the match",
   "score.needsDecision.whoAdvances": "Who advances?",
   "score.needsDecision.noChoice": "Both entrants have left the competition, so neither can advance from this match. To close it, void the last entry to reopen play, then record a forfeit for either side with the reason “disqualified”: nobody advances from it.",
+  "score.needsDecision.noChoice.place": "Both entrants have left the competition, so the place this match decides cannot go to either of them. Leave the match open: any result recorded here, a forfeit included, would award that place to someone who has left.",
   "score.needsDecision.why": "Why?",
   "score.needsDecision.method.lot": "Drawn by lot",
   "score.needsDecision.method.higherSeed": "Higher seed / higher group finisher",

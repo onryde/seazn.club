@@ -1,0 +1,261 @@
+[
+ {
+  "id": "t2-loser-death-unmoved",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": " || was.loserKilled !== now.loserKilled };",
+  "replace": " };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: taking back a recorded WALKOVER releases its dead loser edge"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: double elimination — taking back a winners'-bracket FORFEIT"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: the release through a dead loser edge REFUSES"
+   }
+  ]
+ },
+ {
+  "id": "t2-loser-death-unmoved-rule10",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": " || was.loserKilled !== now.loserKilled };",
+  "replace": " };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "rule 10: no drawn sequence"
+   }
+  ]
+ },
+ {
+  "id": "t2-dead-loser-edge-skipped",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "const deadLoserEdge = edge.side === \"loser\" && (was.loserKilled || leaverDeparted);",
+  "replace": "const deadLoserEdge = false && was.loserKilled;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: taking back a recorded WALKOVER releases its dead loser edge"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: double elimination — taking back a winners'-bracket FORFEIT"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: page_playoff — q1's walkover taken back"
+   }
+  ]
+ },
+ {
+  "id": "t2-departed-unstamped-dropped",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "const deadLoserEdge = edge.side === \"loser\" && (was.loserKilled || leaverDeparted);",
+  "replace": "const deadLoserEdge = edge.side === \"loser\" && was.loserKilled;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2 .X-WD-5, legacy.: a departed loser's dead seat"
+   }
+  ]
+ },
+ {
+  "id": "t2-unstamped-seat-needs-stamp",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "        : p.stamped === false\n",
+  "replace": "        : false\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: taking back a recorded WALKOVER releases its dead loser edge"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2 .X-WD-5, legacy.: a departed loser's dead seat"
+   }
+  ]
+ },
+ {
+  "id": "t2-reachable-loser-void-unlocked",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "(seatIsStamped(t, edge.slot) || edge.side === \"loser\") && (isCascadeVoid(t)",
+  "replace": "seatIsStamped(t, edge.slot) && (isCascadeVoid(t)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: taking back a recorded WALKOVER releases its dead loser edge"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: page_playoff — q1's walkover taken back"
+   }
+  ]
+ },
+ {
+  "id": "t2-revive-after-own-reset",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "and status in ('forfeited', 'scheduled') returning id`",
+  "replace": "and status = 'forfeited' returning id`",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: page_playoff — q1's walkover taken back"
+   }
+  ]
+ },
+ {
+  "id": "t2-legacy-forfeit-not-killing",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "  return o?.kind === \"award\" || isLegacyForfeitWin(o);\n}",
+  "replace": "  return o?.kind === \"award\";\n}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: double elimination — taking back a winners'-bracket FORFEIT"
+   }
+  ]
+ },
+ {
+  "id": "t2-feeds-next-always",
+  "file": "apps/web/src/server/usecases/fixtures.ts",
+  "find": "    return feedsNextMatch(row);\n",
+  "replace": "    return feedsNextMatch(row) || true;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2: fixtureFeedsNextMatch"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "tidy-2 .R-4 on a FINAL."
+   }
+  ]
+ },
+ {
+  "id": "t2-copy-never-place",
+  "file": "apps/web/src/components/v2/needs-decision.tsx",
+  "find": "msg(props.feedsNextMatch === false ? \"score.needsDecision.noChoice.place\" : \"score.needsDecision.noChoice\")",
+  "replace": "msg(props.feedsNextMatch === null ? \"score.needsDecision.noChoice.place\" : \"score.needsDecision.noChoice\")",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/needs-decision.test.tsx"
+    ],
+    "name": "tidy-2: on a line that feeds no next match"
+   }
+  ]
+ },
+ {
+  "id": "t2-page-feeds-constant",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx",
+  "find": "            feeds_next_match: feedsNext,",
+  "replace": "            feeds_next_match: feedsNext || true,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/__tests__/stream-mount.test.tsx"
+    ],
+    "name": "passes THIS fixture's fixtureFeedsNextMatch read through"
+   }
+  ]
+ },
+ {
+  "id": "t2-console-drops-feeds",
+  "file": "apps/web/src/components/v2/fixture-console.tsx",
+  "find": "          feedsNextMatch={fixture.feeds_next_match}\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/departed-entrants-wiring.test.ts"
+    ],
+    "name": "passes fixture.feeds_next_match to NeedsDecisionBlock"
+   }
+  ]
+ },
+ {
+  "id": "t2-repin-i1-stamp-skipped",
+  "file": "apps/web/src/server/engine-db/fed-seats.ts",
+  "find": "      if (!(leaverDeparted && stamped) && !deadLoserEdge) continue;\n",
+  "replace": "      continue;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/withdrawal-w2b.test.ts"
+    ],
+    "name": "I-1: a void of the line she won lifts her stamp"
+   }
+  ]
+ },
+ {
+  "id": "t2-repin-loser-dead-legacy",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  return killsLoserEdge(f.outcome);\n",
+  "replace": "  return f.outcome?.kind === \"award\";\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/double-walkover-seating.test.ts"
+    ],
+    "name": "X-DE-1:"
+   }
+  ]
+ }
+]

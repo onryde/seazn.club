@@ -25,6 +25,7 @@ import {
   fixtureRow,
   heldFootball,
   labelOf,
+  liveEvents,
   playBadminton,
   post,
   rowsOf,
@@ -35,6 +36,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { DEPARTED_STATUSES, createEntrants, patchEntrant } from "../entrants";
 import { completeStage, createStages, generateStageFixtures, getStandings, writeDepartedSeat } from "../stages";
+import { fixtureFeedsNextMatch } from "../fixtures";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -643,6 +645,222 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect(final.status).toBe("decided");
   }, 120_000);
 
+  // ---- loop-F tidy 2: taking back an AWARD releases the loser edge it left dead (X-DE-1) ----
+  it("tidy-2: taking back a recorded WALKOVER releases its dead loser edge — the third-place line it settled (a cascade void when both semis walked over, a bye award when one did) waits for that semi again, and the replayed semi's loser is seated in a LIVE line", async () => {
+    // single-sport: badminton; the un-fill reads the outcome kind and the feed graph, not the sport. No departure
+    // anywhere: an award's loser edge is dead by X-DE-1 alone.
+    const SHAPES = ["both semis walk over", "one semi walks over"] as const;
+    let checked = 0;
+    for (const shape of SHAPES) {
+      const both = shape === "both semis walk over";
+      const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+      const rows = await rowsOf(s.stageId);
+      const [a, b, ...more] = rows.filter((r) => r.home_entrant_id && r.away_entrant_id);
+      if (!a || !b || more.length > 0 || a.loser_to_fixture === null || a.loser_to_fixture !== b.loser_to_fixture) {
+        throw new Error(`${shape}: rig — two semis into one third-place line`);
+      }
+      const thirdId = a.loser_to_fixture;
+      const drawnRow = rows.find((r) => r.id === thirdId)!;
+      const drawnA = slotLabel(drawnRow, a.loser_to_slot);
+      expect(drawnA, `${shape}: rig — the generator labelled the seat`).not.toBeNull();
+      // Semi A: a walkover recorded before the start — an award, so its loser edge is dead (X-DE-1).
+      await post(s.auth, a.id, "core.forfeit", { by: a.away_entrant_id, reason: "walkover" });
+      if (both) await post(s.auth, b.id, "core.forfeit", { by: b.away_entrant_id, reason: "walkover" });
+      else await playBadminton(s.auth, b.id, true);
+      const settled = await fixtureRow(thirdId);
+      expect([settled.status, settled.outcome], `${shape}: rig — the third-place line was settled on semi A's dead loser edge`).toEqual(
+        both ? ["abandoned", null] : ["forfeited", seatWalkover(b.away_entrant_id!)],
+      );
+      // Take back semi A's walkover: the line is open again, and so is the seat its loser drops into.
+      await voidLatest(s.auth, a.id);
+      expect((await fixtureRow(a.id)).status, `${shape}: rig — semi A is open again`).toBe("scheduled");
+      const revived = await fixtureRow(thirdId);
+      expect(
+        [revived.status, revived.outcome, seatOf(revived, a.loser_to_slot), slotLabel(revived, a.loser_to_slot), seatOf(revived, b.loser_to_slot)],
+        `${shape}: the third-place line waits for semi A again`,
+      ).toEqual(["scheduled", null, null, drawnA, both ? null : b.away_entrant_id]);
+      // Replayed: semi A's loser drops into a live line — walked over semi B's still-dead side, or a match to play.
+      await playBadminton(s.auth, a.id, true);
+      const third = await fixtureRow(thirdId);
+      expect([third.status, third.outcome, third.home_entrant_id !== null && third.away_entrant_id !== null, seatOf(third, a.loser_to_slot)], `${shape}: semi A's loser is in a live line`).toEqual(
+        both ? ["forfeited", seatWalkover(a.away_entrant_id!), false, a.away_entrant_id] : ["scheduled", null, true, a.away_entrant_id],
+      );
+      checked++;
+    }
+    expect(checked).toBe(SHAPES.length);
+  }, 120_000);
+
+  it("tidy-2: double elimination — taking back a winners'-bracket FORFEIT (a W2b award, a legacy chess forfeit win) resets the losers' line it walked over and takes back the name that walkover advanced; the replayed loser drops into a live line", async () => {
+    // Two sports, the two outcome shapes a forfeit takes (`killsLoserEdge`): badminton's `award` through core.forfeit,
+    // and chess's LEGACY `win{method:"forfeit"}` a pre-W2b stream still folds to (raw SQL — the method is retired on
+    // write, D15 — then a note so the next append folds it, as double-walkover-seating's X-DE-1 rig does).
+    const SHAPES = [
+      { label: "badminton award", ...badminton },
+      { label: "chess legacy forfeit win", ...chess },
+    ];
+    let checked = 0;
+    for (const shape of SHAPES) {
+      const isChess = shape.sport === "boardgame";
+      const win = async (id: string) => {
+        if ((await fixtureRow(id)).status === "scheduled") await post(s.auth, id, "core.start");
+        if (isChess) await post(s.auth, id, "boardgame.result", { winner: (await fixtureRow(id)).home_entrant_id, method: "checkmate" });
+        else for (let g = 0; g < 2; g++) await post(s.auth, id, "badminton.game.summary", { home: 21, away: 10 });
+        expect((await fixtureRow(id)).status, `${shape.label}: rig — decided`).toBe("decided");
+      };
+      const s = await seedBracket({ sport: shape.sport, variant: shape.variant, stageKind: "double_elim", entrants: 4 });
+      const rows = await rowsOf(s.stageId);
+      const first = Math.min(...rows.map((r) => r.round_no));
+      const [m1, m2, ...more] = rows.filter((r) => r.round_no === first && r.home_entrant_id && r.away_entrant_id);
+      if (!m1 || !m2 || more.length > 0 || m1.loser_to_fixture === null || m1.loser_to_fixture !== m2.loser_to_fixture) {
+        throw new Error(`${shape.label}: rig — two winners' first-round lines drop into one losers' line`);
+      }
+      const lbId = m1.loser_to_fixture;
+      const drawn = slotLabel(rows.find((r) => r.id === lbId)!, m1.loser_to_slot);
+      expect(drawn, `${shape.label}: rig — the generator labelled the seat`).not.toBeNull();
+      if (isChess) {
+        await insertLegacyEvents(m1.id, [
+          { type: "core.start", payload: {} },
+          { type: "boardgame.result", payload: { winner: m1.home_entrant_id, method: "forfeit" } },
+        ]);
+        await post(s.auth, m1.id, "core.note", { text: "arbiter's report" });
+      } else {
+        await post(s.auth, m1.id, "core.forfeit", { by: m1.away_entrant_id, reason: "walkover" });
+      }
+      const forfeited = await fixtureRow(m1.id);
+      expect(forfeited.outcome, `${shape.label}: rig — the forfeit shape`).toMatchObject(isChess ? { kind: "win", method: "forfeit" } : { kind: "award" });
+      await win(m2.id);
+      const lb = await fixtureRow(lbId);
+      expect([lb.status, lb.outcome], `${shape.label}: rig — the losers' line walked m2's loser over m1's dead loser edge`).toEqual(["forfeited", seatWalkover(m2.away_entrant_id!)]);
+      if (lb.winner_to_fixture === null) throw new Error(`${shape.label}: rig — the losers' first round feeds the losers' final`);
+      const nextId = lb.winner_to_fixture;
+      const nextDrawn = slotLabel(rows.find((r) => r.id === nextId)!, lb.winner_to_slot);
+      expect(seatOf(await fixtureRow(nextId), lb.winner_to_slot), `${shape.label}: rig — that walkover advanced m2's loser`).toBe(m2.away_entrant_id);
+
+      // Take back the forfeit (chess: the note first, then the legacy result).
+      if (isChess) await voidLatest(s.auth, m1.id);
+      await voidLatest(s.auth, m1.id);
+      expect((await fixtureRow(m1.id)).outcome, `${shape.label}: rig — m1 is undecided again`).toBeNull();
+      const reset = await fixtureRow(lbId);
+      expect(
+        [reset.status, reset.outcome, seatOf(reset, m1.loser_to_slot), slotLabel(reset, m1.loser_to_slot), seatOf(reset, m2.loser_to_slot)],
+        `${shape.label}: the losers' line waits for m1 again`,
+      ).toEqual(["scheduled", null, null, drawn, m2.away_entrant_id]);
+      const next = await fixtureRow(nextId);
+      expect([seatOf(next, lb.winner_to_slot), slotLabel(next, lb.winner_to_slot)], `${shape.label}: the name the walkover advanced is taken back`).toEqual([null, nextDrawn]);
+      await win(m1.id);
+      const live = await fixtureRow(lbId);
+      expect([live.status, live.outcome, seatOf(live, m1.loser_to_slot), seatOf(live, m2.loser_to_slot)], `${shape.label}: m1's loser drops into a live losers' line`).toEqual([
+        "scheduled",
+        null,
+        m1.away_entrant_id,
+        m2.away_entrant_id,
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(SHAPES.length);
+  }, 120_000);
+
+  it("tidy-2 (X-WD-5, legacy): a departed loser's dead seat that carries NO stamp — a line decided before R-1 stamped it — is released too: the third-place void it helped make waits for that semi again", async () => {
+    // single-sport: badminton. Before R-1 a departed loser's seat was dead but unstamped (`loserFeederIsDead` reads
+    // her departure); the rig writes that legacy shape by clearing the stamp R-1 now writes, back to the drawn label.
+    const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
+    const rows = await rowsOf(s.stageId);
+    const [a, b] = rows.filter((r) => r.home_entrant_id && r.away_entrant_id);
+    if (!a || !b || a.loser_to_fixture === null || a.loser_to_fixture !== b.loser_to_fixture) throw new Error("rig: two semis into one third-place line");
+    const thirdId = a.loser_to_fixture;
+    const drawn = slotLabel(rows.find((r) => r.id === thirdId)!, a.loser_to_slot);
+    const col = a.loser_to_slot === 1 ? sql`home_slot_label` : sql`away_slot_label`;
+    await patchEntrant(s.auth, a.away_entrant_id!, { status: "disqualified" } as never);
+    await playBadminton(s.auth, a.id, true);
+    await sql`update fixtures set ${col} = ${sql.json(drawn as never)} where id = ${thirdId}`;
+    expect(labelOf(await fixtureRow(thirdId), a.loser_to_slot), "rig: the legacy shape — her dead seat carries no stamp").not.toBe(BYE_KEY);
+    await post(s.auth, b.id, "core.forfeit", { by: b.away_entrant_id, reason: "walkover" });
+    const voided = await fixtureRow(thirdId);
+    expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], "rig: both loser feeds dead — the line is void").toEqual(["abandoned", null, null, null]);
+    await voidLatest(s.auth, a.id);
+    const revived = await fixtureRow(thirdId);
+    expect([revived.status, revived.outcome, seatOf(revived, a.loser_to_slot), slotLabel(revived, a.loser_to_slot)], "the void waits for semi A again").toEqual([
+      "scheduled",
+      null,
+      null,
+      drawn,
+    ]);
+  }, 120_000);
+
+  it("tidy-2: page_playoff — q1's walkover taken back revives the q2 void its dead loser edge helped make AND lifts the stamp that void put on the final, which q1's own winner edge resets in the same write; replayed, the final waits for q2", async () => {
+    // single-sport: badminton. The one shipped shape where the line a dead loser edge voided feeds the SAME next match
+    // as the line's winner edge: the release resets the final (its walkover over the void) and the revive lifts the
+    // final's other seat — two writes to one row, in one transaction.
+    const s = await seedBracket({ ...badminton, stageKind: "page_playoff", entrants: 4 });
+    const rows = await rowsOf(s.stageId);
+    const q1 = rows.find((r) => r.home_entrant_id && r.away_entrant_id && r.loser_to_fixture !== null);
+    const el = rows.find((r) => r.home_entrant_id && r.away_entrant_id && r.id !== q1?.id);
+    if (!q1 || !el || q1.loser_to_fixture === null || q1.winner_to_fixture === null || el.winner_to_fixture !== q1.loser_to_fixture) {
+      throw new Error("rig: page_playoff q1 / eliminator into q2");
+    }
+    const q2Id = q1.loser_to_fixture;
+    const finalId = q1.winner_to_fixture;
+    const q2Row = rows.find((r) => r.id === q2Id)!;
+    if (q2Row.winner_to_fixture !== finalId) throw new Error("rig: q2 feeds the final");
+    const finalDrawn = { q1: slotLabel(rows.find((r) => r.id === finalId)!, q1.winner_to_slot), q2: slotLabel(rows.find((r) => r.id === finalId)!, q2Row.winner_to_slot) };
+    // The eliminator's two sides leave in turn: a walkover, then its winner's q2 seat stamped dead (D17).
+    await withdrawEntrantCascade(s.auth, el.home_entrant_id!);
+    await withdrawEntrantCascade(s.auth, el.away_entrant_id!);
+    await post(s.auth, q1.id, "core.forfeit", { by: q1.away_entrant_id, reason: "walkover" });
+    const q2 = await fixtureRow(q2Id);
+    expect([q2.status, q2.outcome, q2.home_entrant_id, q2.away_entrant_id], "rig: q2 is void (one seat departed, the other a forfeit's dead loser edge)").toEqual(["abandoned", null, null, null]);
+    const final = await fixtureRow(finalId);
+    expect([final.status, final.outcome, labelOf(final, q2Row.winner_to_slot)], "rig: the final walked q1's winner over q2's void").toEqual(["forfeited", seatWalkover(q1.home_entrant_id!), BYE_KEY]);
+
+    await voidLatest(s.auth, q1.id);
+    const q2Back = await fixtureRow(q2Id);
+    expect([q2Back.status, q2Back.outcome, seatOf(q2Back, q1.loser_to_slot)], "q2 waits for q1's loser again").toEqual(["scheduled", null, null]);
+    const finalBack = await fixtureRow(finalId);
+    expect(
+      [finalBack.status, finalBack.outcome, finalBack.home_entrant_id, finalBack.away_entrant_id, slotLabel(finalBack, q1.winner_to_slot), slotLabel(finalBack, q2Row.winner_to_slot)],
+      "the final waits for both lines again — neither seat stamped",
+    ).toEqual(["scheduled", null, null, null, finalDrawn.q1, finalDrawn.q2]);
+    // Replayed: q1's winner waits in the final for q2, whose loser-edge seat now holds q1's loser — who walks over the
+    // eliminator's departed side into the final.
+    await playBadminton(s.auth, q1.id, true);
+    const last = await fixtureRow(finalId);
+    expect([last.status, last.outcome, seatOf(last, q1.winner_to_slot), seatOf(last, q2Row.winner_to_slot)], "a real final: q1's winner against q2's").toEqual([
+      "scheduled",
+      null,
+      q1.home_entrant_id,
+      q1.away_entrant_id,
+    ]);
+  }, 120_000);
+
+  it("tidy-2: the release through a dead loser edge REFUSES when the match beyond it has started (NEXT_MATCH_STARTED, naming that match), and writes nothing", async () => {
+    // single-sport: badminton. Double elimination: the losers' line walked m2's loser over m1's dead edge into the
+    // losers' final, which is then not waiting. Its other seat is the winners' final's loser, so it cannot be played
+    // without m1's OWN winner edge (the winners' final) starting too; the not-waiting state is therefore the import-only
+    // `cancelled`, by raw SQL — the precedent knockout-void-unfill's "refuses when the next match is 'cancelled'" set
+    // (`hasStarted`: the status alone). The winners' final has NOT started, so the refusal can only come through the
+    // loser edge.
+    const s = await seedBracket({ ...badminton, stageKind: "double_elim", entrants: 4 });
+    const rows = await rowsOf(s.stageId);
+    const first = Math.min(...rows.map((r) => r.round_no));
+    const [m1, m2] = rows.filter((r) => r.round_no === first && r.home_entrant_id && r.away_entrant_id);
+    if (!m1 || !m2 || m1.loser_to_fixture === null) throw new Error("rig: two winners' first-round lines");
+    await post(s.auth, m1.id, "core.forfeit", { by: m1.away_entrant_id, reason: "walkover" });
+    await playBadminton(s.auth, m2.id, true);
+    const lb = await fixtureRow(m1.loser_to_fixture);
+    if (lb.winner_to_fixture === null) throw new Error("rig: the losers' line feeds the losers' final");
+    await sql`update fixtures set status = 'cancelled' where id = ${lb.winner_to_fixture}`;
+    const wbFinal = await fixtureRow(m1.winner_to_fixture!);
+    expect([wbFinal.status, wbFinal.outcome, await liveEvents(wbFinal.id)], "rig: the winners' final has not started").toEqual(["scheduled", null, 0]);
+    const before = await rowsOf(s.stageId);
+    const err = await voidLatest(s.auth, m1.id).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err, "refused").toMatchObject({ status: 409, code: "NEXT_MATCH_STARTED" });
+    expect(nextMatchRefOf((err as { extra?: Record<string, unknown> }).extra)?.fixture_id, "it names the losers' final").toBe(lb.winner_to_fixture);
+    expect(await rowsOf(s.stageId), "nothing written").toEqual(before);
+  }, 120_000);
+
   it("R-4: the way out the settle dialog names when BOTH sides of a held line have left — void back into play, then a disqualification forfeit for either side: nobody advances, and the next match walks the other semi's winner over", async () => {
     // single-sport: football, the held-line rig (a 0-0 at full time is held in a bracket). The dialog's state is a
     // LEGACY row (PF-8a: a W2a withdrawal left the held line alone) or a disqualification (a status change, no
@@ -684,6 +902,60 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect((await fixtureRow(b.id)).status, "rig: the other semi decided").toBe("decided");
     const walked = await fixtureRow(a.winner_to_fixture);
     expect([walked.status, walked.outcome], "the final walks the other semi's winner over").toEqual(["forfeited", seatWalkover(b.home_entrant_id!)]);
+  }, 120_000);
+
+  it("tidy-2 (R-4 on a FINAL): the void-then-forfeit route names a DEPARTED winner of a line that feeds nothing — why the dialog offers that route only where the line feeds a next match", async () => {
+    // single-sport: football, the held-line rig. A two-entrant knockout: its one line is the final.
+    const s = await seedBracket({ ...football, stageKind: "knockout", entrants: 2 });
+    const [final] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
+    if (!final) throw new Error("rig: a seated final");
+    expect([final.winner_to_fixture, final.loser_to_fixture, await fixtureFeedsNextMatch(s.auth, final.id)], "rig: the line feeds nothing").toEqual([null, null, false]);
+    await heldFootball(s.auth, final.id);
+    await sql`update entrants set status = 'withdrawn' where id = ${final.home_entrant_id}`;
+    await patchEntrant(s.auth, final.away_entrant_id!, { status: "disqualified" } as never);
+    await voidLatest(s.auth, final.id);
+    await post(s.auth, final.id, "core.forfeit", { by: final.home_entrant_id, reason: "disqualified" });
+    const closed = await fixtureRow(final.id);
+    expect([closed.status, closed.outcome?.kind, closed.outcome?.winner], "the forfeit decides the final for a side that has left").toEqual([
+      "forfeited",
+      "award",
+      final.away_entrant_id,
+    ]);
+    const [{ status }] = await sql<{ status: string }[]>`select status from entrants where id = ${closed.outcome!.winner!}`;
+    expect(DEPARTED_STATUSES.has(status), "its winner is departed").toBe(true);
+  }, 120_000);
+
+  it("tidy-2: fixtureFeedsNextMatch (the held block's place-or-advance sentence) is false on EXACTLY the lines the generator marks a final or a third-place line, in every bracket shape", async () => {
+    // The oracle is the ENGINE's own role metadata (scheduling/bracket.ts `isFinal`, the third-place line), written on
+    // generation — never the feed-edge reading under test. Four entrants: a two-entrant double elimination's one
+    // winners' match feeds only the grand final (both edges) and is a "final" by D19 without the flag.
+    const SHAPES = [
+      { label: "knockout", stageKind: "knockout" as const, stageConfig: {} },
+      { label: "knockout + third place", stageKind: "knockout" as const, stageConfig: { thirdPlace: true } },
+      { label: "double elimination", stageKind: "double_elim" as const, stageConfig: {} },
+      { label: "double elimination + reset", stageKind: "double_elim" as const, stageConfig: { bracketReset: true } },
+      { label: "page playoff", stageKind: "page_playoff" as const, stageConfig: {} },
+    ];
+    let rowsChecked = 0;
+    let places = 0;
+    for (const shape of SHAPES) {
+      const s = await seedBracket({ ...badminton, stageKind: shape.stageKind, entrants: 4, stageConfig: shape.stageConfig });
+      const rows = await sql<{ id: string; ext_key: string | null; is_final: boolean; third_place: boolean }[]>`
+        select id, ext_key, is_final, third_place from fixtures where stage_id = ${s.stageId} order by round_no, seq_in_round`;
+      expect(rows.length, `${shape.label}: rig — lines`).toBeGreaterThan(2);
+      const got: string[] = [];
+      const want: string[] = [];
+      for (const r of rows) {
+        if (!(await fixtureFeedsNextMatch(s.auth, r.id))) got.push(r.ext_key ?? r.id);
+        if (r.is_final || r.third_place) want.push(r.ext_key ?? r.id);
+        rowsChecked++;
+      }
+      expect(want.length, `${shape.label}: the generator marks at least one line that decides a place`).toBeGreaterThan(0);
+      expect(got, `${shape.label}: the lines that feed no next match`).toEqual(want);
+      places += want.length;
+    }
+    expect(rowsChecked, "lines checked").toBeGreaterThan(SHAPES.length * 3);
+    expect(places, "place-deciding lines checked").toBeGreaterThanOrEqual(SHAPES.length);
   }, 120_000);
 
   it("I-5: a double-elimination grand final WITH a bracket reset is a final — a double walkover on it is refused, a withdrawal leaves it open, and the resolver never writes one", async () => {
@@ -1097,6 +1369,7 @@ type Act =
   | { t: "score"; k: number }
   | { t: "draw"; k: number }
   | { t: "abandon"; k: number }
+  | { t: "walkover"; k: number }
   | { t: "voidLast"; k: number };
 
 const RIG10: Record<Rig10, { sport: string; variant: string; stageKind: "knockout" | "page_playoff"; entrants: number }> = {
@@ -1110,6 +1383,9 @@ const act: fc.Arbitrary<Act> = fc.oneof(
   fc.record({ t: fc.constant("score" as const), k: fc.nat(3) }),
   fc.record({ t: fc.constant("draw" as const), k: fc.nat(3) }),
   fc.record({ t: fc.constant("abandon" as const), k: fc.nat(3) }),
+  // Loop-F tidy 2: a walkover the ORGANISER records (an award, its loser edge dead — X-DE-1), so a voidLast can take one
+  // back and the sequence reaches the dead loser edge's release.
+  fc.record({ t: fc.constant("walkover" as const), k: fc.nat(3) }),
   fc.record({ t: fc.constant("voidLast" as const), k: fc.nat(3) }),
 );
 const run10 = fc.record({ rig: fc.constantFrom<Rig10>("ko8-chess", "pp4-badminton"), acts: fc.array(act, { minLength: 1, maxLength: MAX_ACTS }) });
@@ -1124,6 +1400,10 @@ const EXAMPLES10: [{ rig: Rig10; acts: Act[] }][] = [
   // I-1: seed 1 wins the first line, withdraws (her semi seat stamped), the organiser voids that win, and she wins it
   // again — she is never re-seated.
   [{ rig: "ko8-chess", acts: [{ t: "score", k: 0 }, { t: "withdraw", i: 0 }, { t: "voidLast", k: 0 }, { t: "score", k: 0 }] }],
+  // Loop-F tidy 2: the eliminator is played (its winner seated in q2), q1 is walked over (q2 walks the eliminator's
+  // winner over q1's dead loser edge), the walkover is taken back, and q1 is played — its loser must meet a live q2,
+  // never the bye award q2 was (the stale-bye invariant below).
+  [{ rig: "pp4-badminton", acts: [{ t: "score", k: 1 }, { t: "walkover", k: 0 }, { t: "voidLast", k: 0 }, { t: "score", k: 0 }] }],
 ];
 /** Review M-5: fast-check 3.x runs the `examples` INSIDE `numRuns` (3.23.2: examples first, then random draws up to
  *  the total), so the random draws are `numRuns − examples` — the total here is the random count PLUS the examples,
@@ -1151,8 +1431,8 @@ function isRefusal(e: unknown): boolean {
 }
 
 describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
-  it("rule 10: no drawn sequence of withdraw / start / score / draw / abandon / void seats a withdrawn entrant, writes a non-withdrew forfeit, or throws", async () => {
-    const cover = { steps: 0, applied: 0, preStart: 0, postStart: 0, tiebreak: 0, voidThenForfeit: 0, bothSides: 0, refusedVoids: 0, voidAfterDeparture: 0 };
+  it("rule 10: no drawn sequence of withdraw / start / score / draw / abandon / walkover / void seats a withdrawn entrant, seats anyone in a settled bye or a void, writes a forfeit nobody recorded, or throws", async () => {
+    const cover = { steps: 0, applied: 0, preStart: 0, postStart: 0, tiebreak: 0, voidThenForfeit: 0, bothSides: 0, refusedVoids: 0, voidAfterDeparture: 0, walkovers: 0, voidedWalkovers: 0 };
     let runs = 0;
     await fc.assert(
       fc.asyncProperty(run10, async ({ rig, acts }) => {
@@ -1163,6 +1443,8 @@ describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
         const isChess = shapeOf.sport === "boardgame";
         /** Lines the organiser re-opened by voiding their result AFTER an entrant on them departed (I-1). */
         const reopened = new Set<string>();
+        /** The walkovers this run's organiser recorded (each a `core.forfeit{reason:"walkover"}`, voided or not). */
+        let recordedWalkovers = 0;
         const withdrawnSet = async () =>
           new Set((await sql<{ id: string }[]>`select id from entrants where division_id = ${s.divisionId} and status = 'withdrawn'`).map((r) => r.id));
         const open = async () => {
@@ -1220,6 +1502,7 @@ describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
                 () => null,
                 (e: unknown) => e,
               );
+              if (err === null && pick.last.type === "core.forfeit" && pick.last.payload.reason === "walkover") cover.voidedWalkovers++;
               if (err !== null) {
                 expect(isRefusal(err), `${where}: a void is refused, never a 500 (${String(err)})`).toBe(true);
                 cover.refusedVoids++;
@@ -1239,6 +1522,14 @@ describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
             } else if (a.t === "abandon") {
               await startIfNeeded(f);
               await post(s.auth, f.id, "core.abandon", { reason: "rain" });
+            } else if (a.t === "walkover") {
+              // Before the start only: the engine's walkover phases (R2, default "pre").
+              if (f.status !== "scheduled") applied = false;
+              else {
+                await post(s.auth, f.id, "core.forfeit", { by: f.away_entrant_id, reason: "walkover" });
+                recordedWalkovers++;
+                cover.walkovers++;
+              }
             } else if (a.t === "draw") {
               if (f.status === "in_play" && (await tiebreakPending(f.id))) applied = false;
               else {
@@ -1276,10 +1567,17 @@ describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
           // I-1's stale shape: a system bye award (a walkover over a dead seat) with both seats filled.
           const staleByes = rows.filter((r) => r.outcome?.kind === "award" && r.outcome.reason === "bye" && r.home_entrant_id !== null && r.away_entrant_id !== null);
           expect(staleByes.map((r) => r.ext_key ?? r.id), `${where}: a bye walkover with both seats filled`).toEqual([]);
+          // Loop-F tidy 2's other stale shape: somebody seated in a line the cascade VOIDED (abandoned, nothing on it).
+          const seatedVoids: string[] = [];
+          for (const r of rows) {
+            if (r.status === "abandoned" && (r.home_entrant_id !== null || r.away_entrant_id !== null) && (await liveEvents(r.id)) === 0) seatedVoids.push(r.ext_key ?? r.id);
+          }
+          expect(seatedVoids, `${where}: an entrant seated in a cascade void`).toEqual([]);
           const forfeits = await sql<{ reason: string | null }[]>`
             select e.payload->>'reason' as reason from score_events e join fixtures f on f.id = e.fixture_id
              where f.stage_id = ${s.stageId} and e.type = 'core.forfeit'`;
-          expect(forfeits.filter((x) => x.reason !== "withdrew"), `${where}: every forfeit is the cascade's`).toEqual([]);
+          expect(forfeits.filter((x) => x.reason !== "withdrew" && x.reason !== "walkover"), `${where}: every forfeit is the cascade's or a recorded walkover`).toEqual([]);
+          expect(forfeits.filter((x) => x.reason === "walkover").length, `${where}: every walkover is one the sequence recorded`).toBe(recordedWalkovers);
         }
         for (const [h, a2] of firstLines) {
           const gone = await withdrawnSet();
@@ -1294,7 +1592,7 @@ describe.skipIf(!HAS_DB)("rule 10: withdrawals in any order", () => {
     expect(cover.steps, "steps checked").toBeGreaterThan(0);
     expect(cover.applied, "steps that acted").toBeGreaterThan(0);
     // The alphabet reached every state the brief names.
-    for (const key of ["preStart", "postStart", "tiebreak", "voidThenForfeit", "bothSides", "voidAfterDeparture"] as const) {
+    for (const key of ["preStart", "postStart", "tiebreak", "voidThenForfeit", "bothSides", "voidAfterDeparture", "walkovers", "voidedWalkovers"] as const) {
       expect(cover[key], `coverage: ${key}`).toBeGreaterThan(0);
     }
   }, BUDGET_MS10);

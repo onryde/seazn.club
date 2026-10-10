@@ -88,6 +88,11 @@ interface BlockProps {
    *  the server refuses it (C17). New rows cannot hold a withdrawn entrant on a held line: a withdrawal walks it over. */
   home: { id: string; name: string; withdrawn?: boolean };
   away: { id: string; name: string; withdrawn?: boolean };
+  /** Loop-F tidy 2: does this line feed a NEXT match (`feedsNextMatch`, lib/bracket-next-match.ts — D19's one reading)?
+   *  False on a final, a grand final, a third-place line: with both sides gone, the R-4 route (void, then a forfeit)
+   *  would award that title or place to someone who has left, so the no-choice sentence names the vacancy instead.
+   *  Unknown (absent) reads as the R-4 sentence. */
+  feedsNextMatch?: boolean;
   busy: boolean;
   /** Sends `core.settle` and reports the server's answer — the localized refusal on a 4xx. */
   settle: (payload: { winner: string; method: SettleMethod; note?: string }) => Promise<SettleResult>;
@@ -229,7 +234,7 @@ export function SettleDialog(props: BlockProps & { onClose: () => void; onRefuse
           {/* Loop-F M-8 (legacy rows only, PF-8a): both sides withdrawn leaves no choice — say so, never an empty grid. */}
           {choices.length === 0 && (
             <p data-testid="settle-no-choice" className="mt-2 text-sm text-slate-600">
-              {msg("score.needsDecision.noChoice")}
+              {msg(props.feedsNextMatch === false ? "score.needsDecision.noChoice.place" : "score.needsDecision.noChoice")}
             </p>
           )}
           <div className="mt-2 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">

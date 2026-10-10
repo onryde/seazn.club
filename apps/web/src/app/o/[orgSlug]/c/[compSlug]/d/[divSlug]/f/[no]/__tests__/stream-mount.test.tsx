@@ -14,6 +14,7 @@ const scene = vi.hoisted(() => ({
   frozen: false,
   status: "scheduled",
   open: [] as string[],
+  feedsNext: true,
 }));
 const spies = vi.hoisted(() => ({
   loader: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock("@/server/usecases/fixtures", () => ({
   eventRecorderNames: vi.fn(async () => ({})),
   getLineup: vi.fn(async () => ({ slots: [] })),
   loadFixturePadCfg: vi.fn(async () => ({ cfg: {}, stageKind: null })),
+  fixtureFeedsNextMatch: vi.fn(async (_auth: unknown, id: string) => (id === "fx-7" ? scene.feedsNext : !scene.feedsNext)),
 }));
 vi.mock("@/server/usecases/divisions", () => ({
   getDivision: vi.fn(async () => ({
@@ -66,7 +68,10 @@ vi.mock("@/server/usecases/schedule", () => ({ getScheduleSettings: vi.fn(async 
 vi.mock("@/server/usecases/competitions", () => ({
   getCompetition: vi.fn(async () => ({ id: "comp-1", name: "Comp", slug: "comp", frozen: scene.frozen, visibility: "private" })),
 }));
-vi.mock("@/server/usecases/entrants", () => ({
+// The page reads the server's ONE departed vocabulary for the settle flag (loop-F tidy) — the real Set, never a restated
+// list (departed-vocabulary-is-single-sourced.test.ts).
+vi.mock("@/server/usecases/entrants", async (importOriginal) => ({
+  DEPARTED_STATUSES: (await importOriginal<typeof import("@/server/usecases/entrants")>()).DEPARTED_STATUSES,
   getEntrant: vi.fn(async (_auth: unknown, id: string) => ({
     id,
     display_name: id === "e-home" ? "Alpha Athletic" : "Bravo Rangers",
@@ -124,7 +129,7 @@ async function consoleProps(query: Record<string, string> = {}): Promise<Record<
 }
 
 beforeEach(() => {
-  Object.assign(scene, { canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [] });
+  Object.assign(scene, { canEdit: true, canScore: true, frozen: false, status: "scheduled", open: [], feedsNext: true });
   spies.loader.mockReset();
   spies.loader.mockImplementation(async () => CONTEXT);
   spies.openStreams.mockReset();
@@ -195,5 +200,20 @@ describe("the organiser fixture page mounts Stream (spec 2026-09-30 §2)", () =>
     expect(spies.loader.mock.calls[0][0]).toMatchObject({ checkout: { status: undefined, sessionId: "cs_a" } });
     // The empty case: any other value of `stream` is not a return.
     expect((await consoleProps({ stream: "closed" })).streamReturn).toBe(false);
+  });
+});
+
+// Loop-F tidy 2 — not Stream, the same page harness: the held block's no-choice sentence reads whether THIS line feeds a
+// next match (needs-decision.tsx `feedsNextMatch`), and the page is what hands the console that read.
+describe("the organiser fixture page hands the console whether the line feeds a next match (loop-F tidy 2)", () => {
+  it("passes THIS fixture's fixtureFeedsNextMatch read through, both ways", async () => {
+    let checked = 0;
+    for (const feeds of [true, false]) {
+      scene.feedsNext = feeds;
+      const fixture = (await consoleProps()).fixture as { id: string; feeds_next_match?: boolean };
+      expect([fixture.id, fixture.feeds_next_match], `feeds ${String(feeds)}`).toEqual(["fx-7", feeds]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });

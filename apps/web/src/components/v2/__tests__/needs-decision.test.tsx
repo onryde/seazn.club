@@ -247,13 +247,14 @@ describe("the settle dialog never truncates a name (M12)", () => {
 // offered the withdrawn entrant as a winner the server then refused (SETTLE_NOT_APPLICABLE withdrawn, C17). The dialog
 // now offers only the sides still in the competition. New rows cannot reach it: a withdrawal walks a held line over.
 describe("the settle dialog never offers a withdrawn entrant (D-R9)", () => {
-  const dialog = (home: { id: string; name: string; withdrawn?: boolean }, away: { id: string; name: string; withdrawn?: boolean }) =>
+  const dialog = (home: { id: string; name: string; withdrawn?: boolean }, away: { id: string; name: string; withdrawn?: boolean }, feedsNextMatch?: boolean) =>
     renderToStaticMarkup(
       <SettleDialog
         msg={(k) => (en as Record<string, string>)[k] ?? k}
         cause="level"
         home={home}
         away={away}
+        feedsNextMatch={feedsNextMatch}
         busy={false}
         settle={async () => ({ ok: true })}
         onClose={() => {}}
@@ -311,6 +312,44 @@ describe("the settle dialog never offers a withdrawn entrant (D-R9)", () => {
       checked++;
     }
     expect(checked).toBe(4);
+    expect(lines.size, "four translations, not one sentence copied").toBe(4);
+  });
+
+  // Loop-F tidy 2: on a line that feeds NO next match — a final, a grand final, a third-place line — the R-4 route would
+  // award the title or the place to a side that has left ("nobody advances" is false there: the forfeit names a
+  // winner). The dialog says so and offers no route: the place stays vacant (X-WD-4: a vacant title is W4's).
+  it("tidy-2: on a line that feeds no next match the no-choice sentence names the vacancy and offers no forfeit; on one that does (or unknown) it names the R-4 route", () => {
+    const noChoice = (html: string) => /data-testid="settle-no-choice"[^>]*>([^<]*)</.exec(html)?.[1] ?? null;
+    const gone = [{ id: "h", name: "Home", withdrawn: true }, { id: "a", name: "Away", withdrawn: true }] as const;
+    const EN = en as Record<string, string>;
+    const unescape = (h: string | null) => h?.replace(/&#x27;/g, "'").replace(/&quot;/g, '"') ?? null;
+    const cases: [boolean | undefined, string][] = [
+      [false, EN["score.needsDecision.noChoice.place"]!],
+      [true, EN["score.needsDecision.noChoice"]!],
+      [undefined, EN["score.needsDecision.noChoice"]!],
+    ];
+    let checked = 0;
+    for (const [feeds, want] of cases) {
+      expect(want, `${String(feeds)}: the key exists`).toBeTruthy();
+      expect(unescape(noChoice(dialog(gone[0], gone[1], feeds))), `feedsNextMatch ${String(feeds)}`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // With a side left, the line has a choice wherever it sits: no sentence at all (the M-8 negative pair, on a final).
+    expect(noChoice(dialog({ id: "h", name: "Home" }, gone[1], false)), "one side left on a final: a choice, no sentence").toBeNull();
+    const DQ: (typeof FORFEIT_REASONS)[number] = "disqualified";
+    const LOCALES: [string, Record<string, string>][] = [["en", en], ["es", es], ["fr", fr], ["nl", nl]];
+    const lines = new Set<string>();
+    let locales = 0;
+    for (const [locale, dict] of LOCALES) {
+      const line = dict["score.needsDecision.noChoice.place"];
+      expect(line, `${locale}: translated`).toBeTruthy();
+      expect(line!.includes(DQ), `${locale}: offers no forfeit route on a line that decides a place`).toBe(false);
+      expect(line, `${locale}: a different sentence from the R-4 route`).not.toBe(dict["score.needsDecision.noChoice"]);
+      lines.add(line!);
+      locales++;
+    }
+    expect(locales).toBe(4);
     expect(lines.size, "four translations, not one sentence copied").toBe(4);
   });
 });
