@@ -614,19 +614,30 @@ async function readCameraEvidence(
     (s) => Date.parse(s.startedAt) < to && (s.endedAt === null || Date.parse(s.endedAt) > from),
   );
   if (sessions.some((s) => s.status === "LIVE")) return "not_ready";
+  // Ruling I2: an unreadable answer is never the negative one. A match was
+  // played — both players seated on a LIVE publisher (T8) — so a list with
+  // no session over it is a list not ready (lag, a filter, a time range),
+  // never "both cameras off all match".
+  if (sessions.length === 0) return "not_ready";
 
   const flags: CameraFlag[] = [];
   for (const [personId, participantIds] of players) {
     const reports: CompleteCoverage[] = [];
+    let peers = 0;
     for (const participantId of participantIds) {
       for (const s of sessions) {
         for (const peer of await listPeerIds(s.id, participantId, rtk)) {
+          peers++;
           const coverage = await fetchVideoOffCoverage(peer, rtk);
           if (coverage.incomplete) return "not_ready";
           reports.push(coverage);
         }
       }
     }
+    // …and a SEATED player (a camera participant) whom no session shows
+    // contradicts our own record the same way. A player with no camera
+    // participant at all, absent from sessions that WERE read, is evidence.
+    if (participantIds.length > 0 && peers === 0) return "not_ready";
     const off = matchCameraOff(window, reports);
     if (off.offIntervals.length === 0) continue;
     const intervals = off.offIntervals
