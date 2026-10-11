@@ -1,7 +1,7 @@
 // The public fixture loader against the REAL fixture_external_play schema.
 //
 // `loadPublicExternalPlay` selected play_url / white_play_url /
-// black_play_url, which V432's table never had: Postgres refuses an unknown
+// black_play_url, which V433's table never had: Postgres refuses an unknown
 // column when it PARSES the query, whether or not a row matches, and
 // getPublicFixture runs that read for every fixture — so every public fixture
 // page errored, chess or not. No test ran the real loader against the real

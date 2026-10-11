@@ -1,4 +1,4 @@
-// V432 video + flags + audit. Four claims that are not derivable from the DDL:
+// V433 video + flags + audit. Four claims that are not derivable from the DDL:
 //  - D6: N participants per fixture is the MODEL, so (fixture_id, person_id)
 //    is deliberately NOT unique — a second angle is config later, not a
 //    migration. The test proves two rows for one person are accepted.
@@ -25,7 +25,7 @@ const attempt = (p: Promise<unknown>): Promise<Outcome> =>
     }),
   );
 
-describe.skipIf(!HAS_DB)("video, flags and audit schema (V432)", () => {
+describe.skipIf(!HAS_DB)("video, flags and audit schema (V433)", () => {
   let orgId = "";
   let fixtureId = "";
   /** A second fixture in the same stage, with NO meeting row — the only way to
@@ -166,7 +166,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V432)", () => {
 
   // T6 fix round 1 (review M-3): with policy_downgrade gone, the columns only
   // it used (stage_id, from_policy, to_policy) were dropped from the unmerged
-  // V432. Expected set typed from that ruling, not read from the table.
+  // V433. Expected set typed from that ruling, not read from the table.
   it("the audit table carries only what a video override needs", async () => {
     const cols = await sql<{ column_name: string }[]>`
       select column_name from information_schema.columns

@@ -40,7 +40,7 @@ export type BridgeRow = {
   needs_reason: NeedsReason | null;
   started_at: Date | null;
   finished_at: Date | null;
-  /** V435 — T10's move ledger: every move Lichess ACCEPTED, as UCI. */
+  /** V436 — T10's move ledger: every move Lichess ACCEPTED, as UCI. */
   moves_uci: string[];
   move_count: number;
   last_move_at: Date | null;

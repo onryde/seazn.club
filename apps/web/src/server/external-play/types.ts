@@ -11,7 +11,7 @@ export type ExternalPlayStatus =
   | "needs_organiser";
 
 /** Spec §9 / row `needs_reason` — why a fixture landed in `needs_organiser`.
- *  The SAME SET as the `needs_reason` CHECK (V432, as V434 re-declares it).
+ *  The SAME SET as the `needs_reason` CHECK (V433, as V435 re-declares it).
  *  `token_revoked` / `double_walkover_blocked` are §3.6: a revoked token is
  *  not a no-show; a blocked double walkover is its own state.
  *  external-play-needs-organiser.test.ts reads the CHECK back from
@@ -27,10 +27,10 @@ export const NEEDS_REASONS = [
   "provider_error",
   "token_revoked",
   "double_walkover_blocked",
-  // V434 (T9 fix round 1, I2): a stale create whose outcome a lookup could
+  // V435 (T9 fix round 1, I2): a stale create whose outcome a lookup could
   // not prove — held for an organiser, never re-created blind.
   "create_outcome_unknown",
-  // V434 (T12, spec §3.6): a drawn game in a bracket stage, held for the
+  // V435 (T12, spec §3.6): a drawn game in a bracket stage, held for the
   // organiser — never written as decided.
   "tiebreak_owed",
 ] as const;

@@ -524,7 +524,7 @@ describe.runIf(HAS_DB)("writeResultFrom — M9: an early resign is an abort with
     expect(fx.status).not.toBe("forfeited");
     const b = await bridgeOf(g.fixtureId);
     expect(b!.status).toBe("needs_organiser");
-    expect(b!.needs_reason, "the existing V432 reason for exactly this").toBe("aborted");
+    expect(b!.needs_reason, "the existing V433 reason for exactly this").toBe("aborted");
   });
 
   it("the SAME resign after two moves DOES decide it — the pair that makes the case above non-vacuous", async () => {

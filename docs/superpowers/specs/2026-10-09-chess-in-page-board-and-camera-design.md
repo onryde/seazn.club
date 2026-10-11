@@ -466,7 +466,7 @@ The sample is a mechanism reference, not a code source. Specifically rejected:
   implementer re-checks the gate as merged rather than coding against this paragraph.
 - **W3 owns Swiss colour alternation.** We read colour; we do not fix allocation.
 - Migrations: V405/V407 sit below main's high-water mark (V431) and `flyway.toml` sets no
-  `outOfOrder`, so they are refused on any DB past V431. **Amend them to V432/V433 as
+  `outOfOrder`, so they are refused on any DB past V431. **Amend them to V433/V434 as
   part of this design's schema work** — do not enable `outOfOrder`.
 
 ---

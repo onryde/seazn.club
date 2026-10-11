@@ -934,15 +934,15 @@ export async function seedFixtureExternalPlaySql(
   fixtureId: string,
   opts: {
     status: "pending" | "ready" | "live" | "finished" | "needs_organiser";
-    /** Required by V432's CHECK exactly when status is needs_organiser. */
+    /** Required by V433's CHECK exactly when status is needs_organiser. */
     needsReason?: string | null;
     lastError?: string | null;
     challengeId?: string | null;
   },
 ): Promise<void> {
-  // V432's columns (the 2026-10-09 model): there is no play URL any more
-  // (V434 dropped url_white/url_black; play_url / external_challenge_id were
-  // never in V432), and scheduled_at_basis is NOT NULL.
+  // V433's columns (the 2026-10-09 model): there is no play URL any more
+  // (V435 dropped url_white/url_black; play_url / external_challenge_id were
+  // never in V433), and scheduled_at_basis is NOT NULL.
   await withDb(async (sql) => {
     const [fx] = await sql<{ org_id: string; scheduled_at: Date | null }[]>`
       select org_id, scheduled_at from fixtures where id = ${fixtureId}`;

@@ -1,8 +1,8 @@
 import "server-only";
 // The organiser queue for online-play fixtures stuck in `needs_organiser`,
-// read by the division page's fixtures tab. Rebuilt against V432: the
+// read by the division page's fixtures tab. Rebuilt against V433: the
 // pre-redesign reader was deleted in 340dce7ed together with the schema it
-// read. Same shape the page already consumes, plus `reason` — V432 moved the
+// read. Same shape the page already consumes, plus `reason` — V433 moved the
 // why out of free-text `last_error` into the `needs_reason` vocabulary.
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -20,7 +20,7 @@ export type NeedsOrganiserExternalPlayRow = {
   lastError: string | null;
 };
 
-/** V432's CHECK pairs `needs_organiser` with a non-null reason from the
+/** V433's CHECK pairs `needs_organiser` with a non-null reason from the
  *  vocabulary, so a row outside it cannot exist. A guard, not a comment: if
  *  the CHECK and NEEDS_REASONS ever drift, refuse loudly instead of handing
  *  the queue a reason nothing can label. */

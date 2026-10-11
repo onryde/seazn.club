@@ -417,7 +417,7 @@ function checkAgeCutoff(
   }
 }
 
-/** Online-chess camera policy (design §5.1, V432). The vocabulary is
+/** Online-chess camera policy (design §5.1, V433). The vocabulary is
  *  lib/camera-policy.ts's — one definition shared with the server ladder and
  *  the settings control. */
 export const CameraPolicyS = z.enum(CAMERA_POLICIES);
@@ -444,7 +444,7 @@ export const CreateDivision = z
     age_cutoff_month: z.number().int().min(1).max(12).nullable().optional(),
     age_cutoff_day: z.number().int().min(1).max(31).nullable().optional(),
     eligibility_note: z.string().max(2000).nullable().optional(),
-    /** Online-chess camera requirement for this division (V432
+    /** Online-chess camera requirement for this division (V433
      *  `divisions.camera_policy`). Absent or null ⇒ inherit the competition's
      *  (NOT NULL, default 'off'); a stage may override it. Board games only —
      *  any other sport refuses 'optional'/'required' (422 CAMERA_POLICY_SPORT). */
@@ -559,7 +559,7 @@ export const Division = z.object({
   archived_at: z.string().nullable(), // v3/09 §4 — set = archived (hidden, restorable)
   created_at: z.string(),
   required_court_tags: z.array(z.string()), // D5/P8 candidate-court filter; see PatchDivision above
-  camera_policy: CameraPolicyS.nullable(), // V432 — null = inherit the competition's; see PatchDivision above
+  camera_policy: CameraPolicyS.nullable(), // V433 — null = inherit the competition's; see PatchDivision above
 });
 
 // ---------------------------------------------------------------------------

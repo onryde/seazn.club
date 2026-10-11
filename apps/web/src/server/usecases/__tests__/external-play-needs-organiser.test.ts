@@ -1,4 +1,4 @@
-// The organiser queue's reader, rebuilt against V432 (the pre-redesign one was
+// The organiser queue's reader, rebuilt against V433 (the pre-redesign one was
 // deleted in 340dce7ed with its schema). It is what the division page's
 // fixtures tab calls, so it is imported here through the SAME path the page
 // uses: the `@/server/usecases/external-play` index.
@@ -65,7 +65,7 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
     const s = await seeded();
     await bridge(s.fixtureId, s.orgId, "needs_organiser", "aborted", null);
     expect((await listNeedsOrganiserExternalPlay(s.auth, s.divisionId)).map((r) => r.reason)).toEqual(["aborted"]);
-    // V432's status CHECK, minus needs_organiser — typed from the migration.
+    // V433's status CHECK, minus needs_organiser — typed from the migration.
     const others = ["pending", "ready", "live", "finished"];
     let checked = 0;
     for (const status of others) {
@@ -82,7 +82,7 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
     ]);
   });
 
-  it("every reason V432 admits is listed as itself, and the TS vocabulary IS the CHECK", async () => {
+  it("every reason V433 admits is listed as itself, and the TS vocabulary IS the CHECK", async () => {
     // The authority is the database: read the needs_reason CHECK's literals.
     const [def] = await sql<{ d: string }[]>`
       select pg_get_constraintdef(c.oid) as d from pg_constraint c
