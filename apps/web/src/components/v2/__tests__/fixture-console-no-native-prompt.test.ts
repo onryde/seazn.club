@@ -26,9 +26,19 @@ describe("fixture-console: no native browser dialogs", () => {
     expect(source).not.toMatch(/(?<!\.)\balert\(/);
   });
 
-  it("routes abandon/forfeit reasons through the in-app TextPromptDialog instead", () => {
+  it("routes the abandon reason through the in-app TextPromptDialog instead", () => {
     expect(source).toContain("function TextPromptDialog(");
     expect(source).toContain("setAbandonPrompt");
-    expect(source).toContain("setForfeitPrompt");
+  });
+
+  // W2b Task 11: the forfeit no longer TYPES a reason at all — the in-app ForfeitDialog offers the closed vocabulary as
+  // choices (forfeit-dialog.tsx; driven click by click in fixture-console-forfeit-hooks.test.tsx).
+  it("routes the forfeit through the in-app ForfeitDialog, never a typed reason", () => {
+    expect(source).toContain("<ForfeitDialog");
+    expect(source).toContain("setForfeitOpen");
+    expect(source, "the old free-text forfeit prompt is gone").not.toContain("setForfeitPrompt");
+    const dialog = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../forfeit-dialog.tsx"), "utf8");
+    expect(dialog).not.toMatch(/window\.(prompt|confirm)\(/);
+    expect(dialog).not.toMatch(/(?<!\.)\balert\(/);
   });
 });

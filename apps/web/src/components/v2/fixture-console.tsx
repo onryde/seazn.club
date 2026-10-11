@@ -70,6 +70,10 @@ import { resolvePad } from "@/components/v2/scorepad/v3/registry";
 import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
 import { HeldNote, NeedsDecisionBlock, finalizeVisible, heldCause, needsDecision, type SettleResult } from "@/components/v2/needs-decision";
+import { ForfeitDialog, forfeitBaseState, forfeitDialogModel, type ForfeitDialogModel, type ForfeitResult } from "@/components/v2/forfeit-dialog";
+import { lineupPairFrom } from "@/components/v2/scorepad/registry";
+import type { AnySportModule } from "@seazn/engine/sport";
+import type { WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
 import { ScoreSentence } from "@/components/score-sentence";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -139,9 +143,11 @@ function StreamControl({
 }
 
 /** Focus-trapped, Esc-to-close single-field text prompt — replaces the native
- *  browser prompt dialog for the abandon/forfeit reason inputs below (same
- *  reasoning as prose-editor.tsx's EditorDialog: stylable, localizable,
- *  testable, consistent with the rest of the app's dialogs). */
+ *  browser prompt dialog for the abandon reason input below (same reasoning as
+ *  prose-editor.tsx's EditorDialog: stylable, localizable, testable, consistent
+ *  with the rest of the app's dialogs). The forfeit no longer types a reason:
+ *  W2b Task 11's `ForfeitDialog` (forfeit-dialog.tsx) offers the closed
+ *  vocabulary as choices. */
 function TextPromptDialog({
   title, initialValue, msg, onSubmit, onClose,
 }: {
@@ -317,6 +323,11 @@ interface Props {
     /** Loop-F tidy 2: the line feeds a next match (`fixtureFeedsNextMatch`) — the held block's no-choice sentence
      *  reads it (needs-decision.tsx `feedsNextMatch`). */
     feeds_next_match?: boolean;
+    /** W2b Task 11 (D19, X-DW-3): the server refuses a double walkover on this fixture (`doubleWalkoverRefused`,
+     *  lib/double-walkover-next-match.ts — a feeding bracket kind on a line that feeds no next match), read by the page.
+     *  The forfeit dialog then shows the guidance instead of "Neither". Absent reads false: "Neither" is offered and
+     *  the server's own refusal still stands. */
+    no_next_match?: boolean;
   };
   sport: SportInfo;
   home: SideInfo | null;
@@ -542,6 +553,13 @@ export function FixtureConsole({
    *  clean undo was expected. Found in review (S13 follow-ups). */
   const [padSyncing, setPadSyncing] = useState(false);
   const [abandonPrompt, setAbandonPrompt] = useState(false);
+  /** W2b Task 11: the forfeit dialog, open with the model it was opened on. A snapshot on purpose: a background resync
+   *  (another device, the tab-return refresh) must not move the choices under the organiser's finger — the server judges
+   *  the send, and a refusal closes the dialog with its reason (`forfeitRefusal`). */
+  const [forfeitOpen, setForfeitOpen] = useState<ForfeitDialogModel | null>(null);
+  /** Spec §7: a refused forfeit closes the dialog and its reason shows here. Outside the match-actions band, because a
+   *  refusal that resynced (SEQ_CONFLICT: the match was decided elsewhere) unmounts the band it came from. */
+  const [forfeitRefusal, setForfeitRefusal] = useState<string | null>(null);
   /** The row whose Void is in flight — the panel dims exactly that button. */
   const [voidingId, setVoidingId] = useState<string | null>(null);
   // Spec 2026-09-30 §2: ONE panel open at a time — Remote scoring or Stream (`nextOpenPanel`). `detailsOpen` and the
@@ -696,6 +714,15 @@ export function FixtureConsole({
     [post, msg],
   );
 
+  // W2b Task 11 (spec §7): the forfeit dialog shows a refusal on the console, like the settle dialog's.
+  const forfeit = useCallback(
+    async ({ by, reason }: { by: string; reason: WriterForfeitReason }): Promise<ForfeitResult> => {
+      const r = await post("core.forfeit", { by, reason });
+      return r.ok ? r : { ok: false, message: r.message ?? msg("score.failed") };
+    },
+    [post, msg],
+  );
+
   // W3 (design §5) — the console's own freshness floor.
   //
   // Every other refresh path here is downstream of the embedded pad's
@@ -750,8 +777,8 @@ export function FixtureConsole({
     // reachable in tests because `apps/web` vitest is `environment: "node"` and
     // `_hook-harness.tsx` commits effects with no browser at all — every other
     // `document` listener in this file sits in a CHILD the harness never
-    // mounts (`TextPromptDialog`'s keydown trap and `ForfeitButton`'s
-    // pointerdown dismiss), and this is the first one on the always-mounted
+    // mounts (`TextPromptDialog`'s keydown trap and `ForfeitDialog`'s, both
+    // mounted only while open), and this is the first one on the always-mounted
     // root. Guarding is what lets three existing console suites render at all.
     // Named by their components on purpose: the line numbers this comment
     // originally carried were already wrong when it was written, because the
@@ -847,23 +874,44 @@ export function FixtureConsole({
   // the organiser's settle (a level result, an active abandon that decided nobody, a chess game whose tie-break is
   // pending). The module is resolved defensively, the way `resolvePadSpecForMount` does: an unresolvable pin falls
   // back to "no pending-decider hook", which can only HIDE the block in phase tiebreak, never show it wrongly.
-  const settleModule = useMemo((): { awaitingDecider?(state: never): boolean } => {
+  // W2b Task 11: the same resolution feeds the forfeit dialog (its phase guard, credit and metric order); null there
+  // offers no Forfeit at all rather than a dialog with nothing to choose.
+  const sportModule = useMemo((): AnySportModule | null => {
     try {
       return resolveModuleClient(sport.key, scorePadV2?.moduleVersion ?? "");
     } catch {
-      return {};
+      return null;
     }
   }, [sport.key, scorePadV2?.moduleVersion]);
-  const held = needsDecision(settleModule, { outcome: live.outcome, state: live.state, stageKind, events });
+  const held = needsDecision(sportModule ?? {}, { outcome: live.outcome, state: live.state, stageKind, events });
+  // W2b Task 11 (UI-1; spec §5.5): what the forfeit dialog offers, from the engine's own phase guard over THIS state (a
+  // scheduled fixture's null read as the module's init), the cfg the pad folds against, and the page's D19 reading.
+  const forfeitCfg = scorePadV2?.resolvedConfig ?? sport.config;
+  const noNextMatch = fixture.no_next_match === true;
+  const forfeitModel = useMemo((): ForfeitDialogModel | null => {
+    if (sportModule === null || home === null || away === null) return null;
+    try {
+      const state = forfeitBaseState(sportModule, forfeitCfg, live.state, lineupPairFrom(home, away));
+      return forfeitDialogModel(sportModule, forfeitCfg, state, { noNextMatch });
+    } catch {
+      // A state the module cannot read here is not a dialog to guess at; the console stays up without the Forfeit.
+      return null;
+    }
+  }, [sportModule, forfeitCfg, live.state, home, away, noNextMatch]);
   // The match-actions band's two halves, each decided ONCE and read both by the band's own gate and by the control it
   // renders (two gates for one fact would each cover for the other, and neither would be tested).
   //  - Finding 27: a held fixture's Finalize is refused (LEVEL_RESULT_IN_BRACKET), so it is not offered.
   //  - Finding 11 / X-ST-2: forfeit and abandon are organiser-only on the server; a scorer is never offered them.
-  //  - Fix round 1 (I1): nor while HELD — a chess knockout in its tie-break is in play and undecided; the engine refuses
-  //    a forfeit there (WRONG_PHASE, boardgame.ts) but would take an abandon, so THIS gate is what keeps both off a held
-  //    match, and the settle above is the organiser's way out.
+  //  - Fix round 1 (I1): nor while HELD — the settle above is the organiser's way out, and the engine would take an
+  //    abandon on a chess tie-break, so THIS gate is what keeps Abandon off a held match.
+  //  - W2b-R14 (BG-WO-3): EXCEPT the Forfeit on a chess knockout whose tie-break is pending — a player who does not turn
+  //    up for the tie-break games is walked over (the engine admits it in phase tiebreak now). Abandon stays closed there.
+  //  - The Forfeit also needs a dialog with something to choose (`forfeitModel`): an unresolvable module offers none.
   const offerFinalize = finalizeVisible({ decided, held });
-  const offerOrganiserActions = !decided && !held && canOrganise;
+  const tiebreakPending = held && heldCause({ outcome: live.outcome, events }) === "tiebreak";
+  const offerForfeit = !decided && (!held || tiebreakPending) && canOrganise && (forfeitModel?.who.length ?? 0) > 0;
+  const offerAbandon = !decided && !held && canOrganise;
+  const offerOrganiserActions = offerForfeit || offerAbandon;
   // Owner ruling 17 — the padSpec resolved purely to decide whether a
   // DECIDED fixture still keeps the pad mounted (`shouldMountPad` above).
   // `scorePadV2?.resolvedConfig ?? sport.config` is the SAME cfg fallback
@@ -1530,18 +1578,29 @@ export function FixtureConsole({
                 )}
               </>
             )}
-            {offerOrganiserActions && (
-              <>
-                <ForfeitButton busy={busy} padSyncing={padSyncing} home={home} away={away} send={send} />
-                <button
-                  type="button"
-                  disabled={busy || padSyncing}
-                  onClick={() => setAbandonPrompt(true)}
-                  className="btn btn-danger min-h-11"
-                >
-                  {msg("score.abandon")}
-                </button>
-              </>
+            {offerForfeit && (
+              <button
+                type="button"
+                data-testid="score-forfeit"
+                disabled={busy || padSyncing}
+                onClick={() => {
+                  setForfeitRefusal(null);
+                  setForfeitOpen(forfeitModel);
+                }}
+                className="btn btn-danger min-h-11"
+              >
+                {msg("score.forfeit")}
+              </button>
+            )}
+            {offerAbandon && (
+              <button
+                type="button"
+                disabled={busy || padSyncing}
+                onClick={() => setAbandonPrompt(true)}
+                className="btn btn-danger min-h-11"
+              >
+                {msg("score.abandon")}
+              </button>
             )}
           </div>
           {abandonPrompt && (
@@ -1558,6 +1617,27 @@ export function FixtureConsole({
           )}
         </section>
       )}
+      {/* W2b Task 11 (spec §7): a refused forfeit closed its dialog; the reason stays here, outside the band, so a
+          refusal that resynced the match into its decided state is still read. */}
+      {forfeitRefusal !== null && (
+        <p data-testid="forfeit-refusal" role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 [overflow-wrap:anywhere]">
+          {forfeitRefusal}
+        </p>
+      )}
+      {forfeitOpen !== null && home && away && (
+        <ForfeitDialog
+          msg={msg}
+          model={forfeitOpen}
+          home={{ id: home.id, name: homeName! }}
+          away={{ id: away.id, name: awayName! }}
+          forfeit={forfeit}
+          onClose={() => setForfeitOpen(null)}
+          onRefused={(message) => {
+            setForfeitOpen(null);
+            setForfeitRefusal(message);
+          }}
+        />
+      )}
 
     </div>
   );
@@ -1573,80 +1653,4 @@ export function FixtureConsole({
 
 function decidedLock(status: string): boolean {
   return status === "finalized" || status === "cancelled";
-}
-
-function ForfeitButton({
-  busy,
-  padSyncing,
-  home,
-  away,
-  send,
-}: {
-  busy: boolean;
-  padSyncing: boolean;
-  home: SideInfo;
-  away: SideInfo;
-  send: SendEvent;
-}) {
-  const msg = useMsg();
-  const [open, setOpen] = useState(false);
-  const [forfeitPrompt, setForfeitPrompt] = useState<SideInfo | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        data-testid="score-forfeit"
-        disabled={busy || padSyncing}
-        onClick={() => setOpen(!open)}
-        className="btn btn-danger min-h-11"
-      >
-        {msg("score.forfeit")}
-      </button>
-      {open && (
-        <div className="card absolute z-10 mt-1 w-56 space-y-1 p-2 shadow-lg">
-          {([["home", home], ["away", away]] as const).map(([sideKey, s]) => (
-            <button
-              key={s.id}
-              type="button"
-              data-testid={`score-forfeit-${sideKey}`}
-              className="block min-h-11 w-full rounded px-2 py-1.5 text-left text-sm hover:bg-purple-50"
-              onClick={() => {
-                setOpen(false);
-                setForfeitPrompt(s);
-              }}
-            >
-              {/* R7/C5 — the person, not the entry label. */}
-              {msg("score.forfeits", { name: entrantDisplayName(s) })}
-            </button>
-          ))}
-        </div>
-      )}
-      {forfeitPrompt && (
-        <TextPromptDialog
-          // R7/C review fix #3 — the picker resolved the person and the
-          // confirmation behind it did not, so a console that named Ada
-          // Okonkwo everywhere else asked the organiser to confirm a forfeit
-          // for "Entry 3". Same resolution, same `SideInfo`.
-          title={msg("score.forfeitPrompt", { name: entrantDisplayName(forfeitPrompt) })}
-          initialValue="walkover"
-          msg={msg}
-          onClose={() => setForfeitPrompt(null)}
-          onSubmit={(reason) => {
-            const by = forfeitPrompt.id;
-            setForfeitPrompt(null);
-            void send("core.forfeit", { by, reason });
-          }}
-        />
-      )}
-    </div>
-  );
 }

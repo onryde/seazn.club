@@ -23,7 +23,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import type { EventIn, LiveState, MemberIn, SideInfo, SportInfo } from "@/components/v2/fixture-console";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { foldMatch } from "@seazn/engine/core";
+import { builtinModules } from "@seazn/engine/sports";
+import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
@@ -237,15 +240,15 @@ describe("the console renders people, not entry labels (D-6)", () => {
 // the picker can be OPENED and the sentence a user reads can be asserted —
 // including the confirmation dialog behind it, which turned out to still be
 // naming the entry label.
-describe("the forfeit picker, opened (D-6)", () => {
+describe("the forfeit dialog, opened (D-6)", () => {
   beforeEach(() => {
-    // `ForfeitButton`'s outside-click effect runs the moment the menu opens
-    // and there is no DOM in this workspace (`environment: "node"`). Two
-    // no-ops are the whole contract it needs; anything more would be a
-    // second, silent implementation of the behaviour under test.
+    // `ForfeitDialog`'s keydown trap registers on `document` the moment it mounts and there is no DOM in this workspace
+    // (`environment: "node"`). Two no-ops (and no focused element) are the whole contract it needs; anything more would
+    // be a second, silent implementation of the behaviour under test.
     vi.stubGlobal("document", {
       addEventListener: () => undefined,
       removeEventListener: () => undefined,
+      activeElement: null,
     });
   });
 
@@ -253,11 +256,15 @@ describe("the forfeit picker, opened (D-6)", () => {
     vi.unstubAllGlobals();
   });
 
-  /** The real `<ForfeitButton/>` element the console builds, re-mounted in the
-   *  harness so its own `useState` can be driven. Found by function identity
-   *  rather than exported for the test: the console is its only caller, and
-   *  widening the module's surface to reach it would be the test changing the
-   *  product. */
+  // W2b Task 11: the dialog reads the module (its phase guard), so the console needs the pad's pin and a REAL folded
+  // state — a started football match.
+  const football = builtinModules.find((m) => m.key === "football")!;
+  const CFG = football.configSchema.parse((football.variants as Record<string, unknown> | undefined)?.["11-a-side"] ?? {});
+  const STARTED = foldMatch(football, CFG, defaultLineupPair(football.positions), [makeEnvelope(1, { type: "core.start", payload: {} })]);
+
+  /** The real `<ForfeitDialog/>` element the console builds once Forfeit is clicked, re-mounted in the harness so its
+   *  own `useState` can be driven. Found by function identity rather than by a test-only export: the console is its
+   *  only caller. */
   function forfeitIsland() {
     const console_ = renderIsland(FixtureConsole, {
       fixture: { id: "f1", status: "in_play", scheduled_at: null, venue_name: null, court_name: null, round_no: 1 },
@@ -268,7 +275,7 @@ describe("the forfeit picker, opened (D-6)", () => {
         status: "in_play",
         last_seq: 1,
         summary: { headline: "1 — 0" },
-        state: {},
+        state: STARTED,
         outcome: null,
       } satisfies LiveState,
       initialEvents: [GOAL],
@@ -276,48 +283,50 @@ describe("the forfeit picker, opened (D-6)", () => {
       canOrganise: true,
       stageKind: null,
       viewerPlan: "community",
+      scorePadV2: {
+        moduleVersion: football.version,
+        resolvedConfig: CFG,
+        initialEvents: [],
+        entitlements: {},
+        stageKind: null,
+        identity: { recordedBy: "user-1", deviceLinkId: null },
+      },
     });
-    const el = console_
-      .tree()
-      .find((e) => typeof e.type === "function" && (e.type as { name?: string }).name === "ForfeitButton");
-    if (!el) throw new Error("<ForfeitButton/> not found in the console's tree");
+    const isDialog = (e: ReactElement) => typeof e.type === "function" && (e.type as { name?: string }).name === "ForfeitDialog";
+    expect(console_.tree().some(isDialog), "closed until Forfeit is clicked").toBe(false);
+    const trigger = console_.tree().find((e) => e.type === "button" && propsOf(e)["data-testid"] === "score-forfeit");
+    if (!trigger) throw new Error("score-forfeit not found in the console's tree");
+    (propsOf(trigger).onClick as () => void)();
+    const el = console_.tree().find(isDialog);
+    if (!el) throw new Error("<ForfeitDialog/> not found after clicking Forfeit");
     return renderIsland(el.type as (props: unknown) => ReactNode, propsOf(el));
   }
 
-  function buttons(island: ReturnType<typeof forfeitIsland>): ReactElement[] {
-    return island.tree().filter((e) => e.type === "button");
-  }
+  const byTestid = (island: ReturnType<typeof forfeitIsland>, id: string): ReactElement[] =>
+    island.tree().filter((e) => propsOf(e)["data-testid"] === id);
 
-  it("names the people once the menu is open, never the entry label", () => {
+  it("names the people on the side choices, never the entry label", () => {
     const island = forfeitIsland();
-
-    // Closed: one control, the trigger — proves the click below is what
-    // reveals the labels, so the assertions cannot be reading the header.
-    expect(buttons(island)).toHaveLength(1);
-    (propsOf(buttons(island)[0]!).onClick as () => void)();
-
-    const open = buttons(island);
-    expect(open, "the trigger plus one row per side").toHaveLength(3);
+    const home = byTestid(island, "forfeit-who-home");
+    const away = byTestid(island, "forfeit-who-away");
+    expect(home).toHaveLength(1);
+    expect(away).toHaveLength(1);
     const text = island.text();
-    expect(text).toContain("Ada Okonkwo forfeits");
-    expect(text).toContain("Cy Mensah / Bo Lindqvist forfeits");
-    expect(text, "the entry label must not reach the picker").not.toContain("Entry 3");
+    expect(text).toContain("Ada Okonkwo");
+    expect(text).toContain("Cy Mensah / Bo Lindqvist");
+    expect(text, "the entry label must not reach the dialog").not.toContain("Entry 3");
     expect(text).not.toContain("Entry 4");
   });
 
-  it("names the person in the confirmation the organiser has to read and accept", () => {
-    // The step AFTER the picker, and the one that carries the consequence:
-    // "Reason {name} forfeits:". It was still reading `forfeitPrompt.name`,
-    // so a console that had named Ada Okonkwo everywhere else asked the
-    // organiser to confirm a forfeit for "Entry 3".
+  it("names the people in the preview the organiser has to read and accept", () => {
+    // The step that carries the consequence: who is credited what. A dialog that named Ada Okonkwo on the side choice
+    // and "Entry 3" in the credited score would be R7/C review fix #3 again (the old prompt's title).
     const island = forfeitIsland();
-    (propsOf(buttons(island)[0]!).onClick as () => void)();
-    (propsOf(buttons(island)[1]!).onClick as () => void)();
-
-    const dialog = island
-      .tree()
-      .find((e) => typeof e.type === "function" && (e.type as { name?: string }).name === "TextPromptDialog");
-    if (!dialog) throw new Error("<TextPromptDialog/> not found after picking a side");
-    expect(propsOf(dialog).title).toBe("Reason Ada Okonkwo forfeits:");
+    (propsOf(byTestid(island, "forfeit-who-home")[0]!).onClick as () => void)();
+    (propsOf(byTestid(island, "forfeit-why-retired")[0]!).onChange as () => void)();
+    const preview = byTestid(island, "forfeit-preview");
+    expect(preview).toHaveLength(1);
+    // FB-RT-1 (FDC Art. 28): the home side retired, the away side is credited the awarded 3-0.
+    expect(textOf(preview[0]!)).toBe("Credited score: Ada Okonkwo 0–3 Cy Mensah / Bo Lindqvist");
   });
 });

@@ -80,7 +80,7 @@ const PAYLOAD_FLOOR = 79;
  *  not a free-text reason. A writer the regex cannot read lands here as a deficit and reds until it is named; a named
  *  one that becomes readable, or goes, reds until its entry is deleted. */
 const UNREAD_WRITERS: Record<string, { writes: number; why: string }> = {
-  "apps/web/src/components/v2/fixture-console.tsx": { writes: 1, why: "`{ by, reason }` from the console's forfeit prompt (Task 11 replaces it)" },
+  "apps/web/src/components/v2/fixture-console.tsx": { writes: 1, why: "`{ by, reason }` from the forfeit dialog's chips: a `WriterForfeitReason`, the engine's phase guard less PF-2's cascade-only reasons (Task 11)" },
   "apps/web/src/components/v2/scorepad/v3/__tests__/authority-only-tiles.test.ts": { writes: 1, why: "an empty `{}` tile payload, classified and never posted" },
   "apps/web/src/lib/__tests__/event-copy.test.ts": { writes: 1, why: "a reason-less copy fixture: rendered as a line, never posted" },
   "apps/web/src/server/api-v1/__tests__/http.test.ts": { writes: 1, why: "`reason` drawn from FORFEIT_REASONS itself (the phase-refusal sweep)" },

@@ -41,6 +41,7 @@ import { sql } from "@/lib/db";
 import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
+import { doubleWalkoverRefused } from "@/lib/double-walkover-next-match";
 
 /** A search param as `URLSearchParams.get` reads it: the first value of a repeated key. */
 const first = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
@@ -238,6 +239,9 @@ export default async function FixturePage({
             home_slot_label: fixture.home_slot_label,
             away_slot_label: fixture.away_slot_label,
             feeds_next_match: feedsNext,
+            // W2b Task 11 (D19, X-DW-3): the server's own reading of "a double walkover is refused here" — the forfeit
+            // dialog shows the guidance instead of "Neither" (a reset grand final and a 2-entrant DE winners' match included).
+            no_next_match: doubleWalkoverRefused(stageKind, feedsNext),
           }}
           sport={{
             key: division.sport_key,
