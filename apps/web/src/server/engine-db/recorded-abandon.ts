@@ -3,7 +3,7 @@ import type postgres from "postgres";
 import { isLevelOutcome } from "@seazn/engine/core";
 import type { FixtureStatus } from "@seazn/engine/competition";
 import { engineFixtureStatus } from "@/lib/fixture-engine-status";
-import { ABANDON_RESULT_KINDS } from "@/lib/forfeit-tag";
+import { ABANDON_RESULT_KINDS, ABANDON_WIN_METHODS } from "@/lib/forfeit-tag";
 
 type Tx = postgres.TransactionSql;
 
@@ -45,13 +45,16 @@ function activeAbandonOf(tx: postgres.Sql | Tx, on: string) {
  * reads (`forfeitLedgerOfReason` → `forfeitTag`, lib/forfeit-tag.ts). An abandon's tag reads the ledger, never the
  * status — after ST-G1 an abandon with a result is `decided` like any other, and a rain-reduced chase played out to its
  * DLS target is `decided` with the same outcome and no abandon at all. So, unlike `hasActiveAbandonSql`, this is NOT
- * gated on the status: it is gated on the outcome being one an abandon can leave (`ABANDON_RESULT_KINDS`, the reader's
- * own list), so the probe runs only for rows the reader could tag. The latest active abandon wins (the kernel refuses a
- * second once one decided).
+ * gated on the status. It IS gated on the outcome (review M-3) by the reader's own rule (`abandonKindOf`): a win only
+ * with an abandon's method (`ABANDON_WIN_METHODS`: DLS, the award policy's leader), or a level kind (draw, tie,
+ * no_result). So an ordinary played result — the commonest row on every division read and public cache miss — is never
+ * probed. The latest active abandon wins (the kernel refuses a second once one decided).
  */
+const ABANDON_LEVEL_KINDS = ABANDON_RESULT_KINDS.filter((kind) => kind !== "win");
 export function activeAbandonReasonSql(tx: postgres.Sql | Tx, on = "f") {
   const f = tx(on);
-  return tx`(case when ${f}.outcome ->> 'kind' in ${tx([...ABANDON_RESULT_KINDS])} then (
+  return tx`(case when (${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})
+                    or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)} then (
     select a.payload ->> 'reason' from score_events a
     where ${activeAbandonOf(tx, on)}
     order by a.seq desc limit 1) end)`;

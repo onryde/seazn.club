@@ -694,5 +694,42 @@
         "name": "M-2: a HELD abandon"
       }
     ]
+  },
+  {
+    "id": "m3-every-win-probed",
+    "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+    "find": "(${f}.outcome ->> 'kind' = 'win' and ${f}.outcome ->> 'method' in ${tx([...ABANDON_WIN_METHODS])})",
+    "replace": "(${f}.outcome ->> 'kind' = 'win')",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+        ],
+        "name": "review M-3: the probe runs for EXACTLY the outcomes the reader tags"
+      }
+    ]
+  },
+  {
+    "id": "m3-level-kinds-dropped",
+    "file": "apps/web/src/server/engine-db/recorded-abandon.ts",
+    "find": "or ${f}.outcome ->> 'kind' in ${tx(ABANDON_LEVEL_KINDS)} then (",
+    "replace": "or false then (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+        ],
+        "name": "review M-3: the probe runs for EXACTLY the outcomes the reader tags"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/active-abandon-reason.test.ts"
+        ],
+        "name": "every outcome kind an abandon can leave reads it"
+      }
+    ]
   }
 ]

@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
-import { ABANDON_RESULT_KINDS } from "@/lib/forfeit-tag";
+import { ABANDON_RESULT_KINDS, forfeitTag } from "@/lib/forfeit-tag";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { listDivisionFixtures } from "@/server/usecases/fixtures";
@@ -74,6 +74,36 @@ describe.skipIf(!HAS_DB)("activeAbandonReasonSql — the ledger's abandon reason
     expect(read).toBe(ABANDON_RESULT_KINDS.length);
     expect(await scene(fixtureId, "abandoned", null, [start, abandon("rain")]), "no outcome").toBeNull();
     expect(await scene(fixtureId, "forfeited", { kind: "double_walkover" }, [start, abandon("rain")]), "a double walkover").toBeNull();
+  });
+
+  it("review M-3: the probe runs for EXACTLY the outcomes the reader tags — a played win (the commonest row) is never probed", async () => {
+    // The expected answer is the READER's (`forfeitTag` beside an active abandon), not this SQL's: the gate exists so
+    // the probe runs only where the reader could use it. Every outcome shape a stored row can hold, beside an abandon.
+    const shapes: Record<string, unknown> = {
+      "win, no method (a played result)": { kind: "win", winner: "h", loser: "a" },
+      "win by DLS": dls,
+      "win by the award policy's leader": { kind: "win", winner: "h", loser: "a", method: "abandoned" },
+      "win by a settle": { kind: "win", winner: "h", loser: "a", method: "settled_toss" },
+      "win on penalties": { kind: "win", winner: "h", loser: "a", method: "shootout" },
+      draw: { kind: "draw" },
+      tie: { kind: "tie" },
+      no_result: { kind: "no_result" },
+      "a walkover": { kind: "award", winner: "h", loser: "a", reason: "walkover" },
+      "a bye": { kind: "award", winner: "h", loser: null, reason: "bye" },
+      "a double walkover": { kind: "double_walkover" },
+      "no outcome": null,
+    };
+    let probed = 0;
+    let skipped = 0;
+    for (const [name, outcome] of Object.entries(shapes)) {
+      // an ABANDON tag (a forfeit or a double walkover is tagged by its own kind, ledger or not)
+      const readerTags = forfeitTag(outcome, { abandon: { reason: "rain" } })?.kind.startsWith("abandoned") === true;
+      const got = await scene(fixtureId, "decided", outcome, [start, abandon("rain")]);
+      expect(got, name).toBe(readerTags ? "rain" : null);
+      if (readerTags) probed++;
+      else skipped++;
+    }
+    expect([probed, skipped], "both halves reached").toEqual([5, 7]);
   });
 
   it("after a void: a voided abandon is no abandon; the latest active one wins", async () => {
