@@ -511,7 +511,16 @@ async function noTruth(pass: Pass, c: ReconcileCandidate, end: Date | null): Pro
 // every player has left by `ended_at`), retrying while any report is not
 // final. Every session of the meeting (a rejoin opens a new one) and every
 // peer of each (a reload is a new one) is unioned per player over the MATCH
-// — the first move to the result, or the room's end — by matchCameraOff.
+// — the first move to the GAME's end — by matchCameraOff.
+//
+// The game's end, never the room's (ruling I1): the room stays up while the
+// organiser holds a board (job 3), so after a tie-break owed, an abort or a
+// mid-game hold its end can be hours after the game's, and every minute in
+// between would read as both cameras off. The best evidence, in order: the
+// bridge's close (`finished_at`), else the first read that saw the game over
+// (`game_over_at`, held or not), else the latest the clock let the game run
+// (the last move plus the side to move's remaining time). None known: not
+// ready. Never past the room's own end — nobody is on camera in a closed room.
 //
 // Under Required only: Off and Optional store nothing and ask RealtimeKit
 // nothing, and an organiser's video override (D11) is "proceed without
@@ -534,6 +543,11 @@ type CameraCandidate = {
   endedAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
+  gameOverAt: Date | null;
+  lastMoveAt: Date | null;
+  moveCount: number | null;
+  whiteMs: number | null;
+  blackMs: number | null;
   overrideAt: Date | null;
 };
 
@@ -542,6 +556,8 @@ async function cameraCandidates(pass: Pass): Promise<CameraCandidate[]> {
   return sql<CameraCandidate[]>`
     select m.fixture_id as "fixtureId", m.org_id as "orgId", m.meeting_id as "meetingId",
            m.ended_at as "endedAt", ep.started_at as "startedAt", ep.finished_at as "finishedAt",
+           ep.game_over_at as "gameOverAt", ep.last_move_at as "lastMoveAt", ep.move_count as "moveCount",
+           ep.white_ms as "whiteMs", ep.black_ms as "blackMs",
            ep.video_override_at as "overrideAt"
       from fixture_video_meetings m
       join fixtures f on f.id = m.fixture_id
@@ -554,6 +570,18 @@ async function cameraCandidates(pass: Pass): Promise<CameraCandidate[]> {
 }
 
 type CameraFlag = { personId: string; note: string };
+
+/** The GAME's end (ruling I1), in the order of the evidence: the bridge's
+ *  close, the first read that saw the game over, the latest the clock let it
+ *  run — the last move plus the side to move's remaining time (T10's ledger:
+ *  an even count is White to move). Null when none is on file. */
+function gameEndOf(c: CameraCandidate): Date | null {
+  if (c.finishedAt !== null) return c.finishedAt;
+  if (c.gameOverAt !== null) return c.gameOverAt;
+  if (c.lastMoveAt === null || c.moveCount === null) return null;
+  const toMoveMs = c.moveCount % 2 === 0 ? c.whiteMs : c.blackMs;
+  return toMoveMs === null ? null : new Date(c.lastMoveAt.getTime() + toMoveMs);
+}
 
 /** Every player's camera over the window, or `not_ready` while any session
  *  is live or any report is not final. A RealtimeKit failure THROWS. */
@@ -640,14 +668,20 @@ async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: RealtimeKitDe
     await settleCamera(pass, c, []);
     return;
   }
-  const window = { from: c.startedAt, to: c.finishedAt ?? c.endedAt };
   const givenUp = pass.now.getTime() - c.endedAt.getTime() > CAMERA_EVIDENCE_GIVE_UP_MS;
+  const gameEnd = gameEndOf(c);
   let read: CameraFlag[] | "not_ready";
-  try {
-    read = await readCameraEvidence(c, window, rtk);
-  } catch (err) {
-    if (!givenUp) throw err; // reported by `each`; read again next pass
+  if (gameEnd === null) {
+    // No end on file: no window to judge, so nothing is read.
     read = "not_ready";
+  } else {
+    const window = { from: c.startedAt, to: new Date(Math.min(gameEnd.getTime(), c.endedAt.getTime())) };
+    try {
+      read = await readCameraEvidence(c, window, rtk);
+    } catch (err) {
+      if (!givenUp) throw err; // reported by `each`; read again next pass
+      read = "not_ready";
+    }
   }
   if (read !== "not_ready") {
     await settleCamera(pass, c, read);
