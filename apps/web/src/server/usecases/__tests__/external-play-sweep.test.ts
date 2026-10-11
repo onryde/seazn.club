@@ -3095,20 +3095,59 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(rtkReads(), "the stage says optional: nothing to read").toEqual([]);
   });
 
-  it("M4: an audit row whose policy cannot be read is never guessed — a failure, nothing settled, read again next pass", async () => {
-    const m = await playedMatch();
-    homeGap(m);
+  /** Stands for a row a future writer left in a shape this reader does not
+   *  know (no writer today leaves one: divisions.ts writes a resolved policy).
+   *  Stamped by the DB's now(), so AFTER the match began. */
+  async function corruptAudit(m: Match): Promise<void> {
     const [{ competition_id }] = await sql<{ competition_id: string }[]>`select competition_id from divisions where id = ${m.b.divisionId}`;
-    // Stands for a row a future writer left in a shape this reader does not know.
     await sql`
       insert into competition_events (competition_id, type, payload, created_at)
       values (${competition_id}, 'chess.camera_policy_changed',
               ${sql.json({ divisionId: m.b.divisionId, effectiveFrom: "sometimes", effectiveTo: "off" })}, now())`;
+  }
+
+  it("M4: an audit row whose policy cannot be read is never guessed — a failure, nothing settled, read again next pass", async () => {
+    const m = await playedMatch();
+    homeGap(m);
+    await corruptAudit(m);
     const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
     expect(cameraFailures(r).map((f) => f.code)).toEqual(["CAMERA_POLICY_AUDIT_UNREADABLE"]);
     expect(r.cameraSettled).toBe(0);
     expect(await settledAt(m.b.fixtureId)).toBeNull();
     expect(await flagsOf(m.b.fixtureId)).toEqual([]);
+  });
+
+  // Re-review N2: an unreadable audit row is one more not-ready answer, with
+  // the same day's give-up — never a failure every pass for ever, never a
+  // flag. One board's bad row is that board's alone: the pass goes on.
+  it("N2: an unreadable policy audit gives up with the rest — AT the day a failure, nothing settled; past it settled with NO flag and SAID so; another match in the same pass completes", async () => {
+    const bad = await playedMatch();
+    homeGap(bad);
+    await corruptAudit(bad);
+    const good = await playedMatch();
+    homeGap(good);
+    // On the millisecond clock the sweep judges with (`ended_at` as a Date).
+    const day = (ms: number) =>
+      sweep([bad.b, good.b], {
+        now: new Date(bad.endedAt + CAMERA_EVIDENCE_GIVE_UP_MS + ms), endMeeting: (id) => endMeeting(id, RTK), realtimeKit: RTK,
+      });
+    const atDay = await day(0);
+    expect(cameraFailures(atDay), "AT the day: still a failure, read again").toEqual([
+      { job: "camera_evidence", fixtureId: bad.b.fixtureId, code: "CAMERA_POLICY_AUDIT_UNREADABLE" },
+    ]);
+    expect(await settledAt(bad.b.fixtureId)).toBeNull();
+    expect([atDay.cameraSettled, atDay.cameraFlags], "the other match settles, flagged, in the same pass").toEqual([1, 1]);
+    expect(await settledAt(good.b.fixtureId), "premise: it was the good match that settled").not.toBeNull();
+    expect((await flagsOf(good.b.fixtureId)).filter((f) => f.kind === "camera_lost")).toHaveLength(1);
+
+    const late = await day(1);
+    expect(cameraFailures(late)).toEqual([{ job: "camera_evidence", fixtureId: bad.b.fixtureId, code: "CAMERA_EVIDENCE_UNREAD" }]);
+    expect([late.cameraSettled, late.cameraFlags]).toEqual([1, 0]);
+    expect(await settledAt(bad.b.fixtureId)).not.toBeNull();
+    expect(await flagsOf(bad.b.fixtureId), "never a flag on a policy nobody can read").toEqual([]);
+
+    const again = await day(SWEEP_CADENCE_MS);
+    expect([cameraFailures(again), again.cameraSettled], "settled: no failure for ever").toEqual([[], 0]);
   });
 
   // Review M2: "the players" are the guard's — each side's ONE member with a
