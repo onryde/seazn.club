@@ -1327,6 +1327,26 @@ describe("the real engine floor files", () => {
     expect(parseFloors(JSON.stringify(f))).toEqual(f.families);
     const e = readFileSync(join(ENGINE, "stryker-equivalent.json"), "utf8");
     expect(JSON.parse(e)).toHaveProperty("note");
-    expect(parseEquivalents(e)).toEqual([]);
+    expect(Array.isArray(parseEquivalents(e))).toBe(true);
+  });
+
+  it("every recorded equivalent is keyed the way SURVIVORS.md prints a mutant, at a line and column its file has", () => {
+    // A key that names no real position matches no mutant, so the record silently does nothing: refuse it here instead.
+    const keys = parseEquivalents(readFileSync(join(ENGINE, "stryker-equivalent.json"), "utf8"));
+    let checked = 0;
+    for (const key of keys) {
+      const m = /^(src\/\S+\.ts):(\d+):(\d+) (\w+) → (.*)$/.exec(key);
+      expect(m, `"${key}" is not file:line:col mutator → replacement`).not.toBeNull();
+      const [, file, line, col] = m!;
+      expect(existsSync(join(ENGINE, file!)), `${key}: no file ${file}`).toBe(true);
+      const text = readFileSync(join(ENGINE, file!), "utf8").split("\n")[Number(line) - 1];
+      expect(text, `${key}: ${file} has no line ${line}`).toBeDefined();
+      // Stryker's report columns are 1-based: the mutated text starts at column `col`, so the line is at least that long.
+      expect(text!.length, `${key}: line ${line} is shorter than column ${col}`).toBeGreaterThanOrEqual(Number(col));
+      checked++;
+    }
+    // anti-vacuity: the first records are the exports pilot's (engine mutation-debt P0, src/exports/build.ts)
+    expect(checked).toBe(keys.length);
+    expect(checked).toBeGreaterThan(0);
   });
 });

@@ -1,4 +1,49 @@
 {
   "note": "Mutants judged equivalent (no test could tell them from the original), recorded by `file:line:col mutator → replacement` as SURVIVORS.md prints them, never by Stryker's unstable ids. Each entry is {\"mutant\": \"<that key>\", \"reason\": \"<why no test can distinguish it, at least 10 characters>\"}. A recorded mutant leaves the denominator of its group's score; the wave that owns the file records it, after reading the code.",
-  "equivalent": []
+  "equivalent": [
+    {
+      "mutant": "src/exports/build.ts:28:9 ConditionalExpression → true",
+      "reason": "With no description the mutant writes `description: undefined` instead of leaving the key out; DocModel declares it optional, and every reader (doc-render's title block and the xlsx writer) reads the value, undefined either way (JSON drops the key)."
+    },
+    {
+      "mutant": "src/exports/build.ts:31:11 ConditionalExpression → true",
+      "reason": "With no meta.footerNote the mutant writes `meta.footerNote: undefined` instead of leaving the key out; DocModel declares it optional, and every reader (doc-render's footer) reads the value, undefined either way (JSON drops the key)."
+    },
+    {
+      "mutant": "src/exports/build.ts:32:11 ConditionalExpression → true",
+      "reason": "With no meta.liveUrl the mutant writes `meta.liveUrl: undefined` instead of leaving the key out; DocModel declares it optional, and every reader (doc-render's live QR) reads the value, undefined either way (JSON drops the key)."
+    },
+    {
+      "mutant": "src/exports/build.ts:34:9 ConditionalExpression → true",
+      "reason": "With no branding the mutant writes `branding: undefined` instead of leaving the key out; DocModel declares it optional, and every reader (doc-render's `model.branding` truthiness checks) reads the value, undefined either way (JSON drops the key)."
+    },
+    {
+      "mutant": "src/exports/build.ts:325:11 ConditionalExpression → true",
+      "reason": "With no bracket.thirdPlaceId the mutant writes `bracket.thirdPlaceId: undefined` instead of leaving the key out; DocModel declares it optional, and every reader (doc-render's drawBracket) reads the value, undefined either way (JSON drops the key)."
+    },
+    {
+      "mutant": "src/exports/build.ts:365:11 ConditionalExpression → true",
+      "reason": "With no bracketDe.resetId the mutant writes `bracketDe.resetId: undefined` instead of leaving the key out; DocModel declares it optional, and every reader (doc-render's drawBracket) reads the value, undefined either way (JSON drops the key)."
+    },
+    {
+      "mutant": "src/exports/build.ts:73:35 StringLiteral → \"\"",
+      "reason": "buildTimetable's `mode` only picks keyOf's branch: \"\" equals neither \"per_pitch\" nor \"per_division\", so it takes the same last branch (one unnamed group) as \"auto\"; mode is read nowhere else."
+    },
+    {
+      "mutant": "src/exports/build.ts:147:39 StringLiteral → \"\"",
+      "reason": "buildRoster's default only feeds `=== \"per_team\"`, and \"\" is as much not \"per_team\" as \"auto\" is; the value is read nowhere else."
+    },
+    {
+      "mutant": "src/exports/build.ts:207:43 StringLiteral → \"\"",
+      "reason": "buildOfficialsRota's default only feeds `=== \"per_team\"`, and \"\" is as much not \"per_team\" as \"auto\" is; the value is read nowhere else."
+    },
+    {
+      "mutant": "src/exports/build.ts:102:23 StringLiteral → \"Stryker was here!\"",
+      "reason": "Page groups are sorted with localeCompare, so a \"\" group (auto, or fixtures with no division) always sorts first and its first section is pushed while sections.length is 0: the break's `group !== \"\"` conjunct never decides it, whatever it compares against."
+    },
+    {
+      "mutant": "src/exports/build.ts:302:47 EqualityOperator → n.side !== \"L\"",
+      "reason": "twoSidedBracket puts the first half of every pre-final round on L and the second half on R, so col 0 holds as many R nodes as L; a centre node sits at col 0 only in a one-round (2-entrant) field, where L counts 0, the mutant 1, and Math.max(1, ·) makes both 1."
+    }
+  ]
 }
