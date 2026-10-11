@@ -1889,6 +1889,7 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
         let finishedLedger: string[] | null = null;
         let lastSubmitted: { who: Who; uci: string } | null = null;
         let published = 0;
+        const pending: Promise<void>[] = [];
         let bodies: RoomBroadcast[] = [];
         let lichessCalls = 0;
         const whoOf = (token: string): Who => {
@@ -1908,6 +1909,17 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
           publish: async (_f, body) => {
             published++;
             bodies.push(body);
+          },
+          // T11's reconcile is NOT this property's subject: a no-op stands in,
+          // deferred through a collected task so nothing runs past the case
+          // (re-review 2, R1). Counted below so the stand-in is not vacuous.
+          reconcile: async (_f, trigger) => {
+            expect(trigger).toBe("rejected_move");
+            bump("noop_reconcile_reached");
+          },
+          defer: (task) => {
+            bump("noop_defer_reached");
+            pending.push(task());
           },
         };
         const run = async (personId: string, action: PlayAction) => {
@@ -2135,11 +2147,15 @@ describe.runIf(HAS_DB)("act — property: interleavings against a lila model", (
           bump("ops");
         }
         bump("reoffer_blocked", lila.reofferBlocked);
+        await Promise.all(pending);
       }),
       { numRuns: RUNS_PER_PREFIX, endOnFailure: true },
     );
     expect(runs, "anti-vacuity: the property ran").toBe(NUM_RUNS);
     console.info(`[T10 property] runs=${runs} ${JSON.stringify(totals)}`);
+    // R1: every refused move reached the no-op stand-ins, never the real reconcile.
+    expect(totals.noop_reconcile_reached ?? 0, "anti-vacuity: the no-op reconcile was reached").toBeGreaterThan(0);
+    expect(totals.noop_defer_reached, "one deferral per reconcile").toBe(totals.noop_reconcile_reached);
     // Anti-vacuity, per path the property is named for.
     let checked = 0;
     for (const path of [
@@ -2255,6 +2271,7 @@ describe.runIf(HAS_DB)("act — property: raw move strings against scalachess's 
         let calls: string[] = [];
         let published = 0;
         let lastRecorded: { who: Who; raw: string } | null = null;
+        const pending: Promise<void>[] = [];
         const deps: PlayDeps = {
           submitMove: async (x) => {
             calls.push(x.uci);
@@ -2266,6 +2283,17 @@ describe.runIf(HAS_DB)("act — property: raw move strings against scalachess's 
           },
           publish: async () => {
             published++;
+          },
+          // T11's reconcile is NOT this property's subject: a no-op stands in,
+          // deferred through a collected task so nothing runs past the case
+          // (re-review 2, R1). Counted below so the stand-in is not vacuous.
+          reconcile: async (_f, trigger) => {
+            expect(trigger).toBe("rejected_move");
+            bump("noop_reconcile_reached");
+          },
+          defer: (task) => {
+            bump("noop_defer_reached");
+            pending.push(task());
           },
         };
         for (const op of ops) {
@@ -2335,11 +2363,15 @@ describe.runIf(HAS_DB)("act — property: raw move strings against scalachess's 
           bump("broadcasts_checked", published);
           bump("ops");
         }
+        await Promise.all(pending);
       }),
       { numRuns: RUNS_PER_PREFIX, endOnFailure: true },
     );
     expect(runs, "anti-vacuity: the property ran").toBe(RUNS_PER_PREFIX * RAW_PREFIXES.length);
     console.info(`[T10 raw-UCI property] runs=${runs} ${JSON.stringify(totals)}`);
+    // R1: every refused move reached the no-op stand-ins, never the real reconcile.
+    expect(totals.noop_reconcile_reached ?? 0, "anti-vacuity: the no-op reconcile was reached").toBeGreaterThan(0);
+    expect(totals.noop_defer_reached, "one deferral per reconcile").toBe(totals.noop_reconcile_reached);
     let checked = 0;
     for (const path of [
       "castle_to_rook:white:h",
