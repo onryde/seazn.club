@@ -22,8 +22,7 @@ import { EngineError } from "@seazn/engine/core";
 import type { BoardgameMethod } from "@seazn/engine/sports/boardgame";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { STATUS_METHOD } from "@/server/external-play/map-result";
-import type { GameSnapshot, LichessStatus, NeedsReason } from "@/server/external-play/types";
+import type { GameSnapshot, NeedsReason } from "@/server/external-play/types";
 import { log } from "@/server/logger";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
@@ -84,16 +83,14 @@ function organiser(s: GameSnapshot, why: string): Disposition {
   return { kind: "hold", reason: "provider_error", detail: `${describeSnapshot(s)} — ${why}` };
 }
 
-/** A result whose method comes from map-result's STATUS_METHOD. A status the
- *  table does not name is held rather than written method-less. */
-function fromTable(s: GameSnapshot & { status: LichessStatus }, winner: Colour | null): Disposition {
-  const method = STATUS_METHOD[s.status];
-  if (method === undefined) return organiser(s, "no method is declared for this status");
-  return { kind: "result", winner, method };
-}
+const result = (winner: Colour | null, method: BoardgameMethod | undefined): Disposition => ({ kind: "result", winner, method });
 
-/** Pure: what a snapshot asks us to do. Exhaustive over the status union, so
- *  a status added to LICHESS_STATUSES does not compile until it is placed. */
+/** Pure: what a snapshot asks us to do — THE status rulebook (the legacy
+ *  map-result.ts table and its unused mapper were deleted in T12 fix round 1,
+ *  M6: one source of truth). Exhaustive over the status union, so a status
+ *  added to LICHESS_STATUSES does not compile until it is placed. Methods
+ *  are the engine's `BoardgameMethod` names for what Lichess's status says
+ *  happened; spec §3.6 names none. */
 function dispositionOf(s: GameSnapshot): Disposition {
   switch (s.status) {
     // Spec §3.5: only a status other than created/started is terminal.
@@ -112,25 +109,34 @@ function dispositionOf(s: GameSnapshot): Disposition {
     // is not guessed.
     case "mate":
     case "resign":
-      return s.winner ? fromTable(s, s.winner) : organiser(s, "a decisive status with no winner");
+      return s.winner
+        ? result(s.winner, s.status === "mate" ? "checkmate" : "resign")
+        : organiser(s, "a decisive status with no winner");
     // Finisher.outOfTime withholds the winner exactly when the side left on
     // the board has insufficient mating material: a DRAW, FIDE 6.9, which
     // the engine calls `insufficient`. A timeout is a WIN otherwise, never a
     // forfeit (§3.6: only a no-show is a forfeit).
     case "outoftime":
-      return s.winner ? fromTable(s, s.winner) : { kind: "result", winner: null, method: "insufficient" };
+      return s.winner ? result(s.winner, "time") : result(null, "insufficient");
     // RoundAsyncActor ResignForce / DrawForce → Finisher.rageQuit(None): the
     // opponent left and the remaining player was given (or chose) a draw.
     // Lichess records no reason, so we record no method.
     case "timeout":
-      return s.winner ? fromTable(s, s.winner) : { kind: "result", winner: null, method: undefined };
+      return s.winner ? result(s.winner, "time") : result(null, undefined);
     // §3.6 draws; addendum 1: insufficientMaterialClaim ("the side that
     // cannot lose claims a draw", Status.scala) is a draw. None of the three
     // carries a winner at Lichess, so one that does is held.
     case "draw":
     case "stalemate":
-    case "insufficientMaterialClaim":
-      return s.winner ? organiser(s, "a drawn status with a winner") : fromTable(s, null);
+    case "insufficientMaterialClaim": {
+      if (s.winner) return organiser(s, "a drawn status with a winner");
+      const method: Record<typeof s.status, BoardgameMethod> = {
+        draw: "agreement",
+        stalemate: "stalemate",
+        insufficientMaterialClaim: "insufficient",
+      };
+      return result(null, method[s.status]);
+    }
     // Addendum 1: cheat → the organiser's FAIR-PLAY queue, under its own
     // reason (fix round 1, I2): Lichess has already ruled, and the winner it
     // reports is the innocent side. variantEnd → the organiser (ship 1 plays

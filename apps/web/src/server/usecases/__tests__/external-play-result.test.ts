@@ -2,7 +2,7 @@
 // Lichess game becomes OUR fixture's result, written under organiser
 // authority. Every expected value below comes from the spec's §3.6 table, the
 // controller's addenda, Lichess's own source (lila / scalachess, pinned where
-// cited) or the engine's declarations — never from result.ts or map-result.ts.
+// cited) or the engine's declarations — never from result.ts.
 //
 // Every game a result is written for is created by T9's REAL producer
 // (`createGameIfReady`, Board API module-mocked at its boundary), so it starts
@@ -25,7 +25,6 @@ import { AppendEventRequest, StageKind } from "@/server/api-v1/schemas";
 import { appendEvent } from "@/server/engine-db";
 import { appendEventInTx } from "@/server/engine-db/append-event";
 import { __resetCreationQueue } from "@/server/external-play/creation-queue";
-import { STATUS_METHOD_KEYS } from "@/server/external-play/map-result";
 import type { BoardCall, GameSnapshot } from "@/server/external-play/types";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
@@ -347,21 +346,6 @@ describe("the rulebook transcription itself", () => {
       }
     }
     expect(checked, "status × winner cells checked").toBe(15 * 3);
-  });
-
-  it("the spec's table and map-result's STATUS_METHOD agree on every decisive status", () => {
-    // Two independently-maintained sources. Drift between them is the defect
-    // this catches; neither is read back out of result.ts.
-    const fromSpec = ["mate", "resign", "outoftime", "timeout", "draw", "stalemate", "insufficientMaterialClaim"].sort();
-    const covered = fromSpec.filter((s) => STATUS_METHOD_KEYS.includes(s));
-    expect(covered, "every spec status has a method in map-result").toEqual(fromSpec);
-    expect(covered.length).toBeGreaterThan(0);
-  });
-
-  it("every STATUS_METHOD key is a status Lichess actually declares — no invented statuses", () => {
-    expect(STATUS_METHOD_KEYS.length, "premise: the table is not empty").toBeGreaterThan(0);
-    const invented = STATUS_METHOD_KEYS.filter((k) => !DECLARED_STATUSES.includes(k));
-    expect(invented).toEqual([]);
   });
 
   it("every method the rulebook writes is one the engine declares", () => {
