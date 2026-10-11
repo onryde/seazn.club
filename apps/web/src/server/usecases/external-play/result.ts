@@ -291,24 +291,47 @@ function phaseOf(state: unknown): string {
   return typeof phase === "string" ? phase : "unknown";
 }
 
+/** A replay: this snapshot's result is already on the ledger — even if an
+ *  organiser has since voided it, which then stands. A replayed draw re-reads
+ *  where the engine put it (afterDraw). Null when the key is not on file. */
+async function replayed(
+  s: GameSnapshot,
+  fixtureId: string,
+  d: Exclude<Disposition, { kind: "none" }>,
+  key: string,
+): Promise<ResultWrite | null> {
+  if (d.kind !== "result" || !(await ledgerHolds(fixtureId, key))) return null;
+  if (d.winner !== null) return answerFor(d);
+  const f = await loadOnlinePlayFixture(fixtureId);
+  return f ? afterDraw(s, fixtureId, await mintOrgOwnerAuth(f.orgId)) : answerFor(d);
+}
+
 async function attempt(
   s: GameSnapshot,
   fixtureId: string,
   d: Exclude<Disposition, { kind: "none" }>,
 ): Promise<ResultWrite> {
   const key = resultIdempotencyKey(fixtureId, s);
-  // 1. A replay: this snapshot's result is already on the ledger — even if
-  //    an organiser has since voided it, which then stands. A replayed draw
-  //    re-reads where the engine put it (afterDraw).
-  if (d.kind === "result" && (await ledgerHolds(fixtureId, key))) {
-    if (d.winner !== null) return answerFor(d);
-    const f = await loadOnlinePlayFixture(fixtureId);
-    return f ? afterDraw(s, fixtureId, await mintOrgOwnerAuth(f.orgId)) : answerFor(d);
-  }
+  // 1. A replay.
+  const replay = await replayed(s, fixtureId, d, key);
+  if (replay) return replay;
+  // The three reads below take no lock (the fixture advisory lock would
+  // deadlock with scoreEvent, which takes it on its own connection), so a
+  // concurrent writer can commit between any two of them. It commits its
+  // keyed result, the fold and the fixture's derived status in ONE
+  // transaction (append-event), so a read that saw the post-result fixture or
+  // fold is followed by a read that sees the key. Hence the replay check is
+  // repeated as the LAST read before every exit that writes nothing (T11
+  // review I1/I2): a loser answers what the winner wrote — never `none` for a
+  // decided game, never a 500, and never `none` for a bracket draw, which
+  // reconcile would read as "close the bridge" over the owed tie-break.
+  const settledMeanwhile = async () => replayed(s, fixtureId, d, key);
 
   // 2. The fixture we serve, and THIS game on it.
   const f = await loadOnlinePlayFixture(fixtureId);
   if (!f) {
+    const late = await settledMeanwhile();
+    if (late) return late;
     log.warn({ fixtureId, gameId: s.gameId }, "lichess result: not an online fixture we serve — nothing written");
     return NONE;
   }
@@ -325,6 +348,8 @@ async function attempt(
   //    withdrawal makes no Lichess call) runs on and arrives here later; the
   //    organiser's decision stands, so nothing is written or held.
   if (!isPlayableFixtureStatus(f.fixtureStatus)) {
+    const late = await settledMeanwhile();
+    if (late) return late;
     log.info({ fixtureId, gameId: s.gameId, fixtureStatus: f.fixtureStatus }, "lichess result: fixture already settled — nothing written");
     return NONE;
   }
@@ -335,6 +360,8 @@ async function attempt(
   const auth = await mintOrgOwnerAuth(f.orgId);
   const state = await getFixtureState(auth, fixtureId);
   if (tiebreakPending(state)) {
+    const late = await settledMeanwhile();
+    if (late) return late;
     log.info({ fixtureId, gameId: s.gameId }, "lichess result: a level result is already recorded, its tie-break pending — nothing written");
     return NONE;
   }
@@ -371,8 +398,18 @@ async function attempt(
     seq += 1;
   } else if (phase !== "live") {
     // append-event.ts derives the status FROM the fold, so a playable status
-    // means `pre`, `live` or a pending tie-break (answered above). Anything
-    // else is a damaged row: refuse by name.
+    // means `pre`, `live` or a pending tie-break (answered above). A fold
+    // past those beside a status read before it is a writer that committed
+    // in between: ours (the key), or another — an organiser's hand result —
+    // after which the fixture, read again, is no longer playable. Only a
+    // fixture STILL playable with such a fold is a damaged row: refuse by name.
+    const late = await settledMeanwhile();
+    if (late) return late;
+    const now = await loadOnlinePlayFixture(fixtureId);
+    if (now === null || !isPlayableFixtureStatus(now.fixtureStatus)) {
+      log.info({ fixtureId, gameId: s.gameId, fixtureStatus: now?.fixtureStatus ?? null }, "lichess result: fixture settled elsewhere meanwhile — nothing written");
+      return NONE;
+    }
     throw new HttpError(
       500,
       `fixture ${fixtureId} reads ${f.fixtureStatus} but its fold is in phase "${phase}"`,
