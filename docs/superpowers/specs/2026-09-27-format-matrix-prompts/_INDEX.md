@@ -1184,6 +1184,14 @@ Elsewhere the text is the controller's record.
      incomplete team keeps its sets; FIVB table 2/1). A walkover credited 3-0 pays 3/0, and a bye still pays the
      clean-sweep pair. One rule for every credited result, with no offender-gets-0 exception. Engine fix 570f53890.
 
+109. **MD-1 in W2b covers W2b's own lines only** (2026-10-11, owner "B"). MD-1 is f-w2's owner-approved survivor
+     classification; PR #934 adds its text, and it was put to this owner separately (class 17). W2b runs Stryker
+     `--mutate` with line ranges limited to the lines W2b added or changed in engine files, never group=all locally.
+     It classifies each Survived/NoCoverage mutant there: A-real gets a test, A-msg gets one line, B-equivalent goes
+     into `stryker-equivalent.json`, C-dead needs a caller search. The PR body carries per-file counts and the score
+     before and after. Older survivors in the same files belong to W2e. Orchestrator ruling, not the owner's: W2b also
+     excludes the `arbitraryEvent` test-data generators in its engine files from mutation.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
