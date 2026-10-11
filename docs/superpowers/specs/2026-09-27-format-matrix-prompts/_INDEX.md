@@ -1239,6 +1239,14 @@ Elsewhere the text is the controller's record.
        credit half of that is fixed as R112-I-1.
      - **No stored row changes:** production's only forfeit is a walkover.
      - **Amends** X-RS-1, X-RT-1 and X-WD-6. Built in the ruling-112 lane.
+114. **Any sport event after Start counts as "played", scoring or not** (2026-10-11, owner "A"). This keeps ruling 112's
+     test exactly as built: `playRecorded` counts any active module-owned event after `core.start`.
+     - **Edges accepted:** a rain delay before the first ball (`cricket.interruption`), a sanction or warning in
+       tennis and the set sports, a card or sin-bin before kick-off (football), or a suspension before face-off
+       (hockey) all count as play. A no-show after one of them is not offered a walkover.
+     - **Workaround:** take the event back (void it), then record the walkover.
+     - **Rejected:** deriving "played" from a score change, as an engine change late in the wave. Reopen it as its
+       own small change if a real organiser hits the edge.
 
 ## Recommendations (mine — not rulings)
 
