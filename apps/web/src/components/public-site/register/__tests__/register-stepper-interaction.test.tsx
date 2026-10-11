@@ -1827,7 +1827,7 @@ describe("step 5 — submit", () => {
 
   // T20: the server answers LICHESS_LINK_REQUIRED only while the club is offered online chess (the PostHog flag
   // `online-chess`), so the stepper needs no flag of its own — but its link must NAME the club, because the start
-  // route refuses (403 ONLINE_CHESS_DISABLED) a start that names none. The URL is typed here from the route's contract
+  // route refuses a start that names none (onto `/me?lichess=unavailable`, fix round 1 m5). The URL is typed here from the route's contract
   // (`/api/auth/lichess?org=<slug>`), not built with the helper under test.
   it("LICHESS_LINK_REQUIRED: the link to Lichess names THIS club, so the start route can ask the club's flag", async () => {
     apiV1Mock.impl.mockRejectedValueOnce(

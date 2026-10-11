@@ -133,8 +133,9 @@ describe("GET /api/auth/lichess — start", () => {
 });
 
 // T20: linking a Lichess account is how online chess STARTS for a player, so the start is offered only to a club
-// offered online chess (the PostHog flag `online-chess`, fallback off). Values from the brief: 403
-// ONLINE_CHESS_DISABLED, the flag asked for the signed-in user in the club's group.
+// offered online chess (the PostHog flag `online-chess`, fallback off), the flag asked for the signed-in user in the
+// club's group. The refusal is a redirect onto a page with `?lichess=unavailable` (controller ruling, fix round 1 m5 —
+// the brief's 403 ONLINE_CHESS_DISABLED is for API callers; this route is a browser navigation).
 describe("GET /api/auth/lichess — online chess must be offered to the club", () => {
   type FlagState = { label: string; offered: boolean; arm: () => void };
   const FLAG_STATES: readonly FlagState[] = [
@@ -152,11 +153,16 @@ describe("GET /api/auth/lichess — online chess must be offered to the club", (
     flags.isServerFeatureEnabled.mockReset();
     s.arm();
   };
-  async function refusalOf(res: Response) {
-    return { status: res.status, body: (await res.json()) as { ok: boolean; code: string } };
+  /** Fix round 1, m5: a refused start is a browser navigation, so it lands on a PAGE — back where it started (the
+   *  validated `next`) or the player home `/me`, carrying `?lichess=unavailable` — exactly as the callback reports
+   *  its own failures. Never raw JSON. */
+  function landedOn(res: Response): { status: number; pathname: string; query: Record<string, string> } {
+    const loc = path(res.headers.get("location") ?? "");
+    return { status: res.status, pathname: loc.pathname, query: Object.fromEntries(loc.searchParams) };
   }
+  const isRedirect = (status: number) => status >= 300 && status < 400;
 
-  it("flag ON starts the OAuth round trip; flag OFF or PostHog throwing refuses 403 ONLINE_CHESS_DISABLED and sets no cookie", async () => {
+  it("flag ON starts the OAuth round trip; flag OFF or PostHog throwing lands back on the page it started from with ?lichess=unavailable, and sets no cookie", async () => {
     let checked = 0;
     for (const s of FLAG_STATES) {
       cookieJar.clear();
@@ -168,7 +174,9 @@ describe("GET /api/auth/lichess — online chess must be offered to the club", (
         );
         expect(cookieJar.has(STATE_COOKIE), s.label).toBe(true);
       } else {
-        expect(await refusalOf(res), s.label).toMatchObject({ status: 403, body: { ok: false, code: "ONLINE_CHESS_DISABLED" } });
+        const landed = landedOn(res);
+        expect(isRedirect(landed.status), `${s.label}: a redirect, not a JSON body (${landed.status})`).toBe(true);
+        expect(landed, s.label).toMatchObject({ pathname: "/settings", query: { tab: "account", lichess: "unavailable" } });
         expect([...cookieJar.keys()], `${s.label}: nothing stored`).toEqual([]);
       }
       expect(flags.isServerFeatureEnabled, s.label).toHaveBeenCalledWith("online-chess", "u1", { orgId: CLUB.id, fallback: false });
@@ -177,24 +185,64 @@ describe("GET /api/auth/lichess — online chess must be offered to the club", (
     expect(checked).toBe(FLAG_STATES.length);
   });
 
-  it("a start that names no club, an unknown one, or a renamed slug is refused 403 — even with the override on, and the flag is never asked", async () => {
-    orgBySlug.mockImplementation(async (slug: string) => (slug === "old-club" ? { renamedTo: CLUB.slug } : null));
+  it("a start naming no club, an unknown one, or a rename to a club that is gone is refused onto a page — /me when it carried no next — even with the override on, and the flag is never asked", async () => {
+    orgBySlug.mockImplementation(async (slug: string) => (slug === "gone-club" ? { renamedTo: "vanished" } : null));
+    const cases: Array<{ url: string; pathname: string; query: Record<string, string> }> = [
+      { url: "http://localhost/api/auth/lichess", pathname: "/me", query: { lichess: "unavailable" } },
+      { url: "http://localhost/api/auth/lichess?next=/settings", pathname: "/settings", query: { lichess: "unavailable" } },
+      { url: "http://localhost/api/auth/lichess?org=", pathname: "/me", query: { lichess: "unavailable" } },
+      { url: "http://localhost/api/auth/lichess?org=nobody", pathname: "/me", query: { lichess: "unavailable" } },
+      { url: "http://localhost/api/auth/lichess?org=gone-club", pathname: "/me", query: { lichess: "unavailable" } },
+      // An off-site next is dropped by the same `safeNextPath` the start uses: the refusal never leaves the site.
+      { url: "http://localhost/api/auth/lichess?org=nobody&next=//evil.example", pathname: "/me", query: { lichess: "unavailable" } },
+    ];
     let checked = 0;
-    for (const url of [
-      "http://localhost/api/auth/lichess",
-      "http://localhost/api/auth/lichess?next=/settings",
-      "http://localhost/api/auth/lichess?org=",
-      "http://localhost/api/auth/lichess?org=nobody",
-      "http://localhost/api/auth/lichess?org=old-club",
-    ]) {
+    for (const c of cases) {
       cookieJar.clear();
-      const res = await GET(new Request(url));
-      expect(await refusalOf(res), url).toMatchObject({ status: 403, body: { ok: false, code: "ONLINE_CHESS_DISABLED" } });
-      expect([...cookieJar.keys()], `${url}: nothing stored`).toEqual([]);
+      const res = await GET(new Request(c.url));
+      const landed = landedOn(res);
+      expect(isRedirect(landed.status), `${c.url}: a redirect (${landed.status})`).toBe(true);
+      expect(res.headers.get("location")!.startsWith("/"), `${c.url}: a same-site, relative Location`).toBe(true);
+      expect(landed, c.url).toMatchObject({ pathname: c.pathname, query: c.query });
+      expect([...cookieJar.keys()], `${c.url}: nothing stored`).toEqual([]);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(cases.length);
     expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+
+  it("a renamed club's old slug is followed — once — to the club it names now, and THAT club's flag decides", async () => {
+    // slug_history answers a renamed slug with the club's live slug (slug-resolve.ts `renamedTo`).
+    orgBySlug.mockImplementation(async (slug: string) =>
+      slug === "old-club" ? { renamedTo: CLUB.slug } : slug === CLUB.slug ? CLUB : null,
+    );
+    const renamed = () => new Request(`http://localhost${lichessLinkStartHref("old-club", "/settings?tab=account")}`);
+    let checked = 0;
+    for (const s of FLAG_STATES) {
+      cookieJar.clear();
+      flagIs(s);
+      const res = await GET(renamed());
+      if (s.offered) {
+        expect(new URL(res.headers.get("location")!).origin, s.label).toBe("https://lichess.org");
+      } else {
+        expect(landedOn(res), s.label).toMatchObject({ pathname: "/settings", query: { lichess: "unavailable" } });
+      }
+      expect(flags.isServerFeatureEnabled, `${s.label}: asked for the club the old slug names`).toHaveBeenCalledWith(
+        "online-chess",
+        "u1",
+        { orgId: CLUB.id, fallback: false },
+      );
+      checked++;
+    }
+    expect(checked).toBe(FLAG_STATES.length);
+
+    // Once, not a chain: a rename that answers with another rename is refused, after exactly two lookups.
+    orgBySlug.mockReset().mockImplementation(async (slug: string) =>
+      slug === "a" ? { renamedTo: "b" } : slug === "b" ? { renamedTo: CLUB.slug } : slug === CLUB.slug ? CLUB : null,
+    );
+    const res = await GET(new Request(`http://localhost${lichessLinkStartHref("a")}`));
+    expect(landedOn(res)).toMatchObject({ pathname: "/me", query: { lichess: "unavailable" } });
+    expect(orgBySlug.mock.calls.map((c) => c[0])).toEqual(["a", "b"]);
   });
 
   it("signed out: to the login page FIRST, keeping the club and the next — so the start works on the way back", async () => {
@@ -208,10 +256,10 @@ describe("GET /api/auth/lichess — online chess must be offered to the club", (
     expect(flags.isServerFeatureEnabled, "nobody to ask for yet").not.toHaveBeenCalled();
   });
 
-  it("the club's refusal comes before Lichess being unconfigured: with both, the answer is 403, not the settings redirect", async () => {
+  it("the club's refusal comes before Lichess being unconfigured: with both, the start lands with lichess=unavailable, not not_configured", async () => {
     vi.stubEnv("LICHESS_CLIENT_ID", undefined);
     flagIs(FLAG_STATES[1]!);
-    expect(await refusalOf(await GET(start()))).toMatchObject({ status: 403, body: { code: "ONLINE_CHESS_DISABLED" } });
+    expect(landedOn(await GET(start()))).toMatchObject({ pathname: "/me", query: { lichess: "unavailable" } });
     // The positive pair: offered, the same unconfigured start redirects to settings as before.
     flagIs(FLAG_STATES[0]!);
     const res = await GET(start());
