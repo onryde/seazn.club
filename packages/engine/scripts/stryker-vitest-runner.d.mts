@@ -24,7 +24,7 @@ export declare class FileFailureKills {
   dispose(): Promise<void>;
   /** The inner runner's dry run; an error naming the files when one failed as a whole; on a complete run, writes the map. */
   dryRun(options: unknown): Promise<unknown>;
-  /** The inner runner's verdict, a `survived` turned `killed` when a test file failed as a whole. */
+  /** The inner runner's verdict, a `survived` turned `killed` when a test file, or a suite or hook in it, failed as a whole. */
   mutantRun(options: unknown): Promise<unknown>;
   /** The dry run's map in the sandbox (absolute test-file path -> first test id); no map is `{}`, any other read failure throws. */
   dryRunTests(): Record<string, string>;

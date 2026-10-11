@@ -39,7 +39,7 @@ export const RUNNER_NAME = "vitest-file-failure-kills";
 /** The dry run's map, in the sandbox: absolute test-file path → the id of the first test the dry run ran in it. */
 export const DRY_RUN_TESTS_FILE = "stryker-dry-run-tests.json";
 /** The first line of the reason a kill this decorator made carries (a report reader can tell it from a test's own failure). */
-export const FILE_FAILED_REASON = "a test file failed as a whole (it threw while it loaded, or a hook at its top level threw):";
+export const FILE_FAILED_REASON = "a test file, or a suite or hook in it, failed as a whole (the file threw while it loaded, a beforeAll/afterAll hook threw, or a suite was left with no test):";
 /** The test name a kill carries when no dry-run map is there to name a real test. */
 export const FILE_FAILED_TEST_NAME = "(the test file failed as a whole)";
 
