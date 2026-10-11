@@ -5889,6 +5889,7 @@
   "externalPlay.reason.unfinished": "De Lichess-partij is nog niet afgelopen.",
   "externalPlay.reason.linkMissing": "Een Lichess-koppeling ontbreekt.",
   "externalPlay.reason.fairPlay": "Lichess heeft deze partij beëindigd wegens een overtreding van fair play.",
+  "externalPlay.reason.notStarted": "Beide spelers hebben ingecheckt, maar de partij is nooit aangemaakt.",
   "externalPlay.reason.generic": "Deze partij heeft een beslissing van de organisator nodig.",
   "externalPlay.queue.versus": "vs",
   "externalPlay.queue.tbd": "N.n.b.",

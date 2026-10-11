@@ -310,6 +310,12 @@ const forfeitsWritten = async (fixtureId: string) =>
     await sql<{ payload: { by: string; reason: string } }[]>`
       select payload from score_events where fixture_id = ${fixtureId} and type = 'core.forfeit' order by seq`
   ).map((r) => r.payload);
+/** The bridge row's status and hold reason; null when the board has none. */
+const bridgeOf = async (fixtureId: string) => {
+  const [r] = await sql<{ status: string; needs_reason: string | null }[]>`
+    select status, needs_reason from fixture_external_play where fixture_id = ${fixtureId}`;
+  return r ?? null;
+};
 const fixtureRow = async (fixtureId: string) => {
   const [r] = await sql<{ status: string; outcome: { kind?: string; winner?: string } | null }[]>`
     select status, outcome from fixtures where id = ${fixtureId}`;
@@ -445,6 +451,9 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
         expect(await forfeitsWritten(b.fixtureId)).toEqual([]);
         expect((await fixtureRow(b.fixtureId)).status, "refused: nothing moved").toBe("scheduled");
       }
+      // C2's pair: one side present is the no-show path, never not_started.
+      expect(report.heldForOrganiser, `${absent} absent: no hold`).toBe(0);
+      expect((await bridgeOf(b.fixtureId))?.needs_reason ?? null, `${absent} absent`).not.toBe("not_started");
       checked++;
     }
     expect(checked, "both sides checked").toBe(2);
@@ -464,13 +473,44 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     }
   });
 
-  it("BOTH present at the deadline with no game is NOT a no-show", async () => {
+  it("BOTH present at the deadline with no game is NOT a no-show: it is HELD `not_started` for the organiser, once (C2)", async () => {
+    // Controller ruling C2 (spec §3.2, §9's deadlineReason): a silent stuck
+    // board blocks the next round, so it must reach the organiser's queue.
     const b = await openedBoard({ checkedIn: ["home", "away"] });
     const report = await sweep(b, { now: b.at(45) });
     expect(report.scanned, "the board was looked at").toBeGreaterThanOrEqual(1);
     expect(report.noShows).toBe(0);
     expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
     expect(report.reconciled, "no game on file: nothing for reconcile to read").toBe(0);
+    expect(report.heldForOrganiser).toBe(1);
+    expect(report.failures).toEqual([]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "not_started" });
+    expect((await fixtureRow(b.fixtureId)).status, "the board is the organiser's, not settled").toBe("scheduled");
+    // The second pass: the organiser's already — nothing re-held, nothing forfeited.
+    const again = await sweep(b, { now: b.at(50) });
+    expect(again.heldForOrganiser).toBe(0);
+    expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "not_started" });
+  });
+
+  it("C2 at the edge: both present a millisecond BEFORE the deadline is nobody's yet; AT it, held", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const { deadline } = playableWindow(b.opened);
+    const early = await sweep(b, { now: new Date(deadline.getTime() - 1) });
+    expect(early.heldForOrganiser).toBe(0);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "pending", needs_reason: null });
+    const at = await sweep(b, { now: deadline });
+    expect(at.heldForOrganiser).toBe(1);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "not_started" });
+  });
+
+  it("C2 with NO bridge row (paired after the open): the row is minted, then held not_started", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await sql`delete from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    const report = await sweep(b, { now: b.at(45) });
+    expect(report.failures).toEqual([]);
+    expect(report.heldForOrganiser).toBe(1);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "not_started" });
   });
 
   it("BEFORE the deadline nobody is ruled absent — the minute before, and the deadline itself", async () => {
@@ -531,8 +571,12 @@ describe.runIf(HAS_DB)("job 1 — the T+20 no-show (the chess forfeit no other t
     for (const make of [readyGame, liveGame]) {
       const b = await openedBoard({ checkedIn: ["home", "away"] });
       await make(b);
-      await sweep(b, { now: b.at(240) });
+      const before = (await bridgeOf(b.fixtureId))!.status;
+      const report = await sweep(b, { now: b.at(240) });
       expect(forfeitsAttempted(b.fixtureId), make.name).toEqual([]);
+      // C2's pair: a game on file is never not_started, however late.
+      expect(report.heldForOrganiser, make.name).toBe(0);
+      expect(await bridgeOf(b.fixtureId), make.name).toEqual({ status: before, needs_reason: null });
       checked++;
     }
     expect(checked).toBe(2);
@@ -623,11 +667,6 @@ describe.runIf(HAS_DB)("job 1 — a double walkover with no next match is HELD, 
       id === fixtureId && input.type === "core.forfeit" && (input.payload as { by?: string }).by === "both"
         ? new EngineError(NO_NEXT as never, "injected: a message the sweep must not read")
         : null;
-  };
-  const bridgeOf = async (fixtureId: string) => {
-    const [r] = await sql<{ status: string; needs_reason: string | null }[]>`
-      select status, needs_reason from fixture_external_play where fixture_id = ${fixtureId}`;
-    return r ?? null;
   };
   /** A bracket line that feeds no next match, in W2b's own terms. */
   const SHAPES = [
@@ -821,6 +860,16 @@ describe.runIf(HAS_DB)("job 2 — retry a create that lost to Lichess's 429 wall
     expect(tried, "at the deadline").toEqual([]);
     await sweep(b, { now: b.at(45), createGameIfReady: createGame });
     expect(tried, "long after").toEqual([]);
+  });
+
+  it("C2: a create Lichess throttled until past the deadline — both present, no game — goes to the organiser as not_started", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await throttled(b, 19);
+    const { tried, createGame } = recordingCreate();
+    const report = await sweep(b, { now: b.at(45), createGameIfReady: createGame });
+    expect(tried, "past T+20: not retried").toEqual([]);
+    expect(report.heldForOrganiser).toBe(1);
+    expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "not_started" });
   });
 
   it("a board whose create LANDED since (a player's own check-in) is not retried", async () => {
@@ -1615,7 +1664,7 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
   const claims = Object.fromEntries(PATH_NAMES.map((p) => [p, 0])) as Record<PathName, number>;
   const counters = {
     steps: 0, skipped_precondition: 0, passes: 0, reads: 0, backoff_skips: 0, empty_counted: 0, truth_reset: 0,
-    forfeit_one: 0, forfeit_both: 0, both_came_no_forfeit: 0, quiet_before_deadline: 0,
+    forfeit_one: 0, forfeit_both: 0, not_started_held: 0, quiet_before_deadline: 0,
     retry_landed: 0, retry_waited: 0, retry_too_late: 0, held_by_create_unread: 0,
     aborted_held: 0, m4_held: 0, m4_held_ready: 0, held_read_again: 0, held_read_counted: 0, t11_held: 0, finished_by_truth: 0, closed_by_withdrawal: 0, creates: 0, moves: 0, withdrawals: 0,
   };
@@ -1714,7 +1763,11 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     }
     if (m.bridge === "pending" && m.playable && m.t >= DEADLINE) {
       if (m.came.home && m.came.away) {
-        counters.both_came_no_forfeit++;
+        // Ruling C2: both came, no game — the organiser's, as not_started.
+        m.bridge = "held";
+        m.reason = "not_started";
+        p.held = 1;
+        counters.not_started_held++;
       } else {
         p.forfeitBy = !m.came.home && !m.came.away ? "both" : !m.came.home ? b.home.entrantId : b.away.entrantId;
         if (p.forfeitBy === "both") counters.forfeit_both++;
@@ -1733,10 +1786,10 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
       case "quiet_before_deadline": return last !== null && last.forfeitBy === null && m.t < DEADLINE && !m.came.away;
       case "noshow_one": return last?.forfeitBy === b.away.entrantId;
       case "noshow_both": return last?.forfeitBy === "both";
-      case "both_came_no_game": return last !== null && last.forfeitBy === null && m.bridge === "pending" && m.t >= DEADLINE;
+      case "both_came_no_game": return last !== null && last.forfeitBy === null && last.held === 1 && m.reason === "not_started" && m.t >= DEADLINE;
       case "retry_waits": return last?.mintRetries === 0 && m.bridge === "pending" && m.throttledUntil !== null;
       case "retry_lands": return last?.mintRetries === 1 && m.bridge === "ready";
-      case "retry_too_late": return last?.mintRetries === 0 && m.bridge === "pending" && m.throttledUntil !== null && m.t >= DEADLINE;
+      case "retry_too_late": return last?.mintRetries === 0 && m.throttledUntil !== null && m.reason === "not_started" && m.t >= DEADLINE;
       case "accept_failed_unread": return last?.reconciled === 0 && m.bridge === "held" && m.heldBy === "create" && m.truth === "ended";
       case "aborted_ready_held": return last?.held === 1 && m.reason === "aborted";
       case "m4_held": return last?.held === 1 && m.reason === "provider_error";
@@ -1910,5 +1963,25 @@ describe.runIf(HAS_DB)("the sweep's sequence property: check-ins, creates, moves
     }
     // fd 1 directly: the JSON reporter drops console output.
     writeSync(1, `sweep property: ${JSON.stringify({ runs: run, claims, counters })}\n`);
+  });
+});
+
+describe("the not_started reason has organiser copy in all four locales (C2)", () => {
+  it("each locale carries its own sentence, distinct from the generic label — counted", () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), "../../../dictionaries");
+    const LOCALES = ["en", "es", "fr", "nl"] as const;
+    const read = (l: string) => JSON.parse(readFileSync(join(dir, l, "ui.json"), "utf8")) as Record<string, string>;
+    const en = read("en");
+    let checked = 0;
+    for (const l of LOCALES) {
+      const d = read(l);
+      const text = d["externalPlay.reason.notStarted"];
+      expect(text, `${l}: present`).toBeTruthy();
+      expect(text, `${l}: not the generic label`).not.toBe(d["externalPlay.reason.generic"]);
+      expect(text, `${l}: not the no-show label (both players came)`).not.toBe(d["externalPlay.reason.noShow"]);
+      if (l !== "en") expect(text, `${l}: translated, not English`).not.toBe(en["externalPlay.reason.notStarted"]);
+      checked++;
+    }
+    expect(checked, "locales checked").toBe(LOCALES.length);
   });
 });

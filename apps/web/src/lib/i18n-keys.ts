@@ -2282,6 +2282,7 @@ export type DictionaryKey =
   | "externalPlay.reason.generic"
   | "externalPlay.reason.linkMissing"
   | "externalPlay.reason.noShow"
+  | "externalPlay.reason.notStarted"
   | "externalPlay.reason.unfinished"
   | "externalPlay.resend.boardHeld"
   | "externalPlay.resend.windowClosed"
