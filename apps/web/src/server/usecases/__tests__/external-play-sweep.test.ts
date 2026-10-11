@@ -42,6 +42,8 @@ import { makeEnvelope } from "@seazn/engine/testkit";
 import type { CameraPolicy } from "@/lib/camera-policy";
 import type { BoardCall } from "@/server/external-play/types";
 import { sql } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
 import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
 import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
@@ -1810,6 +1812,9 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
           seen.push(a.fixtureId);
           return null;
         },
+        // The pass lock (M8) would skip the second pass outright: off, so
+        // the row claim is proven on its own.
+        serialise: false,
       };
       let runs: Promise<SweepReport>[] = [];
       await sql.begin(async (tx) => {
@@ -1888,6 +1893,87 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
 // periods) and owns the state; every pass is checked against it: what the
 // pass did (reads, retries, forfeits, holds, failures) and the row it left.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// T13 fix round 1 — M8: one pass at a time. A pass that finds another
+// running does nothing and says it skipped.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
+  it("a pass while another runs is SKIPPED — nothing scanned, nothing asked — and says so; once the first ends, the next runs", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await liveGame(b);
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let signalInside!: () => void;
+    const inside = new Promise<void>((resolve) => (signalInside = resolve));
+    let reads = 0;
+    // The first pass parks inside its read of the board.
+    const first = sweep(b, {
+      now: b.at(8),
+      reconcile: async () => {
+        reads++;
+        signalInside();
+        await released;
+        return null;
+      },
+    });
+    await inside;
+    const second = await sweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
+    expect(second).toEqual({
+      skipped: true, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
+      cameraSettled: 0, cameraFlags: 0, scanned: 0, failures: [],
+    });
+    release();
+    const done = await first;
+    expect([done.skipped, done.reconciled, reads]).toEqual([false, 1, 1]);
+    const third = await sweep(b, { now: b.at(14), reconcile: async () => { reads++; return null; } });
+    expect([third.skipped, third.reconciled, reads], "the lock went with the first pass").toEqual([false, 1, 2]);
+  });
+
+  it("a pass that THROWS lets go of the lock: the next pass runs", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    // An org scope Postgres cannot read fails a candidate query, outside any
+    // job's own catch: the pass itself throws.
+    await expect(sweepExternalPlay({ now: b.at(5), orgIds: ["not-a-uuid"] })).rejects.toThrow();
+    const next = await sweep(b, { now: b.at(5) });
+    expect(next.skipped).toBe(false);
+    expect(next.scanned, "premise: the next pass looked at the board").toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T13 fix round 1 — M7: a failure inside a job is diagnosable from the server
+// log; the returned report stays code-only.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("M7 — a job's failure is logged with its message; the report carries the code only", () => {
+  it("a generic Error logs its message AND stack; a named refusal its message; the report holds the code alone (counted)", async () => {
+    const warns = vi.spyOn(log, "warn");
+    try {
+      let checked = 0;
+      for (const [err, code, stack] of [
+        [new TypeError("cannot read properties of undefined (reading 'moves')"), "TypeError", true],
+        [new HttpError(503, "lichess key unavailable", "TOKEN_KEY_UNAVAILABLE"), "TOKEN_KEY_UNAVAILABLE", false],
+      ] as const) {
+        const b = await openedBoard({ checkedIn: ["home", "away"] });
+        await liveGame(b);
+        warns.mockClear();
+        const r = await sweep(b, { now: b.at(8), reconcile: async () => { throw err; } });
+        expect(r.failures, code).toEqual([{ job: "reconcile", fixtureId: b.fixtureId, code }]);
+        const logged = warns.mock.calls
+          .map(([o]) => o as Record<string, unknown>)
+          .filter((o) => o?.fixtureId === b.fixtureId && o?.job === "reconcile");
+        expect(logged, code).toHaveLength(1);
+        expect(logged[0], code).toMatchObject({ code, message: err.message });
+        if (stack) expect(String(logged[0]!.stack), `${code}: stack`).toContain("TypeError: cannot read properties");
+        else expect(logged[0]!.stack, `${code}: a named refusal needs no stack`).toBeUndefined();
+        checked++;
+      }
+      expect(checked).toBe(2);
+    } finally {
+      warns.mockRestore();
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // T13 fix round 1 — M6: `heldForOrganiser` counts every hold a read placed,
 // whoever placed it inside the read, and nothing twice.
@@ -2877,8 +2963,10 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       });
       const holderPid = await held;
       const now = after(m, CAMERA_EVIDENCE_AFTER_MS);
-      const a = pass(m, now);
-      const b = pass(m, now);
+      // The pass lock (M8) off, so the settle's own claim is proven alone.
+      const overlapping = () => sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: RTK, serialise: false });
+      const a = overlapping();
+      const b = overlapping();
       // Both settles parked: the first behind the holder, the second behind
       // the first (a row lock's second waiter is blocked by the tuple lock's
       // holder, not by the transaction holding the row).

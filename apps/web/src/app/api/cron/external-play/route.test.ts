@@ -37,6 +37,7 @@ describe("POST /api/cron/external-play", () => {
     vi.stubEnv("CRON_SECRET", "s3cret");
     hdrs.store = new Headers({ "x-cron-secret": "s3cret" });
     const report = {
+      skipped: false,
       noShows: 1,
       mintRetries: 2,
       meetingsEnded: 3,

@@ -7,7 +7,8 @@ import { sweepExternalPlay } from "@/server/usecases/external-play";
  *  design §4): one pass of the external-play sweep (T13) — the T+20 no-show,
  *  the mint retry for a create Lichess throttled, meeting teardown, and the
  *  reconcile sweep that reads every game on file. Answers the sweep's report
- *  (counts, and failures by code — never a message). Wired in the separate
+ *  (counts, and failures by code — never a message; `skipped` when another
+ *  pass was still running, T13 M8). Wired in the separate
  *  cron repo (onryde/seazn.club.workflow).
  *  Cron-shaped like /api/cron/registrations: x-cron-secret header (CRON_SECRET).
  *  Lichess pushes nothing to us (spec §3.5; the old webhook route is deleted):
