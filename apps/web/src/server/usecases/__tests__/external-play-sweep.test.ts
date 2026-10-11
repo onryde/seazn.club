@@ -1889,6 +1889,44 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
 // pass did (reads, retries, forfeits, holds, failures) and the row it left.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
+// T13 fix round 1 — M6: `heldForOrganiser` counts every hold a read placed,
+// whoever placed it inside the read, and nothing twice.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("M6 — the report counts the holds a sweep read placed", () => {
+  it("reconcile's OWN token_revoked hold (both tokens refused) is counted", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await liveGame(b);
+    lichess.onStream = () => ({ status: 401, body: "Unauthorized" });
+    const r = await sweep(b, { now: b.at(8) });
+    expect(r.reconciled).toBe(1);
+    expect(await bridgeOf(b.fixtureId), "premise: reconcile held it itself").toEqual({ status: "needs_organiser", needs_reason: "token_revoked" });
+    expect(r.heldForOrganiser).toBe(1);
+  });
+
+  it("a terminal hold REPLACING a mid-game one on a held row is counted — and a re-read that changes nothing is not", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"], kind: "knockout" });
+    const gameId = await liveGame(b);
+    // T10: Black's token refused mid-game — the board is held token_revoked.
+    expect(await act(
+      { fixtureId: b.fixtureId, personId: b.away.personId, action: { kind: "move", uci: "e7e5" } },
+      { now: b.at(7), accessToken: async (u) => `tok-${u}`, publish: async () => {}, reconcile: async () => null,
+        submitMove: async () => ({ ok: false, code: "unauthorized", raw: "401 Unauthorized" }) },
+    )).toMatchObject({ ok: false });
+    expect(await bridgeOf(b.fixtureId), "premise: held mid-game").toEqual({ status: "needs_organiser", needs_reason: "token_revoked" });
+    // Still running at Lichess: the held row is read, nothing changes.
+    serveStream(gameFull(b, gameId, MID, { moves: ["e2e4"], status: "started" }));
+    const quiet = await sweep(b, { now: b.at(8) });
+    expect([quiet.reconciled, quiet.heldForOrganiser], "a re-read that moved nothing").toEqual([1, 0]);
+    // A knockout draw: the tie-break is owed — the snapshot's hold replaces the mid-game one.
+    serveStream(gameFull(b, gameId, MID, { moves: ["e2e4", "e7e5"], status: "draw" }));
+    const ended = await sweep(b, { now: b.at(8 + SWEEP_CADENCE_MS / 60_000) });
+    expect(ended.reconciled).toBe(1);
+    expect(await bridgeOf(b.fixtureId), "premise: replaced").toEqual({ status: "needs_organiser", needs_reason: "tiebreak_owed" });
+    expect(ended.heldForOrganiser).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T13 fix round 1, ruling I4 — the reviewer's probe P1, staged: the 5-minute
 // sweep reads a live game between Lichess's 200 for a Seazn move and T10's
 // append. T10 put the move on file before sending it, so the sweep adopts it
