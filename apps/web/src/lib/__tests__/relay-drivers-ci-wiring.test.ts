@@ -18,6 +18,10 @@
 // `fallback: false`, and a CI server has no PostHog — so without the override every spec and walkthrough would see the
 // option hidden. The same production boots therefore carry CAPTURE_QR_V2_ALWAYS: "1" (exactly "1": the panel context
 // reads no other value as on). Staging and prod never set it.
+//
+// Online chess (T20, owner 2026-10-11 — "like streaming"): the same shape. What STARTS online chess sits behind the
+// PostHog flag `online-chess` (fallback false), so the same boots carry ONLINE_CHESS_ALWAYS: "1", and no deployed
+// environment may name it.
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { relative, resolve } from "node:path";
@@ -88,6 +92,7 @@ describe("R5: every production server a streaming suite boots runs the fake rela
         // list (config.ts relayDriverMode) — the list is read from config, so stg/prod are refused by construction.
         expect(FAKE_DRIVER_ENV_NAMES, `${wf}:${line} ENV_NAME=${JSON.stringify(env.ENV_NAME)}`).toContain(env.ENV_NAME);
         expect(env.CAPTURE_QR_V2_ALWAYS, `${wf}:${line} shows the phone-camera option (capture-qr-v2 override)`).toBe("1");
+        expect(env.ONLINE_CHESS_ALWAYS, `${wf}:${line} offers online chess (online-chess override)`).toBe("1");
         checked++;
       }
     }
@@ -152,6 +157,8 @@ describe("R5: every production server a streaming suite boots runs the fake rela
       expect(boot).toMatch(/FAKE_INGEST_CONNECT_AFTER_MS="\$\{FAKE_INGEST_CONNECT_AFTER_MS:-\d+\}"/);
       // Capture QR v2: the flag's override, as CI's boots carry it.
       expect(boot).toMatch(/CAPTURE_QR_V2_ALWAYS="\$\{CAPTURE_QR_V2_ALWAYS:-1\}"/);
+      // Online chess (T20): the same, for the online-chess flag.
+      expect(boot).toMatch(/ONLINE_CHESS_ALWAYS="\$\{ONLINE_CHESS_ALWAYS:-1\}"/);
     }
   });
 });
@@ -189,6 +196,11 @@ describe("capture-qr-v2: the CI override never reaches a deployed environment", 
       .filter((f) => isDeployWorkflow(readFileSync(f, "utf8")));
     const checked = [...fly, ...docker, ...envs, ...workflows];
     for (const f of checked) expect(names(readFileSync(f, "utf8")), `${relative(ROOT, f)} names ${OVERRIDE}`).toBe(false);
+    // T20: the online-chess override would offer online chess to every club, bypassing that flag's rollout — the same
+    // files, the same rule.
+    for (const f of checked) {
+      expect(readFileSync(f, "utf8").includes("ONLINE_CHESS_ALWAYS"), `${relative(ROOT, f)} names ONLINE_CHESS_ALWAYS`).toBe(false);
+    }
     // Anti-vacuity, per kind: today fly.toml + fly.stg.toml + services/placement/fly.toml (and db/flyway.toml), the web
     // and placement Dockerfiles, and stg / prod / placement-stg / placement-prod. No staging/production env file is
     // committed (their values live in Fly secrets), so that kind may be empty — the detector below proves it would bite.

@@ -376,6 +376,8 @@ jobs:
           # The capture panel's phone-camera option sits behind a PostHog flag (fallback false) and a
           # CI server has no PostHog; the override shows it, exactly "1". Staging and prod never set it.
           CAPTURE_QR_V2_ALWAYS: "1"
+          # Online chess: the same shape, for the PostHog flag online-chess.
+          ONLINE_CHESS_ALWAYS: "1"
         run: |
           set -euo pipefail
           tar -xzf web.tgz
