@@ -32,18 +32,25 @@
 // (guard.ts `d.sport_key = 'boardgame'`); the sweep adds no sport branch.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { EngineError, foldMatch } from "@seazn/engine/core";
 import { boardgame } from "@seazn/engine/sports/boardgame";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
+import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
 import { DEADLINE_AFTER_MS, MINT_CLAIM_STALE_MS, roomPhase, windowFor } from "@/server/external-play/window";
+import { getFixtureState } from "../fixtures";
 import { stampFixtureCheckIn } from "../me";
+import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createGameIfReady } from "../external-play/create-game";
 import { openRound } from "../external-play/open-round";
 import { act } from "../external-play/play";
+import { reconcile } from "../external-play/reconcile";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
 import {
   playableWindow,
@@ -123,6 +130,43 @@ vi.mock("@/server/external-play/lichess/board-api", async (importOriginal) => {
   return { ...real, ...board, readGameStream: wired.readGameStream, exportGame: wired.exportGame };
 });
 
+// RealtimeKit: the REAL adapter (ensureMeeting / endMeeting) over this fake
+// fetch, passed through the adapter's own `deps.fetch` seam. `patchFails`
+// answers the deactivate with a 500 that many times.
+const rtk = vi.hoisted(() => {
+  const state = {
+    calls: [] as { method: string; path: string }[],
+    patchFails: 0,
+    reset() {
+      state.calls = [];
+      state.patchFails = 0;
+    },
+    async fetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+      const u = new URL(String(input));
+      const path = u.pathname.replace(/^.*\/realtime\/kit\/[^/]+/, "");
+      const method = init?.method ?? "GET";
+      state.calls.push({ method, path });
+      const json = (status: number, body: unknown) =>
+        new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+      if (method === "POST" && path === "/meetings") return json(201, { success: true, data: { id: `mtg-${crypto.randomUUID()}` } });
+      if (method === "POST" && path.endsWith("/active-session/kick-all")) {
+        // Nobody in the room: RealtimeKit's not-found envelope (adapter tests).
+        return json(404, { success: false, error: { code: 404, message: "no active session" } });
+      }
+      if (method === "PATCH" && path.startsWith("/meetings/")) {
+        if (state.patchFails > 0) {
+          state.patchFails--;
+          return json(500, { success: false });
+        }
+        return json(200, { success: true, data: { status: "INACTIVE" } });
+      }
+      return json(418, { success: false, error: { code: 418, message: "unexpected RealtimeKit call" } });
+    },
+  };
+  return state;
+});
+const RTK = { fetch: ((i: string | URL | Request, init?: RequestInit) => rtk.fetch(i, init)) as typeof fetch, baseUrl: "https://rtk.test/client/v4" };
+
 // The forfeit WRITE is observed at scoreEvent's door: a spy around the REAL
 // function (it still writes). On today's engine the write is refused, so the
 // attempt — who, why, under whose authority — is the only thing to read.
@@ -172,6 +216,15 @@ beforeEach(() => {
   // at once without these two.
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
   vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
+  // RealtimeKit configured with placeholders; every call goes to `rtk` above
+  // (and an unrouted default fetch would go to rtk.test, never Cloudflare).
+  rtk.reset();
+  vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acct-test");
+  vi.stubEnv("REALTIMEKIT_API_TOKEN", "rtk-test-token");
+  vi.stubEnv("REALTIMEKIT_APP_ID", "app-test");
+  vi.stubEnv("REALTIMEKIT_PLAYER_PRESET", "player-test");
+  vi.stubEnv("REALTIMEKIT_ARBITER_PRESET", "arbiter-test");
+  vi.stubEnv("REALTIMEKIT_BASE_URL", "https://rtk.test/client/v4");
 });
 
 afterAll(async () => {
@@ -830,5 +883,194 @@ describe.runIf(HAS_DB)("job 2 — retry a create that lost to Lichess's 429 wall
     const { tried, createGame } = recordingCreate();
     await sweep(b, { now: new Date(retryAt.getTime() + 1_000), createGameIfReady: createGame });
     expect(tried).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lichess truth, from the recordings (src/server/external-play/__fixtures__/
+// lichess, README) re-addressed to our game and players — ids only.
+// ---------------------------------------------------------------------------
+const FIX = join(dirname(fileURLToPath(import.meta.url)), "../../external-play/__fixtures__/lichess");
+type GameFullJson = {
+  id: string;
+  white: { id: string; name: string };
+  black: { id: string; name: string };
+  state: { moves: string; status: string; winner?: string; wtime: number; btime: number };
+};
+const recorded = (name: string): GameFullJson =>
+  JSON.parse(readFileSync(join(FIX, name), "utf8").split("\n")[0]!) as GameFullJson;
+/** Recorded 2026-10-11: 8 plies, started. */
+const MID = recorded("gamefull-mid-white.ndjson");
+/** Recorded 2026-10-11: the same game, outoftime, winner black. */
+const ENDED = recorded("gamefull-expired-2.ndjson");
+function gameFull(b: Board, gameId: string, base: GameFullJson, over: { moves?: readonly string[]; status?: string } = {}): string {
+  const j = JSON.parse(JSON.stringify(base)) as GameFullJson;
+  j.id = gameId;
+  j.white.id = j.white.name = b.home.lichessId; // the seed pairs home as White
+  j.black.id = j.black.name = b.away.lichessId;
+  if (over.moves !== undefined) j.state.moves = over.moves.join(" ");
+  if (over.status !== undefined) {
+    j.state.status = over.status;
+    delete j.state.winner;
+  }
+  return `${JSON.stringify(j)}\n`;
+}
+const serveStream = (body: string) => {
+  lichess.onStream = () => ({ status: 200, body });
+};
+
+// ---------------------------------------------------------------------------
+// Job 3 — meeting teardown.
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at T+20 when nobody played", () => {
+  /** T7's REAL ensureMeeting (fake fetch): the room a first arrival opens. */
+  async function meetingFor(b: Board): Promise<string> {
+    const { meetingId } = await ensureMeeting(b.fixtureId, RTK);
+    rtk.calls = [];
+    return meetingId;
+  }
+  /** T7's REAL endMeeting behind a recorder. */
+  function recordingEnd() {
+    const ended: string[] = [];
+    const end: NonNullable<SweepDeps["endMeeting"]> = async (m) => {
+      ended.push(m);
+      await endMeeting(m, RTK);
+    };
+    return { ended, end };
+  }
+  const endedAt = async (fixtureId: string) => {
+    const [r] = await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_video_meetings where fixture_id = ${fixtureId}`;
+    return r?.ended_at ?? null;
+  };
+
+  it("past T+20 with no game on file, the meeting is ended ONCE: kick-all, deactivate, stamped", async () => {
+    const b = await openedBoard({ checkedIn: ["home"] });
+    const m = await meetingFor(b);
+    const { ended, end } = recordingEnd();
+    const report = await sweep(b, { now: b.at(45), endMeeting: end });
+    expect(ended).toEqual([m]);
+    expect(report.meetingsEnded).toBe(1);
+    expect(rtk.calls).toEqual([
+      { method: "POST", path: `/meetings/${m}/active-session/kick-all` },
+      { method: "PATCH", path: `/meetings/${m}` },
+    ]);
+    expect(await endedAt(b.fixtureId)).not.toBeNull();
+    const second = await sweep(b, { now: b.at(50), endMeeting: end });
+    expect(second.meetingsEnded, "idempotent").toBe(0);
+    expect(ended).toEqual([m]);
+  });
+
+  it("BEFORE T+20 a room with no game yet stays up — somebody may still come", async () => {
+    const b = await openedBoard({ checkedIn: ["home"] });
+    await meetingFor(b);
+    const { ended, end } = recordingEnd();
+    const { deadline } = playableWindow(b.opened);
+    await sweep(b, { now: new Date(deadline.getTime() - 1), endMeeting: end });
+    expect(ended, "one millisecond before T+20").toEqual([]);
+    await sweep(b, { now: deadline, endMeeting: end });
+    expect(ended.length, "at T+20 exactly the room has closed").toBe(1);
+  });
+
+  it("a possibly-sent create (T9's create_sent_at) is a game that may exist: its meeting stays", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    await meetingFor(b);
+    // Stands for T9's createAtDequeue marker before its HTTP call (T9 I2).
+    await sql`update fixture_external_play set create_sent_at = ${b.at(19)} where fixture_id = ${b.fixtureId}`;
+    const { ended, end } = recordingEnd();
+    await sweep(b, { now: b.at(45), endMeeting: end });
+    expect(ended).toEqual([]);
+  });
+
+  it("a game on file keeps its meeting past T+20 — ready (never started) or live", async () => {
+    // "Nothing in our system ends a live game early" (spec §3.6): its
+    // players are on camera, so the meeting stays up with it.
+    let checked = 0;
+    for (const make of [readyGame, liveGame]) {
+      const b = await openedBoard({ checkedIn: ["home", "away"] });
+      await meetingFor(b);
+      await make(b);
+      const { ended, end } = recordingEnd();
+      await sweep(b, { now: b.at(240), endMeeting: end });
+      expect(ended, make.name).toEqual([]);
+      expect(await endedAt(b.fixtureId), make.name).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a FINISHED game's meeting is ended at the result, before T+20 or not", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const m = await meetingFor(b);
+    const gameId = await liveGame(b);
+    // T11's REAL reconcile reads the recorded ending (outoftime) and T12
+    // writes the result: the bridge is 'finished'.
+    serveStream(gameFull(b, gameId, ENDED));
+    await reconcile(b.fixtureId, "game_end", { now: b.at(10) });
+    const [r] = await sql<{ status: string }[]>`select status from fixture_external_play where fixture_id = ${b.fixtureId}`;
+    expect(r!.status, "premise: T11 finished the game").toBe("finished");
+    const { ended, end } = recordingEnd();
+    await sweep(b, { now: b.at(11), endMeeting: end });
+    expect(ended).toEqual([m]);
+  });
+
+  it("a game closed while the FIXTURE plays on (a level result already on the pad, its tie-break pending): ended at the result", async () => {
+    // The bridge's own 'finished' is the only signal here: the fixture still
+    // reads in_play (its tie-break is the organiser's) and a game IS on file,
+    // so neither the settled-board rule nor the nobody-played rule sees it.
+    const b = await openedBoard({ checkedIn: ["home", "away"], kind: "knockout" });
+    const m = await meetingFor(b);
+    const gameId = await readyGame(b);
+    const auth = await mintOrgOwnerAuth(b.orgId);
+    const seq = (await getFixtureState(auth, b.fixtureId)).last_seq;
+    await scoreEvent(auth, b.fixtureId, { expected_seq: seq, type: "core.start", payload: {} });
+    await scoreEvent(auth, b.fixtureId, { expected_seq: seq + 1, type: "boardgame.result", payload: { winner: null } });
+    serveStream(gameFull(b, gameId, ENDED));
+    expect(await reconcile(b.fixtureId, "game_end", { now: b.at(10) }), "premise: T11 finished the bridge, T12 wrote nothing")
+      .toMatchObject({ result: { wrote: "none" }, finished: true });
+    expect((await fixtureRow(b.fixtureId)).status, "premise: the fixture plays on").toBe("in_play");
+    const { ended, end } = recordingEnd();
+    await sweep(b, { now: b.at(11), endMeeting: end });
+    expect(ended).toEqual([m]);
+  });
+
+  it("a board settled by a WITHDRAWAL has its meeting ended", async () => {
+    const b = await openedBoard({ checkedIn: ["home"] });
+    const m = await meetingFor(b);
+    await withdrawEntrantCascade(await mintOrgOwnerAuth(b.orgId), b.away.entrantId);
+    const { ended, end } = recordingEnd();
+    await sweep(b, { now: b.at(5), endMeeting: end });
+    expect(ended).toEqual([m]);
+  });
+
+  it("both seated but no game ever made (the create never landed) — past T+20 nothing can be played: ended", async () => {
+    const b = await openedBoard({ checkedIn: ["home", "away"] });
+    const m = await meetingFor(b);
+    const { ended, end } = recordingEnd();
+    await sweep(b, { now: b.at(45), endMeeting: end });
+    expect(ended).toEqual([m]);
+  });
+
+  it("a board with no meeting at all is not a teardown, and RealtimeKit is not called", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    const { ended, end } = recordingEnd();
+    const report = await sweep(b, { now: b.at(45), endMeeting: end });
+    expect(ended).toEqual([]);
+    expect(report.meetingsEnded).toBe(0);
+    expect(rtk.calls).toEqual([]);
+  });
+
+  it("a FAILED deactivate leaves the meeting unended and reported; the next pass ends it", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    const m = await meetingFor(b);
+    const { ended, end } = recordingEnd();
+    rtk.patchFails = 1;
+    const first = await sweep(b, { now: b.at(45), endMeeting: end });
+    expect(first.meetingsEnded).toBe(0);
+    expect(first.failures.filter((f) => f.job === "teardown")).toEqual([{ job: "teardown", fixtureId: b.fixtureId, code: "unavailable" }]);
+    expect(await endedAt(b.fixtureId), "still joinable upstream: not stamped").toBeNull();
+    const second = await sweep(b, { now: b.at(50), endMeeting: end });
+    expect(second.meetingsEnded).toBe(1);
+    expect(ended).toEqual([m, m]);
+    expect(await endedAt(b.fixtureId)).not.toBeNull();
   });
 });
