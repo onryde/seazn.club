@@ -298,7 +298,8 @@ describe("FileFailureKills against a fake inner runner (every guard the real-run
 
   it("a kill is credited through the map by the RESOLVED path of the failed file (the map's keys are resolved paths), and an unmapped file gets the synthetic id", async () => {
     const cwd = sandbox();
-    const dry = { status: "complete", tests: [{ id: "11", name: "first", status: 0, fileName: join(cwd, "c.test.js") }, { id: "12", name: "second", status: 0, fileName: join(cwd, "c.test.js") }] };
+    // an unnormalised fileName too: the vitest runner resolves it today (vitest-helpers.js), the map must not depend on that
+    const dry = { status: "complete", tests: [{ id: "11", name: "first", status: 0, fileName: `${cwd}/sub/../c.test.js` }, { id: "12", name: "second", status: 0, fileName: join(cwd, "c.test.js") }] };
     expect(await new FileFailureKills(fake({ files: [clean(cwd, "c.test.js")], dry }), cwd).dryRun({})).toBe(dry);
     expect(JSON.parse(readFileSync(mapAt(cwd), "utf8"))).toEqual({ [join(cwd, "c.test.js")]: "11" });
     // vitest's filepath is not always normalised; the map is keyed by path.resolve (vitest-helpers.js's toTestResult)
