@@ -105,6 +105,16 @@ describe("hubForfeit — the hub card's words (the producer)", () => {
     expect(w.tag).toBe("Aband. · DLS");
     expect(w.sentence).toBe("Abandoned (rain) — Riverside FC won by 12 runs (DLS).");
   });
+
+  it("M-2: a HELD abandon (status abandoned, a level result owed a settle) carries no result — the card never reads finished", () => {
+    const level = fixture({ outcome: { kind: "no_result" } as never, abandon_reason: "rain" });
+    const result = () => tr("matchCentre.result.no_result");
+    const held = hubForfeit({ ...level, status: "abandoned" }, ctx([], result))!;
+    expect(held.sentence).toBe(tr("forfeit.sentence.abandonedBare", { reason: "rain" }));
+    // the positive pair: the same no-result DECIDED (a table stage) is the match's result, and says so
+    const decided = hubForfeit({ ...level, status: "decided" }, ctx([], result))!;
+    expect(decided.sentence).toBe(tr("forfeit.sentence.abandoned", { reason: "rain", result: result() }));
+  });
 });
 
 // ---------------------------------------------------------------- the results card

@@ -240,4 +240,20 @@ describe("match centre — an abandon with a result (X-AB-2)", () => {
     const bare = centre({ m: CRICKET, cfg: ODI, status: "decided", ledger: washout }, { resolveMsg: undefined });
     expect(bare.doc.header.statusLine).toEqual({ key: "forfeit.sentence.abandonedBare", params: { reason: "rain" } });
   });
+
+  it("M-2: a HELD washout (status abandoned — a level result in a bracket, owed the organiser's settle) never reads finished", () => {
+    // fixtureStatusFromFold rule 2: an abandon whose result is level where a level result is forbidden stays
+    // `abandoned`. Its no-result is not the match's result yet — who advances is owed — so the line names the abandon
+    // and its reason only. The decided washout above is the positive pair (a table stage's no-result IS the result).
+    const washout = () => [
+      ev(1, "core.start"),
+      ev(2, "cricket.innings.summary", { runs: 250, wickets: 5, legalBalls: 300 }),
+      ev(3, "cricket.innings.summary", { runs: 40, wickets: 1, legalBalls: 60, partial: true }),
+      ev(4, "core.abandon", { reason: "rain" }),
+    ];
+    const { doc, outcome } = centre({ m: CRICKET, cfg: ODI, status: "abandoned", ledger: washout });
+    expect(outcome, "premise: a level result").toMatchObject({ kind: "no_result" });
+    expect(doc.header.statusLine).toEqual({ key: "forfeit.sentence.abandonedBare", params: { reason: "rain" } });
+    expect(words(doc.header.statusLine)).not.toContain(t(EN, "matchCentre.result.no_result"));
+  });
 });

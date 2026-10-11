@@ -190,7 +190,9 @@ export function hubForfeit(
         )
       : null;
   return forfeitWords(tag, (key, vars) => ctx.msg(key, vars), nameOf, {
-    result: tag.kind.startsWith("abandoned") ? ctx.resultSentence() : null,
+    // Review M-2: a HELD abandon (status `abandoned` with a level result in a bracket, owed a settle) has no result
+    // yet — the match centre's rule — so the card never reads finished.
+    result: tag.kind.startsWith("abandoned") && f.status !== "abandoned" ? ctx.resultSentence() : null,
     next: nextWinner === null ? null : nameOf(nextWinner),
   });
 }

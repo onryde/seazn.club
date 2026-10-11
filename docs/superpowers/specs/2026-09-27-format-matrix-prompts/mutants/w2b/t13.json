@@ -642,5 +642,57 @@
         "name": "getPublicFixture caches the page's document under \\[pub-fixture-v4, id\\]"
       }
     ]
+  },
+  {
+    "id": "m2-centre-held-never",
+    "file": "apps/web/src/server/public-site/match-centre.ts",
+    "find": "const held = fixture.status === \"abandoned\";",
+    "replace": "const held = false;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+        ],
+        "name": "M-2: a HELD washout"
+      }
+    ]
+  },
+  {
+    "id": "m2-centre-held-always",
+    "file": "apps/web/src/server/public-site/match-centre.ts",
+    "find": "const held = fixture.status === \"abandoned\";",
+    "replace": "const held = true;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+        ],
+        "name": "a washout: \"Abandoned \\(rain\\) — No result"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/public-site/__tests__/match-centre-forfeit.test.ts"
+        ],
+        "name": "X-AB-2: \"Abandoned \\(rain\\) — Eagles won by N runs"
+      }
+    ]
+  },
+  {
+    "id": "m2-hub-held-ignored",
+    "file": "apps/web/src/server/public-site/competition-hub.ts",
+    "find": "result: tag.kind.startsWith(\"abandoned\") && f.status !== \"abandoned\" ? ctx.resultSentence() : null,",
+    "replace": "result: tag.kind.startsWith(\"abandoned\") ? ctx.resultSentence() : null,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/forfeit-tag-surfaces.test.tsx"
+        ],
+        "name": "M-2: a HELD abandon"
+      }
+    ]
   }
 ]

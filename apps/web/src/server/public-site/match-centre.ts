@@ -1044,8 +1044,13 @@ function buildHeader(
     // An abandon's result is the SAME sentence the decided branch above words (the same margins, by method), so the
     // match cannot read one result two ways; a level abandon's ("Draw", "No result") comes from the same switch.
     const shootout = shootoutScoreFromDetail(fixture.summary?.detail);
+    // Review M-2: a HELD abandon — status `abandoned` with a result, which `fixtureStatusFromFold` leaves only for a
+    // level result where one is forbidden (a bracket), owed the organiser's settle — has no result yet: who advances
+    // is still to be decided, so the line names the abandon and its reason alone (`abandonedBare`), never a finished
+    // "— No result." / "— Match drawn.".
+    const held = fixture.status === "abandoned";
     const result =
-      tag.kind.startsWith("abandoned") && resolve !== undefined
+      tag.kind.startsWith("abandoned") && resolve !== undefined && !held
         ? resultMsg(
             fixture.outcome,
             {
