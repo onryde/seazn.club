@@ -1316,6 +1316,36 @@ describe("the CLI's other modes and its refusals", () => {
   });
 });
 
+/** The engine source a recorded equivalent names, or undefined when there is no such file. */
+const engineSource = (file: string): string | undefined => (existsSync(join(ENGINE, file)) ? readFileSync(join(ENGINE, file), "utf8") : undefined);
+
+/** What is wrong with each recorded equivalent's position, read against the source it names: the key's shape
+ *  (`file:line:col mutator → replacement`), its file, its line, its `original` (the source text the mutant replaces), which must
+ *  start at the key's column (Stryker's report columns are 1-based), and its `line` (the whole source line, trimmed), which the
+ *  file's line must equal: a short original such as `""` repeats at the same column on other lines. One fault per bad entry; []
+ *  when every entry holds. */
+function equivalentPositionFaults(entries: readonly unknown[], sourceOf: (file: string) => string | undefined): string[] {
+  const faults: string[] = [];
+  for (const entry of entries) {
+    const { mutant, original, line: recordedLine } = (entry ?? {}) as { mutant?: unknown; original?: unknown; line?: unknown };
+    const m = typeof mutant === "string" ? /^(src\/\S+\.ts):(\d+):(\d+) (\w+) → (.*)$/.exec(mutant) : null;
+    if (m === null) { faults.push(`${String(mutant)}: not file:line:col mutator → replacement`); continue; }
+    if (typeof original !== "string" || original === "") { faults.push(`${String(mutant)}: no \`original\` source text`); continue; }
+    if (typeof recordedLine !== "string" || recordedLine === "") { faults.push(`${String(mutant)}: no \`line\` (the whole source line)`); continue; }
+    const [, file, line, col] = m;
+    const source = sourceOf(file!);
+    if (source === undefined) { faults.push(`${String(mutant)}: no file ${file}`); continue; }
+    const text = source.split("\n")[Number(line) - 1];
+    if (text === undefined) { faults.push(`${String(mutant)}: ${file} has no line ${line}`); continue; }
+    if (!text.slice(Number(col) - 1).startsWith(original)) {
+      faults.push(`${String(mutant)}: line ${line} does not read ${JSON.stringify(original)} at column ${col}: ${JSON.stringify(text.trim())}`);
+    } else if (text.trim() !== recordedLine) {
+      faults.push(`${String(mutant)}: line ${line} does not read the recorded line ${JSON.stringify(recordedLine)}: ${JSON.stringify(text.trim())}`);
+    }
+  }
+  return faults;
+}
+
 describe("the real engine floor files", () => {
   it("stryker-floor.json and stryker-equivalent.json are present, parse, and say what the score counts", () => {
     const f = JSON.parse(readFileSync(join(ENGINE, "stryker-floor.json"), "utf8")) as { note: string; families: Record<string, number> };
@@ -1327,6 +1357,48 @@ describe("the real engine floor files", () => {
     expect(parseFloors(JSON.stringify(f))).toEqual(f.families);
     const e = readFileSync(join(ENGINE, "stryker-equivalent.json"), "utf8");
     expect(JSON.parse(e)).toHaveProperty("note");
-    expect(parseEquivalents(e)).toEqual([]);
+    expect(Array.isArray(parseEquivalents(e))).toBe(true);
+  });
+
+  it("every recorded equivalent is keyed the way SURVIVORS.md prints a mutant, at a line and column where its file still reads the original text the mutant replaces", () => {
+    // A key that matches no mutant does nothing; one a line shift moved onto OTHER code would excuse a different mutant. Both are
+    // refused here, against the source as it is now.
+    const text = readFileSync(join(ENGINE, "stryker-equivalent.json"), "utf8");
+    const recorded = parseEquivalents(text).length;
+    // anti-vacuity: the first records are the exports pilot's (engine mutation-debt P0, src/exports/build.ts)
+    expect(recorded).toBeGreaterThan(0);
+    const entries = (JSON.parse(text) as { equivalent: unknown[] }).equivalent;
+    expect(entries).toHaveLength(recorded);
+    expect(equivalentPositionFaults(entries, engineSource)).toEqual([]);
+  });
+
+  it("the position check itself: the true position passes; a key shifted a line or a column (also onto a line with the same original at the same column), an entry with no original or no line, a missing file or line, and a malformed key are each refused", () => {
+    const SRC = "const a = 1;\nif (x !== undefined) go();\nif (y !== \"\") go();\nif (z !== \"\") stop();\n";
+    const sourceOf = (file: string) => (file === "src/x.ts" ? SRC : undefined);
+    const ok = { mutant: "src/x.ts:2:5 ConditionalExpression → true", original: "x !== undefined", line: "if (x !== undefined) go();", reason: "a reason long enough" };
+    // a short original repeats: build.ts reads `""` at column 23 on line 99 AND on line 102 (review N2), so only the line tells
+    const short = { mutant: "src/x.ts:3:11 StringLiteral → \"Stryker was here!\"", original: "\"\"", line: "if (y !== \"\") go();", reason: "a reason long enough" };
+    expect(equivalentPositionFaults([ok, short], sourceOf)).toEqual([]);
+    expect(equivalentPositionFaults([], sourceOf), "the empty case").toEqual([]);
+    const bad: [unknown, string][] = [
+      [{ ...ok, mutant: "src/x.ts:1:5 ConditionalExpression → true" }, "does not read"], // a line shift: line 1 has a column 5, other code
+      [{ ...ok, mutant: "src/x.ts:2:6 ConditionalExpression → true" }, "does not read"], // a column shift
+      [{ ...ok, original: undefined }, "no `original`"],
+      [{ ...ok, original: "" }, "no `original`"],
+      [{ ...short, mutant: "src/x.ts:4:11 StringLiteral → \"Stryker was here!\"" }, "does not read the recorded line"], // same original, same column
+      [{ ...ok, line: undefined }, "no `line`"],
+      [{ ...ok, line: "if (x !== undefined) stop();" }, "does not read the recorded line"],
+      [{ ...ok, mutant: "src/y.ts:2:5 ConditionalExpression → true" }, "no file src/y.ts"],
+      [{ ...ok, mutant: "src/x.ts:9:5 ConditionalExpression → true" }, "has no line 9"],
+      [{ ...ok, mutant: "src/x.ts 2 5 ConditionalExpression" }, "not file:line:col"],
+    ];
+    let checked = 0;
+    for (const [entry, why] of bad) {
+      const faults = equivalentPositionFaults([entry], sourceOf);
+      expect(faults, JSON.stringify(entry)).toHaveLength(1);
+      expect(faults[0], JSON.stringify(entry)).toContain(why);
+      checked++;
+    }
+    expect(checked).toBe(bad.length);
   });
 });

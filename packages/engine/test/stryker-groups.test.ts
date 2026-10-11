@@ -12,6 +12,7 @@ import * as groupsModule from "../stryker.groups.mjs";
 import { lineCount, parseEntry, selected, type Selected } from "./stryker-coverage.ts";
 import { SPAWN_MS, spawnBudget } from "./stryker-spawn.ts";
 import { resolveGroup } from "../scripts/stryker-cuts.mjs";
+import { RUNNER_NAME } from "../scripts/stryker-vitest-runner.mjs";
 import { STRYKER_EXCLUDED, STRYKER_FAMILIES, STRYKER_GROUPS, STRYKER_PLACEMENT_OUT_OF_SCOPE, STRYKER_SPLITS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "../stryker.groups.mjs";
 
 const ENGINE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -395,7 +396,8 @@ describe("stryker.config.mjs reads its group from STRYKER_GROUP, through the rea
       expect(c.incrementalFile, g).toBe(`reports/mutation/${g}.incremental.json`);
       expect(c.jsonReporter, g).toEqual({ fileName: `reports/mutation/${g}.json` });
       expect(c.incremental, g).toBe(true);
-      expect(c.testRunner, g).toBe("vitest");
+      // the vitest runner behind the decorator that counts a test file failing as a whole as a kill (stryker-vitest-runner.test.ts)
+      expect(c.testRunner, g).toBe(RUNNER_NAME);
       // Stryker's runner ignores this and always uses perTest; the config states what it gets
       expect(c.coverageAnalysis, g).toBe("perTest");
       // the floor file gates (D14), never Stryker's own break

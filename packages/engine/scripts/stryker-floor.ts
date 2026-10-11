@@ -151,8 +151,10 @@ export function parseFloors(text: string): Floors {
   return floors;
 }
 
-/** stryker-equivalent.json: `{note?, equivalent: [{mutant: "file:line:col mutator → replacement", reason}]}`. A recorded
- *  equivalent mutant owes a reason (at least 10 characters), and is recorded once. Returns the mutant keys. */
+/** stryker-equivalent.json: `{note?, equivalent: [{mutant: "file:line:col mutator → replacement", original, line, reason}]}`. A
+ *  recorded equivalent mutant owes a reason (at least 10 characters), and is recorded once. Returns the mutant keys. `original`
+ *  (the source text the mutant replaces) and `line` (its whole source line, trimmed) pin the key to the code it was judged on;
+ *  this parser does not read them, test/stryker-floor.test.ts checks them against the source. */
 export function parseEquivalents(text: string): string[] {
   const raw = parseJson(text, EQUIVALENT_FILE);
   if (!isObject(raw) || !Array.isArray(raw.equivalent)) throw new Refusal(`${EQUIVALENT_FILE} has no \`equivalent\` array`);

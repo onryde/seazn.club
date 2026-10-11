@@ -22,8 +22,12 @@ const DRY_RUN_FLOOR_SECONDS = 344;
 const CI_SLOWDOWN = 8;
 
 export default {
-  testRunner: "vitest",
-  plugins: ["@stryker-mutator/vitest-runner"],
+  // The vitest runner behind a decorator (scripts/stryker-vitest-runner.mjs, engine mutation-debt P0): a test file that fails as
+  // a whole in a mutant run (it throws while it loads) is a kill, where the plain runner counted only tests and reported such a
+  // mutant Survived; and a file that fails as a whole in the DRY run fails it. The vitest runner stays loaded for its options
+  // schema (`vitest` below). Stryker resolves the relative path against its cwd, packages/engine (`pnpm mutation`).
+  testRunner: "vitest-file-failure-kills",
+  plugins: ["@stryker-mutator/vitest-runner", "./scripts/stryker-vitest-runner.mjs"],
   // A leg's parts of a split file (`file#N`) become Stryker's `file:a-b` here, from the statements the TypeScript parser reads.
   // Changed-lines (STRYKER_MUTATE): exactly the ranges it names, checked by scripts/stryker-changed.mjs.
   mutate: changed === undefined ? resolveGroup(group) : parseMutateRanges(changed, import.meta.dirname),
