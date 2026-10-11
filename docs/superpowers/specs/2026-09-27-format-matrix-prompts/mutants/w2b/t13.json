@@ -455,5 +455,50 @@
         "name": "postponed: beforeStart, and no other empty-state sentence"
       }
     ]
+  },
+  {
+    "id": "i1-draw-chip-first-row",
+    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+    "find": "{match.forfeit && i === (match.winnerIndex ?? 0) ? (",
+    "replace": "{match.forfeit && i === 0 ? (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/knockout-tab.test.tsx"
+        ],
+        "name": "a walkover: the tag is on the WINNER's row"
+      }
+    ]
+  },
+  {
+    "id": "i1-draw-chip-both-rows",
+    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+    "find": "{match.forfeit && i === (match.winnerIndex ?? 0) ? (",
+    "replace": "{match.forfeit ? (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/knockout-tab.test.tsx"
+        ],
+        "name": "a double walkover \\(nobody won\\): the tag is on the first row, once"
+      }
+    ]
+  },
+  {
+    "id": "i1-draw-node-undescribed",
+    "file": "apps/web/src/components/public-site/matches-hub/knockout-tab.tsx",
+    "find": "aria-describedby={match.forfeit ? `mh-knockout-forfeit-${match.fixtureId}` : undefined}",
+    "replace": "aria-describedby={undefined}",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/public-site/__tests__/knockout-tab.test.tsx"
+        ],
+        "name": "a walkover: the tag is on the WINNER's row"
+      }
+    ]
   }
 ]

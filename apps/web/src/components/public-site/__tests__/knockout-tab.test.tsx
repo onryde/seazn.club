@@ -878,6 +878,53 @@ describe("KnockoutTab — the champion banner", () => {
   });
 });
 
+// W2b Task 13 fix round 1 (review I-1) — the Draw node's tag. It rides the WINNER's row (the first, when nobody won: a
+// double walkover), its accessible name and tooltip are the sentence, and the node is described by it. The final's
+// winner is Eli on the SECOND row, so a chip pinned to the first row reads differently from the right one.
+describe("KnockoutTab — the Draw node's forfeit tag (T13 review I-1)", () => {
+  const SENTENCE = "Dev didn't show up — walkover.";
+  const drawWith = (forfeit: { kind: string; tag: string; sentence: string } | null, winnerIndex: 0 | 1 | null) =>
+    hubDoc({
+      matches: DONE_MATCHES.map((x) => (x.fixtureId === "f1" ? { ...x, winnerIndex, ...(forfeit ? { forfeit } : {}) } : x)),
+      knockouts: [knockoutView("cup", "premier", ROUNDS, { championFixtureId: null })],
+    });
+  /** The final's node split into its two side rows. */
+  const rowsOf = (h: string): string[] => {
+    const at = h.indexOf(`data-testid="mh-knockout-node-f1"`);
+    expect(at, "the final's node").toBeGreaterThan(-1);
+    const node = h.slice(at, h.indexOf("</a>", at));
+    const rows = node.split(`<span class="flex h-[22px]`).slice(1);
+    expect(rows.length, "two side rows").toBe(2);
+    return rows;
+  };
+  const CHIP = `data-testid="mh-knockout-node-forfeit"`;
+
+  it("empty case first: a played final's node carries no tag and no description", () => {
+    url.view = "draw";
+    const h = render(drawWith(null, 1));
+    expect(rowsOf(h).filter((r) => r.includes(CHIP))).toHaveLength(0);
+    expect(h).not.toContain(`aria-describedby="mh-knockout-forfeit-f1"`);
+  });
+
+  it("a walkover: the tag is on the WINNER's row (Eli, the second), named and titled by the sentence; the node is described by it", () => {
+    url.view = "draw";
+    const h = render(drawWith({ kind: "walkover", tag: "w/o", sentence: SENTENCE }, 1));
+    const rows = rowsOf(h);
+    expect(rows[0], "the loser's row").not.toContain(CHIP);
+    expect(rows[1], "the winner's row").toContain(CHIP);
+    const chip = /<span id="mh-knockout-forfeit-f1" role="img" aria-label="([^"]*)" title="([^"]*)"[^>]*>([^<]*)<\/span>/.exec(rows[1]!);
+    expect(chip, "the chip is an img named by the sentence").not.toBeNull();
+    expect([chip![1], chip![2], chip![3]]).toEqual([esc(SENTENCE), esc(SENTENCE), "w/o"]);
+    expect(h).toContain(`aria-describedby="mh-knockout-forfeit-f1"`);
+  });
+
+  it("a double walkover (nobody won): the tag is on the first row, once", () => {
+    url.view = "draw";
+    const rows = rowsOf(render(drawWith({ kind: "double_walkover", tag: "2× w/o", sentence: "Neither side showed up." }, null)));
+    expect(rows.map((r) => r.split(CHIP).length - 1)).toEqual([1, 0]);
+  });
+});
+
 describe("KnockoutTab — the line under each card", () => {
   it("every branch, each on its own fixture, naming the NEXT round", () => {
     const h = render(MID);
